@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use idml_parse::{graphic, Container, Graphic, Spread, Story};
-use idml_renderer::{pipeline, PipelineOptions};
+use idml_parse::{graphic, Graphic};
+use idml_renderer::{pipeline, Document, PipelineOptions};
 
 #[derive(Parser, Debug)]
 #[command(name = "idml-inspect", version, about)]
@@ -42,22 +42,17 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let bytes =
         std::fs::read(&args.file).with_context(|| format!("read {}", args.file.display()))?;
-    let container = Container::open(&bytes).context("open IDML")?;
+    let document = Document::open(&bytes).context("open IDML")?;
+    let palette = &document.palette;
 
     println!("file          {}", args.file.display());
-    println!("mimetype      {}", container.mimetype);
+    println!("mimetype      {}", document.container.mimetype);
     println!(
         "manifest      {} spread(s), {} story ref(s), {} master(s)",
-        container.designmap.spreads.len(),
-        container.designmap.stories.len(),
-        container.designmap.master_spreads.len(),
+        document.container.designmap.spreads.len(),
+        document.container.designmap.stories.len(),
+        document.container.designmap.master_spreads.len(),
     );
-
-    let palette = container
-        .entry("Resources/Graphic.xml")
-        .map(|raw| Graphic::parse(raw))
-        .transpose()?
-        .unwrap_or_default();
     if !palette.colors.is_empty() || !palette.swatches.is_empty() {
         println!(
             "palette       {} colour(s), {} swatch(es)",
@@ -66,23 +61,13 @@ fn main() -> Result<()> {
         );
     }
 
-    // Per-spread / per-story pretty output — independent of the
-    // library pipeline (which is a single-pass flatten without
-    // intermediate logging).
-    for spread_ref in &container.designmap.spreads {
-        let Some(raw) = container.entry(&spread_ref.src) else {
-            eprintln!(
-                "warning: manifest lists {} but archive has no such entry",
-                spread_ref.src
-            );
-            continue;
-        };
-        let spread = Spread::parse(raw)?;
+    for parsed in &document.spreads {
+        let spread = &parsed.spread;
         println!(
             "\nspread        {}  ({} page(s), {} frame(s){})",
-            spread_ref.src,
+            parsed.src,
             spread.pages.len(),
-            spread.text_frames.len(),
+            spread.text_frames.len() + spread.rectangles.len(),
             if spread.skipped_nested_frames > 0 {
                 format!(", {} nested frame(s) skipped", spread.skipped_nested_frames)
             } else {
@@ -103,22 +88,27 @@ fn main() -> Result<()> {
                 frame.parent_story.as_deref().unwrap_or("(none)"),
                 frame.bounds.width(),
                 frame.bounds.height(),
-                describe_fill(frame, &palette),
+                describe_fill(frame.fill_color.as_deref(), palette),
+            );
+        }
+        for rect in &spread.rectangles {
+            println!(
+                "  rect        {}   {:>6.2} × {:<6.2} pt  fill={}",
+                rect.self_id.as_deref().unwrap_or("?"),
+                rect.bounds.width(),
+                rect.bounds.height(),
+                describe_fill(rect.fill_color.as_deref(), palette),
             );
         }
     }
 
-    for story_ref in &container.designmap.stories {
-        let Some(raw) = container.entry(&story_ref.src) else {
-            continue;
-        };
-        let story = Story::parse(raw)?;
+    for parsed in &document.stories {
         println!(
             "\nstory         {}  ({} paragraph(s))",
-            story_ref.src,
-            story.paragraphs.len(),
+            parsed.src,
+            parsed.story.paragraphs.len(),
         );
-        for (pi, p) in story.paragraphs.iter().enumerate() {
+        for (pi, p) in parsed.story.paragraphs.iter().enumerate() {
             for (ri, r) in p.runs.iter().enumerate() {
                 let size = r.point_size.unwrap_or(args.default_size);
                 println!(
@@ -148,7 +138,7 @@ fn main() -> Result<()> {
     opts.fallback_frame_fill =
         idml_compose::Paint::Solid(idml_compose::Color::rgba(0.92, 0.92, 0.92, 1.0));
 
-    let built = pipeline::build(&container, &palette, &opts)?;
+    let built = pipeline::build(&document, &opts)?;
     println!("\ntotals");
     println!(
         "  paragraphs={p}  runs={r}  glyphs={g}  lines={l}",
@@ -182,8 +172,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn describe_fill(frame: &idml_parse::TextFrame, palette: &Graphic) -> String {
-    let Some(id) = frame.fill_color.as_deref() else {
+fn describe_fill(fill_color: Option<&str>, palette: &Graphic) -> String {
+    let Some(id) = fill_color else {
         return "(none)".to_string();
     };
     match palette.resolve(id) {

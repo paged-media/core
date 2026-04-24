@@ -4,8 +4,7 @@
 use std::io::Write;
 
 use idml_compose::{Color, Paint};
-use idml_parse::{Container, Graphic};
-use idml_renderer::{pipeline, PipelineOptions};
+use idml_renderer::{pipeline, Document, PipelineOptions};
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 fn build_minimal_idml() -> Vec<u8> {
@@ -73,11 +72,10 @@ fn build_minimal_idml() -> Vec<u8> {
 #[test]
 fn build_produces_display_list_and_page_dimensions() {
     let bytes = build_minimal_idml();
-    let container = Container::open(&bytes).unwrap();
-    let palette = Graphic::parse(container.entry("Resources/Graphic.xml").unwrap()).unwrap();
+    let document = Document::open(&bytes).unwrap();
 
     let opts = PipelineOptions::default();
-    let built = pipeline::build(&container, &palette, &opts).unwrap();
+    let built = pipeline::build(&document, &opts).unwrap();
 
     assert_eq!(built.width_pt, 300.0);
     assert_eq!(built.height_pt, 400.0);
@@ -93,11 +91,10 @@ fn build_produces_display_list_and_page_dimensions() {
 #[test]
 fn render_fills_frame_with_resolved_paint() {
     let bytes = build_minimal_idml();
-    let container = Container::open(&bytes).unwrap();
-    let palette = Graphic::parse(container.entry("Resources/Graphic.xml").unwrap()).unwrap();
+    let document = Document::open(&bytes).unwrap();
 
     let opts = PipelineOptions::default();
-    let (built, img) = pipeline::render(&container, &palette, &opts, 72.0, Color::WHITE).unwrap();
+    let (built, img) = pipeline::render(&document, &opts, 72.0, Color::WHITE).unwrap();
 
     // Page is 300×400 pt at 72 dpi → 300×400 px.
     assert_eq!(img.width(), 300);

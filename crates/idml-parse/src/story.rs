@@ -39,6 +39,12 @@ pub struct Paragraph {
     /// `LeftAlign`, `CenterAlign`, `RightAlign`, `FullyJustified`,
     /// `LeftJustified`, `CenterJustified`, `RightJustified`.
     pub justification: Option<String>,
+    /// `FirstLineIndent` in pt.
+    pub first_line_indent: Option<f32>,
+    /// `SpaceBefore` in pt.
+    pub space_before: Option<f32>,
+    /// `SpaceAfter` in pt.
+    pub space_after: Option<f32>,
     pub runs: Vec<CharacterRun>,
 }
 
@@ -51,6 +57,10 @@ pub struct CharacterRun {
     /// `FillColor="Color/..."` on the CharacterStyleRange; resolved
     /// against `Graphic`.
     pub fill_color: Option<String>,
+    /// `Tracking` in 1/1000 em (InDesign's unit — divide by 1000 to
+    /// get the em fraction that should be added to every glyph's
+    /// advance).
+    pub tracking: Option<f32>,
     pub text: String,
 }
 
@@ -72,6 +82,10 @@ impl Story {
                         current_paragraph = Some(Paragraph {
                             paragraph_style: attr(&e, b"AppliedParagraphStyle"),
                             justification: attr(&e, b"Justification"),
+                            first_line_indent: attr(&e, b"FirstLineIndent")
+                                .and_then(|s| s.parse().ok()),
+                            space_before: attr(&e, b"SpaceBefore").and_then(|s| s.parse().ok()),
+                            space_after: attr(&e, b"SpaceAfter").and_then(|s| s.parse().ok()),
                             runs: Vec::new(),
                         });
                     }
@@ -82,6 +96,7 @@ impl Story {
                             font_style: attr(&e, b"FontStyle"),
                             point_size: attr(&e, b"PointSize").and_then(|s| s.parse().ok()),
                             fill_color: attr(&e, b"FillColor"),
+                            tracking: attr(&e, b"Tracking").and_then(|s| s.parse().ok()),
                             text: String::new(),
                         });
                     }

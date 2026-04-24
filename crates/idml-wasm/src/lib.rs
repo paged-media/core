@@ -14,8 +14,7 @@
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use idml_compose::Color;
-    use idml_parse::{Container, Graphic};
-    use idml_renderer::{pipeline, PipelineOptions};
+    use idml_renderer::{pipeline, Document, PipelineOptions};
     use image::{codecs::png::PngEncoder, ImageEncoder};
     use wasm_bindgen::prelude::*;
 
@@ -36,13 +35,8 @@ mod wasm {
         font: Option<Box<[u8]>>,
         dpi: f32,
     ) -> Result<Vec<u8>, JsError> {
-        let container =
-            Container::open(idml).map_err(|e| JsError::new(&format!("open IDML: {e}")))?;
-
-        let palette = match container.entry("Resources/Graphic.xml") {
-            Some(raw) => Graphic::parse(raw).map_err(|e| JsError::new(&format!("graphic: {e}")))?,
-            None => Graphic::default(),
-        };
+        let document =
+            Document::open(idml).map_err(|e| JsError::new(&format!("open IDML: {e}")))?;
 
         let font_slice = font.as_deref();
         let opts = PipelineOptions {
@@ -50,7 +44,7 @@ mod wasm {
             ..PipelineOptions::default()
         };
 
-        let (_built, img) = pipeline::render(&container, &palette, &opts, dpi, Color::WHITE)
+        let (_built, img) = pipeline::render(&document, &opts, dpi, Color::WHITE)
             .map_err(|e| JsError::new(&format!("render: {e}")))?;
 
         let mut out = Vec::with_capacity((img.width() * img.height() * 4) as usize);
@@ -69,15 +63,11 @@ mod wasm {
     /// host to display counts without running a full raster.
     #[wasm_bindgen]
     pub fn parse_summary(idml: &[u8]) -> Result<String, JsError> {
-        let container =
-            Container::open(idml).map_err(|e| JsError::new(&format!("open IDML: {e}")))?;
-        let palette = match container.entry("Resources/Graphic.xml") {
-            Some(raw) => Graphic::parse(raw).map_err(|e| JsError::new(&format!("graphic: {e}")))?,
-            None => Graphic::default(),
-        };
+        let document =
+            Document::open(idml).map_err(|e| JsError::new(&format!("open IDML: {e}")))?;
         let opts = PipelineOptions::default();
-        let built = pipeline::build(&container, &palette, &opts)
-            .map_err(|e| JsError::new(&format!("build: {e}")))?;
+        let built =
+            pipeline::build(&document, &opts).map_err(|e| JsError::new(&format!("build: {e}")))?;
         Ok(format!(
             "{{\"width_pt\":{:.2},\"height_pt\":{:.2},\
              \"commands\":{},\"paths\":{},\

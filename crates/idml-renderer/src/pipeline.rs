@@ -1,16 +1,18 @@
-//! End-to-end pipeline: `Container` → `DisplayList` → `RgbaImage`.
+//! End-to-end pipeline: `Document` → `DisplayList` → `RgbaImage`.
 //!
 //! Everything the inspect binary does minus the pretty-printing. This
 //! is the thin, reusable top-level Rust API that hosts (WASM binding,
 //! native tools, the fidelity harness) call into.
-
-use std::collections::HashMap;
+//!
+//! The pipeline consumes `&idml_scene::Document` — parsing and resource
+//! walking live in that crate so we stay focused on layout + emission.
 
 use idml_compose::{
     emit_paragraph, emit_rect, emit_stroke_rect, Color, DisplayList, Paint, Rect, Stroke,
     TtfOutliner,
 };
-use idml_parse::{graphic, Container, Graphic, Rectangle, Spread, Story, TextFrame};
+use idml_parse::{graphic, Graphic, Rectangle, TextFrame};
+use idml_scene::Document;
 
 /// Knobs the caller tunes when driving the full pipeline.
 #[derive(Debug, Clone)]
@@ -41,7 +43,7 @@ impl Default for PipelineOptions<'_> {
     }
 }
 
-/// Page bounding box and display-list built from a `Container`.
+/// Page bounding box and display-list built from a `Document`.
 #[derive(Debug)]
 pub struct BuiltPage {
     pub width_pt: f32,
@@ -63,34 +65,24 @@ pub struct PipelineStats {
     pub lines: usize,
 }
 
-/// Flatten a parsed `Container` into one `BuiltPage`. Today this unions
+/// Flatten a parsed `Document` into one `BuiltPage`. Today this unions
 /// every page's bounding box into a single canvas — multi-page output
 /// lands once the scene-graph crate exposes per-page iteration.
-pub fn build(
-    container: &Container,
-    palette: &Graphic,
-    options: &PipelineOptions,
-) -> anyhow::Result<BuiltPage> {
+pub fn build(document: &Document, options: &PipelineOptions) -> anyhow::Result<BuiltPage> {
+    let palette = &document.palette;
     let mut stats = PipelineStats::default();
     let mut list = DisplayList::new();
 
-    // Page bounding box — union across every page the manifest lists.
+    // Page bounding box — union across every page the document has.
     let mut page_w: f32 = 612.0;
     let mut page_h: f32 = 792.0;
     let mut saw_page = false;
 
-    // Index TextFrames by ParentStory so the story pass below can pick
-    // a frame without re-parsing.
-    let mut frame_for_story: HashMap<String, TextFrame> = HashMap::new();
-
-    for spread_ref in &container.designmap.spreads {
-        let Some(raw) = container.entry(&spread_ref.src) else {
-            continue;
-        };
-        let spread = Spread::parse(raw)?;
+    for parsed in &document.spreads {
+        let spread = &parsed.spread;
         stats.spreads += 1;
         stats.pages += spread.pages.len();
-        stats.frames += spread.text_frames.len();
+        stats.frames += spread.text_frames.len() + spread.rectangles.len();
 
         for p in &spread.pages {
             if saw_page {
@@ -103,41 +95,33 @@ pub fn build(
             }
         }
 
-        for frame in spread.text_frames {
+        for frame in &spread.text_frames {
             let rect = Rect {
                 x: frame.bounds.left,
                 y: frame.bounds.top,
                 w: frame.bounds.width(),
                 h: frame.bounds.height(),
             };
-            let fill_paint = resolve_fill(&frame, palette).unwrap_or(options.fallback_frame_fill);
+            let fill_paint = resolve_fill(frame, palette).unwrap_or(options.fallback_frame_fill);
             emit_rect(rect, fill_paint, &mut list);
-
-            if let Some(stroke_paint) = resolve_stroke(&frame, palette) {
+            if let Some(stroke_paint) = resolve_stroke(frame, palette) {
                 let width = frame.stroke_weight.unwrap_or(1.0);
                 if width > 0.0 {
                     emit_stroke_rect(rect, Stroke::new(width), stroke_paint, &mut list);
                 }
             }
-
-            if let Some(story_id) = frame.parent_story.clone() {
-                frame_for_story.insert(story_id, frame);
-            }
         }
 
-        // Vector-only rectangles. Same fill/stroke handling as text
-        // frames, just no story hookup.
-        for rect in spread.rectangles {
-            stats.frames += 1;
+        for rect in &spread.rectangles {
             let r = Rect {
                 x: rect.bounds.left,
                 y: rect.bounds.top,
                 w: rect.bounds.width(),
                 h: rect.bounds.height(),
             };
-            let fill = resolve_rect_fill(&rect, palette).unwrap_or(options.fallback_frame_fill);
+            let fill = resolve_rect_fill(rect, palette).unwrap_or(options.fallback_frame_fill);
             emit_rect(r, fill, &mut list);
-            if let Some(paint) = resolve_rect_stroke(&rect, palette) {
+            if let Some(paint) = resolve_rect_stroke(rect, palette) {
                 let width = rect.stroke_weight.unwrap_or(1.0);
                 if width > 0.0 {
                     emit_stroke_rect(r, Stroke::new(width), paint, &mut list);
@@ -154,15 +138,10 @@ pub fn build(
         .and_then(|bytes| ttf_parser::Face::parse(bytes, 0).ok());
     let font_id = options.font.map(fnv_1a_u32).unwrap_or(0);
 
-    for story_ref in &container.designmap.stories {
-        let Some(raw) = container.entry(&story_ref.src) else {
-            continue;
-        };
-        let story = Story::parse(raw)?;
+    for parsed in &document.stories {
         stats.stories += 1;
-
-        let story_id = derive_story_id(&story_ref.src);
-        let frame = story_id.as_ref().and_then(|id| frame_for_story.get(id));
+        let story = &parsed.story;
+        let frame = document.frame_for(&parsed.self_id);
         let column_width_pt = options
             .fallback_column_width_pt
             .or_else(|| frame.map(|f| f.bounds.width()));
@@ -178,8 +157,6 @@ pub fn build(
                 .unwrap_or(options.default_point_size);
             let paragraph_text: String = paragraph.runs.iter().map(|r| r.text.as_str()).collect();
 
-            // Per-run glyph count — useful for logging even when we
-            // don't compose (no font, no frame).
             if let Some(face) = shaping_face.as_ref() {
                 for run in &paragraph.runs {
                     let size = run.point_size.unwrap_or(options.default_point_size);
@@ -188,9 +165,6 @@ pub fn build(
                 }
             }
 
-            // Layout + emit requires both a shaping face and a column
-            // width. Outlining is a third requirement for actually
-            // producing FillPath commands.
             let (Some(face), Some(col_pt)) = (shaping_face.as_ref(), column_width_pt) else {
                 continue;
             };
@@ -229,13 +203,12 @@ pub fn build(
 /// raster pass; everything else comes from `options`.
 #[cfg(feature = "cpu")]
 pub fn render(
-    container: &Container,
-    palette: &Graphic,
+    document: &Document,
     options: &PipelineOptions,
     dpi: f32,
     background: Color,
 ) -> anyhow::Result<(BuiltPage, image::RgbaImage)> {
-    let built = build(container, palette, options)?;
+    let built = build(document, options)?;
     let mut raster_opts = idml_gpu::RasterOptions::new(built.width_pt, built.height_pt);
     raster_opts.dpi = dpi;
     raster_opts.background = background;
@@ -325,18 +298,6 @@ pub fn map_justification(j: Option<&str>) -> idml_text::Alignment {
         Some("FullyJustified") | Some("LeftJustified") => idml_text::Alignment::Justify,
         _ => idml_text::Alignment::Left,
     }
-}
-
-/// Stories are manifested by src filename ("Stories/Story_uXX.xml");
-/// the frame references the story's Self id ("uXX"). This pulls the id
-/// back out so frames can be matched to stories without a second parse.
-pub fn derive_story_id(src: &str) -> Option<String> {
-    let stem = src.rsplit_once('/').map(|(_, t)| t).unwrap_or(src);
-    let without_ext = stem.strip_suffix(".xml").unwrap_or(stem);
-    without_ext
-        .strip_prefix("Story_")
-        .map(|s| s.to_string())
-        .or_else(|| Some(without_ext.to_string()))
 }
 
 fn fnv_1a_u32(bytes: &[u8]) -> u32 {
