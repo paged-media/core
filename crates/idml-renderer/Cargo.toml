@@ -10,9 +10,17 @@ description = "Top-level renderer coordinator. The public Rust API surface."
 [lints]
 workspace = true
 
+[features]
+default = ["cpu"]
+# Pulls in the CPU rasterizer so `render()` is callable. Disabling this
+# leaves only `build()` — useful for WASM builds that rely on a
+# different backend.
+cpu = ["idml-gpu/cpu", "dep:image"]
+
 [[bin]]
 name = "idml-inspect"
 path = "src/bin/inspect.rs"
+required-features = ["cpu"]
 
 [dependencies]
 idml-parse = { path = "../idml-parse" }
@@ -20,11 +28,12 @@ idml-scene = { path = "../idml-scene" }
 idml-text = { path = "../idml-text" }
 idml-color = { path = "../idml-color" }
 idml-compose = { path = "../idml-compose" }
-idml-gpu = { path = "../idml-gpu" }
+idml-gpu = { path = "../idml-gpu", default-features = false }
 anyhow = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 rustybuzz = "0.18"
 ttf-parser = "0.24"
+image = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
