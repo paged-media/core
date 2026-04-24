@@ -31,6 +31,18 @@ fn build_idml() -> Vec<u8> {
     )
     .unwrap();
 
+    zip.start_file("Resources/Graphic.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic>
+    <Color Self="Color/Red" Name="Red" Space="CMYK" ColorValue="0 100 100 0"/>
+    <Color Self="Color/Paper" Name="Paper" Space="RGB" ColorValue="255 255 255"/>
+  </Graphic>
+</idPkg:Graphic>"#,
+    )
+    .unwrap();
+
     zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
     zip.write_all(
         br#"<?xml version="1.0" encoding="UTF-8"?>
@@ -38,7 +50,8 @@ fn build_idml() -> Vec<u8> {
   <Spread Self="sp1">
     <Page Self="p1" GeometricBounds="0 0 792 612"/>
     <Page Self="p2" GeometricBounds="0 612 792 1224"/>
-    <TextFrame Self="frameA" ParentStory="u10" GeometricBounds="72 72 720 540"/>
+    <TextFrame Self="frameA" ParentStory="u10" GeometricBounds="72 72 720 540"
+               FillColor="Color/Red"/>
     <TextFrame Self="frameB" ParentStory="u20" GeometricBounds="100 700 300 1100"/>
   </Spread>
 </idPkg:Spread>"#,
@@ -136,6 +149,17 @@ fn inspects_synthetic_idml_with_spread_and_frames() {
     assert!(
         stdout.contains("A second paragraph of prose."),
         "stdout:\n{stdout}"
+    );
+
+    // Palette surfaced and the red-filled frame shows up with its name.
+    assert!(stdout.contains("palette"), "stdout:\n{stdout}");
+    assert!(
+        stdout.contains("fill=Red"),
+        "expected frame A to display Red fill\nstdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("fill=(none)"),
+        "expected frame B to display no fill\nstdout:\n{stdout}"
     );
 
     // Totals line.

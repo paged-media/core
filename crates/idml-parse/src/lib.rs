@@ -15,10 +15,12 @@ use std::io::{self, Cursor, Read};
 use bytes::Bytes;
 
 pub mod designmap;
+pub mod graphic;
 pub mod spread;
 pub mod story;
 
 pub use designmap::{DesignMap, SpreadRef, StoryRef};
+pub use graphic::{ColorEntry, ColorSpace, Graphic, SwatchEntry};
 pub use spread::{Bounds, Page, Spread, TextFrame};
 pub use story::{CharacterRun, Paragraph, Story};
 

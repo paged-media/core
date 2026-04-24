@@ -46,6 +46,11 @@ pub struct TextFrame {
     pub bounds: Bounds,
     /// 6-element affine transform `[a b c d tx ty]`. `None` if absent.
     pub item_transform: Option<[f32; 6]>,
+    /// `FillColor` attribute, e.g. `Color/Red`. Resolved against
+    /// `Graphic` in `idml-parse::graphic`.
+    pub fill_color: Option<String>,
+    /// `StrokeColor` attribute.
+    pub stroke_color: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
@@ -108,11 +113,15 @@ impl Spread {
                         let parent_story = attr(&e, b"ParentStory");
                         let item_transform =
                             attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s));
+                        let fill_color = attr(&e, b"FillColor");
+                        let stroke_color = attr(&e, b"StrokeColor");
                         out.text_frames.push(TextFrame {
                             self_id: attr(&e, b"Self"),
                             parent_story,
                             bounds,
                             item_transform,
+                            fill_color,
+                            stroke_color,
                         });
                     }
                     _ => {}

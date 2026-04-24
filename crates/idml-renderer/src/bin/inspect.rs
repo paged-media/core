@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Parser;
 use idml_compose::{emit_paragraph, emit_rect, Color, DisplayList, Paint, Rect, TtfOutliner};
-use idml_parse::{Container, Spread, Story};
+use idml_parse::{graphic, Container, Graphic, Spread, Story};
 
 #[derive(Parser, Debug)]
 #[command(name = "idml-inspect", version, about)]
@@ -71,14 +71,28 @@ fn main() -> Result<()> {
         .as_deref()
         .and_then(|b| ttf_parser::Face::parse(b, 0).ok());
 
+    // Parse the document's swatch palette if present. Missing is OK —
+    // not every IDML ships Resources/Graphic.xml.
+    let palette = container
+        .entry("Resources/Graphic.xml")
+        .map(|raw| Graphic::parse(raw))
+        .transpose()?
+        .unwrap_or_default();
+    if !palette.colors.is_empty() || !palette.swatches.is_empty() {
+        println!(
+            "palette       {} colour(s), {} swatch(es)",
+            palette.colors.len(),
+            palette.swatches.len(),
+        );
+    }
+
     // Parse every Spread the manifest references, and index TextFrames
     // by their ParentStory so the story-walk below can fetch each
     // paragraph's column width without a second pass.
     let mut frame_for_story: HashMap<String, idml_parse::TextFrame> = HashMap::new();
     // Accumulates the scene's display list as we walk spreads + stories.
     let mut list = DisplayList::new();
-    // Placeholder frame-background paint — real paints come with the
-    // swatch / AppliedColor parser.
+    // Fallback fill when a frame has no FillColor (or it doesn't resolve).
     let placeholder_fill = Paint::Solid(Color::rgba(0.92, 0.92, 0.92, 1.0));
 
     for spread_ref in &container.designmap.spreads {
@@ -109,12 +123,14 @@ fn main() -> Result<()> {
             );
         }
         for frame in spread.text_frames {
+            let fill_paint = resolve_fill(&frame, &palette).unwrap_or(placeholder_fill);
             println!(
-                "  frame       {} → story {}   {:>6.2} × {:<6.2} pt",
+                "  frame       {} → story {}   {:>6.2} × {:<6.2} pt  fill={}",
                 frame.self_id.as_deref().unwrap_or("?"),
                 frame.parent_story.as_deref().unwrap_or("(none)"),
                 frame.bounds.width(),
                 frame.bounds.height(),
+                describe_fill(&frame, &palette),
             );
             if args.display_list {
                 emit_rect(
@@ -124,7 +140,7 @@ fn main() -> Result<()> {
                         w: frame.bounds.width(),
                         h: frame.bounds.height(),
                     },
-                    placeholder_fill,
+                    fill_paint,
                     &mut list,
                 );
             }
@@ -240,6 +256,35 @@ fn main() -> Result<()> {
         println!("  (pass --font <path> to shape + compose runs)");
     }
     Ok(())
+}
+
+/// Pick the paint for a frame: look up FillColor in the palette,
+/// convert to linear RGB, drop alpha at 1.0. None means "fall back".
+fn resolve_fill(frame: &idml_parse::TextFrame, palette: &Graphic) -> Option<Paint> {
+    let id = frame.fill_color.as_deref()?;
+    let entry = palette.resolve(id)?;
+    let [r, g, b] = graphic::to_linear_rgb(entry)?;
+    Some(Paint::Solid(Color::rgba(r, g, b, 1.0)))
+}
+
+/// One-line fill description for the human-readable report.
+fn describe_fill(frame: &idml_parse::TextFrame, palette: &Graphic) -> String {
+    let Some(id) = frame.fill_color.as_deref() else {
+        return "(none)".to_string();
+    };
+    match palette.resolve(id) {
+        Some(entry) => {
+            let name = entry.name.as_deref().unwrap_or(&entry.self_id);
+            match graphic::to_linear_rgb(entry) {
+                Some(rgb) => format!(
+                    "{name} [{:?} rgb≈{:.2},{:.2},{:.2}]",
+                    entry.space, rgb[0], rgb[1], rgb[2]
+                ),
+                None => format!("{name} [{:?} unconverted]", entry.space),
+            }
+        }
+        None => format!("{id} (unresolved)"),
+    }
 }
 
 fn derive_story_id(src: &str) -> Option<String> {
