@@ -1,31 +1,34 @@
-//! `idml-inspect`: open an IDML, parse its manifest and stories, and
-//! print a human-readable summary. Exercises the parse + story + shape
-//! pipeline end-to-end against real IDML bytes.
+//! `idml-inspect`: open an IDML, parse its manifest, spreads, and
+//! stories, then print a human-readable summary. Exercises parse +
+//! spread + story + shape + compose end-to-end against real IDML
+//! bytes.
 //!
-//! With `--font <path>`, also shapes every run via rustybuzz and reports
-//! glyph counts — proving the text engine's first primitive works against
-//! real IDML content.
+//! With `--font <path>`, every run is shaped via rustybuzz. When a
+//! paragraph belongs to a TextFrame, the frame's inner width is used
+//! as the composer's column width automatically, so line counts match
+//! the document's layout intent.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use idml_parse::{Container, Story};
+use idml_parse::{Container, Spread, Story};
 
 #[derive(Parser, Debug)]
 #[command(name = "idml-inspect", version, about)]
 struct Args {
     /// IDML file to inspect.
     file: PathBuf,
-    /// Optional TTF/OTF font to use for shaping every run. When absent,
-    /// shaping is skipped and only text extraction is reported.
+    /// Optional TTF/OTF font to use for shaping every run.
     #[arg(long)]
     font: Option<PathBuf>,
-    /// Default point size used for shaping when a run has none.
+    /// Default point size used when a run has no explicit PointSize.
     #[arg(long, default_value_t = 12.0)]
     default_size: f32,
-    /// Column width in pt. When set together with --font, each
-    /// paragraph is composed and the line count is reported.
+    /// Explicit column width in pt. Overrides any frame geometry.
+    /// Mainly useful when the IDML has no frames (rare) or when you
+    /// want to experiment with a different column width.
     #[arg(long)]
     column_width_pt: Option<f32>,
 }
@@ -55,6 +58,51 @@ fn main() -> Result<()> {
         .as_deref()
         .and_then(|b| rustybuzz::Face::from_slice(b, 0));
 
+    // Parse every Spread the manifest references, and index TextFrames
+    // by their ParentStory so the story-walk below can fetch each
+    // paragraph's column width without a second pass.
+    let mut frame_for_story: HashMap<String, idml_parse::TextFrame> = HashMap::new();
+    for spread_ref in &container.designmap.spreads {
+        let Some(raw) = container.entry(&spread_ref.src) else {
+            eprintln!(
+                "warning: manifest lists {} but archive has no such entry",
+                spread_ref.src
+            );
+            continue;
+        };
+        let spread = Spread::parse(raw)?;
+        println!(
+            "\nspread        {}  ({} page(s), {} frame(s){})",
+            spread_ref.src,
+            spread.pages.len(),
+            spread.text_frames.len(),
+            if spread.skipped_nested_frames > 0 {
+                format!(", {} nested frame(s) skipped", spread.skipped_nested_frames)
+            } else {
+                String::new()
+            },
+        );
+        for (i, p) in spread.pages.iter().enumerate() {
+            println!(
+                "  page {i:02}    {:>6.2} × {:<6.2} pt",
+                p.bounds.width(),
+                p.bounds.height(),
+            );
+        }
+        for frame in spread.text_frames {
+            println!(
+                "  frame       {} → story {}   {:>6.2} × {:<6.2} pt",
+                frame.self_id.as_deref().unwrap_or("?"),
+                frame.parent_story.as_deref().unwrap_or("(none)"),
+                frame.bounds.width(),
+                frame.bounds.height(),
+            );
+            if let Some(story_id) = frame.parent_story.clone() {
+                frame_for_story.insert(story_id, frame);
+            }
+        }
+    }
+
     let mut total_paragraphs = 0usize;
     let mut total_runs = 0usize;
     let mut total_chars = 0usize;
@@ -70,23 +118,33 @@ fn main() -> Result<()> {
             continue;
         };
         let story = Story::parse(raw)?;
+        // Match the frame by its ParentStory id. Stories are referenced
+        // by their "Self" attribute, which is embedded in the Story XML
+        // itself; the manifest src only encodes the filename, so we
+        // derive the id by stripping "Stories/Story_" and ".xml".
+        let story_id = derive_story_id(&story_ref.src);
+        let frame = story_id.as_ref().and_then(|id| frame_for_story.get(id));
+        let column_width_pt = args
+            .column_width_pt
+            .or_else(|| frame.map(|f| f.bounds.width()));
+
         println!(
-            "\nstory         {}  ({} paragraph(s))",
+            "\nstory         {}  ({} paragraph(s){})",
             story_ref.src,
-            story.paragraphs.len()
+            story.paragraphs.len(),
+            column_width_pt
+                .map(|w| format!(", column {w:.2} pt"))
+                .unwrap_or_default(),
         );
         for (pi, p) in story.paragraphs.iter().enumerate() {
             total_paragraphs += 1;
-            // Representative point size for the paragraph: first run's.
             let paragraph_size = p
                 .runs
                 .first()
                 .and_then(|r| r.point_size)
                 .unwrap_or(args.default_size);
-            // Concatenate all runs so compose sees the whole paragraph.
             let paragraph_text: String = p.runs.iter().map(|r| r.text.as_str()).collect();
 
-            // Per-run shaping report.
             for (ri, r) in p.runs.iter().enumerate() {
                 total_runs += 1;
                 total_chars += r.text.chars().count();
@@ -104,8 +162,7 @@ fn main() -> Result<()> {
                 );
             }
 
-            // Per-paragraph composition report (if font + column given).
-            if let (Some(face), Some(col_pt)) = (face.as_ref(), args.column_width_pt) {
+            if let (Some(face), Some(col_pt)) = (face.as_ref(), column_width_pt) {
                 let measurer = idml_text::RustybuzzMeasurer::new(face, paragraph_size);
                 let opts = idml_text::ComposeOptions::new(col_pt);
                 let lines = idml_text::compose_paragraph(&paragraph_text, &measurer, &opts);
@@ -129,11 +186,19 @@ fn main() -> Result<()> {
         ln = total_lines,
     );
     if face.is_none() {
-        println!("  (pass --font <path> to shape runs)");
-    } else if args.column_width_pt.is_none() {
-        println!("  (pass --column-width-pt <n> to compose paragraphs into lines)");
+        println!("  (pass --font <path> to shape + compose runs)");
     }
     Ok(())
+}
+
+fn derive_story_id(src: &str) -> Option<String> {
+    // Turn "Stories/Story_uXX.xml" → "uXX". Tolerant of prefix changes.
+    let stem = src.rsplit_once('/').map(|(_, t)| t).unwrap_or(src);
+    let without_ext = stem.strip_suffix(".xml").unwrap_or(stem);
+    without_ext
+        .strip_prefix("Story_")
+        .map(|s| s.to_string())
+        .or_else(|| Some(without_ext.to_string()))
 }
 
 fn first_line(s: &str) -> String {

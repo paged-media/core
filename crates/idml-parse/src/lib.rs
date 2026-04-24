@@ -15,9 +15,11 @@ use std::io::{self, Cursor, Read};
 use bytes::Bytes;
 
 pub mod designmap;
+pub mod spread;
 pub mod story;
 
-pub use designmap::{DesignMap, Spread, StoryRef};
+pub use designmap::{DesignMap, SpreadRef, StoryRef};
+pub use spread::{Bounds, Page, Spread, TextFrame};
 pub use story::{CharacterRun, Paragraph, Story};
 
 #[derive(Debug, thiserror::Error)]

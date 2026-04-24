@@ -11,13 +11,13 @@ use crate::ParseError;
 
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct DesignMap {
-    pub spreads: Vec<Spread>,
+    pub spreads: Vec<SpreadRef>,
     pub stories: Vec<StoryRef>,
     pub master_spreads: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct Spread {
+pub struct SpreadRef {
     pub src: String,
 }
 
@@ -42,7 +42,7 @@ impl DesignMap {
                     match e.name().as_ref() {
                         b"idPkg:Spread" => {
                             if let Some(src) = src {
-                                out.spreads.push(Spread { src });
+                                out.spreads.push(SpreadRef { src });
                             }
                         }
                         b"idPkg:Story" => {

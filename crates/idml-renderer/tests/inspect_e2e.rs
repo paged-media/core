@@ -1,7 +1,8 @@
-//! End-to-end test: build a synthetic IDML containing a multi-paragraph
-//! story, run the `idml-inspect` binary against it, and verify the whole
-//! pipeline (ZIP → designmap → Story → summary) produces the expected
-//! counts.
+//! End-to-end test: build a synthetic IDML with a Spread, two pages,
+//! and text frames bound to stories, run the `idml-inspect` binary
+//! against it, and verify the whole pipeline (ZIP → designmap →
+//! spread → stories → summary) produces the expected counts and
+//! frame-to-story bindings.
 
 use std::io::Write;
 use std::process::Command;
@@ -23,9 +24,24 @@ fn build_idml() -> Vec<u8> {
     zip.write_all(
         br#"<?xml version="1.0" encoding="UTF-8"?>
 <Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
   <idPkg:Story src="Stories/Story_u10.xml"/>
   <idPkg:Story src="Stories/Story_u20.xml"/>
 </Document>"#,
+    )
+    .unwrap();
+
+    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 792 612"/>
+    <Page Self="p2" GeometricBounds="0 612 792 1224"/>
+    <TextFrame Self="frameA" ParentStory="u10" GeometricBounds="72 72 720 540"/>
+    <TextFrame Self="frameB" ParentStory="u20" GeometricBounds="100 700 300 1100"/>
+  </Spread>
+</idPkg:Spread>"#,
     )
     .unwrap();
 
@@ -78,7 +94,7 @@ fn inspect_binary() -> std::path::PathBuf {
 }
 
 #[test]
-fn inspects_synthetic_idml_with_two_stories() {
+fn inspects_synthetic_idml_with_spread_and_frames() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("hello.idml");
     std::fs::write(&path, build_idml()).unwrap();
@@ -94,24 +110,35 @@ fn inspects_synthetic_idml_with_two_stories() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Key assertions: both stories are discovered, the body paragraph's
-    // three runs are extracted, and totals line up.
+    // Manifest counts.
+    assert!(stdout.contains("1 spread(s)"), "stdout:\n{stdout}");
     assert!(stdout.contains("2 story ref(s)"), "stdout:\n{stdout}");
+
+    // Spread output.
     assert!(
-        stdout.contains("Stories/Story_u10.xml"),
+        stdout.contains("Spreads/Spread_sp1.xml"),
         "stdout:\n{stdout}"
     );
-    assert!(
-        stdout.contains("Stories/Story_u20.xml"),
-        "stdout:\n{stdout}"
-    );
+    assert!(stdout.contains("2 page(s)"), "stdout:\n{stdout}");
+    assert!(stdout.contains("2 frame(s)"), "stdout:\n{stdout}");
+    // Page 1 dimensions: width = 612, height = 792.
+    assert!(stdout.contains("612.00 × 792.00"), "stdout:\n{stdout}");
+    // Frame A: width = 540 - 72 = 468, height = 720 - 72 = 648.
+    assert!(stdout.contains("frameA → story u10"), "stdout:\n{stdout}");
+    assert!(stdout.contains("468.00 × 648.00"), "stdout:\n{stdout}");
+    // Frame B: width = 1100 - 700 = 400, height = 300 - 100 = 200.
+    assert!(stdout.contains("frameB → story u20"), "stdout:\n{stdout}");
+    assert!(stdout.contains("400.00 × 200.00"), "stdout:\n{stdout}");
+
+    // Story text.
     assert!(stdout.contains("Hello,"), "stdout:\n{stdout}");
     assert!(stdout.contains("world"), "stdout:\n{stdout}");
     assert!(
         stdout.contains("A second paragraph of prose."),
         "stdout:\n{stdout}"
     );
-    // Totals line: 3 paragraphs (2 + 1), 5 runs (3 + 1 + 1).
+
+    // Totals line.
     assert!(stdout.contains("paragraphs=3"), "stdout:\n{stdout}");
     assert!(stdout.contains("runs=5"), "stdout:\n{stdout}");
 }
