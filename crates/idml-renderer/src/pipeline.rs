@@ -10,7 +10,7 @@ use idml_compose::{
     emit_paragraph, emit_rect, emit_stroke_rect, Color, DisplayList, Paint, Rect, Stroke,
     TtfOutliner,
 };
-use idml_parse::{graphic, Container, Graphic, Spread, Story, TextFrame};
+use idml_parse::{graphic, Container, Graphic, Rectangle, Spread, Story, TextFrame};
 
 /// Knobs the caller tunes when driving the full pipeline.
 #[derive(Debug, Clone)]
@@ -124,6 +124,26 @@ pub fn build(
                 frame_for_story.insert(story_id, frame);
             }
         }
+
+        // Vector-only rectangles. Same fill/stroke handling as text
+        // frames, just no story hookup.
+        for rect in spread.rectangles {
+            stats.frames += 1;
+            let r = Rect {
+                x: rect.bounds.left,
+                y: rect.bounds.top,
+                w: rect.bounds.width(),
+                h: rect.bounds.height(),
+            };
+            let fill = resolve_rect_fill(&rect, palette).unwrap_or(options.fallback_frame_fill);
+            emit_rect(r, fill, &mut list);
+            if let Some(paint) = resolve_rect_stroke(&rect, palette) {
+                let width = rect.stroke_weight.unwrap_or(1.0);
+                if width > 0.0 {
+                    emit_stroke_rect(r, Stroke::new(width), paint, &mut list);
+                }
+            }
+        }
     }
 
     let shaping_face = options
@@ -234,6 +254,22 @@ pub fn resolve_fill(frame: &TextFrame, palette: &Graphic) -> Option<Paint> {
 /// Same, for StrokeColor.
 pub fn resolve_stroke(frame: &TextFrame, palette: &Graphic) -> Option<Paint> {
     let id = frame.stroke_color.as_deref()?;
+    let entry = palette.resolve(id)?;
+    let [r, g, b] = graphic::to_linear_rgb(entry)?;
+    Some(Paint::Solid(Color::rgba(r, g, b, 1.0)))
+}
+
+/// Rectangle flavour of `resolve_fill` (no ParentStory to consider).
+pub fn resolve_rect_fill(rect: &Rectangle, palette: &Graphic) -> Option<Paint> {
+    let id = rect.fill_color.as_deref()?;
+    let entry = palette.resolve(id)?;
+    let [r, g, b] = graphic::to_linear_rgb(entry)?;
+    Some(Paint::Solid(Color::rgba(r, g, b, 1.0)))
+}
+
+/// Rectangle flavour of `resolve_stroke`.
+pub fn resolve_rect_stroke(rect: &Rectangle, palette: &Graphic) -> Option<Paint> {
+    let id = rect.stroke_color.as_deref()?;
     let entry = palette.resolve(id)?;
     let [r, g, b] = graphic::to_linear_rgb(entry)?;
     Some(Paint::Solid(Color::rgba(r, g, b, 1.0)))

@@ -45,8 +45,9 @@ pub struct LaidOutParagraph {
 }
 
 /// Paragraph-level horizontal alignment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Alignment {
+    #[default]
     Left,
     Right,
     Center,
@@ -54,12 +55,6 @@ pub enum Alignment {
     /// left-aligned (common typographic convention). Intermediate
     /// lines distribute extra width across inter-word glue.
     Justify,
-}
-
-impl Default for Alignment {
-    fn default() -> Self {
-        Alignment::Left
-    }
 }
 
 #[derive(Debug, Clone)]

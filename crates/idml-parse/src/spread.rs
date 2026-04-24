@@ -25,6 +25,10 @@ pub struct Spread {
     pub self_id: Option<String>,
     pub pages: Vec<Page>,
     pub text_frames: Vec<TextFrame>,
+    /// Axis-aligned rectangles used as pure vector frames (no parent
+    /// story). A full Rectangle path can have corner radii etc. — we
+    /// treat it as a rect; higher-fidelity paths come with §10.1.
+    pub rectangles: Vec<Rectangle>,
     /// Number of text frames skipped because they were nested inside a
     /// Group. Exposed so callers can flag lossy parses without reading
     /// logs.
@@ -53,6 +57,19 @@ pub struct TextFrame {
     pub stroke_color: Option<String>,
     /// `StrokeWeight` attribute, in points. `None` → document default
     /// (typically 1 pt in InDesign).
+    pub stroke_weight: Option<f32>,
+}
+
+/// Vector-only frame (no story). Mirrors `TextFrame` minus the
+/// `parent_story` field; shares the same paint / stroke handling
+/// downstream.
+#[derive(Debug, Clone, Serialize)]
+pub struct Rectangle {
+    pub self_id: Option<String>,
+    pub bounds: Bounds,
+    pub item_transform: Option<[f32; 6]>,
+    pub fill_color: Option<String>,
+    pub stroke_color: Option<String>,
     pub stroke_weight: Option<f32>,
 }
 
@@ -128,6 +145,27 @@ impl Spread {
                             fill_color,
                             stroke_color,
                             stroke_weight,
+                        });
+                    }
+                    b"Rectangle" => {
+                        let Some(bounds) =
+                            attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s))
+                        else {
+                            continue;
+                        };
+                        if group_depth > 0 {
+                            out.skipped_nested_frames += 1;
+                            continue;
+                        }
+                        out.rectangles.push(Rectangle {
+                            self_id: attr(&e, b"Self"),
+                            bounds,
+                            item_transform: attr(&e, b"ItemTransform")
+                                .and_then(|s| parse_matrix(&s)),
+                            fill_color: attr(&e, b"FillColor"),
+                            stroke_color: attr(&e, b"StrokeColor"),
+                            stroke_weight: attr(&e, b"StrokeWeight")
+                                .and_then(|s| s.parse::<f32>().ok()),
                         });
                     }
                     _ => {}
@@ -235,6 +273,27 @@ mod tests {
         assert_eq!(s.skipped_nested_frames, 1);
         assert_eq!(s.text_frames[0].self_id.as_deref(), Some("top"));
         assert_eq!(s.text_frames[1].self_id.as_deref(), Some("after"));
+    }
+
+    #[test]
+    fn parses_rectangles_alongside_text_frames() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <TextFrame Self="t1" ParentStory="u1" GeometricBounds="0 0 100 200"/>
+            <Rectangle Self="r1" GeometricBounds="10 10 90 190"
+                       FillColor="Color/Blue" StrokeColor="Color/Black"
+                       StrokeWeight="1.5"/>
+            <Rectangle Self="r2" GeometricBounds="200 200 300 300"/>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.text_frames.len(), 1);
+        assert_eq!(s.rectangles.len(), 2);
+        assert_eq!(s.rectangles[0].self_id.as_deref(), Some("r1"));
+        assert_eq!(s.rectangles[0].fill_color.as_deref(), Some("Color/Blue"));
+        assert_eq!(s.rectangles[0].stroke_weight, Some(1.5));
+        assert_eq!(s.rectangles[1].fill_color, None);
     }
 
     #[test]
