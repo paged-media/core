@@ -17,3 +17,6 @@ zip = { workspace = true }
 quick-xml = { workspace = true }
 serde = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+zip = { workspace = true }

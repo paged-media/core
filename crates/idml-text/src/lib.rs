@@ -9,3 +9,7 @@
 //! Calibration of Paragraph Composer parity happens in
 //! `spikes/composer-calibration` before this crate takes a hard dependency
 //! on any specific penalty configuration.
+
+pub mod shape;
+
+pub use shape::{shape_run, ShapedGlyph, ShapedRun};

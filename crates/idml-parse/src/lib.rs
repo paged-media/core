@@ -36,6 +36,7 @@ pub enum ParseError {
 ///
 /// The raw-entry map keeps `Bytes` so downstream crates can slice sub-
 /// resources (individual `Stories/Story_*.xml` etc.) without copying.
+#[derive(Debug)]
 pub struct Container {
     pub mimetype: String,
     pub designmap_raw: Bytes,
