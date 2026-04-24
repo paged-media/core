@@ -11,10 +11,14 @@
 //! on any specific penalty configuration.
 
 pub mod compose;
+pub mod layout;
 pub mod shape;
 
 pub use compose::{
     compose_paragraph, AdvanceMeasurer, ComposeOptions, ComposedLine, MonospaceMeasurer,
-    RustybuzzMeasurer,
+    RustybuzzMeasurer, TextShaper,
+};
+pub use layout::{
+    layout_paragraph, position_line, LaidOutLine, LaidOutParagraph, LayoutOptions, PositionedGlyph,
 };
 pub use shape::{shape_run, ShapedGlyph, ShapedRun};

@@ -17,7 +17,7 @@
 use paragraph_breaker::{Breakpoint, Item};
 use rustybuzz::Face;
 
-use crate::shape::{shape_run, ADVANCE_PRECISION};
+use crate::shape::{shape_run, ShapedGlyph, ShapedRun, ADVANCE_PRECISION};
 
 /// Abstraction over width measurement. Returns advances in 1/64 pt.
 pub trait AdvanceMeasurer {
@@ -25,6 +25,18 @@ pub trait AdvanceMeasurer {
     fn measure_word(&self, text: &str) -> i32;
     /// Advance width of a single inter-word break opportunity.
     fn space_width(&self) -> i32;
+}
+
+/// Produces per-glyph data the layout pass needs to position text.
+///
+/// This sits *above* [`AdvanceMeasurer`]: every shaper is also a
+/// measurer (measurement is just `shape(text).total_advance`). The
+/// two traits are separate because the composer only needs widths —
+/// keeping the cheaper path allocation-free where possible.
+pub trait TextShaper: AdvanceMeasurer {
+    /// Shape `text` into glyph ids + advances at the shaper's point
+    /// size. Units are 1/64 pt.
+    fn shape(&self, text: &str) -> ShapedRun;
 }
 
 /// Knobs the calibration spike tunes against InDesign.
@@ -195,6 +207,12 @@ impl AdvanceMeasurer for RustybuzzMeasurer<'_> {
     }
 }
 
+impl TextShaper for RustybuzzMeasurer<'_> {
+    fn shape(&self, text: &str) -> ShapedRun {
+        shape_run(self.face, text, self.point_size)
+    }
+}
+
 /// Deterministic measurer used in tests and by tooling that doesn't want
 /// to ship a TTF. Treats each Unicode scalar as having a fixed width.
 pub struct MonospaceMeasurer {
@@ -218,6 +236,39 @@ impl AdvanceMeasurer for MonospaceMeasurer {
 
     fn space_width(&self) -> i32 {
         self.space_width
+    }
+}
+
+impl TextShaper for MonospaceMeasurer {
+    /// Produces a synthetic `ShapedRun` — one glyph per Unicode scalar.
+    /// Useful for layout-pass tests without shipping a test font.
+    fn shape(&self, text: &str) -> ShapedRun {
+        let mut byte_cursor = 0u32;
+        let mut total = 0i32;
+        let glyphs: Vec<ShapedGlyph> = text
+            .chars()
+            .map(|c| {
+                let cluster = byte_cursor;
+                byte_cursor += c.len_utf8() as u32;
+                let advance = if c.is_whitespace() {
+                    self.space_width
+                } else {
+                    self.char_width
+                };
+                total += advance;
+                ShapedGlyph {
+                    glyph_id: c as u32,
+                    cluster,
+                    x_advance: advance,
+                    y_offset: 0,
+                    x_offset: 0,
+                }
+            })
+            .collect();
+        ShapedRun {
+            glyphs,
+            total_advance: total,
+        }
     }
 }
 
