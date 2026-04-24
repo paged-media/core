@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/idml-parse",
+    "crates/idml-scene",
+    "crates/idml-text",
+    "crates/idml-color",
+    "crates/idml-compose",
+    "crates/idml-gpu",
+    "crates/idml-renderer",
+    "crates/idml-fidelity",
+    "crates/idml-wasm",
+    "spikes/vello-eval",
+    "spikes/composer-calibration",
+    "spikes/wasm-size",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.80"
+license = "UNLICENSED"
+publish = false
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+needless_pass_by_value = "allow"
+too_many_arguments = "allow"
+
+# Shared dependency versions. Individual crates pick what they need.
+# Versions are intentionally conservative pins; bump during Phase 0.
+[workspace.dependencies]
+thiserror = "2"
+anyhow = "1"
+bytes = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+quick-xml = { version = "0.36", features = ["serialize"] }
+serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
+image = { version = "0.25", default-features = false, features = ["png"] }

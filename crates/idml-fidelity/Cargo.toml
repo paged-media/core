@@ -1,0 +1,22 @@
+[package]
+name = "idml-fidelity"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Fidelity corpus harness: reference rasterization, ΔE2000 + SSIM diff, CI gate."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "idml-diff"
+path = "src/bin/diff.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+image = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }

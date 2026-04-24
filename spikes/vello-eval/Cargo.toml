@@ -1,0 +1,23 @@
+[package]
+name = "spike-vello-eval"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Spike A: evaluate Vello against idea.md §10 feature requirements."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "vello-eval"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+image = { workspace = true }
+pollster = "0.4"
+wgpu = "22"
+vello = "0.3"
+ttf-parser = "0.24"

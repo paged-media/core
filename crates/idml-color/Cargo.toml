@@ -1,0 +1,21 @@
+[package]
+name = "idml-color"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "ICC-based color management. Resolves all paints to linear RGB before GPU handoff."
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# lcms2 is native-only here; the WASM story is spiked in spikes/wasm-size.
+# We feature-gate so the workspace builds on wasm32 without pulling in the
+# C dependency until the spike concludes.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lcms2 = "6"

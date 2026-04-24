@@ -1,0 +1,21 @@
+[package]
+name = "idml-renderer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Top-level renderer coordinator. The public Rust API surface."
+
+[lints]
+workspace = true
+
+[dependencies]
+idml-parse = { path = "../idml-parse" }
+idml-scene = { path = "../idml-scene" }
+idml-text = { path = "../idml-text" }
+idml-color = { path = "../idml-color" }
+idml-compose = { path = "../idml-compose" }
+idml-gpu = { path = "../idml-gpu" }
+thiserror = { workspace = true }
+tracing = { workspace = true }

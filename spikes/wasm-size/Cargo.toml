@@ -1,0 +1,28 @@
+[package]
+name = "spike-wasm-size"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Spike C: measure compressed WASM size with the heavy dependencies linked in."
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Native build: library is effectively empty so `cargo check --workspace`
+# passes without a full WASM toolchain. The real target is wasm32; see
+# measure.sh in this directory.
+[dependencies]
+rustybuzz = "0.18"
+ttf-parser = "0.24"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wgpu = { version = "22", default-features = false, features = ["webgpu"] }
+# NOTE: release-profile tweaks (opt-level = "z", lto, panic = abort, strip)
+# are applied via measure.sh flags rather than a package-level profile,
+# because Cargo ignores profiles declared in workspace-member packages.

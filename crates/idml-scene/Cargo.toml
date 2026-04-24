@@ -1,0 +1,16 @@
+[package]
+name = "idml-scene"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Resolved scene graph: spreads, pages, frames, stories, flattened style state."
+
+[lints]
+workspace = true
+
+[dependencies]
+idml-parse = { path = "../idml-parse" }
+thiserror = { workspace = true }
+tracing = { workspace = true }

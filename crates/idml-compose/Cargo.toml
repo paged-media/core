@@ -1,0 +1,18 @@
+[package]
+name = "idml-compose"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Scene graph → flat display list (the GPU handoff format)."
+
+[lints]
+workspace = true
+
+[dependencies]
+idml-scene = { path = "../idml-scene" }
+idml-text = { path = "../idml-text" }
+idml-color = { path = "../idml-color" }
+thiserror = { workspace = true }
+tracing = { workspace = true }

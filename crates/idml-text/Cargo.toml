@@ -1,0 +1,22 @@
+[package]
+name = "idml-text"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Text engine: shaping (rustybuzz), Knuth-Plass line breaking, hyphenation, composition."
+
+[lints]
+workspace = true
+
+[dependencies]
+idml-scene = { path = "../idml-scene" }
+rustybuzz = "0.18"
+ttf-parser = "0.24"
+paragraph-breaker = "0.4"
+hyphenation = { version = "0.8", features = ["embed_all"] }
+unicode-bidi = "0.3"
+unicode-segmentation = "1"
+thiserror = { workspace = true }
+tracing = { workspace = true }
