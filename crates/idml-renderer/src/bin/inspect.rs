@@ -18,7 +18,10 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use idml_compose::{emit_paragraph, emit_rect, Color, DisplayList, Paint, Rect, TtfOutliner};
+use idml_compose::{
+    emit_paragraph, emit_rect, emit_stroke_rect, Color, DisplayList, Paint, Rect, Stroke,
+    TtfOutliner,
+};
 use idml_parse::{graphic, Container, Graphic, Spread, Story};
 
 #[derive(Parser, Debug)]
@@ -133,16 +136,19 @@ fn main() -> Result<()> {
                 describe_fill(&frame, &palette),
             );
             if args.display_list {
-                emit_rect(
-                    Rect {
-                        x: frame.bounds.left,
-                        y: frame.bounds.top,
-                        w: frame.bounds.width(),
-                        h: frame.bounds.height(),
-                    },
-                    fill_paint,
-                    &mut list,
-                );
+                let rect = Rect {
+                    x: frame.bounds.left,
+                    y: frame.bounds.top,
+                    w: frame.bounds.width(),
+                    h: frame.bounds.height(),
+                };
+                emit_rect(rect, fill_paint, &mut list);
+                if let Some(stroke_paint) = resolve_stroke(&frame, &palette) {
+                    let width = frame.stroke_weight.unwrap_or(1.0);
+                    if width > 0.0 {
+                        emit_stroke_rect(rect, Stroke::new(width), stroke_paint, &mut list);
+                    }
+                }
             }
             if let Some(story_id) = frame.parent_story.clone() {
                 frame_for_story.insert(story_id, frame);
@@ -267,6 +273,14 @@ fn main() -> Result<()> {
 /// convert to linear RGB, drop alpha at 1.0. None means "fall back".
 fn resolve_fill(frame: &idml_parse::TextFrame, palette: &Graphic) -> Option<Paint> {
     let id = frame.fill_color.as_deref()?;
+    let entry = palette.resolve(id)?;
+    let [r, g, b] = graphic::to_linear_rgb(entry)?;
+    Some(Paint::Solid(Color::rgba(r, g, b, 1.0)))
+}
+
+/// Same, for StrokeColor.
+fn resolve_stroke(frame: &idml_parse::TextFrame, palette: &Graphic) -> Option<Paint> {
+    let id = frame.stroke_color.as_deref()?;
     let entry = palette.resolve(id)?;
     let [r, g, b] = graphic::to_linear_rgb(entry)?;
     Some(Paint::Solid(Color::rgba(r, g, b, 1.0)))

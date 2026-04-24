@@ -51,6 +51,9 @@ pub struct TextFrame {
     pub fill_color: Option<String>,
     /// `StrokeColor` attribute.
     pub stroke_color: Option<String>,
+    /// `StrokeWeight` attribute, in points. `None` → document default
+    /// (typically 1 pt in InDesign).
+    pub stroke_weight: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
@@ -115,6 +118,8 @@ impl Spread {
                             attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s));
                         let fill_color = attr(&e, b"FillColor");
                         let stroke_color = attr(&e, b"StrokeColor");
+                        let stroke_weight =
+                            attr(&e, b"StrokeWeight").and_then(|s| s.parse::<f32>().ok());
                         out.text_frames.push(TextFrame {
                             self_id: attr(&e, b"Self"),
                             parent_story,
@@ -122,6 +127,7 @@ impl Spread {
                             item_transform,
                             fill_color,
                             stroke_color,
+                            stroke_weight,
                         });
                     }
                     _ => {}

@@ -51,7 +51,7 @@ fn build_idml() -> Vec<u8> {
     <Page Self="p1" GeometricBounds="0 0 792 612"/>
     <Page Self="p2" GeometricBounds="0 612 792 1224"/>
     <TextFrame Self="frameA" ParentStory="u10" GeometricBounds="72 72 720 540"
-               FillColor="Color/Red"/>
+               FillColor="Color/Red" StrokeColor="Color/Paper" StrokeWeight="2"/>
     <TextFrame Self="frameB" ParentStory="u20" GeometricBounds="100 700 300 1100"/>
   </Spread>
 </idPkg:Spread>"#,
@@ -185,9 +185,10 @@ fn display_list_flag_emits_one_command_per_frame_without_font() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Two frames → two FillPath commands; shared unit-rect → one path.
+    // Two frames → two FillPath commands, plus one StrokePath for
+    // frame A's stroke. All three share the interned unit-rect.
     assert!(
-        stdout.contains("display-list: 2 command(s), 1 unique path(s)"),
+        stdout.contains("display-list: 3 command(s), 1 unique path(s)"),
         "stdout:\n{stdout}"
     );
 }

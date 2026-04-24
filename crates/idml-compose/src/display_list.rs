@@ -201,8 +201,55 @@ pub enum DisplayCommand {
         paint: Paint,
         transform: Transform,
     },
-    // StrokePath, DrawImage, PushLayer, PopLayer, PushClip, PopClip
-    // land with §10.3 / §10.4.
+    /// Stroke a path with a paint + stroke parameters, positioned by
+    /// `transform`. Stroke width is in pt, *after* `transform` is
+    /// applied — rasterizers pick up the document-space width from
+    /// `stroke.width` rather than a scaled derivation of the path
+    /// points.
+    StrokePath {
+        path_id: PathId,
+        paint: Paint,
+        stroke: Stroke,
+        transform: Transform,
+    },
+    // DrawImage, PushLayer, PopLayer, PushClip, PopClip land with
+    // §10.3 / §10.4.
+}
+
+/// Stroke parameters. Widths are in pt.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Stroke {
+    pub width: f32,
+    pub cap: LineCap,
+    pub join: LineJoin,
+    pub miter_limit: f32,
+}
+
+impl Stroke {
+    /// Minimal defaults: `width` set by caller, butt caps, miter
+    /// joins, miter_limit=4.0 (PDF default).
+    pub fn new(width: f32) -> Self {
+        Self {
+            width,
+            cap: LineCap::Butt,
+            join: LineJoin::Miter,
+            miter_limit: 4.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LineCap {
+    Butt,
+    Round,
+    Square,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LineJoin {
+    Miter,
+    Round,
+    Bevel,
 }
 
 #[derive(Debug, Default)]

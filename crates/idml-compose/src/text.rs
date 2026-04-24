@@ -170,8 +170,9 @@ mod tests {
             &UnitSquareOutliner::default(),
             &mut list,
         );
-        let first = match list.commands[0] {
+        let first = match &list.commands[0] {
             DisplayCommand::FillPath { transform, .. } => transform.0,
+            other => panic!("expected FillPath, got {other:?}"),
         };
         // tx = 100 + glyph.x/64 = 100 + 0 = 100 (first glyph at x=0).
         assert!((first[4] - 100.0).abs() < 1e-4, "tx = {}", first[4]);
@@ -201,6 +202,7 @@ mod tests {
             .iter()
             .map(|c| match c {
                 DisplayCommand::FillPath { paint, .. } => *paint,
+                other => panic!("expected FillPath, got {other:?}"),
             })
             .collect();
         assert_eq!(paints[0], red);
@@ -220,8 +222,9 @@ mod tests {
             &UnitSquareOutliner::default(),
             &mut list,
         );
-        let m = match list.commands[0] {
+        let m = match &list.commands[0] {
             DisplayCommand::FillPath { transform, .. } => transform.0,
+            other => panic!("expected FillPath, got {other:?}"),
         };
         // d (y-scale) must be negative — fonts are y-up, pages y-down.
         assert!(m[3] < 0.0, "y-scale not flipped: {:?}", m);

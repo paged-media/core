@@ -7,7 +7,7 @@
 //! cache keys — memory-efficient for documents with many frames.
 
 use crate::display_list::{
-    DisplayCommand, DisplayList, Paint, PathData, PathSegment, Rect, Transform,
+    DisplayCommand, DisplayList, Paint, PathData, PathSegment, Rect, Stroke, Transform,
 };
 
 /// Cache key for the unit rectangle `[0, 0, 1, 1]`. Any interned-path
@@ -25,6 +25,20 @@ pub fn emit_rect(rect: Rect, paint: Paint, list: &mut DisplayList) {
     list.push(DisplayCommand::FillPath {
         path_id,
         paint,
+        transform,
+    });
+}
+
+/// Emit a `StrokePath` command for an axis-aligned rectangle. Reuses
+/// the same interned unit-rect path as [`emit_rect`], so a document
+/// with N stroked frames still stores exactly one rect outline.
+pub fn emit_stroke_rect(rect: Rect, stroke: Stroke, paint: Paint, list: &mut DisplayList) {
+    let (path_id, _) = list.paths.intern(UNIT_RECT_KEY, unit_rect());
+    let transform = Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]);
+    list.push(DisplayCommand::StrokePath {
+        path_id,
+        paint,
+        stroke,
         transform,
     });
 }
@@ -94,13 +108,56 @@ mod tests {
             Paint::Solid(Color::WHITE),
             &mut list,
         );
-        let t = match list.commands[0] {
-            DisplayCommand::FillPath { transform, .. } => transform,
+        let t = match &list.commands[0] {
+            DisplayCommand::FillPath { transform, .. } => *transform,
+            DisplayCommand::StrokePath { transform, .. } => *transform,
         };
         // Unit rect corners: (0,0), (1,0), (1,1), (0,1).
         assert_eq!(t.apply(0.0, 0.0), (100.0, 200.0));
         assert_eq!(t.apply(1.0, 0.0), (400.0, 200.0));
         assert_eq!(t.apply(1.0, 1.0), (400.0, 600.0));
         assert_eq!(t.apply(0.0, 1.0), (100.0, 600.0));
+    }
+
+    #[test]
+    fn stroke_rect_emits_stroke_command() {
+        let mut list = DisplayList::new();
+        emit_stroke_rect(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 50.0,
+            },
+            Stroke::new(2.0),
+            Paint::Solid(Color::BLACK),
+            &mut list,
+        );
+        assert_eq!(list.commands.len(), 1);
+        match &list.commands[0] {
+            DisplayCommand::StrokePath { stroke, .. } => {
+                assert_eq!(stroke.width, 2.0);
+            }
+            _ => panic!("expected StrokePath"),
+        }
+    }
+
+    #[test]
+    fn fill_and_stroke_rect_share_one_interned_path() {
+        let mut list = DisplayList::new();
+        let r = Rect {
+            x: 10.0,
+            y: 20.0,
+            w: 30.0,
+            h: 40.0,
+        };
+        emit_rect(r, Paint::Solid(Color::WHITE), &mut list);
+        emit_stroke_rect(r, Stroke::new(1.0), Paint::Solid(Color::BLACK), &mut list);
+        assert_eq!(list.commands.len(), 2);
+        assert_eq!(
+            list.paths.len(),
+            1,
+            "fill + stroke should share the unit rect"
+        );
     }
 }

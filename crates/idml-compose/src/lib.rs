@@ -12,9 +12,9 @@ pub mod primitives;
 pub mod text;
 
 pub use display_list::{
-    Color, DisplayCommand, DisplayList, GlyphCacheKey, Paint, PathBuffer, PathData, PathId,
-    PathSegment, Rect, Transform,
+    Color, DisplayCommand, DisplayList, GlyphCacheKey, LineCap, LineJoin, Paint, PathBuffer,
+    PathData, PathId, PathSegment, Rect, Stroke, Transform,
 };
 pub use glyph::{GlyphOutliner, TtfOutliner, UnitSquareOutliner};
-pub use primitives::{emit_rect, UNIT_RECT_KEY};
+pub use primitives::{emit_rect, emit_stroke_rect, UNIT_RECT_KEY};
 pub use text::emit_paragraph;
