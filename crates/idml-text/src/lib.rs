@@ -10,6 +10,11 @@
 //! `spikes/composer-calibration` before this crate takes a hard dependency
 //! on any specific penalty configuration.
 
+pub mod compose;
 pub mod shape;
 
+pub use compose::{
+    compose_paragraph, AdvanceMeasurer, ComposeOptions, ComposedLine, MonospaceMeasurer,
+    RustybuzzMeasurer,
+};
 pub use shape::{shape_run, ShapedGlyph, ShapedRun};
