@@ -1,0 +1,289 @@
+//! CPU rasterizer via `tiny-skia`.
+//!
+//! Takes a `DisplayList` and produces an 8-bit sRGB `RgbImage`. This is
+//! the "always works" backend — no GPU required, no driver bugs, useful
+//! for tests, the fidelity harness, and CI. The GPU path (Vello) lives
+//! in a separate module once Spike A concludes.
+//!
+//! Coordinate system mirrors the display list: page space in pt, origin
+//! top-left, y-down. `dpi` scales pt → pixels.
+//!
+//! Colour pipeline: Paints carry linear RGB (as per `idml-compose`).
+//! tiny-skia expects sRGB; we apply the sRGB gamma curve at the paint
+//! boundary. Fidelity-level ICC colour management comes through
+//! `idml-color` — this module stays in the simple path.
+
+use idml_compose::{
+    Color as CComposeColor, DisplayCommand, DisplayList, LineCap, LineJoin, Paint, PathData,
+    PathSegment, Transform as CTransform,
+};
+use image::{Rgba, RgbaImage};
+use tiny_skia::{
+    FillRule, LineCap as TsLineCap, LineJoin as TsLineJoin, Paint as TsPaint, PathBuilder, Pixmap,
+    Stroke as TsStroke, Transform as TsTransform,
+};
+
+#[derive(Debug, Clone, Copy)]
+pub struct RasterOptions {
+    /// Page width in pt.
+    pub page_width_pt: f32,
+    /// Page height in pt.
+    pub page_height_pt: f32,
+    /// Output DPI; 72 produces 1px per pt, 300 is print-quality.
+    pub dpi: f32,
+    /// Fill colour applied to the whole canvas before any commands.
+    /// Linear RGB, as per display-list convention.
+    pub background: CComposeColor,
+}
+
+impl RasterOptions {
+    pub fn new(page_width_pt: f32, page_height_pt: f32) -> Self {
+        Self {
+            page_width_pt,
+            page_height_pt,
+            dpi: 96.0,
+            background: CComposeColor::WHITE,
+        }
+    }
+}
+
+/// Rasterise `list` to an 8-bit sRGB RGBA image at the configured DPI.
+pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
+    let scale = options.dpi / 72.0;
+    let px_w = ((options.page_width_pt * scale).ceil() as u32).max(1);
+    let px_h = ((options.page_height_pt * scale).ceil() as u32).max(1);
+
+    let mut pixmap = Pixmap::new(px_w, px_h).expect("non-zero pixmap");
+    pixmap.fill(linear_color_to_ts(options.background));
+
+    // Everything pt-space is scaled uniformly by `scale` into px-space.
+    let page_to_px = TsTransform::from_scale(scale, scale);
+
+    for cmd in &list.commands {
+        match cmd {
+            DisplayCommand::FillPath {
+                path_id,
+                paint,
+                transform,
+            } => {
+                let Some(path_data) = list.paths.get(*path_id) else {
+                    continue;
+                };
+                let Some(path) = build_path_transformed(path_data, transform) else {
+                    continue;
+                };
+                let ts_paint = paint_to_ts(paint);
+                pixmap.fill_path(&path, &ts_paint, FillRule::Winding, page_to_px, None);
+            }
+            DisplayCommand::StrokePath {
+                path_id,
+                paint,
+                stroke,
+                transform,
+            } => {
+                let Some(path_data) = list.paths.get(*path_id) else {
+                    continue;
+                };
+                let Some(path) = build_path_transformed(path_data, transform) else {
+                    continue;
+                };
+                let ts_paint = paint_to_ts(paint);
+                // Stroke width is in pt (page units). page_to_px will
+                // scale both the path and the stroke uniformly.
+                let ts_stroke = TsStroke {
+                    width: stroke.width.max(0.0),
+                    line_cap: map_cap(stroke.cap),
+                    line_join: map_join(stroke.join),
+                    miter_limit: stroke.miter_limit.max(1.0),
+                    ..Default::default()
+                };
+                pixmap.stroke_path(&path, &ts_paint, &ts_stroke, page_to_px, None);
+            }
+        }
+    }
+
+    let data = pixmap.take();
+    RgbaImage::from_raw(px_w, px_h, data)
+        .unwrap_or_else(|| RgbaImage::from_pixel(px_w, px_h, Rgba([0, 0, 0, 0])))
+}
+
+/// Build a tiny-skia path with `path_transform` applied to every
+/// control point. After this, the path lives in page space, so stroke
+/// widths — specified in pt — aren't distorted by non-uniform rect
+/// transforms (which would otherwise make horizontal edges thicker
+/// than vertical ones on a non-square frame).
+fn build_path_transformed(data: &PathData, path_transform: &CTransform) -> Option<tiny_skia::Path> {
+    let apply = |x: f32, y: f32| {
+        let [a, b, c, d, tx, ty] = path_transform.0;
+        (a * x + c * y + tx, b * x + d * y + ty)
+    };
+    let mut bld = PathBuilder::new();
+    for seg in &data.segments {
+        match *seg {
+            PathSegment::MoveTo { x, y } => {
+                let (px, py) = apply(x, y);
+                bld.move_to(px, py);
+            }
+            PathSegment::LineTo { x, y } => {
+                let (px, py) = apply(x, y);
+                bld.line_to(px, py);
+            }
+            PathSegment::QuadTo { cx, cy, x, y } => {
+                let (pcx, pcy) = apply(cx, cy);
+                let (px, py) = apply(x, y);
+                bld.quad_to(pcx, pcy, px, py);
+            }
+            PathSegment::CubicTo {
+                cx1,
+                cy1,
+                cx2,
+                cy2,
+                x,
+                y,
+            } => {
+                let (p1x, p1y) = apply(cx1, cy1);
+                let (p2x, p2y) = apply(cx2, cy2);
+                let (px, py) = apply(x, y);
+                bld.cubic_to(p1x, p1y, p2x, p2y, px, py);
+            }
+            PathSegment::Close => bld.close(),
+        }
+    }
+    bld.finish()
+}
+
+fn paint_to_ts(paint: &Paint) -> TsPaint<'static> {
+    match paint {
+        Paint::Solid(c) => {
+            let mut p = TsPaint::default();
+            p.set_color(linear_color_to_ts(*c));
+            p.anti_alias = true;
+            p
+        }
+    }
+}
+
+/// Linear RGB (0..=1) → sRGB-encoded tiny_skia::Color.
+fn linear_color_to_ts(c: CComposeColor) -> tiny_skia::Color {
+    let r = linear_to_srgb(c.r.clamp(0.0, 1.0));
+    let g = linear_to_srgb(c.g.clamp(0.0, 1.0));
+    let b = linear_to_srgb(c.b.clamp(0.0, 1.0));
+    let a = c.a.clamp(0.0, 1.0);
+    tiny_skia::Color::from_rgba(r, g, b, a).unwrap_or(tiny_skia::Color::BLACK)
+}
+
+fn linear_to_srgb(c: f32) -> f32 {
+    if c <= 0.003_130_8 {
+        12.92 * c
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+fn map_cap(cap: LineCap) -> TsLineCap {
+    match cap {
+        LineCap::Butt => TsLineCap::Butt,
+        LineCap::Round => TsLineCap::Round,
+        LineCap::Square => TsLineCap::Square,
+    }
+}
+
+fn map_join(join: LineJoin) -> TsLineJoin {
+    match join {
+        LineJoin::Miter => TsLineJoin::Miter,
+        LineJoin::Round => TsLineJoin::Round,
+        LineJoin::Bevel => TsLineJoin::Bevel,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use idml_compose::{emit_rect, emit_stroke_rect, Color, DisplayList, Paint, Rect};
+
+    fn at(img: &RgbaImage, x: u32, y: u32) -> [u8; 4] {
+        img.get_pixel(x, y).0
+    }
+
+    #[test]
+    fn empty_list_renders_background() {
+        let list = DisplayList::new();
+        let opts = RasterOptions::new(10.0, 10.0);
+        let img = rasterize(&list, &opts);
+        let p = at(&img, 2, 2);
+        assert_eq!(p[3], 255, "alpha");
+        assert!(
+            p[0] > 240 && p[1] > 240 && p[2] > 240,
+            "bg white, got {p:?}"
+        );
+    }
+
+    #[test]
+    fn red_rect_fills_expected_pixels() {
+        let mut list = DisplayList::new();
+        let red = Paint::Solid(Color::rgba(1.0, 0.0, 0.0, 1.0));
+        emit_rect(
+            Rect {
+                x: 10.0,
+                y: 10.0,
+                w: 30.0,
+                h: 20.0,
+            },
+            red,
+            &mut list,
+        );
+        let mut opts = RasterOptions::new(50.0, 50.0);
+        opts.dpi = 72.0; // 1 px = 1 pt, so rect covers x=10..40, y=10..30.
+        let img = rasterize(&list, &opts);
+
+        // Sample inside the rect: should be ~(255, 0, 0).
+        let inside = at(&img, 20, 20);
+        assert!(inside[0] > 240, "inside red channel {inside:?}");
+        assert!(inside[1] < 15, "inside green {inside:?}");
+        assert!(inside[2] < 15, "inside blue {inside:?}");
+
+        // Sample outside the rect: background white.
+        let outside = at(&img, 2, 2);
+        assert!(outside[0] > 240 && outside[1] > 240 && outside[2] > 240);
+    }
+
+    #[test]
+    fn stroke_draws_around_rect_perimeter() {
+        let mut list = DisplayList::new();
+        let black = Paint::Solid(Color::rgba(0.0, 0.0, 0.0, 1.0));
+        emit_stroke_rect(
+            Rect {
+                x: 10.0,
+                y: 10.0,
+                w: 30.0,
+                h: 20.0,
+            },
+            idml_compose::Stroke::new(2.0),
+            black,
+            &mut list,
+        );
+        let mut opts = RasterOptions::new(50.0, 50.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        // The stroke straddles the boundary — the horizontal edge at
+        // y=10 should be dark.
+        let on_edge = at(&img, 20, 10);
+        assert!(
+            on_edge[0] < 100 && on_edge[1] < 100 && on_edge[2] < 100,
+            "edge should be dark; got {on_edge:?}"
+        );
+        // Outside the stroke: still background white.
+        let outside = at(&img, 2, 2);
+        assert!(outside[0] > 240, "expected white bg; got {outside:?}");
+    }
+
+    #[test]
+    fn dpi_scaling_changes_image_size() {
+        let list = DisplayList::new();
+        let mut opts = RasterOptions::new(100.0, 50.0);
+        opts.dpi = 144.0; // 2 px/pt
+        let img = rasterize(&list, &opts);
+        assert_eq!(img.width(), 200);
+        assert_eq!(img.height(), 100);
+    }
+}

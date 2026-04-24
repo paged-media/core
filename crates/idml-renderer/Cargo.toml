@@ -29,5 +29,6 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+idml-fidelity = { path = "../idml-fidelity" }
 zip = { workspace = true }
 tempfile = "3"

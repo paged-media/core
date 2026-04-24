@@ -168,6 +168,42 @@ fn inspects_synthetic_idml_with_spread_and_frames() {
 }
 
 #[test]
+fn render_flag_produces_png_that_passes_fidelity_self_diff() {
+    let tmp = tempfile::tempdir().unwrap();
+    let idml = tmp.path().join("hello.idml");
+    std::fs::write(&idml, build_idml()).unwrap();
+    let png_a = tmp.path().join("a.png");
+    let png_b = tmp.path().join("b.png");
+
+    // Render the same IDML twice under identical options.
+    for out in [&png_a, &png_b] {
+        let status = Command::new(inspect_binary())
+            .arg(&idml)
+            .arg("--render")
+            .arg(out)
+            .arg("--dpi")
+            .arg("72")
+            .status()
+            .expect("spawn idml-inspect");
+        assert!(status.success(), "render failed");
+        assert!(out.exists(), "PNG not produced at {:?}", out);
+    }
+
+    // Compare the two identical renders via the fidelity library —
+    // they should hit ΔE = 0 and SSIM = 1, clearing the gate.
+    let (report, _deltas) = idml_fidelity::diff::compare_pngs(&png_a, &png_b).unwrap();
+    assert!(
+        report.passes(),
+        "self-diff failed: mean ΔE={} p99 ΔE={} SSIM={}",
+        report.mean_delta_e,
+        report.p99_delta_e,
+        report.ssim
+    );
+    assert!(report.mean_delta_e < 1e-6, "mean ΔE should be zero");
+    assert!((report.ssim - 1.0).abs() < 1e-6, "SSIM should be 1");
+}
+
+#[test]
 fn display_list_flag_emits_one_command_per_frame_without_font() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("hello.idml");

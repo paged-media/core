@@ -44,6 +44,13 @@ struct Args {
     /// and report command / path counts.
     #[arg(long)]
     display_list: bool,
+    /// Rasterise the DisplayList via the CPU backend and write a PNG
+    /// to the given path. Implies --display-list.
+    #[arg(long)]
+    render: Option<PathBuf>,
+    /// DPI for --render output (72 = 1 px per pt; 300 = print).
+    #[arg(long, default_value_t = 144.0)]
+    dpi: f32,
 }
 
 fn main() -> Result<()> {
@@ -89,12 +96,21 @@ fn main() -> Result<()> {
         );
     }
 
+    // --render implies --display-list so the pipeline downstream of
+    // `args.display_list` is always populated when we need to raster.
+    let want_display_list = args.display_list || args.render.is_some();
+
     // Parse every Spread the manifest references, and index TextFrames
     // by their ParentStory so the story-walk below can fetch each
     // paragraph's column width without a second pass.
     let mut frame_for_story: HashMap<String, idml_parse::TextFrame> = HashMap::new();
     // Accumulates the scene's display list as we walk spreads + stories.
     let mut list = DisplayList::new();
+    // Track the page bounding box — union of all page rects — for the
+    // final --render pass. Defaults to US Letter if no spread is found.
+    let mut page_w: f32 = 612.0;
+    let mut page_h: f32 = 792.0;
+    let mut first_page = true;
     // Fallback fill when a frame has no FillColor (or it doesn't resolve).
     let placeholder_fill = Paint::Solid(Color::rgba(0.92, 0.92, 0.92, 1.0));
 
@@ -124,6 +140,14 @@ fn main() -> Result<()> {
                 p.bounds.width(),
                 p.bounds.height(),
             );
+            if first_page {
+                page_w = p.bounds.width();
+                page_h = p.bounds.height();
+                first_page = false;
+            } else {
+                page_w = page_w.max(p.bounds.width());
+                page_h = page_h.max(p.bounds.height());
+            }
         }
         for frame in spread.text_frames {
             let fill_paint = resolve_fill(&frame, &palette).unwrap_or(placeholder_fill);
@@ -135,7 +159,7 @@ fn main() -> Result<()> {
                 frame.bounds.height(),
                 describe_fill(&frame, &palette),
             );
-            if args.display_list {
+            if want_display_list {
                 let rect = Rect {
                     x: frame.bounds.left,
                     y: frame.bounds.top,
@@ -221,7 +245,7 @@ fn main() -> Result<()> {
                     laid_out.lines.len(),
                     col_pt
                 );
-                if args.display_list {
+                if want_display_list {
                     if let (Some(outline), Some(frame)) = (outline_face.as_ref(), frame) {
                         let outliner = TtfOutliner::new(outline);
                         let font_id = font_bytes.as_deref().map(fnv_1a_u32).unwrap_or(0);
@@ -256,7 +280,7 @@ fn main() -> Result<()> {
         gl = total_glyphs,
         ln = total_lines,
     );
-    if args.display_list {
+    if want_display_list {
         println!(
             "  display-list: {} command(s), {} unique path(s)",
             list.commands.len(),
@@ -265,6 +289,20 @@ fn main() -> Result<()> {
     }
     if shaping_face.is_none() {
         println!("  (pass --font <path> to shape + compose runs)");
+    }
+
+    if let Some(out) = args.render.as_deref() {
+        let mut opts = idml_gpu::RasterOptions::new(page_w, page_h);
+        opts.dpi = args.dpi;
+        let img = idml_gpu::rasterize(&list, &opts);
+        img.save(out)
+            .with_context(|| format!("write {}", out.display()))?;
+        println!(
+            "  rendered {} × {} px to {}",
+            img.width(),
+            img.height(),
+            out.display()
+        );
     }
     Ok(())
 }

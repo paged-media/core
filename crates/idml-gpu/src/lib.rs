@@ -5,6 +5,12 @@
 //! disturbing the rest of the pipeline. The choice is driven by Spike A
 //! in `spikes/vello-eval`.
 
+#[cfg(feature = "cpu")]
+pub mod cpu;
+
+#[cfg(feature = "cpu")]
+pub use cpu::{rasterize, RasterOptions};
+
 /// Abstraction over the rasterizer implementation.
 ///
 /// The trait surface is deliberately small so Spike A's evaluation can
