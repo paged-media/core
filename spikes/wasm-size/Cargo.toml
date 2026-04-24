@@ -19,6 +19,9 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 rustybuzz = "0.18"
 ttf-parser = "0.24"
+# Pulls in the full render stack so the measured artefact reflects
+# what a real browser deployment would ship.
+idml-wasm = { path = "../../crates/idml-wasm" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

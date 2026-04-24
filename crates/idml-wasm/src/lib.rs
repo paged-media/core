@@ -1,14 +1,113 @@
 //! wasm-bindgen surface.
 //!
-//! Wraps `idml-renderer` behind the TypeScript API described in
-//! idea.md §14.1. Native builds expose a plain library target so the
-//! crate can still participate in `cargo check --workspace`.
+//! Wraps `idml-renderer` behind a small browser-facing API:
+//!
+//! ```ts
+//! import init, { render_to_png, parse_summary } from 'idml-wasm';
+//! await init();
+//! const png = render_to_png(idmlBytes, fontBytes, 144);
+//! ```
+//!
+//! Native builds expose a plain library target so the crate can still
+//! participate in `cargo check --workspace`.
 
 #[cfg(target_arch = "wasm32")]
-use wasm_bindgen::prelude::*;
+mod wasm {
+    use idml_compose::Color;
+    use idml_parse::{Container, Graphic};
+    use idml_renderer::{pipeline, PipelineOptions};
+    use image::{codecs::png::PngEncoder, ImageEncoder};
+    use wasm_bindgen::prelude::*;
+
+    #[wasm_bindgen(start)]
+    pub fn on_start() {
+        console_error_panic_hook::set_once();
+        web_sys::console::log_1(&"idml-wasm: init".into());
+    }
+
+    /// Render an IDML to a PNG.
+    ///
+    /// `idml` is the container bytes. `font` is optional — when absent,
+    /// text is skipped and only frame rectangles are drawn. `dpi`
+    /// controls output resolution (72 = 1 px per pt, 300 = print).
+    #[wasm_bindgen]
+    pub fn render_to_png(
+        idml: &[u8],
+        font: Option<Box<[u8]>>,
+        dpi: f32,
+    ) -> Result<Vec<u8>, JsError> {
+        let container =
+            Container::open(idml).map_err(|e| JsError::new(&format!("open IDML: {e}")))?;
+
+        let palette = match container.entry("Resources/Graphic.xml") {
+            Some(raw) => Graphic::parse(raw).map_err(|e| JsError::new(&format!("graphic: {e}")))?,
+            None => Graphic::default(),
+        };
+
+        let font_slice = font.as_deref();
+        let opts = PipelineOptions {
+            font: font_slice,
+            ..PipelineOptions::default()
+        };
+
+        let (_built, img) = pipeline::render(&container, &palette, &opts, dpi, Color::WHITE)
+            .map_err(|e| JsError::new(&format!("render: {e}")))?;
+
+        let mut out = Vec::with_capacity((img.width() * img.height() * 4) as usize);
+        PngEncoder::new(&mut out)
+            .write_image(
+                img.as_raw(),
+                img.width(),
+                img.height(),
+                image::ExtendedColorType::Rgba8,
+            )
+            .map_err(|e| JsError::new(&format!("png encode: {e}")))?;
+        Ok(out)
+    }
+
+    /// Report parse + pipeline stats as a JSON string. Useful for the
+    /// host to display counts without running a full raster.
+    #[wasm_bindgen]
+    pub fn parse_summary(idml: &[u8]) -> Result<String, JsError> {
+        let container =
+            Container::open(idml).map_err(|e| JsError::new(&format!("open IDML: {e}")))?;
+        let palette = match container.entry("Resources/Graphic.xml") {
+            Some(raw) => Graphic::parse(raw).map_err(|e| JsError::new(&format!("graphic: {e}")))?,
+            None => Graphic::default(),
+        };
+        let opts = PipelineOptions::default();
+        let built = pipeline::build(&container, &palette, &opts)
+            .map_err(|e| JsError::new(&format!("build: {e}")))?;
+        Ok(format!(
+            "{{\"width_pt\":{:.2},\"height_pt\":{:.2},\
+             \"commands\":{},\"paths\":{},\
+             \"spreads\":{},\"pages\":{},\"frames\":{},\
+             \"stories\":{},\"paragraphs\":{},\"runs\":{}}}",
+            built.width_pt,
+            built.height_pt,
+            built.list.commands.len(),
+            built.list.paths.len(),
+            built.stats.spreads,
+            built.stats.pages,
+            built.stats.frames,
+            built.stats.stories,
+            built.stats.paragraphs,
+            built.stats.runs,
+        ))
+    }
+}
 
 #[cfg(target_arch = "wasm32")]
-#[wasm_bindgen(start)]
-pub fn start() {
-    web_sys::console::log_1(&"idml-wasm: init".into());
+pub use wasm::*;
+
+// Non-wasm builds keep the library buildable — important for
+// `cargo check --workspace` on native hosts and for `cargo doc`.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod native_shim {
+    //! Stub surface that makes the crate compile on native targets.
+    //! The real API is only available when built for wasm32.
+
+    pub fn is_wasm() -> bool {
+        false
+    }
 }
