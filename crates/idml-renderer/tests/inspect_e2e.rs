@@ -142,3 +142,28 @@ fn inspects_synthetic_idml_with_spread_and_frames() {
     assert!(stdout.contains("paragraphs=3"), "stdout:\n{stdout}");
     assert!(stdout.contains("runs=5"), "stdout:\n{stdout}");
 }
+
+#[test]
+fn display_list_flag_emits_one_command_per_frame_without_font() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("hello.idml");
+    std::fs::write(&path, build_idml()).unwrap();
+
+    let output = Command::new(inspect_binary())
+        .arg(&path)
+        .arg("--display-list")
+        .output()
+        .expect("spawn idml-inspect");
+    assert!(
+        output.status.success(),
+        "idml-inspect failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Two frames → two FillPath commands; shared unit-rect → one path.
+    assert!(
+        stdout.contains("display-list: 2 command(s), 1 unique path(s)"),
+        "stdout:\n{stdout}"
+    );
+}

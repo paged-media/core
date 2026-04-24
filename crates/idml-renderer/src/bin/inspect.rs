@@ -7,12 +7,18 @@
 //! paragraph belongs to a TextFrame, the frame's inner width is used
 //! as the composer's column width automatically, so line counts match
 //! the document's layout intent.
+//!
+//! With `--display-list`, also builds the page's DisplayList by
+//! emitting one `FillPath` command per frame background and (when a
+//! font is available) one `FillPath` per glyph. Command and path
+//! counts are reported at the end.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use idml_compose::{emit_paragraph, emit_rect, Color, DisplayList, Paint, Rect, TtfOutliner};
 use idml_parse::{Container, Spread, Story};
 
 #[derive(Parser, Debug)]
@@ -31,6 +37,10 @@ struct Args {
     /// want to experiment with a different column width.
     #[arg(long)]
     column_width_pt: Option<f32>,
+    /// Build the DisplayList (frame backgrounds + positioned glyphs)
+    /// and report command / path counts.
+    #[arg(long)]
+    display_list: bool,
 }
 
 fn main() -> Result<()> {
@@ -54,14 +64,23 @@ fn main() -> Result<()> {
         .as_deref()
         .map(|p| std::fs::read(p).with_context(|| format!("read font {}", p.display())))
         .transpose()?;
-    let face = font_bytes
+    let shaping_face = font_bytes
         .as_deref()
         .and_then(|b| rustybuzz::Face::from_slice(b, 0));
+    let outline_face = font_bytes
+        .as_deref()
+        .and_then(|b| ttf_parser::Face::parse(b, 0).ok());
 
     // Parse every Spread the manifest references, and index TextFrames
     // by their ParentStory so the story-walk below can fetch each
     // paragraph's column width without a second pass.
     let mut frame_for_story: HashMap<String, idml_parse::TextFrame> = HashMap::new();
+    // Accumulates the scene's display list as we walk spreads + stories.
+    let mut list = DisplayList::new();
+    // Placeholder frame-background paint — real paints come with the
+    // swatch / AppliedColor parser.
+    let placeholder_fill = Paint::Solid(Color::rgba(0.92, 0.92, 0.92, 1.0));
+
     for spread_ref in &container.designmap.spreads {
         let Some(raw) = container.entry(&spread_ref.src) else {
             eprintln!(
@@ -97,6 +116,18 @@ fn main() -> Result<()> {
                 frame.bounds.width(),
                 frame.bounds.height(),
             );
+            if args.display_list {
+                emit_rect(
+                    Rect {
+                        x: frame.bounds.left,
+                        y: frame.bounds.top,
+                        w: frame.bounds.width(),
+                        h: frame.bounds.height(),
+                    },
+                    placeholder_fill,
+                    &mut list,
+                );
+            }
             if let Some(story_id) = frame.parent_story.clone() {
                 frame_for_story.insert(story_id, frame);
             }
@@ -118,10 +149,6 @@ fn main() -> Result<()> {
             continue;
         };
         let story = Story::parse(raw)?;
-        // Match the frame by its ParentStory id. Stories are referenced
-        // by their "Self" attribute, which is embedded in the Story XML
-        // itself; the manifest src only encodes the filename, so we
-        // derive the id by stripping "Stories/Story_" and ".xml".
         let story_id = derive_story_id(&story_ref.src);
         let frame = story_id.as_ref().and_then(|id| frame_for_story.get(id));
         let column_width_pt = args
@@ -149,7 +176,7 @@ fn main() -> Result<()> {
                 total_runs += 1;
                 total_chars += r.text.chars().count();
                 let size = r.point_size.unwrap_or(args.default_size);
-                let (preview, glyph_count) = if let Some(face) = face.as_ref() {
+                let (preview, glyph_count) = if let Some(face) = shaping_face.as_ref() {
                     let shaped = idml_text::shape_run(face, &r.text, size);
                     total_glyphs += shaped.glyphs.len();
                     (first_line(&r.text), shaped.glyphs.len())
@@ -162,16 +189,33 @@ fn main() -> Result<()> {
                 );
             }
 
-            if let (Some(face), Some(col_pt)) = (face.as_ref(), column_width_pt) {
+            if let (Some(face), Some(col_pt)) = (shaping_face.as_ref(), column_width_pt) {
                 let measurer = idml_text::RustybuzzMeasurer::new(face, paragraph_size);
-                let opts = idml_text::ComposeOptions::new(col_pt);
-                let lines = idml_text::compose_paragraph(&paragraph_text, &measurer, &opts);
-                total_lines += lines.len();
+                let lopts = idml_text::LayoutOptions::new(col_pt, paragraph_size);
+                let laid_out = idml_text::layout_paragraph(&paragraph_text, &measurer, &lopts);
+                total_lines += laid_out.lines.len();
                 println!(
                     "  p{pi:02}        composed lines={:<4} (column {:.2} pt)",
-                    lines.len(),
+                    laid_out.lines.len(),
                     col_pt
                 );
+                if args.display_list {
+                    if let (Some(outline), Some(frame)) = (outline_face.as_ref(), frame) {
+                        let outliner = TtfOutliner::new(outline);
+                        // Use a hash of the font bytes for the cache
+                        // key scope — fine for a single render.
+                        let font_id = font_bytes.as_deref().map(fnv_1a_u32).unwrap_or(0);
+                        emit_paragraph(
+                            &laid_out,
+                            font_id,
+                            paragraph_size,
+                            Paint::Solid(Color::BLACK),
+                            (frame.bounds.left, frame.bounds.top),
+                            &outliner,
+                            &mut list,
+                        );
+                    }
+                }
             }
         }
     }
@@ -185,14 +229,20 @@ fn main() -> Result<()> {
         gl = total_glyphs,
         ln = total_lines,
     );
-    if face.is_none() {
+    if args.display_list {
+        println!(
+            "  display-list: {} command(s), {} unique path(s)",
+            list.commands.len(),
+            list.paths.len(),
+        );
+    }
+    if shaping_face.is_none() {
         println!("  (pass --font <path> to shape + compose runs)");
     }
     Ok(())
 }
 
 fn derive_story_id(src: &str) -> Option<String> {
-    // Turn "Stories/Story_uXX.xml" → "uXX". Tolerant of prefix changes.
     let stem = src.rsplit_once('/').map(|(_, t)| t).unwrap_or(src);
     let without_ext = stem.strip_suffix(".xml").unwrap_or(stem);
     without_ext
@@ -209,4 +259,17 @@ fn first_line(s: &str) -> String {
     } else {
         line.to_string()
     }
+}
+
+fn fnv_1a_u32(bytes: &[u8]) -> u32 {
+    // 32-bit FNV-1a — cheap, non-cryptographic; fine for a per-render
+    // font-cache key.
+    const FNV_OFFSET: u32 = 0x811c_9dc5;
+    const FNV_PRIME: u32 = 0x0100_0193;
+    let mut h = FNV_OFFSET;
+    for &b in bytes {
+        h ^= b as u32;
+        h = h.wrapping_mul(FNV_PRIME);
+    }
+    h
 }

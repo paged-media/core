@@ -24,6 +24,7 @@ idml-gpu = { path = "../idml-gpu" }
 anyhow = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 rustybuzz = "0.18"
+ttf-parser = "0.24"
 thiserror = { workspace = true }
 tracing = { workspace = true }
 

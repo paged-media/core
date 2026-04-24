@@ -8,6 +8,7 @@
 
 pub mod display_list;
 pub mod glyph;
+pub mod primitives;
 pub mod text;
 
 pub use display_list::{
@@ -15,4 +16,5 @@ pub use display_list::{
     PathSegment, Rect, Transform,
 };
 pub use glyph::{GlyphOutliner, TtfOutliner, UnitSquareOutliner};
+pub use primitives::{emit_rect, UNIT_RECT_KEY};
 pub use text::emit_paragraph;
