@@ -20,3 +20,6 @@ image = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
