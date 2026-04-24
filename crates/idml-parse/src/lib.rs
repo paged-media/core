@@ -15,8 +15,10 @@ use std::io::{self, Cursor, Read};
 use bytes::Bytes;
 
 pub mod designmap;
+pub mod story;
 
-pub use designmap::{DesignMap, Spread, Story};
+pub use designmap::{DesignMap, Spread, StoryRef};
+pub use story::{CharacterRun, Paragraph, Story};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {

@@ -10,6 +10,10 @@ description = "Top-level renderer coordinator. The public Rust API surface."
 [lints]
 workspace = true
 
+[[bin]]
+name = "idml-inspect"
+path = "src/bin/inspect.rs"
+
 [dependencies]
 idml-parse = { path = "../idml-parse" }
 idml-scene = { path = "../idml-scene" }
@@ -17,5 +21,12 @@ idml-text = { path = "../idml-text" }
 idml-color = { path = "../idml-color" }
 idml-compose = { path = "../idml-compose" }
 idml-gpu = { path = "../idml-gpu" }
+anyhow = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+rustybuzz = "0.18"
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+zip = { workspace = true }
+tempfile = "3"
