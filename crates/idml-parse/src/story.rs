@@ -35,6 +35,10 @@ pub struct Story {
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct Paragraph {
     pub paragraph_style: Option<String>,
+    /// `Justification` attribute from IDML. Common values:
+    /// `LeftAlign`, `CenterAlign`, `RightAlign`, `FullyJustified`,
+    /// `LeftJustified`, `CenterJustified`, `RightJustified`.
+    pub justification: Option<String>,
     pub runs: Vec<CharacterRun>,
 }
 
@@ -67,6 +71,7 @@ impl Story {
                     b"ParagraphStyleRange" => {
                         current_paragraph = Some(Paragraph {
                             paragraph_style: attr(&e, b"AppliedParagraphStyle"),
+                            justification: attr(&e, b"Justification"),
                             runs: Vec::new(),
                         });
                     }

@@ -19,6 +19,7 @@ pub use compose::{
     RustybuzzMeasurer, TextShaper,
 };
 pub use layout::{
-    layout_paragraph, position_line, LaidOutLine, LaidOutParagraph, LayoutOptions, PositionedGlyph,
+    layout_paragraph, position_line, Alignment, LaidOutLine, LaidOutParagraph, LayoutOptions,
+    PositionedGlyph,
 };
 pub use shape::{shape_run, ShapedGlyph, ShapedRun};

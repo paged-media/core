@@ -175,7 +175,8 @@ pub fn build(
                 continue;
             };
             let measurer = idml_text::RustybuzzMeasurer::new(face, paragraph_size);
-            let lopts = idml_text::LayoutOptions::new(col_pt, paragraph_size);
+            let mut lopts = idml_text::LayoutOptions::new(col_pt, paragraph_size);
+            lopts.alignment = map_justification(paragraph.justification.as_deref());
             let laid_out = idml_text::layout_paragraph(&paragraph_text, &measurer, &lopts);
             stats.lines += laid_out.lines.len();
 
@@ -277,6 +278,17 @@ pub fn build_run_paint_picker(
         cursor += run.text.len() as u32;
     }
     RunPaintPicker { bands, default }
+}
+
+/// Map IDML `Justification` attribute values to `idml_text::Alignment`.
+/// Unknown or missing values fall back to `Left`.
+pub fn map_justification(j: Option<&str>) -> idml_text::Alignment {
+    match j {
+        Some("RightAlign") | Some("RightJustified") => idml_text::Alignment::Right,
+        Some("CenterAlign") | Some("CenterJustified") => idml_text::Alignment::Center,
+        Some("FullyJustified") | Some("LeftJustified") => idml_text::Alignment::Justify,
+        _ => idml_text::Alignment::Left,
+    }
 }
 
 /// Stories are manifested by src filename ("Stories/Story_uXX.xml");

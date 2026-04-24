@@ -112,6 +112,7 @@ mod tests {
             },
             line_height: 64 * 14,
             first_baseline: 64 * 10,
+            alignment: idml_text::Alignment::Left,
         };
         layout_paragraph(text, &shaper, &opts)
     }
