@@ -218,14 +218,19 @@ fn main() -> Result<()> {
                 if args.display_list {
                     if let (Some(outline), Some(frame)) = (outline_face.as_ref(), frame) {
                         let outliner = TtfOutliner::new(outline);
-                        // Use a hash of the font bytes for the cache
-                        // key scope — fine for a single render.
                         let font_id = font_bytes.as_deref().map(fnv_1a_u32).unwrap_or(0);
+                        // Build a cluster → Paint picker from the run
+                        // table: walk the paragraph text, track the
+                        // byte-offset where each run starts, and pick
+                        // based on which run's range contains the
+                        // cluster. Falls back to black when a run's
+                        // FillColor is absent or unresolved.
+                        let picker = run_paint_picker(p, &palette);
                         emit_paragraph(
                             &laid_out,
                             font_id,
                             paragraph_size,
-                            Paint::Solid(Color::BLACK),
+                            |cluster| picker.pick(cluster),
                             (frame.bounds.left, frame.bounds.top),
                             &outliner,
                             &mut list,
@@ -265,6 +270,50 @@ fn resolve_fill(frame: &idml_parse::TextFrame, palette: &Graphic) -> Option<Pain
     let entry = palette.resolve(id)?;
     let [r, g, b] = graphic::to_linear_rgb(entry)?;
     Some(Paint::Solid(Color::rgba(r, g, b, 1.0)))
+}
+
+/// Cluster → Paint picker built from a paragraph's run table. The
+/// paragraph text is the concatenation of each run's `text`; this
+/// struct remembers the (start_byte, paint) pair for each run.
+struct RunPaintPicker {
+    // Sorted ascending by `start`. `start` is the byte offset of the
+    // first character of the run in the concatenated paragraph text.
+    bands: Vec<(u32, Paint)>,
+    default: Paint,
+}
+
+impl RunPaintPicker {
+    fn pick(&self, cluster: u32) -> Paint {
+        // Linear search is fine: paragraphs rarely have more than a
+        // dozen runs. Find the last band whose start <= cluster.
+        let mut chosen = self.default;
+        for (start, paint) in &self.bands {
+            if *start <= cluster {
+                chosen = *paint;
+            } else {
+                break;
+            }
+        }
+        chosen
+    }
+}
+
+fn run_paint_picker(paragraph: &idml_parse::Paragraph, palette: &Graphic) -> RunPaintPicker {
+    let default = Paint::Solid(Color::BLACK);
+    let mut bands: Vec<(u32, Paint)> = Vec::with_capacity(paragraph.runs.len());
+    let mut cursor: u32 = 0;
+    for run in &paragraph.runs {
+        let paint = run
+            .fill_color
+            .as_deref()
+            .and_then(|id| palette.resolve(id))
+            .and_then(graphic::to_linear_rgb)
+            .map(|[r, g, b]| Paint::Solid(Color::rgba(r, g, b, 1.0)))
+            .unwrap_or(default);
+        bands.push((cursor, paint));
+        cursor += run.text.len() as u32;
+    }
+    RunPaintPicker { bands, default }
 }
 
 /// One-line fill description for the human-readable report.

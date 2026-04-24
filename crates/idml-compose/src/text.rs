@@ -30,18 +30,24 @@ const ADVANCE_PRECISION: f32 = 64.0;
 ///   scheme (hash of the font bytes, index into a font table, etc.)
 ///   and keep it stable for a single render.
 /// - `point_size` is the em size the glyphs were shaped at.
+/// - `paint_for(cluster)` returns the paint for the glyph at `cluster`
+///   (byte offset into the source paragraph). Single-colour callers
+///   pass `|_| Paint::Solid(my_color)`.
 /// - `frame_origin_pt` is the page-space position of the frame's
 ///   top-left corner. Glyph positions are offset by it so the
 ///   commands live in page coordinates.
-pub fn emit_paragraph(
+pub fn emit_paragraph<O, F>(
     laid_out: &LaidOutParagraph,
     font_id: u32,
     point_size: f32,
-    paint: Paint,
+    paint_for: F,
     frame_origin_pt: (f32, f32),
-    outliner: &impl GlyphOutliner,
+    outliner: &O,
     list: &mut DisplayList,
-) {
+) where
+    O: GlyphOutliner,
+    F: Fn(u32) -> Paint,
+{
     let upem = outliner.units_per_em();
     let scale = point_size / upem;
     let (ox, oy) = frame_origin_pt;
@@ -54,6 +60,7 @@ pub fn emit_paragraph(
             };
             let gx = ox + g.x as f32 / ADVANCE_PRECISION;
             let gy = oy + g.y as f32 / ADVANCE_PRECISION;
+            let paint = paint_for(g.cluster);
             // Column-major 2×3 as `[a b c d tx ty]`: scale by (scale,
             // scale) and flip y by negating the y-axis scale. Then
             // translate to (gx, gy).
@@ -117,7 +124,7 @@ mod tests {
             &p,
             1,
             12.0,
-            Paint::Solid(Color::BLACK),
+            |_| Paint::Solid(Color::BLACK),
             (0.0, 0.0),
             &UnitSquareOutliner::default(),
             &mut list,
@@ -136,7 +143,7 @@ mod tests {
             &p,
             1,
             12.0,
-            Paint::Solid(Color::BLACK),
+            |_| Paint::Solid(Color::BLACK),
             (0.0, 0.0),
             &UnitSquareOutliner::default(),
             &mut list,
@@ -158,7 +165,7 @@ mod tests {
             &p,
             1,
             12.0,
-            Paint::Solid(Color::BLACK),
+            |_| Paint::Solid(Color::BLACK),
             (100.0, 200.0),
             &UnitSquareOutliner::default(),
             &mut list,
@@ -173,6 +180,34 @@ mod tests {
     }
 
     #[test]
+    fn paint_picker_receives_cluster_byte_offset() {
+        // "ab" with MonospaceMeasurer → 2 glyphs at clusters 0 and 1.
+        let p = laid_out("ab");
+        let mut list = DisplayList::new();
+        let red = Paint::Solid(Color::rgba(1.0, 0.0, 0.0, 1.0));
+        let blue = Paint::Solid(Color::rgba(0.0, 0.0, 1.0, 1.0));
+        emit_paragraph(
+            &p,
+            1,
+            12.0,
+            |c| if c == 0 { red } else { blue },
+            (0.0, 0.0),
+            &UnitSquareOutliner::default(),
+            &mut list,
+        );
+        assert_eq!(list.commands.len(), 2);
+        let paints: Vec<Paint> = list
+            .commands
+            .iter()
+            .map(|c| match c {
+                DisplayCommand::FillPath { paint, .. } => *paint,
+            })
+            .collect();
+        assert_eq!(paints[0], red);
+        assert_eq!(paints[1], blue);
+    }
+
+    #[test]
     fn y_axis_is_flipped_by_transform_matrix() {
         let p = laid_out("x");
         let mut list = DisplayList::new();
@@ -180,7 +215,7 @@ mod tests {
             &p,
             1,
             12.0,
-            Paint::Solid(Color::BLACK),
+            |_| Paint::Solid(Color::BLACK),
             (0.0, 0.0),
             &UnitSquareOutliner::default(),
             &mut list,

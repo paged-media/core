@@ -44,6 +44,9 @@ pub struct CharacterRun {
     pub font: Option<String>,
     pub font_style: Option<String>,
     pub point_size: Option<f32>,
+    /// `FillColor="Color/..."` on the CharacterStyleRange; resolved
+    /// against `Graphic`.
+    pub fill_color: Option<String>,
     pub text: String,
 }
 
@@ -73,6 +76,7 @@ impl Story {
                             font: attr(&e, b"AppliedFont"),
                             font_style: attr(&e, b"FontStyle"),
                             point_size: attr(&e, b"PointSize").and_then(|s| s.parse().ok()),
+                            fill_color: attr(&e, b"FillColor"),
                             text: String::new(),
                         });
                     }
