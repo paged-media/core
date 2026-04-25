@@ -349,14 +349,27 @@ pub fn build_document(
             pages[page_idx].stats.paragraphs += 1;
             pages[page_idx].stats.runs += paragraph.runs.len();
 
+            // Resolve every run's effective attributes through the
+            // style cascade once per paragraph; keep them aligned
+            // with paragraph.runs by index so downstream pieces
+            // (font lookup, StyledRun construction, paint picker)
+            // can use the same indices.
+            let resolved_runs: Vec<idml_scene::ResolvedRunAttrs> = paragraph
+                .runs
+                .iter()
+                .map(|r| document.resolved_run_attrs(paragraph, r))
+                .collect();
+            let resolved_paragraph = document.resolved_paragraph_attrs(paragraph);
+
             // Resolve every run's font bytes up-front so the borrows
             // for `Face` construction below all live in the same
             // scope. Runs whose family doesn't resolve fall back to
             // `options.font` (carried inside the FontTable) — when
             // even that's absent we drop the paragraph.
             let mut bytes_pool: Vec<bytes::Bytes> = Vec::with_capacity(paragraph.runs.len());
-            for run in &paragraph.runs {
-                let Some(b) = font_table.bytes_for(run.font.as_deref(), run.font_style.as_deref())
+            for resolved in &resolved_runs {
+                let Some(b) =
+                    font_table.bytes_for(resolved.font.as_deref(), resolved.font_style.as_deref())
                 else {
                     continue;
                 };
@@ -389,7 +402,8 @@ pub fn build_document(
 
             let font_ids: Vec<u32> = bytes_pool.iter().map(|b| fnv_1a_u32(b.as_ref())).collect();
 
-            // Build StyledRuns aligned with paragraph.runs.
+            // Build StyledRuns aligned with paragraph.runs, using
+            // each run's cascaded attrs.
             let styled_runs: Vec<idml_text::StyledRun> = paragraph
                 .runs
                 .iter()
@@ -397,8 +411,10 @@ pub fn build_document(
                 .map(|(i, run)| idml_text::StyledRun {
                     text: &run.text,
                     face: &shaping_faces[i],
-                    point_size: run.point_size.unwrap_or(options.default_point_size),
-                    tracking: run.tracking,
+                    point_size: resolved_runs[i]
+                        .point_size
+                        .unwrap_or(options.default_point_size),
+                    tracking: resolved_runs[i].tracking,
                     font_id: font_ids[i],
                 })
                 .collect();
@@ -410,7 +426,7 @@ pub fn build_document(
                 continue;
             };
             let mut lopts = idml_text::LayoutOptions::new(col_pt, paragraph_size);
-            lopts.alignment = map_justification(paragraph.justification.as_deref());
+            lopts.alignment = map_justification(resolved_paragraph.justification.as_deref());
 
             // Per-paragraph baseline. Initialise from the layout
             // defaults on the first paragraph; subsequent paragraphs
@@ -418,8 +434,8 @@ pub fn build_document(
             if y_cursor < 0 {
                 y_cursor = lopts.first_baseline;
             } else {
-                let space_before_64 =
-                    paragraph.space_before.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION;
+                let space_before_64 = resolved_paragraph.space_before.unwrap_or(0.0)
+                    * idml_text::shape::ADVANCE_PRECISION;
                 y_cursor += space_before_64.round() as i32;
             }
             lopts.first_baseline = y_cursor;
@@ -427,7 +443,7 @@ pub fn build_document(
             let mut laid_out = idml_text::layout_runs(&styled_runs, &lopts);
 
             // Apply FirstLineIndent — same post-layout shift as before.
-            if let Some(indent_pt) = paragraph.first_line_indent {
+            if let Some(indent_pt) = resolved_paragraph.first_line_indent {
                 let indent_64 = (indent_pt * idml_text::shape::ADVANCE_PRECISION).round() as i32;
                 if indent_64 != 0 {
                     if let Some(line) = laid_out.lines.first_mut() {
@@ -447,14 +463,19 @@ pub fn build_document(
                 y_cursor = last.baseline_y + lopts.line_height;
             }
             let space_after_64 =
-                paragraph.space_after.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION;
+                resolved_paragraph.space_after.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION;
             y_cursor += space_after_64.round() as i32;
 
             total_stats.lines += laid_out.lines.len();
             pages[page_idx].stats.lines += laid_out.lines.len();
 
             let Some(frame) = frame else { continue };
-            let picker = build_run_paint_picker(paragraph, palette, options.fallback_text_paint);
+            let picker = build_run_paint_picker_resolved(
+                paragraph,
+                &resolved_runs,
+                palette,
+                options.fallback_text_paint,
+            );
             let (ox, oy) = pages[page_idx].spread_origin;
 
             // Emission: for each line, walk glyphs grouped by
@@ -1035,6 +1056,31 @@ pub fn build_run_paint_picker(
     RunPaintPicker { bands, default }
 }
 
+/// Like [`build_run_paint_picker`] but uses each run's cascaded
+/// `fill_color` (so a run that only carries an `AppliedCharacterStyle`
+/// still picks up the right paint).
+fn build_run_paint_picker_resolved(
+    paragraph: &idml_parse::Paragraph,
+    resolved_runs: &[idml_scene::ResolvedRunAttrs],
+    palette: &Graphic,
+    default: Paint,
+) -> RunPaintPicker {
+    let mut bands: Vec<(u32, Paint)> = Vec::with_capacity(paragraph.runs.len());
+    let mut cursor: u32 = 0;
+    for (i, run) in paragraph.runs.iter().enumerate() {
+        let paint = resolved_runs[i]
+            .fill_color
+            .as_deref()
+            .and_then(|id| palette.resolve(id))
+            .and_then(graphic::to_linear_rgb)
+            .map(|[r, g, b]| Paint::Solid(Color::rgba(r, g, b, 1.0)))
+            .unwrap_or(default);
+        bands.push((cursor, paint));
+        cursor += run.text.len() as u32;
+    }
+    RunPaintPicker { bands, default }
+}
+
 /// Map IDML `Justification` attribute values to `idml_text::Alignment`.
 /// Unknown or missing values fall back to `Left`.
 pub fn map_justification(j: Option<&str>) -> idml_text::Alignment {
@@ -1067,15 +1113,20 @@ impl FontTable {
         // Walk every run in every story and collect distinct keys
         // before calling the resolver — `resolve_font` may be a JS
         // promise wrapper or a disk read, so deduping matters.
+        // Each run's effective (family, style) comes from the cascade
+        // (run direct > applied character style > applied paragraph
+        // style) so a run that only carries `AppliedCharacterStyle`
+        // still requests the right font.
         let mut keys: std::collections::HashSet<(String, Option<String>)> =
             std::collections::HashSet::new();
         for parsed in &document.stories {
             for paragraph in &parsed.story.paragraphs {
                 for run in &paragraph.runs {
-                    let Some(family) = run.font.as_deref() else {
+                    let resolved = document.resolved_run_attrs(paragraph, run);
+                    let Some(family) = resolved.font else {
                         continue;
                     };
-                    keys.insert((family.to_string(), run.font_style.clone()));
+                    keys.insert((family, resolved.font_style));
                 }
             }
         }

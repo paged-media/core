@@ -18,6 +18,7 @@ pub mod designmap;
 pub mod graphic;
 pub mod spread;
 pub mod story;
+pub mod styles;
 mod util;
 
 pub use designmap::{DesignMap, SpreadRef, StoryRef};
@@ -28,6 +29,9 @@ pub use spread::{
     Bounds, DropShadowSetting, GraphicLine, Oval, Page, Rectangle, Spread, TextFrame,
 };
 pub use story::{CharacterRun, Paragraph, Story};
+pub use styles::{
+    CharacterStyleDef, ParagraphStyleDef, ResolvedCharacter, ResolvedParagraph, StyleSheet,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {

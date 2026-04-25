@@ -12,7 +12,10 @@
 
 use std::collections::HashMap;
 
-use idml_parse::{Container, Graphic, ParseError, Spread, Story, StoryRef, TextFrame};
+use idml_parse::{
+    CharacterRun, Container, Graphic, Paragraph, ParseError, Spread, Story, StoryRef, StyleSheet,
+    TextFrame,
+};
 
 /// Owned, parsed representation of an IDML document.
 #[derive(Debug)]
@@ -28,6 +31,10 @@ pub struct Document {
     /// `TextFrame` indexed by its `ParentStory` id — built once so the
     /// pipeline doesn't have to scan every spread for each story.
     pub frame_for_story: HashMap<String, TextFrame>,
+    /// Paragraph + character style definitions loaded from
+    /// `Resources/Styles.xml`. Empty when the archive has no styles
+    /// resource (rare; typically only synthetic test docs).
+    pub styles: StyleSheet,
 }
 
 /// A spread plus the path it came from in the container.
@@ -66,6 +73,10 @@ impl Document {
         let palette = match container.entry("Resources/Graphic.xml") {
             Some(raw) => Graphic::parse(raw)?,
             None => Graphic::default(),
+        };
+        let styles = match container.entry("Resources/Styles.xml") {
+            Some(raw) => StyleSheet::parse(raw)?,
+            None => StyleSheet::default(),
         };
 
         // Master spreads parse first so the page → master link is
@@ -128,6 +139,7 @@ impl Document {
             stories,
             master_spreads,
             frame_for_story,
+            styles,
         })
     }
 
@@ -161,6 +173,69 @@ impl Document {
         self.container.entry(path).map(|b| b.as_ref())
     }
 
+    /// Resolve a run's effective character-level attributes by
+    /// walking the cascade: direct on the run > applied character
+    /// style > applied paragraph style. Each attribute falls
+    /// through to the next layer only when unset above.
+    pub fn resolved_run_attrs(
+        &self,
+        paragraph: &Paragraph,
+        run: &CharacterRun,
+    ) -> ResolvedRunAttrs {
+        let char_resolved = run
+            .character_style
+            .as_deref()
+            .map(|id| self.styles.resolve_character(id))
+            .unwrap_or_default();
+        let para_resolved = paragraph
+            .paragraph_style
+            .as_deref()
+            .map(|id| self.styles.resolve_paragraph(id))
+            .unwrap_or_default();
+        ResolvedRunAttrs {
+            font: run
+                .font
+                .clone()
+                .or(char_resolved.font)
+                .or(para_resolved.font),
+            font_style: run
+                .font_style
+                .clone()
+                .or(char_resolved.font_style)
+                .or(para_resolved.font_style),
+            point_size: run
+                .point_size
+                .or(char_resolved.point_size)
+                .or(para_resolved.point_size),
+            fill_color: run
+                .fill_color
+                .clone()
+                .or(char_resolved.fill_color)
+                .or(para_resolved.fill_color),
+            tracking: run
+                .tracking
+                .or(char_resolved.tracking)
+                .or(para_resolved.tracking),
+        }
+    }
+
+    /// Resolve a paragraph's effective paragraph-level attributes.
+    /// The cascade is direct > applied paragraph style. Character
+    /// styles don't carry paragraph attrs in IDML.
+    pub fn resolved_paragraph_attrs(&self, paragraph: &Paragraph) -> ResolvedParagraphAttrs {
+        let para = paragraph
+            .paragraph_style
+            .as_deref()
+            .map(|id| self.styles.resolve_paragraph(id))
+            .unwrap_or_default();
+        ResolvedParagraphAttrs {
+            justification: paragraph.justification.clone().or(para.justification),
+            first_line_indent: paragraph.first_line_indent.or(para.first_line_indent),
+            space_before: paragraph.space_before.or(para.space_before),
+            space_after: paragraph.space_after.or(para.space_after),
+        }
+    }
+
     /// Manifest-advertised story metadata; a convenience for callers
     /// that need the original src paths without walking `stories`.
     pub fn story_refs(&self) -> &[StoryRef] {
@@ -188,6 +263,27 @@ pub fn derive_master_id(src: &str) -> String {
         .strip_prefix("MasterSpread_")
         .map(|s| s.to_string())
         .unwrap_or_else(|| without_ext.to_string())
+}
+
+/// Effective character-level attributes after walking the cascade
+/// (direct > applied character style > applied paragraph style).
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ResolvedRunAttrs {
+    pub font: Option<String>,
+    pub font_style: Option<String>,
+    pub point_size: Option<f32>,
+    pub fill_color: Option<String>,
+    pub tracking: Option<f32>,
+}
+
+/// Effective paragraph-level attributes after walking the cascade
+/// (direct > applied paragraph style).
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ResolvedParagraphAttrs {
+    pub justification: Option<String>,
+    pub first_line_indent: Option<f32>,
+    pub space_before: Option<f32>,
+    pub space_after: Option<f32>,
 }
 
 #[derive(Debug, thiserror::Error)]
