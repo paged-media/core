@@ -15,7 +15,7 @@
 //! All text input positions are in 1/64 pt, as produced by
 //! `idml_text::layout`; we divide by 64 at the emit boundary.
 
-use idml_text::layout::LaidOutParagraph;
+use idml_text::layout::{LaidOutParagraph, PositionedGlyph};
 
 use crate::display_list::{DisplayCommand, DisplayList, GlyphCacheKey, Paint, PathId, Transform};
 use crate::glyph::GlyphOutliner;
@@ -48,29 +48,53 @@ pub fn emit_paragraph<O, F>(
     O: GlyphOutliner,
     F: Fn(u32) -> Paint,
 {
+    for line in &laid_out.lines {
+        emit_glyph_slice(
+            &line.glyphs,
+            font_id,
+            point_size,
+            &paint_for,
+            frame_origin_pt,
+            outliner,
+            list,
+        );
+    }
+}
+
+/// Emit `FillPath` commands for a contiguous slice of glyphs that all
+/// share `font_id` (and therefore one outliner). Multi-font callers
+/// group glyphs by `glyph.font_id` and call this once per group.
+pub fn emit_glyph_slice<O, F>(
+    glyphs: &[PositionedGlyph],
+    font_id: u32,
+    point_size: f32,
+    paint_for: F,
+    frame_origin_pt: (f32, f32),
+    outliner: &O,
+    list: &mut DisplayList,
+) where
+    O: GlyphOutliner,
+    F: Fn(u32) -> Paint,
+{
     let upem = outliner.units_per_em();
     let scale = point_size / upem;
     let (ox, oy) = frame_origin_pt;
-
-    for line in &laid_out.lines {
-        for g in &line.glyphs {
-            let Some(path_id) = get_or_intern_glyph_outline(font_id, g.glyph_id, outliner, list)
-            else {
-                continue;
-            };
-            let gx = ox + g.x as f32 / ADVANCE_PRECISION;
-            let gy = oy + g.y as f32 / ADVANCE_PRECISION;
-            let paint = paint_for(g.cluster);
-            // Column-major 2×3 as `[a b c d tx ty]`: scale by (scale,
-            // scale) and flip y by negating the y-axis scale. Then
-            // translate to (gx, gy).
-            let transform = Transform([scale, 0.0, 0.0, -scale, gx, gy]);
-            list.push(DisplayCommand::FillPath {
-                path_id,
-                paint,
-                transform,
-            });
-        }
+    for g in glyphs {
+        let Some(path_id) = get_or_intern_glyph_outline(font_id, g.glyph_id, outliner, list) else {
+            continue;
+        };
+        let gx = ox + g.x as f32 / ADVANCE_PRECISION;
+        let gy = oy + g.y as f32 / ADVANCE_PRECISION;
+        let paint = paint_for(g.cluster);
+        // Column-major 2×3 as `[a b c d tx ty]`: scale by (scale,
+        // scale) and flip y by negating the y-axis scale. Then
+        // translate to (gx, gy).
+        let transform = Transform([scale, 0.0, 0.0, -scale, gx, gy]);
+        list.push(DisplayCommand::FillPath {
+            path_id,
+            paint,
+            transform,
+        });
     }
 }
 
@@ -231,5 +255,54 @@ mod tests {
         };
         // d (y-scale) must be negative — fonts are y-up, pages y-down.
         assert!(m[3] < 0.0, "y-scale not flipped: {:?}", m);
+    }
+
+    #[test]
+    fn emit_glyph_slice_caches_per_font_id() {
+        // Two glyph slices with the same glyph_id but different
+        // font_ids must intern two distinct outlines — otherwise a
+        // 'B' in font A would steal the path of a 'B' in font B.
+        let mut list = DisplayList::new();
+        let glyphs_a = vec![PositionedGlyph {
+            glyph_id: 65,
+            cluster: 0,
+            x: 0,
+            y: 0,
+            font_id: 0,
+            point_size: 0.0,
+        }];
+        let glyphs_b = vec![PositionedGlyph {
+            glyph_id: 65,
+            cluster: 0,
+            x: 0,
+            y: 0,
+            font_id: 0,
+            point_size: 0.0,
+        }];
+        emit_glyph_slice(
+            &glyphs_a,
+            111,
+            12.0,
+            |_| Paint::Solid(Color::BLACK),
+            (0.0, 0.0),
+            &UnitSquareOutliner::default(),
+            &mut list,
+        );
+        emit_glyph_slice(
+            &glyphs_b,
+            222,
+            12.0,
+            |_| Paint::Solid(Color::BLACK),
+            (0.0, 0.0),
+            &UnitSquareOutliner::default(),
+            &mut list,
+        );
+        // Two FillPath commands, two distinct paths in the buffer.
+        assert_eq!(list.commands.len(), 2);
+        assert_eq!(
+            list.paths.len(),
+            2,
+            "different font_ids must intern distinct outlines"
+        );
     }
 }

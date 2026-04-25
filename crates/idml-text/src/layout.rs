@@ -11,8 +11,11 @@
 
 use std::ops::Range;
 
+use paragraph_breaker::{Breakpoint, Item};
+use rustybuzz::Face;
+
 use crate::compose::{compose_paragraph, ComposeOptions, TextShaper};
-use crate::shape::{ShapedRun, ADVANCE_PRECISION};
+use crate::shape::{apply_tracking, shape_run, ShapedRun, ADVANCE_PRECISION};
 
 /// A glyph positioned in frame space, ready for rasterization.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -24,6 +27,15 @@ pub struct PositionedGlyph {
     pub x: i32,
     /// Frame-origin-relative y (baseline + per-glyph y_offset), 1/64 pt.
     pub y: i32,
+    /// Font id this glyph was shaped with. Single-font layouts
+    /// (`layout_paragraph`) leave this 0; multi-font layouts
+    /// (`layout_runs`) set it per run so the rasterizer can route
+    /// glyph outlining through the right face.
+    pub font_id: u32,
+    /// Point size this glyph was shaped at. Single-font layouts
+    /// leave this 0.0; multi-font layouts set it per run so emission
+    /// can scale outlines with the correct em ratio.
+    pub point_size: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +182,8 @@ pub fn position_line(
             cluster: cluster_base + g.cluster,
             x: pen_x + g.x_offset,
             y: baseline_y + g.y_offset,
+            font_id: 0,
+            point_size: 0.0,
         });
         pen_x += g.x_advance;
     }
@@ -247,6 +261,220 @@ fn is_ws_at(bytes: &[u8], i: usize) -> bool {
         bytes.get(i),
         Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r')
     )
+}
+
+/// One styled run inside a paragraph. The pipeline assembles a
+/// `Vec<StyledRun>` per paragraph; `layout_runs` shapes each run
+/// with its own face, drives the line breaker against the
+/// concatenated advances, and tags every output glyph with
+/// the run's `font_id` and `point_size` so emission can route
+/// outlining through the right face.
+pub struct StyledRun<'a> {
+    pub text: &'a str,
+    pub face: &'a Face<'a>,
+    pub point_size: f32,
+    pub tracking: Option<f32>,
+    pub font_id: u32,
+}
+
+/// Multi-font flavour of [`layout_paragraph`].
+///
+/// Pre-shapes each run with its own face (so advances reflect the
+/// run's font + size), runs paragraph-breaker on the concatenated
+/// item stream, and slices the resulting glyphs back per line. Every
+/// `PositionedGlyph` carries the originating run's `font_id` and
+/// `point_size`.
+///
+/// Hyphenation is intentionally not threaded through here yet —
+/// `layout_paragraph` keeps that path while this batch lands.
+pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagraph {
+    if runs.is_empty() {
+        return LaidOutParagraph { lines: Vec::new() };
+    }
+
+    // 1. Concatenate run text and remember the byte offset where
+    // each run starts. Then shape every run with its face so the
+    // glyph advances reflect that run's font.
+    let mut paragraph_text = String::new();
+    let mut run_starts = Vec::with_capacity(runs.len());
+    let mut run_shapes: Vec<ShapedRun> = Vec::with_capacity(runs.len());
+    for r in runs {
+        run_starts.push(paragraph_text.len());
+        paragraph_text.push_str(r.text);
+        let mut s = shape_run(r.face, r.text, r.point_size);
+        if let Some(t) = r.tracking {
+            apply_tracking(&mut s, t, r.point_size);
+        }
+        run_shapes.push(s);
+    }
+
+    // 2. Build a flat array of (paragraph-cluster, run_index, glyph)
+    // entries sorted by cluster. paragraph-breaker only needs widths
+    // grouped by word; rendering needs the original glyph data
+    // sliced by line. Both pull off this single source of truth.
+    let mut flat: Vec<FlatGlyph> = Vec::new();
+    for (run_i, shape) in run_shapes.iter().enumerate() {
+        let base = run_starts[run_i] as u32;
+        for g in &shape.glyphs {
+            flat.push(FlatGlyph {
+                cluster: base + g.cluster,
+                run_idx: run_i,
+                x_advance: g.x_advance,
+                x_offset: g.x_offset,
+                y_offset: g.y_offset,
+                glyph_id: g.glyph_id,
+            });
+        }
+    }
+    flat.sort_by_key(|g| g.cluster);
+
+    // 3. Build paragraph-breaker items: one Box per word (sum of
+    // advances of glyphs whose cluster is within the word range),
+    // glue between words, infinite-stretch glue + forced break at
+    // the end. Track byte_end alongside each item so we can map
+    // breakpoint indices back to source byte offsets.
+    let words = segment_paragraph(&paragraph_text);
+    if words.is_empty() {
+        return LaidOutParagraph { lines: Vec::new() };
+    }
+    let opts = &options.compose;
+    // Use the first run's space width as the glue width — IDML
+    // doesn't change inter-word spacing across runs, and pulling a
+    // per-word space face would require a synthetic face index.
+    let space_width = shape_run(runs[0].face, " ", runs[0].point_size).total_advance;
+    let stretch = (space_width as f32 * opts.stretch_ratio).round() as i32;
+    let shrink = (space_width as f32 * opts.shrink_ratio).round() as i32;
+
+    let mut items: Vec<Item<()>> = Vec::with_capacity(words.len() * 2 + 2);
+    let mut byte_ends: Vec<usize> = Vec::with_capacity(items.capacity());
+    for (i, w) in words.iter().enumerate() {
+        let width = sum_advances_in(&flat, w.start as u32..w.end as u32);
+        items.push(Item::Box { width, data: () });
+        byte_ends.push(w.end);
+        if i + 1 < words.len() {
+            items.push(Item::Glue {
+                width: space_width,
+                stretch,
+                shrink,
+            });
+            byte_ends.push(w.end);
+        }
+    }
+    items.push(Item::Glue {
+        width: 0,
+        stretch: paragraph_breaker::INFINITE_PENALTY,
+        shrink: 0,
+    });
+    byte_ends.push(paragraph_text.len());
+    items.push(Item::Penalty {
+        width: 0,
+        penalty: -paragraph_breaker::INFINITE_PENALTY,
+        flagged: true,
+    });
+    byte_ends.push(paragraph_text.len());
+
+    let breaks: Vec<Breakpoint> =
+        paragraph_breaker::total_fit(&items, &[opts.column_width], opts.tolerance, opts.looseness);
+
+    // 4. For each chosen line, walk `flat` in cluster order and pull
+    // glyphs whose cluster is in the line's byte range. Position
+    // them with a running pen and tag with the run's font_id +
+    // point_size so emission can route outlining.
+    let mut lines = Vec::with_capacity(breaks.len());
+    let mut byte_cursor = 0usize;
+    let mut baseline = options.first_baseline;
+    let last_break = breaks.len().saturating_sub(1);
+    let bytes = paragraph_text.as_bytes();
+    for (i, bp) in breaks.iter().enumerate() {
+        let Some(&end) = byte_ends.get(bp.index) else {
+            continue;
+        };
+        let mut start = byte_cursor;
+        while start < end && bytes[start].is_ascii_whitespace() {
+            start += 1;
+        }
+        if start >= end {
+            continue;
+        }
+        let mut glyphs: Vec<PositionedGlyph> = Vec::new();
+        let mut pen_x: i32 = 0;
+        for fg in &flat {
+            if fg.cluster < start as u32 || fg.cluster >= end as u32 {
+                continue;
+            }
+            let run = &runs[fg.run_idx];
+            glyphs.push(PositionedGlyph {
+                glyph_id: fg.glyph_id,
+                cluster: fg.cluster,
+                x: pen_x + fg.x_offset,
+                y: baseline + fg.y_offset,
+                font_id: run.font_id,
+                point_size: run.point_size,
+            });
+            pen_x += fg.x_advance;
+        }
+        let natural_width = pen_x;
+        apply_alignment(
+            &mut glyphs,
+            natural_width,
+            options.column_width(),
+            options.alignment,
+            i == last_break,
+            bytes,
+        );
+        lines.push(LaidOutLine {
+            byte_range: start..end,
+            baseline_y: baseline,
+            width: natural_width,
+            ratio: bp.ratio,
+            glyphs,
+        });
+        baseline += options.line_height;
+        byte_cursor = end;
+    }
+    LaidOutParagraph { lines }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FlatGlyph {
+    cluster: u32,
+    run_idx: usize,
+    x_advance: i32,
+    x_offset: i32,
+    y_offset: i32,
+    glyph_id: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WordSpan {
+    start: usize,
+    end: usize,
+}
+
+fn segment_paragraph(text: &str) -> Vec<WordSpan> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        let start = cursor;
+        while cursor < bytes.len() && !bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor > start {
+            out.push(WordSpan { start, end: cursor });
+        }
+    }
+    out
+}
+
+fn sum_advances_in(flat: &[FlatGlyph], range: Range<u32>) -> i32 {
+    flat.iter()
+        .filter(|g| g.cluster >= range.start && g.cluster < range.end)
+        .map(|g| g.x_advance)
+        .sum()
 }
 
 #[cfg(test)]

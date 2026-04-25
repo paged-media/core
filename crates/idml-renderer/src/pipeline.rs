@@ -11,10 +11,10 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use idml_compose::{
-    emit_drop_shadow_rect_transformed, emit_ellipse_transformed, emit_line, emit_paragraph,
-    emit_rect, emit_rect_transformed, emit_stroke_ellipse_transformed, emit_stroke_rect,
-    emit_stroke_rect_transformed, Color, DisplayList, DropShadow, Paint, Rect, Stroke, Transform,
-    TtfOutliner,
+    emit_drop_shadow_rect_transformed, emit_ellipse_transformed, emit_glyph_slice, emit_line,
+    emit_paragraph, emit_rect, emit_rect_transformed, emit_stroke_ellipse_transformed,
+    emit_stroke_rect, emit_stroke_rect_transformed, Color, DisplayList, DropShadow, Paint, Rect,
+    Stroke, Transform, TtfOutliner,
 };
 use idml_parse::{graphic, Graphic, GraphicLine, Oval, Rectangle, TextFrame};
 use idml_scene::Document;
@@ -349,45 +349,66 @@ pub fn build_document(
             pages[page_idx].stats.paragraphs += 1;
             pages[page_idx].stats.runs += paragraph.runs.len();
 
-            let first_run = paragraph.runs.first();
-            let paragraph_size = first_run
-                .and_then(|r| r.point_size)
-                .unwrap_or(options.default_point_size);
-            let paragraph_text: String = paragraph.runs.iter().map(|r| r.text.as_str()).collect();
-
-            // Pick the font for this paragraph from its first run.
-            // Mid-paragraph font switches are a Phase 2 item — when
-            // they land, this lookup moves into the per-run shaping
-            // loop below.
-            let font_bytes = font_table.bytes_for(
-                first_run.and_then(|r| r.font.as_deref()),
-                first_run.and_then(|r| r.font_style.as_deref()),
-            );
-            let Some(font_bytes) = font_bytes else {
-                continue;
-            };
-            let Some(shaping_face) = rustybuzz::Face::from_slice(font_bytes.as_ref(), 0) else {
-                continue;
-            };
-            let Some(outline_face) = ttf_parser::Face::parse(font_bytes.as_ref(), 0).ok() else {
-                continue;
-            };
-            let font_id = fnv_1a_u32(font_bytes.as_ref());
-
+            // Resolve every run's font bytes up-front so the borrows
+            // for `Face` construction below all live in the same
+            // scope. Runs whose family doesn't resolve fall back to
+            // `options.font` (carried inside the FontTable) — when
+            // even that's absent we drop the paragraph.
+            let mut bytes_pool: Vec<bytes::Bytes> = Vec::with_capacity(paragraph.runs.len());
             for run in &paragraph.runs {
-                let size = run.point_size.unwrap_or(options.default_point_size);
-                let mut shaped = idml_text::shape_run(&shaping_face, &run.text, size);
-                if let Some(t) = run.tracking {
-                    idml_text::apply_tracking(&mut shaped, t, size);
-                }
-                total_stats.glyphs += shaped.glyphs.len();
-                pages[page_idx].stats.glyphs += shaped.glyphs.len();
+                let Some(b) = font_table.bytes_for(run.font.as_deref(), run.font_style.as_deref())
+                else {
+                    continue;
+                };
+                bytes_pool.push(b);
+            }
+            if bytes_pool.is_empty() || bytes_pool.len() != paragraph.runs.len() {
+                continue;
             }
 
+            // Pair each run's bytes with a parsed shaping face + an
+            // outliner face. Face::from_slice fails on malformed
+            // fonts; if any run's face fails we skip the paragraph
+            // (rather than dropping a single run) so positions don't
+            // collapse silently.
+            let mut shaping_faces: Vec<rustybuzz::Face> = Vec::with_capacity(bytes_pool.len());
+            let mut outline_faces: Vec<ttf_parser::Face> = Vec::with_capacity(bytes_pool.len());
+            for b in &bytes_pool {
+                let Some(rf) = rustybuzz::Face::from_slice(b.as_ref(), 0) else {
+                    continue;
+                };
+                let Ok(of) = ttf_parser::Face::parse(b.as_ref(), 0) else {
+                    continue;
+                };
+                shaping_faces.push(rf);
+                outline_faces.push(of);
+            }
+            if shaping_faces.len() != paragraph.runs.len() {
+                continue;
+            }
+
+            let font_ids: Vec<u32> = bytes_pool.iter().map(|b| fnv_1a_u32(b.as_ref())).collect();
+
+            // Build StyledRuns aligned with paragraph.runs.
+            let styled_runs: Vec<idml_text::StyledRun> = paragraph
+                .runs
+                .iter()
+                .enumerate()
+                .map(|(i, run)| idml_text::StyledRun {
+                    text: &run.text,
+                    face: &shaping_faces[i],
+                    point_size: run.point_size.unwrap_or(options.default_point_size),
+                    tracking: run.tracking,
+                    font_id: font_ids[i],
+                })
+                .collect();
+
+            // Per-paragraph layout options — column width is shared,
+            // tolerance + spacing knobs come from defaults.
+            let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
             let Some(col_pt) = column_width_pt else {
                 continue;
             };
-            let measurer = idml_text::RustybuzzMeasurer::new(&shaping_face, paragraph_size);
             let mut lopts = idml_text::LayoutOptions::new(col_pt, paragraph_size);
             lopts.alignment = map_justification(paragraph.justification.as_deref());
 
@@ -403,13 +424,9 @@ pub fn build_document(
             }
             lopts.first_baseline = y_cursor;
 
-            let mut laid_out = idml_text::layout_paragraph(&paragraph_text, &measurer, &lopts);
+            let mut laid_out = idml_text::layout_runs(&styled_runs, &lopts);
 
-            // Apply FirstLineIndent: shift every glyph on the first
-            // line by `first_line_indent * 64`. Doing it post-layout
-            // means the line-break solution doesn't shift; only the
-            // visible position does — which matches what InDesign
-            // does for non-first-line-indent paragraphs.
+            // Apply FirstLineIndent — same post-layout shift as before.
             if let Some(indent_pt) = paragraph.first_line_indent {
                 let indent_64 = (indent_pt * idml_text::shape::ADVANCE_PRECISION).round() as i32;
                 if indent_64 != 0 {
@@ -421,9 +438,11 @@ pub fn build_document(
                 }
             }
 
-            // Advance the cursor by the paragraph's vertical extent
-            // (last baseline + one line_height of descender slack)
-            // plus the configured SpaceAfter.
+            // Stats + cursor advance.
+            for line in &laid_out.lines {
+                pages[page_idx].stats.glyphs += line.glyphs.len();
+                total_stats.glyphs += line.glyphs.len();
+            }
             if let Some(last) = laid_out.lines.last() {
                 y_cursor = last.baseline_y + lopts.line_height;
             }
@@ -435,18 +454,40 @@ pub fn build_document(
             pages[page_idx].stats.lines += laid_out.lines.len();
 
             let Some(frame) = frame else { continue };
-            let outliner = TtfOutliner::new(&outline_face);
             let picker = build_run_paint_picker(paragraph, palette, options.fallback_text_paint);
             let (ox, oy) = pages[page_idx].spread_origin;
-            emit_paragraph(
-                &laid_out,
-                font_id,
-                paragraph_size,
-                |cluster| picker.pick(cluster),
-                (frame.bounds.left - ox, frame.bounds.top - oy),
-                &outliner,
-                &mut pages[page_idx].list,
-            );
+
+            // Emission: for each line, walk glyphs grouped by
+            // font_id and emit each run-segment with the matching
+            // outliner face + its point size.
+            for line in &laid_out.lines {
+                let mut start = 0;
+                while start < line.glyphs.len() {
+                    let fid = line.glyphs[start].font_id;
+                    let mut end = start + 1;
+                    while end < line.glyphs.len() && line.glyphs[end].font_id == fid {
+                        end += 1;
+                    }
+                    let face_idx = match font_ids.iter().position(|f| *f == fid) {
+                        Some(i) => i,
+                        None => {
+                            start = end;
+                            continue;
+                        }
+                    };
+                    let outliner = TtfOutliner::new(&outline_faces[face_idx]);
+                    emit_glyph_slice(
+                        &line.glyphs[start..end],
+                        fid,
+                        line.glyphs[start].point_size,
+                        |cluster| picker.pick(cluster),
+                        (frame.bounds.left - ox, frame.bounds.top - oy),
+                        &outliner,
+                        &mut pages[page_idx].list,
+                    );
+                    start = end;
+                }
+            }
         }
     }
 

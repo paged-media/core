@@ -21,7 +21,7 @@ pub use compose::{
 };
 pub use hyphenate::{Hyphenator, Language};
 pub use layout::{
-    layout_paragraph, position_line, Alignment, LaidOutLine, LaidOutParagraph, LayoutOptions,
-    PositionedGlyph,
+    layout_paragraph, layout_runs, position_line, Alignment, LaidOutLine, LaidOutParagraph,
+    LayoutOptions, PositionedGlyph, StyledRun,
 };
 pub use shape::{apply_tracking, shape_run, ShapedGlyph, ShapedRun};
