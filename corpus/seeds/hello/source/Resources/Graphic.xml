@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic>
+    <Color Self="Color/Paper" Name="Paper" Model="Process" Space="RGB" ColorValue="255 255 255"/>
+    <Color Self="Color/Black" Name="Black" Model="Process" Space="CMYK" ColorValue="0 0 0 100"/>
+    <Color Self="Color/Brand"  Name="Brand"  Model="Process" Space="CMYK" ColorValue="80 30 0 0"/>
+    <Color Self="Color/Accent" Name="Accent" Model="Process" Space="CMYK" ColorValue="0 70 90 0"/>
+    <Color Self="Color/PageNo" Name="PageNo" Model="Process" Space="Gray" ColorValue="60"/>
+  </Graphic>
+</idPkg:Graphic>

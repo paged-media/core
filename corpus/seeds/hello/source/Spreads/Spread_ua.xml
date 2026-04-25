@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="ua">
+    <Page Self="ua-p" GeometricBounds="0 0 792 612" AppliedMaster="MasterSpread/uad"/>
+    <!-- Hero accent block -->
+    <Rectangle Self="ua-hero" GeometricBounds="120 72 220 540"
+               FillColor="Color/Accent" StrokeWeight="0"/>
+    <!-- Body text frame -->
+    <TextFrame Self="ua-body" ParentStory="u100"
+               GeometricBounds="260 72 720 540"
+               FillColor="Swatch/None" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>

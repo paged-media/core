@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u200">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Heading"
+                         Justification="CenterAlign" SpaceAfter="12">
+      <CharacterStyleRange AppliedFont="Body Font" PointSize="22"
+                           FillColor="Color/Black">
+        <Content>Page Two</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Body"
+                         Justification="LeftAlign">
+      <CharacterStyleRange AppliedFont="Body Font" PointSize="11"
+                           FillColor="Color/Black">
+        <Content>The second page of the seed document carries a different layout — a brand-coloured sidebar across the top half and the body text below. Both pages share the same master spread, so the band along the top and the footer rule appear on both.</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Body">
+      <CharacterStyleRange AppliedFont="Body Font" PointSize="11" FillColor="Color/Black">
+        <Content>Together the two pages exercise multi-page output, master-spread inheritance, paragraph alignment (left, centre, fully justified), CMYK swatches, RGB swatches, the </Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedFont="Body Font" FontStyle="Bold" PointSize="11"
+                           FillColor="Color/Accent">
+        <Content>per-run fill colour</Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedFont="Body Font" PointSize="11" FillColor="Color/Black">
+        <Content>, and the rectangle frame primitive.</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>

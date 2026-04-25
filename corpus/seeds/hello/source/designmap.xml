@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:MasterSpread src="MasterSpreads/MasterSpread_uad.xml"/>
+  <idPkg:Spread src="Spreads/Spread_ua.xml"/>
+  <idPkg:Spread src="Spreads/Spread_ub.xml"/>
+  <idPkg:Story src="Stories/Story_u100.xml"/>
+  <idPkg:Story src="Stories/Story_u200.xml"/>
+</Document>

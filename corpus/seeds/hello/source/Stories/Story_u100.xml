@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u100">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Heading"
+                         Justification="LeftAlign" SpaceAfter="12">
+      <CharacterStyleRange AppliedFont="Body Font" PointSize="28"
+                           FillColor="Color/Black">
+        <Content>The Hello Document</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Body"
+                         Justification="FullyJustified" FirstLineIndent="12">
+      <CharacterStyleRange AppliedFont="Body Font" PointSize="11"
+                           FillColor="Color/Black">
+        <Content>This is the first paragraph of a self-authored seed IDML used to exercise the renderer end to end. The text frame on this page is filled by the master spread's brand band along the top and a black footer rule near the bottom.</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Body"
+                         Justification="FullyJustified" FirstLineIndent="12">
+      <CharacterStyleRange AppliedFont="Body Font" PointSize="11"
+                           FillColor="Color/Black">
+        <Content>The accent block to the left is a process CMYK swatch resolved via the swatch palette. With no ICC profile supplied the renderer falls back to the naive CMYK to sRGB conversion documented in idml-parse::graphic.</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>

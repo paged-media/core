@@ -114,9 +114,17 @@ pub fn build_document(
     // Walk every page in every spread. We capture each page's bounds,
     // origin, and applied-master reference so the next passes can
     // route frames by containment and apply master backgrounds.
+    //
+    // `spread_page_ranges[i]` is the half-open page-index range
+    // owned by `document.spreads[i]`; frames within a spread route
+    // only to that range, since each IDML spread has its own
+    // coordinate system and two spreads' page bounds can collide.
     let mut page_geometries: Vec<PageGeom> = Vec::new();
+    let mut spread_page_ranges: Vec<std::ops::Range<usize>> =
+        Vec::with_capacity(document.spreads.len());
     for parsed in &document.spreads {
         total_stats.spreads += 1;
+        let start = pages.len();
         for p in &parsed.spread.pages {
             let geom = PageGeom {
                 bounds_in_spread: p.bounds,
@@ -131,6 +139,7 @@ pub fn build_document(
                 stats: PipelineStats::default(),
             });
         }
+        spread_page_ranges.push(start..pages.len());
     }
     total_stats.pages = pages.len();
     if pages.is_empty() {
@@ -179,6 +188,7 @@ pub fn build_document(
         let dx = target_origin.0 - master_origin.0;
         let dy = target_origin.1 - master_origin.1;
         for frame in &master.spread.text_frames {
+            total_stats.frames += 1;
             let translated = idml_parse::Bounds {
                 top: frame.bounds.top + dy,
                 left: frame.bounds.left + dx,
@@ -196,6 +206,7 @@ pub fn build_document(
             );
         }
         for rect in &master.spread.rectangles {
+            total_stats.frames += 1;
             let translated = idml_parse::Bounds {
                 top: rect.bounds.top + dy,
                 left: rect.bounds.left + dx,
@@ -215,12 +226,24 @@ pub fn build_document(
     }
 
     // Frame pass: route every frame to the page whose bounds contain
-    // its centre. Falls back to page 0 for outliers.
-    for parsed in &document.spreads {
+    // its centre, *within the frame's own spread*. Two IDML spreads
+    // may have identical page bounds (typically 0..page_w, 0..page_h)
+    // so global routing collapses every page into page 0. We also
+    // remember the page each TextFrame ended up on so the story pass
+    // can avoid re-running the routing logic.
+    let mut text_frame_page: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for (spread_idx, parsed) in document.spreads.iter().enumerate() {
         let spread = &parsed.spread;
+        let range = spread_page_ranges[spread_idx].clone();
+        let local_geoms = &page_geometries[range.clone()];
         for frame in &spread.text_frames {
             total_stats.frames += 1;
-            let page_idx = page_for_frame(&frame.bounds, &page_geometries).unwrap_or(0);
+            let local_idx = page_for_frame(&frame.bounds, local_geoms).unwrap_or(0);
+            let page_idx = range.start + local_idx;
+            if let Some(parent_story) = frame.parent_story.clone() {
+                text_frame_page.insert(parent_story, page_idx);
+            }
             emit_text_frame_into(
                 &mut pages[page_idx],
                 frame,
@@ -231,8 +254,8 @@ pub fn build_document(
         }
         for rect in &spread.rectangles {
             total_stats.frames += 1;
-            let bounds = rect.bounds;
-            let page_idx = page_for_frame(&bounds, &page_geometries).unwrap_or(0);
+            let local_idx = page_for_frame(&rect.bounds, local_geoms).unwrap_or(0);
+            let page_idx = range.start + local_idx;
             emit_rectangle_into(
                 &mut pages[page_idx],
                 rect,
@@ -256,9 +279,7 @@ pub fn build_document(
         total_stats.stories += 1;
         let story = &parsed.story;
         let frame = document.frame_for(&parsed.self_id);
-        let page_idx = frame
-            .map(|f| page_for_frame(&f.bounds, &page_geometries).unwrap_or(0))
-            .unwrap_or(0);
+        let page_idx = text_frame_page.get(&parsed.self_id).copied().unwrap_or(0);
         let column_width_pt = options
             .fallback_column_width_pt
             .or_else(|| frame.map(|f| f.bounds.width()));

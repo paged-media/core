@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<idPkg:MasterSpread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <MasterSpread Self="uad" Name="A-Master">
+    <Page Self="uad-p" GeometricBounds="0 0 792 612"/>
+    <!-- Brand colour band along the top -->
+    <Rectangle Self="uad-band" GeometricBounds="0 0 36 612"
+               FillColor="Color/Brand" StrokeWeight="0"/>
+    <!-- Footer rule -->
+    <Rectangle Self="uad-rule" GeometricBounds="756 72 758 540"
+               FillColor="Color/Black" StrokeWeight="0"/>
+  </MasterSpread>
+</idPkg:MasterSpread>

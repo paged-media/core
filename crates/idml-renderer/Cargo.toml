@@ -39,5 +39,6 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 idml-fidelity = { path = "../idml-fidelity" }
+image = { workspace = true }
 zip = { workspace = true }
 tempfile = "3"
