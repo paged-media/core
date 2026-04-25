@@ -22,6 +22,9 @@ pub struct Graphic {
     pub colors: BTreeMap<String, ColorEntry>,
     /// Named `<Swatch>` entries — "None", "Paper", "Black", etc.
     pub swatches: BTreeMap<String, SwatchEntry>,
+    /// `<Gradient>` swatches (linear / radial), keyed by `Self`
+    /// (e.g. "Gradient/Sky").
+    pub gradients: BTreeMap<String, GradientEntry>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -38,6 +41,30 @@ pub struct SwatchEntry {
     pub name: Option<String>,
     /// `Self` reference to the Color this swatch wraps, if any.
     pub color_ref: Option<String>,
+}
+
+/// IDML gradient swatch. Stops reference Color entries by `Self` id.
+#[derive(Debug, Clone, Serialize)]
+pub struct GradientEntry {
+    pub self_id: String,
+    pub name: Option<String>,
+    pub kind: GradientKind,
+    pub stops: Vec<GradientStopRef>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub enum GradientKind {
+    Linear,
+    Radial,
+    Unknown,
+}
+
+/// One stop in a gradient: a Color reference + a normalised location.
+#[derive(Debug, Clone, Serialize)]
+pub struct GradientStopRef {
+    pub stop_color: String,
+    /// `Location` attribute, 0..=100 in IDML.
+    pub location_pct: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -70,6 +97,10 @@ impl Graphic {
 
         let mut out = Graphic::default();
         let mut buf = Vec::new();
+        // State for the open <Gradient> element. Stops are children
+        // of the surrounding <Gradient>; we collect them here and
+        // commit once the close tag fires.
+        let mut current_gradient: Option<GradientEntry> = None;
 
         loop {
             match reader.read_event_into(&mut buf)? {
@@ -84,8 +115,27 @@ impl Graphic {
                             out.swatches.insert(entry.self_id.clone(), entry);
                         }
                     }
+                    b"Gradient" => {
+                        if let Some(entry) = parse_gradient(&e) {
+                            current_gradient = Some(entry);
+                        }
+                    }
+                    b"GradientStop" => {
+                        if let (Some(g), Some(stop)) =
+                            (current_gradient.as_mut(), parse_gradient_stop(&e))
+                        {
+                            g.stops.push(stop);
+                        }
+                    }
                     _ => {}
                 },
+                Event::End(e) => {
+                    if e.name().as_ref() == b"Gradient" {
+                        if let Some(g) = current_gradient.take() {
+                            out.gradients.insert(g.self_id.clone(), g);
+                        }
+                    }
+                }
                 Event::Eof => break,
                 _ => {}
             }
@@ -124,6 +174,35 @@ fn parse_color(e: &quick_xml::events::BytesStart) -> Option<ColorEntry> {
         name: attr(e, b"Name"),
         space,
         value,
+    })
+}
+
+fn parse_gradient(e: &quick_xml::events::BytesStart) -> Option<GradientEntry> {
+    let self_id = attr(e, b"Self")?;
+    let kind = attr(e, b"Type")
+        .as_deref()
+        .map(|s| match s {
+            "Linear" => GradientKind::Linear,
+            "Radial" => GradientKind::Radial,
+            _ => GradientKind::Unknown,
+        })
+        .unwrap_or(GradientKind::Linear);
+    Some(GradientEntry {
+        self_id,
+        name: attr(e, b"Name"),
+        kind,
+        stops: Vec::new(),
+    })
+}
+
+fn parse_gradient_stop(e: &quick_xml::events::BytesStart) -> Option<GradientStopRef> {
+    let stop_color = attr(e, b"StopColor")?;
+    let location_pct = attr(e, b"Location")
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(0.0);
+    Some(GradientStopRef {
+        stop_color,
+        location_pct,
     })
 }
 
@@ -232,5 +311,29 @@ mod tests {
     fn unknown_color_id_resolves_to_none() {
         let g = Graphic::parse(SAMPLE).unwrap();
         assert!(g.resolve("Color/NotThere").is_none());
+    }
+
+    const GRADIENT_SAMPLE: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic>
+    <Color Self="Color/Sky"   Name="Sky"   Space="RGB" ColorValue="120 180 255"/>
+    <Color Self="Color/Sun"   Name="Sun"   Space="RGB" ColorValue="255 220 100"/>
+    <Gradient Self="Gradient/Sky" Name="Sky" Type="Linear">
+      <GradientStop StopColor="Color/Sun" Location="0"/>
+      <GradientStop StopColor="Color/Sky" Location="100"/>
+    </Gradient>
+  </Graphic>
+</idPkg:Graphic>"#;
+
+    #[test]
+    fn parses_linear_gradient_with_two_stops() {
+        let g = Graphic::parse(GRADIENT_SAMPLE).unwrap();
+        let grad = g.gradients.get("Gradient/Sky").expect("gradient parsed");
+        assert_eq!(grad.kind, GradientKind::Linear);
+        assert_eq!(grad.stops.len(), 2);
+        assert_eq!(grad.stops[0].stop_color, "Color/Sun");
+        assert_eq!(grad.stops[0].location_pct, 0.0);
+        assert_eq!(grad.stops[1].stop_color, "Color/Sky");
+        assert_eq!(grad.stops[1].location_pct, 100.0);
     }
 }

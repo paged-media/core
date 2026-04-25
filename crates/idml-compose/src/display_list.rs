@@ -36,11 +36,39 @@ impl Color {
     }
 }
 
-/// Paint describes how a path is filled. Only solid colour is
-/// supported in this first pass; gradients + images land with §10.3.
+/// Paint describes how a path is filled. Solid colour and linear
+/// gradient cover most IDML fills today; radial / image / pattern
+/// fills land with §10.3.
+///
+/// `Paint` is `Copy`, so gradients are stored once in
+/// `DisplayList::gradients` and referenced by id rather than embedded.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Paint {
     Solid(Color),
+    LinearGradient(GradientId),
+}
+
+/// Index into `DisplayList::gradients`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GradientId(pub u32);
+
+/// One stop in a gradient: a colour at a normalised offset (0..=1).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GradientStop {
+    pub offset: f32,
+    pub color: Color,
+}
+
+/// Linear gradient definition. Endpoints are unit coordinates
+/// (`(0, 0)..(1, 0)` is left → right; `(0, 0)..(0, 1)` is
+/// top → bottom). The path's transform maps the unit square to its
+/// final geometry, so the same gradient reused on N rectangles
+/// renders correctly on each.
+#[derive(Debug, Clone)]
+pub struct LinearGradient {
+    pub start: (f32, f32),
+    pub end: (f32, f32),
+    pub stops: Vec<GradientStop>,
 }
 
 /// 2×3 affine transform stored as `[a b c d tx ty]` —
@@ -256,6 +284,7 @@ pub enum LineJoin {
 pub struct DisplayList {
     pub paths: PathBuffer,
     pub commands: Vec<DisplayCommand>,
+    pub gradients: Vec<LinearGradient>,
 }
 
 impl DisplayList {
@@ -265,6 +294,17 @@ impl DisplayList {
 
     pub fn push(&mut self, cmd: DisplayCommand) {
         self.commands.push(cmd);
+    }
+
+    /// Append a linear gradient and return its id.
+    pub fn push_linear_gradient(&mut self, g: LinearGradient) -> GradientId {
+        let id = GradientId(self.gradients.len() as u32);
+        self.gradients.push(g);
+        id
+    }
+
+    pub fn linear_gradient(&self, id: GradientId) -> Option<&LinearGradient> {
+        self.gradients.get(id.0 as usize)
     }
 }
 

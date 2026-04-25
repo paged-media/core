@@ -19,8 +19,9 @@ use idml_compose::{
 };
 use image::{Rgba, RgbaImage};
 use tiny_skia::{
-    FillRule, LineCap as TsLineCap, LineJoin as TsLineJoin, Paint as TsPaint, PathBuilder, Pixmap,
-    Stroke as TsStroke, Transform as TsTransform,
+    FillRule, GradientStop as TsGradientStop, LineCap as TsLineCap, LineJoin as TsLineJoin,
+    LinearGradient as TsLinearGradient, Paint as TsPaint, PathBuilder, Pixmap, Point as TsPoint,
+    Shader, SpreadMode, Stroke as TsStroke, Transform as TsTransform,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -72,7 +73,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 let Some(path) = build_path_transformed(path_data, transform) else {
                     continue;
                 };
-                let ts_paint = paint_to_ts(paint);
+                let ts_paint = paint_to_ts(paint, list, transform, page_to_px);
                 pixmap.fill_path(&path, &ts_paint, FillRule::Winding, page_to_px, None);
             }
             DisplayCommand::StrokePath {
@@ -87,9 +88,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 let Some(path) = build_path_transformed(path_data, transform) else {
                     continue;
                 };
-                let ts_paint = paint_to_ts(paint);
-                // Stroke width is in pt (page units). page_to_px will
-                // scale both the path and the stroke uniformly.
+                let ts_paint = paint_to_ts(paint, list, transform, page_to_px);
                 let ts_stroke = TsStroke {
                     width: stroke.width.max(0.0),
                     line_cap: map_cap(stroke.cap),
@@ -152,15 +151,61 @@ fn build_path_transformed(data: &PathData, path_transform: &CTransform) -> Optio
     bld.finish()
 }
 
-fn paint_to_ts(paint: &Paint) -> TsPaint<'static> {
+fn paint_to_ts(
+    paint: &Paint,
+    list: &DisplayList,
+    path_transform: &CTransform,
+    page_to_px: TsTransform,
+) -> TsPaint<'static> {
+    let mut p = TsPaint {
+        anti_alias: true,
+        ..Default::default()
+    };
     match paint {
         Paint::Solid(c) => {
-            let mut p = TsPaint::default();
             p.set_color(linear_color_to_ts(*c));
-            p.anti_alias = true;
-            p
+        }
+        Paint::LinearGradient(id) => {
+            if let Some(grad) = list.linear_gradient(*id) {
+                if let Some(shader) = build_linear_gradient_shader(grad, path_transform, page_to_px)
+                {
+                    p.shader = shader;
+                } else {
+                    // Empty / invalid gradient → black fallback.
+                    p.set_color(tiny_skia::Color::BLACK);
+                }
+            } else {
+                p.set_color(tiny_skia::Color::BLACK);
+            }
         }
     }
+    p
+}
+
+fn build_linear_gradient_shader(
+    grad: &idml_compose::LinearGradient,
+    path_transform: &CTransform,
+    page_to_px: TsTransform,
+) -> Option<Shader<'static>> {
+    if grad.stops.len() < 2 {
+        return None;
+    }
+    // Map the gradient's unit-square endpoints into page space via
+    // the path's transform — the gradient lives in path-local coords
+    // (the unit-rect we reuse for emit_rect / emit_ellipse).
+    let [a, b, c, d, tx, ty] = path_transform.0;
+    let to_page =
+        |x: f32, y: f32| -> TsPoint { TsPoint::from_xy(a * x + c * y + tx, b * x + d * y + ty) };
+    let start = to_page(grad.start.0, grad.start.1);
+    let end = to_page(grad.end.0, grad.end.1);
+
+    let stops: Vec<TsGradientStop> = grad
+        .stops
+        .iter()
+        .map(|s| TsGradientStop::new(s.offset.clamp(0.0, 1.0), linear_color_to_ts(s.color)))
+        .collect();
+
+    TsLinearGradient::new(start, end, stops, SpreadMode::Pad, page_to_px)
 }
 
 /// Linear RGB (0..=1) → sRGB-encoded tiny_skia::Color.

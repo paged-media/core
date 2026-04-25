@@ -20,7 +20,9 @@ pub mod spread;
 pub mod story;
 
 pub use designmap::{DesignMap, SpreadRef, StoryRef};
-pub use graphic::{ColorEntry, ColorSpace, Graphic, SwatchEntry};
+pub use graphic::{
+    ColorEntry, ColorSpace, GradientEntry, GradientKind, GradientStopRef, Graphic, SwatchEntry,
+};
 pub use spread::{Bounds, GraphicLine, Oval, Page, Rectangle, Spread, TextFrame};
 pub use story::{CharacterRun, Paragraph, Story};
 

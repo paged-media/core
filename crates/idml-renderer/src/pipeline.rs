@@ -440,13 +440,13 @@ fn emit_text_frame_into(
     let fill = frame
         .fill_color
         .as_deref()
-        .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+        .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
         .unwrap_or(fallback);
     emit_rect(r, fill, &mut page.list);
     if let Some(stroke) = frame
         .stroke_color
         .as_deref()
-        .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+        .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
     {
         let width = frame.stroke_weight.unwrap_or(1.0);
         if width > 0.0 {
@@ -473,13 +473,13 @@ fn emit_oval_into(
     let fill = oval
         .fill_color
         .as_deref()
-        .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+        .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
         .unwrap_or(fallback);
     emit_ellipse(r, fill, &mut page.list);
     if let Some(stroke) = oval
         .stroke_color
         .as_deref()
-        .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+        .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
     {
         let width = oval.stroke_weight.unwrap_or(1.0);
         if width > 0.0 {
@@ -536,13 +536,13 @@ fn emit_rectangle_into(
     let fill = rect
         .fill_color
         .as_deref()
-        .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+        .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
         .unwrap_or(fallback);
     emit_rect(r, fill, &mut page.list);
     if let Some(stroke) = rect
         .stroke_color
         .as_deref()
-        .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+        .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
     {
         let width = rect.stroke_weight.unwrap_or(1.0);
         if width > 0.0 {
@@ -744,13 +744,9 @@ pub fn resolve_rect_stroke(rect: &Rectangle, palette: &Graphic) -> Option<Paint>
     color_id_to_paint(rect.stroke_color.as_deref()?, palette, None)
 }
 
-/// Resolve a color id (e.g. "Color/Red" or "Swatch/Black") to a
-/// `Paint` via the palette and an optional CMYK ICC transform.
-///
-/// On targets where lcms2 isn't available (wasm32) or when no profile
-/// is supplied, falls back to the naive math in
-/// `idml-parse::graphic::to_linear_rgb` — keeping the existing
-/// behaviour for hosts that don't yet ship an ICC profile.
+/// Solid-paint resolver. Used by per-cluster glyph paint pickers
+/// (where embedding gradient stops per glyph would be wasteful) and
+/// by callers that don't have a `&mut DisplayList`.
 pub fn color_id_to_paint(
     id: &str,
     palette: &Graphic,
@@ -770,7 +766,6 @@ pub fn color_id_to_paint(
                 let idml_color::LinearRgb([r, g, b]) = xform.cmyk_percent_to_linear_rgb(cmyk);
                 return Some(Paint::Solid(Color::rgba(r, g, b, 1.0)));
             }
-            // wasm32: xform is unconstructable so this branch is unreachable.
             #[cfg(target_arch = "wasm32")]
             {
                 let _ = xform;
@@ -779,6 +774,49 @@ pub fn color_id_to_paint(
     }
     let [r, g, b] = graphic::to_linear_rgb(entry)?;
     Some(Paint::Solid(Color::rgba(r, g, b, 1.0)))
+}
+
+/// Resolver that also handles gradient swatches.
+///
+/// Gradient ids resolve to a `Paint::LinearGradient` whose stops live
+/// in `list.gradients`. Solid colours fall through to
+/// `color_id_to_paint`. Used for frame fills (which can carry
+/// gradient swatches); not used for per-glyph paints.
+pub fn color_id_to_paint_with_list(
+    id: &str,
+    palette: &Graphic,
+    cmyk_xform: Option<&idml_color::IccTransform>,
+    list: &mut DisplayList,
+) -> Option<Paint> {
+    if let Some(grad) = palette.gradients.get(id) {
+        let stops: Vec<idml_compose::GradientStop> = grad
+            .stops
+            .iter()
+            .filter_map(|s| {
+                color_id_to_paint(&s.stop_color, palette, cmyk_xform).and_then(|p| match p {
+                    Paint::Solid(c) => Some(idml_compose::GradientStop {
+                        offset: (s.location_pct / 100.0).clamp(0.0, 1.0),
+                        color: c,
+                    }),
+                    _ => None,
+                })
+            })
+            .collect();
+        if stops.len() < 2 {
+            return None;
+        }
+        // Default endpoints: top-to-bottom across the unit square.
+        // Frame-level GradientFillStart / Length / Angle attributes
+        // override these — that wiring lands when the spread parser
+        // captures those fields.
+        let id = list.push_linear_gradient(idml_compose::LinearGradient {
+            start: (0.0, 0.0),
+            end: (0.0, 1.0),
+            stops,
+        });
+        return Some(Paint::LinearGradient(id));
+    }
+    color_id_to_paint(id, palette, cmyk_xform)
 }
 
 /// Cluster → Paint picker built from a paragraph's run table.

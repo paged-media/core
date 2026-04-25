@@ -12,8 +12,8 @@ pub mod primitives;
 pub mod text;
 
 pub use display_list::{
-    Color, DisplayCommand, DisplayList, GlyphCacheKey, LineCap, LineJoin, Paint, PathBuffer,
-    PathData, PathId, PathSegment, Rect, Stroke, Transform,
+    Color, DisplayCommand, DisplayList, GlyphCacheKey, GradientId, GradientStop, LineCap, LineJoin,
+    LinearGradient, Paint, PathBuffer, PathData, PathId, PathSegment, Rect, Stroke, Transform,
 };
 pub use glyph::{GlyphOutliner, TtfOutliner, UnitSquareOutliner};
 pub use primitives::{

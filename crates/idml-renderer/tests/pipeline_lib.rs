@@ -137,6 +137,86 @@ fn render_fills_frame_with_resolved_paint() {
     assert_eq!(built.stats.lines, 0);
 }
 
+fn build_gradient_idml() -> Vec<u8> {
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+
+    zip.start_file("designmap.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+</Document>"#,
+    )
+    .unwrap();
+
+    zip.start_file("Resources/Graphic.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic>
+    <Color Self="Color/Sun" Name="Sun" Space="RGB" ColorValue="255 200 80"/>
+    <Color Self="Color/Sky" Name="Sky" Space="RGB" ColorValue="60 120 220"/>
+    <Gradient Self="Gradient/SkyDown" Name="SkyDown" Type="Linear">
+      <GradientStop StopColor="Color/Sun" Location="0"/>
+      <GradientStop StopColor="Color/Sky" Location="100"/>
+    </Gradient>
+  </Graphic>
+</idPkg:Graphic>"#,
+    )
+    .unwrap();
+
+    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 200"/>
+    <Rectangle Self="r1" GeometricBounds="0 0 200 200"
+               FillColor="Gradient/SkyDown" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#,
+    )
+    .unwrap();
+
+    zip.finish().unwrap().into_inner()
+}
+
+#[test]
+fn linear_gradient_fills_top_to_bottom() {
+    let bytes = build_gradient_idml();
+    let document = Document::open(&bytes).unwrap();
+    let opts = PipelineOptions::default();
+    let (built, images) = pipeline::render_document(&document, &opts, 72.0, Color::WHITE).unwrap();
+
+    assert_eq!(images.len(), 1);
+    let img = &images[0];
+
+    // The gradient runs (0,0) → (0,1) in unit coords, so the top of
+    // the 200 × 200 page should look like Color/Sun (warm yellow) and
+    // the bottom should look like Color/Sky (cool blue).
+    let top = *img.get_pixel(100, 5);
+    let bottom = *img.get_pixel(100, 195);
+    assert!(
+        top.0[0] > top.0[2] + 50,
+        "expected warm top pixel, got {:?}",
+        top
+    );
+    assert!(
+        bottom.0[2] > bottom.0[0] + 50,
+        "expected cool bottom pixel, got {:?}",
+        bottom
+    );
+    // The display list carries one gradient definition.
+    assert_eq!(built.pages[0].list.gradients.len(), 1);
+}
+
 #[test]
 fn pipeline_options_default_uses_gray_fallback() {
     let opts = PipelineOptions::default();
@@ -146,5 +226,6 @@ fn pipeline_options_default_uses_gray_fallback() {
             assert_eq!(c.r, c.g);
             assert_eq!(c.g, c.b);
         }
+        Paint::LinearGradient(_) => panic!("default should be a solid grey, not a gradient"),
     }
 }
