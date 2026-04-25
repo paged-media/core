@@ -21,6 +21,10 @@ pub struct Document {
     pub palette: Graphic,
     pub spreads: Vec<ParsedSpread>,
     pub stories: Vec<ParsedStory>,
+    /// Master spreads, indexed by their `Self` id (e.g.
+    /// `MasterSpread/uad`). Pages reference these via
+    /// `Page::applied_master`.
+    pub master_spreads: HashMap<String, ParsedMasterSpread>,
     /// `TextFrame` indexed by its `ParentStory` id — built once so the
     /// pipeline doesn't have to scan every spread for each story.
     pub frame_for_story: HashMap<String, TextFrame>,
@@ -42,6 +46,16 @@ pub struct ParsedStory {
     pub story: Story,
 }
 
+/// A master spread plus the `Self` id pages reference it by. The
+/// XML schema is identical to a regular `<Spread>`, so we reuse
+/// `Spread` for the geometry payload.
+#[derive(Debug, Clone)]
+pub struct ParsedMasterSpread {
+    pub src: String,
+    pub self_id: String,
+    pub spread: Spread,
+}
+
 impl Document {
     /// Parse every resource the manifest points at. Missing spreads
     /// or stories produce an [`OpenError::MissingEntry`] — the parse
@@ -53,6 +67,27 @@ impl Document {
             Some(raw) => Graphic::parse(raw)?,
             None => Graphic::default(),
         };
+
+        // Master spreads parse first so the page → master link is
+        // available downstream. The IDML schema for a `<MasterSpread>`
+        // is identical to a `<Spread>` (same Page / TextFrame /
+        // Rectangle children), so we reuse `Spread::parse`.
+        let mut master_spreads: HashMap<String, ParsedMasterSpread> = HashMap::new();
+        for src in &container.designmap.master_spreads {
+            let raw = container
+                .entry(src)
+                .ok_or_else(|| OpenError::MissingEntry(src.clone()))?;
+            let parsed = Spread::parse(raw)?;
+            let self_id = derive_master_id(src);
+            master_spreads.insert(
+                self_id.clone(),
+                ParsedMasterSpread {
+                    src: src.clone(),
+                    self_id,
+                    spread: parsed,
+                },
+            );
+        }
 
         let mut spreads = Vec::with_capacity(container.designmap.spreads.len());
         let mut frame_for_story = HashMap::new();
@@ -91,8 +126,25 @@ impl Document {
             palette,
             spreads,
             stories,
+            master_spreads,
             frame_for_story,
         })
+    }
+
+    /// Look up a master spread by its `Self` id (the suffix stripped
+    /// from the manifest src) or by the full reference value used in
+    /// `Page::applied_master` (e.g. `MasterSpread/uad`).
+    pub fn master_spread(&self, reference: &str) -> Option<&ParsedMasterSpread> {
+        if let Some(m) = self.master_spreads.get(reference) {
+            return Some(m);
+        }
+        // `applied_master` is typically `MasterSpread/<id>`; our key is
+        // the bare `<id>`. Strip the prefix when needed.
+        let stripped = reference
+            .rsplit_once('/')
+            .map(|(_, id)| id)
+            .unwrap_or(reference);
+        self.master_spreads.get(stripped)
     }
 
     /// The frame that hosts a story, looked up by the story's
@@ -123,6 +175,17 @@ pub fn derive_story_id(src: &str) -> String {
     let without_ext = stem.strip_suffix(".xml").unwrap_or(stem);
     without_ext
         .strip_prefix("Story_")
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| without_ext.to_string())
+}
+
+/// Derive a MasterSpread's `Self` id from its manifest src. Turns
+/// "MasterSpreads/MasterSpread_uad.xml" → "uad".
+pub fn derive_master_id(src: &str) -> String {
+    let stem = src.rsplit_once('/').map(|(_, t)| t).unwrap_or(src);
+    let without_ext = stem.strip_suffix(".xml").unwrap_or(stem);
+    without_ext
+        .strip_prefix("MasterSpread_")
         .map(|s| s.to_string())
         .unwrap_or_else(|| without_ext.to_string())
 }

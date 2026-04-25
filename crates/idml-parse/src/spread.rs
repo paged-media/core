@@ -39,6 +39,9 @@ pub struct Spread {
 pub struct Page {
     pub self_id: Option<String>,
     pub bounds: Bounds,
+    /// `AppliedMaster` reference — `MasterSpread/<id>` typically.
+    /// Resolved to a `MasterSpread` by `idml_scene::Document`.
+    pub applied_master: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -117,6 +120,7 @@ impl Spread {
                             out.pages.push(Page {
                                 self_id: attr(&e, b"Self"),
                                 bounds,
+                                applied_master: attr(&e, b"AppliedMaster"),
                             });
                         }
                     }

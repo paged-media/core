@@ -93,23 +93,18 @@ pub fn build_document(
     let mut pages: Vec<BuiltPage> = Vec::new();
     let mut total_stats = PipelineStats::default();
 
-    // Walk every page in every spread. We capture each page's bounds +
-    // origin so the second pass can route frames by centre-point
-    // containment.
-    let mut page_index_by_id: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
+    // Walk every page in every spread. We capture each page's bounds,
+    // origin, and applied-master reference so the next passes can
+    // route frames by containment and apply master backgrounds.
     let mut page_geometries: Vec<PageGeom> = Vec::new();
     for parsed in &document.spreads {
         total_stats.spreads += 1;
         for p in &parsed.spread.pages {
             let geom = PageGeom {
                 bounds_in_spread: p.bounds,
+                applied_master: p.applied_master.clone(),
             };
-            let idx = page_geometries.len();
             page_geometries.push(geom);
-            if let Some(id) = &p.self_id {
-                page_index_by_id.insert(id.clone(), idx);
-            }
             pages.push(BuiltPage {
                 width_pt: p.bounds.width(),
                 height_pt: p.bounds.height(),
@@ -137,7 +132,56 @@ pub fn build_document(
                 bottom: 792.0,
                 right: 612.0,
             },
+            applied_master: None,
         });
+    }
+
+    // Master-spread pass — runs first so master items end up at the
+    // bottom of each page's display list (page-level frames overlay on
+    // top). Master frames are stamped into every page that references
+    // the master.
+    for (i, geom) in page_geometries.iter().enumerate() {
+        let Some(master_ref) = geom.applied_master.as_deref() else {
+            continue;
+        };
+        let Some(master) = document.master_spread(master_ref) else {
+            continue;
+        };
+        // Master items are positioned in the master-spread coordinate
+        // system; map them onto the live page by translating from the
+        // master's first page origin to the live page origin. For the
+        // common single-page master this is a straight passthrough.
+        let master_origin = master
+            .spread
+            .pages
+            .first()
+            .map(|p| (p.bounds.left, p.bounds.top))
+            .unwrap_or((0.0, 0.0));
+        let target_origin = pages[i].spread_origin;
+        let dx = target_origin.0 - master_origin.0;
+        let dy = target_origin.1 - master_origin.1;
+        for frame in &master.spread.text_frames {
+            let translated = idml_parse::Bounds {
+                top: frame.bounds.top + dy,
+                left: frame.bounds.left + dx,
+                bottom: frame.bounds.bottom + dy,
+                right: frame.bounds.right + dx,
+            };
+            let mut copy = frame.clone();
+            copy.bounds = translated;
+            emit_text_frame_into(&mut pages[i], &copy, palette, options.fallback_frame_fill);
+        }
+        for rect in &master.spread.rectangles {
+            let translated = idml_parse::Bounds {
+                top: rect.bounds.top + dy,
+                left: rect.bounds.left + dx,
+                bottom: rect.bounds.bottom + dy,
+                right: rect.bounds.right + dx,
+            };
+            let mut copy = rect.clone();
+            copy.bounds = translated;
+            emit_rectangle_into(&mut pages[i], &copy, palette, options.fallback_frame_fill);
+        }
     }
 
     // Frame pass: route every frame to the page whose bounds contain
@@ -245,9 +289,11 @@ pub fn build_document(
     })
 }
 
-/// Wraps a page's bounds for centre-point routing.
+/// Wraps a page's bounds for centre-point routing + its master
+/// reference for master-spread application.
 struct PageGeom {
     bounds_in_spread: idml_parse::Bounds,
+    applied_master: Option<String>,
 }
 
 fn page_for_frame(frame: &idml_parse::Bounds, pages: &[PageGeom]) -> Option<usize> {
