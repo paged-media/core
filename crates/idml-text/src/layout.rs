@@ -345,12 +345,57 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     let stretch = (space_width as f32 * opts.stretch_ratio).round() as i32;
     let shrink = (space_width as f32 * opts.shrink_ratio).round() as i32;
 
-    let mut items: Vec<Item<()>> = Vec::with_capacity(words.len() * 2 + 2);
+    let mut items: Vec<Item<()>> = Vec::with_capacity(words.len() * 4 + 2);
     let mut byte_ends: Vec<usize> = Vec::with_capacity(items.capacity());
+    let mut is_hyphen: Vec<bool> = Vec::with_capacity(items.capacity());
     for (i, w) in words.iter().enumerate() {
-        let width = sum_advances_in(&flat, w.start as u32..w.end as u32);
-        items.push(Item::Box { width, data: () });
+        // Hyphenate iff the word is entirely within one run AND a
+        // hyphenator is configured. Multi-run words (rare — usually a
+        // bold "hold" + italic "ing") fall through to a single Box;
+        // they still break at glue boundaries.
+        let single_run = run_index_for_word(&flat, w.start as u32, w.end as u32);
+        let breaks: Vec<usize> = match (opts.hyphenator, single_run) {
+            (Some(h), Some(_)) => {
+                let word_text = &paragraph_text[w.start..w.end];
+                h.opportunities(word_text)
+                    .into_iter()
+                    .filter(|&b| b > 0 && b < word_text.len())
+                    .map(|b| w.start + b)
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+        let hyphen_width = if !breaks.is_empty() {
+            let r = &runs[single_run.unwrap()];
+            shape_run(r.face, "-", r.point_size).total_advance
+        } else {
+            0
+        };
+        let mut seg_start = w.start;
+        for offset in &breaks {
+            let seg_width = sum_advances_in(&flat, seg_start as u32..*offset as u32);
+            items.push(Item::Box {
+                width: seg_width,
+                data: (),
+            });
+            byte_ends.push(*offset);
+            is_hyphen.push(false);
+            items.push(Item::Penalty {
+                width: hyphen_width,
+                penalty: opts.hyphen_penalty,
+                flagged: true,
+            });
+            byte_ends.push(*offset);
+            is_hyphen.push(true);
+            seg_start = *offset;
+        }
+        let final_width = sum_advances_in(&flat, seg_start as u32..w.end as u32);
+        items.push(Item::Box {
+            width: final_width,
+            data: (),
+        });
         byte_ends.push(w.end);
+        is_hyphen.push(false);
         if i + 1 < words.len() {
             items.push(Item::Glue {
                 width: space_width,
@@ -358,6 +403,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                 shrink,
             });
             byte_ends.push(w.end);
+            is_hyphen.push(false);
         }
     }
     items.push(Item::Glue {
@@ -366,12 +412,14 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         shrink: 0,
     });
     byte_ends.push(paragraph_text.len());
+    is_hyphen.push(false);
     items.push(Item::Penalty {
         width: 0,
         penalty: -paragraph_breaker::INFINITE_PENALTY,
         flagged: true,
     });
     byte_ends.push(paragraph_text.len());
+    is_hyphen.push(false);
 
     let breaks: Vec<Breakpoint> =
         paragraph_breaker::total_fit(&items, &[opts.column_width], opts.tolerance, opts.looseness);
@@ -389,6 +437,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         let Some(&end) = byte_ends.get(bp.index) else {
             continue;
         };
+        let hyphenated = is_hyphen.get(bp.index).copied().unwrap_or(false);
         let mut start = byte_cursor;
         while start < end && bytes[start].is_ascii_whitespace() {
             start += 1;
@@ -398,6 +447,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         }
         let mut glyphs: Vec<PositionedGlyph> = Vec::new();
         let mut pen_x: i32 = 0;
+        let mut last_run_idx: Option<usize> = None;
         for fg in &flat {
             if fg.cluster < start as u32 || fg.cluster >= end as u32 {
                 continue;
@@ -412,6 +462,28 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                 point_size: run.point_size,
             });
             pen_x += fg.x_advance;
+            last_run_idx = Some(fg.run_idx);
+        }
+        // Append a synthetic hyphen glyph for hyphenated breaks,
+        // shaped with the run that owns the line's last glyph. The
+        // hyphen carries the line's last source byte as its cluster
+        // so per-cluster paint pickers attribute it to the same run.
+        if hyphenated {
+            if let Some(idx) = last_run_idx {
+                let r = &runs[idx];
+                let hyphen_shape = shape_run(r.face, "-", r.point_size);
+                for g in &hyphen_shape.glyphs {
+                    glyphs.push(PositionedGlyph {
+                        glyph_id: g.glyph_id,
+                        cluster: end.saturating_sub(1) as u32,
+                        x: pen_x + g.x_offset,
+                        y: baseline + g.y_offset,
+                        font_id: r.font_id,
+                        point_size: r.point_size,
+                    });
+                    pen_x += g.x_advance;
+                }
+            }
         }
         let natural_width = pen_x;
         apply_alignment(
@@ -493,6 +565,25 @@ fn sum_advances_in(flat: &[FlatGlyph], range: Range<u32>) -> i32 {
         .filter(|g| g.cluster >= range.start && g.cluster < range.end)
         .map(|g| g.x_advance)
         .sum()
+}
+
+/// Returns `Some(run_idx)` when every glyph whose cluster falls in
+/// `[start, end)` belongs to the same run, else `None`. Used to
+/// gate hyphenation: a word that crosses a run boundary is rare and
+/// needs per-segment hyphen widths we don't model yet.
+fn run_index_for_word(flat: &[FlatGlyph], start: u32, end: u32) -> Option<usize> {
+    let mut run: Option<usize> = None;
+    for g in flat {
+        if g.cluster < start || g.cluster >= end {
+            continue;
+        }
+        match run {
+            None => run = Some(g.run_idx),
+            Some(r) if r != g.run_idx => return None,
+            _ => {}
+        }
+    }
+    run
 }
 
 #[cfg(test)]
