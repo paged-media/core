@@ -448,7 +448,15 @@ fn emit_text_frame_into(
         w: frame.bounds.width(),
         h: frame.bounds.height(),
     };
-    if let Some(shadow) = drop_shadow {
+    // Per-frame IDML shadow takes precedence over the synthetic
+    // pipeline-level option. Both fall back to None when neither is
+    // present.
+    let effective_shadow = frame
+        .drop_shadow
+        .as_ref()
+        .and_then(|s| convert_setting_to_shadow(s, palette, cmyk_xform))
+        .or(drop_shadow);
+    if let Some(shadow) = effective_shadow {
         emit_drop_shadow_rect(r, shadow, &mut page.list);
     }
     let fill = frame
@@ -484,6 +492,16 @@ fn emit_oval_into(
         w: oval.bounds.width(),
         h: oval.bounds.height(),
     };
+    if let Some(shadow) = oval
+        .drop_shadow
+        .as_ref()
+        .and_then(|s| convert_setting_to_shadow(s, palette, cmyk_xform))
+    {
+        // Ovals don't yet have a dedicated shadow primitive — use the
+        // bounding-rect stamp as a stopgap. Replace once the rasterizer
+        // grows shadowed-ellipse support.
+        emit_drop_shadow_rect(r, shadow, &mut page.list);
+    }
     let fill = oval
         .fill_color
         .as_deref()
@@ -548,7 +566,12 @@ fn emit_rectangle_into(
         w: rect.bounds.width(),
         h: rect.bounds.height(),
     };
-    if let Some(shadow) = drop_shadow {
+    let effective_shadow = rect
+        .drop_shadow
+        .as_ref()
+        .and_then(|s| convert_setting_to_shadow(s, palette, cmyk_xform))
+        .or(drop_shadow);
+    if let Some(shadow) = effective_shadow {
         emit_drop_shadow_rect(r, shadow, &mut page.list);
     }
     let fill = rect
@@ -567,6 +590,39 @@ fn emit_rectangle_into(
             emit_stroke_rect(r, Stroke::new(width), stroke, &mut page.list);
         }
     }
+}
+
+/// Convert an IDML `<DropShadowSetting>` to a compose-layer
+/// `DropShadow`. Returns `None` for `Mode="None"` or settings that
+/// resolve to a fully-transparent shadow (opacity 0).
+fn convert_setting_to_shadow(
+    setting: &idml_parse::DropShadowSetting,
+    palette: &Graphic,
+    cmyk_xform: Option<&idml_color::IccTransform>,
+) -> Option<DropShadow> {
+    if setting.mode.eq_ignore_ascii_case("None") {
+        return None;
+    }
+    let opacity = (setting.opacity_pct / 100.0).clamp(0.0, 1.0);
+    if opacity == 0.0 {
+        return None;
+    }
+    let color = setting
+        .effect_color
+        .as_deref()
+        .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+        .and_then(|p| match p {
+            Paint::Solid(c) => Some(c),
+            _ => None,
+        })
+        .unwrap_or(Color::BLACK);
+    Some(DropShadow {
+        offset_x: setting.x_offset,
+        offset_y: setting.y_offset,
+        blur_radius: setting.size,
+        color,
+        opacity,
+    })
 }
 
 /// Single-page convenience: union every page's bounds and emit all

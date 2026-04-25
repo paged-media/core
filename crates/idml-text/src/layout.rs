@@ -58,8 +58,8 @@ pub enum Alignment {
 }
 
 #[derive(Debug, Clone)]
-pub struct LayoutOptions {
-    pub compose: ComposeOptions,
+pub struct LayoutOptions<'a> {
+    pub compose: ComposeOptions<'a>,
     /// Distance between baselines, 1/64 pt.
     pub line_height: i32,
     /// Offset of the first baseline from the top of the paragraph box,
@@ -69,7 +69,7 @@ pub struct LayoutOptions {
     pub alignment: Alignment,
 }
 
-impl LayoutOptions {
+impl LayoutOptions<'_> {
     /// Convenience constructor from point-unit inputs. Uses 1.2×
     /// point_size as the default line height (common InDesign default
     /// for Auto leading) and `0.8 × point_size` for the first baseline.
@@ -99,8 +99,29 @@ pub fn layout_paragraph<S: TextShaper>(
 
     for (i, line) in composed.iter().enumerate() {
         let slice = &text[line.byte_range.clone()];
-        let shaped = shaper.shape(slice);
+        // For hyphenated lines we shape `slice + "-"` so the trailing
+        // hyphen sits in the same shaping context as the word part
+        // (some fonts apply contextual kerning to "-"). The hyphen
+        // glyph carries the `cluster` of the line's last byte so
+        // run-paint pickers attribute it to the word, not the next.
+        let owned;
+        let to_shape: &str = if line.ends_with_hyphen {
+            owned = format!("{slice}-");
+            &owned
+        } else {
+            slice
+        };
+        let shaped = shaper.shape(to_shape);
         let mut glyphs = position_line(&shaped, 0, baseline, line.byte_range.start as u32);
+        if line.ends_with_hyphen {
+            // The last glyph corresponds to the synthetic "-" — pin
+            // its cluster to the line's last source byte so it picks
+            // up the right run paint and doesn't claim a cluster
+            // beyond the line's byte range.
+            if let Some(last) = glyphs.last_mut() {
+                last.cluster = line.byte_range.end.saturating_sub(1) as u32;
+            }
+        }
         let is_last = i == last_index;
         apply_alignment(
             &mut glyphs,
@@ -123,7 +144,7 @@ pub fn layout_paragraph<S: TextShaper>(
     LaidOutParagraph { lines }
 }
 
-impl LayoutOptions {
+impl LayoutOptions<'_> {
     /// Column width in 1/64 pt (convenience for layout passes).
     pub fn column_width(&self) -> i32 {
         self.compose.column_width
@@ -252,7 +273,7 @@ mod tests {
         }
     }
 
-    fn opts(column_chars: i32, alignment: Alignment) -> LayoutOptions {
+    fn opts(column_chars: i32, alignment: Alignment) -> LayoutOptions<'static> {
         LayoutOptions {
             compose: ComposeOptions {
                 column_width: column_chars * 10,
@@ -260,6 +281,8 @@ mod tests {
                 stretch_ratio: 1.0,
                 shrink_ratio: 0.5,
                 looseness: 0,
+                hyphenator: None,
+                hyphen_penalty: 50,
             },
             line_height: 20,
             first_baseline: 15,

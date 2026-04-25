@@ -109,6 +109,8 @@ mod tests {
                 stretch_ratio: 1.0,
                 shrink_ratio: 0.5,
                 looseness: 0,
+                hyphenator: None,
+                hyphen_penalty: 50,
             },
             line_height: 64 * 14,
             first_baseline: 64 * 10,

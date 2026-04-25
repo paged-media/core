@@ -17,6 +17,7 @@
 use paragraph_breaker::{Breakpoint, Item};
 use rustybuzz::Face;
 
+use crate::hyphenate::Hyphenator;
 use crate::shape::{shape_run, ShapedGlyph, ShapedRun, ADVANCE_PRECISION};
 
 /// Abstraction over width measurement. Returns advances in 1/64 pt.
@@ -40,8 +41,12 @@ pub trait TextShaper: AdvanceMeasurer {
 }
 
 /// Knobs the calibration spike tunes against InDesign.
+///
+/// `'a` is the lifetime of the optional `&Hyphenator` borrow. Building
+/// `ComposeOptions` without a hyphenator imposes no lifetime obligation
+/// on callers — the lifetime is inferred to `'static`.
 #[derive(Debug, Clone)]
-pub struct ComposeOptions {
+pub struct ComposeOptions<'a> {
     /// Column width in 1/64 pt.
     pub column_width: i32,
     /// paragraph-breaker tolerance. Higher = more permissive fits.
@@ -52,9 +57,18 @@ pub struct ComposeOptions {
     pub stretch_ratio: f32,
     /// Inter-word glue: shrink as a fraction of `space_width`.
     pub shrink_ratio: f32,
+    /// Optional hyphenation engine. When set, the composer emits
+    /// flagged Penalty items at every TeX-pattern break opportunity
+    /// inside each word; paragraph-breaker decides whether to take
+    /// them based on `tolerance` and `hyphen_penalty`.
+    pub hyphenator: Option<&'a Hyphenator>,
+    /// Penalty cost paid when a line is broken at a hyphenation
+    /// opportunity. Knuth-Plass convention: 50 = mildly penalised,
+    /// 100 = costly. Only consulted when `hyphenator` is set.
+    pub hyphen_penalty: i32,
 }
 
-impl ComposeOptions {
+impl ComposeOptions<'_> {
     /// Defaults chosen as a reasonable starting point; the composer
     /// spike calibrates these against InDesign before the text engine
     /// takes them as fixed.
@@ -65,6 +79,8 @@ impl ComposeOptions {
             looseness: 0,
             stretch_ratio: 1.0,
             shrink_ratio: 0.5,
+            hyphenator: None,
+            hyphen_penalty: 50,
         }
     }
 }
@@ -79,6 +95,10 @@ pub struct ComposedLine {
     /// Justification ratio: 0 = natural width, >0 = stretched, <0 =
     /// shrunk. Matches paragraph-breaker's convention.
     pub ratio: f32,
+    /// True when the line break landed on a flagged hyphenation
+    /// penalty mid-word. The layout pass appends a `-` glyph after
+    /// the line's last glyph so the rendered output reads correctly.
+    pub ends_with_hyphen: bool,
 }
 
 /// Compose one paragraph.
@@ -86,6 +106,10 @@ pub struct ComposedLine {
 /// Splits `text` into words by ASCII whitespace, measures each with
 /// `measurer`, builds a Knuth-Plass item stream, and invokes
 /// `paragraph_breaker::total_fit`. Returns the resulting line sequence.
+///
+/// When `options.hyphenator` is set, each word is split into segments
+/// at every TeX-pattern break point and a flagged Penalty is emitted
+/// between segments so paragraph-breaker can hyphenate mid-word.
 pub fn compose_paragraph(
     text: &str,
     measurer: &dyn AdvanceMeasurer,
@@ -98,17 +122,70 @@ pub fn compose_paragraph(
     let space_width = measurer.space_width();
     let stretch = (space_width as f32 * options.stretch_ratio).round() as i32;
     let shrink = (space_width as f32 * options.shrink_ratio).round() as i32;
+    let hyphen_width = if options.hyphenator.is_some() {
+        measurer.measure_word("-")
+    } else {
+        0
+    };
 
-    let mut items: Vec<Item<usize>> = Vec::with_capacity(words.len() * 2 + 2);
+    // `items` is what paragraph-breaker sees. `byte_ends` and
+    // `is_hyphen_break` are parallel arrays indexed the same way so we
+    // can map any chosen break back to a source byte offset and learn
+    // whether the break needs a trailing hyphen glyph.
+    let mut items: Vec<Item<()>> = Vec::with_capacity(words.len() * 4 + 2);
+    let mut byte_ends: Vec<usize> = Vec::with_capacity(items.capacity());
+    let mut is_hyphen_break: Vec<bool> = Vec::with_capacity(items.capacity());
+
     for (i, w) in words.iter().enumerate() {
-        let width = measurer.measure_word(&text[w.start..w.end]);
-        items.push(Item::Box { width, data: i });
+        let word_text = &text[w.start..w.end];
+        // Hyphenation breaks are byte offsets inside the word; filter
+        // out any sentinel 0/len entries the dictionary might produce.
+        let breaks: Vec<usize> = options
+            .hyphenator
+            .map(|h| h.opportunities(word_text))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|&b| b > 0 && b < word_text.len())
+            .collect();
+
+        let mut seg_start = 0usize;
+        for &offset in &breaks {
+            if offset <= seg_start {
+                continue;
+            }
+            let seg = &word_text[seg_start..offset];
+            let width = measurer.measure_word(seg);
+            items.push(Item::Box { width, data: () });
+            byte_ends.push(w.start + offset);
+            is_hyphen_break.push(false);
+            items.push(Item::Penalty {
+                width: hyphen_width,
+                penalty: options.hyphen_penalty,
+                flagged: true,
+            });
+            byte_ends.push(w.start + offset);
+            is_hyphen_break.push(true);
+            seg_start = offset;
+        }
+        let final_seg = &word_text[seg_start..];
+        let final_w = measurer.measure_word(final_seg);
+        items.push(Item::Box {
+            width: final_w,
+            data: (),
+        });
+        byte_ends.push(w.end);
+        is_hyphen_break.push(false);
+
         if i + 1 < words.len() {
             items.push(Item::Glue {
                 width: space_width,
                 stretch,
                 shrink,
             });
+            // Glue between words: a break here trims the trailing
+            // space, so byte_end is the previous word's end.
+            byte_ends.push(w.end);
+            is_hyphen_break.push(false);
         }
     }
     // Paragraph end: infinite stretch + forced break (TeX convention).
@@ -117,11 +194,15 @@ pub fn compose_paragraph(
         stretch: paragraph_breaker::INFINITE_PENALTY,
         shrink: 0,
     });
+    byte_ends.push(text.len());
+    is_hyphen_break.push(false);
     items.push(Item::Penalty {
         width: 0,
         penalty: -paragraph_breaker::INFINITE_PENALTY,
         flagged: true,
     });
+    byte_ends.push(text.len());
+    is_hyphen_break.push(false);
 
     let breaks: Vec<Breakpoint> = paragraph_breaker::total_fit(
         &items,
@@ -130,26 +211,33 @@ pub fn compose_paragraph(
         options.looseness,
     );
 
-    // Translate Breakpoints (item indices) back into word-end byte offsets.
+    // Translate Breakpoints (item indices) into byte ranges. A break
+    // at a flagged hyphenation penalty marks the line for hyphen
+    // rendering at the layout pass.
     let mut lines = Vec::with_capacity(breaks.len());
-    let mut start_word = 0usize;
+    let mut byte_cursor = 0usize;
     for bp in &breaks {
-        // Find the last Box whose item index is ≤ bp.index.
-        let last_box = (0..=bp.index).rev().find_map(|i| match items.get(i) {
-            Some(Item::Box { data, .. }) => Some(*data),
-            _ => None,
-        });
-        let Some(end_word) = last_box else {
+        let Some(&end) = byte_ends.get(bp.index) else {
             continue;
         };
-        let byte_start = words[start_word].start;
-        let byte_end = words[end_word].end;
+        let hyphen = is_hyphen_break.get(bp.index).copied().unwrap_or(false);
+        // Skip whitespace at the line's left edge (after a glue
+        // break) so byte_range tracks the visible content.
+        let mut start = byte_cursor;
+        let bytes = text.as_bytes();
+        while start < end && is_ws(bytes[start]) {
+            start += 1;
+        }
+        if start >= end {
+            continue;
+        }
         lines.push(ComposedLine {
-            byte_range: byte_start..byte_end,
+            byte_range: start..end,
             width: bp.width,
             ratio: bp.ratio,
+            ends_with_hyphen: hyphen,
         });
-        start_word = end_word + 1;
+        byte_cursor = end;
     }
     lines
 }
@@ -289,6 +377,38 @@ mod tests {
             .into_iter()
             .map(|l| text[l.byte_range].to_string())
             .collect()
+    }
+
+    #[test]
+    fn hyphenation_inserts_mid_word_breaks_when_needed() {
+        // A line that fits exactly when broken at a hyphenation
+        // penalty inside the second word, and can't fit without one
+        // (a single-word line has no inner glue to absorb slack).
+        let m = MonospaceMeasurer::new(10, 10);
+        let h = crate::Hyphenator::for_language(crate::Language::EnglishUS);
+        let mut opts = ComposeOptions::new(0.0);
+        opts.column_width = 80;
+        opts.tolerance = 20.0;
+        opts.hyphenator = Some(&h);
+        let out = compose_paragraph("the elephants", &m, &opts);
+        assert!(
+            out.iter().any(|l| l.ends_with_hyphen),
+            "expected at least one hyphenated line: {:?}",
+            out
+        );
+    }
+
+    #[test]
+    fn no_hyphenator_means_no_hyphen_flag() {
+        let m = MonospaceMeasurer::new(10, 10);
+        let opts = ComposeOptions {
+            column_width: 200,
+            ..ComposeOptions::new(0.0)
+        };
+        let out = compose_paragraph("optimisation works well", &m, &opts);
+        for l in &out {
+            assert!(!l.ends_with_hyphen, "no hyphenator → no flag");
+        }
     }
 
     #[test]

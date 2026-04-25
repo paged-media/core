@@ -49,6 +49,12 @@ pub struct Hyphenator {
     inner: Standard,
 }
 
+impl std::fmt::Debug for Hyphenator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Hyphenator").finish_non_exhaustive()
+    }
+}
+
 impl Hyphenator {
     /// Load the embedded TeX dictionary for `lang`.
     pub fn for_language(lang: Language) -> Self {

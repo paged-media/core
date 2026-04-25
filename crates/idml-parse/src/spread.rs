@@ -68,6 +68,21 @@ pub struct TextFrame {
     /// `StrokeWeight` attribute, in points. `None` → document default
     /// (typically 1 pt in InDesign).
     pub stroke_weight: Option<f32>,
+    /// `<DropShadowSetting>` parsed from `<Properties><TransparencySetting>`.
+    /// `None` when absent or `Mode="None"`.
+    pub drop_shadow: Option<DropShadowSetting>,
+}
+
+/// Drop shadow as carried in the IDML XML. Distances are in pt;
+/// `opacity_pct` is 0..=100; `effect_color` is a Color id reference.
+#[derive(Debug, Clone, Serialize)]
+pub struct DropShadowSetting {
+    pub mode: String,
+    pub x_offset: f32,
+    pub y_offset: f32,
+    pub size: f32,
+    pub opacity_pct: f32,
+    pub effect_color: Option<String>,
 }
 
 /// Vector-only frame (no story). Mirrors `TextFrame` minus the
@@ -81,6 +96,7 @@ pub struct Rectangle {
     pub fill_color: Option<String>,
     pub stroke_color: Option<String>,
     pub stroke_weight: Option<f32>,
+    pub drop_shadow: Option<DropShadowSetting>,
 }
 
 /// Axis-aligned ellipse — `<Oval>` in IDML. Same fill/stroke story as
@@ -93,6 +109,7 @@ pub struct Oval {
     pub fill_color: Option<String>,
     pub stroke_color: Option<String>,
     pub stroke_weight: Option<f32>,
+    pub drop_shadow: Option<DropShadowSetting>,
 }
 
 /// Straight line — `<GraphicLine>` in IDML. The endpoints are the
@@ -124,6 +141,15 @@ impl Bounds {
     }
 }
 
+/// Tracks which frame the current `<DropShadowSetting>` should
+/// attach to — the most recently opened TextFrame / Rectangle / Oval.
+#[derive(Debug, Clone, Copy)]
+enum CurrentFrame {
+    Text(usize),
+    Rect(usize),
+    Oval(usize),
+}
+
 impl Spread {
     pub fn parse(xml: &[u8]) -> Result<Self, ParseError> {
         let mut reader = quick_xml::Reader::from_reader(xml);
@@ -131,6 +157,7 @@ impl Spread {
 
         let mut out = Spread::default();
         let mut group_depth: usize = 0;
+        let mut current_frame: Option<CurrentFrame> = None;
         let mut buf = Vec::new();
 
         loop {
@@ -180,7 +207,9 @@ impl Spread {
                             fill_color,
                             stroke_color,
                             stroke_weight,
+                            drop_shadow: None,
                         });
+                        current_frame = Some(CurrentFrame::Text(out.text_frames.len() - 1));
                     }
                     b"Rectangle" => {
                         let Some(bounds) =
@@ -201,7 +230,9 @@ impl Spread {
                             stroke_color: attr(&e, b"StrokeColor"),
                             stroke_weight: attr(&e, b"StrokeWeight")
                                 .and_then(|s| s.parse::<f32>().ok()),
+                            drop_shadow: None,
                         });
+                        current_frame = Some(CurrentFrame::Rect(out.rectangles.len() - 1));
                     }
                     b"Oval" => {
                         let Some(bounds) =
@@ -222,7 +253,30 @@ impl Spread {
                             stroke_color: attr(&e, b"StrokeColor"),
                             stroke_weight: attr(&e, b"StrokeWeight")
                                 .and_then(|s| s.parse::<f32>().ok()),
+                            drop_shadow: None,
                         });
+                        current_frame = Some(CurrentFrame::Oval(out.ovals.len() - 1));
+                    }
+                    b"DropShadowSetting" => {
+                        if let (Some(cf), Some(setting)) = (current_frame, parse_drop_shadow(&e)) {
+                            // Only "Drop"/"Default" mode results in a
+                            // visible shadow. "None" means the shadow
+                            // is disabled even though the setting is
+                            // serialised.
+                            if setting.mode != "None" {
+                                match cf {
+                                    CurrentFrame::Text(i) => {
+                                        out.text_frames[i].drop_shadow = Some(setting);
+                                    }
+                                    CurrentFrame::Rect(i) => {
+                                        out.rectangles[i].drop_shadow = Some(setting);
+                                    }
+                                    CurrentFrame::Oval(i) => {
+                                        out.ovals[i].drop_shadow = Some(setting);
+                                    }
+                                }
+                            }
+                        }
                     }
                     b"GraphicLine" => {
                         let Some(bounds) =
@@ -246,11 +300,17 @@ impl Spread {
                     }
                     _ => {}
                 },
-                Event::End(e) => {
-                    if e.name().as_ref() == b"Group" && group_depth > 0 {
+                Event::End(e) => match e.name().as_ref() {
+                    b"Group" if group_depth > 0 => {
                         group_depth -= 1;
                     }
-                }
+                    b"TextFrame" | b"Rectangle" | b"Oval" => {
+                        // Frame is fully parsed; clear the
+                        // drop-shadow attachment context.
+                        current_frame = None;
+                    }
+                    _ => {}
+                },
                 Event::Eof => break,
                 _ => {}
             }
@@ -280,6 +340,23 @@ fn parse_bounds(s: &str) -> Option<Bounds> {
         left: parts[1],
         bottom: parts[2],
         right: parts[3],
+    })
+}
+
+fn parse_drop_shadow(e: &quick_xml::events::BytesStart) -> Option<DropShadowSetting> {
+    Some(DropShadowSetting {
+        mode: attr(e, b"Mode").unwrap_or_else(|| "Drop".to_string()),
+        x_offset: attr(e, b"XOffset")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0),
+        y_offset: attr(e, b"YOffset")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0),
+        size: attr(e, b"Size").and_then(|s| s.parse().ok()).unwrap_or(0.0),
+        opacity_pct: attr(e, b"Opacity")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(75.0),
+        effect_color: attr(e, b"EffectColor"),
     })
 }
 
@@ -370,6 +447,58 @@ mod tests {
         assert_eq!(s.rectangles[0].fill_color.as_deref(), Some("Color/Blue"));
         assert_eq!(s.rectangles[0].stroke_weight, Some(1.5));
         assert_eq!(s.rectangles[1].fill_color, None);
+    }
+
+    #[test]
+    fn parses_drop_shadow_inside_text_frame_properties() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <TextFrame Self="frame1" ParentStory="u1" GeometricBounds="0 0 100 200">
+              <Properties>
+                <TransparencySetting>
+                  <DropShadowSetting Mode="Drop" XOffset="3" YOffset="3" Size="6"
+                                     Opacity="50" EffectColor="Color/Black"/>
+                </TransparencySetting>
+              </Properties>
+            </TextFrame>
+            <Rectangle Self="rect1" GeometricBounds="0 0 50 50"/>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.text_frames.len(), 1);
+        let shadow = s.text_frames[0]
+            .drop_shadow
+            .as_ref()
+            .expect("drop shadow parsed");
+        assert_eq!(shadow.mode, "Drop");
+        assert_eq!(shadow.x_offset, 3.0);
+        assert_eq!(shadow.y_offset, 3.0);
+        assert_eq!(shadow.size, 6.0);
+        assert_eq!(shadow.opacity_pct, 50.0);
+        assert_eq!(shadow.effect_color.as_deref(), Some("Color/Black"));
+        // Plain rectangle without shadow stays None.
+        assert_eq!(s.rectangles.len(), 1);
+        assert!(s.rectangles[0].drop_shadow.is_none());
+    }
+
+    #[test]
+    fn drop_shadow_with_mode_none_is_skipped() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <TextFrame Self="f1" ParentStory="u1" GeometricBounds="0 0 100 200">
+              <Properties>
+                <TransparencySetting>
+                  <DropShadowSetting Mode="None" XOffset="3" YOffset="3" Size="6"
+                                     Opacity="50"/>
+                </TransparencySetting>
+              </Properties>
+            </TextFrame>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert!(s.text_frames[0].drop_shadow.is_none());
     }
 
     #[test]
