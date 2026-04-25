@@ -19,3 +19,8 @@ tracing = { workspace = true }
 # C dependency until the spike concludes.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 lcms2 = "6"
+
+[dev-dependencies]
+# Used in tests once a redistributable CMYK profile lands in
+# corpus/profiles. Keeping the placeholder dep slot here so the
+# test setup is one Cargo.toml line away from being live.

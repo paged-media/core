@@ -29,6 +29,11 @@ pub struct PipelineOptions<'a> {
     pub fallback_frame_fill: Paint,
     /// Fill paint for runs that have no resolvable FillColor.
     pub fallback_text_paint: Paint,
+    /// CMYK ICC profile bytes. When present (and on a target with
+    /// lcms2 available — i.e. not wasm32), CMYK swatches are routed
+    /// through ICC instead of the naive math in `idml-parse::graphic`.
+    /// None → naive conversion (existing behaviour).
+    pub cmyk_icc_profile: Option<&'a [u8]>,
 }
 
 impl Default for PipelineOptions<'_> {
@@ -39,6 +44,7 @@ impl Default for PipelineOptions<'_> {
             fallback_column_width_pt: None,
             fallback_frame_fill: Paint::Solid(Color::rgba(0.92, 0.92, 0.92, 1.0)),
             fallback_text_paint: Paint::Solid(Color::BLACK),
+            cmyk_icc_profile: None,
         }
     }
 }
@@ -90,6 +96,18 @@ pub fn build_document(
     options: &PipelineOptions,
 ) -> anyhow::Result<BuiltDocument> {
     let palette = &document.palette;
+    // Build the CMYK ICC transform once per render. Failures are
+    // logged + swallowed: if the profile is malformed we silently
+    // fall back to naive math so the render still produces output.
+    let cmyk_xform = options.cmyk_icc_profile.and_then(|bytes| {
+        match idml_color::IccTransform::cmyk_to_linear_rgb(bytes) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to build CMYK ICC transform; using naive conversion");
+                None
+            }
+        }
+    });
     let mut pages: Vec<BuiltPage> = Vec::new();
     let mut total_stats = PipelineStats::default();
 
@@ -169,7 +187,13 @@ pub fn build_document(
             };
             let mut copy = frame.clone();
             copy.bounds = translated;
-            emit_text_frame_into(&mut pages[i], &copy, palette, options.fallback_frame_fill);
+            emit_text_frame_into(
+                &mut pages[i],
+                &copy,
+                palette,
+                options.fallback_frame_fill,
+                cmyk_xform.as_ref(),
+            );
         }
         for rect in &master.spread.rectangles {
             let translated = idml_parse::Bounds {
@@ -180,7 +204,13 @@ pub fn build_document(
             };
             let mut copy = rect.clone();
             copy.bounds = translated;
-            emit_rectangle_into(&mut pages[i], &copy, palette, options.fallback_frame_fill);
+            emit_rectangle_into(
+                &mut pages[i],
+                &copy,
+                palette,
+                options.fallback_frame_fill,
+                cmyk_xform.as_ref(),
+            );
         }
     }
 
@@ -196,6 +226,7 @@ pub fn build_document(
                 frame,
                 palette,
                 options.fallback_frame_fill,
+                cmyk_xform.as_ref(),
             );
         }
         for rect in &spread.rectangles {
@@ -207,6 +238,7 @@ pub fn build_document(
                 rect,
                 palette,
                 options.fallback_frame_fill,
+                cmyk_xform.as_ref(),
             );
         }
     }
@@ -310,9 +342,9 @@ fn emit_text_frame_into(
     frame: &TextFrame,
     palette: &Graphic,
     fallback: Paint,
+    cmyk_xform: Option<&idml_color::IccTransform>,
 ) {
     page.stats.frames += 1;
-    // Translate to page-local coordinates.
     let (ox, oy) = page.spread_origin;
     let r = Rect {
         x: frame.bounds.left - ox,
@@ -320,9 +352,17 @@ fn emit_text_frame_into(
         w: frame.bounds.width(),
         h: frame.bounds.height(),
     };
-    let fill = resolve_fill(frame, palette).unwrap_or(fallback);
+    let fill = frame
+        .fill_color
+        .as_deref()
+        .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+        .unwrap_or(fallback);
     emit_rect(r, fill, &mut page.list);
-    if let Some(stroke) = resolve_stroke(frame, palette) {
+    if let Some(stroke) = frame
+        .stroke_color
+        .as_deref()
+        .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+    {
         let width = frame.stroke_weight.unwrap_or(1.0);
         if width > 0.0 {
             emit_stroke_rect(r, Stroke::new(width), stroke, &mut page.list);
@@ -330,7 +370,13 @@ fn emit_text_frame_into(
     }
 }
 
-fn emit_rectangle_into(page: &mut BuiltPage, rect: &Rectangle, palette: &Graphic, fallback: Paint) {
+fn emit_rectangle_into(
+    page: &mut BuiltPage,
+    rect: &Rectangle,
+    palette: &Graphic,
+    fallback: Paint,
+    cmyk_xform: Option<&idml_color::IccTransform>,
+) {
     page.stats.frames += 1;
     let (ox, oy) = page.spread_origin;
     let r = Rect {
@@ -339,9 +385,17 @@ fn emit_rectangle_into(page: &mut BuiltPage, rect: &Rectangle, palette: &Graphic
         w: rect.bounds.width(),
         h: rect.bounds.height(),
     };
-    let fill = resolve_rect_fill(rect, palette).unwrap_or(fallback);
+    let fill = rect
+        .fill_color
+        .as_deref()
+        .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+        .unwrap_or(fallback);
     emit_rect(r, fill, &mut page.list);
-    if let Some(stroke) = resolve_rect_stroke(rect, palette) {
+    if let Some(stroke) = rect
+        .stroke_color
+        .as_deref()
+        .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+    {
         let width = rect.stroke_weight.unwrap_or(1.0);
         if width > 0.0 {
             emit_stroke_rect(r, Stroke::new(width), stroke, &mut page.list);
@@ -524,32 +578,57 @@ pub fn render(
 
 /// Pick the paint for a frame from its FillColor attribute.
 pub fn resolve_fill(frame: &TextFrame, palette: &Graphic) -> Option<Paint> {
-    let id = frame.fill_color.as_deref()?;
-    let entry = palette.resolve(id)?;
-    let [r, g, b] = graphic::to_linear_rgb(entry)?;
-    Some(Paint::Solid(Color::rgba(r, g, b, 1.0)))
+    color_id_to_paint(frame.fill_color.as_deref()?, palette, None)
 }
 
 /// Same, for StrokeColor.
 pub fn resolve_stroke(frame: &TextFrame, palette: &Graphic) -> Option<Paint> {
-    let id = frame.stroke_color.as_deref()?;
-    let entry = palette.resolve(id)?;
-    let [r, g, b] = graphic::to_linear_rgb(entry)?;
-    Some(Paint::Solid(Color::rgba(r, g, b, 1.0)))
+    color_id_to_paint(frame.stroke_color.as_deref()?, palette, None)
 }
 
 /// Rectangle flavour of `resolve_fill` (no ParentStory to consider).
 pub fn resolve_rect_fill(rect: &Rectangle, palette: &Graphic) -> Option<Paint> {
-    let id = rect.fill_color.as_deref()?;
-    let entry = palette.resolve(id)?;
-    let [r, g, b] = graphic::to_linear_rgb(entry)?;
-    Some(Paint::Solid(Color::rgba(r, g, b, 1.0)))
+    color_id_to_paint(rect.fill_color.as_deref()?, palette, None)
 }
 
 /// Rectangle flavour of `resolve_stroke`.
 pub fn resolve_rect_stroke(rect: &Rectangle, palette: &Graphic) -> Option<Paint> {
-    let id = rect.stroke_color.as_deref()?;
+    color_id_to_paint(rect.stroke_color.as_deref()?, palette, None)
+}
+
+/// Resolve a color id (e.g. "Color/Red" or "Swatch/Black") to a
+/// `Paint` via the palette and an optional CMYK ICC transform.
+///
+/// On targets where lcms2 isn't available (wasm32) or when no profile
+/// is supplied, falls back to the naive math in
+/// `idml-parse::graphic::to_linear_rgb` — keeping the existing
+/// behaviour for hosts that don't yet ship an ICC profile.
+pub fn color_id_to_paint(
+    id: &str,
+    palette: &Graphic,
+    cmyk_xform: Option<&idml_color::IccTransform>,
+) -> Option<Paint> {
     let entry = palette.resolve(id)?;
+    if let (Some(xform), idml_parse::ColorSpace::Cmyk) = (cmyk_xform, entry.space) {
+        if entry.value.len() == 4 {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let cmyk = idml_color::Cmyk {
+                    c: entry.value[0],
+                    m: entry.value[1],
+                    y: entry.value[2],
+                    k: entry.value[3],
+                };
+                let idml_color::LinearRgb([r, g, b]) = xform.cmyk_percent_to_linear_rgb(cmyk);
+                return Some(Paint::Solid(Color::rgba(r, g, b, 1.0)));
+            }
+            // wasm32: xform is unconstructable so this branch is unreachable.
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = xform;
+            }
+        }
+    }
     let [r, g, b] = graphic::to_linear_rgb(entry)?;
     Some(Paint::Solid(Color::rgba(r, g, b, 1.0)))
 }
