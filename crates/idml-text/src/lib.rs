@@ -11,6 +11,7 @@
 //! on any specific penalty configuration.
 
 pub mod compose;
+pub mod hyphenate;
 pub mod layout;
 pub mod shape;
 
@@ -18,6 +19,7 @@ pub use compose::{
     compose_paragraph, AdvanceMeasurer, ComposeOptions, ComposedLine, MonospaceMeasurer,
     RustybuzzMeasurer, TextShaper,
 };
+pub use hyphenate::{Hyphenator, Language};
 pub use layout::{
     layout_paragraph, position_line, Alignment, LaidOutLine, LaidOutParagraph, LayoutOptions,
     PositionedGlyph,

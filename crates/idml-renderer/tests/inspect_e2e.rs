@@ -205,6 +205,40 @@ fn render_flag_produces_png_that_passes_fidelity_self_diff() {
 }
 
 #[test]
+fn json_flag_emits_machine_readable_report() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("hello.idml");
+    std::fs::write(&path, build_idml()).unwrap();
+
+    let output = Command::new(inspect_binary())
+        .arg(&path)
+        .arg("--json")
+        .arg("--display-list")
+        .output()
+        .expect("spawn idml-inspect");
+    assert!(
+        output.status.success(),
+        "idml-inspect failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("not valid JSON: {e}\n{stdout}"));
+    assert_eq!(
+        json["mimetype"],
+        "application/vnd.adobe.indesign-idml-package"
+    );
+    assert_eq!(json["manifest"]["spreads"], 1);
+    assert_eq!(json["manifest"]["stories"], 2);
+    assert_eq!(json["totals"]["pages"], 2);
+    assert_eq!(json["totals"]["paragraphs"], 3);
+    assert_eq!(json["totals"]["runs"], 5);
+    assert!(json["pages"].as_array().unwrap().len() == 2);
+    assert!(json["spreads"].as_array().unwrap().len() == 1);
+    assert!(json["stories"].as_array().unwrap().len() == 2);
+}
+
+#[test]
 fn display_list_flag_emits_one_command_per_frame_without_font() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("hello.idml");
