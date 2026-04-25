@@ -18,10 +18,16 @@ pub const UNIT_RECT_KEY: u64 = 0xD001_0001_0000_0001;
 /// space. The unit-rect path is interned so a document with N frames
 /// only stores one copy of the path data.
 pub fn emit_rect(rect: Rect, paint: Paint, list: &mut DisplayList) {
+    emit_rect_transformed(rect, Transform::IDENTITY, paint, list);
+}
+
+/// Filled rectangle with an arbitrary affine applied on top of the
+/// rect-to-page mapping. Used by callers that need IDML's
+/// `ItemTransform` to compose into the final transform without
+/// throwing the unit-rect path interning away.
+pub fn emit_rect_transformed(rect: Rect, outer: Transform, paint: Paint, list: &mut DisplayList) {
     let (path_id, _) = list.paths.intern(UNIT_RECT_KEY, unit_rect());
-    // Map unit-rect [0,0,1,1] → [rect.x, rect.y, rect.x+rect.w, rect.y+rect.h]:
-    // scale by (rect.w, rect.h), translate to (rect.x, rect.y).
-    let transform = Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]);
+    let transform = outer.compose(&Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]));
     list.push(DisplayCommand::FillPath {
         path_id,
         paint,
@@ -33,8 +39,19 @@ pub fn emit_rect(rect: Rect, paint: Paint, list: &mut DisplayList) {
 /// the same interned unit-rect path as [`emit_rect`], so a document
 /// with N stroked frames still stores exactly one rect outline.
 pub fn emit_stroke_rect(rect: Rect, stroke: Stroke, paint: Paint, list: &mut DisplayList) {
+    emit_stroke_rect_transformed(rect, Transform::IDENTITY, stroke, paint, list);
+}
+
+/// Stroked rectangle with an outer affine. See [`emit_rect_transformed`].
+pub fn emit_stroke_rect_transformed(
+    rect: Rect,
+    outer: Transform,
+    stroke: Stroke,
+    paint: Paint,
+    list: &mut DisplayList,
+) {
     let (path_id, _) = list.paths.intern(UNIT_RECT_KEY, unit_rect());
-    let transform = Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]);
+    let transform = outer.compose(&Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]));
     list.push(DisplayCommand::StrokePath {
         path_id,
         paint,
@@ -52,8 +69,18 @@ pub const UNIT_ELLIPSE_KEY: u64 = 0xD001_0001_0000_0002;
 /// unit-ellipse path is interned once per `DisplayList`, so a
 /// document with N ovals only stores one outline.
 pub fn emit_ellipse(rect: Rect, paint: Paint, list: &mut DisplayList) {
+    emit_ellipse_transformed(rect, Transform::IDENTITY, paint, list);
+}
+
+/// Filled ellipse with an outer affine. See [`emit_rect_transformed`].
+pub fn emit_ellipse_transformed(
+    rect: Rect,
+    outer: Transform,
+    paint: Paint,
+    list: &mut DisplayList,
+) {
     let (path_id, _) = list.paths.intern(UNIT_ELLIPSE_KEY, unit_ellipse());
-    let transform = Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]);
+    let transform = outer.compose(&Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]));
     list.push(DisplayCommand::FillPath {
         path_id,
         paint,
@@ -63,8 +90,18 @@ pub fn emit_ellipse(rect: Rect, paint: Paint, list: &mut DisplayList) {
 
 /// Stroked variant of [`emit_ellipse`].
 pub fn emit_stroke_ellipse(rect: Rect, stroke: Stroke, paint: Paint, list: &mut DisplayList) {
+    emit_stroke_ellipse_transformed(rect, Transform::IDENTITY, stroke, paint, list);
+}
+
+pub fn emit_stroke_ellipse_transformed(
+    rect: Rect,
+    outer: Transform,
+    stroke: Stroke,
+    paint: Paint,
+    list: &mut DisplayList,
+) {
     let (path_id, _) = list.paths.intern(UNIT_ELLIPSE_KEY, unit_ellipse());
-    let transform = Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]);
+    let transform = outer.compose(&Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]));
     list.push(DisplayCommand::StrokePath {
         path_id,
         paint,
@@ -78,8 +115,17 @@ pub fn emit_stroke_ellipse(rect: Rect, stroke: Stroke, paint: Paint, list: &mut 
 /// only stores one outline. Conventionally emitted *before* the
 /// matching `emit_rect` so the shadow lands behind the fill.
 pub fn emit_drop_shadow_rect(rect: Rect, shadow: DropShadow, list: &mut DisplayList) {
+    emit_drop_shadow_rect_transformed(rect, Transform::IDENTITY, shadow, list);
+}
+
+pub fn emit_drop_shadow_rect_transformed(
+    rect: Rect,
+    outer: Transform,
+    shadow: DropShadow,
+    list: &mut DisplayList,
+) {
     let (path_id, _) = list.paths.intern(UNIT_RECT_KEY, unit_rect());
-    let transform = Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]);
+    let transform = outer.compose(&Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]));
     list.push(DisplayCommand::DropShadow {
         path_id,
         transform,

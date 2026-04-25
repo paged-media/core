@@ -399,3 +399,80 @@ fn asset_resolver_is_consulted_for_every_distinct_font() {
         "resolver should be asked once per distinct (family, style)"
     );
 }
+
+fn build_translated_idml() -> Vec<u8> {
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+
+    zip.start_file("designmap.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+</Document>"#,
+    )
+    .unwrap();
+
+    zip.start_file("Resources/Graphic.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic>
+    <Color Self="Color/Red" Name="Red" Space="CMYK" ColorValue="0 100 100 0"/>
+  </Graphic>
+</idPkg:Graphic>"#,
+    )
+    .unwrap();
+
+    // The frame has local bounds (0, 0, 40, 40) and ItemTransform
+    // translates by (100, 50). The rendered frame should land at
+    // (100, 50) → (140, 90) in spread coords.
+    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 200"/>
+    <Rectangle Self="rectA" GeometricBounds="0 0 40 40"
+               ItemTransform="1 0 0 1 100 50"
+               FillColor="Color/Red" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#,
+    )
+    .unwrap();
+
+    zip.finish().unwrap().into_inner()
+}
+
+#[test]
+fn item_transform_translation_moves_rendered_frame() {
+    let bytes = build_translated_idml();
+    let document = Document::open(&bytes).unwrap();
+    let opts = PipelineOptions::default();
+    let (_built, images) = pipeline::render_document(&document, &opts, 72.0, Color::WHITE).unwrap();
+    let img = &images[0];
+
+    // Frame should land at (100, 50)..(140, 90). Inside the rect:
+    let inside = *img.get_pixel(120, 70);
+    assert!(
+        inside.0[0] > 200 && inside.0[1] < 50,
+        "expected red inside translated frame, got {:?}",
+        inside
+    );
+    // The original (untransformed) location (0, 0)..(40, 40) should
+    // be background — proves the translation actually applied.
+    let untransformed_origin = *img.get_pixel(20, 20);
+    assert!(
+        untransformed_origin.0[0] > 240
+            && untransformed_origin.0[1] > 240
+            && untransformed_origin.0[2] > 240,
+        "untransformed origin should be background, got {:?}",
+        untransformed_origin
+    );
+}

@@ -92,6 +92,21 @@ impl Transform {
         let [a, b, c, d, tx, ty] = self.0;
         (a * x + c * y + tx, b * x + d * y + ty)
     }
+
+    /// Compose `self` with `inner`: the result applies `inner` first,
+    /// then `self`. I.e. `self.compose(inner).apply(p) == self.apply(inner.apply(p))`.
+    pub fn compose(&self, inner: &Transform) -> Transform {
+        let [a1, b1, c1, d1, tx1, ty1] = self.0;
+        let [a2, b2, c2, d2, tx2, ty2] = inner.0;
+        Transform([
+            a1 * a2 + c1 * b2,
+            b1 * a2 + d1 * b2,
+            a1 * c2 + c1 * d2,
+            b1 * c2 + d1 * d2,
+            a1 * tx2 + c1 * ty2 + tx1,
+            b1 * tx2 + d1 * ty2 + ty1,
+        ])
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -362,6 +377,23 @@ mod tests {
     fn transform_scale_applied_to_point() {
         let t = Transform::scale(2.0, 3.0);
         assert_eq!(t.apply(5.0, 7.0), (10.0, 21.0));
+    }
+
+    #[test]
+    fn transform_compose_applies_outer_after_inner() {
+        // inner first scales by 2x, outer translates by (10, 20).
+        let inner = Transform::scale(2.0, 2.0);
+        let outer = Transform::translate(10.0, 20.0);
+        let composed = outer.compose(&inner);
+        // Point (3, 4) → inner → (6, 8) → outer → (16, 28).
+        assert_eq!(composed.apply(3.0, 4.0), (16.0, 28.0));
+    }
+
+    #[test]
+    fn transform_compose_with_identity_is_a_noop() {
+        let t = Transform([2.0, 0.5, -0.5, 2.0, 7.0, 11.0]);
+        assert_eq!(Transform::IDENTITY.compose(&t).0, t.0);
+        assert_eq!(t.compose(&Transform::IDENTITY).0, t.0);
     }
 
     #[test]

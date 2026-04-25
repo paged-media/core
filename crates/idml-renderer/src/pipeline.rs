@@ -11,8 +11,10 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use idml_compose::{
-    emit_drop_shadow_rect, emit_ellipse, emit_line, emit_paragraph, emit_rect, emit_stroke_ellipse,
-    emit_stroke_rect, Color, DisplayList, DropShadow, Paint, Rect, Stroke, TtfOutliner,
+    emit_drop_shadow_rect_transformed, emit_ellipse_transformed, emit_line, emit_paragraph,
+    emit_rect, emit_rect_transformed, emit_stroke_ellipse_transformed, emit_stroke_rect,
+    emit_stroke_rect_transformed, Color, DisplayList, DropShadow, Paint, Rect, Stroke, Transform,
+    TtfOutliner,
 };
 use idml_parse::{graphic, Graphic, GraphicLine, Oval, Rectangle, TextFrame};
 use idml_scene::Document;
@@ -479,24 +481,24 @@ fn emit_text_frame_into(
     drop_shadow: Option<DropShadow>,
 ) {
     page.stats.frames += 1;
-    let (ox, oy) = page.spread_origin;
     let r = Rect {
-        x: frame.bounds.left - ox,
-        y: frame.bounds.top - oy,
+        x: frame.bounds.left,
+        y: frame.bounds.top,
         w: frame.bounds.width(),
         h: frame.bounds.height(),
     };
+    let outer = frame_outer_transform(page, frame.item_transform);
     if let Some(shadow) =
         resolve_frame_shadow(frame.drop_shadow.as_ref(), drop_shadow, palette, cmyk_xform)
     {
-        emit_drop_shadow_rect(r, shadow, &mut page.list);
+        emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list);
     }
     let fill = frame
         .fill_color
         .as_deref()
         .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
         .unwrap_or(fallback);
-    emit_rect(r, fill, &mut page.list);
+    emit_rect_transformed(r, outer, fill, &mut page.list);
     if let Some(stroke) = frame
         .stroke_color
         .as_deref()
@@ -504,7 +506,7 @@ fn emit_text_frame_into(
     {
         let width = frame.stroke_weight.unwrap_or(1.0);
         if width > 0.0 {
-            emit_stroke_rect(r, Stroke::new(width), stroke, &mut page.list);
+            emit_stroke_rect_transformed(r, outer, Stroke::new(width), stroke, &mut page.list);
         }
     }
 }
@@ -517,26 +519,26 @@ fn emit_oval_into(
     cmyk_xform: Option<&idml_color::IccTransform>,
 ) {
     page.stats.frames += 1;
-    let (ox, oy) = page.spread_origin;
     let r = Rect {
-        x: oval.bounds.left - ox,
-        y: oval.bounds.top - oy,
+        x: oval.bounds.left,
+        y: oval.bounds.top,
         w: oval.bounds.width(),
         h: oval.bounds.height(),
     };
+    let outer = frame_outer_transform(page, oval.item_transform);
     // Ovals don't yet have a dedicated shadow primitive — use the
     // bounding-rect stamp as a stopgap. Replace once the rasterizer
     // grows shadowed-ellipse support.
     if let Some(shadow) = resolve_frame_shadow(oval.drop_shadow.as_ref(), None, palette, cmyk_xform)
     {
-        emit_drop_shadow_rect(r, shadow, &mut page.list);
+        emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list);
     }
     let fill = oval
         .fill_color
         .as_deref()
         .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
         .unwrap_or(fallback);
-    emit_ellipse(r, fill, &mut page.list);
+    emit_ellipse_transformed(r, outer, fill, &mut page.list);
     if let Some(stroke) = oval
         .stroke_color
         .as_deref()
@@ -544,7 +546,7 @@ fn emit_oval_into(
     {
         let width = oval.stroke_weight.unwrap_or(1.0);
         if width > 0.0 {
-            emit_stroke_ellipse(r, Stroke::new(width), stroke, &mut page.list);
+            emit_stroke_ellipse_transformed(r, outer, Stroke::new(width), stroke, &mut page.list);
         }
     }
 }
@@ -588,24 +590,24 @@ fn emit_rectangle_into(
     drop_shadow: Option<DropShadow>,
 ) {
     page.stats.frames += 1;
-    let (ox, oy) = page.spread_origin;
     let r = Rect {
-        x: rect.bounds.left - ox,
-        y: rect.bounds.top - oy,
+        x: rect.bounds.left,
+        y: rect.bounds.top,
         w: rect.bounds.width(),
         h: rect.bounds.height(),
     };
+    let outer = frame_outer_transform(page, rect.item_transform);
     if let Some(shadow) =
         resolve_frame_shadow(rect.drop_shadow.as_ref(), drop_shadow, palette, cmyk_xform)
     {
-        emit_drop_shadow_rect(r, shadow, &mut page.list);
+        emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list);
     }
     let fill = rect
         .fill_color
         .as_deref()
         .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
         .unwrap_or(fallback);
-    emit_rect(r, fill, &mut page.list);
+    emit_rect_transformed(r, outer, fill, &mut page.list);
     if let Some(stroke) = rect
         .stroke_color
         .as_deref()
@@ -613,8 +615,22 @@ fn emit_rectangle_into(
     {
         let width = rect.stroke_weight.unwrap_or(1.0);
         if width > 0.0 {
-            emit_stroke_rect(r, Stroke::new(width), stroke, &mut page.list);
+            emit_stroke_rect_transformed(r, outer, Stroke::new(width), stroke, &mut page.list);
         }
+    }
+}
+
+/// Build the outer affine that maps a frame's local-space rect into
+/// page-space pixels: page-origin offset composed with the frame's
+/// `ItemTransform` (identity when absent). Identity ItemTransform is
+/// the common case — the result collapses to a pure translation, so
+/// the rasterizer's axis-aligned fast paths still apply.
+fn frame_outer_transform(page: &BuiltPage, item_transform: Option<[f32; 6]>) -> Transform {
+    let (ox, oy) = page.spread_origin;
+    let page_origin = Transform::translate(-ox, -oy);
+    match item_transform {
+        Some(m) => page_origin.compose(&Transform(m)),
+        None => page_origin,
     }
 }
 

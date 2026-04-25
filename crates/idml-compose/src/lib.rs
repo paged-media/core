@@ -18,7 +18,9 @@ pub use display_list::{
 };
 pub use glyph::{GlyphOutliner, TtfOutliner, UnitSquareOutliner};
 pub use primitives::{
-    emit_drop_shadow_rect, emit_ellipse, emit_line, emit_rect, emit_stroke_ellipse,
-    emit_stroke_rect, UNIT_ELLIPSE_KEY, UNIT_RECT_KEY,
+    emit_drop_shadow_rect, emit_drop_shadow_rect_transformed, emit_ellipse,
+    emit_ellipse_transformed, emit_line, emit_rect, emit_rect_transformed, emit_stroke_ellipse,
+    emit_stroke_ellipse_transformed, emit_stroke_rect, emit_stroke_rect_transformed,
+    UNIT_ELLIPSE_KEY, UNIT_RECT_KEY,
 };
 pub use text::emit_paragraph;
