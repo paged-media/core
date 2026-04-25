@@ -48,8 +48,21 @@ impl Default for PipelineOptions<'_> {
 pub struct BuiltPage {
     pub width_pt: f32,
     pub height_pt: f32,
+    /// Page origin in spread coordinates (top-left). The display list's
+    /// commands are page-relative — the rasterizer treats (0, 0) as
+    /// the page's top-left corner regardless of where the page sits in
+    /// its parent spread.
+    pub spread_origin: (f32, f32),
     pub list: DisplayList,
     /// Aggregated counts, useful for logging / CI reporting.
+    pub stats: PipelineStats,
+}
+
+/// Multi-page render output. Each entry is a fully populated
+/// `BuiltPage` with its own DisplayList and dimensions.
+#[derive(Debug)]
+pub struct BuiltDocument {
+    pub pages: Vec<BuiltPage>,
     pub stats: PipelineStats,
 }
 
@@ -65,9 +78,235 @@ pub struct PipelineStats {
     pub lines: usize,
 }
 
-/// Flatten a parsed `Document` into one `BuiltPage`. Today this unions
-/// every page's bounding box into a single canvas — multi-page output
-/// lands once the scene-graph crate exposes per-page iteration.
+/// Build one `BuiltPage` per `<Page>` in the document. Each page's
+/// display list contains only frames whose centres fall inside the
+/// page's `GeometricBounds`. Frames placed entirely on the pasteboard
+/// (rare) land on the first page so they don't disappear silently.
+///
+/// Returns a `BuiltDocument` with aggregated stats. Use `build` for
+/// the historical single-page (union of all bounds) shape.
+pub fn build_document(
+    document: &Document,
+    options: &PipelineOptions,
+) -> anyhow::Result<BuiltDocument> {
+    let palette = &document.palette;
+    let mut pages: Vec<BuiltPage> = Vec::new();
+    let mut total_stats = PipelineStats::default();
+
+    // Walk every page in every spread. We capture each page's bounds +
+    // origin so the second pass can route frames by centre-point
+    // containment.
+    let mut page_index_by_id: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut page_geometries: Vec<PageGeom> = Vec::new();
+    for parsed in &document.spreads {
+        total_stats.spreads += 1;
+        for p in &parsed.spread.pages {
+            let geom = PageGeom {
+                bounds_in_spread: p.bounds,
+            };
+            let idx = page_geometries.len();
+            page_geometries.push(geom);
+            if let Some(id) = &p.self_id {
+                page_index_by_id.insert(id.clone(), idx);
+            }
+            pages.push(BuiltPage {
+                width_pt: p.bounds.width(),
+                height_pt: p.bounds.height(),
+                spread_origin: (p.bounds.left, p.bounds.top),
+                list: DisplayList::new(),
+                stats: PipelineStats::default(),
+            });
+        }
+    }
+    total_stats.pages = pages.len();
+    if pages.is_empty() {
+        // Documents without a page (rare but valid) get a single
+        // letter-sized canvas so callers always see a renderable output.
+        pages.push(BuiltPage {
+            width_pt: 612.0,
+            height_pt: 792.0,
+            spread_origin: (0.0, 0.0),
+            list: DisplayList::new(),
+            stats: PipelineStats::default(),
+        });
+        page_geometries.push(PageGeom {
+            bounds_in_spread: idml_parse::Bounds {
+                top: 0.0,
+                left: 0.0,
+                bottom: 792.0,
+                right: 612.0,
+            },
+        });
+    }
+
+    // Frame pass: route every frame to the page whose bounds contain
+    // its centre. Falls back to page 0 for outliers.
+    for parsed in &document.spreads {
+        let spread = &parsed.spread;
+        for frame in &spread.text_frames {
+            total_stats.frames += 1;
+            let page_idx = page_for_frame(&frame.bounds, &page_geometries).unwrap_or(0);
+            emit_text_frame_into(
+                &mut pages[page_idx],
+                frame,
+                palette,
+                options.fallback_frame_fill,
+            );
+        }
+        for rect in &spread.rectangles {
+            total_stats.frames += 1;
+            let bounds = rect.bounds;
+            let page_idx = page_for_frame(&bounds, &page_geometries).unwrap_or(0);
+            emit_rectangle_into(
+                &mut pages[page_idx],
+                rect,
+                palette,
+                options.fallback_frame_fill,
+            );
+        }
+    }
+
+    // Story pass: layout text into its hosting frame's page.
+    let shaping_face = options
+        .font
+        .and_then(|bytes| rustybuzz::Face::from_slice(bytes, 0));
+    let outline_face = options
+        .font
+        .and_then(|bytes| ttf_parser::Face::parse(bytes, 0).ok());
+    let font_id = options.font.map(fnv_1a_u32).unwrap_or(0);
+
+    for parsed in &document.stories {
+        total_stats.stories += 1;
+        let story = &parsed.story;
+        let frame = document.frame_for(&parsed.self_id);
+        let page_idx = frame
+            .map(|f| page_for_frame(&f.bounds, &page_geometries).unwrap_or(0))
+            .unwrap_or(0);
+        let column_width_pt = options
+            .fallback_column_width_pt
+            .or_else(|| frame.map(|f| f.bounds.width()));
+
+        for paragraph in &story.paragraphs {
+            total_stats.paragraphs += 1;
+            total_stats.runs += paragraph.runs.len();
+            pages[page_idx].stats.paragraphs += 1;
+            pages[page_idx].stats.runs += paragraph.runs.len();
+
+            let paragraph_size = paragraph
+                .runs
+                .first()
+                .and_then(|r| r.point_size)
+                .unwrap_or(options.default_point_size);
+            let paragraph_text: String = paragraph.runs.iter().map(|r| r.text.as_str()).collect();
+
+            if let Some(face) = shaping_face.as_ref() {
+                for run in &paragraph.runs {
+                    let size = run.point_size.unwrap_or(options.default_point_size);
+                    let shaped = idml_text::shape_run(face, &run.text, size);
+                    total_stats.glyphs += shaped.glyphs.len();
+                    pages[page_idx].stats.glyphs += shaped.glyphs.len();
+                }
+            }
+
+            let (Some(face), Some(col_pt)) = (shaping_face.as_ref(), column_width_pt) else {
+                continue;
+            };
+            let measurer = idml_text::RustybuzzMeasurer::new(face, paragraph_size);
+            let mut lopts = idml_text::LayoutOptions::new(col_pt, paragraph_size);
+            lopts.alignment = map_justification(paragraph.justification.as_deref());
+            let laid_out = idml_text::layout_paragraph(&paragraph_text, &measurer, &lopts);
+            total_stats.lines += laid_out.lines.len();
+            pages[page_idx].stats.lines += laid_out.lines.len();
+
+            let (Some(outline), Some(frame)) = (outline_face.as_ref(), frame) else {
+                continue;
+            };
+            let outliner = TtfOutliner::new(outline);
+            let picker = build_run_paint_picker(paragraph, palette, options.fallback_text_paint);
+            // Translate frame origin into the page's local coordinate
+            // system: page-relative = spread-relative - page_origin.
+            let (ox, oy) = pages[page_idx].spread_origin;
+            emit_paragraph(
+                &laid_out,
+                font_id,
+                paragraph_size,
+                |cluster| picker.pick(cluster),
+                (frame.bounds.left - ox, frame.bounds.top - oy),
+                &outliner,
+                &mut pages[page_idx].list,
+            );
+        }
+    }
+
+    Ok(BuiltDocument {
+        pages,
+        stats: total_stats,
+    })
+}
+
+/// Wraps a page's bounds for centre-point routing.
+struct PageGeom {
+    bounds_in_spread: idml_parse::Bounds,
+}
+
+fn page_for_frame(frame: &idml_parse::Bounds, pages: &[PageGeom]) -> Option<usize> {
+    let cx = (frame.left + frame.right) * 0.5;
+    let cy = (frame.top + frame.bottom) * 0.5;
+    pages.iter().position(|p| {
+        let b = p.bounds_in_spread;
+        cx >= b.left && cx <= b.right && cy >= b.top && cy <= b.bottom
+    })
+}
+
+fn emit_text_frame_into(
+    page: &mut BuiltPage,
+    frame: &TextFrame,
+    palette: &Graphic,
+    fallback: Paint,
+) {
+    page.stats.frames += 1;
+    // Translate to page-local coordinates.
+    let (ox, oy) = page.spread_origin;
+    let r = Rect {
+        x: frame.bounds.left - ox,
+        y: frame.bounds.top - oy,
+        w: frame.bounds.width(),
+        h: frame.bounds.height(),
+    };
+    let fill = resolve_fill(frame, palette).unwrap_or(fallback);
+    emit_rect(r, fill, &mut page.list);
+    if let Some(stroke) = resolve_stroke(frame, palette) {
+        let width = frame.stroke_weight.unwrap_or(1.0);
+        if width > 0.0 {
+            emit_stroke_rect(r, Stroke::new(width), stroke, &mut page.list);
+        }
+    }
+}
+
+fn emit_rectangle_into(page: &mut BuiltPage, rect: &Rectangle, palette: &Graphic, fallback: Paint) {
+    page.stats.frames += 1;
+    let (ox, oy) = page.spread_origin;
+    let r = Rect {
+        x: rect.bounds.left - ox,
+        y: rect.bounds.top - oy,
+        w: rect.bounds.width(),
+        h: rect.bounds.height(),
+    };
+    let fill = resolve_rect_fill(rect, palette).unwrap_or(fallback);
+    emit_rect(r, fill, &mut page.list);
+    if let Some(stroke) = resolve_rect_stroke(rect, palette) {
+        let width = rect.stroke_weight.unwrap_or(1.0);
+        if width > 0.0 {
+            emit_stroke_rect(r, Stroke::new(width), stroke, &mut page.list);
+        }
+    }
+}
+
+/// Single-page convenience: union every page's bounds and emit all
+/// frames in spread coordinates. Kept for back-compat and for hosts
+/// that genuinely want one canvas — but multi-page callers should use
+/// `build_document` instead.
 pub fn build(document: &Document, options: &PipelineOptions) -> anyhow::Result<BuiltPage> {
     let palette = &document.palette;
     let mut stats = PipelineStats::default();
@@ -194,9 +433,30 @@ pub fn build(document: &Document, options: &PipelineOptions) -> anyhow::Result<B
     Ok(BuiltPage {
         width_pt: page_w,
         height_pt: page_h,
+        spread_origin: (0.0, 0.0),
         list,
         stats,
     })
+}
+
+/// Build + rasterise every page. Returns one `RgbaImage` per page in
+/// document order. `dpi` and `background` apply uniformly.
+#[cfg(feature = "cpu")]
+pub fn render_document(
+    document: &Document,
+    options: &PipelineOptions,
+    dpi: f32,
+    background: Color,
+) -> anyhow::Result<(BuiltDocument, Vec<image::RgbaImage>)> {
+    let built = build_document(document, options)?;
+    let mut images = Vec::with_capacity(built.pages.len());
+    for page in &built.pages {
+        let mut raster_opts = idml_gpu::RasterOptions::new(page.width_pt, page.height_pt);
+        raster_opts.dpi = dpi;
+        raster_opts.background = background;
+        images.push(idml_gpu::rasterize(&page.list, &raster_opts));
+    }
+    Ok((built, images))
 }
 
 /// Build + rasterise in one call. `dpi` and `background` control the

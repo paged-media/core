@@ -89,6 +89,22 @@ fn build_produces_display_list_and_page_dimensions() {
 }
 
 #[test]
+fn build_document_emits_one_page_with_correct_geometry() {
+    let bytes = build_minimal_idml();
+    let document = Document::open(&bytes).unwrap();
+
+    let opts = PipelineOptions::default();
+    let built = pipeline::build_document(&document, &opts).unwrap();
+
+    assert_eq!(built.pages.len(), 1, "one <Page> in the manifest");
+    let page = &built.pages[0];
+    assert_eq!(page.width_pt, 300.0);
+    assert_eq!(page.height_pt, 400.0);
+    assert_eq!(page.list.commands.len(), 1);
+    assert_eq!(page.stats.frames, 1);
+}
+
+#[test]
 fn render_fills_frame_with_resolved_paint() {
     let bytes = build_minimal_idml();
     let document = Document::open(&bytes).unwrap();

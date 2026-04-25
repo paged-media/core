@@ -138,38 +138,61 @@ fn main() -> Result<()> {
     opts.fallback_frame_fill =
         idml_compose::Paint::Solid(idml_compose::Color::rgba(0.92, 0.92, 0.92, 1.0));
 
-    let built = pipeline::build(&document, &opts)?;
+    let built = pipeline::build_document(&document, &opts)?;
     println!("\ntotals");
     println!(
-        "  paragraphs={p}  runs={r}  glyphs={g}  lines={l}",
+        "  pages={pg}  paragraphs={p}  runs={r}  glyphs={g}  lines={l}",
+        pg = built.pages.len(),
         p = built.stats.paragraphs,
         r = built.stats.runs,
         g = built.stats.glyphs,
         l = built.stats.lines,
     );
     if want_display_list {
+        let total_cmds: usize = built.pages.iter().map(|p| p.list.commands.len()).sum();
+        let total_paths: usize = built.pages.iter().map(|p| p.list.paths.len()).sum();
         println!(
-            "  display-list: {} command(s), {} unique path(s)",
-            built.list.commands.len(),
-            built.list.paths.len(),
+            "  display-list: {} command(s) total across {} page(s), {} path(s) total",
+            total_cmds,
+            built.pages.len(),
+            total_paths,
         );
     }
     if let Some(out) = args.render.as_deref() {
-        let mut raster_opts = idml_gpu::RasterOptions::new(built.width_pt, built.height_pt);
-        raster_opts.dpi = args.dpi;
-        let img = idml_gpu::rasterize(&built.list, &raster_opts);
-        img.save(out)
-            .with_context(|| format!("write {}", out.display()))?;
-        println!(
-            "  rendered {} × {} px to {}",
-            img.width(),
-            img.height(),
-            out.display()
-        );
+        // Multi-page output writes <stem>-001.png, <stem>-002.png, …
+        // when the document has more than one page. Single-page docs
+        // get the unmodified path so existing scripts still work.
+        let multi = built.pages.len() > 1;
+        for (i, page) in built.pages.iter().enumerate() {
+            let mut raster_opts = idml_gpu::RasterOptions::new(page.width_pt, page.height_pt);
+            raster_opts.dpi = args.dpi;
+            let img = idml_gpu::rasterize(&page.list, &raster_opts);
+            let path = if multi {
+                page_output_path(out, i + 1)
+            } else {
+                out.to_path_buf()
+            };
+            img.save(&path)
+                .with_context(|| format!("write {}", path.display()))?;
+            println!(
+                "  page {} rendered {} × {} px to {}",
+                i + 1,
+                img.width(),
+                img.height(),
+                path.display()
+            );
+        }
     } else if !want_display_list && font_bytes.is_none() {
         println!("  (pass --font <path>, --display-list, or --render for more detail)");
     }
     Ok(())
+}
+
+fn page_output_path(base: &std::path::Path, page_index: usize) -> std::path::PathBuf {
+    let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("page");
+    let ext = base.extension().and_then(|s| s.to_str()).unwrap_or("png");
+    let parent = base.parent().unwrap_or(std::path::Path::new(""));
+    parent.join(format!("{stem}-{page_index:03}.{ext}"))
 }
 
 fn describe_fill(fill_color: Option<&str>, palette: &Graphic) -> String {

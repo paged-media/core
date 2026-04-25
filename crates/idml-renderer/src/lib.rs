@@ -6,12 +6,12 @@
 pub mod pipeline;
 
 pub use pipeline::{
-    build, build_run_paint_picker, resolve_fill, resolve_stroke, BuiltPage, PipelineOptions,
-    PipelineStats, RunPaintPicker,
+    build, build_document, build_run_paint_picker, resolve_fill, resolve_stroke, BuiltDocument,
+    BuiltPage, PipelineOptions, PipelineStats, RunPaintPicker,
 };
 
 #[cfg(feature = "cpu")]
-pub use pipeline::render;
+pub use pipeline::{render, render_document};
 
 // Re-export Document so consumers only need one `use` for the common
 // path: `use idml_renderer::{Document, pipeline, PipelineOptions};`.

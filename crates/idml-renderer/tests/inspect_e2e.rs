@@ -172,26 +172,27 @@ fn render_flag_produces_png_that_passes_fidelity_self_diff() {
     let tmp = tempfile::tempdir().unwrap();
     let idml = tmp.path().join("hello.idml");
     std::fs::write(&idml, build_idml()).unwrap();
-    let png_a = tmp.path().join("a.png");
-    let png_b = tmp.path().join("b.png");
+    // Multi-page output: --render writes <stem>-001.png, <stem>-002.png.
+    // We compare the first page's render across two runs.
+    let base_a = tmp.path().join("a.png");
+    let base_b = tmp.path().join("b.png");
+    let page_a = tmp.path().join("a-001.png");
+    let page_b = tmp.path().join("b-001.png");
 
-    // Render the same IDML twice under identical options.
-    for out in [&png_a, &png_b] {
+    for (base, page) in [(&base_a, &page_a), (&base_b, &page_b)] {
         let status = Command::new(inspect_binary())
             .arg(&idml)
             .arg("--render")
-            .arg(out)
+            .arg(base)
             .arg("--dpi")
             .arg("72")
             .status()
             .expect("spawn idml-inspect");
         assert!(status.success(), "render failed");
-        assert!(out.exists(), "PNG not produced at {:?}", out);
+        assert!(page.exists(), "PNG not produced at {:?}", page);
     }
 
-    // Compare the two identical renders via the fidelity library —
-    // they should hit ΔE = 0 and SSIM = 1, clearing the gate.
-    let (report, _deltas) = idml_fidelity::diff::compare_pngs(&png_a, &png_b).unwrap();
+    let (report, _deltas) = idml_fidelity::diff::compare_pngs(&page_a, &page_b).unwrap();
     assert!(
         report.passes(),
         "self-diff failed: mean ΔE={} p99 ΔE={} SSIM={}",
@@ -221,10 +222,9 @@ fn display_list_flag_emits_one_command_per_frame_without_font() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Two frames → two FillPath commands, plus one StrokePath for
-    // frame A's stroke. All three share the interned unit-rect.
-    assert!(
-        stdout.contains("display-list: 3 command(s), 1 unique path(s)"),
-        "stdout:\n{stdout}"
-    );
+    // Two frames split across the spread's two pages → 3 commands
+    // total (frame A fill + stroke on page 1; frame B fill on page 2).
+    // Each page interns its own unit-rect path → 2 paths total.
+    assert!(stdout.contains("3 command(s) total"), "stdout:\n{stdout}");
+    assert!(stdout.contains("2 path(s) total"), "stdout:\n{stdout}");
 }

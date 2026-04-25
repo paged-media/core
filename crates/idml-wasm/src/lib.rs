@@ -44,8 +44,14 @@ mod wasm {
             ..PipelineOptions::default()
         };
 
-        let (_built, img) = pipeline::render(&document, &opts, dpi, Color::WHITE)
+        // First page only — multi-page output goes through the
+        // forthcoming `render_pages_to_pngs` API.
+        let (_built, mut images) = pipeline::render_document(&document, &opts, dpi, Color::WHITE)
             .map_err(|e| JsError::new(&format!("render: {e}")))?;
+        let img = images
+            .drain(..)
+            .next()
+            .ok_or_else(|| JsError::new("document has no pages"))?;
 
         let mut out = Vec::with_capacity((img.width() * img.height() * 4) as usize);
         PngEncoder::new(&mut out)
@@ -66,17 +72,17 @@ mod wasm {
         let document =
             Document::open(idml).map_err(|e| JsError::new(&format!("open IDML: {e}")))?;
         let opts = PipelineOptions::default();
-        let built =
-            pipeline::build(&document, &opts).map_err(|e| JsError::new(&format!("build: {e}")))?;
+        let built = pipeline::build_document(&document, &opts)
+            .map_err(|e| JsError::new(&format!("build: {e}")))?;
+        let total_cmds: usize = built.pages.iter().map(|p| p.list.commands.len()).sum();
+        let total_paths: usize = built.pages.iter().map(|p| p.list.paths.len()).sum();
         Ok(format!(
-            "{{\"width_pt\":{:.2},\"height_pt\":{:.2},\
-             \"commands\":{},\"paths\":{},\
+            "{{\"page_count\":{},\"commands\":{},\"paths\":{},\
              \"spreads\":{},\"pages\":{},\"frames\":{},\
              \"stories\":{},\"paragraphs\":{},\"runs\":{}}}",
-            built.width_pt,
-            built.height_pt,
-            built.list.commands.len(),
-            built.list.paths.len(),
+            built.pages.len(),
+            total_cmds,
+            total_paths,
             built.stats.spreads,
             built.stats.pages,
             built.stats.frames,
