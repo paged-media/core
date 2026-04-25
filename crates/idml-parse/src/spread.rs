@@ -157,7 +157,11 @@ impl Spread {
         reader.config_mut().trim_text(true);
 
         let mut out = Spread::default();
-        let mut group_depth: usize = 0;
+        // Stack of <Group> ItemTransforms encountered, outermost
+        // first. When a frame appears inside one or more groups, its
+        // effective spread-space transform is the composition of
+        // those group transforms with its own ItemTransform.
+        let mut group_transforms: Vec<Option<[f32; 6]>> = Vec::new();
         let mut current_frame: Option<CurrentFrame> = None;
         let mut buf = Vec::new();
 
@@ -170,7 +174,8 @@ impl Spread {
                         }
                     }
                     b"Group" => {
-                        group_depth += 1;
+                        let t = attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s));
+                        group_transforms.push(t);
                     }
                     b"Page" => {
                         if let Some(bounds) =
@@ -189,13 +194,11 @@ impl Spread {
                         else {
                             continue;
                         };
-                        if group_depth > 0 {
-                            out.skipped_nested_frames += 1;
-                            continue;
-                        }
                         let parent_story = attr(&e, b"ParentStory");
-                        let item_transform =
-                            attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s));
+                        let item_transform = effective_item_transform(
+                            &group_transforms,
+                            attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s)),
+                        );
                         let fill_color = attr(&e, b"FillColor");
                         let stroke_color = attr(&e, b"StrokeColor");
                         let stroke_weight =
@@ -218,15 +221,14 @@ impl Spread {
                         else {
                             continue;
                         };
-                        if group_depth > 0 {
-                            out.skipped_nested_frames += 1;
-                            continue;
-                        }
+                        let item_transform = effective_item_transform(
+                            &group_transforms,
+                            attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s)),
+                        );
                         out.rectangles.push(Rectangle {
                             self_id: attr(&e, b"Self"),
                             bounds,
-                            item_transform: attr(&e, b"ItemTransform")
-                                .and_then(|s| parse_matrix(&s)),
+                            item_transform,
                             fill_color: attr(&e, b"FillColor"),
                             stroke_color: attr(&e, b"StrokeColor"),
                             stroke_weight: attr(&e, b"StrokeWeight")
@@ -241,15 +243,14 @@ impl Spread {
                         else {
                             continue;
                         };
-                        if group_depth > 0 {
-                            out.skipped_nested_frames += 1;
-                            continue;
-                        }
+                        let item_transform = effective_item_transform(
+                            &group_transforms,
+                            attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s)),
+                        );
                         out.ovals.push(Oval {
                             self_id: attr(&e, b"Self"),
                             bounds,
-                            item_transform: attr(&e, b"ItemTransform")
-                                .and_then(|s| parse_matrix(&s)),
+                            item_transform,
                             fill_color: attr(&e, b"FillColor"),
                             stroke_color: attr(&e, b"StrokeColor"),
                             stroke_weight: attr(&e, b"StrokeWeight")
@@ -285,15 +286,14 @@ impl Spread {
                         else {
                             continue;
                         };
-                        if group_depth > 0 {
-                            out.skipped_nested_frames += 1;
-                            continue;
-                        }
+                        let item_transform = effective_item_transform(
+                            &group_transforms,
+                            attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s)),
+                        );
                         out.graphic_lines.push(GraphicLine {
                             self_id: attr(&e, b"Self"),
                             bounds,
-                            item_transform: attr(&e, b"ItemTransform")
-                                .and_then(|s| parse_matrix(&s)),
+                            item_transform,
                             stroke_color: attr(&e, b"StrokeColor"),
                             stroke_weight: attr(&e, b"StrokeWeight")
                                 .and_then(|s| s.parse::<f32>().ok()),
@@ -302,8 +302,8 @@ impl Spread {
                     _ => {}
                 },
                 Event::End(e) => match e.name().as_ref() {
-                    b"Group" if group_depth > 0 => {
-                        group_depth -= 1;
+                    b"Group" if !group_transforms.is_empty() => {
+                        group_transforms.pop();
                     }
                     b"TextFrame" | b"Rectangle" | b"Oval" => {
                         // Frame is fully parsed; clear the
@@ -365,6 +365,47 @@ fn parse_matrix(s: &str) -> Option<[f32; 6]> {
     Some([parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]])
 }
 
+/// Compose two affine matrices `a ∘ b`: applying the result to a
+/// point is equivalent to applying `b` first then `a`. Matches
+/// `idml_compose::Transform::compose` so the parser and the
+/// renderer agree on composition order.
+fn compose_matrix(a: &[f32; 6], b: &[f32; 6]) -> [f32; 6] {
+    let [a1, b1, c1, d1, tx1, ty1] = *a;
+    let [a2, b2, c2, d2, tx2, ty2] = *b;
+    [
+        a1 * a2 + c1 * b2,
+        b1 * a2 + d1 * b2,
+        a1 * c2 + c1 * d2,
+        b1 * c2 + d1 * d2,
+        a1 * tx2 + c1 * ty2 + tx1,
+        b1 * tx2 + d1 * ty2 + ty1,
+    ]
+}
+
+/// Resolve the effective `ItemTransform` for a frame nested inside
+/// zero or more groups: outer groups apply first, then inner groups,
+/// then the frame's own ItemTransform. `None` for every input
+/// short-circuits to `None` so axis-aligned frames keep an empty
+/// transform field.
+fn effective_item_transform(
+    group_stack: &[Option<[f32; 6]>],
+    own: Option<[f32; 6]>,
+) -> Option<[f32; 6]> {
+    let mut acc: Option<[f32; 6]> = None;
+    for g in group_stack {
+        match (acc, g) {
+            (None, Some(m)) => acc = Some(*m),
+            (Some(a), Some(m)) => acc = Some(compose_matrix(&a, m)),
+            (acc_, None) => acc = acc_,
+        }
+    }
+    match (acc, own) {
+        (None, x) => x,
+        (Some(a), None) => Some(a),
+        (Some(a), Some(o)) => Some(compose_matrix(&a, &o)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,22 +445,58 @@ mod tests {
     }
 
     #[test]
-    fn skips_frames_inside_groups() {
+    fn lifts_frames_out_of_groups_with_composed_transform() {
+        // Two levels of nesting: outer group translates by (10, 20),
+        // inner group translates by (3, 4), inner frame has its own
+        // ItemTransform translating by (100, 200). Expected effective
+        // transform: outer ∘ inner ∘ frame = translate(113, 224).
         let xml =
             br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
           <Spread Self="s">
             <TextFrame Self="top" ParentStory="u1" GeometricBounds="0 0 100 200"/>
-            <Group>
-              <TextFrame Self="inner" ParentStory="u2" GeometricBounds="0 0 50 50"/>
+            <Group ItemTransform="1 0 0 1 10 20">
+              <Group ItemTransform="1 0 0 1 3 4">
+                <TextFrame Self="inner" ParentStory="u2"
+                           GeometricBounds="0 0 50 50"
+                           ItemTransform="1 0 0 1 100 200"/>
+              </Group>
             </Group>
             <TextFrame Self="after" ParentStory="u3" GeometricBounds="0 0 100 200"/>
           </Spread>
         </idPkg:Spread>"#;
         let s = Spread::parse(xml).unwrap();
-        assert_eq!(s.text_frames.len(), 2);
-        assert_eq!(s.skipped_nested_frames, 1);
+        assert_eq!(s.text_frames.len(), 3, "all frames lifted out of groups");
+        assert_eq!(s.skipped_nested_frames, 0);
         assert_eq!(s.text_frames[0].self_id.as_deref(), Some("top"));
-        assert_eq!(s.text_frames[1].self_id.as_deref(), Some("after"));
+        assert_eq!(s.text_frames[1].self_id.as_deref(), Some("inner"));
+        assert_eq!(s.text_frames[2].self_id.as_deref(), Some("after"));
+        // outer translation (10, 20) + inner translation (3, 4) +
+        // frame's own (100, 200) = translation (113, 224); the linear
+        // part stays identity since every transform is pure
+        // translation.
+        let m = s.text_frames[1].item_transform.expect("composed");
+        assert!((m[0] - 1.0).abs() < 1e-4 && (m[3] - 1.0).abs() < 1e-4);
+        assert!(m[1].abs() < 1e-4 && m[2].abs() < 1e-4);
+        assert!((m[4] - 113.0).abs() < 1e-4, "tx = {}", m[4]);
+        assert!((m[5] - 224.0).abs() < 1e-4, "ty = {}", m[5]);
+    }
+
+    #[test]
+    fn group_without_item_transform_passes_child_through() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Group>
+              <TextFrame Self="inner" ParentStory="u1" GeometricBounds="0 0 50 50"/>
+            </Group>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.text_frames.len(), 1);
+        assert!(
+            s.text_frames[0].item_transform.is_none(),
+            "no group transform + no own transform → None"
+        );
     }
 
     #[test]
