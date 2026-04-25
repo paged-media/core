@@ -7,6 +7,9 @@
 //! The pipeline consumes `&idml_scene::Document` — parsing and resource
 //! walking live in that crate so we stay focused on layout + emission.
 
+use std::collections::HashMap;
+
+use bytes::Bytes;
 use idml_compose::{
     emit_drop_shadow_rect, emit_ellipse, emit_line, emit_paragraph, emit_rect, emit_stroke_ellipse,
     emit_stroke_rect, Color, DisplayList, DropShadow, Paint, Rect, Stroke, TtfOutliner,
@@ -14,12 +17,19 @@ use idml_compose::{
 use idml_parse::{graphic, Graphic, GraphicLine, Oval, Rectangle, TextFrame};
 use idml_scene::Document;
 
+use crate::AssetResolver;
+
 /// Knobs the caller tunes when driving the full pipeline.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PipelineOptions<'a> {
-    /// Font bytes used for both shaping (`rustybuzz`) and glyph
-    /// outlining (`ttf-parser`). `None` → text is skipped.
+    /// Default font bytes. Used as a fallback for any paragraph
+    /// whose `AppliedFont` doesn't resolve via `assets`. `None` plus
+    /// no resolver hit → text is skipped.
     pub font: Option<&'a [u8]>,
+    /// Asset resolver consulted per (family, style). When set, the
+    /// pipeline pre-resolves every distinct font referenced in the
+    /// document; runs without a hit fall back to `font`.
+    pub assets: Option<&'a dyn AssetResolver>,
     /// Fallback point size for runs with no `PointSize` attribute.
     pub default_point_size: f32,
     /// Fallback column width in pt when a paragraph has no frame
@@ -41,10 +51,24 @@ pub struct PipelineOptions<'a> {
     pub frame_drop_shadow: Option<DropShadow>,
 }
 
+impl std::fmt::Debug for PipelineOptions<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PipelineOptions")
+            .field("font", &self.font.map(|b| b.len()))
+            .field("assets", &self.assets.is_some())
+            .field("default_point_size", &self.default_point_size)
+            .field("fallback_column_width_pt", &self.fallback_column_width_pt)
+            .field("cmyk_icc_profile", &self.cmyk_icc_profile.map(|b| b.len()))
+            .field("frame_drop_shadow", &self.frame_drop_shadow)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Default for PipelineOptions<'_> {
     fn default() -> Self {
         Self {
             font: None,
+            assets: None,
             default_point_size: 12.0,
             fallback_column_width_pt: None,
             fallback_frame_fill: Paint::Solid(Color::rgba(0.92, 0.92, 0.92, 1.0)),
@@ -295,13 +319,13 @@ pub fn build_document(
     }
 
     // Story pass: layout text into its hosting frame's page.
-    let shaping_face = options
-        .font
-        .and_then(|bytes| rustybuzz::Face::from_slice(bytes, 0));
-    let outline_face = options
-        .font
-        .and_then(|bytes| ttf_parser::Face::parse(bytes, 0).ok());
-    let font_id = options.font.map(fnv_1a_u32).unwrap_or(0);
+    //
+    // The font table pre-resolves every distinct (family, style)
+    // referenced anywhere in the document so each paragraph picks up
+    // the right TTF without re-querying the resolver. Per paragraph
+    // we still build `Face`s on demand — `rustybuzz::Face::from_slice`
+    // is cheap (parses font tables, no allocation churn).
+    let font_table = FontTable::build(document, options);
 
     for parsed in &document.stories {
         total_stats.stories += 1;
@@ -323,29 +347,45 @@ pub fn build_document(
             pages[page_idx].stats.paragraphs += 1;
             pages[page_idx].stats.runs += paragraph.runs.len();
 
-            let paragraph_size = paragraph
-                .runs
-                .first()
+            let first_run = paragraph.runs.first();
+            let paragraph_size = first_run
                 .and_then(|r| r.point_size)
                 .unwrap_or(options.default_point_size);
             let paragraph_text: String = paragraph.runs.iter().map(|r| r.text.as_str()).collect();
 
-            if let Some(face) = shaping_face.as_ref() {
-                for run in &paragraph.runs {
-                    let size = run.point_size.unwrap_or(options.default_point_size);
-                    let mut shaped = idml_text::shape_run(face, &run.text, size);
-                    if let Some(t) = run.tracking {
-                        idml_text::apply_tracking(&mut shaped, t, size);
-                    }
-                    total_stats.glyphs += shaped.glyphs.len();
-                    pages[page_idx].stats.glyphs += shaped.glyphs.len();
-                }
-            }
-
-            let (Some(face), Some(col_pt)) = (shaping_face.as_ref(), column_width_pt) else {
+            // Pick the font for this paragraph from its first run.
+            // Mid-paragraph font switches are a Phase 2 item — when
+            // they land, this lookup moves into the per-run shaping
+            // loop below.
+            let font_bytes = font_table.bytes_for(
+                first_run.and_then(|r| r.font.as_deref()),
+                first_run.and_then(|r| r.font_style.as_deref()),
+            );
+            let Some(font_bytes) = font_bytes else {
                 continue;
             };
-            let measurer = idml_text::RustybuzzMeasurer::new(face, paragraph_size);
+            let Some(shaping_face) = rustybuzz::Face::from_slice(font_bytes.as_ref(), 0) else {
+                continue;
+            };
+            let Some(outline_face) = ttf_parser::Face::parse(font_bytes.as_ref(), 0).ok() else {
+                continue;
+            };
+            let font_id = fnv_1a_u32(font_bytes.as_ref());
+
+            for run in &paragraph.runs {
+                let size = run.point_size.unwrap_or(options.default_point_size);
+                let mut shaped = idml_text::shape_run(&shaping_face, &run.text, size);
+                if let Some(t) = run.tracking {
+                    idml_text::apply_tracking(&mut shaped, t, size);
+                }
+                total_stats.glyphs += shaped.glyphs.len();
+                pages[page_idx].stats.glyphs += shaped.glyphs.len();
+            }
+
+            let Some(col_pt) = column_width_pt else {
+                continue;
+            };
+            let measurer = idml_text::RustybuzzMeasurer::new(&shaping_face, paragraph_size);
             let mut lopts = idml_text::LayoutOptions::new(col_pt, paragraph_size);
             lopts.alignment = map_justification(paragraph.justification.as_deref());
 
@@ -392,10 +432,8 @@ pub fn build_document(
             total_stats.lines += laid_out.lines.len();
             pages[page_idx].stats.lines += laid_out.lines.len();
 
-            let (Some(outline), Some(frame)) = (outline_face.as_ref(), frame) else {
-                continue;
-            };
-            let outliner = TtfOutliner::new(outline);
+            let Some(frame) = frame else { continue };
+            let outliner = TtfOutliner::new(&outline_face);
             let picker = build_run_paint_picker(paragraph, palette, options.fallback_text_paint);
             let (ox, oy) = pages[page_idx].spread_origin;
             emit_paragraph(
@@ -948,6 +986,70 @@ pub fn map_justification(j: Option<&str>) -> idml_text::Alignment {
         Some("CenterAlign") | Some("CenterJustified") => idml_text::Alignment::Center,
         Some("FullyJustified") | Some("LeftJustified") => idml_text::Alignment::Justify,
         _ => idml_text::Alignment::Left,
+    }
+}
+
+/// Per-render font cache. Pre-resolves every distinct (family, style)
+/// pair referenced anywhere in the document via the configured
+/// `AssetResolver`. Falls back to `options.font` when nothing
+/// resolves.
+struct FontTable {
+    cache: HashMap<(String, Option<String>), Bytes>,
+    fallback: Option<Bytes>,
+}
+
+impl FontTable {
+    fn build(document: &Document, options: &PipelineOptions) -> Self {
+        let fallback = options.font.map(Bytes::copy_from_slice);
+        let Some(resolver) = options.assets else {
+            return Self {
+                cache: HashMap::new(),
+                fallback,
+            };
+        };
+        // Walk every run in every story and collect distinct keys
+        // before calling the resolver — `resolve_font` may be a JS
+        // promise wrapper or a disk read, so deduping matters.
+        let mut keys: std::collections::HashSet<(String, Option<String>)> =
+            std::collections::HashSet::new();
+        for parsed in &document.stories {
+            for paragraph in &parsed.story.paragraphs {
+                for run in &paragraph.runs {
+                    let Some(family) = run.font.as_deref() else {
+                        continue;
+                    };
+                    keys.insert((family.to_string(), run.font_style.clone()));
+                }
+            }
+        }
+        let mut cache = HashMap::with_capacity(keys.len());
+        for key in keys {
+            if let Some(bytes) = resolver.resolve_font(&key.0, key.1.as_deref()) {
+                cache.insert(key, bytes);
+            }
+        }
+        Self { cache, fallback }
+    }
+
+    /// Look up the bytes a paragraph should shape with.
+    /// Resolver hit > options.font fallback. `None` means no font
+    /// is available — caller skips the paragraph.
+    fn bytes_for(&self, family: Option<&str>, style: Option<&str>) -> Option<Bytes> {
+        if let Some(family) = family {
+            // Direct (family, style) hit, then bare-family hit, so
+            // a doc that only registers "Body Font" still picks up
+            // its bold runs.
+            if let Some(b) = self
+                .cache
+                .get(&(family.to_string(), style.map(str::to_string)))
+            {
+                return Some(b.clone());
+            }
+            if let Some(b) = self.cache.get(&(family.to_string(), None)) {
+                return Some(b.clone());
+            }
+        }
+        self.fallback.clone()
     }
 }
 

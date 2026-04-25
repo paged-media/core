@@ -265,3 +265,137 @@ fn pipeline_options_default_uses_gray_fallback() {
         Paint::LinearGradient(_) => panic!("default should be a solid grey, not a gradient"),
     }
 }
+
+fn build_multi_font_idml() -> Vec<u8> {
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+
+    zip.start_file("designmap.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_u10.xml"/>
+  <idPkg:Story src="Stories/Story_u20.xml"/>
+</Document>"#,
+    )
+    .unwrap();
+
+    zip.start_file("Resources/Graphic.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic/>
+</idPkg:Graphic>"#,
+    )
+    .unwrap();
+
+    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 400 300"/>
+    <TextFrame Self="frameA" ParentStory="u10" GeometricBounds="20 20 80 280"/>
+    <TextFrame Self="frameB" ParentStory="u20" GeometricBounds="100 20 160 280"/>
+  </Spread>
+</idPkg:Spread>"#,
+    )
+    .unwrap();
+
+    zip.start_file("Stories/Story_u10.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Body Font" PointSize="11">
+        <Content>Body text.</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+    )
+    .unwrap();
+
+    zip.start_file("Stories/Story_u20.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u20">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Heading Font" FontStyle="Bold" PointSize="22">
+        <Content>HEADING</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+    )
+    .unwrap();
+
+    zip.finish().unwrap().into_inner()
+}
+
+/// AssetResolver wrapper that records every resolve_font call so the
+/// test can verify the pipeline pre-resolves every distinct (family,
+/// style) pair exactly once.
+struct CountingResolver {
+    inner: idml_renderer::BytesResolver,
+    calls: std::sync::Mutex<Vec<(String, Option<String>)>>,
+}
+
+impl idml_renderer::AssetResolver for CountingResolver {
+    fn resolve_font(&self, family: &str, style: Option<&str>) -> Option<bytes::Bytes> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((family.to_string(), style.map(str::to_string)));
+        self.inner.resolve_font(family, style)
+    }
+    fn resolve_image(&self, uri: &str) -> Option<bytes::Bytes> {
+        self.inner.resolve_image(uri)
+    }
+    fn resolve_icc(&self, name: &str) -> Option<bytes::Bytes> {
+        self.inner.resolve_icc(name)
+    }
+}
+
+#[test]
+fn asset_resolver_is_consulted_for_every_distinct_font() {
+    let bytes = build_multi_font_idml();
+    let document = Document::open(&bytes).unwrap();
+
+    let mut br = idml_renderer::BytesResolver::new();
+    // Register fake bytes — the test only checks that the resolver
+    // is asked, not that shaping succeeds.
+    br.add_font("Body Font", None, b"BODY".to_vec());
+    br.add_font("Heading Font", Some("Bold"), b"HEAD".to_vec());
+
+    let resolver = CountingResolver {
+        inner: br,
+        calls: std::sync::Mutex::new(Vec::new()),
+    };
+
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+    let _built = pipeline::build_document(&document, &opts).unwrap();
+
+    let mut calls = resolver.calls.lock().unwrap().clone();
+    calls.sort();
+    assert_eq!(
+        calls,
+        vec![
+            ("Body Font".to_string(), None),
+            ("Heading Font".to_string(), Some("Bold".to_string())),
+        ],
+        "resolver should be asked once per distinct (family, style)"
+    );
+}
