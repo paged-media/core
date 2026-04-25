@@ -422,6 +422,11 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             i == last_break,
             bytes,
         );
+        // Per-line line-height: largest run's point size on the
+        // line × 1.2 (Adobe's Auto leading default). Falls back to
+        // options.line_height for empty lines so callers that pass a
+        // tuned value still see it honoured.
+        let line_height = max_line_height_for_glyphs(&glyphs).unwrap_or(options.line_height);
         lines.push(LaidOutLine {
             byte_range: start..end,
             baseline_y: baseline,
@@ -429,10 +434,23 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             ratio: bp.ratio,
             glyphs,
         });
-        baseline += options.line_height;
+        baseline += line_height;
         byte_cursor = end;
     }
     LaidOutParagraph { lines }
+}
+
+/// Auto-leading line height for a line of glyphs, in 1/64 pt:
+/// `max(glyph.point_size) * 1.2 * 64`. Returns `None` for an empty
+/// line so callers can fall back to a default.
+pub(crate) fn max_line_height_for_glyphs(glyphs: &[PositionedGlyph]) -> Option<i32> {
+    glyphs
+        .iter()
+        .map(|g| g.point_size)
+        .fold(None, |acc: Option<f32>, ps| {
+            Some(acc.map(|a| a.max(ps)).unwrap_or(ps))
+        })
+        .map(|max_pt| (max_pt * 1.2 * ADVANCE_PRECISION).round() as i32)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -629,5 +647,28 @@ mod tests {
         }
         let expected_width: i32 = line0.glyphs.iter().map(|_| 10).sum::<i32>();
         assert_eq!(line0.width, expected_width);
+    }
+
+    fn pg(point_size: f32) -> PositionedGlyph {
+        PositionedGlyph {
+            glyph_id: 0,
+            cluster: 0,
+            x: 0,
+            y: 0,
+            font_id: 0,
+            point_size,
+        }
+    }
+
+    #[test]
+    fn auto_leading_picks_largest_run_size() {
+        let glyphs = vec![pg(11.0), pg(22.0), pg(11.0)];
+        // 22 * 1.2 * 64 = 1689.6 → 1690.
+        assert_eq!(max_line_height_for_glyphs(&glyphs), Some(1690));
+    }
+
+    #[test]
+    fn auto_leading_returns_none_for_empty_line() {
+        assert_eq!(max_line_height_for_glyphs(&[]), None);
     }
 }
