@@ -12,12 +12,13 @@ pub mod primitives;
 pub mod text;
 
 pub use display_list::{
-    Color, DisplayCommand, DisplayList, GlyphCacheKey, GradientId, GradientStop, LineCap, LineJoin,
-    LinearGradient, Paint, PathBuffer, PathData, PathId, PathSegment, Rect, Stroke, Transform,
+    Color, DisplayCommand, DisplayList, DropShadow, GlyphCacheKey, GradientId, GradientStop,
+    LineCap, LineJoin, LinearGradient, Paint, PathBuffer, PathData, PathId, PathSegment, Rect,
+    Stroke, Transform,
 };
 pub use glyph::{GlyphOutliner, TtfOutliner, UnitSquareOutliner};
 pub use primitives::{
-    emit_ellipse, emit_line, emit_rect, emit_stroke_ellipse, emit_stroke_rect, UNIT_ELLIPSE_KEY,
-    UNIT_RECT_KEY,
+    emit_drop_shadow_rect, emit_ellipse, emit_line, emit_rect, emit_stroke_ellipse,
+    emit_stroke_rect, UNIT_ELLIPSE_KEY, UNIT_RECT_KEY,
 };
 pub use text::emit_paragraph;

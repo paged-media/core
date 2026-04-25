@@ -218,6 +218,42 @@ fn linear_gradient_fills_top_to_bottom() {
 }
 
 #[test]
+fn frame_drop_shadow_paints_offset_pixels() {
+    let bytes = build_minimal_idml();
+    let document = Document::open(&bytes).unwrap();
+    let opts = PipelineOptions {
+        frame_drop_shadow: Some(idml_compose::DropShadow {
+            offset_x: 6.0,
+            offset_y: 6.0,
+            blur_radius: 0.0,
+            color: Color::rgba(0.0, 0.0, 0.0, 1.0),
+            opacity: 1.0,
+        }),
+        ..PipelineOptions::default()
+    };
+    let (_built, images) = pipeline::render_document(&document, &opts, 72.0, Color::WHITE).unwrap();
+    let img = &images[0];
+
+    // Frame is at x=20..200, y=20..100. Shadow offset (6, 6) places
+    // the shadow rect at x=26..206, y=26..106. The strip just below
+    // the frame (y=101..106, x=200..206 area) should be dark from
+    // the shadow.
+    let shadow_strip = *img.get_pixel(202, 105);
+    assert!(
+        shadow_strip.0[0] < 60 && shadow_strip.0[1] < 60 && shadow_strip.0[2] < 60,
+        "expected dark shadow pixel, got {:?}",
+        shadow_strip
+    );
+    // Inside the frame, the red fill draws over the shadow.
+    let inside = *img.get_pixel(50, 50);
+    assert!(
+        inside.0[0] > 200 && inside.0[1] < 50,
+        "frame interior should still read red, got {:?}",
+        inside
+    );
+}
+
+#[test]
 fn pipeline_options_default_uses_gray_fallback() {
     let opts = PipelineOptions::default();
     match opts.fallback_frame_fill {

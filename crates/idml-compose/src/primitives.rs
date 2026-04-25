@@ -7,7 +7,7 @@
 //! cache keys — memory-efficient for documents with many frames.
 
 use crate::display_list::{
-    DisplayCommand, DisplayList, Paint, PathData, PathSegment, Rect, Stroke, Transform,
+    DisplayCommand, DisplayList, DropShadow, Paint, PathData, PathSegment, Rect, Stroke, Transform,
 };
 
 /// Cache key for the unit rectangle `[0, 0, 1, 1]`. Any interned-path
@@ -70,6 +70,20 @@ pub fn emit_stroke_ellipse(rect: Rect, stroke: Stroke, paint: Paint, list: &mut 
         paint,
         stroke,
         transform,
+    });
+}
+
+/// Emit a drop-shadow stamp for an axis-aligned rectangle. Shares
+/// the unit-rect interned path so a document with N shadowed frames
+/// only stores one outline. Conventionally emitted *before* the
+/// matching `emit_rect` so the shadow lands behind the fill.
+pub fn emit_drop_shadow_rect(rect: Rect, shadow: DropShadow, list: &mut DisplayList) {
+    let (path_id, _) = list.paths.intern(UNIT_RECT_KEY, unit_rect());
+    let transform = Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]);
+    list.push(DisplayCommand::DropShadow {
+        path_id,
+        transform,
+        shadow,
     });
 }
 
@@ -221,6 +235,7 @@ mod tests {
         let t = match &list.commands[0] {
             DisplayCommand::FillPath { transform, .. } => *transform,
             DisplayCommand::StrokePath { transform, .. } => *transform,
+            DisplayCommand::DropShadow { transform, .. } => *transform,
         };
         // Unit rect corners: (0,0), (1,0), (1,1), (0,1).
         assert_eq!(t.apply(0.0, 0.0), (100.0, 200.0));
@@ -303,6 +318,30 @@ mod tests {
         emit_ellipse(r, Paint::Solid(Color::BLACK), &mut list);
         assert_eq!(list.commands.len(), 2);
         assert_eq!(list.paths.len(), 2, "rect + ellipse keys differ");
+    }
+
+    #[test]
+    fn drop_shadow_rect_emits_drop_shadow_command() {
+        use crate::DropShadow;
+        let mut list = DisplayList::new();
+        emit_drop_shadow_rect(
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                w: 100.0,
+                h: 50.0,
+            },
+            DropShadow::default_soft(),
+            &mut list,
+        );
+        assert_eq!(list.commands.len(), 1);
+        match &list.commands[0] {
+            DisplayCommand::DropShadow { shadow, .. } => {
+                assert_eq!(shadow.offset_x, 4.0);
+                assert!(shadow.opacity > 0.0 && shadow.opacity < 1.0);
+            }
+            other => panic!("expected DropShadow, got {other:?}"),
+        }
     }
 
     #[test]

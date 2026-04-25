@@ -8,8 +8,8 @@
 //! walking live in that crate so we stay focused on layout + emission.
 
 use idml_compose::{
-    emit_ellipse, emit_line, emit_paragraph, emit_rect, emit_stroke_ellipse, emit_stroke_rect,
-    Color, DisplayList, Paint, Rect, Stroke, TtfOutliner,
+    emit_drop_shadow_rect, emit_ellipse, emit_line, emit_paragraph, emit_rect, emit_stroke_ellipse,
+    emit_stroke_rect, Color, DisplayList, DropShadow, Paint, Rect, Stroke, TtfOutliner,
 };
 use idml_parse::{graphic, Graphic, GraphicLine, Oval, Rectangle, TextFrame};
 use idml_scene::Document;
@@ -34,6 +34,11 @@ pub struct PipelineOptions<'a> {
     /// through ICC instead of the naive math in `idml-parse::graphic`.
     /// None → naive conversion (existing behaviour).
     pub cmyk_icc_profile: Option<&'a [u8]>,
+    /// Synthetic drop shadow applied to every TextFrame and
+    /// Rectangle. Useful for tooling demos and as a stopgap until
+    /// `<TransparencySetting>` parsing lands and per-frame effects
+    /// flow from the IDML itself.
+    pub frame_drop_shadow: Option<DropShadow>,
 }
 
 impl Default for PipelineOptions<'_> {
@@ -45,6 +50,7 @@ impl Default for PipelineOptions<'_> {
             fallback_frame_fill: Paint::Solid(Color::rgba(0.92, 0.92, 0.92, 1.0)),
             fallback_text_paint: Paint::Solid(Color::BLACK),
             cmyk_icc_profile: None,
+            frame_drop_shadow: None,
         }
     }
 }
@@ -203,6 +209,7 @@ pub fn build_document(
                 palette,
                 options.fallback_frame_fill,
                 cmyk_xform.as_ref(),
+                None, // master items don't carry a drop shadow today.
             );
         }
         for rect in &master.spread.rectangles {
@@ -221,6 +228,7 @@ pub fn build_document(
                 palette,
                 options.fallback_frame_fill,
                 cmyk_xform.as_ref(),
+                None,
             );
         }
     }
@@ -250,6 +258,7 @@ pub fn build_document(
                 palette,
                 options.fallback_frame_fill,
                 cmyk_xform.as_ref(),
+                options.frame_drop_shadow,
             );
         }
         for rect in &spread.rectangles {
@@ -262,6 +271,7 @@ pub fn build_document(
                 palette,
                 options.fallback_frame_fill,
                 cmyk_xform.as_ref(),
+                options.frame_drop_shadow,
             );
         }
         for oval in &spread.ovals {
@@ -428,6 +438,7 @@ fn emit_text_frame_into(
     palette: &Graphic,
     fallback: Paint,
     cmyk_xform: Option<&idml_color::IccTransform>,
+    drop_shadow: Option<DropShadow>,
 ) {
     page.stats.frames += 1;
     let (ox, oy) = page.spread_origin;
@@ -437,6 +448,9 @@ fn emit_text_frame_into(
         w: frame.bounds.width(),
         h: frame.bounds.height(),
     };
+    if let Some(shadow) = drop_shadow {
+        emit_drop_shadow_rect(r, shadow, &mut page.list);
+    }
     let fill = frame
         .fill_color
         .as_deref()
@@ -524,6 +538,7 @@ fn emit_rectangle_into(
     palette: &Graphic,
     fallback: Paint,
     cmyk_xform: Option<&idml_color::IccTransform>,
+    drop_shadow: Option<DropShadow>,
 ) {
     page.stats.frames += 1;
     let (ox, oy) = page.spread_origin;
@@ -533,6 +548,9 @@ fn emit_rectangle_into(
         w: rect.bounds.width(),
         h: rect.bounds.height(),
     };
+    if let Some(shadow) = drop_shadow {
+        emit_drop_shadow_rect(r, shadow, &mut page.list);
+    }
     let fill = rect
         .fill_color
         .as_deref()

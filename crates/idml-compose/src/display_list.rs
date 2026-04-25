@@ -220,6 +220,37 @@ impl GlyphCacheKey {
     }
 }
 
+/// Drop-shadow parameters. All measurements are in pt; `color` is
+/// linear RGB; `opacity` is multiplied into the shadow alpha.
+///
+/// Today's rasterizer renders the shadow as a hard-edged offset fill
+/// — the spec's separable Gaussian blur (idea.md §10.4) needs an
+/// offscreen pass which lands once the layered-render plumbing
+/// exists. `blur_radius` is parsed and stored so the rasterizer can
+/// pick it up later without breaking the display-list contract.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DropShadow {
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub blur_radius: f32,
+    pub color: Color,
+    pub opacity: f32,
+}
+
+impl DropShadow {
+    /// Sensible default: 4 pt offset down-right, 4 pt blur radius
+    /// (currently ignored), 30% black.
+    pub fn default_soft() -> Self {
+        Self {
+            offset_x: 4.0,
+            offset_y: 4.0,
+            blur_radius: 4.0,
+            color: Color::rgba(0.0, 0.0, 0.0, 1.0),
+            opacity: 0.3,
+        }
+    }
+}
+
 /// One command in the display list.
 #[derive(Debug, Clone)]
 pub enum DisplayCommand {
@@ -239,6 +270,15 @@ pub enum DisplayCommand {
         paint: Paint,
         stroke: Stroke,
         transform: Transform,
+    },
+    /// Drop-shadow stamp: render the path filled with `shadow.color`
+    /// at `(offset_x, offset_y)` from the path's natural position.
+    /// Conventionally emitted *before* the matching FillPath/StrokePath
+    /// so the shadow lands behind the painted shape.
+    DropShadow {
+        path_id: PathId,
+        transform: Transform,
+        shadow: DropShadow,
     },
     // DrawImage, PushLayer, PopLayer, PushClip, PopClip land with
     // §10.3 / §10.4.

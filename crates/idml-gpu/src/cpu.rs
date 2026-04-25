@@ -98,6 +98,33 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 };
                 pixmap.stroke_path(&path, &ts_paint, &ts_stroke, page_to_px, None);
             }
+            DisplayCommand::DropShadow {
+                path_id,
+                transform,
+                shadow,
+            } => {
+                let Some(path_data) = list.paths.get(*path_id) else {
+                    continue;
+                };
+                // Build the path in page space, then translate by
+                // the shadow offset. Hard-edge today; idea.md §10.4's
+                // separable Gaussian blur lands once the offscreen
+                // layer pipeline is in place.
+                let mut shifted = *transform;
+                shifted.0[4] += shadow.offset_x;
+                shifted.0[5] += shadow.offset_y;
+                let Some(path) = build_path_transformed(path_data, &shifted) else {
+                    continue;
+                };
+                let mut shadow_color = shadow.color;
+                shadow_color.a *= shadow.opacity.clamp(0.0, 1.0);
+                let mut p = TsPaint {
+                    anti_alias: true,
+                    ..Default::default()
+                };
+                p.set_color(linear_color_to_ts(shadow_color));
+                pixmap.fill_path(&path, &p, FillRule::Winding, page_to_px, None);
+            }
         }
     }
 
