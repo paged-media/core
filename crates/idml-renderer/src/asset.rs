@@ -10,8 +10,13 @@
 //! it with a JS Promise resolver at the language boundary; the
 //! browser's `AssetResolver` interface in idea.md §11.1 stays
 //! Promise-based externally.
+//!
+//! Returned bytes are `bytes::Bytes` so cloning is a refcount bump,
+//! not a memcpy — fonts and image payloads are routinely megabytes.
 
 use std::collections::HashMap;
+
+use bytes::Bytes;
 
 /// Resolve assets referenced by an IDML document.
 ///
@@ -22,16 +27,15 @@ pub trait AssetResolver: Send + Sync {
     /// Resolve a font by family + style. `style` is IDML's
     /// `FontStyle` attribute (e.g. "Bold", "Italic", "Bold Italic")
     /// or `None` when the run carries no style.
-    fn resolve_font(&self, family: &str, style: Option<&str>) -> Option<Vec<u8>>;
+    fn resolve_font(&self, family: &str, style: Option<&str>) -> Option<Bytes>;
 
-    /// Resolve a placed image by URI. Returns the raw bytes (PNG /
-    /// JPEG / TIFF / etc.); decoding is the renderer's job.
-    fn resolve_image(&self, uri: &str) -> Option<Vec<u8>>;
+    /// Resolve a placed image by URI.
+    fn resolve_image(&self, uri: &str) -> Option<Bytes>;
 
     /// Resolve an ICC profile by name. Used by `idml-color` for
     /// CMYK → linear-RGB conversion when the document specifies a
     /// non-default working space.
-    fn resolve_icc(&self, name: &str) -> Option<Vec<u8>>;
+    fn resolve_icc(&self, name: &str) -> Option<Bytes>;
 }
 
 /// In-memory `AssetResolver` backed by `HashMap`s. Useful for tests,
@@ -39,9 +43,9 @@ pub trait AssetResolver: Send + Sync {
 /// hosts that want to pre-load assets before rendering.
 #[derive(Debug, Default)]
 pub struct BytesResolver {
-    pub fonts: HashMap<String, Vec<u8>>,
-    pub images: HashMap<String, Vec<u8>>,
-    pub icc: HashMap<String, Vec<u8>>,
+    pub fonts: HashMap<String, Bytes>,
+    pub images: HashMap<String, Bytes>,
+    pub icc: HashMap<String, Bytes>,
 }
 
 impl BytesResolver {
@@ -54,36 +58,32 @@ impl BytesResolver {
     /// matches IDML's "Helvetica Neue" + "Bold" → "Helvetica Neue Bold"
     /// convention used by AppliedFont without spaces between the
     /// two halves.
-    pub fn add_font(&mut self, family: &str, style: Option<&str>, bytes: Vec<u8>) {
-        self.fonts.insert(font_key(family, style), bytes);
+    pub fn add_font(&mut self, family: &str, style: Option<&str>, bytes: impl Into<Bytes>) {
+        self.fonts.insert(font_key(family, style), bytes.into());
     }
 
-    pub fn add_image(&mut self, uri: impl Into<String>, bytes: Vec<u8>) {
-        self.images.insert(uri.into(), bytes);
+    pub fn add_image(&mut self, uri: impl Into<String>, bytes: impl Into<Bytes>) {
+        self.images.insert(uri.into(), bytes.into());
     }
 
-    pub fn add_icc(&mut self, name: impl Into<String>, bytes: Vec<u8>) {
-        self.icc.insert(name.into(), bytes);
+    pub fn add_icc(&mut self, name: impl Into<String>, bytes: impl Into<Bytes>) {
+        self.icc.insert(name.into(), bytes.into());
     }
 }
 
 impl AssetResolver for BytesResolver {
-    fn resolve_font(&self, family: &str, style: Option<&str>) -> Option<Vec<u8>> {
-        self.fonts
-            .get(&font_key(family, style))
-            .cloned()
-            .or_else(|| {
-                // Fall through to the bare-family entry when the styled
-                // variant isn't registered.
-                self.fonts.get(family).cloned()
-            })
+    fn resolve_font(&self, family: &str, style: Option<&str>) -> Option<Bytes> {
+        self.fonts.get(&font_key(family, style)).cloned().or_else(||
+            // Fall through to the bare-family entry when the styled
+            // variant isn't registered.
+            self.fonts.get(family).cloned())
     }
 
-    fn resolve_image(&self, uri: &str) -> Option<Vec<u8>> {
+    fn resolve_image(&self, uri: &str) -> Option<Bytes> {
         self.images.get(uri).cloned()
     }
 
-    fn resolve_icc(&self, name: &str) -> Option<Vec<u8>> {
+    fn resolve_icc(&self, name: &str) -> Option<Bytes> {
         self.icc.get(name).cloned()
     }
 }
@@ -104,7 +104,7 @@ mod tests {
         let mut r = BytesResolver::new();
         r.add_font("Helvetica Neue", Some("Bold"), b"FONTBYTES".to_vec());
         let bytes = r.resolve_font("Helvetica Neue", Some("Bold")).unwrap();
-        assert_eq!(bytes, b"FONTBYTES");
+        assert_eq!(&bytes[..], b"FONTBYTES");
     }
 
     #[test]
@@ -112,7 +112,7 @@ mod tests {
         let mut r = BytesResolver::new();
         r.add_font("Minion Pro", None, b"REG".to_vec());
         let bytes = r.resolve_font("Minion Pro", Some("Bold")).unwrap();
-        assert_eq!(bytes, b"REG");
+        assert_eq!(&bytes[..], b"REG");
     }
 
     #[test]

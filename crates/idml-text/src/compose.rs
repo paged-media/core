@@ -128,81 +128,124 @@ pub fn compose_paragraph(
         0
     };
 
-    // `items` is what paragraph-breaker sees. `byte_ends` and
-    // `is_hyphen_break` are parallel arrays indexed the same way so we
-    // can map any chosen break back to a source byte offset and learn
-    // whether the break needs a trailing hyphen glyph.
-    let mut items: Vec<Item<()>> = Vec::with_capacity(words.len() * 4 + 2);
-    let mut byte_ends: Vec<usize> = Vec::with_capacity(items.capacity());
-    let mut is_hyphen_break: Vec<bool> = Vec::with_capacity(items.capacity());
+    // Per-item metadata kept in lockstep with the items vector via
+    // `push_item`. paragraph-breaker takes `&[Item<()>]`, so we keep
+    // the items in their own contiguous Vec — but every push goes
+    // through the helper so the byte_end / is_hyphen side-data can
+    // never drift out of sync.
+    let item_capacity = if options.hyphenator.is_some() {
+        words.len() * 4 + 2
+    } else {
+        words.len() * 2 + 2
+    };
+    let mut items: Vec<Item<()>> = Vec::with_capacity(item_capacity);
+    let mut meta: Vec<ItemMeta> = Vec::with_capacity(item_capacity);
+    let push = |items: &mut Vec<_>, meta: &mut Vec<ItemMeta>, item, byte_end, is_hyphen| {
+        items.push(item);
+        meta.push(ItemMeta {
+            byte_end,
+            is_hyphen,
+        });
+    };
 
     for (i, w) in words.iter().enumerate() {
         let word_text = &text[w.start..w.end];
-        // Hyphenation breaks are byte offsets inside the word; filter
-        // out any sentinel 0/len entries the dictionary might produce.
-        let breaks: Vec<usize> = options
-            .hyphenator
-            .map(|h| h.opportunities(word_text))
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|&b| b > 0 && b < word_text.len())
-            .collect();
-
-        let mut seg_start = 0usize;
-        for &offset in &breaks {
-            if offset <= seg_start {
-                continue;
+        // No hyphenator → emit a single Box for the whole word and
+        // skip the per-word break-vec construction entirely.
+        match options.hyphenator {
+            None => {
+                push(
+                    &mut items,
+                    &mut meta,
+                    Item::Box {
+                        width: measurer.measure_word(word_text),
+                        data: (),
+                    },
+                    w.end,
+                    false,
+                );
             }
-            let seg = &word_text[seg_start..offset];
-            let width = measurer.measure_word(seg);
-            items.push(Item::Box { width, data: () });
-            byte_ends.push(w.start + offset);
-            is_hyphen_break.push(false);
-            items.push(Item::Penalty {
-                width: hyphen_width,
-                penalty: options.hyphen_penalty,
-                flagged: true,
-            });
-            byte_ends.push(w.start + offset);
-            is_hyphen_break.push(true);
-            seg_start = offset;
+            Some(h) => {
+                let mut seg_start = 0usize;
+                for offset in h.opportunities(word_text) {
+                    if offset <= seg_start || offset >= word_text.len() {
+                        continue;
+                    }
+                    push(
+                        &mut items,
+                        &mut meta,
+                        Item::Box {
+                            width: measurer.measure_word(&word_text[seg_start..offset]),
+                            data: (),
+                        },
+                        w.start + offset,
+                        false,
+                    );
+                    push(
+                        &mut items,
+                        &mut meta,
+                        Item::Penalty {
+                            width: hyphen_width,
+                            penalty: options.hyphen_penalty,
+                            flagged: true,
+                        },
+                        w.start + offset,
+                        true,
+                    );
+                    seg_start = offset;
+                }
+                push(
+                    &mut items,
+                    &mut meta,
+                    Item::Box {
+                        width: measurer.measure_word(&word_text[seg_start..]),
+                        data: (),
+                    },
+                    w.end,
+                    false,
+                );
+            }
         }
-        let final_seg = &word_text[seg_start..];
-        let final_w = measurer.measure_word(final_seg);
-        items.push(Item::Box {
-            width: final_w,
-            data: (),
-        });
-        byte_ends.push(w.end);
-        is_hyphen_break.push(false);
 
         if i + 1 < words.len() {
-            items.push(Item::Glue {
-                width: space_width,
-                stretch,
-                shrink,
-            });
-            // Glue between words: a break here trims the trailing
-            // space, so byte_end is the previous word's end.
-            byte_ends.push(w.end);
-            is_hyphen_break.push(false);
+            push(
+                &mut items,
+                &mut meta,
+                Item::Glue {
+                    width: space_width,
+                    stretch,
+                    shrink,
+                },
+                // A break at this glue trims the trailing space, so
+                // the byte_end is the previous word's end.
+                w.end,
+                false,
+            );
         }
     }
     // Paragraph end: infinite stretch + forced break (TeX convention).
-    items.push(Item::Glue {
-        width: 0,
-        stretch: paragraph_breaker::INFINITE_PENALTY,
-        shrink: 0,
-    });
-    byte_ends.push(text.len());
-    is_hyphen_break.push(false);
-    items.push(Item::Penalty {
-        width: 0,
-        penalty: -paragraph_breaker::INFINITE_PENALTY,
-        flagged: true,
-    });
-    byte_ends.push(text.len());
-    is_hyphen_break.push(false);
+    push(
+        &mut items,
+        &mut meta,
+        Item::Glue {
+            width: 0,
+            stretch: paragraph_breaker::INFINITE_PENALTY,
+            shrink: 0,
+        },
+        text.len(),
+        false,
+    );
+    push(
+        &mut items,
+        &mut meta,
+        Item::Penalty {
+            width: 0,
+            penalty: -paragraph_breaker::INFINITE_PENALTY,
+            flagged: true,
+        },
+        text.len(),
+        false,
+    );
 
     let breaks: Vec<Breakpoint> = paragraph_breaker::total_fit(
         &items,
@@ -216,30 +259,34 @@ pub fn compose_paragraph(
     // rendering at the layout pass.
     let mut lines = Vec::with_capacity(breaks.len());
     let mut byte_cursor = 0usize;
+    let bytes = text.as_bytes();
     for bp in &breaks {
-        let Some(&end) = byte_ends.get(bp.index) else {
+        let Some(m) = meta.get(bp.index) else {
             continue;
         };
-        let hyphen = is_hyphen_break.get(bp.index).copied().unwrap_or(false);
         // Skip whitespace at the line's left edge (after a glue
-        // break) so byte_range tracks the visible content.
+        // break) so byte_range tracks visible content.
         let mut start = byte_cursor;
-        let bytes = text.as_bytes();
-        while start < end && is_ws(bytes[start]) {
+        while start < m.byte_end && bytes[start].is_ascii_whitespace() {
             start += 1;
         }
-        if start >= end {
+        if start >= m.byte_end {
             continue;
         }
         lines.push(ComposedLine {
-            byte_range: start..end,
+            byte_range: start..m.byte_end,
             width: bp.width,
             ratio: bp.ratio,
-            ends_with_hyphen: hyphen,
+            ends_with_hyphen: m.is_hyphen,
         });
-        byte_cursor = end;
+        byte_cursor = m.byte_end;
     }
     lines
+}
+
+struct ItemMeta {
+    byte_end: usize,
+    is_hyphen: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -253,11 +300,11 @@ fn segment(text: &str) -> Vec<WordSpan> {
     let bytes = text.as_bytes();
     let mut cursor = 0;
     while cursor < bytes.len() {
-        while cursor < bytes.len() && is_ws(bytes[cursor]) {
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
             cursor += 1;
         }
         let start = cursor;
-        while cursor < bytes.len() && !is_ws(bytes[cursor]) {
+        while cursor < bytes.len() && !bytes[cursor].is_ascii_whitespace() {
             cursor += 1;
         }
         if cursor > start {
@@ -265,11 +312,6 @@ fn segment(text: &str) -> Vec<WordSpan> {
         }
     }
     out
-}
-
-#[inline]
-fn is_ws(b: u8) -> bool {
-    matches!(b, b' ' | b'\t' | b'\n' | b'\r')
 }
 
 /// Production measurer: shapes each word via `rustybuzz` at the given

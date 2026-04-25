@@ -30,6 +30,7 @@ idml-color = { path = "../idml-color" }
 idml-compose = { path = "../idml-compose" }
 idml-gpu = { path = "../idml-gpu", default-features = false }
 anyhow = { workspace = true }
+bytes = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 rustybuzz = "0.18"
 ttf-parser = "0.24"

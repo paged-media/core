@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use quick_xml::events::Event;
 use serde::Serialize;
 
+use crate::util::attr;
 use crate::ParseError;
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -213,13 +214,6 @@ fn parse_swatch(e: &quick_xml::events::BytesStart) -> Option<SwatchEntry> {
         name: attr(e, b"Name"),
         color_ref: attr(e, b"ColorEditorHotGraphic").or_else(|| attr(e, b"Color")),
     })
-}
-
-fn attr(e: &quick_xml::events::BytesStart, key: &[u8]) -> Option<String> {
-    e.attributes()
-        .flatten()
-        .find(|a| a.key.as_ref() == key)
-        .and_then(|a| std::str::from_utf8(&a.value).ok().map(str::to_string))
 }
 
 /// Convert a [`ColorEntry`] to non-color-managed linear RGB (0..=1).

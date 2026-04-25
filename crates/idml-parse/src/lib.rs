@@ -18,6 +18,7 @@ pub mod designmap;
 pub mod graphic;
 pub mod spread;
 pub mod story;
+mod util;
 
 pub use designmap::{DesignMap, SpreadRef, StoryRef};
 pub use graphic::{
