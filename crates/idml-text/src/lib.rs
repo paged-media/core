@@ -22,4 +22,4 @@ pub use layout::{
     layout_paragraph, position_line, Alignment, LaidOutLine, LaidOutParagraph, LayoutOptions,
     PositionedGlyph,
 };
-pub use shape::{shape_run, ShapedGlyph, ShapedRun};
+pub use shape::{apply_tracking, shape_run, ShapedGlyph, ShapedRun};

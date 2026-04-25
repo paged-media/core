@@ -21,7 +21,7 @@ pub mod story;
 
 pub use designmap::{DesignMap, SpreadRef, StoryRef};
 pub use graphic::{ColorEntry, ColorSpace, Graphic, SwatchEntry};
-pub use spread::{Bounds, Page, Rectangle, Spread, TextFrame};
+pub use spread::{Bounds, GraphicLine, Oval, Page, Rectangle, Spread, TextFrame};
 pub use story::{CharacterRun, Paragraph, Story};
 
 #[derive(Debug, thiserror::Error)]

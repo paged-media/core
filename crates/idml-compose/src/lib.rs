@@ -16,5 +16,8 @@ pub use display_list::{
     PathData, PathId, PathSegment, Rect, Stroke, Transform,
 };
 pub use glyph::{GlyphOutliner, TtfOutliner, UnitSquareOutliner};
-pub use primitives::{emit_rect, emit_stroke_rect, UNIT_RECT_KEY};
+pub use primitives::{
+    emit_ellipse, emit_line, emit_rect, emit_stroke_ellipse, emit_stroke_rect, UNIT_ELLIPSE_KEY,
+    UNIT_RECT_KEY,
+};
 pub use text::emit_paragraph;

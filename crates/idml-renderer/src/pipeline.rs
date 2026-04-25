@@ -8,10 +8,10 @@
 //! walking live in that crate so we stay focused on layout + emission.
 
 use idml_compose::{
-    emit_paragraph, emit_rect, emit_stroke_rect, Color, DisplayList, Paint, Rect, Stroke,
-    TtfOutliner,
+    emit_ellipse, emit_line, emit_paragraph, emit_rect, emit_stroke_ellipse, emit_stroke_rect,
+    Color, DisplayList, Paint, Rect, Stroke, TtfOutliner,
 };
-use idml_parse::{graphic, Graphic, Rectangle, TextFrame};
+use idml_parse::{graphic, Graphic, GraphicLine, Oval, Rectangle, TextFrame};
 use idml_scene::Document;
 
 /// Knobs the caller tunes when driving the full pipeline.
@@ -264,6 +264,24 @@ pub fn build_document(
                 cmyk_xform.as_ref(),
             );
         }
+        for oval in &spread.ovals {
+            total_stats.frames += 1;
+            let local_idx = page_for_frame(&oval.bounds, local_geoms).unwrap_or(0);
+            let page_idx = range.start + local_idx;
+            emit_oval_into(
+                &mut pages[page_idx],
+                oval,
+                palette,
+                options.fallback_frame_fill,
+                cmyk_xform.as_ref(),
+            );
+        }
+        for line in &spread.graphic_lines {
+            total_stats.frames += 1;
+            let local_idx = page_for_frame(&line.bounds, local_geoms).unwrap_or(0);
+            let page_idx = range.start + local_idx;
+            emit_line_into(&mut pages[page_idx], line, palette, cmyk_xform.as_ref());
+        }
     }
 
     // Story pass: layout text into its hosting frame's page.
@@ -284,6 +302,11 @@ pub fn build_document(
             .fallback_column_width_pt
             .or_else(|| frame.map(|f| f.bounds.width()));
 
+        // Cursor accumulates baseline_y (1/64 pt) across paragraphs so
+        // they stack vertically. Without this every paragraph would
+        // start at the same first-baseline relative to the frame.
+        let mut y_cursor: i32 = -1;
+
         for paragraph in &story.paragraphs {
             total_stats.paragraphs += 1;
             total_stats.runs += paragraph.runs.len();
@@ -300,7 +323,10 @@ pub fn build_document(
             if let Some(face) = shaping_face.as_ref() {
                 for run in &paragraph.runs {
                     let size = run.point_size.unwrap_or(options.default_point_size);
-                    let shaped = idml_text::shape_run(face, &run.text, size);
+                    let mut shaped = idml_text::shape_run(face, &run.text, size);
+                    if let Some(t) = run.tracking {
+                        idml_text::apply_tracking(&mut shaped, t, size);
+                    }
                     total_stats.glyphs += shaped.glyphs.len();
                     pages[page_idx].stats.glyphs += shaped.glyphs.len();
                 }
@@ -312,7 +338,47 @@ pub fn build_document(
             let measurer = idml_text::RustybuzzMeasurer::new(face, paragraph_size);
             let mut lopts = idml_text::LayoutOptions::new(col_pt, paragraph_size);
             lopts.alignment = map_justification(paragraph.justification.as_deref());
-            let laid_out = idml_text::layout_paragraph(&paragraph_text, &measurer, &lopts);
+
+            // Per-paragraph baseline. Initialise from the layout
+            // defaults on the first paragraph; subsequent paragraphs
+            // continue from y_cursor + space_before.
+            if y_cursor < 0 {
+                y_cursor = lopts.first_baseline;
+            } else {
+                let space_before_64 =
+                    paragraph.space_before.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION;
+                y_cursor += space_before_64.round() as i32;
+            }
+            lopts.first_baseline = y_cursor;
+
+            let mut laid_out = idml_text::layout_paragraph(&paragraph_text, &measurer, &lopts);
+
+            // Apply FirstLineIndent: shift every glyph on the first
+            // line by `first_line_indent * 64`. Doing it post-layout
+            // means the line-break solution doesn't shift; only the
+            // visible position does — which matches what InDesign
+            // does for non-first-line-indent paragraphs.
+            if let Some(indent_pt) = paragraph.first_line_indent {
+                let indent_64 = (indent_pt * idml_text::shape::ADVANCE_PRECISION).round() as i32;
+                if indent_64 != 0 {
+                    if let Some(line) = laid_out.lines.first_mut() {
+                        for g in &mut line.glyphs {
+                            g.x += indent_64;
+                        }
+                    }
+                }
+            }
+
+            // Advance the cursor by the paragraph's vertical extent
+            // (last baseline + one line_height of descender slack)
+            // plus the configured SpaceAfter.
+            if let Some(last) = laid_out.lines.last() {
+                y_cursor = last.baseline_y + lopts.line_height;
+            }
+            let space_after_64 =
+                paragraph.space_after.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION;
+            y_cursor += space_after_64.round() as i32;
+
             total_stats.lines += laid_out.lines.len();
             pages[page_idx].stats.lines += laid_out.lines.len();
 
@@ -321,8 +387,6 @@ pub fn build_document(
             };
             let outliner = TtfOutliner::new(outline);
             let picker = build_run_paint_picker(paragraph, palette, options.fallback_text_paint);
-            // Translate frame origin into the page's local coordinate
-            // system: page-relative = spread-relative - page_origin.
             let (ox, oy) = pages[page_idx].spread_origin;
             emit_paragraph(
                 &laid_out,
@@ -389,6 +453,69 @@ fn emit_text_frame_into(
             emit_stroke_rect(r, Stroke::new(width), stroke, &mut page.list);
         }
     }
+}
+
+fn emit_oval_into(
+    page: &mut BuiltPage,
+    oval: &Oval,
+    palette: &Graphic,
+    fallback: Paint,
+    cmyk_xform: Option<&idml_color::IccTransform>,
+) {
+    page.stats.frames += 1;
+    let (ox, oy) = page.spread_origin;
+    let r = Rect {
+        x: oval.bounds.left - ox,
+        y: oval.bounds.top - oy,
+        w: oval.bounds.width(),
+        h: oval.bounds.height(),
+    };
+    let fill = oval
+        .fill_color
+        .as_deref()
+        .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+        .unwrap_or(fallback);
+    emit_ellipse(r, fill, &mut page.list);
+    if let Some(stroke) = oval
+        .stroke_color
+        .as_deref()
+        .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+    {
+        let width = oval.stroke_weight.unwrap_or(1.0);
+        if width > 0.0 {
+            emit_stroke_ellipse(r, Stroke::new(width), stroke, &mut page.list);
+        }
+    }
+}
+
+fn emit_line_into(
+    page: &mut BuiltPage,
+    line: &GraphicLine,
+    palette: &Graphic,
+    cmyk_xform: Option<&idml_color::IccTransform>,
+) {
+    page.stats.frames += 1;
+    let Some(stroke_paint) = line
+        .stroke_color
+        .as_deref()
+        .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+    else {
+        return;
+    };
+    let width = line.stroke_weight.unwrap_or(1.0);
+    if width <= 0.0 {
+        return;
+    }
+    let (ox, oy) = page.spread_origin;
+    emit_line(
+        line.bounds.left - ox,
+        line.bounds.top - oy,
+        line.bounds.right - ox,
+        line.bounds.bottom - oy,
+        Stroke::new(width),
+        stroke_paint,
+        &mut page.list,
+    );
 }
 
 fn emit_rectangle_into(

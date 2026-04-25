@@ -43,6 +43,116 @@ pub fn emit_stroke_rect(rect: Rect, stroke: Stroke, paint: Paint, list: &mut Dis
     });
 }
 
+/// Cache key for the unit ellipse — a four-cubic Bézier approximation
+/// inscribed in the `[0, 0, 1, 1]` square (centred at `(0.5, 0.5)`,
+/// radius `0.5`). Reserved for any interned-path consumer.
+pub const UNIT_ELLIPSE_KEY: u64 = 0xD001_0001_0000_0002;
+
+/// Emit a filled ellipse inscribed in `rect`. Like [`emit_rect`], the
+/// unit-ellipse path is interned once per `DisplayList`, so a
+/// document with N ovals only stores one outline.
+pub fn emit_ellipse(rect: Rect, paint: Paint, list: &mut DisplayList) {
+    let (path_id, _) = list.paths.intern(UNIT_ELLIPSE_KEY, unit_ellipse());
+    let transform = Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]);
+    list.push(DisplayCommand::FillPath {
+        path_id,
+        paint,
+        transform,
+    });
+}
+
+/// Stroked variant of [`emit_ellipse`].
+pub fn emit_stroke_ellipse(rect: Rect, stroke: Stroke, paint: Paint, list: &mut DisplayList) {
+    let (path_id, _) = list.paths.intern(UNIT_ELLIPSE_KEY, unit_ellipse());
+    let transform = Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]);
+    list.push(DisplayCommand::StrokePath {
+        path_id,
+        paint,
+        stroke,
+        transform,
+    });
+}
+
+/// Emit a stroked straight line from `(x1, y1)` to `(x2, y2)` in page
+/// coords. Lines have no fill; this only emits a `StrokePath`.
+pub fn emit_line(
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    stroke: Stroke,
+    paint: Paint,
+    list: &mut DisplayList,
+) {
+    // Lines aren't naturally interned (their geometry depends on the
+    // endpoints), so push an anonymous path each time.
+    let path = PathData {
+        segments: vec![
+            PathSegment::MoveTo { x: x1, y: y1 },
+            PathSegment::LineTo { x: x2, y: y2 },
+        ],
+    };
+    let path_id = list.paths.push_anon(path);
+    list.push(DisplayCommand::StrokePath {
+        path_id,
+        paint,
+        stroke,
+        transform: Transform::IDENTITY,
+    });
+}
+
+/// Magic constant for cubic Bézier ellipse approximation: the cubic
+/// control-point distance that turns four arcs into a near-perfect
+/// circle. Standard value: 4·(√2 − 1) / 3.
+const ELLIPSE_KAPPA: f32 = 0.552_284_8;
+
+fn unit_ellipse() -> PathData {
+    // A cubic Bézier approximation of a unit-square inscribed circle
+    // (centre 0.5, radius 0.5). Four arcs, each cubic.
+    let r = 0.5_f32;
+    let k = r * ELLIPSE_KAPPA;
+    let cx = 0.5_f32;
+    let cy = 0.5_f32;
+    PathData {
+        segments: vec![
+            PathSegment::MoveTo { x: cx + r, y: cy },
+            PathSegment::CubicTo {
+                cx1: cx + r,
+                cy1: cy + k,
+                cx2: cx + k,
+                cy2: cy + r,
+                x: cx,
+                y: cy + r,
+            },
+            PathSegment::CubicTo {
+                cx1: cx - k,
+                cy1: cy + r,
+                cx2: cx - r,
+                cy2: cy + k,
+                x: cx - r,
+                y: cy,
+            },
+            PathSegment::CubicTo {
+                cx1: cx - r,
+                cy1: cy - k,
+                cx2: cx - k,
+                cy2: cy - r,
+                x: cx,
+                y: cy - r,
+            },
+            PathSegment::CubicTo {
+                cx1: cx + k,
+                cy1: cy - r,
+                cx2: cx + r,
+                cy2: cy - k,
+                x: cx + r,
+                y: cy,
+            },
+            PathSegment::Close,
+        ],
+    }
+}
+
 fn unit_rect() -> PathData {
     PathData {
         segments: vec![
@@ -159,5 +269,58 @@ mod tests {
             1,
             "fill + stroke should share the unit rect"
         );
+    }
+
+    #[test]
+    fn emit_ellipse_interns_unit_path_once() {
+        let mut list = DisplayList::new();
+        for i in 0..4 {
+            emit_ellipse(
+                Rect {
+                    x: i as f32 * 10.0,
+                    y: 0.0,
+                    w: 8.0,
+                    h: 8.0,
+                },
+                Paint::Solid(Color::WHITE),
+                &mut list,
+            );
+        }
+        assert_eq!(list.commands.len(), 4);
+        assert_eq!(list.paths.len(), 1);
+    }
+
+    #[test]
+    fn ellipse_and_rect_use_distinct_unit_paths() {
+        let mut list = DisplayList::new();
+        let r = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 10.0,
+            h: 10.0,
+        };
+        emit_rect(r, Paint::Solid(Color::WHITE), &mut list);
+        emit_ellipse(r, Paint::Solid(Color::BLACK), &mut list);
+        assert_eq!(list.commands.len(), 2);
+        assert_eq!(list.paths.len(), 2, "rect + ellipse keys differ");
+    }
+
+    #[test]
+    fn line_emits_a_stroke_path() {
+        let mut list = DisplayList::new();
+        emit_line(
+            0.0,
+            0.0,
+            100.0,
+            50.0,
+            Stroke::new(1.0),
+            Paint::Solid(Color::BLACK),
+            &mut list,
+        );
+        assert_eq!(list.commands.len(), 1);
+        match &list.commands[0] {
+            DisplayCommand::StrokePath { stroke, .. } => assert_eq!(stroke.width, 1.0),
+            other => panic!("expected StrokePath, got {other:?}"),
+        }
     }
 }

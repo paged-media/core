@@ -29,6 +29,13 @@ pub struct Spread {
     /// story). A full Rectangle path can have corner radii etc. — we
     /// treat it as a rect; higher-fidelity paths come with §10.1.
     pub rectangles: Vec<Rectangle>,
+    /// Ellipses (`<Oval>`). Treated as the inscribed ellipse of the
+    /// `GeometricBounds` rect.
+    pub ovals: Vec<Oval>,
+    /// Straight lines (`<GraphicLine>`). The `GeometricBounds`
+    /// describe the line's bounding box; its endpoints are the
+    /// rect's top-left and bottom-right corners.
+    pub graphic_lines: Vec<GraphicLine>,
     /// Number of text frames skipped because they were nested inside a
     /// Group. Exposed so callers can flag lossy parses without reading
     /// logs.
@@ -72,6 +79,30 @@ pub struct Rectangle {
     pub bounds: Bounds,
     pub item_transform: Option<[f32; 6]>,
     pub fill_color: Option<String>,
+    pub stroke_color: Option<String>,
+    pub stroke_weight: Option<f32>,
+}
+
+/// Axis-aligned ellipse — `<Oval>` in IDML. Same fill/stroke story as
+/// Rectangle; geometry is the ellipse inscribed in `GeometricBounds`.
+#[derive(Debug, Clone, Serialize)]
+pub struct Oval {
+    pub self_id: Option<String>,
+    pub bounds: Bounds,
+    pub item_transform: Option<[f32; 6]>,
+    pub fill_color: Option<String>,
+    pub stroke_color: Option<String>,
+    pub stroke_weight: Option<f32>,
+}
+
+/// Straight line — `<GraphicLine>` in IDML. The endpoints are the
+/// `GeometricBounds` rect's top-left and bottom-right corners (IDML
+/// stores the endpoints implicitly via the bounds).
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphicLine {
+    pub self_id: Option<String>,
+    pub bounds: Bounds,
+    pub item_transform: Option<[f32; 6]>,
     pub stroke_color: Option<String>,
     pub stroke_weight: Option<f32>,
 }
@@ -167,6 +198,47 @@ impl Spread {
                             item_transform: attr(&e, b"ItemTransform")
                                 .and_then(|s| parse_matrix(&s)),
                             fill_color: attr(&e, b"FillColor"),
+                            stroke_color: attr(&e, b"StrokeColor"),
+                            stroke_weight: attr(&e, b"StrokeWeight")
+                                .and_then(|s| s.parse::<f32>().ok()),
+                        });
+                    }
+                    b"Oval" => {
+                        let Some(bounds) =
+                            attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s))
+                        else {
+                            continue;
+                        };
+                        if group_depth > 0 {
+                            out.skipped_nested_frames += 1;
+                            continue;
+                        }
+                        out.ovals.push(Oval {
+                            self_id: attr(&e, b"Self"),
+                            bounds,
+                            item_transform: attr(&e, b"ItemTransform")
+                                .and_then(|s| parse_matrix(&s)),
+                            fill_color: attr(&e, b"FillColor"),
+                            stroke_color: attr(&e, b"StrokeColor"),
+                            stroke_weight: attr(&e, b"StrokeWeight")
+                                .and_then(|s| s.parse::<f32>().ok()),
+                        });
+                    }
+                    b"GraphicLine" => {
+                        let Some(bounds) =
+                            attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s))
+                        else {
+                            continue;
+                        };
+                        if group_depth > 0 {
+                            out.skipped_nested_frames += 1;
+                            continue;
+                        }
+                        out.graphic_lines.push(GraphicLine {
+                            self_id: attr(&e, b"Self"),
+                            bounds,
+                            item_transform: attr(&e, b"ItemTransform")
+                                .and_then(|s| parse_matrix(&s)),
                             stroke_color: attr(&e, b"StrokeColor"),
                             stroke_weight: attr(&e, b"StrokeWeight")
                                 .and_then(|s| s.parse::<f32>().ok()),
