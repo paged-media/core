@@ -465,19 +465,21 @@ impl<'a> StoryEmitter<'a> {
             let Some((start, end)) = self.frame_cmd_ranges[i] else {
                 continue;
             };
-            let vj = frame.vertical_justification.as_deref();
-            if vj.is_none() || vj == Some("TopAlign") {
+            let Some(vj) = frame.vertical_justification else {
+                continue;
+            };
+            if vj == idml_parse::VerticalJustification::Top {
                 continue;
             }
             let frame_height_64 =
                 (frame.bounds.height() * idml_text::shape::ADVANCE_PRECISION).round() as i32;
-            // Approximate used height = last baseline; a future
-            // batch can fold in the descender of the last line.
             let used_64 = self.frame_max_baseline_64[i];
             let slack_64 = (frame_height_64 - used_64).max(0);
             let dy_64 = match vj {
-                Some("CenterAlign") => slack_64 / 2,
-                Some("BottomAlign") => slack_64,
+                idml_parse::VerticalJustification::Center => slack_64 / 2,
+                idml_parse::VerticalJustification::Bottom => slack_64,
+                // Justify falls through to Top (per-paragraph
+                // distribution lands later); Top handled above.
                 _ => 0,
             };
             if dy_64 == 0 {
@@ -958,28 +960,29 @@ fn first_baseline_for_frame(
         .unwrap_or(0);
     let pt_to_64 = |pt: f32| (pt * idml_text::shape::ADVANCE_PRECISION).round() as i32;
     let em_fraction_to_64 = |frac: f32| pt_to_64(point_size * frac);
-    let policy_offset_64 = match frame.first_baseline_offset.as_deref() {
-        Some("CapHeight") => em_fraction_to_64(
+    use idml_parse::FirstBaselineOffset as F;
+    let policy_offset_64 = match frame.first_baseline_offset {
+        Some(F::CapHeight) => em_fraction_to_64(
             metrics
                 .and_then(|m| m.cap_height)
                 .unwrap_or(CAP_HEIGHT_FALLBACK),
         ),
-        Some("XHeight") => em_fraction_to_64(
+        Some(F::XHeight) => em_fraction_to_64(
             metrics
                 .and_then(|m| m.x_height)
                 .unwrap_or(X_HEIGHT_FALLBACK),
         ),
-        Some("EmBoxHeight") => pt_to_64(point_size),
+        Some(F::EmBoxHeight) => pt_to_64(point_size),
         // FixedHeight / LeadingOffset use MinimumFirstBaselineOffset
         // verbatim. Falls back to default when missing.
-        Some("FixedHeight") | Some("LeadingOffset") => frame
+        Some(F::FixedHeight) | Some(F::LeadingOffset) => frame
             .minimum_first_baseline_offset
             .map(pt_to_64)
             .unwrap_or(default_64),
-        // AscentOffset (IDML default) and unrecognised values: use
-        // the font's ascender if available; otherwise fall through
-        // to the renderer heuristic the LayoutOptions gave us.
-        _ => metrics
+        // AscentOffset (IDML default) and `None` (unrecognised /
+        // absent attribute): use the font's ascender if available;
+        // otherwise fall through to the LayoutOptions heuristic.
+        Some(F::AscentOffset) | None => metrics
             .map(|m| em_fraction_to_64(m.ascender))
             .unwrap_or(default_64),
     };

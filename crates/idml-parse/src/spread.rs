@@ -76,17 +76,13 @@ pub struct TextFrame {
     /// continues this story when its content overflows the current
     /// frame. `None` for end-of-chain or unthreaded frames.
     pub next_text_frame: Option<String>,
-    /// `VerticalJustification` from `<TextFramePreference>`. IDML
-    /// values: `TopAlign` (default), `CenterAlign`, `BottomAlign`,
-    /// `JustifyAlign`.
-    pub vertical_justification: Option<String>,
-    /// `FirstBaselineOffset` from `<TextFramePreference>`. IDML
-    /// values: `AscentOffset` (default), `CapHeight`, `XHeight`,
-    /// `EmBoxHeight`, `LeadingOffset`, `FixedHeight`. Controls how
-    /// the first line's baseline is placed inside the frame's
+    /// `VerticalJustification` from `<TextFramePreference>`.
+    pub vertical_justification: Option<VerticalJustification>,
+    /// `FirstBaselineOffset` from `<TextFramePreference>`. Controls
+    /// how the first line's baseline is placed inside the frame's
     /// inset box. `None` falls back to the renderer's heuristic
     /// (point_size × 0.8).
-    pub first_baseline_offset: Option<String>,
+    pub first_baseline_offset: Option<FirstBaselineOffset>,
     /// `MinimumFirstBaselineOffset` from `<TextFramePreference>`,
     /// in pt. Used with `FirstBaselineOffset="LeadingOffset"` and
     /// `"FixedHeight"`.
@@ -96,6 +92,66 @@ pub struct TextFrame {
     /// space-separated list of four numbers, IDML order
     /// `top left bottom right`). `None` when absent.
     pub inset_spacing: Option<[f32; 4]>,
+}
+
+/// IDML `<TextFramePreference VerticalJustification="...">` values.
+/// `Top` is the IDML default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum VerticalJustification {
+    Top,
+    Center,
+    Bottom,
+    /// "JustifyAlign" — distributes paragraph spacing to fill the
+    /// frame vertically. Renderer falls through to Top until the
+    /// per-paragraph distribution pass lands.
+    Justify,
+}
+
+impl VerticalJustification {
+    /// Parse an IDML attribute value. Unknown values return `None`.
+    pub fn from_idml(s: &str) -> Option<Self> {
+        match s {
+            "TopAlign" => Some(Self::Top),
+            "CenterAlign" => Some(Self::Center),
+            "BottomAlign" => Some(Self::Bottom),
+            "JustifyAlign" => Some(Self::Justify),
+            _ => None,
+        }
+    }
+}
+
+/// IDML `<TextFramePreference FirstBaselineOffset="...">` values.
+/// Drives where the first line's baseline sits inside the frame's
+/// inset box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum FirstBaselineOffset {
+    /// IDML default. Baseline at one ascender below the top inset.
+    AscentOffset,
+    /// Baseline at one cap-height below the top inset.
+    CapHeight,
+    /// Baseline at one x-height below the top inset.
+    XHeight,
+    /// Baseline at one em-box-height below the top inset.
+    EmBoxHeight,
+    /// Distance is `MinimumFirstBaselineOffset` pt below the inset.
+    LeadingOffset,
+    /// Same as LeadingOffset; both consult the
+    /// `MinimumFirstBaselineOffset` pt value.
+    FixedHeight,
+}
+
+impl FirstBaselineOffset {
+    pub fn from_idml(s: &str) -> Option<Self> {
+        match s {
+            "AscentOffset" => Some(Self::AscentOffset),
+            "CapHeight" => Some(Self::CapHeight),
+            "XHeight" => Some(Self::XHeight),
+            "EmBoxHeight" => Some(Self::EmBoxHeight),
+            "LeadingOffset" => Some(Self::LeadingOffset),
+            "FixedHeight" => Some(Self::FixedHeight),
+            _ => None,
+        }
+    }
 }
 
 /// Drop shadow as carried in the IDML XML. Distances are in pt;
@@ -318,10 +374,16 @@ impl Spread {
                     b"TextFramePreference" => {
                         if let Some(CurrentFrame::Text(i)) = current_frame {
                             let f = &mut out.text_frames[i];
-                            if let Some(vj) = attr(&e, b"VerticalJustification") {
+                            if let Some(vj) = attr(&e, b"VerticalJustification")
+                                .as_deref()
+                                .and_then(VerticalJustification::from_idml)
+                            {
                                 f.vertical_justification = Some(vj);
                             }
-                            if let Some(fbo) = attr(&e, b"FirstBaselineOffset") {
+                            if let Some(fbo) = attr(&e, b"FirstBaselineOffset")
+                                .as_deref()
+                                .and_then(FirstBaselineOffset::from_idml)
+                            {
                                 f.first_baseline_offset = Some(fbo);
                             }
                             if let Some(min_fbo) = attr(&e, b"MinimumFirstBaselineOffset")
@@ -582,8 +644,14 @@ mod tests {
         </idPkg:Spread>"#;
         let s = Spread::parse(xml).unwrap();
         let f = &s.text_frames[0];
-        assert_eq!(f.vertical_justification.as_deref(), Some("CenterAlign"));
-        assert_eq!(f.first_baseline_offset.as_deref(), Some("CapHeight"));
+        assert_eq!(
+            f.vertical_justification,
+            Some(VerticalJustification::Center)
+        );
+        assert_eq!(
+            f.first_baseline_offset,
+            Some(FirstBaselineOffset::CapHeight)
+        );
         assert_eq!(f.minimum_first_baseline_offset, Some(14.0));
         assert_eq!(f.inset_spacing, Some([6.0, 8.0, 10.0, 12.0]));
     }
