@@ -412,6 +412,13 @@ struct StoryEmitter<'a> {
     y_cursor: i32,
     frame_cmd_ranges: Vec<Option<(usize, usize)>>,
     frame_max_baseline_64: Vec<i32>,
+    /// Counter for `NumberedList` paragraphs in this story.
+    /// 0 means "not currently inside a numbered list" — incremented
+    /// to 1 on the first numbered paragraph and reset back to 0 the
+    /// first time a non-numbered paragraph is emitted. The reset
+    /// matches IDML's `NumberingContinue=true` default behaviour
+    /// for adjacent paragraphs.
+    numbered_counter: u32,
 }
 
 impl<'a> StoryEmitter<'a> {
@@ -448,6 +455,7 @@ impl<'a> StoryEmitter<'a> {
             y_cursor: -1,
             frame_cmd_ranges: vec![None; len],
             frame_max_baseline_64: vec![0; len],
+            numbered_counter: 0,
         }
     }
 
@@ -573,12 +581,13 @@ fn emit_paragraph_into_chain(
     // style's character formatting instead. IDML serialises tabs
     // in BulletsTextAfter as the literal `^t` two-byte sequence —
     // expand to a real `\t` so apply_tab_stops snaps it.
-    let bullet_first_text: Option<String> = bullet_prefix(&resolved_paragraph).and_then(|prefix| {
-        paragraph
-            .runs
-            .first()
-            .map(|r| format!("{prefix}{}", r.text))
-    });
+    let list_first_text: Option<String> =
+        list_prefix(&resolved_paragraph, &mut em.numbered_counter).and_then(|prefix| {
+            paragraph
+                .runs
+                .first()
+                .map(|r| format!("{prefix}{}", r.text))
+        });
 
     let styled_runs: Vec<idml_text::StyledRun> = paragraph
         .runs
@@ -586,7 +595,7 @@ fn emit_paragraph_into_chain(
         .enumerate()
         .map(|(i, run)| idml_text::StyledRun {
             text: if i == 0 {
-                bullet_first_text.as_deref().unwrap_or(&run.text)
+                list_first_text.as_deref().unwrap_or(&run.text)
             } else {
                 &run.text
             },
@@ -646,9 +655,7 @@ fn emit_paragraph_into_chain(
     // bullet+separator on run 0. Compute lazily; only the tab
     // pass actually needs it.
     let needs_paragraph_text = paragraph.runs.iter().any(|r| r.text.contains('\t'))
-        || bullet_first_text
-            .as_deref()
-            .is_some_and(|t| t.contains('\t'));
+        || list_first_text.as_deref().is_some_and(|t| t.contains('\t'));
     if needs_paragraph_text {
         let tab_stops: Vec<idml_text::layout::TabStopSpec> = resolved_paragraph
             .tab_list
@@ -669,7 +676,7 @@ fn emit_paragraph_into_chain(
             .enumerate()
             .map(|(i, r)| {
                 if i == 0 {
-                    bullet_first_text.as_deref().unwrap_or(&r.text)
+                    list_first_text.as_deref().unwrap_or(&r.text)
                 } else {
                     &r.text
                 }
@@ -1529,23 +1536,44 @@ pub fn map_justification(j: Option<&str>) -> idml_text::Alignment {
 
 /// Map IDML `<TabStop Alignment="...">` values to the layout
 /// crate's `TabAlignment`.
-/// Build the bullet+separator string for a bulleted paragraph,
-/// or `None` for paragraphs that don't carry a bullet. Numbered
-/// lists (`NumberedList`) need a per-list counter and don't ship
-/// in this batch — they fall through to `None` here.
-fn bullet_prefix(p: &idml_scene::ResolvedParagraphAttrs) -> Option<String> {
-    if p.bullets_list_type.as_deref() != Some("BulletList") {
-        return None;
+/// Build the list-marker prefix for a paragraph, or `None` when no
+/// list applies. Mutates `counter` per IDML's
+/// `NumberingContinue=true` default:
+///  - BulletList: counter resets to 0 (bullets don't number);
+///    returns `<bullet><separator>`.
+///  - NumberedList: counter increments and the marker is
+///    `<n>.<tab>` using Arabic numerals.
+///  - NoList / absent: counter resets to 0; returns `None`.
+///
+/// The `\t` after a numbered marker is handled by the existing
+/// tab-stop pass — the renderer's default 36 pt grid gives a
+/// reasonable hanging indent without explicit `<TabList>`.
+///
+/// Other NumberingFormat variants (Roman, alpha, zero-padded)
+/// fall through to Arabic for now; lands as a follow-up.
+fn list_prefix(p: &idml_scene::ResolvedParagraphAttrs, counter: &mut u32) -> Option<String> {
+    match p.bullets_list_type.as_deref() {
+        Some("BulletList") => {
+            *counter = 0;
+            let cp = p.bullet_character?;
+            let ch = char::from_u32(cp)?;
+            // `^t` in IDML serialises a literal tab in BulletsTextAfter.
+            let after = p
+                .bullets_text_after
+                .as_deref()
+                .map(|s| s.replace("^t", "\t"))
+                .unwrap_or_else(|| " ".to_string());
+            Some(format!("{ch}{after}"))
+        }
+        Some("NumberedList") => {
+            *counter = counter.checked_add(1).unwrap_or(1);
+            Some(format!("{}.\t", counter))
+        }
+        _ => {
+            *counter = 0;
+            None
+        }
     }
-    let cp = p.bullet_character?;
-    let ch = char::from_u32(cp)?;
-    // `^t` in IDML serialises a literal tab in BulletsTextAfter.
-    let after = p
-        .bullets_text_after
-        .as_deref()
-        .map(|s| s.replace("^t", "\t"))
-        .unwrap_or_else(|| " ".to_string());
-    Some(format!("{ch}{after}"))
 }
 
 fn map_tab_alignment(a: Option<&str>) -> idml_text::layout::TabAlignment {
@@ -1714,37 +1742,74 @@ mod tests {
     }
 
     #[test]
-    fn bullet_prefix_builds_glyph_plus_separator() {
-        // U+2022 BULLET • + plain space.
-        let p = bullet_prefix(&attrs(Some("BulletList"), Some(0x2022), Some(" "))).unwrap();
+    fn list_prefix_builds_bullet_plus_separator() {
+        let mut counter = 0;
+        let p = list_prefix(
+            &attrs(Some("BulletList"), Some(0x2022), Some(" ")),
+            &mut counter,
+        )
+        .unwrap();
         assert_eq!(p, "\u{2022} ");
+        assert_eq!(counter, 0, "BulletList resets counter");
     }
 
     #[test]
-    fn bullet_prefix_expands_caret_t_to_tab() {
-        let p = bullet_prefix(&attrs(Some("BulletList"), Some(0x2022), Some("^t"))).unwrap();
+    fn list_prefix_expands_caret_t_to_tab() {
+        let mut counter = 0;
+        let p = list_prefix(
+            &attrs(Some("BulletList"), Some(0x2022), Some("^t")),
+            &mut counter,
+        )
+        .unwrap();
         assert_eq!(p, "\u{2022}\t");
     }
 
     #[test]
-    fn bullet_prefix_defaults_separator_to_space() {
-        let p = bullet_prefix(&attrs(Some("BulletList"), Some(0x2022), None)).unwrap();
-        assert_eq!(p, "\u{2022} ");
+    fn list_prefix_none_for_nolist_resets_counter() {
+        let mut counter = 5;
+        assert!(list_prefix(&attrs(Some("NoList"), None, None), &mut counter).is_none());
+        assert_eq!(counter, 0);
     }
 
     #[test]
-    fn bullet_prefix_none_for_nolist() {
-        assert!(bullet_prefix(&attrs(Some("NoList"), Some(0x2022), Some(" "))).is_none());
+    fn list_prefix_numbered_increments_across_paragraphs() {
+        let mut counter = 0;
+        let attrs = attrs(Some("NumberedList"), None, None);
+        assert_eq!(list_prefix(&attrs, &mut counter).as_deref(), Some("1.\t"));
+        assert_eq!(list_prefix(&attrs, &mut counter).as_deref(), Some("2.\t"));
+        assert_eq!(list_prefix(&attrs, &mut counter).as_deref(), Some("3.\t"));
+        assert_eq!(counter, 3);
     }
 
     #[test]
-    fn bullet_prefix_none_for_numbered_list() {
-        // Numbered lists need a counter; not in this batch.
-        assert!(bullet_prefix(&attrs(Some("NumberedList"), None, None)).is_none());
+    fn list_prefix_numbered_resets_after_non_numbered() {
+        let mut counter = 0;
+        let n = attrs(Some("NumberedList"), None, None);
+        let none = attrs(None, None, None);
+        list_prefix(&n, &mut counter); // 1.
+        list_prefix(&n, &mut counter); // 2.
+        list_prefix(&none, &mut counter); // resets
+        assert_eq!(counter, 0);
+        assert_eq!(list_prefix(&n, &mut counter).as_deref(), Some("1.\t"));
     }
 
     #[test]
-    fn bullet_prefix_none_when_codepoint_missing() {
-        assert!(bullet_prefix(&attrs(Some("BulletList"), None, Some(" "))).is_none());
+    fn list_prefix_bullet_to_numbered_resets() {
+        // Mixing list types in a row also resets — each list_type
+        // change starts a fresh sequence.
+        let mut counter = 0;
+        list_prefix(
+            &attrs(Some("BulletList"), Some(0x2022), Some(" ")),
+            &mut counter,
+        );
+        assert_eq!(counter, 0);
+        let n = attrs(Some("NumberedList"), None, None);
+        assert_eq!(list_prefix(&n, &mut counter).as_deref(), Some("1.\t"));
+    }
+
+    #[test]
+    fn list_prefix_bullet_none_when_codepoint_missing() {
+        let mut counter = 0;
+        assert!(list_prefix(&attrs(Some("BulletList"), None, Some(" ")), &mut counter).is_none());
     }
 }
