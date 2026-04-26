@@ -504,6 +504,24 @@ pub fn build_document(
                 }
             }
 
+            // Snap each line's tab characters to the next stop —
+            // also a post-layout pass for the same reason as the
+            // first-line indent. Stops come from the cascaded
+            // TabList; in absence of any, IDML's 36 pt grid kicks in.
+            let has_any_tab = paragraph.runs.iter().any(|r| r.text.contains('\t'));
+            if has_any_tab {
+                let tab_stops_pt: Vec<f32> = resolved_paragraph
+                    .tab_list
+                    .iter()
+                    .map(|t| t.position)
+                    .collect();
+                let paragraph_text: String =
+                    paragraph.runs.iter().map(|r| r.text.as_str()).collect();
+                for line in laid_out.lines.iter_mut() {
+                    idml_text::layout::apply_tab_stops(line, &paragraph_text, &tab_stops_pt, 36.0);
+                }
+            }
+
             let picker = build_run_paint_picker_resolved(
                 paragraph,
                 &resolved_runs,

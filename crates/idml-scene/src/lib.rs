@@ -319,11 +319,17 @@ impl Document {
             .as_deref()
             .map(|id| self.styles.resolve_paragraph(id))
             .unwrap_or_default();
+        let tab_list = if !paragraph.tab_list.is_empty() {
+            paragraph.tab_list.clone()
+        } else {
+            para.tab_list
+        };
         ResolvedParagraphAttrs {
             justification: paragraph.justification.clone().or(para.justification),
             first_line_indent: paragraph.first_line_indent.or(para.first_line_indent),
             space_before: paragraph.space_before.or(para.space_before),
             space_after: paragraph.space_after.or(para.space_after),
+            tab_list,
         }
     }
 
@@ -377,6 +383,7 @@ pub struct ResolvedParagraphAttrs {
     pub first_line_indent: Option<f32>,
     pub space_before: Option<f32>,
     pub space_after: Option<f32>,
+    pub tab_list: Vec<idml_parse::TabStop>,
 }
 
 #[derive(Debug, thiserror::Error)]

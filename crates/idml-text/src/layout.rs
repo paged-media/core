@@ -554,6 +554,67 @@ pub fn max_line_height_for_glyphs(glyphs: &[PositionedGlyph]) -> Option<i32> {
         .map(|max_pt| (max_pt * 1.2 * ADVANCE_PRECISION).round() as i32)
 }
 
+/// Snap each `\t` glyph in `line` to the next tab stop, widening
+/// its `x_advance` and pushing every following glyph in the line
+/// right by the resulting delta. Tab stops are read from
+/// `tab_stops_pt` (sorted, in pt) — when none of them sit past the
+/// current pen, falls back to a `default_stop_pt` grid (typical
+/// IDML default: 36 pt).
+///
+/// `paragraph_text` lets us identify which glyphs are tabs by
+/// their cluster pointing at a `\t` byte.
+pub fn apply_tab_stops(
+    line: &mut LaidOutLine,
+    paragraph_text: &str,
+    tab_stops_pt: &[f32],
+    default_stop_pt: f32,
+) {
+    let bytes = paragraph_text.as_bytes();
+    let default_stop_64 = (default_stop_pt * ADVANCE_PRECISION).round() as i32;
+    if default_stop_64 <= 0 && tab_stops_pt.is_empty() {
+        return;
+    }
+    let mut i = 0;
+    while i < line.glyphs.len() {
+        let cluster = line.glyphs[i].cluster as usize;
+        if cluster >= bytes.len() || bytes[cluster] != b'\t' {
+            i += 1;
+            continue;
+        }
+        let current_x = line.glyphs[i].x;
+        let next_stop_64 = next_tab_stop_64(current_x, tab_stops_pt, default_stop_64);
+        if next_stop_64 <= current_x {
+            i += 1;
+            continue;
+        }
+        let new_advance = next_stop_64 - current_x;
+        let delta = new_advance - line.glyphs[i].x_advance;
+        if delta > 0 {
+            for g in &mut line.glyphs[(i + 1)..] {
+                g.x += delta;
+            }
+            line.glyphs[i].x_advance = new_advance;
+            line.width += delta;
+        }
+        i += 1;
+    }
+}
+
+fn next_tab_stop_64(current_x_64: i32, stops_pt: &[f32], default_stop_64: i32) -> i32 {
+    for &stop_pt in stops_pt {
+        let stop_64 = (stop_pt * ADVANCE_PRECISION).round() as i32;
+        if stop_64 > current_x_64 {
+            return stop_64;
+        }
+    }
+    if default_stop_64 <= 0 {
+        return current_x_64;
+    }
+    // Snap to next default-grid stop past current_x.
+    let n = current_x_64 / default_stop_64 + 1;
+    n * default_stop_64
+}
+
 #[derive(Debug, Clone, Copy)]
 struct FlatGlyph {
     cluster: u32,
@@ -793,5 +854,70 @@ mod tests {
     #[test]
     fn auto_leading_returns_none_for_empty_line() {
         assert_eq!(max_line_height_for_glyphs(&[]), None);
+    }
+
+    fn line_with_tab(text: &str) -> LaidOutLine {
+        // Build a synthetic line whose glyphs have monotonic x +
+        // small advances. Tab byte is at index 1.
+        let bytes = text.as_bytes();
+        let mut glyphs = Vec::new();
+        let mut pen = 0;
+        for (i, &b) in bytes.iter().enumerate() {
+            let adv = if b == b'\t' { 640 } else { 320 }; // 10 / 5 pt
+            glyphs.push(PositionedGlyph {
+                glyph_id: 0,
+                cluster: i as u32,
+                x: pen,
+                y: 0,
+                x_advance: adv,
+                font_id: 0,
+                point_size: 12.0,
+                underline: false,
+                strikethru: false,
+            });
+            pen += adv;
+        }
+        LaidOutLine {
+            byte_range: 0..bytes.len(),
+            baseline_y: 0,
+            width: pen,
+            ratio: 0.0,
+            glyphs,
+        }
+    }
+
+    #[test]
+    fn apply_tab_stops_snaps_to_next_explicit_stop() {
+        let text = "a\tb";
+        let mut line = line_with_tab(text);
+        // 'a' at x=0 (advance 320); '\t' at x=320; 'b' at x=960.
+        // With a stop at 36 pt = 2304 1/64pt, the tab widens to
+        // (2304 - 320) = 1984; 'b' shifts to 2304.
+        apply_tab_stops(&mut line, text, &[36.0], 0.0);
+        assert_eq!(line.glyphs[0].x, 0);
+        assert_eq!(line.glyphs[1].x, 320);
+        assert_eq!(line.glyphs[1].x_advance, 1984);
+        assert_eq!(line.glyphs[2].x, 2304);
+    }
+
+    #[test]
+    fn apply_tab_stops_falls_back_to_default_grid() {
+        let text = "a\tb";
+        let mut line = line_with_tab(text);
+        // 36 pt grid only; tab at x=320 → next stop 2304.
+        apply_tab_stops(&mut line, text, &[], 36.0);
+        assert_eq!(line.glyphs[2].x, 2304);
+    }
+
+    #[test]
+    fn apply_tab_stops_skips_when_pen_past_all_stops() {
+        let text = "abc\tx";
+        let mut line = line_with_tab(text);
+        // Stop at 1 pt = 64 1/64pt; the tab is at x = 3*320 = 960
+        // (already past); without a default grid we should leave
+        // it alone.
+        let before_x = line.glyphs[4].x;
+        apply_tab_stops(&mut line, text, &[1.0], 0.0);
+        assert_eq!(line.glyphs[4].x, before_x);
     }
 }
