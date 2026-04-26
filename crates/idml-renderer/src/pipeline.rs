@@ -531,20 +531,38 @@ fn emit_paragraph_into_chain(
         return;
     }
 
-    let mut shaping_faces: Vec<rustybuzz::Face> = Vec::with_capacity(bytes_pool.len());
-    let mut outline_faces: Vec<ttf_parser::Face> = Vec::with_capacity(bytes_pool.len());
-    for b in &bytes_pool {
-        let Some(rf) = rustybuzz::Face::from_slice(b.as_ref(), 0) else {
-            continue;
-        };
-        let Ok(of) = ttf_parser::Face::parse(b.as_ref(), 0) else {
-            continue;
-        };
-        shaping_faces.push(rf);
-        outline_faces.push(of);
+    // Dedup faces by Bytes pointer identity: a paragraph with N
+    // runs sharing one font parses one Face instead of N. The
+    // `bytes_pool` Arcs already share buffers when the FontTable
+    // returns the same family for multiple runs, so as_ptr
+    // comparison is the right key. Per-render dedup (across
+    // paragraphs) wants self-referential Face<'static>-over-Bytes
+    // and is left for the next batch.
+    let mut unique_idx: Vec<usize> = Vec::with_capacity(bytes_pool.len());
+    for (i, b) in bytes_pool.iter().enumerate() {
+        let head = bytes_pool[..i]
+            .iter()
+            .position(|prior| prior.as_ptr() == b.as_ptr())
+            .unwrap_or(i);
+        unique_idx.push(head);
     }
-    if shaping_faces.len() != paragraph.runs.len() {
-        return;
+    let mut shaping_faces: Vec<Option<rustybuzz::Face>> =
+        (0..bytes_pool.len()).map(|_| None).collect();
+    let mut outline_faces: Vec<Option<ttf_parser::Face>> =
+        (0..bytes_pool.len()).map(|_| None).collect();
+    for i in 0..bytes_pool.len() {
+        if unique_idx[i] != i {
+            continue;
+        }
+        let bytes_ref = bytes_pool[i].as_ref();
+        let Some(rf) = rustybuzz::Face::from_slice(bytes_ref, 0) else {
+            return;
+        };
+        let Ok(of) = ttf_parser::Face::parse(bytes_ref, 0) else {
+            return;
+        };
+        shaping_faces[i] = Some(rf);
+        outline_faces[i] = Some(of);
     }
 
     let font_ids: Vec<u32> = bytes_pool.iter().map(|b| fnv_1a_u32(b.as_ref())).collect();
@@ -555,7 +573,7 @@ fn emit_paragraph_into_chain(
         .enumerate()
         .map(|(i, run)| idml_text::StyledRun {
             text: &run.text,
-            face: &shaping_faces[i],
+            face: shaping_faces[unique_idx[i]].as_ref().unwrap(),
             point_size: resolved_runs[i]
                 .point_size
                 .unwrap_or(em.options.default_point_size),
@@ -670,13 +688,17 @@ fn emit_paragraph_into_chain(
                 end += 1;
             }
             let face_idx = match font_ids.iter().position(|f| *f == fid) {
-                Some(i) => i,
+                Some(i) => unique_idx[i],
                 None => {
                     start = end;
                     continue;
                 }
             };
-            let outliner = TtfOutliner::new(&outline_faces[face_idx]);
+            let Some(outline) = outline_faces[face_idx].as_ref() else {
+                start = end;
+                continue;
+            };
+            let outliner = TtfOutliner::new(outline);
             emit_glyph_slice(
                 &line.glyphs[start..end],
                 fid,
