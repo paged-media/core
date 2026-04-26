@@ -565,9 +565,36 @@ pub enum TabAlignment {
     Right,
     /// Text after the tab is centred ON the stop.
     Center,
-    /// `CharacterAlign` — aligns on a character (typically `.`).
-    /// Falls through to `Left` until decimal alignment lands.
+    /// `CharacterAlign` — the alignment character (typically `.`)
+    /// in the segment lands AT the stop. Segments without the
+    /// character fall through to Left.
     Decimal,
+}
+
+/// One tab stop spec with position, alignment, and (for Decimal)
+/// the character to align on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TabStopSpec {
+    pub position_pt: f32,
+    pub alignment: TabAlignment,
+    /// Character the segment aligns on for `Decimal` stops.
+    /// IDML defaults to `.` when `<TabStop AlignmentCharacter>` is
+    /// absent. Ignored for the other alignments.
+    pub alignment_character: char,
+}
+
+impl TabStopSpec {
+    /// Convenience: a Left-aligned stop at `position_pt`. The
+    /// `alignment_character` defaults to `.` so future Decimal
+    /// stops in the same array don't have to be initialised
+    /// specially.
+    pub fn left(position_pt: f32) -> Self {
+        Self {
+            position_pt,
+            alignment: TabAlignment::Left,
+            alignment_character: '.',
+        }
+    }
 }
 
 /// Snap each `\t` glyph in `line` to the next tab stop. Widens the
@@ -578,7 +605,9 @@ pub enum TabAlignment {
 ///  - `Left`: segment starts at the stop.
 ///  - `Right`: segment ends at the stop.
 ///  - `Center`: segment is centred on the stop.
-///  - `Decimal`: falls through to `Left` (no character alignment yet).
+///  - `Decimal`: the segment's first occurrence of
+///    `alignment_character` (typically `.`) lands at the stop.
+///    Segments without the character fall through to Left.
 ///
 /// When the stop's alignment can't be honoured (e.g. Right with a
 /// segment wider than the gap to the stop), falls through to Left
@@ -590,7 +619,7 @@ pub enum TabAlignment {
 pub fn apply_tab_stops(
     line: &mut LaidOutLine,
     paragraph_text: &str,
-    tab_stops: &[(f32, TabAlignment)],
+    tab_stops: &[TabStopSpec],
     default_stop_pt: f32,
 ) {
     let bytes = paragraph_text.as_bytes();
@@ -606,28 +635,45 @@ pub fn apply_tab_stops(
             continue;
         }
         let current_x = line.glyphs[i].x;
-        let (next_stop_64, alignment) = next_tab_stop_64(current_x, tab_stops, default_stop_64);
+        let (next_stop_64, alignment, decimal_char) =
+            next_tab_stop_64(current_x, tab_stops, default_stop_64);
         if next_stop_64 <= current_x {
             i += 1;
             continue;
         }
-        // Right / Center need the width of the segment that follows
-        // this tab so we can pull its right edge / centre onto the
-        // stop. The segment ends at the next tab (which will get its
-        // own snap pass) or at end of line.
         let segment_end = next_tab_or_end(&line.glyphs, i, bytes);
-        let segment_width = segment_natural_width(&line.glyphs, i + 1, segment_end);
         let target_segment_left = match alignment {
-            TabAlignment::Right => next_stop_64 - segment_width,
-            TabAlignment::Center => next_stop_64 - segment_width / 2,
-            TabAlignment::Left | TabAlignment::Decimal => next_stop_64,
+            TabAlignment::Right => {
+                let segment_width = segment_natural_width(&line.glyphs, i + 1, segment_end);
+                next_stop_64 - segment_width
+            }
+            TabAlignment::Center => {
+                let segment_width = segment_natural_width(&line.glyphs, i + 1, segment_end);
+                next_stop_64 - segment_width / 2
+            }
+            TabAlignment::Decimal => {
+                // Find the alignment character's natural offset
+                // inside the segment (0 = right at segment start)
+                // and back the segment up so it lands on the stop.
+                // Falls through to Left when the char is missing.
+                match decimal_offset(
+                    &line.glyphs,
+                    i + 1,
+                    segment_end,
+                    paragraph_text,
+                    decimal_char,
+                ) {
+                    Some(off) => next_stop_64 - off,
+                    None => next_stop_64,
+                }
+            }
+            TabAlignment::Left => next_stop_64,
         };
         let original_advance = line.glyphs[i].x_advance;
         let mut new_advance = target_segment_left - current_x;
-        // Tabs can only widen — if Right/Center alignment would
-        // shrink the tab below its natural advance, fall through to
-        // Left at the stop. Avoids glyph collisions when a segment
-        // is too wide for its cell.
+        // Tabs can only widen — if non-Left alignment would shrink
+        // the tab below its natural advance, fall through to Left
+        // at the stop.
         if new_advance < original_advance && alignment != TabAlignment::Left {
             new_advance = next_stop_64 - current_x;
         }
@@ -645,20 +691,53 @@ pub fn apply_tab_stops(
 
 fn next_tab_stop_64(
     current_x_64: i32,
-    stops: &[(f32, TabAlignment)],
+    stops: &[TabStopSpec],
     default_stop_64: i32,
-) -> (i32, TabAlignment) {
-    for &(stop_pt, align) in stops {
-        let stop_64 = (stop_pt * ADVANCE_PRECISION).round() as i32;
+) -> (i32, TabAlignment, char) {
+    for spec in stops {
+        let stop_64 = (spec.position_pt * ADVANCE_PRECISION).round() as i32;
         if stop_64 > current_x_64 {
-            return (stop_64, align);
+            return (stop_64, spec.alignment, spec.alignment_character);
         }
     }
     if default_stop_64 <= 0 {
-        return (current_x_64, TabAlignment::Left);
+        return (current_x_64, TabAlignment::Left, '.');
     }
     let n = current_x_64 / default_stop_64 + 1;
-    (n * default_stop_64, TabAlignment::Left)
+    (n * default_stop_64, TabAlignment::Left, '.')
+}
+
+/// Find the first byte offset of `target_char` in
+/// `paragraph_text[clusters[start..end]]`, then return the natural
+/// x position of that glyph relative to the segment's start.
+/// `None` when the character isn't in the segment.
+fn decimal_offset(
+    glyphs: &[PositionedGlyph],
+    start: usize,
+    end: usize,
+    paragraph_text: &str,
+    target_char: char,
+) -> Option<i32> {
+    if start >= end || end > glyphs.len() {
+        return None;
+    }
+    let segment_start_byte = glyphs[start].cluster as usize;
+    let segment_end_byte = glyphs[end - 1].cluster as usize + 1;
+    let bytes = paragraph_text.as_bytes();
+    if segment_end_byte > bytes.len() {
+        return None;
+    }
+    let mut buf = [0u8; 4];
+    let needle = target_char.encode_utf8(&mut buf).as_bytes();
+    let segment_bytes = &bytes[segment_start_byte..segment_end_byte];
+    let pos = segment_bytes
+        .windows(needle.len())
+        .position(|w| w == needle)?;
+    let target_cluster = (segment_start_byte + pos) as u32;
+    let target_glyph = glyphs[start..end]
+        .iter()
+        .find(|g| g.cluster == target_cluster)?;
+    Some(target_glyph.x - glyphs[start].x)
 }
 
 fn next_tab_or_end(glyphs: &[PositionedGlyph], from: usize, bytes: &[u8]) -> usize {
@@ -958,7 +1037,16 @@ mod tests {
         // 'a' at x=0 (advance 320); '\t' at x=320; 'b' at x=960.
         // With a stop at 36 pt = 2304 1/64pt, the tab widens to
         // (2304 - 320) = 1984; 'b' shifts to 2304.
-        apply_tab_stops(&mut line, text, &[(36.0, TabAlignment::Left)], 0.0);
+        apply_tab_stops(
+            &mut line,
+            text,
+            &[TabStopSpec {
+                position_pt: 36.0,
+                alignment: TabAlignment::Left,
+                alignment_character: '.',
+            }],
+            0.0,
+        );
         assert_eq!(line.glyphs[0].x, 0);
         assert_eq!(line.glyphs[1].x, 320);
         assert_eq!(line.glyphs[1].x_advance, 1984);
@@ -978,7 +1066,16 @@ mod tests {
         let text = "abc\tx";
         let mut line = line_with_tab(text);
         let before_x = line.glyphs[4].x;
-        apply_tab_stops(&mut line, text, &[(1.0, TabAlignment::Left)], 0.0);
+        apply_tab_stops(
+            &mut line,
+            text,
+            &[TabStopSpec {
+                position_pt: 1.0,
+                alignment: TabAlignment::Left,
+                alignment_character: '.',
+            }],
+            0.0,
+        );
         assert_eq!(line.glyphs[4].x, before_x);
     }
 
@@ -991,7 +1088,16 @@ mod tests {
         // (1664 - 320) = 1344 1/64pt of advance.
         let text = "a\tbc";
         let mut line = line_with_tab(text);
-        apply_tab_stops(&mut line, text, &[(36.0, TabAlignment::Right)], 0.0);
+        apply_tab_stops(
+            &mut line,
+            text,
+            &[TabStopSpec {
+                position_pt: 36.0,
+                alignment: TabAlignment::Right,
+                alignment_character: '.',
+            }],
+            0.0,
+        );
         assert_eq!(line.glyphs[1].x_advance, 1344);
         assert_eq!(line.glyphs[2].x, 1664, "'b' should start at 1664");
         assert_eq!(line.glyphs[3].x, 1984, "'c' should start at 1984");
@@ -1005,7 +1111,16 @@ mod tests {
         let mut line = line_with_tab(text);
         // Center stop at 36 pt = 2304; segment is 640 wide; centre
         // at 2304 means segment starts at 2304 - 320 = 1984.
-        apply_tab_stops(&mut line, text, &[(36.0, TabAlignment::Center)], 0.0);
+        apply_tab_stops(
+            &mut line,
+            text,
+            &[TabStopSpec {
+                position_pt: 36.0,
+                alignment: TabAlignment::Center,
+                alignment_character: '.',
+            }],
+            0.0,
+        );
         assert_eq!(line.glyphs[2].x, 1984);
         // Last glyph right edge at 1984 + 640 = 2624.
         assert_eq!(line.glyphs[3].x + line.glyphs[3].x_advance, 2624);
@@ -1020,8 +1135,80 @@ mod tests {
         // its natural width and no snap happens.
         let text = "a\tbc";
         let mut line = line_with_tab(text);
-        apply_tab_stops(&mut line, text, &[(8.0, TabAlignment::Right)], 0.0);
+        apply_tab_stops(
+            &mut line,
+            text,
+            &[TabStopSpec {
+                position_pt: 8.0,
+                alignment: TabAlignment::Right,
+                alignment_character: '.',
+            }],
+            0.0,
+        );
         assert_eq!(line.glyphs[1].x_advance, 640, "tab keeps natural width");
         assert_eq!(line.glyphs[2].x, 960, "'b' unchanged at natural position");
+    }
+
+    #[test]
+    fn decimal_align_snaps_dot_onto_stop() {
+        // "a\t1.5" — 'a' 0..320, '\t' 320..960, '1' 960..1280,
+        // '.' 1280..1600, '5' 1600..1920. Decimal stop at
+        // 36 pt = 2304: '.' should land at 2304.
+        // segment_start_x = 960; '.' is at 1280 → offset 320.
+        // target_segment_left = 2304 - 320 = 1984.
+        // tab advance widens to 1984 - 320 = 1664.
+        let text = "a\t1.5";
+        let mut line = line_with_tab(text);
+        apply_tab_stops(
+            &mut line,
+            text,
+            &[TabStopSpec {
+                position_pt: 36.0,
+                alignment: TabAlignment::Decimal,
+                alignment_character: '.',
+            }],
+            0.0,
+        );
+        assert_eq!(line.glyphs[1].x_advance, 1664);
+        assert_eq!(line.glyphs[2].x, 1984, "'1' starts at 1984");
+        assert_eq!(line.glyphs[3].x, 2304, "'.' lands at the stop");
+        assert_eq!(line.glyphs[4].x, 2624, "'5' starts after the dot");
+    }
+
+    #[test]
+    fn decimal_align_falls_back_to_left_when_char_missing() {
+        // No '.' in segment — should fall through to Left.
+        let text = "a\tbc";
+        let mut line = line_with_tab(text);
+        apply_tab_stops(
+            &mut line,
+            text,
+            &[TabStopSpec {
+                position_pt: 36.0,
+                alignment: TabAlignment::Decimal,
+                alignment_character: '.',
+            }],
+            0.0,
+        );
+        // Same outcome as Left at 36pt: tab widens so 'b' starts at 2304.
+        assert_eq!(line.glyphs[2].x, 2304);
+    }
+
+    #[test]
+    fn decimal_align_with_custom_character() {
+        // Use ',' as the decimal character (European convention).
+        let text = "a\t1,5";
+        let mut line = line_with_tab(text);
+        apply_tab_stops(
+            &mut line,
+            text,
+            &[TabStopSpec {
+                position_pt: 36.0,
+                alignment: TabAlignment::Decimal,
+                alignment_character: ',',
+            }],
+            0.0,
+        );
+        assert_eq!(line.glyphs[3].x, 2304, "',' lands at the stop");
     }
 }

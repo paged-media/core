@@ -650,10 +650,18 @@ fn emit_paragraph_into_chain(
             .as_deref()
             .is_some_and(|t| t.contains('\t'));
     if needs_paragraph_text {
-        let tab_stops: Vec<(f32, idml_text::layout::TabAlignment)> = resolved_paragraph
+        let tab_stops: Vec<idml_text::layout::TabStopSpec> = resolved_paragraph
             .tab_list
             .iter()
-            .map(|t| (t.position, map_tab_alignment(t.alignment.as_deref())))
+            .map(|t| idml_text::layout::TabStopSpec {
+                position_pt: t.position,
+                alignment: map_tab_alignment(t.alignment.as_deref()),
+                alignment_character: t
+                    .alignment_character
+                    .as_deref()
+                    .and_then(|s| s.chars().next())
+                    .unwrap_or('.'),
+            })
             .collect();
         let paragraph_text: String = paragraph
             .runs
