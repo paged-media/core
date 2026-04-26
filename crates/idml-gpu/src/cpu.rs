@@ -20,8 +20,8 @@ use idml_compose::{
 use image::{Rgba, RgbaImage};
 use tiny_skia::{
     FillRule, GradientStop as TsGradientStop, LineCap as TsLineCap, LineJoin as TsLineJoin,
-    LinearGradient as TsLinearGradient, Paint as TsPaint, PathBuilder, Pixmap, Point as TsPoint,
-    Shader, SpreadMode, Stroke as TsStroke, Transform as TsTransform,
+    LinearGradient as TsLinearGradient, Paint as TsPaint, PathBuilder, Pixmap, PixmapPaint,
+    Point as TsPoint, Shader, SpreadMode, Stroke as TsStroke, Transform as TsTransform,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -124,6 +124,53 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 };
                 p.set_color(linear_color_to_ts(shadow_color));
                 pixmap.fill_path(&path, &p, FillRule::Winding, page_to_px, None);
+            }
+            DisplayCommand::Image {
+                image_id,
+                transform,
+            } => {
+                let Some(img) = list.image(*image_id) else {
+                    continue;
+                };
+                if img.width == 0
+                    || img.height == 0
+                    || img.rgba.len() != (img.width as usize * img.height as usize * 4)
+                {
+                    continue;
+                }
+                // Build a tiny_skia source pixmap from the decoded
+                // RGBA8 buffer. This is one alloc + memcpy per
+                // command; image dedup happens upstream when the
+                // pipeline pushes into the list.
+                let mut src = Pixmap::new(img.width, img.height).expect("non-zero image pixmap");
+                src.data_mut().copy_from_slice(&img.rgba);
+                // Compose the placement transform: the display-list
+                // transform maps (0..1, 0..1) → page coords, and
+                // page_to_px scales those to device pixels. Source
+                // pixmap pixels live in (0..w, 0..h), so divide by
+                // (w, h) before the existing transform.
+                let inv_w = 1.0 / img.width as f32;
+                let inv_h = 1.0 / img.height as f32;
+                let unit_to_page = TsTransform::from_row(
+                    transform.0[0],
+                    transform.0[1],
+                    transform.0[2],
+                    transform.0[3],
+                    transform.0[4],
+                    transform.0[5],
+                );
+                let pixel_to_unit = TsTransform::from_scale(inv_w, inv_h);
+                let pixel_to_px = page_to_px
+                    .pre_concat(unit_to_page)
+                    .pre_concat(pixel_to_unit);
+                pixmap.draw_pixmap(
+                    0,
+                    0,
+                    src.as_ref(),
+                    &PixmapPaint::default(),
+                    pixel_to_px,
+                    None,
+                );
             }
         }
     }

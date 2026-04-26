@@ -299,6 +299,10 @@ pub fn build_document(
                 cmyk_xform.as_ref(),
                 options.frame_drop_shadow,
             );
+            // Place an image after the rectangle's solid fill so the
+            // image draws on top. Decoding happens once per command;
+            // intra-document dedup is a future optimisation.
+            emit_rectangle_image(&mut pages[page_idx], rect, options);
         }
         for oval in &spread.ovals {
             total_stats.frames += 1;
@@ -680,6 +684,50 @@ fn emit_rectangle_into(
             emit_stroke_rect_transformed(r, outer, Stroke::new(width), stroke, &mut page.list);
         }
     }
+}
+
+/// Resolve, decode, and emit a placed image for a rectangle. Skips
+/// silently if `assets` is unset, the resolver returns `None`, or
+/// decoding fails — IDMLs without their linked assets should still
+/// produce a usable render of the surrounding geometry.
+fn emit_rectangle_image(page: &mut BuiltPage, rect: &Rectangle, options: &PipelineOptions) {
+    let Some(uri) = rect.image_link.as_deref() else {
+        return;
+    };
+    let Some(resolver) = options.assets else {
+        return;
+    };
+    let Some(bytes) = resolver.resolve_image(uri) else {
+        tracing::warn!(uri, "image resolver returned no bytes; skipping");
+        return;
+    };
+    let Some(decoded) = decode_image_bytes(bytes.as_ref()) else {
+        tracing::warn!(uri, "image decode failed; skipping");
+        return;
+    };
+    let r = Rect {
+        x: rect.bounds.left,
+        y: rect.bounds.top,
+        w: rect.bounds.width(),
+        h: rect.bounds.height(),
+    };
+    let outer = frame_outer_transform(page, rect.item_transform);
+    let id = page.list.push_image(decoded);
+    idml_compose::emit_image_at(r, outer, id, &mut page.list);
+}
+
+/// Decode raw image bytes to RGBA8. Format detection is via magic
+/// bytes (`image::load_from_memory`). Returns `None` for any decode
+/// or buffer-shape failure.
+fn decode_image_bytes(bytes: &[u8]) -> Option<idml_compose::DecodedImage> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let rgba = img.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    Some(idml_compose::DecodedImage {
+        width,
+        height,
+        rgba: rgba.into_raw(),
+    })
 }
 
 /// Build the outer affine that maps a frame's local-space rect into

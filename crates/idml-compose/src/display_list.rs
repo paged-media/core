@@ -295,8 +295,33 @@ pub enum DisplayCommand {
         transform: Transform,
         shadow: DropShadow,
     },
-    // DrawImage, PushLayer, PopLayer, PushClip, PopClip land with
-    // §10.3 / §10.4.
+    /// Place a decoded RGBA8 image. The unit-rect at the source
+    /// pixmap's pixel grid maps to page coordinates via `transform` —
+    /// `(0, 0)` of the source pixmap lands at `transform.apply(0, 0)`,
+    /// `(width, height)` lands at `transform.apply(width, height)`.
+    /// Subsampling, filtering, and alpha blending live in the
+    /// rasterizer.
+    Image {
+        image_id: ImageId,
+        transform: Transform,
+    },
+    // PushLayer, PopLayer, PushClip, PopClip land with §10.4.
+}
+
+/// Index into [`DisplayList::images`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ImageId(pub u32);
+
+/// One placed image's decoded RGBA8 pixels. The pipeline decodes
+/// once per (uri, dpi) and stores the result here so repeat
+/// placements share the buffer.
+#[derive(Debug, Clone)]
+pub struct DecodedImage {
+    pub width: u32,
+    pub height: u32,
+    /// Tightly packed RGBA8 (4 bytes per pixel, row-major). Length
+    /// must equal `width * height * 4`.
+    pub rgba: Vec<u8>,
 }
 
 /// Stroke parameters. Widths are in pt.
@@ -340,6 +365,7 @@ pub struct DisplayList {
     pub paths: PathBuffer,
     pub commands: Vec<DisplayCommand>,
     pub gradients: Vec<LinearGradient>,
+    pub images: Vec<DecodedImage>,
 }
 
 impl DisplayList {
@@ -360,6 +386,19 @@ impl DisplayList {
 
     pub fn linear_gradient(&self, id: GradientId) -> Option<&LinearGradient> {
         self.gradients.get(id.0 as usize)
+    }
+
+    /// Append a decoded image and return its id. Callers are expected
+    /// to dedupe before calling — the buffer is a Vec, not a hash
+    /// map, since image bytes don't have a cheap hash.
+    pub fn push_image(&mut self, img: DecodedImage) -> ImageId {
+        let id = ImageId(self.images.len() as u32);
+        self.images.push(img);
+        id
+    }
+
+    pub fn image(&self, id: ImageId) -> Option<&DecodedImage> {
+        self.images.get(id.0 as usize)
     }
 }
 

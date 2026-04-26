@@ -98,6 +98,11 @@ pub struct Rectangle {
     pub stroke_color: Option<String>,
     pub stroke_weight: Option<f32>,
     pub drop_shadow: Option<DropShadowSetting>,
+    /// `LinkResourceURI` from a nested `<Image>` (or its `<Link>`
+    /// child). The pipeline routes this through
+    /// `AssetResolver::resolve_image`. `None` means the rectangle
+    /// is a plain colour swatch.
+    pub image_link: Option<String>,
 }
 
 /// Axis-aligned ellipse — `<Oval>` in IDML. Same fill/stroke story as
@@ -234,6 +239,7 @@ impl Spread {
                             stroke_weight: attr(&e, b"StrokeWeight")
                                 .and_then(|s| s.parse::<f32>().ok()),
                             drop_shadow: None,
+                            image_link: None,
                         });
                         current_frame = Some(CurrentFrame::Rect(out.rectangles.len() - 1));
                     }
@@ -277,6 +283,24 @@ impl Spread {
                                         out.ovals[i].drop_shadow = Some(setting);
                                     }
                                 }
+                            }
+                        }
+                    }
+                    b"Image" | b"Link" => {
+                        // IDML's image-bearing rectangle nests an
+                        // <Image> with a LinkResourceURI on the
+                        // element itself or on its <Link> child.
+                        // Either source attaches to the current
+                        // Rectangle (the only frame type that hosts
+                        // images in this slice).
+                        if let (Some(CurrentFrame::Rect(i)), Some(uri)) = (
+                            current_frame,
+                            attr(&e, b"LinkResourceURI").or_else(|| attr(&e, b"href")),
+                        ) {
+                            // First-write-wins so the outer <Image>
+                            // attribute beats the inner <Link>'s.
+                            if out.rectangles[i].image_link.is_none() {
+                                out.rectangles[i].image_link = Some(uri);
                             }
                         }
                     }

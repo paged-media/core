@@ -7,7 +7,8 @@
 //! cache keys — memory-efficient for documents with many frames.
 
 use crate::display_list::{
-    DisplayCommand, DisplayList, DropShadow, Paint, PathData, PathSegment, Rect, Stroke, Transform,
+    DisplayCommand, DisplayList, DropShadow, ImageId, Paint, PathData, PathSegment, Rect, Stroke,
+    Transform,
 };
 
 /// Cache key for the unit rectangle `[0, 0, 1, 1]`. Any interned-path
@@ -130,6 +131,18 @@ pub fn emit_drop_shadow_rect_transformed(
         path_id,
         transform,
         shadow,
+    });
+}
+
+/// Emit a placed image covering `rect` (in local coords) with an
+/// outer affine on top — same composition story as the rect / ellipse
+/// `*_transformed` family. The rasterizer maps the image's full
+/// pixel grid into `rect` then through `outer` into page coords.
+pub fn emit_image_at(rect: Rect, outer: Transform, image_id: ImageId, list: &mut DisplayList) {
+    let transform = outer.compose(&Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]));
+    list.push(DisplayCommand::Image {
+        image_id,
+        transform,
     });
 }
 
@@ -282,6 +295,7 @@ mod tests {
             DisplayCommand::FillPath { transform, .. } => *transform,
             DisplayCommand::StrokePath { transform, .. } => *transform,
             DisplayCommand::DropShadow { transform, .. } => *transform,
+            DisplayCommand::Image { transform, .. } => *transform,
         };
         // Unit rect corners: (0,0), (1,0), (1,1), (0,1).
         assert_eq!(t.apply(0.0, 0.0), (100.0, 200.0));

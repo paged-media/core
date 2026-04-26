@@ -476,3 +476,88 @@ fn item_transform_translation_moves_rendered_frame() {
         untransformed_origin
     );
 }
+
+fn build_image_idml() -> Vec<u8> {
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    zip.start_file("designmap.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+</Document>"#,
+    )
+    .unwrap();
+    zip.start_file("Resources/Graphic.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic/>
+</idPkg:Graphic>"#,
+    )
+    .unwrap();
+    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 200"/>
+    <Rectangle Self="rectImage" GeometricBounds="40 40 160 160" StrokeWeight="0">
+      <Image Self="imageA" LinkResourceURI="logo.png"/>
+    </Rectangle>
+  </Spread>
+</idPkg:Spread>"#,
+    )
+    .unwrap();
+    zip.finish().unwrap().into_inner()
+}
+
+/// Build a 1×1 fully-green PNG so the test asserts on a known
+/// pixel after rendering. PNG is the simplest format the `image`
+/// crate decodes by default.
+fn green_pixel_png() -> Vec<u8> {
+    let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 220, 0, 255]));
+    let mut bytes = Vec::new();
+    image::DynamicImage::ImageRgba8(img)
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+    bytes
+}
+
+#[test]
+fn rectangle_image_link_decodes_and_blits() {
+    let bytes = build_image_idml();
+    let document = Document::open(&bytes).unwrap();
+
+    let mut br = idml_renderer::BytesResolver::new();
+    br.add_image("logo.png", green_pixel_png());
+
+    let opts = PipelineOptions {
+        assets: Some(&br),
+        ..PipelineOptions::default()
+    };
+    let (built, images) = pipeline::render_document(&document, &opts, 72.0, Color::WHITE).unwrap();
+
+    // The rectangle covers x=40..160, y=40..160. The image is a
+    // 1×1 green pixel scaled across the whole rect; sampling deep
+    // inside the rect should read green.
+    let img = &images[0];
+    let inside = *img.get_pixel(100, 100);
+    assert!(
+        inside.0[0] < 60 && inside.0[1] > 180 && inside.0[2] < 60,
+        "expected green inside placed image, got {:?}",
+        inside
+    );
+    // The DisplayList must own one DecodedImage, plus the
+    // Image command alongside the rectangle's FillPath.
+    let page = &built.pages[0];
+    assert_eq!(page.list.images.len(), 1);
+}
