@@ -554,24 +554,48 @@ pub fn max_line_height_for_glyphs(glyphs: &[PositionedGlyph]) -> Option<i32> {
         .map(|max_pt| (max_pt * 1.2 * ADVANCE_PRECISION).round() as i32)
 }
 
-/// Snap each `\t` glyph in `line` to the next tab stop, widening
-/// its `x_advance` and pushing every following glyph in the line
-/// right by the resulting delta. Tab stops are read from
-/// `tab_stops_pt` (sorted, in pt) — when none of them sit past the
-/// current pen, falls back to a `default_stop_pt` grid (typical
-/// IDML default: 36 pt).
+/// In-cell alignment for a tab stop. IDML's `Alignment` attribute on
+/// `<TabStop>` distinguishes how text following the tab snaps
+/// against `Position`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabAlignment {
+    /// Default. Text after the tab starts AT the stop.
+    Left,
+    /// Text after the tab ends AT the stop.
+    Right,
+    /// Text after the tab is centred ON the stop.
+    Center,
+    /// `CharacterAlign` — aligns on a character (typically `.`).
+    /// Falls through to `Left` until decimal alignment lands.
+    Decimal,
+}
+
+/// Snap each `\t` glyph in `line` to the next tab stop. Widens the
+/// tab's `x_advance` and pushes every following glyph right by the
+/// resulting delta so the segment after the tab lands per the
+/// stop's alignment:
 ///
-/// `paragraph_text` lets us identify which glyphs are tabs by
-/// their cluster pointing at a `\t` byte.
+///  - `Left`: segment starts at the stop.
+///  - `Right`: segment ends at the stop.
+///  - `Center`: segment is centred on the stop.
+///  - `Decimal`: falls through to `Left` (no character alignment yet).
+///
+/// When the stop's alignment can't be honoured (e.g. Right with a
+/// segment wider than the gap to the stop), falls through to Left
+/// for that tab so glyphs never collide.
+///
+/// `tab_stops` is sorted by position (pt). Falls back to a
+/// `default_stop_pt` grid (IDML default: 36 pt) when no explicit
+/// stop sits past the current pen.
 pub fn apply_tab_stops(
     line: &mut LaidOutLine,
     paragraph_text: &str,
-    tab_stops_pt: &[f32],
+    tab_stops: &[(f32, TabAlignment)],
     default_stop_pt: f32,
 ) {
     let bytes = paragraph_text.as_bytes();
     let default_stop_64 = (default_stop_pt * ADVANCE_PRECISION).round() as i32;
-    if default_stop_64 <= 0 && tab_stops_pt.is_empty() {
+    if default_stop_64 <= 0 && tab_stops.is_empty() {
         return;
     }
     let mut i = 0;
@@ -582,13 +606,32 @@ pub fn apply_tab_stops(
             continue;
         }
         let current_x = line.glyphs[i].x;
-        let next_stop_64 = next_tab_stop_64(current_x, tab_stops_pt, default_stop_64);
+        let (next_stop_64, alignment) = next_tab_stop_64(current_x, tab_stops, default_stop_64);
         if next_stop_64 <= current_x {
             i += 1;
             continue;
         }
-        let new_advance = next_stop_64 - current_x;
-        let delta = new_advance - line.glyphs[i].x_advance;
+        // Right / Center need the width of the segment that follows
+        // this tab so we can pull its right edge / centre onto the
+        // stop. The segment ends at the next tab (which will get its
+        // own snap pass) or at end of line.
+        let segment_end = next_tab_or_end(&line.glyphs, i, bytes);
+        let segment_width = segment_natural_width(&line.glyphs, i + 1, segment_end);
+        let target_segment_left = match alignment {
+            TabAlignment::Right => next_stop_64 - segment_width,
+            TabAlignment::Center => next_stop_64 - segment_width / 2,
+            TabAlignment::Left | TabAlignment::Decimal => next_stop_64,
+        };
+        let original_advance = line.glyphs[i].x_advance;
+        let mut new_advance = target_segment_left - current_x;
+        // Tabs can only widen — if Right/Center alignment would
+        // shrink the tab below its natural advance, fall through to
+        // Left at the stop. Avoids glyph collisions when a segment
+        // is too wide for its cell.
+        if new_advance < original_advance && alignment != TabAlignment::Left {
+            new_advance = next_stop_64 - current_x;
+        }
+        let delta = new_advance - original_advance;
         if delta > 0 {
             for g in &mut line.glyphs[(i + 1)..] {
                 g.x += delta;
@@ -600,19 +643,41 @@ pub fn apply_tab_stops(
     }
 }
 
-fn next_tab_stop_64(current_x_64: i32, stops_pt: &[f32], default_stop_64: i32) -> i32 {
-    for &stop_pt in stops_pt {
+fn next_tab_stop_64(
+    current_x_64: i32,
+    stops: &[(f32, TabAlignment)],
+    default_stop_64: i32,
+) -> (i32, TabAlignment) {
+    for &(stop_pt, align) in stops {
         let stop_64 = (stop_pt * ADVANCE_PRECISION).round() as i32;
         if stop_64 > current_x_64 {
-            return stop_64;
+            return (stop_64, align);
         }
     }
     if default_stop_64 <= 0 {
-        return current_x_64;
+        return (current_x_64, TabAlignment::Left);
     }
-    // Snap to next default-grid stop past current_x.
     let n = current_x_64 / default_stop_64 + 1;
-    n * default_stop_64
+    (n * default_stop_64, TabAlignment::Left)
+}
+
+fn next_tab_or_end(glyphs: &[PositionedGlyph], from: usize, bytes: &[u8]) -> usize {
+    for (j, g) in glyphs.iter().enumerate().skip(from + 1) {
+        let cluster = g.cluster as usize;
+        if cluster < bytes.len() && bytes[cluster] == b'\t' {
+            return j;
+        }
+    }
+    glyphs.len()
+}
+
+fn segment_natural_width(glyphs: &[PositionedGlyph], start: usize, end: usize) -> i32 {
+    if start >= end || end > glyphs.len() {
+        return 0;
+    }
+    let last = &glyphs[end - 1];
+    let first_x = glyphs[start].x;
+    last.x + last.x_advance - first_x
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -893,7 +958,7 @@ mod tests {
         // 'a' at x=0 (advance 320); '\t' at x=320; 'b' at x=960.
         // With a stop at 36 pt = 2304 1/64pt, the tab widens to
         // (2304 - 320) = 1984; 'b' shifts to 2304.
-        apply_tab_stops(&mut line, text, &[36.0], 0.0);
+        apply_tab_stops(&mut line, text, &[(36.0, TabAlignment::Left)], 0.0);
         assert_eq!(line.glyphs[0].x, 0);
         assert_eq!(line.glyphs[1].x, 320);
         assert_eq!(line.glyphs[1].x_advance, 1984);
@@ -904,7 +969,6 @@ mod tests {
     fn apply_tab_stops_falls_back_to_default_grid() {
         let text = "a\tb";
         let mut line = line_with_tab(text);
-        // 36 pt grid only; tab at x=320 → next stop 2304.
         apply_tab_stops(&mut line, text, &[], 36.0);
         assert_eq!(line.glyphs[2].x, 2304);
     }
@@ -913,11 +977,51 @@ mod tests {
     fn apply_tab_stops_skips_when_pen_past_all_stops() {
         let text = "abc\tx";
         let mut line = line_with_tab(text);
-        // Stop at 1 pt = 64 1/64pt; the tab is at x = 3*320 = 960
-        // (already past); without a default grid we should leave
-        // it alone.
         let before_x = line.glyphs[4].x;
-        apply_tab_stops(&mut line, text, &[1.0], 0.0);
+        apply_tab_stops(&mut line, text, &[(1.0, TabAlignment::Left)], 0.0);
         assert_eq!(line.glyphs[4].x, before_x);
+    }
+
+    #[test]
+    fn right_align_pulls_segment_right_edge_to_stop() {
+        // "a\tbc" — 'a' at 0..320, '\t' at 320..960, 'b' 960..1280,
+        // 'c' 1280..1600. Right-align stop at 36 pt = 2304 1/64pt.
+        // Segment after tab is "bc" (2 glyphs * 320 = 640 wide), so
+        // the segment should start at 2304 - 640 = 1664; tab takes
+        // (1664 - 320) = 1344 1/64pt of advance.
+        let text = "a\tbc";
+        let mut line = line_with_tab(text);
+        apply_tab_stops(&mut line, text, &[(36.0, TabAlignment::Right)], 0.0);
+        assert_eq!(line.glyphs[1].x_advance, 1344);
+        assert_eq!(line.glyphs[2].x, 1664, "'b' should start at 1664");
+        assert_eq!(line.glyphs[3].x, 1984, "'c' should start at 1984");
+        // Right edge of last glyph at the stop.
+        assert_eq!(line.glyphs[3].x + line.glyphs[3].x_advance, 2304);
+    }
+
+    #[test]
+    fn center_align_centres_segment_on_stop() {
+        let text = "a\tbc";
+        let mut line = line_with_tab(text);
+        // Center stop at 36 pt = 2304; segment is 640 wide; centre
+        // at 2304 means segment starts at 2304 - 320 = 1984.
+        apply_tab_stops(&mut line, text, &[(36.0, TabAlignment::Center)], 0.0);
+        assert_eq!(line.glyphs[2].x, 1984);
+        // Last glyph right edge at 1984 + 640 = 2624.
+        assert_eq!(line.glyphs[3].x + line.glyphs[3].x_advance, 2624);
+    }
+
+    #[test]
+    fn right_align_falls_back_when_segment_overflows() {
+        // Stop at 8 pt = 512 (just past tab's natural x of 320),
+        // segment width 640 → Right would want segment to start at
+        // -128. Falls through to Left, but Left would also shrink
+        // the tab below its natural 640 advance — so the tab keeps
+        // its natural width and no snap happens.
+        let text = "a\tbc";
+        let mut line = line_with_tab(text);
+        apply_tab_stops(&mut line, text, &[(8.0, TabAlignment::Right)], 0.0);
+        assert_eq!(line.glyphs[1].x_advance, 640, "tab keeps natural width");
+        assert_eq!(line.glyphs[2].x, 960, "'b' unchanged at natural position");
     }
 }

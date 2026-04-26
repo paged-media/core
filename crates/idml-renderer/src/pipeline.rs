@@ -598,14 +598,14 @@ fn emit_paragraph_into_chain(
 
     let has_any_tab = paragraph.runs.iter().any(|r| r.text.contains('\t'));
     if has_any_tab {
-        let tab_stops_pt: Vec<f32> = resolved_paragraph
+        let tab_stops: Vec<(f32, idml_text::layout::TabAlignment)> = resolved_paragraph
             .tab_list
             .iter()
-            .map(|t| t.position)
+            .map(|t| (t.position, map_tab_alignment(t.alignment.as_deref())))
             .collect();
         let paragraph_text: String = paragraph.runs.iter().map(|r| r.text.as_str()).collect();
         for line in laid_out.lines.iter_mut() {
-            idml_text::layout::apply_tab_stops(line, &paragraph_text, &tab_stops_pt, 36.0);
+            idml_text::layout::apply_tab_stops(line, &paragraph_text, &tab_stops, 36.0);
         }
     }
 
@@ -1429,6 +1429,17 @@ pub fn map_justification(j: Option<&str>) -> idml_text::Alignment {
         Some("CenterAlign") | Some("CenterJustified") => idml_text::Alignment::Center,
         Some("FullyJustified") | Some("LeftJustified") => idml_text::Alignment::Justify,
         _ => idml_text::Alignment::Left,
+    }
+}
+
+/// Map IDML `<TabStop Alignment="...">` values to the layout
+/// crate's `TabAlignment`.
+fn map_tab_alignment(a: Option<&str>) -> idml_text::layout::TabAlignment {
+    match a {
+        Some("RightAlign") => idml_text::layout::TabAlignment::Right,
+        Some("CenterAlign") => idml_text::layout::TabAlignment::Center,
+        Some("CharacterAlign") => idml_text::layout::TabAlignment::Decimal,
+        _ => idml_text::layout::TabAlignment::Left,
     }
 }
 
