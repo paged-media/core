@@ -265,78 +265,111 @@ impl Document {
         paragraph: &Paragraph,
         run: &CharacterRun,
     ) -> ResolvedRunAttrs {
-        let char_resolved = run
-            .character_style
-            .as_deref()
-            .map(|id| self.styles.resolve_character(id))
-            .unwrap_or_default();
-        let para_resolved = paragraph
-            .paragraph_style
-            .as_deref()
-            .map(|id| self.styles.resolve_paragraph(id))
-            .unwrap_or_default();
-        ResolvedRunAttrs {
-            font: run
-                .font
-                .clone()
-                .or(char_resolved.font)
-                .or(para_resolved.font),
-            font_style: run
-                .font_style
-                .clone()
-                .or(char_resolved.font_style)
-                .or(para_resolved.font_style),
-            point_size: run
-                .point_size
-                .or(char_resolved.point_size)
-                .or(para_resolved.point_size),
-            fill_color: run
-                .fill_color
-                .clone()
-                .or(char_resolved.fill_color)
-                .or(para_resolved.fill_color),
-            tracking: run
-                .tracking
-                .or(char_resolved.tracking)
-                .or(para_resolved.tracking),
-            underline: run
-                .underline
-                .or(char_resolved.underline)
-                .or(para_resolved.underline),
-            strikethru: run
-                .strikethru
-                .or(char_resolved.strikethru)
-                .or(para_resolved.strikethru),
+        let mut acc = ResolvedRunAttrs::from_run(run);
+        if let Some(id) = run.character_style.as_deref() {
+            acc.merge_below_character(&self.styles.resolve_character(id));
         }
+        if let Some(id) = paragraph.paragraph_style.as_deref() {
+            acc.merge_below_paragraph(&self.styles.resolve_paragraph(id));
+        }
+        acc
     }
 
     /// Resolve a paragraph's effective paragraph-level attributes.
     /// The cascade is direct > applied paragraph style. Character
     /// styles don't carry paragraph attrs in IDML.
     pub fn resolved_paragraph_attrs(&self, paragraph: &Paragraph) -> ResolvedParagraphAttrs {
-        let para = paragraph
-            .paragraph_style
-            .as_deref()
-            .map(|id| self.styles.resolve_paragraph(id))
-            .unwrap_or_default();
-        let tab_list = if !paragraph.tab_list.is_empty() {
-            paragraph.tab_list.clone()
-        } else {
-            para.tab_list
-        };
-        ResolvedParagraphAttrs {
-            justification: paragraph.justification.clone().or(para.justification),
-            first_line_indent: paragraph.first_line_indent.or(para.first_line_indent),
-            space_before: paragraph.space_before.or(para.space_before),
-            space_after: paragraph.space_after.or(para.space_after),
-            tab_list,
+        let mut acc = ResolvedParagraphAttrs::from_paragraph(paragraph);
+        if let Some(id) = paragraph.paragraph_style.as_deref() {
+            acc.merge_below(&self.styles.resolve_paragraph(id));
         }
+        acc
     }
 
     /// Manifest-advertised story metadata; a convenience for callers
     /// that need the original src paths without walking `stories`.
     pub fn story_refs(&self) -> &[StoryRef] {
         &self.container.designmap.stories
+    }
+}
+
+impl ResolvedRunAttrs {
+    /// Capture a run's directly-set fields into a fresh
+    /// `ResolvedRunAttrs`. Style-cascade fallbacks apply via
+    /// `merge_below_character` / `merge_below_paragraph`.
+    pub fn from_run(run: &CharacterRun) -> Self {
+        Self {
+            font: run.font.clone(),
+            font_style: run.font_style.clone(),
+            point_size: run.point_size,
+            fill_color: run.fill_color.clone(),
+            tracking: run.tracking,
+            underline: run.underline,
+            strikethru: run.strikethru,
+        }
+    }
+
+    /// Fill any unset field from a resolved character style.
+    pub fn merge_below_character(&mut self, c: &idml_parse::ResolvedCharacter) {
+        if self.font.is_none() {
+            self.font = c.font.clone();
+        }
+        if self.font_style.is_none() {
+            self.font_style = c.font_style.clone();
+        }
+        self.point_size = self.point_size.or(c.point_size);
+        if self.fill_color.is_none() {
+            self.fill_color = c.fill_color.clone();
+        }
+        self.tracking = self.tracking.or(c.tracking);
+        self.underline = self.underline.or(c.underline);
+        self.strikethru = self.strikethru.or(c.strikethru);
+    }
+
+    /// Fill any unset field from a resolved paragraph style.
+    /// Run-level can pull font / size / fill out of paragraph
+    /// styles but not the paragraph-only knobs.
+    pub fn merge_below_paragraph(&mut self, p: &idml_parse::ResolvedParagraph) {
+        if self.font.is_none() {
+            self.font = p.font.clone();
+        }
+        if self.font_style.is_none() {
+            self.font_style = p.font_style.clone();
+        }
+        self.point_size = self.point_size.or(p.point_size);
+        if self.fill_color.is_none() {
+            self.fill_color = p.fill_color.clone();
+        }
+        self.tracking = self.tracking.or(p.tracking);
+        self.underline = self.underline.or(p.underline);
+        self.strikethru = self.strikethru.or(p.strikethru);
+    }
+}
+
+impl ResolvedParagraphAttrs {
+    /// Capture a paragraph's directly-set fields. Style cascade
+    /// fallbacks apply via `merge_below`.
+    pub fn from_paragraph(paragraph: &Paragraph) -> Self {
+        Self {
+            justification: paragraph.justification.clone(),
+            first_line_indent: paragraph.first_line_indent,
+            space_before: paragraph.space_before,
+            space_after: paragraph.space_after,
+            tab_list: paragraph.tab_list.clone(),
+        }
+    }
+
+    /// Fill any unset field from a resolved paragraph style.
+    pub fn merge_below(&mut self, p: &idml_parse::ResolvedParagraph) {
+        if self.justification.is_none() {
+            self.justification = p.justification.clone();
+        }
+        self.first_line_indent = self.first_line_indent.or(p.first_line_indent);
+        self.space_before = self.space_before.or(p.space_before);
+        self.space_after = self.space_after.or(p.space_after);
+        if self.tab_list.is_empty() && !p.tab_list.is_empty() {
+            self.tab_list = p.tab_list.clone();
+        }
     }
 }
 

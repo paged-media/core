@@ -179,13 +179,7 @@ impl StyleSheet {
             let Some(s) = self.character_styles.get(&cur_id) else {
                 break;
             };
-            acc.font = acc.font.or_else(|| s.font.clone());
-            acc.font_style = acc.font_style.or_else(|| s.font_style.clone());
-            acc.point_size = acc.point_size.or(s.point_size);
-            acc.fill_color = acc.fill_color.or_else(|| s.fill_color.clone());
-            acc.tracking = acc.tracking.or(s.tracking);
-            acc.underline = acc.underline.or(s.underline);
-            acc.strikethru = acc.strikethru.or(s.strikethru);
+            acc.merge_below(s);
             cursor = s.based_on.clone();
         }
         acc
@@ -199,25 +193,60 @@ impl StyleSheet {
             let Some(s) = self.paragraph_styles.get(&cur_id) else {
                 break;
             };
-            acc.font = acc.font.or_else(|| s.font.clone());
-            acc.font_style = acc.font_style.or_else(|| s.font_style.clone());
-            acc.point_size = acc.point_size.or(s.point_size);
-            acc.fill_color = acc.fill_color.or_else(|| s.fill_color.clone());
-            acc.tracking = acc.tracking.or(s.tracking);
-            acc.justification = acc.justification.or_else(|| s.justification.clone());
-            acc.first_line_indent = acc.first_line_indent.or(s.first_line_indent);
-            acc.space_before = acc.space_before.or(s.space_before);
-            acc.space_after = acc.space_after.or(s.space_after);
-            acc.underline = acc.underline.or(s.underline);
-            acc.strikethru = acc.strikethru.or(s.strikethru);
-            // First non-empty TabList wins; later parents don't
-            // overwrite a child's explicit declaration.
-            if acc.tab_list.is_empty() && !s.tab_list.is_empty() {
-                acc.tab_list = s.tab_list.clone();
-            }
+            acc.merge_below(s);
             cursor = s.based_on.clone();
         }
         acc
+    }
+}
+
+impl ResolvedCharacter {
+    /// Fill any unset (`None`) field from `def`. Cascade convention:
+    /// already-set fields on `self` win; `def` only patches gaps.
+    pub fn merge_below(&mut self, def: &CharacterStyleDef) {
+        if self.font.is_none() {
+            self.font = def.font.clone();
+        }
+        if self.font_style.is_none() {
+            self.font_style = def.font_style.clone();
+        }
+        self.point_size = self.point_size.or(def.point_size);
+        if self.fill_color.is_none() {
+            self.fill_color = def.fill_color.clone();
+        }
+        self.tracking = self.tracking.or(def.tracking);
+        self.underline = self.underline.or(def.underline);
+        self.strikethru = self.strikethru.or(def.strikethru);
+    }
+}
+
+impl ResolvedParagraph {
+    /// Fill any unset field from `def` (BasedOn cascade). For
+    /// `tab_list` "unset" means empty — IDML has no
+    /// distinction between "no tabs" and "tab list inherited".
+    pub fn merge_below(&mut self, def: &ParagraphStyleDef) {
+        if self.font.is_none() {
+            self.font = def.font.clone();
+        }
+        if self.font_style.is_none() {
+            self.font_style = def.font_style.clone();
+        }
+        self.point_size = self.point_size.or(def.point_size);
+        if self.fill_color.is_none() {
+            self.fill_color = def.fill_color.clone();
+        }
+        self.tracking = self.tracking.or(def.tracking);
+        if self.justification.is_none() {
+            self.justification = def.justification.clone();
+        }
+        self.first_line_indent = self.first_line_indent.or(def.first_line_indent);
+        self.space_before = self.space_before.or(def.space_before);
+        self.space_after = self.space_after.or(def.space_after);
+        self.underline = self.underline.or(def.underline);
+        self.strikethru = self.strikethru.or(def.strikethru);
+        if self.tab_list.is_empty() && !def.tab_list.is_empty() {
+            self.tab_list = def.tab_list.clone();
+        }
     }
 }
 

@@ -183,13 +183,13 @@ fn build_scene(list: &DisplayList, options: &RasterOptions) -> Scene {
                 };
                 if decoded.width == 0
                     || decoded.height == 0
-                    || decoded.rgba.len()
-                        != (decoded.width as usize * decoded.height as usize * 4)
+                    || decoded.rgba.len() != (decoded.width as usize * decoded.height as usize * 4)
                 {
                     continue;
                 }
                 let blob = Blob::new(std::sync::Arc::new(decoded.rgba.clone()));
-                let img = PenikoImage::new(blob, PenikoFormat::Rgba8, decoded.width, decoded.height);
+                let img =
+                    PenikoImage::new(blob, PenikoFormat::Rgba8, decoded.width, decoded.height);
                 // Display-list transform maps unit-rect (0..1, 0..1)
                 // → page coords. The image's pixel grid lives in
                 // (0..w, 0..h), so divide by (w, h) before composing
