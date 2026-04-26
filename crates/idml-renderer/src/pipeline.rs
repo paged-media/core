@@ -351,7 +351,6 @@ pub fn build_document(
 
     for parsed in &document.stories {
         total_stats.stories += 1;
-        let story = &parsed.story;
         let chain = document.frame_chain(&parsed.self_id);
         if chain.is_empty() {
             continue;
@@ -365,296 +364,105 @@ pub fn build_document(
                     .unwrap_or(0)
             })
             .collect();
-        // The first frame's insets shrink the column width. Threaded
+        let mut emitter = StoryEmitter::new(
+            document,
+            options,
+            palette,
+            cmyk_xform.as_ref(),
+            &font_table,
+            chain,
+            chain_pages,
+        );
+        for paragraph in &parsed.story.paragraphs {
+            emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
+        }
+        emitter.apply_vertical_justification(&mut pages);
+    }
+
+    Ok(BuiltDocument {
+        pages,
+        stats: total_stats,
+    })
+}
+
+/// Emits a story's paragraphs into the page list, flowing across
+/// the frame chain on overflow and applying TextFramePreference
+/// vertical justification once the story finishes.
+///
+/// Carries all the per-story mutable state the build_document loop
+/// previously held inline:
+///  - frame_idx + y_cursor: which frame is currently filling and
+///    where the next baseline goes inside it.
+///  - frame_cmd_ranges + frame_max_baseline_64: tracked during
+///    emission so the post-story vertical-justification shift can
+///    target this story's commands without touching frame outlines.
+struct StoryEmitter<'a> {
+    document: &'a Document,
+    options: &'a PipelineOptions<'a>,
+    palette: &'a Graphic,
+    /// Reserved for the upcoming CMYK text-fill path. The current
+    /// per-glyph paint picker resolves through `palette` directly.
+    #[allow(dead_code)]
+    cmyk_xform: Option<&'a idml_color::IccTransform>,
+    font_table: &'a FontTable,
+    chain: Vec<&'a TextFrame>,
+    chain_pages: Vec<usize>,
+    column_width_pt: Option<f32>,
+    frame_idx: usize,
+    y_cursor: i32,
+    frame_cmd_ranges: Vec<Option<(usize, usize)>>,
+    frame_max_baseline_64: Vec<i32>,
+}
+
+impl<'a> StoryEmitter<'a> {
+    fn new(
+        document: &'a Document,
+        options: &'a PipelineOptions<'a>,
+        palette: &'a Graphic,
+        cmyk_xform: Option<&'a idml_color::IccTransform>,
+        font_table: &'a FontTable,
+        chain: Vec<&'a TextFrame>,
+        chain_pages: Vec<usize>,
+    ) -> Self {
+        // Head frame's L+R insets shrink the column width. Threaded
         // frames usually share the same insets; honouring per-frame
-        // insets requires recomputing the column width when crossing
-        // frame boundaries — out of scope for this batch.
+        // insets requires recomputing the column width when
+        // crossing frame boundaries.
         let head_insets = chain[0].inset_spacing.unwrap_or([0.0; 4]);
         let column_width_pt = options.fallback_column_width_pt.or_else(|| {
             chain
                 .first()
                 .map(|f| (f.bounds.width() - head_insets[1] - head_insets[3]).max(0.0))
         });
-
-        // frame_idx tracks which frame in the chain we're filling
-        // right now; y_cursor is the next baseline (1/64 pt) within
-        // that frame. Both reset when the cursor overflows the
-        // frame's height and we advance to the next one.
-        let mut frame_idx: usize = 0;
-        let mut y_cursor: i32 = -1;
-        // Per-frame: (start_cmd, end_cmd) range on its page, plus
-        // the largest baseline_y emitted into that frame in 1/64 pt.
-        // Both feed the post-story vertical-justification shift.
-        let mut frame_cmd_ranges: Vec<Option<(usize, usize)>> = vec![None; chain.len()];
-        let mut frame_max_baseline_64: Vec<i32> = vec![0; chain.len()];
-
-        for paragraph in &story.paragraphs {
-            total_stats.paragraphs += 1;
-            total_stats.runs += paragraph.runs.len();
-            pages[chain_pages[frame_idx]].stats.paragraphs += 1;
-            pages[chain_pages[frame_idx]].stats.runs += paragraph.runs.len();
-
-            // Resolve every run's effective attributes through the
-            // style cascade once per paragraph; keep them aligned
-            // with paragraph.runs by index so downstream pieces
-            // (font lookup, StyledRun construction, paint picker)
-            // can use the same indices.
-            let resolved_runs: Vec<idml_scene::ResolvedRunAttrs> = paragraph
-                .runs
-                .iter()
-                .map(|r| document.resolved_run_attrs(paragraph, r))
-                .collect();
-            let resolved_paragraph = document.resolved_paragraph_attrs(paragraph);
-
-            // Resolve every run's font bytes up-front so the borrows
-            // for `Face` construction below all live in the same
-            // scope. Runs whose family doesn't resolve fall back to
-            // `options.font` (carried inside the FontTable) — when
-            // even that's absent we drop the paragraph.
-            let mut bytes_pool: Vec<bytes::Bytes> = Vec::with_capacity(paragraph.runs.len());
-            for resolved in &resolved_runs {
-                let Some(b) =
-                    font_table.bytes_for(resolved.font.as_deref(), resolved.font_style.as_deref())
-                else {
-                    continue;
-                };
-                bytes_pool.push(b);
-            }
-            if bytes_pool.is_empty() || bytes_pool.len() != paragraph.runs.len() {
-                continue;
-            }
-
-            // Pair each run's bytes with a parsed shaping face + an
-            // outliner face. Face::from_slice fails on malformed
-            // fonts; if any run's face fails we skip the paragraph
-            // (rather than dropping a single run) so positions don't
-            // collapse silently.
-            let mut shaping_faces: Vec<rustybuzz::Face> = Vec::with_capacity(bytes_pool.len());
-            let mut outline_faces: Vec<ttf_parser::Face> = Vec::with_capacity(bytes_pool.len());
-            for b in &bytes_pool {
-                let Some(rf) = rustybuzz::Face::from_slice(b.as_ref(), 0) else {
-                    continue;
-                };
-                let Ok(of) = ttf_parser::Face::parse(b.as_ref(), 0) else {
-                    continue;
-                };
-                shaping_faces.push(rf);
-                outline_faces.push(of);
-            }
-            if shaping_faces.len() != paragraph.runs.len() {
-                continue;
-            }
-
-            let font_ids: Vec<u32> = bytes_pool.iter().map(|b| fnv_1a_u32(b.as_ref())).collect();
-
-            // Build StyledRuns aligned with paragraph.runs, using
-            // each run's cascaded attrs.
-            let styled_runs: Vec<idml_text::StyledRun> = paragraph
-                .runs
-                .iter()
-                .enumerate()
-                .map(|(i, run)| idml_text::StyledRun {
-                    text: &run.text,
-                    face: &shaping_faces[i],
-                    point_size: resolved_runs[i]
-                        .point_size
-                        .unwrap_or(options.default_point_size),
-                    tracking: resolved_runs[i].tracking,
-                    font_id: font_ids[i],
-                    underline: resolved_runs[i].underline.unwrap_or(false),
-                    strikethru: resolved_runs[i].strikethru.unwrap_or(false),
-                })
-                .collect();
-
-            // Per-paragraph layout options — column width is shared,
-            // tolerance + spacing knobs come from defaults.
-            let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
-            let Some(col_pt) = column_width_pt else {
-                continue;
-            };
-            let mut lopts = idml_text::LayoutOptions::new(col_pt, paragraph_size);
-            lopts.alignment = map_justification(resolved_paragraph.justification.as_deref());
-
-            // Per-paragraph baseline. The first paragraph in a story
-            // anchors against the head frame's `FirstBaselineOffset`
-            // policy + top inset; subsequent paragraphs continue
-            // from y_cursor + SpaceBefore.
-            if y_cursor < 0 {
-                y_cursor = first_baseline_for_frame(chain[0], paragraph_size, lopts.first_baseline);
-            } else {
-                let space_before_64 = resolved_paragraph.space_before.unwrap_or(0.0)
-                    * idml_text::shape::ADVANCE_PRECISION;
-                y_cursor += space_before_64.round() as i32;
-            }
-            lopts.first_baseline = y_cursor;
-
-            let mut laid_out = idml_text::layout_runs(&styled_runs, &lopts);
-
-            // FirstLineIndent shifts the first line's glyphs after
-            // breaking — Knuth-Plass can't model a per-line x-shift,
-            // so it's a post-layout pass.
-            if let Some(indent_pt) = resolved_paragraph.first_line_indent {
-                let indent_64 = (indent_pt * idml_text::shape::ADVANCE_PRECISION).round() as i32;
-                if indent_64 != 0 {
-                    if let Some(line) = laid_out.lines.first_mut() {
-                        for g in &mut line.glyphs {
-                            g.x += indent_64;
-                        }
-                    }
-                }
-            }
-
-            // Snap each line's tab characters to the next stop —
-            // also a post-layout pass for the same reason as the
-            // first-line indent. Stops come from the cascaded
-            // TabList; in absence of any, IDML's 36 pt grid kicks in.
-            let has_any_tab = paragraph.runs.iter().any(|r| r.text.contains('\t'));
-            if has_any_tab {
-                let tab_stops_pt: Vec<f32> = resolved_paragraph
-                    .tab_list
-                    .iter()
-                    .map(|t| t.position)
-                    .collect();
-                let paragraph_text: String =
-                    paragraph.runs.iter().map(|r| r.text.as_str()).collect();
-                for line in laid_out.lines.iter_mut() {
-                    idml_text::layout::apply_tab_stops(line, &paragraph_text, &tab_stops_pt, 36.0);
-                }
-            }
-
-            let picker = build_run_paint_picker_resolved(
-                paragraph,
-                &resolved_runs,
-                palette,
-                options.fallback_text_paint,
-            );
-
-            // Per-line: route into the current frame; on overflow,
-            // advance to the next frame in the chain and shift the
-            // line's glyphs to land near that frame's first baseline.
-            // Lines whose break would overflow the last frame in the
-            // chain stay in the last frame (visible overset text).
-            let space_after_64 =
-                resolved_paragraph.space_after.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION;
-            for mut line in laid_out.lines.into_iter() {
-                let line_h = idml_text::layout::max_line_height_for_glyphs(&line.glyphs)
-                    .unwrap_or(lopts.line_height);
-                let frame_height_64 = (chain[frame_idx].bounds.height()
-                    * idml_text::shape::ADVANCE_PRECISION)
-                    .round() as i32;
-                // Overflow when the baseline itself sits past the
-                // frame's bottom edge. Keeps the math simple — fancier
-                // ascent/descent accounting can fold in once
-                // FirstBaselineOffset / TextFramePreference parsing
-                // lands.
-                if line.baseline_y > frame_height_64 && frame_idx + 1 < chain.len() {
-                    let prev_baseline = line.baseline_y;
-                    frame_idx += 1;
-                    let new_baseline =
-                        (paragraph_size * 0.8 * idml_text::shape::ADVANCE_PRECISION).round() as i32;
-                    let dy = new_baseline - prev_baseline;
-                    for g in &mut line.glyphs {
-                        g.y += dy;
-                    }
-                    line.baseline_y = new_baseline;
-                }
-
-                // Stats per the page that finally gets this line.
-                let target_page = chain_pages[frame_idx];
-                pages[target_page].stats.glyphs += line.glyphs.len();
-                pages[target_page].stats.lines += 1;
-                total_stats.glyphs += line.glyphs.len();
-                total_stats.lines += 1;
-
-                let frame = chain[frame_idx];
-                let (ox, oy) = pages[target_page].spread_origin;
-                // Frame text origin: bounds top-left + (left, top)
-                // insets so glyphs render inside the inset box.
-                // y_cursor / first_baseline already factor the top
-                // inset (via first_baseline_for_frame), so only the
-                // left inset shifts the emission origin here.
-                let frame_insets = frame.inset_spacing.unwrap_or([0.0; 4]);
-                let text_origin_pt = (
-                    frame.bounds.left - ox + frame_insets[1],
-                    frame.bounds.top - oy,
-                );
-
-                // Snapshot command count BEFORE this line's emission
-                // so the post-story vertical-justification pass can
-                // shift this frame's commands without touching the
-                // frame outline (which was emitted earlier).
-                let before_cmds = pages[target_page].list.commands.len();
-
-                // Emission: walk glyphs grouped by font_id and emit
-                // each run-segment with the matching outliner face +
-                // its point size.
-                let mut start = 0;
-                while start < line.glyphs.len() {
-                    let fid = line.glyphs[start].font_id;
-                    let mut end = start + 1;
-                    while end < line.glyphs.len() && line.glyphs[end].font_id == fid {
-                        end += 1;
-                    }
-                    let face_idx = match font_ids.iter().position(|f| *f == fid) {
-                        Some(i) => i,
-                        None => {
-                            start = end;
-                            continue;
-                        }
-                    };
-                    let outliner = TtfOutliner::new(&outline_faces[face_idx]);
-                    emit_glyph_slice(
-                        &line.glyphs[start..end],
-                        fid,
-                        line.glyphs[start].point_size,
-                        |cluster| picker.pick(cluster),
-                        text_origin_pt,
-                        &outliner,
-                        &mut pages[target_page].list,
-                    );
-                    start = end;
-                }
-                // Decoration emission: walk the line's glyphs and
-                // emit horizontal strokes for contiguous underlined
-                // / struck-through ranges, using the run's resolved
-                // fill colour. Underline sits a fraction of the
-                // point size below the baseline; strikethrough
-                // sits above. Both are line-anchored so they read
-                // as decoration rather than glyph fill.
-                emit_line_decorations(
-                    &line,
-                    &picker,
-                    (frame.bounds.left - ox, frame.bounds.top - oy),
-                    &mut pages[target_page].list,
-                );
-
-                let after_cmds = pages[target_page].list.commands.len();
-                match &mut frame_cmd_ranges[frame_idx] {
-                    Some((_, e)) => *e = after_cmds,
-                    None => frame_cmd_ranges[frame_idx] = Some((before_cmds, after_cmds)),
-                }
-                if line.baseline_y > frame_max_baseline_64[frame_idx] {
-                    frame_max_baseline_64[frame_idx] = line.baseline_y;
-                }
-
-                y_cursor = line.baseline_y + line_h;
-            }
-            // SpaceAfter advances the in-frame cursor for the next
-            // paragraph. Crucially, we don't reset frame_idx here —
-            // the next paragraph keeps writing into whichever frame
-            // the last line landed in.
-            y_cursor += space_after_64.round() as i32;
+        let len = chain.len();
+        Self {
+            document,
+            options,
+            palette,
+            cmyk_xform,
+            font_table,
+            chain,
+            chain_pages,
+            column_width_pt,
+            frame_idx: 0,
+            y_cursor: -1,
+            frame_cmd_ranges: vec![None; len],
+            frame_max_baseline_64: vec![0; len],
         }
+    }
 
-        // Post-story vertical-justification pass. Per frame in the
-        // chain: compute slack = frame.height - (max_baseline +
-        // line_height descender slack); shift the frame's emitted
-        // commands' ty by `slack`, `slack/2`, or 0 according to
-        // VerticalJustification. JustifyAlign would distribute the
-        // slack between paragraphs — falls through to TopAlign for
-        // now (a future batch).
-        for (i, frame) in chain.iter().enumerate() {
-            let Some((start, end)) = frame_cmd_ranges[i] else {
+    fn emit_paragraph(
+        &mut self,
+        paragraph: &idml_parse::Paragraph,
+        pages: &mut [BuiltPage],
+        total_stats: &mut PipelineStats,
+    ) {
+        emit_paragraph_into_chain(self, paragraph, pages, total_stats);
+    }
+
+    fn apply_vertical_justification(&self, pages: &mut [BuiltPage]) {
+        for (i, frame) in self.chain.iter().enumerate() {
+            let Some((start, end)) = self.frame_cmd_ranges[i] else {
                 continue;
             };
             let vj = frame.vertical_justification.as_deref();
@@ -663,11 +471,9 @@ pub fn build_document(
             }
             let frame_height_64 =
                 (frame.bounds.height() * idml_text::shape::ADVANCE_PRECISION).round() as i32;
-            // Approximate used height: last baseline + one line's
-            // descender allowance (≈ 1 line height at the
-            // paragraph's natural size). Good enough to centre /
-            // bottom-align typical body copy.
-            let used_64 = frame_max_baseline_64[i];
+            // Approximate used height = last baseline; a future
+            // batch can fold in the descender of the last line.
+            let used_64 = self.frame_max_baseline_64[i];
             let slack_64 = (frame_height_64 - used_64).max(0);
             let dy_64 = match vj {
                 Some("CenterAlign") => slack_64 / 2,
@@ -678,16 +484,220 @@ pub fn build_document(
                 continue;
             }
             let dy_pt = dy_64 as f32 / idml_text::shape::ADVANCE_PRECISION;
-            for cmd in &mut pages[chain_pages[i]].list.commands[start..end] {
+            for cmd in &mut pages[self.chain_pages[i]].list.commands[start..end] {
                 cmd.transform_mut().0[5] += dy_pt;
             }
         }
     }
+}
 
-    Ok(BuiltDocument {
-        pages,
-        stats: total_stats,
-    })
+/// Body of `StoryEmitter::emit_paragraph`. Lives as a free fn so
+/// the long, branching layout/emit pipeline isn't visually
+/// indented under `impl`. The free fn has full mutable access to
+/// the emitter state via `&mut StoryEmitter`.
+fn emit_paragraph_into_chain(
+    em: &mut StoryEmitter,
+    paragraph: &idml_parse::Paragraph,
+    pages: &mut [BuiltPage],
+    total_stats: &mut PipelineStats,
+) {
+    total_stats.paragraphs += 1;
+    total_stats.runs += paragraph.runs.len();
+    pages[em.chain_pages[em.frame_idx]].stats.paragraphs += 1;
+    pages[em.chain_pages[em.frame_idx]].stats.runs += paragraph.runs.len();
+
+    let resolved_runs: Vec<idml_scene::ResolvedRunAttrs> = paragraph
+        .runs
+        .iter()
+        .map(|r| em.document.resolved_run_attrs(paragraph, r))
+        .collect();
+    let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
+
+    // Resolve every run's font bytes up front so the borrows for
+    // `Face` construction below all live in the same scope.
+    let mut bytes_pool: Vec<bytes::Bytes> = Vec::with_capacity(paragraph.runs.len());
+    for resolved in &resolved_runs {
+        let Some(b) = em
+            .font_table
+            .bytes_for(resolved.font.as_deref(), resolved.font_style.as_deref())
+        else {
+            continue;
+        };
+        bytes_pool.push(b);
+    }
+    if bytes_pool.is_empty() || bytes_pool.len() != paragraph.runs.len() {
+        return;
+    }
+
+    let mut shaping_faces: Vec<rustybuzz::Face> = Vec::with_capacity(bytes_pool.len());
+    let mut outline_faces: Vec<ttf_parser::Face> = Vec::with_capacity(bytes_pool.len());
+    for b in &bytes_pool {
+        let Some(rf) = rustybuzz::Face::from_slice(b.as_ref(), 0) else {
+            continue;
+        };
+        let Ok(of) = ttf_parser::Face::parse(b.as_ref(), 0) else {
+            continue;
+        };
+        shaping_faces.push(rf);
+        outline_faces.push(of);
+    }
+    if shaping_faces.len() != paragraph.runs.len() {
+        return;
+    }
+
+    let font_ids: Vec<u32> = bytes_pool.iter().map(|b| fnv_1a_u32(b.as_ref())).collect();
+
+    let styled_runs: Vec<idml_text::StyledRun> = paragraph
+        .runs
+        .iter()
+        .enumerate()
+        .map(|(i, run)| idml_text::StyledRun {
+            text: &run.text,
+            face: &shaping_faces[i],
+            point_size: resolved_runs[i]
+                .point_size
+                .unwrap_or(em.options.default_point_size),
+            tracking: resolved_runs[i].tracking,
+            font_id: font_ids[i],
+            underline: resolved_runs[i].underline.unwrap_or(false),
+            strikethru: resolved_runs[i].strikethru.unwrap_or(false),
+        })
+        .collect();
+
+    let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
+    let Some(col_pt) = em.column_width_pt else {
+        return;
+    };
+    let mut lopts = idml_text::LayoutOptions::new(col_pt, paragraph_size);
+    lopts.alignment = map_justification(resolved_paragraph.justification.as_deref());
+
+    if em.y_cursor < 0 {
+        em.y_cursor = first_baseline_for_frame(em.chain[0], paragraph_size, lopts.first_baseline);
+    } else {
+        let space_before_64 =
+            resolved_paragraph.space_before.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION;
+        em.y_cursor += space_before_64.round() as i32;
+    }
+    lopts.first_baseline = em.y_cursor;
+
+    let mut laid_out = idml_text::layout_runs(&styled_runs, &lopts);
+
+    // FirstLineIndent shifts the first line's glyphs after
+    // breaking — Knuth-Plass can't model a per-line x-shift, so
+    // it's a post-layout pass.
+    if let Some(indent_pt) = resolved_paragraph.first_line_indent {
+        let indent_64 = (indent_pt * idml_text::shape::ADVANCE_PRECISION).round() as i32;
+        if indent_64 != 0 {
+            if let Some(line) = laid_out.lines.first_mut() {
+                for g in &mut line.glyphs {
+                    g.x += indent_64;
+                }
+            }
+        }
+    }
+
+    let has_any_tab = paragraph.runs.iter().any(|r| r.text.contains('\t'));
+    if has_any_tab {
+        let tab_stops_pt: Vec<f32> = resolved_paragraph
+            .tab_list
+            .iter()
+            .map(|t| t.position)
+            .collect();
+        let paragraph_text: String = paragraph.runs.iter().map(|r| r.text.as_str()).collect();
+        for line in laid_out.lines.iter_mut() {
+            idml_text::layout::apply_tab_stops(line, &paragraph_text, &tab_stops_pt, 36.0);
+        }
+    }
+
+    let picker = build_run_paint_picker_resolved(
+        paragraph,
+        &resolved_runs,
+        em.palette,
+        em.options.fallback_text_paint,
+    );
+
+    let space_after_64 =
+        resolved_paragraph.space_after.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION;
+    for mut line in laid_out.lines.into_iter() {
+        let line_h = idml_text::layout::max_line_height_for_glyphs(&line.glyphs)
+            .unwrap_or(lopts.line_height);
+        let frame_height_64 = (em.chain[em.frame_idx].bounds.height()
+            * idml_text::shape::ADVANCE_PRECISION)
+            .round() as i32;
+        if line.baseline_y > frame_height_64 && em.frame_idx + 1 < em.chain.len() {
+            let prev_baseline = line.baseline_y;
+            em.frame_idx += 1;
+            let new_baseline =
+                (paragraph_size * 0.8 * idml_text::shape::ADVANCE_PRECISION).round() as i32;
+            let dy = new_baseline - prev_baseline;
+            for g in &mut line.glyphs {
+                g.y += dy;
+            }
+            line.baseline_y = new_baseline;
+        }
+
+        let target_page = em.chain_pages[em.frame_idx];
+        pages[target_page].stats.glyphs += line.glyphs.len();
+        pages[target_page].stats.lines += 1;
+        total_stats.glyphs += line.glyphs.len();
+        total_stats.lines += 1;
+
+        let frame = em.chain[em.frame_idx];
+        let (ox, oy) = pages[target_page].spread_origin;
+        let frame_insets = frame.inset_spacing.unwrap_or([0.0; 4]);
+        let text_origin_pt = (
+            frame.bounds.left - ox + frame_insets[1],
+            frame.bounds.top - oy,
+        );
+
+        let before_cmds = pages[target_page].list.commands.len();
+
+        let mut start = 0;
+        while start < line.glyphs.len() {
+            let fid = line.glyphs[start].font_id;
+            let mut end = start + 1;
+            while end < line.glyphs.len() && line.glyphs[end].font_id == fid {
+                end += 1;
+            }
+            let face_idx = match font_ids.iter().position(|f| *f == fid) {
+                Some(i) => i,
+                None => {
+                    start = end;
+                    continue;
+                }
+            };
+            let outliner = TtfOutliner::new(&outline_faces[face_idx]);
+            emit_glyph_slice(
+                &line.glyphs[start..end],
+                fid,
+                line.glyphs[start].point_size,
+                |cluster| picker.pick(cluster),
+                text_origin_pt,
+                &outliner,
+                &mut pages[target_page].list,
+            );
+            start = end;
+        }
+        emit_line_decorations(
+            &line,
+            &picker,
+            (frame.bounds.left - ox, frame.bounds.top - oy),
+            &mut pages[target_page].list,
+        );
+
+        let after_cmds = pages[target_page].list.commands.len();
+        let frame_idx = em.frame_idx;
+        match &mut em.frame_cmd_ranges[frame_idx] {
+            Some((_, e)) => *e = after_cmds,
+            None => em.frame_cmd_ranges[frame_idx] = Some((before_cmds, after_cmds)),
+        }
+        if line.baseline_y > em.frame_max_baseline_64[frame_idx] {
+            em.frame_max_baseline_64[frame_idx] = line.baseline_y;
+        }
+
+        em.y_cursor = line.baseline_y + line_h;
+    }
+    em.y_cursor += space_after_64.round() as i32;
 }
 
 /// Wraps a page's bounds for centre-point routing + its master
