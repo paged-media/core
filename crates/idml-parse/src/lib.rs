@@ -28,7 +28,7 @@ pub use graphic::{
 pub use spread::{
     Bounds, DropShadowSetting, GraphicLine, Oval, Page, Rectangle, Spread, TextFrame,
 };
-pub use story::{CharacterRun, Paragraph, Story};
+pub use story::{CharacterRun, Paragraph, Story, TabStop};
 pub use styles::{
     CharacterStyleDef, ParagraphStyleDef, ResolvedCharacter, ResolvedParagraph, StyleSheet,
 };

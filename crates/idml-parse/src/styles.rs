@@ -26,6 +26,7 @@ use std::collections::BTreeMap;
 use quick_xml::events::Event;
 use serde::Serialize;
 
+use crate::story::TabStop;
 use crate::util::attr;
 use crate::ParseError;
 
@@ -70,6 +71,9 @@ pub struct ParagraphStyleDef {
     pub space_after: Option<f32>,
     pub underline: Option<bool>,
     pub strikethru: Option<bool>,
+    /// `<TabList>` parsed from the style. Empty means "no
+    /// declaration" — the cascade may inherit from `BasedOn`.
+    pub tab_list: Vec<TabStop>,
 }
 
 /// Effective character-level attributes after walking BasedOn.
@@ -98,6 +102,8 @@ pub struct ResolvedParagraph {
     pub space_after: Option<f32>,
     pub underline: Option<bool>,
     pub strikethru: Option<bool>,
+    /// `<TabList>` from the cascade. Empty means inherited / none.
+    pub tab_list: Vec<TabStop>,
 }
 
 impl StyleSheet {
@@ -107,9 +113,26 @@ impl StyleSheet {
 
         let mut out = StyleSheet::default();
         let mut buf = Vec::new();
+        // Track the open ParagraphStyle's id so nested <TabStop>
+        // children attach to the right entry.
+        let mut current_paragraph_style: Option<String> = None;
         loop {
             match reader.read_event_into(&mut buf)? {
-                Event::Start(e) | Event::Empty(e) => match e.name().as_ref() {
+                Event::Start(e) => match e.name().as_ref() {
+                    b"CharacterStyle" => {
+                        if let Some(s) = parse_character_style(&e) {
+                            out.character_styles.insert(s.self_id.clone(), s);
+                        }
+                    }
+                    b"ParagraphStyle" => {
+                        if let Some(s) = parse_paragraph_style(&e) {
+                            current_paragraph_style = Some(s.self_id.clone());
+                            out.paragraph_styles.insert(s.self_id.clone(), s);
+                        }
+                    }
+                    _ => {}
+                },
+                Event::Empty(e) => match e.name().as_ref() {
                     b"CharacterStyle" => {
                         if let Some(s) = parse_character_style(&e) {
                             out.character_styles.insert(s.self_id.clone(), s);
@@ -120,8 +143,23 @@ impl StyleSheet {
                             out.paragraph_styles.insert(s.self_id.clone(), s);
                         }
                     }
+                    b"TabStop" => {
+                        if let (Some(id), Some(stop)) = (
+                            current_paragraph_style.as_deref(),
+                            parse_tab_stop_styles(&e),
+                        ) {
+                            if let Some(p) = out.paragraph_styles.get_mut(id) {
+                                p.tab_list.push(stop);
+                            }
+                        }
+                    }
                     _ => {}
                 },
+                Event::End(e) => {
+                    if e.name().as_ref() == b"ParagraphStyle" {
+                        current_paragraph_style = None;
+                    }
+                }
                 Event::Eof => break,
                 _ => {}
             }
@@ -172,6 +210,11 @@ impl StyleSheet {
             acc.space_after = acc.space_after.or(s.space_after);
             acc.underline = acc.underline.or(s.underline);
             acc.strikethru = acc.strikethru.or(s.strikethru);
+            // First non-empty TabList wins; later parents don't
+            // overwrite a child's explicit declaration.
+            if acc.tab_list.is_empty() && !s.tab_list.is_empty() {
+                acc.tab_list = s.tab_list.clone();
+            }
             cursor = s.based_on.clone();
         }
         acc
@@ -193,6 +236,16 @@ fn parse_character_style(e: &quick_xml::events::BytesStart) -> Option<CharacterS
     })
 }
 
+fn parse_tab_stop_styles(e: &quick_xml::events::BytesStart) -> Option<TabStop> {
+    let position = attr(e, b"Position").and_then(|s| s.parse::<f32>().ok())?;
+    Some(TabStop {
+        position,
+        alignment: attr(e, b"Alignment"),
+        alignment_character: attr(e, b"AlignmentCharacter"),
+        leader: attr(e, b"Leader"),
+    })
+}
+
 fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphStyleDef> {
     Some(ParagraphStyleDef {
         self_id: attr(e, b"Self")?,
@@ -209,6 +262,7 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         space_after: attr(e, b"SpaceAfter").and_then(|s| s.parse().ok()),
         underline: attr(e, b"Underline").and_then(|s| s.parse().ok()),
         strikethru: attr(e, b"StrikeThru").and_then(|s| s.parse().ok()),
+        tab_list: Vec::new(),
     })
 }
 

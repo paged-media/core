@@ -46,7 +46,25 @@ pub struct Paragraph {
     pub space_before: Option<f32>,
     /// `SpaceAfter` in pt.
     pub space_after: Option<f32>,
+    /// `<TabList>` parsed from `<Properties>`. Empty when none is
+    /// declared on this paragraph (the cascade fills in from the
+    /// applied paragraph style if available).
+    pub tab_list: Vec<TabStop>,
     pub runs: Vec<CharacterRun>,
+}
+
+/// One stop in a paragraph's `<TabList>`. Position is in pt from
+/// the column's left edge.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TabStop {
+    pub position: f32,
+    /// IDML alignment string: `LeftAlign`, `RightAlign`,
+    /// `CenterAlign`, `CharacterAlign`.
+    pub alignment: Option<String>,
+    /// `AlignmentCharacter` for `CharacterAlign` stops (rare).
+    pub alignment_character: Option<String>,
+    /// `Leader` string rendered in the tab gap.
+    pub leader: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -91,8 +109,19 @@ impl Story {
                                 .and_then(|s| s.parse().ok()),
                             space_before: attr(&e, b"SpaceBefore").and_then(|s| s.parse().ok()),
                             space_after: attr(&e, b"SpaceAfter").and_then(|s| s.parse().ok()),
+                            tab_list: Vec::new(),
                             runs: Vec::new(),
                         });
+                    }
+                    b"TabStop" => {
+                        // <TabStop Position="..." Alignment="..."/>
+                        // appears nested inside <TabList><ListItem>.
+                        // Append to the open paragraph's list.
+                        if let Some(stop) = parse_tab_stop(&e) {
+                            if let Some(p) = current_paragraph.as_mut() {
+                                p.tab_list.push(stop);
+                            }
+                        }
                     }
                     b"CharacterStyleRange" => {
                         current_run = Some(CharacterRun {
@@ -135,15 +164,33 @@ impl Story {
                     }
                     _ => {}
                 },
-                Event::Empty(e) => {
+                Event::Empty(e) => match e.name().as_ref() {
                     // Line breaks inside a paragraph surface as <Br/> — treat
                     // them as a logical newline in the current run.
-                    if e.name().as_ref() == b"Br" {
+                    b"Br" => {
                         if let Some(run) = current_run.as_mut() {
                             run.text.push('\n');
                         }
                     }
-                }
+                    // Tab characters surface as <Tab/>; the layout
+                    // pass treats '\t' as wide whitespace until a
+                    // proper TabList-aware breaker lands.
+                    b"Tab" => {
+                        if let Some(run) = current_run.as_mut() {
+                            run.text.push('\t');
+                        }
+                    }
+                    // Self-closing <TabStop .../> inside the
+                    // paragraph's TabList.
+                    b"TabStop" => {
+                        if let Some(stop) = parse_tab_stop(&e) {
+                            if let Some(p) = current_paragraph.as_mut() {
+                                p.tab_list.push(stop);
+                            }
+                        }
+                    }
+                    _ => {}
+                },
                 Event::Text(t) => {
                     if in_content {
                         if let Some(run) = current_run.as_mut() {
@@ -158,6 +205,16 @@ impl Story {
         }
         Ok(out)
     }
+}
+
+fn parse_tab_stop(e: &quick_xml::events::BytesStart) -> Option<TabStop> {
+    let position = attr(e, b"Position").and_then(|s| s.parse::<f32>().ok())?;
+    Some(TabStop {
+        position,
+        alignment: attr(e, b"Alignment"),
+        alignment_character: attr(e, b"AlignmentCharacter"),
+        leader: attr(e, b"Leader"),
+    })
 }
 
 #[cfg(test)]
@@ -219,5 +276,44 @@ mod tests {
         </Story>"#;
         let s = Story::parse(xml).unwrap();
         assert_eq!(s.paragraphs[0].runs[0].text, "line one\nline two");
+    }
+
+    #[test]
+    fn tab_element_becomes_tab_character() {
+        let xml = br#"<Story>
+          <ParagraphStyleRange>
+            <CharacterStyleRange>
+              <Content>name</Content>
+              <Tab/>
+              <Content>value</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        assert_eq!(s.paragraphs[0].runs[0].text, "name\tvalue");
+    }
+
+    #[test]
+    fn tab_list_attaches_to_paragraph() {
+        let xml = br#"<Story>
+          <ParagraphStyleRange>
+            <Properties>
+              <TabList>
+                <ListItem><TabStop Position="36" Alignment="LeftAlign"/></ListItem>
+                <ListItem><TabStop Position="144" Alignment="RightAlign" Leader="."/></ListItem>
+              </TabList>
+            </Properties>
+            <CharacterStyleRange>
+              <Content>x</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let stops = &s.paragraphs[0].tab_list;
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].position, 36.0);
+        assert_eq!(stops[0].alignment.as_deref(), Some("LeftAlign"));
+        assert_eq!(stops[1].position, 144.0);
+        assert_eq!(stops[1].leader.as_deref(), Some("."));
     }
 }
