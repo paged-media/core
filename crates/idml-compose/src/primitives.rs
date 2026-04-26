@@ -28,7 +28,7 @@ pub fn emit_rect(rect: Rect, paint: Paint, list: &mut DisplayList) {
 /// throwing the unit-rect path interning away.
 pub fn emit_rect_transformed(rect: Rect, outer: Transform, paint: Paint, list: &mut DisplayList) {
     let (path_id, _) = list.paths.intern(UNIT_RECT_KEY, unit_rect());
-    let transform = outer.compose(&Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]));
+    let transform = Transform::for_rect_in(rect, outer);
     list.push(DisplayCommand::FillPath {
         path_id,
         paint,
@@ -52,7 +52,7 @@ pub fn emit_stroke_rect_transformed(
     list: &mut DisplayList,
 ) {
     let (path_id, _) = list.paths.intern(UNIT_RECT_KEY, unit_rect());
-    let transform = outer.compose(&Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]));
+    let transform = Transform::for_rect_in(rect, outer);
     list.push(DisplayCommand::StrokePath {
         path_id,
         paint,
@@ -81,7 +81,7 @@ pub fn emit_ellipse_transformed(
     list: &mut DisplayList,
 ) {
     let (path_id, _) = list.paths.intern(UNIT_ELLIPSE_KEY, unit_ellipse());
-    let transform = outer.compose(&Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]));
+    let transform = Transform::for_rect_in(rect, outer);
     list.push(DisplayCommand::FillPath {
         path_id,
         paint,
@@ -102,7 +102,7 @@ pub fn emit_stroke_ellipse_transformed(
     list: &mut DisplayList,
 ) {
     let (path_id, _) = list.paths.intern(UNIT_ELLIPSE_KEY, unit_ellipse());
-    let transform = outer.compose(&Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]));
+    let transform = Transform::for_rect_in(rect, outer);
     list.push(DisplayCommand::StrokePath {
         path_id,
         paint,
@@ -126,7 +126,7 @@ pub fn emit_drop_shadow_rect_transformed(
     list: &mut DisplayList,
 ) {
     let (path_id, _) = list.paths.intern(UNIT_RECT_KEY, unit_rect());
-    let transform = outer.compose(&Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]));
+    let transform = Transform::for_rect_in(rect, outer);
     list.push(DisplayCommand::DropShadow {
         path_id,
         transform,
@@ -139,7 +139,7 @@ pub fn emit_drop_shadow_rect_transformed(
 /// `*_transformed` family. The rasterizer maps the image's full
 /// pixel grid into `rect` then through `outer` into page coords.
 pub fn emit_image_at(rect: Rect, outer: Transform, image_id: ImageId, list: &mut DisplayList) {
-    let transform = outer.compose(&Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]));
+    let transform = Transform::for_rect_in(rect, outer);
     list.push(DisplayCommand::Image {
         image_id,
         transform,

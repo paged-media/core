@@ -297,11 +297,6 @@ impl Spread {
                         }
                     }
                     b"TextFramePreference" => {
-                        // Attach VerticalJustification to the
-                        // current TextFrame. Other knobs on
-                        // TextFramePreference (insets, columns,
-                        // FirstBaselineOffset) land here too once
-                        // the renderer consumes them.
                         if let (Some(CurrentFrame::Text(i)), Some(vj)) =
                             (current_frame, attr(&e, b"VerticalJustification"))
                         {

@@ -31,6 +31,11 @@ pub struct Document {
     /// `TextFrame` indexed by its `ParentStory` id — built once so the
     /// pipeline doesn't have to scan every spread for each story.
     pub frame_for_story: HashMap<String, TextFrame>,
+    /// `(spread_idx, frame_idx)` for each TextFrame keyed by its
+    /// `Self` id. Built at open time so [`text_frame`] is O(1) and
+    /// [`frame_chain`] walks long NextTextFrame chains in linear
+    /// time rather than O(K × total_frames).
+    pub text_frame_index: HashMap<String, (usize, usize)>,
     /// Paragraph + character style definitions loaded from
     /// `Resources/Styles.xml`. Empty when the archive has no styles
     /// resource (rare; typically only synthetic test docs).
@@ -107,14 +112,19 @@ impl Document {
 
         let mut spreads = Vec::with_capacity(container.designmap.spreads.len());
         let mut frame_for_story = HashMap::new();
+        let mut text_frame_index: HashMap<String, (usize, usize)> = HashMap::new();
         for spread_ref in &container.designmap.spreads {
             let raw = container
                 .entry(&spread_ref.src)
                 .ok_or_else(|| OpenError::MissingEntry(spread_ref.src.clone()))?;
             let parsed = Spread::parse(raw)?;
-            for frame in &parsed.text_frames {
+            let spread_idx = spreads.len();
+            for (frame_idx, frame) in parsed.text_frames.iter().enumerate() {
                 if let Some(id) = frame.parent_story.clone() {
                     frame_for_story.insert(id, frame.clone());
+                }
+                if let Some(self_id) = frame.self_id.clone() {
+                    text_frame_index.insert(self_id, (spread_idx, frame_idx));
                 }
             }
             spreads.push(ParsedSpread {
@@ -144,6 +154,7 @@ impl Document {
             stories,
             master_spreads,
             frame_for_story,
+            text_frame_index,
             styles,
         })
     }
@@ -172,16 +183,12 @@ impl Document {
     }
 
     /// Look up a `TextFrame` by its `Self` id (e.g. `frameA`).
-    /// Walks every parsed spread; cheap given typical frame counts.
+    /// O(1) via the `text_frame_index` map built at open time.
     pub fn text_frame(&self, frame_self_id: &str) -> Option<&TextFrame> {
-        for parsed in &self.spreads {
-            for f in &parsed.spread.text_frames {
-                if f.self_id.as_deref() == Some(frame_self_id) {
-                    return Some(f);
-                }
-            }
-        }
-        None
+        let &(spread_idx, frame_idx) = self.text_frame_index.get(frame_self_id)?;
+        self.spreads
+            .get(spread_idx)
+            .and_then(|s| s.spread.text_frames.get(frame_idx))
     }
 
     /// Frame chain for a story: starts at the frame that is the

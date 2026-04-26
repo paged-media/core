@@ -93,6 +93,16 @@ impl Transform {
         (a * x + c * y + tx, b * x + d * y + ty)
     }
 
+    /// Build the transform that maps the unit rect `[0,0,1,1]` onto
+    /// `rect` in some local space, with `outer` applied on top:
+    /// `result = outer ∘ scale(rect.w, rect.h) ∘ translate(rect.x, rect.y)`.
+    /// Centralises the unit-rect-to-page mapping shared by every
+    /// `emit_*_transformed` helper in `primitives` and the image
+    /// emitter — keeps that math in one place.
+    pub fn for_rect_in(rect: Rect, outer: Transform) -> Transform {
+        outer.compose(&Transform([rect.w, 0.0, 0.0, rect.h, rect.x, rect.y]))
+    }
+
     /// Compose `self` with `inner`: the result applies `inner` first,
     /// then `self`. I.e. `self.compose(inner).apply(p) == self.apply(inner.apply(p))`.
     pub fn compose(&self, inner: &Transform) -> Transform {
@@ -306,6 +316,21 @@ pub enum DisplayCommand {
         transform: Transform,
     },
     // PushLayer, PopLayer, PushClip, PopClip land with §10.4.
+}
+
+impl DisplayCommand {
+    /// Mutable accessor for the command's placement transform.
+    /// Used by post-emit passes (vertical justification, future
+    /// layered effects) that need to translate / re-anchor a range
+    /// of commands without inspecting variants individually.
+    pub fn transform_mut(&mut self) -> &mut Transform {
+        match self {
+            DisplayCommand::FillPath { transform, .. }
+            | DisplayCommand::StrokePath { transform, .. }
+            | DisplayCommand::DropShadow { transform, .. }
+            | DisplayCommand::Image { transform, .. } => transform,
+        }
+    }
 }
 
 /// Index into [`DisplayList::images`].

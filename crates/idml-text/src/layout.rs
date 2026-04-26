@@ -341,7 +341,15 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             });
         }
     }
-    flat.sort_by_key(|g| g.cluster);
+    // Each run's pre-shape emits glyphs in cluster order, and runs
+    // append in run order with monotonically-increasing `base`
+    // cluster offsets — so `flat` is already globally sorted by
+    // cluster. The invariant matters because `run_index_for_word`
+    // and `sum_advances_in` walk it in order.
+    debug_assert!(
+        flat.windows(2).all(|w| w[0].cluster <= w[1].cluster),
+        "FlatGlyph cluster ordering invariant violated"
+    );
 
     // 3. Build paragraph-breaker items: one Box per word (sum of
     // advances of glyphs whose cluster is within the word range),

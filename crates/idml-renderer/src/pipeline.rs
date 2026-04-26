@@ -260,24 +260,22 @@ pub fn build_document(
     }
 
     // Frame pass: route every frame to the page whose bounds contain
-    // its centre, *within the frame's own spread*. Two IDML spreads
-    // may have identical page bounds (typically 0..page_w, 0..page_h)
-    // so global routing collapses every page into page 0. We also
-    // remember the page each TextFrame ended up on so the story pass
-    // can avoid re-running the routing logic.
-    let mut text_frame_page: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
-    // Per-frame (by Self id) page lookup so threaded stories can
-    // route lines to whichever frame's page they land in. Built
-    // alongside text_frame_page so the same routing pass populates
-    // both maps.
+    // Per-frame (by Self id) page lookup. The story pass builds
+    // each story's frame chain via Document::frame_chain and uses
+    // this map to find each chain entry's page so threaded stories
+    // can route line emission across pages.
     let mut frame_to_page: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
     // Per-page (URI → ImageId) cache so multiple rectangles on the
-    // same page that reference the same image share a single
-    // decoded buffer in the display list.
+    // same page sharing an image share a single ImageId in the
+    // page's display list.
     let mut page_image_caches: Vec<HashMap<String, idml_compose::ImageId>> =
         (0..pages.len()).map(|_| HashMap::new()).collect();
+    // Renderer-scoped (URI → DecodedImage) cache so an image
+    // referenced from multiple pages is decoded once. The cached
+    // DecodedImage is cloned into each page's image pool — the
+    // memcpy is cheap; the saved decode (PNG/JPEG → RGBA) is not.
+    let mut decoded_image_cache: HashMap<String, idml_compose::DecodedImage> = HashMap::new();
     for (spread_idx, parsed) in document.spreads.iter().enumerate() {
         let spread = &parsed.spread;
         let range = spread_page_ranges[spread_idx].clone();
@@ -286,9 +284,6 @@ pub fn build_document(
             total_stats.frames += 1;
             let local_idx = page_for_frame(&frame.bounds, local_geoms).unwrap_or(0);
             let page_idx = range.start + local_idx;
-            if let Some(parent_story) = frame.parent_story.clone() {
-                text_frame_page.insert(parent_story, page_idx);
-            }
             if let Some(self_id) = frame.self_id.clone() {
                 frame_to_page.insert(self_id, page_idx);
             }
@@ -313,15 +308,16 @@ pub fn build_document(
                 cmyk_xform.as_ref(),
                 options.frame_drop_shadow,
             );
-            // Place an image after the rectangle's solid fill so the
-            // image draws on top. The per-page cache shares
-            // decoded bytes across rectangles that reference the
-            // same URI on this page.
+            // The image draws on top of the rectangle's solid fill.
+            // Per-page cache: shares ImageId across same-URI
+            // rectangles on this page. Renderer-scoped cache:
+            // shares the decoded RGBA across pages.
             emit_rectangle_image(
                 &mut pages[page_idx],
                 rect,
                 options,
                 &mut page_image_caches[page_idx],
+                &mut decoded_image_cache,
             );
         }
         for oval in &spread.ovals {
@@ -356,9 +352,6 @@ pub fn build_document(
     for parsed in &document.stories {
         total_stats.stories += 1;
         let story = &parsed.story;
-        // Walk the NextTextFrame chain so threaded stories pick up
-        // every frame. Single-frame stories collapse to a one-entry
-        // chain — same behaviour as before.
         let chain = document.frame_chain(&parsed.self_id);
         if chain.is_empty() {
             continue;
@@ -489,7 +482,9 @@ pub fn build_document(
 
             let mut laid_out = idml_text::layout_runs(&styled_runs, &lopts);
 
-            // Apply FirstLineIndent — same post-layout shift as before.
+            // FirstLineIndent shifts the first line's glyphs after
+            // breaking — Knuth-Plass can't model a per-line x-shift,
+            // so it's a post-layout pass.
             if let Some(indent_pt) = resolved_paragraph.first_line_indent {
                 let indent_64 = (indent_pt * idml_text::shape::ADVANCE_PRECISION).round() as i32;
                 if indent_64 != 0 {
@@ -647,16 +642,8 @@ pub fn build_document(
                 continue;
             }
             let dy_pt = dy_64 as f32 / idml_text::shape::ADVANCE_PRECISION;
-            let cmds = &mut pages[chain_pages[i]].list.commands;
-            for cmd in &mut cmds[start..end] {
-                match cmd {
-                    idml_compose::DisplayCommand::FillPath { transform, .. }
-                    | idml_compose::DisplayCommand::StrokePath { transform, .. }
-                    | idml_compose::DisplayCommand::DropShadow { transform, .. }
-                    | idml_compose::DisplayCommand::Image { transform, .. } => {
-                        transform.0[5] += dy_pt;
-                    }
-                }
+            for cmd in &mut pages[chain_pages[i]].list.commands[start..end] {
+                cmd.transform_mut().0[5] += dy_pt;
             }
         }
     }
@@ -835,17 +822,12 @@ fn emit_rectangle_into(
 /// silently if `assets` is unset, the resolver returns `None`, or
 /// decoding fails — IDMLs without their linked assets should still
 /// produce a usable render of the surrounding geometry.
-///
-/// `image_cache` maps `LinkResourceURI` → already-pushed `ImageId`
-/// for *this page*. Repeat placements of the same image (gallery
-/// layouts, stamps) share the decoded buffer. The cache is per-page
-/// because `ImageId` indexes a page's display list — different pages
-/// have separate image pools.
 fn emit_rectangle_image(
     page: &mut BuiltPage,
     rect: &Rectangle,
     options: &PipelineOptions,
-    image_cache: &mut HashMap<String, idml_compose::ImageId>,
+    page_image_cache: &mut HashMap<String, idml_compose::ImageId>,
+    decoded_cache: &mut HashMap<String, idml_compose::DecodedImage>,
 ) {
     let Some(uri) = rect.image_link.as_deref() else {
         return;
@@ -857,22 +839,30 @@ fn emit_rectangle_image(
         h: rect.bounds.height(),
     };
     let outer = frame_outer_transform(page, rect.item_transform);
-    let id = if let Some(cached) = image_cache.get(uri) {
+    let id = if let Some(cached) = page_image_cache.get(uri) {
         *cached
     } else {
-        let Some(resolver) = options.assets else {
-            return;
-        };
-        let Some(bytes) = resolver.resolve_image(uri) else {
-            tracing::warn!(uri, "image resolver returned no bytes; skipping");
-            return;
-        };
-        let Some(decoded) = decode_image_bytes(bytes.as_ref()) else {
-            tracing::warn!(uri, "image decode failed; skipping");
-            return;
+        // Cross-page decode cache hit: clone the cached RGBA into
+        // this page's image pool.
+        let decoded = if let Some(d) = decoded_cache.get(uri) {
+            d.clone()
+        } else {
+            let Some(resolver) = options.assets else {
+                return;
+            };
+            let Some(bytes) = resolver.resolve_image(uri) else {
+                tracing::warn!(uri, "image resolver returned no bytes; skipping");
+                return;
+            };
+            let Some(d) = decode_image_bytes(bytes.as_ref()) else {
+                tracing::warn!(uri, "image decode failed; skipping");
+                return;
+            };
+            decoded_cache.insert(uri.to_string(), d.clone());
+            d
         };
         let id = page.list.push_image(decoded);
-        image_cache.insert(uri.to_string(), id);
+        page_image_cache.insert(uri.to_string(), id);
         id
     };
     idml_compose::emit_image_at(r, outer, id, &mut page.list);
@@ -1306,14 +1296,19 @@ fn emit_line_decorations(
     if line.glyphs.is_empty() {
         return;
     }
-    // Underline first, strikethrough second so a glyph with both
-    // gets two stripes.
-    type DecorPredicate = fn(&idml_text::PositionedGlyph) -> bool;
-    let predicates: [(DecorPredicate, f32); 2] = [
-        (|g| g.underline, 0.12),   // ≈ 12% of point size below baseline
-        (|g| g.strikethru, -0.30), // ≈ 30% above baseline (mid-x-height-ish)
-    ];
-    for (predicate, y_offset_factor) in predicates {
+    // Two passes — underline (12% of em below baseline) then
+    // strikethrough (30% above) — so a glyph with both gets two
+    // stripes. Offsets are crude approximations until we read the
+    // font's `OS/2` table for the spec'd y_offset / strikeout_pos.
+    const UNDERLINE_OFFSET_EM: f32 = 0.12;
+    const STRIKETHRU_OFFSET_EM: f32 = -0.30;
+    type Pred = fn(&idml_text::PositionedGlyph) -> bool;
+    let underline: Pred = |g| g.underline;
+    let strikethru: Pred = |g| g.strikethru;
+    for (predicate, y_offset_factor) in [
+        (underline, UNDERLINE_OFFSET_EM),
+        (strikethru, STRIKETHRU_OFFSET_EM),
+    ] {
         let mut start = 0;
         while start < line.glyphs.len() {
             if !predicate(&line.glyphs[start]) {
