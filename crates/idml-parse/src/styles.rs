@@ -74,6 +74,16 @@ pub struct ParagraphStyleDef {
     /// `<TabList>` parsed from the style. Empty means "no
     /// declaration" — the cascade may inherit from `BasedOn`.
     pub tab_list: Vec<TabStop>,
+    /// `BulletsAndNumberingListType`: `BulletList` /
+    /// `NumberedList` / `NoList`. `None` when absent.
+    pub bullets_list_type: Option<String>,
+    /// `<BulletChar BulletCharacterValue="...">` — Unicode code
+    /// point of the bullet glyph. None when no bullet declared.
+    pub bullet_character: Option<u32>,
+    /// `BulletsTextAfter` — string rendered between the bullet
+    /// and the paragraph text (typically a tab `^t` or a space).
+    /// IDML serialises tabs as the literal `^t` sequence.
+    pub bullets_text_after: Option<String>,
 }
 
 /// Effective character-level attributes after walking BasedOn.
@@ -104,6 +114,9 @@ pub struct ResolvedParagraph {
     pub strikethru: Option<bool>,
     /// `<TabList>` from the cascade. Empty means inherited / none.
     pub tab_list: Vec<TabStop>,
+    pub bullets_list_type: Option<String>,
+    pub bullet_character: Option<u32>,
+    pub bullets_text_after: Option<String>,
 }
 
 impl StyleSheet {
@@ -150,6 +163,16 @@ impl StyleSheet {
                         ) {
                             if let Some(p) = out.paragraph_styles.get_mut(id) {
                                 p.tab_list.push(stop);
+                            }
+                        }
+                    }
+                    b"BulletChar" => {
+                        if let (Some(id), Some(cp)) = (
+                            current_paragraph_style.as_deref(),
+                            attr(&e, b"BulletCharacterValue").and_then(|s| s.parse::<u32>().ok()),
+                        ) {
+                            if let Some(p) = out.paragraph_styles.get_mut(id) {
+                                p.bullet_character = Some(cp);
                             }
                         }
                     }
@@ -247,6 +270,13 @@ impl ResolvedParagraph {
         if self.tab_list.is_empty() && !def.tab_list.is_empty() {
             self.tab_list = def.tab_list.clone();
         }
+        if self.bullets_list_type.is_none() {
+            self.bullets_list_type = def.bullets_list_type.clone();
+        }
+        self.bullet_character = self.bullet_character.or(def.bullet_character);
+        if self.bullets_text_after.is_none() {
+            self.bullets_text_after = def.bullets_text_after.clone();
+        }
     }
 }
 
@@ -292,6 +322,9 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         underline: attr(e, b"Underline").and_then(|s| s.parse().ok()),
         strikethru: attr(e, b"StrikeThru").and_then(|s| s.parse().ok()),
         tab_list: Vec::new(),
+        bullets_list_type: attr(e, b"BulletsAndNumberingListType"),
+        bullet_character: None,
+        bullets_text_after: attr(e, b"BulletsTextAfter"),
     })
 }
 
@@ -357,6 +390,27 @@ mod tests {
         assert_eq!(r.font.as_deref(), Some("Body Font")); // inherited
         assert_eq!(r.justification.as_deref(), Some("LeftAlign"));
         assert_eq!(r.space_after, Some(6.0));
+    }
+
+    #[test]
+    fn parses_bullets_on_paragraph_style() {
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootParagraphStyleGroup>
+            <ParagraphStyle Self="ParagraphStyle/Bulleted"
+                            BulletsAndNumberingListType="BulletList"
+                            BulletsTextAfter=" ">
+              <Properties>
+                <BulletChar BulletCharacterValue="8226"/>
+              </Properties>
+            </ParagraphStyle>
+          </RootParagraphStyleGroup>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let p = s.paragraph_styles.get("ParagraphStyle/Bulleted").unwrap();
+        assert_eq!(p.bullets_list_type.as_deref(), Some("BulletList"));
+        assert_eq!(p.bullet_character, Some(8226)); // U+2022 BULLET
+        assert_eq!(p.bullets_text_after.as_deref(), Some(" "));
     }
 
     #[test]
