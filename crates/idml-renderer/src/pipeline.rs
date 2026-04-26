@@ -572,7 +572,15 @@ fn emit_paragraph_into_chain(
     lopts.alignment = map_justification(resolved_paragraph.justification.as_deref());
 
     if em.y_cursor < 0 {
-        em.y_cursor = first_baseline_for_frame(em.chain[0], paragraph_size, lopts.first_baseline);
+        let head_font_metrics = font_ids
+            .first()
+            .and_then(|id| em.font_table.metrics_for(*id));
+        em.y_cursor = first_baseline_for_frame(
+            em.chain[0],
+            paragraph_size,
+            lopts.first_baseline,
+            head_font_metrics,
+        );
     } else {
         let space_before_64 =
             resolved_paragraph.space_before.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION;
@@ -933,28 +941,47 @@ fn decode_image_bytes(bytes: &[u8]) -> Option<idml_compose::DecodedImage> {
 /// top inset. `default_64` is the renderer's heuristic baseline
 /// (LayoutOptions::new gives `point_size * 0.8 * 64`) used for
 /// `AscentOffset` (the IDML default) and any unrecognised value.
-fn first_baseline_for_frame(frame: &TextFrame, point_size: f32, default_64: i32) -> i32 {
+/// `metrics` carries the head font's OS/2 / hhea metrics; when
+/// present, `CapHeight` and `XHeight` policies use the font's
+/// real values instead of a 70% / 50% heuristic.
+fn first_baseline_for_frame(
+    frame: &TextFrame,
+    point_size: f32,
+    default_64: i32,
+    metrics: Option<&FontMetrics>,
+) -> i32 {
+    const CAP_HEIGHT_FALLBACK: f32 = 0.70;
+    const X_HEIGHT_FALLBACK: f32 = 0.50;
     let top_inset_64 = frame
         .inset_spacing
         .map(|i| (i[0] * idml_text::shape::ADVANCE_PRECISION).round() as i32)
         .unwrap_or(0);
+    let pt_to_64 = |pt: f32| (pt * idml_text::shape::ADVANCE_PRECISION).round() as i32;
+    let em_fraction_to_64 = |frac: f32| pt_to_64(point_size * frac);
     let policy_offset_64 = match frame.first_baseline_offset.as_deref() {
-        // CapHeight ≈ 70% of point size, x-height ≈ 50%, em-box-
-        // height = full point size. Real engines read the font's
-        // OS/2 / hhea tables; these are good-enough approximations
-        // until per-font metrics are available.
-        Some("CapHeight") => {
-            (point_size * 0.7 * idml_text::shape::ADVANCE_PRECISION).round() as i32
-        }
-        Some("XHeight") => (point_size * 0.5 * idml_text::shape::ADVANCE_PRECISION).round() as i32,
-        Some("EmBoxHeight") => (point_size * idml_text::shape::ADVANCE_PRECISION).round() as i32,
+        Some("CapHeight") => em_fraction_to_64(
+            metrics
+                .and_then(|m| m.cap_height)
+                .unwrap_or(CAP_HEIGHT_FALLBACK),
+        ),
+        Some("XHeight") => em_fraction_to_64(
+            metrics
+                .and_then(|m| m.x_height)
+                .unwrap_or(X_HEIGHT_FALLBACK),
+        ),
+        Some("EmBoxHeight") => pt_to_64(point_size),
         // FixedHeight / LeadingOffset use MinimumFirstBaselineOffset
         // verbatim. Falls back to default when missing.
         Some("FixedHeight") | Some("LeadingOffset") => frame
             .minimum_first_baseline_offset
-            .map(|m| (m * idml_text::shape::ADVANCE_PRECISION).round() as i32)
+            .map(pt_to_64)
             .unwrap_or(default_64),
-        _ => default_64,
+        // AscentOffset (IDML default) and unrecognised values: use
+        // the font's ascender if available; otherwise fall through
+        // to the renderer heuristic the LayoutOptions gave us.
+        _ => metrics
+            .map(|m| em_fraction_to_64(m.ascender))
+            .unwrap_or(default_64),
     };
     top_inset_64 + policy_offset_64
 }
@@ -1446,48 +1473,88 @@ fn map_tab_alignment(a: Option<&str>) -> idml_text::layout::TabAlignment {
 /// Per-render font cache. Pre-resolves every distinct (family, style)
 /// pair referenced anywhere in the document via the configured
 /// `AssetResolver`. Falls back to `options.font` when nothing
-/// resolves.
+/// resolves. Also extracts OS/2 / hhea metrics per font_id at
+/// build time so baseline math doesn't have to re-parse the font
+/// per paragraph.
 struct FontTable {
     cache: HashMap<(String, Option<String>), Bytes>,
     fallback: Option<Bytes>,
+    /// Metrics keyed by `fnv_1a_u32(bytes)` (same id the rest of
+    /// the pipeline uses for glyph-cache routing).
+    metrics: HashMap<u32, FontMetrics>,
+}
+
+/// Per-font metrics the renderer reads at baseline-placement time.
+/// All values are scale-free (unit = font units / `units_per_em`)
+/// so callers can multiply by `point_size` to get pt.
+#[derive(Debug, Clone, Copy)]
+struct FontMetrics {
+    /// `OS/2.sCapHeight`, fraction of em. `None` when the font
+    /// doesn't expose it (legacy fonts without the OS/2 v2+ field).
+    cap_height: Option<f32>,
+    /// `OS/2.sxHeight`, fraction of em.
+    x_height: Option<f32>,
+    /// `hhea.ascender`, fraction of em. Always present.
+    ascender: f32,
 }
 
 impl FontTable {
     fn build(document: &Document, options: &PipelineOptions) -> Self {
         let fallback = options.font.map(Bytes::copy_from_slice);
-        let Some(resolver) = options.assets else {
-            return Self {
-                cache: HashMap::new(),
-                fallback,
-            };
-        };
-        // Walk every run in every story and collect distinct keys
-        // before calling the resolver — `resolve_font` may be a JS
-        // promise wrapper or a disk read, so deduping matters.
-        // Each run's effective (family, style) comes from the cascade
-        // (run direct > applied character style > applied paragraph
-        // style) so a run that only carries `AppliedCharacterStyle`
-        // still requests the right font.
-        let mut keys: std::collections::HashSet<(String, Option<String>)> =
-            std::collections::HashSet::new();
-        for parsed in &document.stories {
-            for paragraph in &parsed.story.paragraphs {
-                for run in &paragraph.runs {
-                    let resolved = document.resolved_run_attrs(paragraph, run);
-                    let Some(family) = resolved.font else {
-                        continue;
-                    };
-                    keys.insert((family, resolved.font_style));
+        let mut cache: HashMap<(String, Option<String>), Bytes> = HashMap::new();
+        if let Some(resolver) = options.assets {
+            // Walk every run in every story and collect distinct
+            // keys before calling the resolver — `resolve_font`
+            // may be a JS Promise wrapper or a disk read, so
+            // deduping matters. Each run's effective (family,
+            // style) comes from the cascade (run direct > applied
+            // character style > applied paragraph style) so a run
+            // that only carries `AppliedCharacterStyle` still
+            // requests the right font.
+            let mut keys: std::collections::HashSet<(String, Option<String>)> =
+                std::collections::HashSet::new();
+            for parsed in &document.stories {
+                for paragraph in &parsed.story.paragraphs {
+                    for run in &paragraph.runs {
+                        let resolved = document.resolved_run_attrs(paragraph, run);
+                        let Some(family) = resolved.font else {
+                            continue;
+                        };
+                        keys.insert((family, resolved.font_style));
+                    }
+                }
+            }
+            cache.reserve(keys.len());
+            for key in keys {
+                if let Some(bytes) = resolver.resolve_font(&key.0, key.1.as_deref()) {
+                    cache.insert(key, bytes);
                 }
             }
         }
-        let mut cache = HashMap::with_capacity(keys.len());
-        for key in keys {
-            if let Some(bytes) = resolver.resolve_font(&key.0, key.1.as_deref()) {
-                cache.insert(key, bytes);
+        // Parse metrics for every distinct byte buffer we ended up
+        // caching, plus the fallback. Keyed by the same fnv hash
+        // emit_paragraph uses for font_id — so the lookup is direct.
+        let mut metrics: HashMap<u32, FontMetrics> = HashMap::new();
+        let mut record = |bytes: &[u8]| {
+            let id = fnv_1a_u32(bytes);
+            if metrics.contains_key(&id) {
+                return;
             }
+            if let Some(m) = parse_font_metrics(bytes) {
+                metrics.insert(id, m);
+            }
+        };
+        for b in cache.values() {
+            record(b.as_ref());
         }
-        Self { cache, fallback }
+        if let Some(b) = fallback.as_ref() {
+            record(b.as_ref());
+        }
+        Self {
+            cache,
+            fallback,
+            metrics,
+        }
     }
 
     /// Look up the bytes a paragraph should shape with.
@@ -1510,6 +1577,23 @@ impl FontTable {
         }
         self.fallback.clone()
     }
+
+    fn metrics_for(&self, font_id: u32) -> Option<&FontMetrics> {
+        self.metrics.get(&font_id)
+    }
+}
+
+fn parse_font_metrics(bytes: &[u8]) -> Option<FontMetrics> {
+    let face = ttf_parser::Face::parse(bytes, 0).ok()?;
+    let upem = face.units_per_em() as f32;
+    if upem <= 0.0 {
+        return None;
+    }
+    Some(FontMetrics {
+        cap_height: face.capital_height().map(|v| v as f32 / upem),
+        x_height: face.x_height().map(|v| v as f32 / upem),
+        ascender: face.ascender() as f32 / upem,
+    })
 }
 
 fn fnv_1a_u32(bytes: &[u8]) -> u32 {
