@@ -24,8 +24,13 @@
 
 use std::cell::RefCell;
 
-use idml_compose::{Color as ComposeColor, DisplayCommand, DisplayList, Paint, PathSegment};
-use vello::peniko::{kurbo, Color as PenikoColor, Fill};
+use idml_compose::{
+    Color as ComposeColor, DisplayCommand, DisplayList, LineCap, LineJoin, Paint, PathSegment,
+};
+use vello::peniko::{
+    kurbo::{self, Stroke as KurboStroke},
+    Blob, Color as PenikoColor, Fill, Format as PenikoFormat, Image as PenikoImage,
+};
 use vello::wgpu;
 use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene};
 
@@ -150,10 +155,63 @@ fn build_scene(list: &DisplayList, options: &RasterOptions) -> Scene {
                 };
                 scene.fill(Fill::NonZero, page_to_px, color, None, &path);
             }
-            DisplayCommand::StrokePath { .. }
-            | DisplayCommand::DropShadow { .. }
-            | DisplayCommand::Image { .. } => {
-                // Stubs — see module docs.
+            DisplayCommand::StrokePath {
+                path_id,
+                paint,
+                stroke,
+                transform,
+            } => {
+                let Some(path_data) = list.paths.get(*path_id) else {
+                    continue;
+                };
+                let path = path_to_bez(path_data, transform);
+                let Some(color) = paint_solid_or_skip(paint) else {
+                    continue;
+                };
+                let ks = KurboStroke::new(stroke.width.max(0.0) as f64)
+                    .with_caps(map_cap(stroke.cap))
+                    .with_join(map_join(stroke.join))
+                    .with_miter_limit(stroke.miter_limit.max(1.0) as f64);
+                scene.stroke(&ks, page_to_px, color, None, &path);
+            }
+            DisplayCommand::Image {
+                image_id,
+                transform,
+            } => {
+                let Some(decoded) = list.image(*image_id) else {
+                    continue;
+                };
+                if decoded.width == 0
+                    || decoded.height == 0
+                    || decoded.rgba.len()
+                        != (decoded.width as usize * decoded.height as usize * 4)
+                {
+                    continue;
+                }
+                let blob = Blob::new(std::sync::Arc::new(decoded.rgba.clone()));
+                let img = PenikoImage::new(blob, PenikoFormat::Rgba8, decoded.width, decoded.height);
+                // Display-list transform maps unit-rect (0..1, 0..1)
+                // → page coords. The image's pixel grid lives in
+                // (0..w, 0..h), so divide by (w, h) before composing
+                // with the unit-rect transform and the page→px scale.
+                let inv_w = 1.0 / decoded.width as f64;
+                let inv_h = 1.0 / decoded.height as f64;
+                let pixel_to_unit = kurbo::Affine::scale_non_uniform(inv_w, inv_h);
+                let unit_to_page = kurbo::Affine::new([
+                    transform.0[0] as f64,
+                    transform.0[1] as f64,
+                    transform.0[2] as f64,
+                    transform.0[3] as f64,
+                    transform.0[4] as f64,
+                    transform.0[5] as f64,
+                ]);
+                let pixel_to_px = page_to_px * unit_to_page * pixel_to_unit;
+                scene.draw_image(&img, pixel_to_px);
+            }
+            DisplayCommand::DropShadow { .. } => {
+                // Stub — needs Vello's offscreen-layer + Gaussian
+                // blur path which only lands cleanly with the
+                // §10.4 effect plumbing.
             }
         }
     }
@@ -293,6 +351,22 @@ fn paint_solid_or_skip(paint: &Paint) -> Option<PenikoColor> {
     match paint {
         Paint::Solid(c) => Some(linear_to_peniko(*c)),
         Paint::LinearGradient(_) => None,
+    }
+}
+
+fn map_cap(c: LineCap) -> kurbo::Cap {
+    match c {
+        LineCap::Butt => kurbo::Cap::Butt,
+        LineCap::Round => kurbo::Cap::Round,
+        LineCap::Square => kurbo::Cap::Square,
+    }
+}
+
+fn map_join(j: LineJoin) -> kurbo::Join {
+    match j {
+        LineJoin::Miter => kurbo::Join::Miter,
+        LineJoin::Round => kurbo::Join::Round,
+        LineJoin::Bevel => kurbo::Join::Bevel,
     }
 }
 
