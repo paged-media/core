@@ -29,7 +29,8 @@ use idml_compose::{
 };
 use vello::peniko::{
     kurbo::{self, Stroke as KurboStroke},
-    Blob, Color as PenikoColor, Fill, Format as PenikoFormat, Image as PenikoImage,
+    Blob, BrushRef, Color as PenikoColor, ColorStop as PenikoColorStop, Fill,
+    Format as PenikoFormat, Gradient as PenikoGradient, Image as PenikoImage,
 };
 use vello::wgpu;
 use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene};
@@ -146,14 +147,10 @@ fn build_scene(list: &DisplayList, options: &RasterOptions) -> Scene {
                     continue;
                 };
                 let path = path_to_bez(path_data, transform);
-                let color = match paint_solid_or_skip(paint) {
-                    Some(c) => c,
-                    None => {
-                        // TODO: gradients via peniko::Gradient
-                        continue;
-                    }
+                let Some(brush) = resolve_paint(paint, list, transform) else {
+                    continue;
                 };
-                scene.fill(Fill::NonZero, page_to_px, color, None, &path);
+                scene.fill(Fill::NonZero, page_to_px, brush.as_ref(), None, &path);
             }
             DisplayCommand::StrokePath {
                 path_id,
@@ -165,14 +162,14 @@ fn build_scene(list: &DisplayList, options: &RasterOptions) -> Scene {
                     continue;
                 };
                 let path = path_to_bez(path_data, transform);
-                let Some(color) = paint_solid_or_skip(paint) else {
+                let Some(brush) = resolve_paint(paint, list, transform) else {
                     continue;
                 };
                 let ks = KurboStroke::new(stroke.width.max(0.0) as f64)
                     .with_caps(map_cap(stroke.cap))
                     .with_join(map_join(stroke.join))
                     .with_miter_limit(stroke.miter_limit.max(1.0) as f64);
-                scene.stroke(&ks, page_to_px, color, None, &path);
+                scene.stroke(&ks, page_to_px, brush.as_ref(), None, &path);
             }
             DisplayCommand::Image {
                 image_id,
@@ -347,10 +344,60 @@ fn path_to_bez(
     p
 }
 
-fn paint_solid_or_skip(paint: &Paint) -> Option<PenikoColor> {
+/// Owned brush variant to keep both arms of `BrushRef` alive long
+/// enough for the `scene.fill` / `scene.stroke` call. `BrushRef`
+/// borrows from a `peniko::Color` or a `peniko::Gradient`; we hold
+/// whichever one we built and convert via `as_ref()` at the call
+/// site.
+enum VelloBrush {
+    Solid(PenikoColor),
+    Gradient(PenikoGradient),
+}
+
+impl VelloBrush {
+    fn as_ref(&self) -> BrushRef<'_> {
+        match self {
+            VelloBrush::Solid(c) => BrushRef::Solid(*c),
+            VelloBrush::Gradient(g) => BrushRef::Gradient(g),
+        }
+    }
+}
+
+/// Convert a display-list `Paint` (solid or gradient id) into a
+/// vello brush. Gradient endpoints in the display list live in
+/// the path's unit-rect local coordinates; we apply the path's
+/// `transform` to them so the brush's coordinates land in the
+/// same page-space the shape lives in (vello's `brush_transform`
+/// is `None` here, meaning "brush in shape's local coords").
+fn resolve_paint(
+    paint: &Paint,
+    list: &DisplayList,
+    transform: &idml_compose::Transform,
+) -> Option<VelloBrush> {
     match paint {
-        Paint::Solid(c) => Some(linear_to_peniko(*c)),
-        Paint::LinearGradient(_) => None,
+        Paint::Solid(c) => Some(VelloBrush::Solid(linear_to_peniko(*c))),
+        Paint::LinearGradient(id) => {
+            let g = list.linear_gradient(*id)?;
+            if g.stops.len() < 2 {
+                return None;
+            }
+            let (sx, sy) = transform.apply(g.start.0, g.start.1);
+            let (ex, ey) = transform.apply(g.end.0, g.end.1);
+            let stops: Vec<PenikoColorStop> = g
+                .stops
+                .iter()
+                .map(|s| PenikoColorStop {
+                    offset: s.offset,
+                    color: linear_to_peniko(s.color),
+                })
+                .collect();
+            let pg = PenikoGradient::new_linear(
+                kurbo::Point::new(sx as f64, sy as f64),
+                kurbo::Point::new(ex as f64, ey as f64),
+            )
+            .with_stops(stops.as_slice());
+            Some(VelloBrush::Gradient(pg))
+        }
     }
 }
 
