@@ -72,6 +72,10 @@ pub struct TextFrame {
     /// `<DropShadowSetting>` parsed from `<Properties><TransparencySetting>`.
     /// `None` when absent or `Mode="None"`.
     pub drop_shadow: Option<DropShadowSetting>,
+    /// `NextTextFrame` attribute — the `Self` id of the frame that
+    /// continues this story when its content overflows the current
+    /// frame. `None` for end-of-chain or unthreaded frames.
+    pub next_text_frame: Option<String>,
 }
 
 /// Drop shadow as carried in the IDML XML. Distances are in pt;
@@ -217,6 +221,7 @@ impl Spread {
                             stroke_color,
                             stroke_weight,
                             drop_shadow: None,
+                            next_text_frame: attr(&e, b"NextTextFrame"),
                         });
                         current_frame = Some(CurrentFrame::Text(out.text_frames.len() - 1));
                     }
@@ -503,6 +508,24 @@ mod tests {
         assert!(m[1].abs() < 1e-4 && m[2].abs() < 1e-4);
         assert!((m[4] - 113.0).abs() < 1e-4, "tx = {}", m[4]);
         assert!((m[5] - 224.0).abs() < 1e-4, "ty = {}", m[5]);
+    }
+
+    #[test]
+    fn parses_next_text_frame_link() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <TextFrame Self="frameA" ParentStory="u1"
+                       GeometricBounds="0 0 100 100"
+                       NextTextFrame="frameB"/>
+            <TextFrame Self="frameB" ParentStory="u1"
+                       GeometricBounds="120 0 220 100"/>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.text_frames.len(), 2);
+        assert_eq!(s.text_frames[0].next_text_frame.as_deref(), Some("frameB"));
+        assert!(s.text_frames[1].next_text_frame.is_none());
     }
 
     #[test]

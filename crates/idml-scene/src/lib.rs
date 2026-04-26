@@ -63,6 +63,11 @@ pub struct ParsedMasterSpread {
     pub spread: Spread,
 }
 
+/// Cap on the number of frames followed via `NextTextFrame`.
+/// Real chains are 1–10 frames; the cap exists so a malformed
+/// document with a missed cycle can't make the resolver loop.
+const MAX_FRAME_CHAIN: usize = 256;
+
 impl Document {
     /// Parse every resource the manifest points at. Missing spreads
     /// or stories produce an [`OpenError::MissingEntry`] — the parse
@@ -164,6 +169,77 @@ impl Document {
     /// in IDML.
     pub fn frame_for(&self, story_id: &str) -> Option<&TextFrame> {
         self.frame_for_story.get(story_id)
+    }
+
+    /// Look up a `TextFrame` by its `Self` id (e.g. `frameA`).
+    /// Walks every parsed spread; cheap given typical frame counts.
+    pub fn text_frame(&self, frame_self_id: &str) -> Option<&TextFrame> {
+        for parsed in &self.spreads {
+            for f in &parsed.spread.text_frames {
+                if f.self_id.as_deref() == Some(frame_self_id) {
+                    return Some(f);
+                }
+            }
+        }
+        None
+    }
+
+    /// Frame chain for a story: starts at the frame that is the
+    /// chain head (a frame hosting `story_id` whose `Self` id is
+    /// not another frame's `NextTextFrame` target) and follows
+    /// `NextTextFrame` links until exhaustion. Cycles are bounded
+    /// by `MAX_FRAME_CHAIN` so a malformed document can't hang.
+    /// Returns `Vec<&TextFrame>` borrowing from the document.
+    pub fn frame_chain(&self, story_id: &str) -> Vec<&TextFrame> {
+        // Collect every frame on this story (typically 1; can be N
+        // when the story is threaded across multiple frames).
+        let mut story_frames: Vec<&TextFrame> = Vec::new();
+        for parsed in &self.spreads {
+            for f in &parsed.spread.text_frames {
+                if f.parent_story.as_deref() == Some(story_id) {
+                    story_frames.push(f);
+                }
+            }
+        }
+        if story_frames.is_empty() {
+            return Vec::new();
+        }
+        // The head is whichever frame on this story isn't another
+        // frame's NextTextFrame target. If every frame is targeted
+        // (i.e. a cycle), fall back to the first frame found.
+        let targeted: std::collections::HashSet<&str> = story_frames
+            .iter()
+            .filter_map(|f| f.next_text_frame.as_deref())
+            .collect();
+        let head = story_frames
+            .iter()
+            .find(|f| match f.self_id.as_deref() {
+                Some(id) => !targeted.contains(id),
+                None => true,
+            })
+            .copied()
+            .unwrap_or(story_frames[0]);
+
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        out.push(head);
+        if let Some(id) = head.self_id.as_deref() {
+            seen.insert(id.to_string());
+        }
+        let mut cursor = head.next_text_frame.clone();
+        for _ in 0..MAX_FRAME_CHAIN {
+            let Some(id) = cursor else { break };
+            if seen.contains(&id) {
+                break;
+            }
+            let Some(next) = self.text_frame(&id) else {
+                break;
+            };
+            out.push(next);
+            seen.insert(id);
+            cursor = next.next_text_frame.clone();
+        }
+        out
     }
 
     /// Bytes of a sub-resource in the underlying container (fonts,
