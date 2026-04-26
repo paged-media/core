@@ -267,6 +267,12 @@ pub fn build_document(
     // can avoid re-running the routing logic.
     let mut text_frame_page: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
+    // Per-frame (by Self id) page lookup so threaded stories can
+    // route lines to whichever frame's page they land in. Built
+    // alongside text_frame_page so the same routing pass populates
+    // both maps.
+    let mut frame_to_page: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for (spread_idx, parsed) in document.spreads.iter().enumerate() {
         let spread = &parsed.spread;
         let range = spread_page_ranges[spread_idx].clone();
@@ -277,6 +283,9 @@ pub fn build_document(
             let page_idx = range.start + local_idx;
             if let Some(parent_story) = frame.parent_story.clone() {
                 text_frame_page.insert(parent_story, page_idx);
+            }
+            if let Some(self_id) = frame.self_id.clone() {
+                frame_to_page.insert(self_id, page_idx);
             }
             emit_text_frame_into(
                 &mut pages[page_idx],
@@ -336,22 +345,38 @@ pub fn build_document(
     for parsed in &document.stories {
         total_stats.stories += 1;
         let story = &parsed.story;
-        let frame = document.frame_for(&parsed.self_id);
-        let page_idx = text_frame_page.get(&parsed.self_id).copied().unwrap_or(0);
+        // Walk the NextTextFrame chain so threaded stories pick up
+        // every frame. Single-frame stories collapse to a one-entry
+        // chain — same behaviour as before.
+        let chain = document.frame_chain(&parsed.self_id);
+        if chain.is_empty() {
+            continue;
+        }
+        let chain_pages: Vec<usize> = chain
+            .iter()
+            .map(|f| {
+                f.self_id
+                    .as_deref()
+                    .and_then(|id| frame_to_page.get(id).copied())
+                    .unwrap_or(0)
+            })
+            .collect();
         let column_width_pt = options
             .fallback_column_width_pt
-            .or_else(|| frame.map(|f| f.bounds.width()));
+            .or_else(|| chain.first().map(|f| f.bounds.width()));
 
-        // Cursor accumulates baseline_y (1/64 pt) across paragraphs so
-        // they stack vertically. Without this every paragraph would
-        // start at the same first-baseline relative to the frame.
+        // frame_idx tracks which frame in the chain we're filling
+        // right now; y_cursor is the next baseline (1/64 pt) within
+        // that frame. Both reset when the cursor overflows the
+        // frame's height and we advance to the next one.
+        let mut frame_idx: usize = 0;
         let mut y_cursor: i32 = -1;
 
         for paragraph in &story.paragraphs {
             total_stats.paragraphs += 1;
             total_stats.runs += paragraph.runs.len();
-            pages[page_idx].stats.paragraphs += 1;
-            pages[page_idx].stats.runs += paragraph.runs.len();
+            pages[chain_pages[frame_idx]].stats.paragraphs += 1;
+            pages[chain_pages[frame_idx]].stats.runs += paragraph.runs.len();
 
             // Resolve every run's effective attributes through the
             // style cascade once per paragraph; keep them aligned
@@ -458,34 +483,56 @@ pub fn build_document(
                 }
             }
 
-            // Stats + cursor advance.
-            for line in &laid_out.lines {
-                pages[page_idx].stats.glyphs += line.glyphs.len();
-                total_stats.glyphs += line.glyphs.len();
-            }
-            if let Some(last) = laid_out.lines.last() {
-                y_cursor = last.baseline_y + lopts.line_height;
-            }
-            let space_after_64 =
-                resolved_paragraph.space_after.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION;
-            y_cursor += space_after_64.round() as i32;
-
-            total_stats.lines += laid_out.lines.len();
-            pages[page_idx].stats.lines += laid_out.lines.len();
-
-            let Some(frame) = frame else { continue };
             let picker = build_run_paint_picker_resolved(
                 paragraph,
                 &resolved_runs,
                 palette,
                 options.fallback_text_paint,
             );
-            let (ox, oy) = pages[page_idx].spread_origin;
 
-            // Emission: for each line, walk glyphs grouped by
-            // font_id and emit each run-segment with the matching
-            // outliner face + its point size.
-            for line in &laid_out.lines {
+            // Per-line: route into the current frame; on overflow,
+            // advance to the next frame in the chain and shift the
+            // line's glyphs to land near that frame's first baseline.
+            // Lines whose break would overflow the last frame in the
+            // chain stay in the last frame (visible overset text).
+            let space_after_64 =
+                resolved_paragraph.space_after.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION;
+            for mut line in laid_out.lines.into_iter() {
+                let line_h = idml_text::layout::max_line_height_for_glyphs(&line.glyphs)
+                    .unwrap_or(lopts.line_height);
+                let frame_height_64 = (chain[frame_idx].bounds.height()
+                    * idml_text::shape::ADVANCE_PRECISION)
+                    .round() as i32;
+                // Overflow when the baseline itself sits past the
+                // frame's bottom edge. Keeps the math simple — fancier
+                // ascent/descent accounting can fold in once
+                // FirstBaselineOffset / TextFramePreference parsing
+                // lands.
+                if line.baseline_y > frame_height_64 && frame_idx + 1 < chain.len() {
+                    let prev_baseline = line.baseline_y;
+                    frame_idx += 1;
+                    let new_baseline =
+                        (paragraph_size * 0.8 * idml_text::shape::ADVANCE_PRECISION).round() as i32;
+                    let dy = new_baseline - prev_baseline;
+                    for g in &mut line.glyphs {
+                        g.y += dy;
+                    }
+                    line.baseline_y = new_baseline;
+                }
+
+                // Stats per the page that finally gets this line.
+                let target_page = chain_pages[frame_idx];
+                pages[target_page].stats.glyphs += line.glyphs.len();
+                pages[target_page].stats.lines += 1;
+                total_stats.glyphs += line.glyphs.len();
+                total_stats.lines += 1;
+
+                let frame = chain[frame_idx];
+                let (ox, oy) = pages[target_page].spread_origin;
+
+                // Emission: walk glyphs grouped by font_id and emit
+                // each run-segment with the matching outliner face +
+                // its point size.
                 let mut start = 0;
                 while start < line.glyphs.len() {
                     let fid = line.glyphs[start].font_id;
@@ -508,11 +555,18 @@ pub fn build_document(
                         |cluster| picker.pick(cluster),
                         (frame.bounds.left - ox, frame.bounds.top - oy),
                         &outliner,
-                        &mut pages[page_idx].list,
+                        &mut pages[target_page].list,
                     );
                     start = end;
                 }
+
+                y_cursor = line.baseline_y + line_h;
             }
+            // SpaceAfter advances the in-frame cursor for the next
+            // paragraph. Crucially, we don't reset frame_idx here —
+            // the next paragraph keeps writing into whichever frame
+            // the last line landed in.
+            y_cursor += space_after_64.round() as i32;
         }
     }
 

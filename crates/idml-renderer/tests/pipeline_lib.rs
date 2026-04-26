@@ -632,3 +632,28 @@ fn frame_chain_walks_next_text_frame_links() {
     assert_eq!(chain[1].self_id.as_deref(), Some("frameB"));
     assert_eq!(chain[2].self_id.as_deref(), Some("frameC"));
 }
+
+#[test]
+fn threaded_story_renders_without_panic() {
+    let bytes = build_threaded_idml();
+    let document = Document::open(&bytes).unwrap();
+    // No font registered → text is skipped per the resolver fallback,
+    // but the chain construction + per-frame emission plumbing must
+    // still run cleanly. Smoke test for the threading refactor.
+    let opts = PipelineOptions::default();
+    let built = pipeline::build_document(&document, &opts).unwrap();
+    // Exactly one page in this synthetic IDML.
+    assert_eq!(built.pages.len(), 1);
+    // Three frames in the chain → three FillPath rectangles emitted
+    // for the frame backgrounds (plus zero text glyphs).
+    let frame_fills = built.pages[0]
+        .list
+        .commands
+        .iter()
+        .filter(|c| matches!(c, idml_compose::DisplayCommand::FillPath { .. }))
+        .count();
+    assert!(
+        frame_fills >= 3,
+        "expected ≥3 frame fills, got {frame_fills}"
+    );
+}

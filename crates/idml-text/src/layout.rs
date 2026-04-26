@@ -515,7 +515,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
 /// Auto-leading line height for a line of glyphs, in 1/64 pt:
 /// `max(glyph.point_size) * 1.2 * 64`. Returns `None` for an empty
 /// line so callers can fall back to a default.
-pub(crate) fn max_line_height_for_glyphs(glyphs: &[PositionedGlyph]) -> Option<i32> {
+pub fn max_line_height_for_glyphs(glyphs: &[PositionedGlyph]) -> Option<i32> {
     glyphs
         .iter()
         .map(|g| g.point_size)
