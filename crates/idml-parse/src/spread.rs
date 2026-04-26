@@ -76,6 +76,10 @@ pub struct TextFrame {
     /// continues this story when its content overflows the current
     /// frame. `None` for end-of-chain or unthreaded frames.
     pub next_text_frame: Option<String>,
+    /// `VerticalJustification` from `<TextFramePreference>`. IDML
+    /// values: `TopAlign` (default), `CenterAlign`, `BottomAlign`,
+    /// `JustifyAlign`.
+    pub vertical_justification: Option<String>,
 }
 
 /// Drop shadow as carried in the IDML XML. Distances are in pt;
@@ -222,6 +226,7 @@ impl Spread {
                             stroke_weight,
                             drop_shadow: None,
                             next_text_frame: attr(&e, b"NextTextFrame"),
+                            vertical_justification: None,
                         });
                         current_frame = Some(CurrentFrame::Text(out.text_frames.len() - 1));
                     }
@@ -289,6 +294,18 @@ impl Spread {
                                     }
                                 }
                             }
+                        }
+                    }
+                    b"TextFramePreference" => {
+                        // Attach VerticalJustification to the
+                        // current TextFrame. Other knobs on
+                        // TextFramePreference (insets, columns,
+                        // FirstBaselineOffset) land here too once
+                        // the renderer consumes them.
+                        if let (Some(CurrentFrame::Text(i)), Some(vj)) =
+                            (current_frame, attr(&e, b"VerticalJustification"))
+                        {
+                            out.text_frames[i].vertical_justification = Some(vj);
                         }
                     }
                     b"Image" | b"Link" => {

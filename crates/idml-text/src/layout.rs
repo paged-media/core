@@ -27,6 +27,10 @@ pub struct PositionedGlyph {
     pub x: i32,
     /// Frame-origin-relative y (baseline + per-glyph y_offset), 1/64 pt.
     pub y: i32,
+    /// Per-glyph horizontal advance, 1/64 pt. Carried so emission
+    /// can compute the right-edge of contiguous decoration runs
+    /// (underline / strikethrough) without re-shaping.
+    pub x_advance: i32,
     /// Font id this glyph was shaped with. Single-font layouts
     /// (`layout_paragraph`) leave this 0; multi-font layouts
     /// (`layout_runs`) set it per run so the rasterizer can route
@@ -36,6 +40,12 @@ pub struct PositionedGlyph {
     /// leave this 0.0; multi-font layouts set it per run so emission
     /// can scale outlines with the correct em ratio.
     pub point_size: f32,
+    /// Underline / strikethrough flags lifted from the run.
+    /// Multi-font layouts (`layout_runs`) populate these from the
+    /// originating `StyledRun`. Single-font `layout_paragraph` leaves
+    /// them false.
+    pub underline: bool,
+    pub strikethru: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -182,8 +192,11 @@ pub fn position_line(
             cluster: cluster_base + g.cluster,
             x: pen_x + g.x_offset,
             y: baseline_y + g.y_offset,
+            x_advance: g.x_advance,
             font_id: 0,
             point_size: 0.0,
+            underline: false,
+            strikethru: false,
         });
         pen_x += g.x_advance;
     }
@@ -275,6 +288,8 @@ pub struct StyledRun<'a> {
     pub point_size: f32,
     pub tracking: Option<f32>,
     pub font_id: u32,
+    pub underline: bool,
+    pub strikethru: bool,
 }
 
 /// Multi-font flavour of [`layout_paragraph`].
@@ -458,8 +473,11 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                 cluster: fg.cluster,
                 x: pen_x + fg.x_offset,
                 y: baseline + fg.y_offset,
+                x_advance: fg.x_advance,
                 font_id: run.font_id,
                 point_size: run.point_size,
+                underline: run.underline,
+                strikethru: run.strikethru,
             });
             pen_x += fg.x_advance;
             last_run_idx = Some(fg.run_idx);
@@ -478,8 +496,11 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                         cluster: end.saturating_sub(1) as u32,
                         x: pen_x + g.x_offset,
                         y: baseline + g.y_offset,
+                        x_advance: g.x_advance,
                         font_id: r.font_id,
                         point_size: r.point_size,
+                        underline: r.underline,
+                        strikethru: r.strikethru,
                     });
                     pen_x += g.x_advance;
                 }
@@ -746,8 +767,11 @@ mod tests {
             cluster: 0,
             x: 0,
             y: 0,
+            x_advance: 0,
             font_id: 0,
             point_size,
+            underline: false,
+            strikethru: false,
         }
     }
 

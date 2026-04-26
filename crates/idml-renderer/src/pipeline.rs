@@ -273,6 +273,11 @@ pub fn build_document(
     // both maps.
     let mut frame_to_page: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
+    // Per-page (URI → ImageId) cache so multiple rectangles on the
+    // same page that reference the same image share a single
+    // decoded buffer in the display list.
+    let mut page_image_caches: Vec<HashMap<String, idml_compose::ImageId>> =
+        (0..pages.len()).map(|_| HashMap::new()).collect();
     for (spread_idx, parsed) in document.spreads.iter().enumerate() {
         let spread = &parsed.spread;
         let range = spread_page_ranges[spread_idx].clone();
@@ -309,9 +314,15 @@ pub fn build_document(
                 options.frame_drop_shadow,
             );
             // Place an image after the rectangle's solid fill so the
-            // image draws on top. Decoding happens once per command;
-            // intra-document dedup is a future optimisation.
-            emit_rectangle_image(&mut pages[page_idx], rect, options);
+            // image draws on top. The per-page cache shares
+            // decoded bytes across rectangles that reference the
+            // same URI on this page.
+            emit_rectangle_image(
+                &mut pages[page_idx],
+                rect,
+                options,
+                &mut page_image_caches[page_idx],
+            );
         }
         for oval in &spread.ovals {
             total_stats.frames += 1;
@@ -371,6 +382,11 @@ pub fn build_document(
         // frame's height and we advance to the next one.
         let mut frame_idx: usize = 0;
         let mut y_cursor: i32 = -1;
+        // Per-frame: (start_cmd, end_cmd) range on its page, plus
+        // the largest baseline_y emitted into that frame in 1/64 pt.
+        // Both feed the post-story vertical-justification shift.
+        let mut frame_cmd_ranges: Vec<Option<(usize, usize)>> = vec![None; chain.len()];
+        let mut frame_max_baseline_64: Vec<i32> = vec![0; chain.len()];
 
         for paragraph in &story.paragraphs {
             total_stats.paragraphs += 1;
@@ -445,6 +461,8 @@ pub fn build_document(
                         .unwrap_or(options.default_point_size),
                     tracking: resolved_runs[i].tracking,
                     font_id: font_ids[i],
+                    underline: resolved_runs[i].underline.unwrap_or(false),
+                    strikethru: resolved_runs[i].strikethru.unwrap_or(false),
                 })
                 .collect();
 
@@ -530,6 +548,12 @@ pub fn build_document(
                 let frame = chain[frame_idx];
                 let (ox, oy) = pages[target_page].spread_origin;
 
+                // Snapshot command count BEFORE this line's emission
+                // so the post-story vertical-justification pass can
+                // shift this frame's commands without touching the
+                // frame outline (which was emitted earlier).
+                let before_cmds = pages[target_page].list.commands.len();
+
                 // Emission: walk glyphs grouped by font_id and emit
                 // each run-segment with the matching outliner face +
                 // its point size.
@@ -559,6 +583,28 @@ pub fn build_document(
                     );
                     start = end;
                 }
+                // Decoration emission: walk the line's glyphs and
+                // emit horizontal strokes for contiguous underlined
+                // / struck-through ranges, using the run's resolved
+                // fill colour. Underline sits a fraction of the
+                // point size below the baseline; strikethrough
+                // sits above. Both are line-anchored so they read
+                // as decoration rather than glyph fill.
+                emit_line_decorations(
+                    &line,
+                    &picker,
+                    (frame.bounds.left - ox, frame.bounds.top - oy),
+                    &mut pages[target_page].list,
+                );
+
+                let after_cmds = pages[target_page].list.commands.len();
+                match &mut frame_cmd_ranges[frame_idx] {
+                    Some((_, e)) => *e = after_cmds,
+                    None => frame_cmd_ranges[frame_idx] = Some((before_cmds, after_cmds)),
+                }
+                if line.baseline_y > frame_max_baseline_64[frame_idx] {
+                    frame_max_baseline_64[frame_idx] = line.baseline_y;
+                }
 
                 y_cursor = line.baseline_y + line_h;
             }
@@ -567,6 +613,51 @@ pub fn build_document(
             // the next paragraph keeps writing into whichever frame
             // the last line landed in.
             y_cursor += space_after_64.round() as i32;
+        }
+
+        // Post-story vertical-justification pass. Per frame in the
+        // chain: compute slack = frame.height - (max_baseline +
+        // line_height descender slack); shift the frame's emitted
+        // commands' ty by `slack`, `slack/2`, or 0 according to
+        // VerticalJustification. JustifyAlign would distribute the
+        // slack between paragraphs — falls through to TopAlign for
+        // now (a future batch).
+        for (i, frame) in chain.iter().enumerate() {
+            let Some((start, end)) = frame_cmd_ranges[i] else {
+                continue;
+            };
+            let vj = frame.vertical_justification.as_deref();
+            if vj.is_none() || vj == Some("TopAlign") {
+                continue;
+            }
+            let frame_height_64 =
+                (frame.bounds.height() * idml_text::shape::ADVANCE_PRECISION).round() as i32;
+            // Approximate used height: last baseline + one line's
+            // descender allowance (≈ 1 line height at the
+            // paragraph's natural size). Good enough to centre /
+            // bottom-align typical body copy.
+            let used_64 = frame_max_baseline_64[i];
+            let slack_64 = (frame_height_64 - used_64).max(0);
+            let dy_64 = match vj {
+                Some("CenterAlign") => slack_64 / 2,
+                Some("BottomAlign") => slack_64,
+                _ => 0,
+            };
+            if dy_64 == 0 {
+                continue;
+            }
+            let dy_pt = dy_64 as f32 / idml_text::shape::ADVANCE_PRECISION;
+            let cmds = &mut pages[chain_pages[i]].list.commands;
+            for cmd in &mut cmds[start..end] {
+                match cmd {
+                    idml_compose::DisplayCommand::FillPath { transform, .. }
+                    | idml_compose::DisplayCommand::StrokePath { transform, .. }
+                    | idml_compose::DisplayCommand::DropShadow { transform, .. }
+                    | idml_compose::DisplayCommand::Image { transform, .. } => {
+                        transform.0[5] += dy_pt;
+                    }
+                }
+            }
         }
     }
 
@@ -681,7 +772,7 @@ fn emit_line_into(
     let Some(stroke_paint) = line
         .stroke_color
         .as_deref()
-        .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+        .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
     else {
         return;
     };
@@ -744,19 +835,19 @@ fn emit_rectangle_into(
 /// silently if `assets` is unset, the resolver returns `None`, or
 /// decoding fails — IDMLs without their linked assets should still
 /// produce a usable render of the surrounding geometry.
-fn emit_rectangle_image(page: &mut BuiltPage, rect: &Rectangle, options: &PipelineOptions) {
+///
+/// `image_cache` maps `LinkResourceURI` → already-pushed `ImageId`
+/// for *this page*. Repeat placements of the same image (gallery
+/// layouts, stamps) share the decoded buffer. The cache is per-page
+/// because `ImageId` indexes a page's display list — different pages
+/// have separate image pools.
+fn emit_rectangle_image(
+    page: &mut BuiltPage,
+    rect: &Rectangle,
+    options: &PipelineOptions,
+    image_cache: &mut HashMap<String, idml_compose::ImageId>,
+) {
     let Some(uri) = rect.image_link.as_deref() else {
-        return;
-    };
-    let Some(resolver) = options.assets else {
-        return;
-    };
-    let Some(bytes) = resolver.resolve_image(uri) else {
-        tracing::warn!(uri, "image resolver returned no bytes; skipping");
-        return;
-    };
-    let Some(decoded) = decode_image_bytes(bytes.as_ref()) else {
-        tracing::warn!(uri, "image decode failed; skipping");
         return;
     };
     let r = Rect {
@@ -766,7 +857,24 @@ fn emit_rectangle_image(page: &mut BuiltPage, rect: &Rectangle, options: &Pipeli
         h: rect.bounds.height(),
     };
     let outer = frame_outer_transform(page, rect.item_transform);
-    let id = page.list.push_image(decoded);
+    let id = if let Some(cached) = image_cache.get(uri) {
+        *cached
+    } else {
+        let Some(resolver) = options.assets else {
+            return;
+        };
+        let Some(bytes) = resolver.resolve_image(uri) else {
+            tracing::warn!(uri, "image resolver returned no bytes; skipping");
+            return;
+        };
+        let Some(decoded) = decode_image_bytes(bytes.as_ref()) else {
+            tracing::warn!(uri, "image decode failed; skipping");
+            return;
+        };
+        let id = page.list.push_image(decoded);
+        image_cache.insert(uri.to_string(), id);
+        id
+    };
     idml_compose::emit_image_at(r, outer, id, &mut page.list);
 }
 
@@ -1181,6 +1289,64 @@ fn build_run_paint_picker_resolved(
         cursor += run.text.len() as u32;
     }
     RunPaintPicker { bands, default }
+}
+
+/// Walk a laid-out line's glyphs and emit horizontal stroke
+/// commands for any underlined or struck-through ranges. The stroke
+/// uses the run's resolved fill colour (per cluster, via the same
+/// picker as the glyphs themselves) so coloured text gets coloured
+/// decoration.
+fn emit_line_decorations(
+    line: &idml_text::layout::LaidOutLine,
+    picker: &RunPaintPicker,
+    frame_origin_pt: (f32, f32),
+    list: &mut DisplayList,
+) {
+    use idml_text::shape::ADVANCE_PRECISION;
+    if line.glyphs.is_empty() {
+        return;
+    }
+    // Underline first, strikethrough second so a glyph with both
+    // gets two stripes.
+    type DecorPredicate = fn(&idml_text::PositionedGlyph) -> bool;
+    let predicates: [(DecorPredicate, f32); 2] = [
+        (|g| g.underline, 0.12),   // ≈ 12% of point size below baseline
+        (|g| g.strikethru, -0.30), // ≈ 30% above baseline (mid-x-height-ish)
+    ];
+    for (predicate, y_offset_factor) in predicates {
+        let mut start = 0;
+        while start < line.glyphs.len() {
+            if !predicate(&line.glyphs[start]) {
+                start += 1;
+                continue;
+            }
+            let mut end = start + 1;
+            while end < line.glyphs.len() && predicate(&line.glyphs[end]) {
+                end += 1;
+            }
+            let g0 = &line.glyphs[start];
+            let g_last = &line.glyphs[end - 1];
+            let x_start_pt = frame_origin_pt.0 + (g0.x as f32) / ADVANCE_PRECISION;
+            let x_end_pt =
+                frame_origin_pt.0 + ((g_last.x + g_last.x_advance) as f32) / ADVANCE_PRECISION;
+            let baseline_pt = frame_origin_pt.1 + (line.baseline_y as f32) / ADVANCE_PRECISION;
+            let y_pt = baseline_pt + g0.point_size * y_offset_factor;
+            let stroke_w = (g0.point_size * 0.06_f32).max(0.4);
+            // Decoration paint matches the run's fill at the start
+            // glyph's cluster.
+            let paint = picker.pick(g0.cluster);
+            idml_compose::emit_line(
+                x_start_pt,
+                y_pt,
+                x_end_pt,
+                y_pt,
+                Stroke::new(stroke_w),
+                paint,
+                list,
+            );
+            start = end;
+        }
+    }
 }
 
 /// Map IDML `Justification` attribute values to `idml_text::Alignment`.

@@ -268,16 +268,22 @@ mod tests {
             cluster: 0,
             x: 0,
             y: 0,
+            x_advance: 0,
             font_id: 0,
             point_size: 0.0,
+            underline: false,
+            strikethru: false,
         }];
         let glyphs_b = vec![PositionedGlyph {
             glyph_id: 65,
             cluster: 0,
             x: 0,
             y: 0,
+            x_advance: 0,
             font_id: 0,
             point_size: 0.0,
+            underline: false,
+            strikethru: false,
         }];
         emit_glyph_slice(
             &glyphs_a,

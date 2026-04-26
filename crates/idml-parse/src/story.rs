@@ -62,6 +62,10 @@ pub struct CharacterRun {
     /// get the em fraction that should be added to every glyph's
     /// advance).
     pub tracking: Option<f32>,
+    /// `Underline="true"` on the CharacterStyleRange.
+    pub underline: Option<bool>,
+    /// `StrikeThru="true"` on the CharacterStyleRange.
+    pub strikethru: Option<bool>,
     pub text: String,
 }
 
@@ -98,6 +102,9 @@ impl Story {
                             point_size: attr(&e, b"PointSize").and_then(|s| s.parse().ok()),
                             fill_color: attr(&e, b"FillColor"),
                             tracking: attr(&e, b"Tracking").and_then(|s| s.parse().ok()),
+                            underline: attr(&e, b"Underline").and_then(|s| s.parse::<bool>().ok()),
+                            strikethru: attr(&e, b"StrikeThru")
+                                .and_then(|s| s.parse::<bool>().ok()),
                             text: String::new(),
                         });
                     }

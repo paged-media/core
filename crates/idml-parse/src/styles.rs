@@ -50,6 +50,8 @@ pub struct CharacterStyleDef {
     pub point_size: Option<f32>,
     pub fill_color: Option<String>,
     pub tracking: Option<f32>,
+    pub underline: Option<bool>,
+    pub strikethru: Option<bool>,
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -66,6 +68,8 @@ pub struct ParagraphStyleDef {
     pub first_line_indent: Option<f32>,
     pub space_before: Option<f32>,
     pub space_after: Option<f32>,
+    pub underline: Option<bool>,
+    pub strikethru: Option<bool>,
 }
 
 /// Effective character-level attributes after walking BasedOn.
@@ -76,6 +80,8 @@ pub struct ResolvedCharacter {
     pub point_size: Option<f32>,
     pub fill_color: Option<String>,
     pub tracking: Option<f32>,
+    pub underline: Option<bool>,
+    pub strikethru: Option<bool>,
 }
 
 /// Effective paragraph-level attributes after walking BasedOn.
@@ -90,6 +96,8 @@ pub struct ResolvedParagraph {
     pub first_line_indent: Option<f32>,
     pub space_before: Option<f32>,
     pub space_after: Option<f32>,
+    pub underline: Option<bool>,
+    pub strikethru: Option<bool>,
 }
 
 impl StyleSheet {
@@ -138,6 +146,8 @@ impl StyleSheet {
             acc.point_size = acc.point_size.or(s.point_size);
             acc.fill_color = acc.fill_color.or_else(|| s.fill_color.clone());
             acc.tracking = acc.tracking.or(s.tracking);
+            acc.underline = acc.underline.or(s.underline);
+            acc.strikethru = acc.strikethru.or(s.strikethru);
             cursor = s.based_on.clone();
         }
         acc
@@ -160,6 +170,8 @@ impl StyleSheet {
             acc.first_line_indent = acc.first_line_indent.or(s.first_line_indent);
             acc.space_before = acc.space_before.or(s.space_before);
             acc.space_after = acc.space_after.or(s.space_after);
+            acc.underline = acc.underline.or(s.underline);
+            acc.strikethru = acc.strikethru.or(s.strikethru);
             cursor = s.based_on.clone();
         }
         acc
@@ -176,6 +188,8 @@ fn parse_character_style(e: &quick_xml::events::BytesStart) -> Option<CharacterS
         point_size: attr(e, b"PointSize").and_then(|s| s.parse().ok()),
         fill_color: attr(e, b"FillColor"),
         tracking: attr(e, b"Tracking").and_then(|s| s.parse().ok()),
+        underline: attr(e, b"Underline").and_then(|s| s.parse().ok()),
+        strikethru: attr(e, b"StrikeThru").and_then(|s| s.parse().ok()),
     })
 }
 
@@ -193,6 +207,8 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         first_line_indent: attr(e, b"FirstLineIndent").and_then(|s| s.parse().ok()),
         space_before: attr(e, b"SpaceBefore").and_then(|s| s.parse().ok()),
         space_after: attr(e, b"SpaceAfter").and_then(|s| s.parse().ok()),
+        underline: attr(e, b"Underline").and_then(|s| s.parse().ok()),
+        strikethru: attr(e, b"StrikeThru").and_then(|s| s.parse().ok()),
     })
 }
 

@@ -292,6 +292,14 @@ impl Document {
                 .tracking
                 .or(char_resolved.tracking)
                 .or(para_resolved.tracking),
+            underline: run
+                .underline
+                .or(char_resolved.underline)
+                .or(para_resolved.underline),
+            strikethru: run
+                .strikethru
+                .or(char_resolved.strikethru)
+                .or(para_resolved.strikethru),
         }
     }
 
@@ -350,6 +358,8 @@ pub struct ResolvedRunAttrs {
     pub point_size: Option<f32>,
     pub fill_color: Option<String>,
     pub tracking: Option<f32>,
+    pub underline: Option<bool>,
+    pub strikethru: Option<bool>,
 }
 
 /// Effective paragraph-level attributes after walking the cascade
