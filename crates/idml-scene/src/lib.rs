@@ -348,7 +348,9 @@ impl ResolvedRunAttrs {
 
 impl ResolvedParagraphAttrs {
     /// Capture a paragraph's directly-set fields. Style cascade
-    /// fallbacks apply via `merge_below`.
+    /// fallbacks apply via `merge_below`. Bullet fields aren't on
+    /// `Paragraph` (IDML carries them only on the style), so they
+    /// always start `None` here and arrive via the cascade.
     pub fn from_paragraph(paragraph: &Paragraph) -> Self {
         Self {
             justification: paragraph.justification.clone(),
@@ -356,6 +358,9 @@ impl ResolvedParagraphAttrs {
             space_before: paragraph.space_before,
             space_after: paragraph.space_after,
             tab_list: paragraph.tab_list.clone(),
+            bullets_list_type: None,
+            bullet_character: None,
+            bullets_text_after: None,
         }
     }
 
@@ -369,6 +374,13 @@ impl ResolvedParagraphAttrs {
         self.space_after = self.space_after.or(p.space_after);
         if self.tab_list.is_empty() && !p.tab_list.is_empty() {
             self.tab_list = p.tab_list.clone();
+        }
+        if self.bullets_list_type.is_none() {
+            self.bullets_list_type = p.bullets_list_type.clone();
+        }
+        self.bullet_character = self.bullet_character.or(p.bullet_character);
+        if self.bullets_text_after.is_none() {
+            self.bullets_text_after = p.bullets_text_after.clone();
         }
     }
 }
@@ -417,6 +429,15 @@ pub struct ResolvedParagraphAttrs {
     pub space_before: Option<f32>,
     pub space_after: Option<f32>,
     pub tab_list: Vec<idml_parse::TabStop>,
+    /// `BulletsAndNumberingListType` (BulletList / NumberedList /
+    /// NoList). The renderer only consumes BulletList today.
+    pub bullets_list_type: Option<String>,
+    /// Unicode codepoint of the bullet glyph (from `<BulletChar>`).
+    pub bullet_character: Option<u32>,
+    /// Separator string rendered between the bullet and the
+    /// paragraph text. IDML serialises tabs as `^t`; the
+    /// renderer expands them to `\t` at use time.
+    pub bullets_text_after: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -567,12 +567,29 @@ fn emit_paragraph_into_chain(
 
     let font_ids: Vec<u32> = bytes_pool.iter().map(|b| fnv_1a_u32(b.as_ref())).collect();
 
+    // Bulleted paragraphs prepend `<bullet><separator>` to the
+    // first run's text. The bullet picks up the first run's font
+    // and size; a future batch can route it through the paragraph
+    // style's character formatting instead. IDML serialises tabs
+    // in BulletsTextAfter as the literal `^t` two-byte sequence —
+    // expand to a real `\t` so apply_tab_stops snaps it.
+    let bullet_first_text: Option<String> = bullet_prefix(&resolved_paragraph).and_then(|prefix| {
+        paragraph
+            .runs
+            .first()
+            .map(|r| format!("{prefix}{}", r.text))
+    });
+
     let styled_runs: Vec<idml_text::StyledRun> = paragraph
         .runs
         .iter()
         .enumerate()
         .map(|(i, run)| idml_text::StyledRun {
-            text: &run.text,
+            text: if i == 0 {
+                bullet_first_text.as_deref().unwrap_or(&run.text)
+            } else {
+                &run.text
+            },
             face: shaping_faces[unique_idx[i]].as_ref().unwrap(),
             point_size: resolved_runs[i]
                 .point_size
@@ -624,14 +641,32 @@ fn emit_paragraph_into_chain(
         }
     }
 
-    let has_any_tab = paragraph.runs.iter().any(|r| r.text.contains('\t'));
-    if has_any_tab {
+    // Build the paragraph text that matches the cluster offsets
+    // layout_runs saw — bulleted paragraphs include the prepended
+    // bullet+separator on run 0. Compute lazily; only the tab
+    // pass actually needs it.
+    let needs_paragraph_text = paragraph.runs.iter().any(|r| r.text.contains('\t'))
+        || bullet_first_text
+            .as_deref()
+            .is_some_and(|t| t.contains('\t'));
+    if needs_paragraph_text {
         let tab_stops: Vec<(f32, idml_text::layout::TabAlignment)> = resolved_paragraph
             .tab_list
             .iter()
             .map(|t| (t.position, map_tab_alignment(t.alignment.as_deref())))
             .collect();
-        let paragraph_text: String = paragraph.runs.iter().map(|r| r.text.as_str()).collect();
+        let paragraph_text: String = paragraph
+            .runs
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                if i == 0 {
+                    bullet_first_text.as_deref().unwrap_or(&r.text)
+                } else {
+                    &r.text
+                }
+            })
+            .collect();
         for line in laid_out.lines.iter_mut() {
             idml_text::layout::apply_tab_stops(line, &paragraph_text, &tab_stops, 36.0);
         }
@@ -1486,6 +1521,25 @@ pub fn map_justification(j: Option<&str>) -> idml_text::Alignment {
 
 /// Map IDML `<TabStop Alignment="...">` values to the layout
 /// crate's `TabAlignment`.
+/// Build the bullet+separator string for a bulleted paragraph,
+/// or `None` for paragraphs that don't carry a bullet. Numbered
+/// lists (`NumberedList`) need a per-list counter and don't ship
+/// in this batch — they fall through to `None` here.
+fn bullet_prefix(p: &idml_scene::ResolvedParagraphAttrs) -> Option<String> {
+    if p.bullets_list_type.as_deref() != Some("BulletList") {
+        return None;
+    }
+    let cp = p.bullet_character?;
+    let ch = char::from_u32(cp)?;
+    // `^t` in IDML serialises a literal tab in BulletsTextAfter.
+    let after = p
+        .bullets_text_after
+        .as_deref()
+        .map(|s| s.replace("^t", "\t"))
+        .unwrap_or_else(|| " ".to_string());
+    Some(format!("{ch}{after}"))
+}
+
 fn map_tab_alignment(a: Option<&str>) -> idml_text::layout::TabAlignment {
     match a {
         Some("RightAlign") => idml_text::layout::TabAlignment::Right,
@@ -1632,4 +1686,57 @@ fn fnv_1a_u32(bytes: &[u8]) -> u32 {
         h = h.wrapping_mul(FNV_PRIME);
     }
     h
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn attrs(
+        list_type: Option<&str>,
+        ch: Option<u32>,
+        after: Option<&str>,
+    ) -> idml_scene::ResolvedParagraphAttrs {
+        idml_scene::ResolvedParagraphAttrs {
+            bullets_list_type: list_type.map(str::to_string),
+            bullet_character: ch,
+            bullets_text_after: after.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn bullet_prefix_builds_glyph_plus_separator() {
+        // U+2022 BULLET • + plain space.
+        let p = bullet_prefix(&attrs(Some("BulletList"), Some(0x2022), Some(" "))).unwrap();
+        assert_eq!(p, "\u{2022} ");
+    }
+
+    #[test]
+    fn bullet_prefix_expands_caret_t_to_tab() {
+        let p = bullet_prefix(&attrs(Some("BulletList"), Some(0x2022), Some("^t"))).unwrap();
+        assert_eq!(p, "\u{2022}\t");
+    }
+
+    #[test]
+    fn bullet_prefix_defaults_separator_to_space() {
+        let p = bullet_prefix(&attrs(Some("BulletList"), Some(0x2022), None)).unwrap();
+        assert_eq!(p, "\u{2022} ");
+    }
+
+    #[test]
+    fn bullet_prefix_none_for_nolist() {
+        assert!(bullet_prefix(&attrs(Some("NoList"), Some(0x2022), Some(" "))).is_none());
+    }
+
+    #[test]
+    fn bullet_prefix_none_for_numbered_list() {
+        // Numbered lists need a counter; not in this batch.
+        assert!(bullet_prefix(&attrs(Some("NumberedList"), None, None)).is_none());
+    }
+
+    #[test]
+    fn bullet_prefix_none_when_codepoint_missing() {
+        assert!(bullet_prefix(&attrs(Some("BulletList"), None, Some(" "))).is_none());
+    }
 }
