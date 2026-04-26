@@ -361,6 +361,7 @@ impl ResolvedParagraphAttrs {
             bullets_list_type: None,
             bullet_character: None,
             bullets_text_after: None,
+            numbering_format: None,
         }
     }
 
@@ -381,6 +382,9 @@ impl ResolvedParagraphAttrs {
         self.bullet_character = self.bullet_character.or(p.bullet_character);
         if self.bullets_text_after.is_none() {
             self.bullets_text_after = p.bullets_text_after.clone();
+        }
+        if self.numbering_format.is_none() {
+            self.numbering_format = p.numbering_format.clone();
         }
     }
 }
@@ -438,6 +442,11 @@ pub struct ResolvedParagraphAttrs {
     /// paragraph text. IDML serialises tabs as `^t`; the
     /// renderer expands them to `\t` at use time.
     pub bullets_text_after: Option<String>,
+    /// `NumberingFormat` sample string from the cascaded paragraph
+    /// style. Used by the renderer's `format_number` helper to pick
+    /// Arabic / Roman / alpha / zero-padded formatting for
+    /// `NumberedList` paragraphs.
+    pub numbering_format: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]

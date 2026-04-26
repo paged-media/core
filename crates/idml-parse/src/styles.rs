@@ -84,6 +84,13 @@ pub struct ParagraphStyleDef {
     /// and the paragraph text (typically a tab `^t` or a space).
     /// IDML serialises tabs as the literal `^t` sequence.
     pub bullets_text_after: Option<String>,
+    /// `NumberingFormat` for `NumberedList` paragraphs. IDML
+    /// serialises these as the literal sample string, e.g.
+    /// `"1, 2, 3, 4..."`, `"I, II, III, IV..."`,
+    /// `"01, 02, 03, 04..."`, `"A, B, C, D..."`. The renderer
+    /// reads only the prefix before the first comma to decide
+    /// the format. `None` falls back to Arabic.
+    pub numbering_format: Option<String>,
 }
 
 /// Effective character-level attributes after walking BasedOn.
@@ -117,6 +124,7 @@ pub struct ResolvedParagraph {
     pub bullets_list_type: Option<String>,
     pub bullet_character: Option<u32>,
     pub bullets_text_after: Option<String>,
+    pub numbering_format: Option<String>,
 }
 
 impl StyleSheet {
@@ -277,6 +285,9 @@ impl ResolvedParagraph {
         if self.bullets_text_after.is_none() {
             self.bullets_text_after = def.bullets_text_after.clone();
         }
+        if self.numbering_format.is_none() {
+            self.numbering_format = def.numbering_format.clone();
+        }
     }
 }
 
@@ -325,6 +336,7 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         bullets_list_type: attr(e, b"BulletsAndNumberingListType"),
         bullet_character: None,
         bullets_text_after: attr(e, b"BulletsTextAfter"),
+        numbering_format: attr(e, b"NumberingFormat"),
     })
 }
 

@@ -1567,13 +1567,95 @@ fn list_prefix(p: &idml_scene::ResolvedParagraphAttrs, counter: &mut u32) -> Opt
         }
         Some("NumberedList") => {
             *counter = counter.checked_add(1).unwrap_or(1);
-            Some(format!("{}.\t", counter))
+            let formatted = format_number(*counter, p.numbering_format.as_deref());
+            Some(format!("{formatted}.\t"))
         }
         _ => {
             *counter = 0;
             None
         }
     }
+}
+
+/// Format a 1-based list counter per IDML's `NumberingFormat`
+/// sample string. Reads the prefix before the first comma to
+/// pick a style:
+///  - "1, 2, 3..."   → Arabic ("1", "2", "3", ...)
+///  - "01, 02, 03..." (or "001, ...") → zero-padded Arabic
+///  - "I, II, III..." → upper Roman
+///  - "i, ii, iii..." → lower Roman
+///  - "A, B, C..."   → upper alpha (A..Z, AA..ZZ, ...)
+///  - "a, b, c..."   → lower alpha
+///
+/// Anything else (or `None`) falls through to plain Arabic.
+fn format_number(n: u32, format: Option<&str>) -> String {
+    let Some(spec) = format else {
+        return n.to_string();
+    };
+    let head = spec.split(',').next().unwrap_or("").trim();
+    match head {
+        "I" => to_roman(n, false),
+        "i" => to_roman(n, true),
+        "A" => to_alpha(n, false),
+        "a" => to_alpha(n, true),
+        s if s.starts_with('0') && s.chars().all(|c| c.is_ascii_digit()) => {
+            // Zero-padded Arabic; width = head's length.
+            format!("{:0>width$}", n, width = s.len())
+        }
+        _ => n.to_string(),
+    }
+}
+
+/// Roman numeral conversion. `n` must be ≥ 1; `n == 0` returns
+/// an empty string (lists start at 1, so this is a sanity guard).
+fn to_roman(mut n: u32, lower: bool) -> String {
+    if n == 0 {
+        return String::new();
+    }
+    const MAP: &[(u32, &str)] = &[
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
+    ];
+    let mut out = String::new();
+    for &(value, symbol) in MAP {
+        while n >= value {
+            out.push_str(symbol);
+            n -= value;
+        }
+    }
+    if lower {
+        out.make_ascii_lowercase();
+    }
+    out
+}
+
+/// Spreadsheet-column-style alpha encoding: 1→A, 2→B, …, 26→Z,
+/// 27→AA, 28→AB, …, 702→ZZ, 703→AAA. Lowercase mode shifts to
+/// 'a'..'z'.
+fn to_alpha(mut n: u32, lower: bool) -> String {
+    if n == 0 {
+        return String::new();
+    }
+    let base_char = if lower { b'a' } else { b'A' };
+    let mut chars = Vec::new();
+    while n > 0 {
+        let rem = ((n - 1) % 26) as u8;
+        chars.push(base_char + rem);
+        n = (n - 1) / 26;
+    }
+    chars.reverse();
+    String::from_utf8(chars).expect("ascii letters are valid utf-8")
 }
 
 fn map_tab_alignment(a: Option<&str>) -> idml_text::layout::TabAlignment {
@@ -1811,5 +1893,55 @@ mod tests {
     fn list_prefix_bullet_none_when_codepoint_missing() {
         let mut counter = 0;
         assert!(list_prefix(&attrs(Some("BulletList"), None, Some(" ")), &mut counter).is_none());
+    }
+
+    #[test]
+    fn format_number_arabic_default() {
+        assert_eq!(format_number(1, None), "1");
+        assert_eq!(format_number(42, None), "42");
+        assert_eq!(format_number(7, Some("1, 2, 3, 4...")), "7");
+    }
+
+    #[test]
+    fn format_number_zero_padded() {
+        assert_eq!(format_number(1, Some("01, 02, 03, 04...")), "01");
+        assert_eq!(format_number(42, Some("01, 02, 03...")), "42");
+        assert_eq!(format_number(7, Some("001, 002, 003...")), "007");
+    }
+
+    #[test]
+    fn format_number_roman_upper_lower() {
+        assert_eq!(format_number(1, Some("I, II, III, IV...")), "I");
+        assert_eq!(format_number(4, Some("I, II, III, IV...")), "IV");
+        assert_eq!(format_number(9, Some("I, II, III...")), "IX");
+        assert_eq!(format_number(40, Some("I, II, III...")), "XL");
+        assert_eq!(format_number(1994, Some("I, II, III...")), "MCMXCIV");
+        assert_eq!(format_number(4, Some("i, ii, iii, iv...")), "iv");
+    }
+
+    #[test]
+    fn format_number_alpha_upper_lower() {
+        assert_eq!(format_number(1, Some("A, B, C, D...")), "A");
+        assert_eq!(format_number(26, Some("A, B, C...")), "Z");
+        assert_eq!(format_number(27, Some("A, B, C...")), "AA");
+        assert_eq!(format_number(28, Some("A, B, C...")), "AB");
+        assert_eq!(format_number(703, Some("A, B, C...")), "AAA");
+        assert_eq!(format_number(2, Some("a, b, c...")), "b");
+    }
+
+    #[test]
+    fn format_number_unknown_falls_back_to_arabic() {
+        assert_eq!(format_number(5, Some("Q, R, S, ...")), "5");
+        assert_eq!(format_number(5, Some("not a format")), "5");
+    }
+
+    #[test]
+    fn list_prefix_uses_numbering_format() {
+        let mut counter = 0;
+        let mut a = attrs(Some("NumberedList"), None, None);
+        a.numbering_format = Some("I, II, III, IV...".to_string());
+        assert_eq!(list_prefix(&a, &mut counter).as_deref(), Some("I.\t"));
+        assert_eq!(list_prefix(&a, &mut counter).as_deref(), Some("II.\t"));
+        assert_eq!(list_prefix(&a, &mut counter).as_deref(), Some("III.\t"));
     }
 }
