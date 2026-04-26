@@ -24,35 +24,29 @@ use tiny_skia::{
     Point as TsPoint, Shader, SpreadMode, Stroke as TsStroke, Transform as TsTransform,
 };
 
-#[derive(Debug, Clone, Copy)]
-pub struct RasterOptions {
-    /// Page width in pt.
-    pub page_width_pt: f32,
-    /// Page height in pt.
-    pub page_height_pt: f32,
-    /// Output DPI; 72 produces 1px per pt, 300 is print-quality.
-    pub dpi: f32,
-    /// Fill colour applied to the whole canvas before any commands.
-    /// Linear RGB, as per display-list convention.
-    pub background: CComposeColor,
-}
+use crate::{PathRasterizer, RasterOptions};
 
-impl RasterOptions {
-    pub fn new(page_width_pt: f32, page_height_pt: f32) -> Self {
-        Self {
-            page_width_pt,
-            page_height_pt,
-            dpi: 96.0,
-            background: CComposeColor::WHITE,
-        }
+/// `PathRasterizer` impl backed by tiny-skia. Always-works backend
+/// used by tests and the fidelity harness; no GPU required.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CpuRasterizer;
+
+impl PathRasterizer for CpuRasterizer {
+    fn name(&self) -> &'static str {
+        "cpu/tiny-skia"
+    }
+
+    fn rasterize(&self, list: &DisplayList, options: &RasterOptions) -> Vec<u8> {
+        rasterize(list, options).into_raw()
     }
 }
 
 /// Rasterise `list` to an 8-bit sRGB RGBA image at the configured DPI.
+/// Free-function form retained for callers that already use it (the
+/// `idml-renderer::pipeline::render_document` path).
 pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
+    let (px_w, px_h) = options.pixel_size();
     let scale = options.dpi / 72.0;
-    let px_w = ((options.page_width_pt * scale).ceil() as u32).max(1);
-    let px_h = ((options.page_height_pt * scale).ceil() as u32).max(1);
 
     let mut pixmap = Pixmap::new(px_w, px_h).expect("non-zero pixmap");
     pixmap.fill(linear_color_to_ts(options.background));
@@ -404,5 +398,16 @@ mod tests {
         let img = rasterize(&list, &opts);
         assert_eq!(img.width(), 200);
         assert_eq!(img.height(), 100);
+    }
+
+    #[test]
+    fn cpu_rasterizer_trait_returns_correct_pixel_count() {
+        let r = CpuRasterizer;
+        let list = idml_compose::DisplayList::new();
+        let mut opts = RasterOptions::new(40.0, 30.0);
+        opts.dpi = 72.0;
+        let buf = r.rasterize(&list, &opts);
+        assert_eq!(buf.len(), 40 * 30 * 4);
+        assert_eq!(r.name(), "cpu/tiny-skia");
     }
 }
