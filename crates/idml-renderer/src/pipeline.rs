@@ -365,9 +365,16 @@ pub fn build_document(
                     .unwrap_or(0)
             })
             .collect();
-        let column_width_pt = options
-            .fallback_column_width_pt
-            .or_else(|| chain.first().map(|f| f.bounds.width()));
+        // The first frame's insets shrink the column width. Threaded
+        // frames usually share the same insets; honouring per-frame
+        // insets requires recomputing the column width when crossing
+        // frame boundaries — out of scope for this batch.
+        let head_insets = chain[0].inset_spacing.unwrap_or([0.0; 4]);
+        let column_width_pt = options.fallback_column_width_pt.or_else(|| {
+            chain
+                .first()
+                .map(|f| (f.bounds.width() - head_insets[1] - head_insets[3]).max(0.0))
+        });
 
         // frame_idx tracks which frame in the chain we're filling
         // right now; y_cursor is the next baseline (1/64 pt) within
@@ -468,11 +475,12 @@ pub fn build_document(
             let mut lopts = idml_text::LayoutOptions::new(col_pt, paragraph_size);
             lopts.alignment = map_justification(resolved_paragraph.justification.as_deref());
 
-            // Per-paragraph baseline. Initialise from the layout
-            // defaults on the first paragraph; subsequent paragraphs
-            // continue from y_cursor + space_before.
+            // Per-paragraph baseline. The first paragraph in a story
+            // anchors against the head frame's `FirstBaselineOffset`
+            // policy + top inset; subsequent paragraphs continue
+            // from y_cursor + SpaceBefore.
             if y_cursor < 0 {
-                y_cursor = lopts.first_baseline;
+                y_cursor = first_baseline_for_frame(chain[0], paragraph_size, lopts.first_baseline);
             } else {
                 let space_before_64 = resolved_paragraph.space_before.unwrap_or(0.0)
                     * idml_text::shape::ADVANCE_PRECISION;
@@ -542,6 +550,16 @@ pub fn build_document(
 
                 let frame = chain[frame_idx];
                 let (ox, oy) = pages[target_page].spread_origin;
+                // Frame text origin: bounds top-left + (left, top)
+                // insets so glyphs render inside the inset box.
+                // y_cursor / first_baseline already factor the top
+                // inset (via first_baseline_for_frame), so only the
+                // left inset shifts the emission origin here.
+                let frame_insets = frame.inset_spacing.unwrap_or([0.0; 4]);
+                let text_origin_pt = (
+                    frame.bounds.left - ox + frame_insets[1],
+                    frame.bounds.top - oy,
+                );
 
                 // Snapshot command count BEFORE this line's emission
                 // so the post-story vertical-justification pass can
@@ -572,7 +590,7 @@ pub fn build_document(
                         fid,
                         line.glyphs[start].point_size,
                         |cluster| picker.pick(cluster),
-                        (frame.bounds.left - ox, frame.bounds.top - oy),
+                        text_origin_pt,
                         &outliner,
                         &mut pages[target_page].list,
                     );
@@ -880,6 +898,37 @@ fn decode_image_bytes(bytes: &[u8]) -> Option<idml_compose::DecodedImage> {
         height,
         rgba: rgba.into_raw(),
     })
+}
+
+/// First-baseline y (1/64 pt) for the head frame of a story,
+/// honouring `<TextFramePreference FirstBaselineOffset>` and the
+/// top inset. `default_64` is the renderer's heuristic baseline
+/// (LayoutOptions::new gives `point_size * 0.8 * 64`) used for
+/// `AscentOffset` (the IDML default) and any unrecognised value.
+fn first_baseline_for_frame(frame: &TextFrame, point_size: f32, default_64: i32) -> i32 {
+    let top_inset_64 = frame
+        .inset_spacing
+        .map(|i| (i[0] * idml_text::shape::ADVANCE_PRECISION).round() as i32)
+        .unwrap_or(0);
+    let policy_offset_64 = match frame.first_baseline_offset.as_deref() {
+        // CapHeight ≈ 70% of point size, x-height ≈ 50%, em-box-
+        // height = full point size. Real engines read the font's
+        // OS/2 / hhea tables; these are good-enough approximations
+        // until per-font metrics are available.
+        Some("CapHeight") => {
+            (point_size * 0.7 * idml_text::shape::ADVANCE_PRECISION).round() as i32
+        }
+        Some("XHeight") => (point_size * 0.5 * idml_text::shape::ADVANCE_PRECISION).round() as i32,
+        Some("EmBoxHeight") => (point_size * idml_text::shape::ADVANCE_PRECISION).round() as i32,
+        // FixedHeight / LeadingOffset use MinimumFirstBaselineOffset
+        // verbatim. Falls back to default when missing.
+        Some("FixedHeight") | Some("LeadingOffset") => frame
+            .minimum_first_baseline_offset
+            .map(|m| (m * idml_text::shape::ADVANCE_PRECISION).round() as i32)
+            .unwrap_or(default_64),
+        _ => default_64,
+    };
+    top_inset_64 + policy_offset_64
 }
 
 /// Build the outer affine that maps a frame's local-space rect into

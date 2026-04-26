@@ -80,6 +80,22 @@ pub struct TextFrame {
     /// values: `TopAlign` (default), `CenterAlign`, `BottomAlign`,
     /// `JustifyAlign`.
     pub vertical_justification: Option<String>,
+    /// `FirstBaselineOffset` from `<TextFramePreference>`. IDML
+    /// values: `AscentOffset` (default), `CapHeight`, `XHeight`,
+    /// `EmBoxHeight`, `LeadingOffset`, `FixedHeight`. Controls how
+    /// the first line's baseline is placed inside the frame's
+    /// inset box. `None` falls back to the renderer's heuristic
+    /// (point_size × 0.8).
+    pub first_baseline_offset: Option<String>,
+    /// `MinimumFirstBaselineOffset` from `<TextFramePreference>`,
+    /// in pt. Used with `FirstBaselineOffset="LeadingOffset"` and
+    /// `"FixedHeight"`.
+    pub minimum_first_baseline_offset: Option<f32>,
+    /// Frame insets in pt: (top, left, bottom, right). Comes from
+    /// `<TextFramePreference>` `InsetSpacing` attribute (a
+    /// space-separated list of four numbers, IDML order
+    /// `top left bottom right`). `None` when absent.
+    pub inset_spacing: Option<[f32; 4]>,
 }
 
 /// Drop shadow as carried in the IDML XML. Distances are in pt;
@@ -227,6 +243,9 @@ impl Spread {
                             drop_shadow: None,
                             next_text_frame: attr(&e, b"NextTextFrame"),
                             vertical_justification: None,
+                            first_baseline_offset: None,
+                            minimum_first_baseline_offset: None,
+                            inset_spacing: None,
                         });
                         current_frame = Some(CurrentFrame::Text(out.text_frames.len() - 1));
                     }
@@ -297,10 +316,24 @@ impl Spread {
                         }
                     }
                     b"TextFramePreference" => {
-                        if let (Some(CurrentFrame::Text(i)), Some(vj)) =
-                            (current_frame, attr(&e, b"VerticalJustification"))
-                        {
-                            out.text_frames[i].vertical_justification = Some(vj);
+                        if let Some(CurrentFrame::Text(i)) = current_frame {
+                            let f = &mut out.text_frames[i];
+                            if let Some(vj) = attr(&e, b"VerticalJustification") {
+                                f.vertical_justification = Some(vj);
+                            }
+                            if let Some(fbo) = attr(&e, b"FirstBaselineOffset") {
+                                f.first_baseline_offset = Some(fbo);
+                            }
+                            if let Some(min_fbo) = attr(&e, b"MinimumFirstBaselineOffset")
+                                .and_then(|s| s.parse::<f32>().ok())
+                            {
+                                f.minimum_first_baseline_offset = Some(min_fbo);
+                            }
+                            if let Some(insets) =
+                                attr(&e, b"InsetSpacing").and_then(|s| parse_insets(&s))
+                            {
+                                f.inset_spacing = Some(insets);
+                            }
                         }
                     }
                     b"Image" | b"Link" => {
@@ -393,6 +426,17 @@ fn parse_drop_shadow(e: &quick_xml::events::BytesStart) -> Option<DropShadowSett
             .unwrap_or(75.0),
         effect_color: attr(e, b"EffectColor"),
     })
+}
+
+/// IDML's `InsetSpacing` is four whitespace-separated numbers in
+/// pt — top, left, bottom, right. Returns `None` if the count is
+/// off; the renderer falls back to zero insets.
+fn parse_insets(s: &str) -> Option<[f32; 4]> {
+    let parts: Vec<f32> = s
+        .split_whitespace()
+        .filter_map(|p| p.parse().ok())
+        .collect();
+    (parts.len() == 4).then(|| [parts[0], parts[1], parts[2], parts[3]])
 }
 
 fn parse_matrix(s: &str) -> Option<[f32; 6]> {
@@ -520,6 +564,28 @@ mod tests {
         assert!(m[1].abs() < 1e-4 && m[2].abs() < 1e-4);
         assert!((m[4] - 113.0).abs() < 1e-4, "tx = {}", m[4]);
         assert!((m[5] - 224.0).abs() < 1e-4, "ty = {}", m[5]);
+    }
+
+    #[test]
+    fn parses_text_frame_preference_inset_and_first_baseline() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <TextFrame Self="frameA" ParentStory="u1" GeometricBounds="0 0 200 300">
+              <Properties/>
+              <TextFramePreference VerticalJustification="CenterAlign"
+                                   FirstBaselineOffset="CapHeight"
+                                   MinimumFirstBaselineOffset="14"
+                                   InsetSpacing="6 8 10 12"/>
+            </TextFrame>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        let f = &s.text_frames[0];
+        assert_eq!(f.vertical_justification.as_deref(), Some("CenterAlign"));
+        assert_eq!(f.first_baseline_offset.as_deref(), Some("CapHeight"));
+        assert_eq!(f.minimum_first_baseline_offset, Some(14.0));
+        assert_eq!(f.inset_spacing, Some([6.0, 8.0, 10.0, 12.0]));
     }
 
     #[test]
