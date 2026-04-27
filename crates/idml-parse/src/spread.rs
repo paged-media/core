@@ -45,6 +45,13 @@ pub struct Spread {
     /// describe the line's bounding box; its endpoints are the
     /// rect's top-left and bottom-right corners.
     pub graphic_lines: Vec<GraphicLine>,
+    /// `<Polygon>` items. Real-world IDMLs use these for charts,
+    /// rosettes, and any non-rectangular flat shape. Today the
+    /// renderer treats them as their axis-aligned bounding box —
+    /// faithful only for axis-aligned simple polygons; complex
+    /// shapes (donut charts etc.) come with full path rasterisation
+    /// later in the roadmap.
+    pub polygons: Vec<Polygon>,
     /// Number of text frames skipped because they were nested inside a
     /// Group. Exposed so callers can flag lossy parses without reading
     /// logs.
@@ -119,6 +126,11 @@ pub struct TextFrame {
     /// space-separated list of four numbers, IDML order
     /// `top left bottom right`). `None` when absent.
     pub inset_spacing: Option<[f32; 4]>,
+    /// `AppliedObjectStyle` reference — `ObjectStyle/<id>`. Real-
+    /// world IDMLs almost always rely on this for fill/stroke; the
+    /// per-element FillColor attribute is rare. Resolved by
+    /// `idml_scene::Document` against the document's StyleSheet.
+    pub applied_object_style: Option<String>,
 }
 
 /// IDML `<TextFramePreference VerticalJustification="...">` values.
@@ -210,6 +222,8 @@ pub struct Rectangle {
     /// `AssetResolver::resolve_image`. `None` means the rectangle
     /// is a plain colour swatch.
     pub image_link: Option<String>,
+    /// `AppliedObjectStyle` reference; see `TextFrame`.
+    pub applied_object_style: Option<String>,
 }
 
 /// Axis-aligned ellipse — `<Oval>` in IDML. Same fill/stroke story as
@@ -223,6 +237,8 @@ pub struct Oval {
     pub stroke_color: Option<String>,
     pub stroke_weight: Option<f32>,
     pub drop_shadow: Option<DropShadowSetting>,
+    /// `AppliedObjectStyle` reference; see `TextFrame`.
+    pub applied_object_style: Option<String>,
 }
 
 /// Straight line — `<GraphicLine>` in IDML. The endpoints are the
@@ -235,6 +251,22 @@ pub struct GraphicLine {
     pub item_transform: Option<[f32; 6]>,
     pub stroke_color: Option<String>,
     pub stroke_weight: Option<f32>,
+    /// `AppliedObjectStyle` reference; see `TextFrame`.
+    pub applied_object_style: Option<String>,
+}
+
+/// `<Polygon>`. Same paint/stroke story as `Rectangle`; geometry is
+/// the polygon's bounding rect for now (full-path support is a
+/// follow-up).
+#[derive(Debug, Clone, Serialize)]
+pub struct Polygon {
+    pub self_id: Option<String>,
+    pub bounds: Bounds,
+    pub item_transform: Option<[f32; 6]>,
+    pub fill_color: Option<String>,
+    pub stroke_color: Option<String>,
+    pub stroke_weight: Option<f32>,
+    pub applied_object_style: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
@@ -269,6 +301,7 @@ enum CurrentFrameKind {
     Rect(usize),
     Oval(usize),
     Line(usize),
+    Polygon(usize),
 }
 
 /// Per-frame parser state held while a shape element is open.
@@ -353,6 +386,10 @@ impl Spread {
                     debug_assert_eq!(i + 1, out.graphic_lines.len());
                     out.graphic_lines.pop();
                 }
+                CurrentFrameKind::Polygon(i) => {
+                    debug_assert_eq!(i + 1, out.polygons.len());
+                    out.polygons.pop();
+                }
             }
         }
         // Apply path-derived bounds to the just-closed frame.
@@ -362,6 +399,7 @@ impl Spread {
                 CurrentFrameKind::Rect(i) => out.rectangles[i].bounds = bounds,
                 CurrentFrameKind::Oval(i) => out.ovals[i].bounds = bounds,
                 CurrentFrameKind::Line(i) => out.graphic_lines[i].bounds = bounds,
+                CurrentFrameKind::Polygon(i) => out.polygons[i].bounds = bounds,
             }
         }
 
@@ -420,6 +458,7 @@ impl Spread {
                             first_baseline_offset: None,
                             minimum_first_baseline_offset: None,
                             inset_spacing: None,
+                            applied_object_style: attr(&e, b"AppliedObjectStyle"),
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Text(out.text_frames.len() - 1),
@@ -444,6 +483,7 @@ impl Spread {
                                 .and_then(|s| s.parse::<f32>().ok()),
                             drop_shadow: None,
                             image_link: None,
+                            applied_object_style: attr(&e, b"AppliedObjectStyle"),
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Rect(out.rectangles.len() - 1),
@@ -467,6 +507,7 @@ impl Spread {
                             stroke_weight: attr(&e, b"StrokeWeight")
                                 .and_then(|s| s.parse::<f32>().ok()),
                             drop_shadow: None,
+                            applied_object_style: attr(&e, b"AppliedObjectStyle"),
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Oval(out.ovals.len() - 1),
@@ -493,9 +534,10 @@ impl Spread {
                                     CurrentFrameKind::Oval(i) => {
                                         out.ovals[i].drop_shadow = Some(setting);
                                     }
-                                    CurrentFrameKind::Line(_) => {
-                                        // GraphicLine has no drop_shadow
-                                        // field; ignore.
+                                    CurrentFrameKind::Line(_) | CurrentFrameKind::Polygon(_) => {
+                                        // GraphicLine + Polygon have
+                                        // no drop_shadow field today;
+                                        // ignore.
                                     }
                                 }
                             }
@@ -578,9 +620,33 @@ impl Spread {
                             stroke_color: attr(&e, b"StrokeColor"),
                             stroke_weight: attr(&e, b"StrokeWeight")
                                 .and_then(|s| s.parse::<f32>().ok()),
+                            applied_object_style: attr(&e, b"AppliedObjectStyle"),
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Line(out.graphic_lines.len() - 1),
+                            needs_bounds: bounds_attr.is_none(),
+                            anchors: Vec::new(),
+                        });
+                    }
+                    b"Polygon" => {
+                        let bounds_attr =
+                            attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
+                        let item_transform = effective_item_transform(
+                            &group_transforms,
+                            attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s)),
+                        );
+                        out.polygons.push(Polygon {
+                            self_id: attr(&e, b"Self"),
+                            bounds: bounds_attr.unwrap_or(Bounds::ZERO),
+                            item_transform,
+                            fill_color: attr(&e, b"FillColor"),
+                            stroke_color: attr(&e, b"StrokeColor"),
+                            stroke_weight: attr(&e, b"StrokeWeight")
+                                .and_then(|s| s.parse::<f32>().ok()),
+                            applied_object_style: attr(&e, b"AppliedObjectStyle"),
+                        });
+                        current_frame = Some(CurrentFrame {
+                            kind: CurrentFrameKind::Polygon(out.polygons.len() - 1),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
                         });
@@ -591,7 +657,7 @@ impl Spread {
                     b"Group" if !group_transforms.is_empty() => {
                         group_transforms.pop();
                     }
-                    b"TextFrame" | b"Rectangle" | b"Oval" | b"GraphicLine" => {
+                    b"TextFrame" | b"Rectangle" | b"Oval" | b"GraphicLine" | b"Polygon" => {
                         // Finalize bounds from accumulated path
                         // anchors when no GeometricBounds attribute
                         // was present. If neither source produced

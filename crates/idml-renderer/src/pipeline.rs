@@ -16,7 +16,7 @@ use idml_compose::{
     emit_stroke_rect, emit_stroke_rect_transformed, Color, DisplayList, DropShadow, Paint, Rect,
     Stroke, Transform, TtfOutliner,
 };
-use idml_parse::{graphic, Graphic, GraphicLine, Oval, Rectangle, TextFrame};
+use idml_parse::{graphic, Graphic, GraphicLine, Oval, Polygon, Rectangle, TextFrame};
 use idml_scene::Document;
 
 use crate::AssetResolver;
@@ -253,6 +253,7 @@ pub fn build_document(
             };
             let mut copy = frame.clone();
             copy.bounds = translated;
+            let copy = text_frame_with_object_style(copy, document);
             emit_text_frame_into(
                 &mut pages[i],
                 &copy,
@@ -272,6 +273,7 @@ pub fn build_document(
             };
             let mut copy = rect.clone();
             copy.bounds = translated;
+            let copy = rectangle_with_object_style(copy, document);
             emit_rectangle_into(
                 &mut pages[i],
                 &copy,
@@ -316,9 +318,10 @@ pub fn build_document(
             if let Some(self_id) = frame.self_id.clone() {
                 frame_to_page.insert(self_id, page_idx);
             }
+            let frame = text_frame_with_object_style(frame.clone(), document);
             emit_text_frame_into(
                 &mut pages[page_idx],
-                frame,
+                &frame,
                 palette,
                 options.fallback_frame_fill,
                 cmyk_xform.as_ref(),
@@ -330,9 +333,10 @@ pub fn build_document(
             let spread_bounds = transform_bounds(rect.bounds, rect.item_transform);
             let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
             let page_idx = range.start + local_idx;
+            let rect = rectangle_with_object_style(rect.clone(), document);
             emit_rectangle_into(
                 &mut pages[page_idx],
-                rect,
+                &rect,
                 palette,
                 options.fallback_frame_fill,
                 cmyk_xform.as_ref(),
@@ -344,7 +348,7 @@ pub fn build_document(
             // shares the decoded RGBA across pages.
             emit_rectangle_image(
                 &mut pages[page_idx],
-                rect,
+                &rect,
                 options,
                 &mut page_image_caches[page_idx],
                 &mut decoded_image_cache,
@@ -355,9 +359,10 @@ pub fn build_document(
             let spread_bounds = transform_bounds(oval.bounds, oval.item_transform);
             let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
             let page_idx = range.start + local_idx;
+            let oval = oval_with_object_style(oval.clone(), document);
             emit_oval_into(
                 &mut pages[page_idx],
-                oval,
+                &oval,
                 palette,
                 options.fallback_frame_fill,
                 cmyk_xform.as_ref(),
@@ -368,7 +373,22 @@ pub fn build_document(
             let spread_bounds = transform_bounds(line.bounds, line.item_transform);
             let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
             let page_idx = range.start + local_idx;
-            emit_line_into(&mut pages[page_idx], line, palette, cmyk_xform.as_ref());
+            let line = line_with_object_style(line.clone(), document);
+            emit_line_into(&mut pages[page_idx], &line, palette, cmyk_xform.as_ref());
+        }
+        for poly in &spread.polygons {
+            total_stats.frames += 1;
+            let spread_bounds = transform_bounds(poly.bounds, poly.item_transform);
+            let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
+            let page_idx = range.start + local_idx;
+            let poly = polygon_with_object_style(poly.clone(), document);
+            emit_polygon_into(
+                &mut pages[page_idx],
+                &poly,
+                palette,
+                options.fallback_frame_fill,
+                cmyk_xform.as_ref(),
+            );
         }
     }
 
@@ -755,10 +775,12 @@ fn emit_paragraph_into_chain(
         let frame = em.chain[em.frame_idx];
         let (ox, oy) = pages[target_page].spread_origin;
         let frame_insets = frame.inset_spacing.unwrap_or([0.0; 4]);
-        let text_origin_pt = (
-            frame.bounds.left - ox + frame_insets[1],
-            frame.bounds.top - oy,
-        );
+        // frame.bounds is in the frame's *inner* coordinate system
+        // (PathGeometry-derived for real-world IDMLs). The frame's
+        // ItemTransform maps that to spread coords; subtracting the
+        // page's spread_origin then puts text in page-local pt.
+        let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
+        let text_origin_pt = (sx - ox + frame_insets[1], sy - oy);
 
         let before_cmds = pages[target_page].list.commands.len();
 
@@ -795,7 +817,7 @@ fn emit_paragraph_into_chain(
         emit_line_decorations(
             &line,
             &picker,
-            (frame.bounds.left - ox, frame.bounds.top - oy),
+            (sx - ox, sy - oy),
             &mut pages[target_page].list,
         );
 
@@ -823,6 +845,128 @@ struct PageGeom {
     applied_master: Option<String>,
     host_spread_idx: usize,
     local_page_idx: usize,
+}
+
+/// Apply a frame's `AppliedObjectStyle` cascade (when present) so
+/// any unset fill/stroke/weight gets the value the style would
+/// have produced. Real-world IDMLs rely almost exclusively on
+/// AppliedObjectStyle for these — `FillColor=` attributes are
+/// rare on individual page items. Frames already carrying every
+/// override are returned unchanged.
+fn text_frame_with_object_style(frame: TextFrame, document: &Document) -> TextFrame {
+    if frame.fill_color.is_some() && frame.stroke_color.is_some() && frame.stroke_weight.is_some() {
+        return frame;
+    }
+    let Some(id) = frame.applied_object_style.as_deref() else {
+        return frame;
+    };
+    let resolved = document.styles.resolve_object(id);
+    TextFrame {
+        fill_color: frame.fill_color.or(resolved.fill_color),
+        stroke_color: frame.stroke_color.or(resolved.stroke_color),
+        stroke_weight: frame.stroke_weight.or(resolved.stroke_weight),
+        ..frame
+    }
+}
+
+fn rectangle_with_object_style(rect: Rectangle, document: &Document) -> Rectangle {
+    if rect.fill_color.is_some() && rect.stroke_color.is_some() && rect.stroke_weight.is_some() {
+        return rect;
+    }
+    let Some(id) = rect.applied_object_style.as_deref() else {
+        return rect;
+    };
+    let resolved = document.styles.resolve_object(id);
+    Rectangle {
+        fill_color: rect.fill_color.or(resolved.fill_color),
+        stroke_color: rect.stroke_color.or(resolved.stroke_color),
+        stroke_weight: rect.stroke_weight.or(resolved.stroke_weight),
+        ..rect
+    }
+}
+
+fn oval_with_object_style(oval: Oval, document: &Document) -> Oval {
+    if oval.fill_color.is_some() && oval.stroke_color.is_some() && oval.stroke_weight.is_some() {
+        return oval;
+    }
+    let Some(id) = oval.applied_object_style.as_deref() else {
+        return oval;
+    };
+    let resolved = document.styles.resolve_object(id);
+    Oval {
+        fill_color: oval.fill_color.or(resolved.fill_color),
+        stroke_color: oval.stroke_color.or(resolved.stroke_color),
+        stroke_weight: oval.stroke_weight.or(resolved.stroke_weight),
+        ..oval
+    }
+}
+
+fn line_with_object_style(line: GraphicLine, document: &Document) -> GraphicLine {
+    if line.stroke_color.is_some() && line.stroke_weight.is_some() {
+        return line;
+    }
+    let Some(id) = line.applied_object_style.as_deref() else {
+        return line;
+    };
+    let resolved = document.styles.resolve_object(id);
+    GraphicLine {
+        stroke_color: line.stroke_color.or(resolved.stroke_color),
+        stroke_weight: line.stroke_weight.or(resolved.stroke_weight),
+        ..line
+    }
+}
+
+fn polygon_with_object_style(poly: Polygon, document: &Document) -> Polygon {
+    if poly.fill_color.is_some() && poly.stroke_color.is_some() && poly.stroke_weight.is_some() {
+        return poly;
+    }
+    let Some(id) = poly.applied_object_style.as_deref() else {
+        return poly;
+    };
+    let resolved = document.styles.resolve_object(id);
+    Polygon {
+        fill_color: poly.fill_color.or(resolved.fill_color),
+        stroke_color: poly.stroke_color.or(resolved.stroke_color),
+        stroke_weight: poly.stroke_weight.or(resolved.stroke_weight),
+        ..poly
+    }
+}
+
+/// Polygon emit reuses the rectangle-style emit helpers — we treat
+/// the polygon as its axis-aligned bounding box for now. Replacing
+/// this with full path rasterisation comes with §10.1 of the
+/// roadmap. Routing already happens at the call site.
+fn emit_polygon_into(
+    page: &mut BuiltPage,
+    poly: &Polygon,
+    palette: &Graphic,
+    fallback: Paint,
+    cmyk_xform: Option<&idml_color::IccTransform>,
+) {
+    page.stats.frames += 1;
+    let r = Rect {
+        x: poly.bounds.left,
+        y: poly.bounds.top,
+        w: poly.bounds.width(),
+        h: poly.bounds.height(),
+    };
+    let outer = frame_outer_transform(page, poly.item_transform);
+    let fill = poly
+        .fill_color
+        .as_deref()
+        .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
+        .unwrap_or(fallback);
+    emit_rect_transformed(r, outer, fill, &mut page.list);
+    if let Some(stroke) = poly
+        .stroke_color
+        .as_deref()
+        .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
+    {
+        let width = poly.stroke_weight.unwrap_or(1.0);
+        if width > 0.0 {
+            emit_stroke_rect_transformed(r, outer, Stroke::new(width), stroke, &mut page.list);
+        }
+    }
 }
 
 /// Apply a 6-element IDML affine `[a b c d e f]` to `(x, y)`.
@@ -872,6 +1016,17 @@ fn transform_bounds(b: idml_parse::Bounds, m: Option<[f32; 6]>) -> idml_parse::B
         left: min_x,
         bottom: max_y,
         right: max_x,
+    }
+}
+
+/// Map an inner-coord top-left corner through ItemTransform to its
+/// spread-coord position. Identity (`None`) is the no-op. Used by
+/// the text-emission path so glyphs land where the frame actually
+/// sits in spread coords rather than at its inner-coord origin.
+fn frame_spread_top_left(b: idml_parse::Bounds, m: Option<[f32; 6]>) -> (f32, f32) {
+    match m {
+        Some(m) => apply_matrix(&m, b.left, b.top),
+        None => (b.left, b.top),
     }
 }
 
@@ -1328,12 +1483,13 @@ pub fn build(document: &Document, options: &PipelineOptions) -> anyhow::Result<B
             };
             let outliner = TtfOutliner::new(outline);
             let picker = build_run_paint_picker(paragraph, palette, options.fallback_text_paint);
+            let origin = frame_spread_top_left(frame.bounds, frame.item_transform);
             emit_paragraph(
                 &laid_out,
                 font_id,
                 paragraph_size,
                 |cluster| picker.pick(cluster),
-                (frame.bounds.left, frame.bounds.top),
+                origin,
                 &outliner,
                 &mut list,
             );

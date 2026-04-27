@@ -26,12 +26,13 @@ pub use graphic::{
     ColorEntry, ColorSpace, GradientEntry, GradientKind, GradientStopRef, Graphic, SwatchEntry,
 };
 pub use spread::{
-    Bounds, DropShadowSetting, FirstBaselineOffset, GraphicLine, Oval, Page, Rectangle, Spread,
-    TextFrame, VerticalJustification,
+    Bounds, DropShadowSetting, FirstBaselineOffset, GraphicLine, Oval, Page, Polygon, Rectangle,
+    Spread, TextFrame, VerticalJustification,
 };
 pub use story::{CharacterRun, Paragraph, Story, TabStop};
 pub use styles::{
-    CharacterStyleDef, ParagraphStyleDef, ResolvedCharacter, ResolvedParagraph, StyleSheet,
+    CharacterStyleDef, ObjectStyleDef, ParagraphStyleDef, ResolvedCharacter, ResolvedObject,
+    ResolvedParagraph, StyleSheet,
 };
 
 #[derive(Debug, thiserror::Error)]

@@ -39,6 +39,34 @@ const MAX_BASED_ON_DEPTH: usize = 16;
 pub struct StyleSheet {
     pub character_styles: BTreeMap<String, CharacterStyleDef>,
     pub paragraph_styles: BTreeMap<String, ParagraphStyleDef>,
+    /// `<ObjectStyle>` definitions from `<RootObjectStyleGroup>`.
+    /// Page-item shapes (TextFrame, Rectangle, Oval, GraphicLine,
+    /// Polygon) reference these via `AppliedObjectStyle="..."` to
+    /// inherit fill / stroke / etc. when their own attributes are
+    /// absent. Real-world IDMLs use this almost exclusively for
+    /// rectangle fills.
+    pub object_styles: BTreeMap<String, ObjectStyleDef>,
+}
+
+/// `<ObjectStyle>` — the page-item analogue of paragraph/character
+/// styles. Carries fill + stroke defaults that flow into a frame
+/// when it carries no per-element override.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct ObjectStyleDef {
+    pub self_id: String,
+    pub name: Option<String>,
+    pub based_on: Option<String>,
+    pub fill_color: Option<String>,
+    pub stroke_color: Option<String>,
+    pub stroke_weight: Option<f32>,
+}
+
+/// Effective object-level attributes after walking BasedOn.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ResolvedObject {
+    pub fill_color: Option<String>,
+    pub stroke_color: Option<String>,
+    pub stroke_weight: Option<f32>,
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -135,6 +163,7 @@ pub struct ResolvedParagraph {
 enum CurrentStyle {
     Character,
     Paragraph,
+    Object,
 }
 
 /// Element-form attributes inside `<Properties>` we want to push back
@@ -159,6 +188,7 @@ impl StyleSheet {
         // Same idea for <CharacterStyle>, used when we read
         // <AppliedFont> as an element inside <Properties>.
         let mut current_character_style: Option<String> = None;
+        let mut current_object_style: Option<String> = None;
         let mut current_style: Option<CurrentStyle> = None;
         let mut pending_property: Option<CurrentProperty> = None;
         loop {
@@ -176,6 +206,13 @@ impl StyleSheet {
                             current_paragraph_style = Some(s.self_id.clone());
                             current_style = Some(CurrentStyle::Paragraph);
                             out.paragraph_styles.insert(s.self_id.clone(), s);
+                        }
+                    }
+                    b"ObjectStyle" => {
+                        if let Some(s) = parse_object_style(&e) {
+                            current_object_style = Some(s.self_id.clone());
+                            current_style = Some(CurrentStyle::Object);
+                            out.object_styles.insert(s.self_id.clone(), s);
                         }
                     }
                     b"AppliedFont" if current_style.is_some() => {
@@ -224,6 +261,15 @@ impl StyleSheet {
                                                     c.based_on = Some(text);
                                                 }
                                             }
+                                        }
+                                    }
+                                }
+                            }
+                            (Some(CurrentStyle::Object), Some(CurrentProperty::BasedOn)) => {
+                                if let Some(id) = current_object_style.as_deref() {
+                                    if let Some(o) = out.object_styles.get_mut(id) {
+                                        if o.based_on.is_none() {
+                                            o.based_on = Some(text);
                                         }
                                     }
                                 }
@@ -279,6 +325,12 @@ impl StyleSheet {
                             current_style = None;
                         }
                     }
+                    b"ObjectStyle" => {
+                        current_object_style = None;
+                        if matches!(current_style, Some(CurrentStyle::Object)) {
+                            current_style = None;
+                        }
+                    }
                     b"AppliedFont" | b"BasedOn" => {
                         // Pending property is consumed by the next
                         // Text event; clearing here prevents
@@ -325,6 +377,34 @@ impl StyleSheet {
             cursor = s.based_on.clone();
         }
         acc
+    }
+
+    /// Walk an ObjectStyle's `BasedOn` chain. Same depth-bounded
+    /// pattern as `resolve_paragraph` / `resolve_character`.
+    pub fn resolve_object(&self, id: &str) -> ResolvedObject {
+        let mut acc = ResolvedObject::default();
+        let mut cursor = Some(id.to_string());
+        for _ in 0..MAX_BASED_ON_DEPTH {
+            let Some(cur_id) = cursor else { break };
+            let Some(s) = self.object_styles.get(&cur_id) else {
+                break;
+            };
+            acc.merge_below(s);
+            cursor = s.based_on.clone();
+        }
+        acc
+    }
+}
+
+impl ResolvedObject {
+    pub fn merge_below(&mut self, def: &ObjectStyleDef) {
+        if self.fill_color.is_none() {
+            self.fill_color = def.fill_color.clone();
+        }
+        if self.stroke_color.is_none() {
+            self.stroke_color = def.stroke_color.clone();
+        }
+        self.stroke_weight = self.stroke_weight.or(def.stroke_weight);
     }
 }
 
@@ -410,6 +490,27 @@ fn parse_tab_stop_styles(e: &quick_xml::events::BytesStart) -> Option<TabStop> {
         alignment: attr(e, b"Alignment"),
         alignment_character: attr(e, b"AlignmentCharacter"),
         leader: attr(e, b"Leader"),
+    })
+}
+
+fn parse_object_style(e: &quick_xml::events::BytesStart) -> Option<ObjectStyleDef> {
+    let self_id = attr(e, b"Self")?;
+    let stroke_weight = attr(e, b"StrokeWeight").and_then(|s| s.parse().ok());
+    // IDML stores "no stroke" as the literal "Swatch/None"; treat
+    // that as missing so the cascade can fall through to a real
+    // colour from BasedOn rather than handing the renderer a paint
+    // it can't resolve.
+    let normalize = |c: Option<String>| match c.as_deref() {
+        Some("Swatch/None") | Some("n") | Some("") => None,
+        _ => c,
+    };
+    Some(ObjectStyleDef {
+        self_id,
+        name: attr(e, b"Name"),
+        based_on: attr(e, b"BasedOn"),
+        fill_color: normalize(attr(e, b"FillColor")),
+        stroke_color: normalize(attr(e, b"StrokeColor")),
+        stroke_weight,
     })
 }
 
