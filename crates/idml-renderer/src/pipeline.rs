@@ -13,10 +13,10 @@ use bytes::Bytes;
 use idml_compose::{
     emit_drop_shadow_rect_transformed, emit_ellipse_transformed, emit_glyph_slice, emit_line,
     emit_paragraph, emit_rect, emit_rect_transformed, emit_stroke_ellipse_transformed,
-    emit_stroke_rect, emit_stroke_rect_transformed, Color, DisplayList, DropShadow, Paint, Rect,
-    Stroke, Transform, TtfOutliner,
+    emit_stroke_rect, emit_stroke_rect_transformed, Color, DisplayCommand, DisplayList, DropShadow,
+    Paint, PathData, PathSegment, Rect, Stroke, Transform, TtfOutliner,
 };
-use idml_parse::{graphic, Graphic, GraphicLine, Oval, Polygon, Rectangle, TextFrame};
+use idml_parse::{graphic, Graphic, GraphicLine, Oval, PathAnchor, Polygon, Rectangle, TextFrame};
 use idml_scene::Document;
 
 use crate::AssetResolver;
@@ -974,10 +974,53 @@ fn polygon_with_object_style(poly: Polygon, document: &Document) -> Polygon {
     }
 }
 
-/// Polygon emit reuses the rectangle-style emit helpers — we treat
-/// the polygon as its axis-aligned bounding box for now. Replacing
-/// this with full path rasterisation comes with §10.1 of the
-/// roadmap. Routing already happens at the call site.
+/// Build a [`PathData`] from a polygon's parsed Bezier anchors.
+/// Each consecutive pair becomes a cubic with the leading point's
+/// `right` and the trailing point's `left` as control points. When
+/// `right == anchor` and `left == anchor` (the IDML serialisation
+/// for straight-line corners), the cubic degenerates and tiny-skia
+/// reduces it to a line internally.
+fn polygon_path_from_anchors(anchors: &[PathAnchor]) -> PathData {
+    let mut segs = Vec::with_capacity(anchors.len() * 2);
+    if let Some(first) = anchors.first() {
+        let (mx, my) = first.anchor;
+        segs.push(PathSegment::MoveTo { x: mx, y: my });
+    }
+    for window in anchors.windows(2) {
+        let from = &window[0];
+        let to = &window[1];
+        segs.push(PathSegment::CubicTo {
+            cx1: from.right.0,
+            cy1: from.right.1,
+            cx2: to.left.0,
+            cy2: to.left.1,
+            x: to.anchor.0,
+            y: to.anchor.1,
+        });
+    }
+    // Close the path back to the first anchor through the curve
+    // implied by the last point's `right` and the first point's
+    // `left` — IDML polygons are otherwise always closed.
+    if anchors.len() >= 2 {
+        let last = anchors.last().unwrap();
+        let first = anchors.first().unwrap();
+        segs.push(PathSegment::CubicTo {
+            cx1: last.right.0,
+            cy1: last.right.1,
+            cx2: first.left.0,
+            cy2: first.left.1,
+            x: first.anchor.0,
+            y: first.anchor.1,
+        });
+    }
+    segs.push(PathSegment::Close);
+    PathData { segments: segs }
+}
+
+/// Polygon emit. When the polygon carries `<PathPointType>` anchors
+/// (real-world InDesign export shape) we build a curved FillPath
+/// from them; otherwise fall back to drawing the AABB so synthetic
+/// IDMLs that declare a polygon via `GeometricBounds` still render.
 fn emit_polygon_into(
     page: &mut BuiltPage,
     poly: &Polygon,
@@ -986,29 +1029,94 @@ fn emit_polygon_into(
     cmyk_xform: Option<&idml_color::IccTransform>,
 ) {
     page.stats.frames += 1;
-    let r = Rect {
-        x: poly.bounds.left,
-        y: poly.bounds.top,
-        w: poly.bounds.width(),
-        h: poly.bounds.height(),
-    };
     let outer = frame_outer_transform(page, poly.item_transform);
     let fill = poly
         .fill_color
         .as_deref()
         .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
         .unwrap_or(fallback);
-    emit_rect_transformed(r, outer, fill, &mut page.list);
-    if let Some(stroke) = poly
+
+    if poly.anchors.is_empty() {
+        // No anchors: render the bbox.
+        let r = Rect {
+            x: poly.bounds.left,
+            y: poly.bounds.top,
+            w: poly.bounds.width(),
+            h: poly.bounds.height(),
+        };
+        emit_rect_transformed(r, outer, fill, &mut page.list);
+        if let Some(stroke) = poly
+            .stroke_color
+            .as_deref()
+            .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
+        {
+            let width = poly.stroke_weight.unwrap_or(1.0);
+            if width > 0.0 {
+                emit_stroke_rect_transformed(r, outer, Stroke::new(width), stroke, &mut page.list);
+            }
+        }
+        return;
+    }
+
+    // Curved path. Anchors are in inner coords; the outer transform
+    // (page-origin × ItemTransform) maps inner → page-local pt at
+    // emit time, so the path data we intern stays in the same
+    // coordinate system the parser produced. Cache key uses the
+    // polygon's Self id where present so repeated draws of the
+    // same shape share the interned path.
+    let path = polygon_path_from_anchors(&poly.anchors);
+    let cache_key = match &poly.self_id {
+        Some(id) => fnv_1a_u64(id.as_bytes()),
+        None => path_signature(&poly.anchors),
+    };
+    let (path_id, _) = page.list.paths.intern(cache_key, path);
+    page.list.commands.push(DisplayCommand::FillPath {
+        path_id,
+        paint: fill,
+        transform: outer,
+    });
+    if let Some(stroke_paint) = poly
         .stroke_color
         .as_deref()
         .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
     {
         let width = poly.stroke_weight.unwrap_or(1.0);
         if width > 0.0 {
-            emit_stroke_rect_transformed(r, outer, Stroke::new(width), stroke, &mut page.list);
+            page.list.commands.push(DisplayCommand::StrokePath {
+                path_id,
+                paint: stroke_paint,
+                stroke: Stroke::new(width),
+                transform: outer,
+            });
         }
     }
+}
+
+/// Cheap content-derived cache key for polygons that don't carry a
+/// `Self` id (synthetic / minified IDMLs). FNV-1a of the
+/// concatenated anchor coordinates.
+fn path_signature(anchors: &[PathAnchor]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for a in anchors {
+        for v in [
+            a.anchor.0, a.anchor.1, a.left.0, a.left.1, a.right.0, a.right.1,
+        ] {
+            for b in v.to_le_bytes() {
+                h ^= b as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+        }
+    }
+    h
+}
+
+fn fnv_1a_u64(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
 }
 
 /// Apply a 6-element IDML affine `[a b c d e f]` to `(x, y)`.

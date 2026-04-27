@@ -255,9 +255,22 @@ pub struct GraphicLine {
     pub applied_object_style: Option<String>,
 }
 
-/// `<Polygon>`. Same paint/stroke story as `Rectangle`; geometry is
-/// the polygon's bounding rect for now (full-path support is a
-/// follow-up).
+/// One point on an IDML `<PathGeometry>` path. `anchor` is the
+/// on-curve point; `left` / `right` are the incoming / outgoing
+/// Bezier control points respectively. Coordinates are in the
+/// owning page item's *inner* coordinate system.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct PathAnchor {
+    pub anchor: (f32, f32),
+    pub left: (f32, f32),
+    pub right: (f32, f32),
+}
+
+/// `<Polygon>`. Same paint/stroke story as `Rectangle`. `anchors`
+/// retains the parsed `<PathPointType>` data so the renderer can
+/// rasterise the actual curved path; `bounds` is still the AABB so
+/// page-routing and emit paths that haven't been switched over keep
+/// working.
 #[derive(Debug, Clone, Serialize)]
 pub struct Polygon {
     pub self_id: Option<String>,
@@ -267,6 +280,10 @@ pub struct Polygon {
     pub stroke_color: Option<String>,
     pub stroke_weight: Option<f32>,
     pub applied_object_style: Option<String>,
+    /// Path-point anchors with their Bezier control points, in the
+    /// polygon's inner coords. Empty for synthetic IDMLs that
+    /// declared the polygon via `GeometricBounds` only.
+    pub anchors: Vec<PathAnchor>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
@@ -315,19 +332,27 @@ struct CurrentFrame {
     /// then come from `<PathPointType Anchor="...">` children.
     needs_bounds: bool,
     /// Path-point anchors accumulated while the frame is open.
-    /// Only populated when `needs_bounds` is true.
-    anchors: Vec<(f32, f32)>,
+    /// Always collected for Polygons (so the renderer can rasterise
+    /// the curved path); collected for the other shapes only when
+    /// `needs_bounds` is true so we can derive an AABB on close.
+    anchors: Vec<PathAnchor>,
+    /// True for Polygons even when `needs_bounds` is false, so the
+    /// emitter still gets the curved-path data.
+    keep_anchors: bool,
 }
 
-/// Compute the axis-aligned bounding box of a non-empty point set.
-fn bounds_from_anchors(anchors: &[(f32, f32)]) -> Bounds {
+/// Compute the axis-aligned bounding box of a non-empty point set,
+/// using only the anchors (control points pull beyond the visible
+/// curve and would inflate the bbox).
+fn bounds_from_anchors(anchors: &[PathAnchor]) -> Bounds {
     let (mut min_x, mut max_x, mut min_y, mut max_y) = (
         f32::INFINITY,
         f32::NEG_INFINITY,
         f32::INFINITY,
         f32::NEG_INFINITY,
     );
-    for &(x, y) in anchors {
+    for a in anchors {
+        let (x, y) = a.anchor;
         if x < min_x {
             min_x = x;
         }
@@ -464,6 +489,7 @@ impl Spread {
                             kind: CurrentFrameKind::Text(out.text_frames.len() - 1),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
+                            keep_anchors: false,
                         });
                     }
                     b"Rectangle" => {
@@ -489,6 +515,7 @@ impl Spread {
                             kind: CurrentFrameKind::Rect(out.rectangles.len() - 1),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
+                            keep_anchors: false,
                         });
                     }
                     b"Oval" => {
@@ -513,6 +540,7 @@ impl Spread {
                             kind: CurrentFrameKind::Oval(out.ovals.len() - 1),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
+                            keep_anchors: false,
                         });
                     }
                     b"DropShadowSetting" => {
@@ -546,15 +574,26 @@ impl Spread {
                     b"PathPointType" => {
                         // Accumulate path-anchor points so the close
                         // tag can derive bounds when no
-                        // GeometricBounds attribute was present.
-                        // Real-world InDesign exports always serialise
+                        // GeometricBounds attribute was present, and
+                        // so polygon rasterisation has the actual
+                        // Bezier control points to work with. Real-
+                        // world InDesign exports always serialise
                         // geometry this way.
                         if let Some(cf) = current_frame.as_mut() {
-                            if cf.needs_bounds {
-                                if let Some(anchor) =
-                                    attr(&e, b"Anchor").and_then(|s| parse_xy_pair(&s))
-                                {
-                                    cf.anchors.push(anchor);
+                            if cf.needs_bounds || cf.keep_anchors {
+                                let anchor = attr(&e, b"Anchor").and_then(|s| parse_xy_pair(&s));
+                                if let Some(a) = anchor {
+                                    let left = attr(&e, b"LeftDirection")
+                                        .and_then(|s| parse_xy_pair(&s))
+                                        .unwrap_or(a);
+                                    let right = attr(&e, b"RightDirection")
+                                        .and_then(|s| parse_xy_pair(&s))
+                                        .unwrap_or(a);
+                                    cf.anchors.push(PathAnchor {
+                                        anchor: a,
+                                        left,
+                                        right,
+                                    });
                                 }
                             }
                         }
@@ -626,6 +665,7 @@ impl Spread {
                             kind: CurrentFrameKind::Line(out.graphic_lines.len() - 1),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
+                            keep_anchors: false,
                         });
                     }
                     b"Polygon" => {
@@ -644,11 +684,16 @@ impl Spread {
                             stroke_weight: attr(&e, b"StrokeWeight")
                                 .and_then(|s| s.parse::<f32>().ok()),
                             applied_object_style: attr(&e, b"AppliedObjectStyle"),
+                            anchors: Vec::new(),
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Polygon(out.polygons.len() - 1),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
+                            // Always retain Bezier path anchors for
+                            // polygons so the renderer can emit a
+                            // FillPath instead of a bbox FillRect.
+                            keep_anchors: true,
                         });
                     }
                     _ => {}
@@ -675,6 +720,17 @@ impl Spread {
                                         cf.kind,
                                         bounds_from_anchors(&cf.anchors),
                                     );
+                                }
+                            }
+                            // Polygons keep the curved-path data
+                            // even when GeometricBounds was set, so
+                            // the renderer can rasterise the actual
+                            // outline.
+                            if cf.keep_anchors && !cf.anchors.is_empty() {
+                                if let CurrentFrameKind::Polygon(i) = cf.kind {
+                                    if i < out.polygons.len() {
+                                        out.polygons[i].anchors = cf.anchors;
+                                    }
                                 }
                             }
                         }

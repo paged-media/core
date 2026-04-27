@@ -27,6 +27,11 @@ struct Args {
     /// substituting a permissive face.
     #[arg(long)]
     default_font: Option<PathBuf>,
+    /// Register a TTF/OTF under a specific IDML family name. Pass as
+    /// `--font-family "Open Sans=corpus/fonts/OpenSans.ttf"`. Repeatable.
+    /// Takes precedence over `--default-font` for the named family.
+    #[arg(long, value_name = "NAME=PATH")]
+    font_family: Vec<String>,
     /// Default point size used when a run has no explicit PointSize.
     #[arg(long, default_value_t = 12.0)]
     default_size: f32,
@@ -146,9 +151,26 @@ fn main() -> Result<()> {
         .as_deref()
         .map(|p| std::fs::read(p).with_context(|| format!("read default font {}", p.display())))
         .transpose()?;
-    let resolver = default_font_bytes
-        .as_ref()
-        .map(|bytes| idml_renderer::BytesResolver::new().with_default_font(bytes.clone()));
+    let mut family_registrations: Vec<(String, Vec<u8>)> = Vec::new();
+    for spec in &args.font_family {
+        let (name, path) = spec
+            .split_once('=')
+            .with_context(|| format!("--font-family expects NAME=PATH, got {spec}"))?;
+        let bytes = std::fs::read(path).with_context(|| format!("read font for {name}: {path}"))?;
+        family_registrations.push((name.to_string(), bytes));
+    }
+    let resolver = if default_font_bytes.is_some() || !family_registrations.is_empty() {
+        let mut r = idml_renderer::BytesResolver::new();
+        for (name, bytes) in &family_registrations {
+            r.add_font(name, None, bytes.clone());
+        }
+        if let Some(bytes) = default_font_bytes.as_ref() {
+            r.default_font = Some(bytes.clone().into());
+        }
+        Some(r)
+    } else {
+        None
+    };
 
     let mut opts = PipelineOptions {
         font: font_bytes.as_deref(),
