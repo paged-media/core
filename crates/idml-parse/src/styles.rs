@@ -46,6 +46,11 @@ pub struct StyleSheet {
     /// absent. Real-world IDMLs use this almost exclusively for
     /// rectangle fills.
     pub object_styles: BTreeMap<String, ObjectStyleDef>,
+    /// `<CellStyle>` definitions from `<RootCellStyleGroup>`. Cells
+    /// reference these via `AppliedCellStyle="..."` to inherit
+    /// fill / VJ / per-edge strokes when their own attributes are
+    /// absent.
+    pub cell_styles: BTreeMap<String, CellStyleDef>,
 }
 
 /// `<ObjectStyle>` — the page-item analogue of paragraph/character
@@ -67,6 +72,42 @@ pub struct ResolvedObject {
     pub fill_color: Option<String>,
     pub stroke_color: Option<String>,
     pub stroke_weight: Option<f32>,
+}
+
+/// `<CellStyle>` — per-cell defaults for fill, edge strokes, and
+/// vertical justification. Cells can override individual fields
+/// inline; missing fields cascade through `BasedOn` and finally
+/// fall through to renderer defaults.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct CellStyleDef {
+    pub self_id: String,
+    pub name: Option<String>,
+    pub based_on: Option<String>,
+    pub fill_color: Option<String>,
+    pub vertical_justification: Option<String>,
+    pub top_edge_stroke_color: Option<String>,
+    pub top_edge_stroke_weight: Option<f32>,
+    pub bottom_edge_stroke_color: Option<String>,
+    pub bottom_edge_stroke_weight: Option<f32>,
+    pub left_edge_stroke_color: Option<String>,
+    pub left_edge_stroke_weight: Option<f32>,
+    pub right_edge_stroke_color: Option<String>,
+    pub right_edge_stroke_weight: Option<f32>,
+}
+
+/// Effective cell-level attributes after walking BasedOn.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ResolvedCell {
+    pub fill_color: Option<String>,
+    pub vertical_justification: Option<String>,
+    pub top_edge_stroke_color: Option<String>,
+    pub top_edge_stroke_weight: Option<f32>,
+    pub bottom_edge_stroke_color: Option<String>,
+    pub bottom_edge_stroke_weight: Option<f32>,
+    pub left_edge_stroke_color: Option<String>,
+    pub left_edge_stroke_weight: Option<f32>,
+    pub right_edge_stroke_color: Option<String>,
+    pub right_edge_stroke_weight: Option<f32>,
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -164,6 +205,7 @@ enum CurrentStyle {
     Character,
     Paragraph,
     Object,
+    Cell,
 }
 
 /// Element-form attributes inside `<Properties>` we want to push back
@@ -189,6 +231,7 @@ impl StyleSheet {
         // <AppliedFont> as an element inside <Properties>.
         let mut current_character_style: Option<String> = None;
         let mut current_object_style: Option<String> = None;
+        let mut current_cell_style: Option<String> = None;
         let mut current_style: Option<CurrentStyle> = None;
         let mut pending_property: Option<CurrentProperty> = None;
         loop {
@@ -213,6 +256,13 @@ impl StyleSheet {
                             current_object_style = Some(s.self_id.clone());
                             current_style = Some(CurrentStyle::Object);
                             out.object_styles.insert(s.self_id.clone(), s);
+                        }
+                    }
+                    b"CellStyle" => {
+                        if let Some(s) = parse_cell_style(&e) {
+                            current_cell_style = Some(s.self_id.clone());
+                            current_style = Some(CurrentStyle::Cell);
+                            out.cell_styles.insert(s.self_id.clone(), s);
                         }
                     }
                     b"AppliedFont" if current_style.is_some() => {
@@ -274,6 +324,15 @@ impl StyleSheet {
                                     }
                                 }
                             }
+                            (Some(CurrentStyle::Cell), Some(CurrentProperty::BasedOn)) => {
+                                if let Some(id) = current_cell_style.as_deref() {
+                                    if let Some(c) = out.cell_styles.get_mut(id) {
+                                        if c.based_on.is_none() {
+                                            c.based_on = Some(text);
+                                        }
+                                    }
+                                }
+                            }
                             _ => {}
                         }
                         pending_property = None;
@@ -328,6 +387,12 @@ impl StyleSheet {
                     b"ObjectStyle" => {
                         current_object_style = None;
                         if matches!(current_style, Some(CurrentStyle::Object)) {
+                            current_style = None;
+                        }
+                    }
+                    b"CellStyle" => {
+                        current_cell_style = None;
+                        if matches!(current_style, Some(CurrentStyle::Cell)) {
                             current_style = None;
                         }
                     }
@@ -394,6 +459,22 @@ impl StyleSheet {
         }
         acc
     }
+
+    /// Walk a CellStyle's BasedOn chain. Cell strokes / fills /
+    /// vertical justification cascade through it.
+    pub fn resolve_cell(&self, id: &str) -> ResolvedCell {
+        let mut acc = ResolvedCell::default();
+        let mut cursor = Some(id.to_string());
+        for _ in 0..MAX_BASED_ON_DEPTH {
+            let Some(cur_id) = cursor else { break };
+            let Some(s) = self.cell_styles.get(&cur_id) else {
+                break;
+            };
+            acc.merge_below(s);
+            cursor = s.based_on.clone();
+        }
+        acc
+    }
 }
 
 impl ResolvedObject {
@@ -405,6 +486,37 @@ impl ResolvedObject {
             self.stroke_color = def.stroke_color.clone();
         }
         self.stroke_weight = self.stroke_weight.or(def.stroke_weight);
+    }
+}
+
+impl ResolvedCell {
+    pub fn merge_below(&mut self, def: &CellStyleDef) {
+        if self.fill_color.is_none() {
+            self.fill_color = def.fill_color.clone();
+        }
+        if self.vertical_justification.is_none() {
+            self.vertical_justification = def.vertical_justification.clone();
+        }
+        if self.top_edge_stroke_color.is_none() {
+            self.top_edge_stroke_color = def.top_edge_stroke_color.clone();
+        }
+        self.top_edge_stroke_weight = self.top_edge_stroke_weight.or(def.top_edge_stroke_weight);
+        if self.bottom_edge_stroke_color.is_none() {
+            self.bottom_edge_stroke_color = def.bottom_edge_stroke_color.clone();
+        }
+        self.bottom_edge_stroke_weight = self
+            .bottom_edge_stroke_weight
+            .or(def.bottom_edge_stroke_weight);
+        if self.left_edge_stroke_color.is_none() {
+            self.left_edge_stroke_color = def.left_edge_stroke_color.clone();
+        }
+        self.left_edge_stroke_weight = self.left_edge_stroke_weight.or(def.left_edge_stroke_weight);
+        if self.right_edge_stroke_color.is_none() {
+            self.right_edge_stroke_color = def.right_edge_stroke_color.clone();
+        }
+        self.right_edge_stroke_weight = self
+            .right_edge_stroke_weight
+            .or(def.right_edge_stroke_weight);
     }
 }
 
@@ -490,6 +602,29 @@ fn parse_tab_stop_styles(e: &quick_xml::events::BytesStart) -> Option<TabStop> {
         alignment: attr(e, b"Alignment"),
         alignment_character: attr(e, b"AlignmentCharacter"),
         leader: attr(e, b"Leader"),
+    })
+}
+
+fn parse_cell_style(e: &quick_xml::events::BytesStart) -> Option<CellStyleDef> {
+    let self_id = attr(e, b"Self")?;
+    let normalize = |c: Option<String>| match c.as_deref() {
+        Some("Swatch/None") | Some("n") | Some("") => None,
+        _ => c,
+    };
+    Some(CellStyleDef {
+        self_id,
+        name: attr(e, b"Name"),
+        based_on: attr(e, b"BasedOn"),
+        fill_color: normalize(attr(e, b"FillColor")),
+        vertical_justification: attr(e, b"VerticalJustification"),
+        top_edge_stroke_color: normalize(attr(e, b"TopEdgeStrokeColor")),
+        top_edge_stroke_weight: attr(e, b"TopEdgeStrokeWeight").and_then(|s| s.parse().ok()),
+        bottom_edge_stroke_color: normalize(attr(e, b"BottomEdgeStrokeColor")),
+        bottom_edge_stroke_weight: attr(e, b"BottomEdgeStrokeWeight").and_then(|s| s.parse().ok()),
+        left_edge_stroke_color: normalize(attr(e, b"LeftEdgeStrokeColor")),
+        left_edge_stroke_weight: attr(e, b"LeftEdgeStrokeWeight").and_then(|s| s.parse().ok()),
+        right_edge_stroke_color: normalize(attr(e, b"RightEdgeStrokeColor")),
+        right_edge_stroke_weight: attr(e, b"RightEdgeStrokeWeight").and_then(|s| s.parse().ok()),
     })
 }
 

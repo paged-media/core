@@ -1528,11 +1528,114 @@ fn emit_table_into_chain(
         let inner_w = (cell_w_pt - cell.text_left_inset - cell.text_right_inset).max(0.0);
         let inner_h = (cell_h_pt - cell.text_top_inset - cell.text_bottom_inset).max(0.0);
 
+        // Resolve the cell's CellStyle cascade (fill, vertical
+        // justification, per-edge strokes) and apply the visible
+        // bits before laying out cell text.
+        let resolved_cell = cell
+            .applied_cell_style
+            .as_deref()
+            .map(|id| em.document.styles.resolve_cell(id))
+            .unwrap_or_default();
+
+        // Cell fill — drawn before text so glyphs paint on top.
+        if let Some(fill) = resolved_cell
+            .fill_color
+            .as_deref()
+            .and_then(|id| color_id_to_paint(id, em.palette, em.cmyk_xform))
+        {
+            emit_rect(
+                Rect {
+                    x: cell_x_pt,
+                    y: cell_y_pt,
+                    w: cell_w_pt,
+                    h: cell_h_pt,
+                },
+                fill,
+                &mut pages[target_page].list,
+            );
+        }
+        // Per-edge cell strokes. Each edge gets its own thin rect
+        // (filled, since rect-stroke aligns to centerlines and we
+        // want the edge to sit precisely on the cell boundary).
+        let edges = [
+            (
+                resolved_cell.top_edge_stroke_color.as_deref(),
+                resolved_cell.top_edge_stroke_weight,
+                cell_x_pt,
+                cell_y_pt,
+                cell_w_pt,
+            ),
+            (
+                resolved_cell.bottom_edge_stroke_color.as_deref(),
+                resolved_cell.bottom_edge_stroke_weight,
+                cell_x_pt,
+                cell_y_pt + cell_h_pt,
+                cell_w_pt,
+            ),
+        ];
+        for (color, weight, x, y, w) in edges {
+            if let (Some(color_id), Some(weight)) = (color, weight) {
+                if weight > 0.0 {
+                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) {
+                        emit_rect(
+                            Rect {
+                                x,
+                                y: y - weight * 0.5,
+                                w,
+                                h: weight,
+                            },
+                            paint,
+                            &mut pages[target_page].list,
+                        );
+                    }
+                }
+            }
+        }
+        let v_edges = [
+            (
+                resolved_cell.left_edge_stroke_color.as_deref(),
+                resolved_cell.left_edge_stroke_weight,
+                cell_x_pt,
+                cell_y_pt,
+                cell_h_pt,
+            ),
+            (
+                resolved_cell.right_edge_stroke_color.as_deref(),
+                resolved_cell.right_edge_stroke_weight,
+                cell_x_pt + cell_w_pt,
+                cell_y_pt,
+                cell_h_pt,
+            ),
+        ];
+        for (color, weight, x, y, h) in v_edges {
+            if let (Some(color_id), Some(weight)) = (color, weight) {
+                if weight > 0.0 {
+                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) {
+                        emit_rect(
+                            Rect {
+                                x: x - weight * 0.5,
+                                y,
+                                w: weight,
+                                h,
+                            },
+                            paint,
+                            &mut pages[target_page].list,
+                        );
+                    }
+                }
+            }
+        }
+
+        // Lay out the cell paragraphs into a working buffer first
+        // so we know their total height; then apply vertical
+        // justification by shifting all of them by a uniform dy.
         let mut paragraph_y = 0.0f32;
+        let mut emitted_extents: Vec<(usize, usize)> = Vec::new();
         for paragraph in &cell.paragraphs {
             if paragraph.runs.is_empty() {
                 continue;
             }
+            let cmd_start = pages[target_page].list.commands.len();
             let consumed = emit_cell_paragraph(
                 em,
                 paragraph,
@@ -1543,9 +1646,32 @@ fn emit_table_into_chain(
                 pages,
                 total_stats,
             );
+            let cmd_end = pages[target_page].list.commands.len();
+            if cmd_end > cmd_start {
+                emitted_extents.push((cmd_start, cmd_end));
+            }
             paragraph_y += consumed;
             if paragraph_y >= inner_h {
                 break;
+            }
+        }
+        // Apply CellStyle vertical justification by shifting every
+        // glyph command we emitted in this cell by dy = slack/factor.
+        // CenterAlign → centre vertically; BottomAlign → push to the
+        // bottom inset. Top is the default (no shift).
+        let used_h = paragraph_y;
+        if used_h > 0.0 && used_h < inner_h {
+            let dy = match resolved_cell.vertical_justification.as_deref() {
+                Some("CenterAlign") => Some((inner_h - used_h) * 0.5),
+                Some("BottomAlign") => Some(inner_h - used_h),
+                _ => None,
+            };
+            if let Some(dy) = dy {
+                for (s, e) in &emitted_extents {
+                    for cmd in &mut pages[target_page].list.commands[*s..*e] {
+                        cmd.transform_mut().0[5] += dy;
+                    }
+                }
             }
         }
     }

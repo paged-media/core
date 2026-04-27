@@ -31,8 +31,8 @@ pub use spread::{
 };
 pub use story::{CharacterRun, Paragraph, Story, TabStop, Table, TableCell, TableColumn, TableRow};
 pub use styles::{
-    CharacterStyleDef, ObjectStyleDef, ParagraphStyleDef, ResolvedCharacter, ResolvedObject,
-    ResolvedParagraph, StyleSheet,
+    CellStyleDef, CharacterStyleDef, ObjectStyleDef, ParagraphStyleDef, ResolvedCell,
+    ResolvedCharacter, ResolvedObject, ResolvedParagraph, StyleSheet,
 };
 
 #[derive(Debug, thiserror::Error)]
