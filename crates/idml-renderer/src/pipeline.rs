@@ -1469,19 +1469,6 @@ fn emit_table_into_chain(
     if table.cells.is_empty() {
         return;
     }
-    let frame = em.chain[em.frame_idx];
-    let target_page = em.chain_pages[em.frame_idx];
-    let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
-    let (ox, oy) = pages[target_page].spread_origin;
-    let frame_insets = frame.inset_spacing.unwrap_or([0.0; 4]);
-    let table_left_pt = sx - ox + frame_insets[1] + em.column_x_shift_pt;
-    let baseline_pt = if em.y_cursor >= 0 {
-        em.y_cursor as f32 / idml_text::shape::ADVANCE_PRECISION
-    } else {
-        frame_insets[0]
-    };
-    let table_top_pt = sy - oy + baseline_pt - em.options.default_point_size * 0.8;
-
     let col_widths: Vec<f32> = table
         .columns
         .iter()
@@ -1499,30 +1486,13 @@ fn emit_table_into_chain(
         acc += *w;
         col_x.push(acc);
     }
-    let mut row_y: Vec<f32> = Vec::with_capacity(row_heights.len() + 1);
-    let mut acc = 0.0f32;
-    row_y.push(0.0);
-    for h in &row_heights {
-        acc += *h;
-        row_y.push(acc);
-    }
-    let total_h = acc;
     let total_w = col_x.last().copied().unwrap_or(0.0);
 
-    // Resolve the table's TableStyle cascade once. Holds the
-    // per-region CellStyle defaults + table-level border strokes
-    // + alternating row fill knobs. Cells fall back to their
-    // region's default when they carry no AppliedCellStyle.
     let resolved_table = table
         .applied_table_style
         .as_deref()
         .map(|id| em.document.styles.resolve_table(id))
         .unwrap_or_default();
-
-    // Decide which CellStyle id applies to a cell at (col, row)
-    // when the cell itself has no override. Header rows take
-    // header_region; footer rows take footer; first/last column
-    // take left/right column region; everything else body.
     let header_count = table.header_row_count as usize;
     let footer_count = table.footer_row_count as usize;
     let total_rows = row_heights.len();
@@ -1531,7 +1501,7 @@ fn emit_table_into_chain(
         if r < header_count {
             return resolved_table.header_region_cell_style.as_deref();
         }
-        if total_rows >= footer_count && r >= total_rows - footer_count && footer_count > 0 {
+        if footer_count > 0 && r + footer_count >= total_rows {
             return resolved_table.footer_region_cell_style.as_deref();
         }
         if c == 0 {
@@ -1547,6 +1517,152 @@ fn emit_table_into_chain(
         resolved_table.body_region_cell_style.as_deref()
     };
 
+    // Per-row layout basis: which chain frame the row lives in
+    // and the page-local top y for that row. Walks rows
+    // top-to-bottom, advancing through the chain when a row would
+    // overflow its frame. Cells consult their starting row's basis
+    // for positioning; spans clip to the starting frame's bottom
+    // rather than splitting across frames.
+    #[derive(Clone, Copy)]
+    struct RowBasis {
+        chain_idx: usize,
+        target_page: usize,
+        table_left_pt: f32,
+        // Page-local y for the top of THIS row.
+        row_top_in_page: f32,
+    }
+    let frame_basis_for = |chain_idx: usize, x_shift: f32| -> (f32, f32, f32, f32, usize) {
+        let frame = em.chain[chain_idx];
+        let target_page = em.chain_pages[chain_idx];
+        let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
+        let (ox, oy) = pages[target_page].spread_origin;
+        let insets = frame.inset_spacing.unwrap_or([0.0; 4]);
+        let table_left_pt = sx - ox + insets[1] + x_shift;
+        let frame_top_in_page = sy - oy;
+        let frame_height = frame.bounds.height();
+        (
+            table_left_pt,
+            frame_top_in_page,
+            frame_height,
+            insets[0],
+            target_page,
+        )
+    };
+    let mut chain_idx = em.frame_idx;
+    let (mut tab_left, mut frame_top_in_page, mut frame_height, mut top_inset, mut target_page) =
+        frame_basis_for(chain_idx, em.column_x_shift_pt);
+    let mut row_top_y_in_frame = if em.y_cursor >= 0 {
+        em.y_cursor as f32 / idml_text::shape::ADVANCE_PRECISION
+            - em.options.default_point_size * 0.8
+    } else {
+        top_inset
+    };
+    let mut row_bases: Vec<RowBasis> = Vec::with_capacity(total_rows);
+    // Per-frame extent for table-border emission below.
+    // Each entry: (chain_idx, target_page, table_left_pt, row_top
+    // of the first row in this frame, row_bottom of the last row
+    // in this frame).
+    let mut frame_extents: Vec<(usize, usize, f32, f32, f32)> = Vec::new();
+    let mut current_frame_first_top = frame_top_in_page + row_top_y_in_frame;
+    let mut current_frame_last_bottom = current_frame_first_top;
+
+    for &h in row_heights.iter() {
+        // Advance to the next frame if this row would overflow
+        // the current frame and we already have at least one row
+        // placed in it. Without the "already placed" guard a row
+        // taller than the head frame's available space would
+        // trigger an infinite handover loop on a single-frame story.
+        let already_placed_in_this_frame = row_bases
+            .last()
+            .map(|b| b.chain_idx == chain_idx)
+            .unwrap_or(false);
+        if row_top_y_in_frame + h > frame_height
+            && chain_idx + 1 < em.chain.len()
+            && already_placed_in_this_frame
+        {
+            // Close out current frame's extent.
+            frame_extents.push((
+                chain_idx,
+                target_page,
+                tab_left,
+                current_frame_first_top,
+                current_frame_last_bottom,
+            ));
+            chain_idx += 1;
+            let (l, ftop, h_next, ti, tp) = frame_basis_for(chain_idx, 0.0);
+            tab_left = l;
+            frame_top_in_page = ftop;
+            frame_height = h_next;
+            top_inset = ti;
+            target_page = tp;
+            row_top_y_in_frame = top_inset;
+            current_frame_first_top = frame_top_in_page + row_top_y_in_frame;
+        }
+        let row_top_in_page = frame_top_in_page + row_top_y_in_frame;
+        row_bases.push(RowBasis {
+            chain_idx,
+            target_page,
+            table_left_pt: tab_left,
+            row_top_in_page,
+        });
+        row_top_y_in_frame += h;
+        current_frame_last_bottom = frame_top_in_page + row_top_y_in_frame;
+    }
+    // Close out the trailing frame extent.
+    frame_extents.push((
+        chain_idx,
+        target_page,
+        tab_left,
+        current_frame_first_top,
+        current_frame_last_bottom,
+    ));
+    // Track the final frame index + y for the y_cursor advance.
+    let final_chain_idx = chain_idx;
+    let final_y_in_frame = row_top_y_in_frame;
+
+    // Alternating row fills. The TableStyle cycles between
+    // `start_row_fill_color` (count rows) and
+    // `end_row_fill_color` (count rows) starting from the first
+    // *body* row. Cells with their own cell-style fill paint over
+    // the alternating fill.
+    let alternating_fill_for_body_row = |body_row_idx: usize| -> Option<&str> {
+        let start_n = resolved_table.start_row_fill_count.unwrap_or(0) as usize;
+        let end_n = resolved_table.end_row_fill_count.unwrap_or(0) as usize;
+        let cycle = start_n + end_n;
+        if cycle == 0 {
+            return None;
+        }
+        let pos = body_row_idx % cycle;
+        if pos < start_n {
+            resolved_table.start_row_fill_color.as_deref()
+        } else {
+            resolved_table.end_row_fill_color.as_deref()
+        }
+    };
+    for r in 0..total_rows {
+        if r < header_count {
+            continue;
+        }
+        if footer_count > 0 && r + footer_count >= total_rows {
+            continue;
+        }
+        let body_idx = r - header_count;
+        let Some(fill_id) = alternating_fill_for_body_row(body_idx) else {
+            continue;
+        };
+        let Some(paint) = color_id_to_paint(fill_id, em.palette, em.cmyk_xform) else {
+            continue;
+        };
+        let basis = row_bases[r];
+        let rect = Rect {
+            x: basis.table_left_pt,
+            y: basis.row_top_in_page,
+            w: total_w,
+            h: row_heights[r],
+        };
+        emit_rect(rect, paint, &mut pages[basis.target_page].list);
+    }
+
     for cell in &table.cells {
         let Some((c, r)) = cell.coords() else {
             continue;
@@ -1555,12 +1671,27 @@ fn emit_table_into_chain(
         if c >= col_widths.len() || r >= row_heights.len() {
             continue;
         }
-        let cell_x_pt = table_left_pt + col_x[c];
-        let cell_y_pt = table_top_pt + row_y[r];
+        let basis = row_bases[r];
+        let target_page = basis.target_page;
+        let cell_x_pt = basis.table_left_pt + col_x[c];
+        let cell_y_pt = basis.row_top_in_page;
         let last_c = (c + cell.column_span.max(1) as usize).min(col_widths.len());
-        let last_r = (r + cell.row_span.max(1) as usize).min(row_heights.len());
+        // For row spans, accumulate heights and clip to the
+        // starting frame's bottom so spans that would cross a
+        // frame boundary don't fly off-page. For body of work in
+        // sample.idml all spans stay within their starting frame.
+        let span_rows = cell.row_span.max(1) as usize;
+        let last_r = (r + span_rows).min(row_heights.len());
+        let mut cell_h_pt = 0.0f32;
+        for sr in r..last_r {
+            // Stop accumulating if a successor row jumped to a new
+            // frame — clip the cell to the originating frame.
+            if row_bases[sr].chain_idx != basis.chain_idx {
+                break;
+            }
+            cell_h_pt += row_heights[sr];
+        }
         let cell_w_pt = col_x[last_c] - col_x[c];
-        let cell_h_pt = row_y[last_r] - row_y[r];
 
         let inner_left = cell_x_pt + cell.text_left_inset;
         let inner_top = cell_y_pt + cell.text_top_inset;
@@ -1718,73 +1849,113 @@ fn emit_table_into_chain(
         }
     }
 
-    // Table-level borders. Same filled-rect trick the per-edge
-    // cell strokes use so the line snaps to the table boundary at
-    // any weight without tiny-skia's stroke-rect centerline drift.
-    let table_borders = [
-        (
-            resolved_table.top_border_stroke_color.as_deref(),
-            resolved_table.top_border_stroke_weight,
-            table_left_pt,
-            table_top_pt,
-            total_w,
-            true,
-        ),
-        (
-            resolved_table.bottom_border_stroke_color.as_deref(),
-            resolved_table.bottom_border_stroke_weight,
-            table_left_pt,
-            table_top_pt + total_h,
-            total_w,
-            true,
-        ),
-        (
+    // Table-level borders, drawn per-frame so a threaded table
+    // gets a top border at the start of the first frame, a bottom
+    // border at the end of the last frame, and full left/right
+    // borders inside every frame the table touches. Each border
+    // segment uses the same filled-rect snap-to-boundary trick as
+    // the per-cell edge strokes.
+    for (i, (_chain_idx, fp_target_page, frame_table_left, top_y, bottom_y)) in
+        frame_extents.iter().enumerate()
+    {
+        let is_first = i == 0;
+        let is_last = i == frame_extents.len() - 1;
+        let target = *fp_target_page;
+        if is_first {
+            if let (Some(color_id), Some(w)) = (
+                resolved_table.top_border_stroke_color.as_deref(),
+                resolved_table.top_border_stroke_weight,
+            ) {
+                if w > 0.0 {
+                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) {
+                        emit_rect(
+                            Rect {
+                                x: *frame_table_left,
+                                y: *top_y - w * 0.5,
+                                w: total_w,
+                                h: w,
+                            },
+                            paint,
+                            &mut pages[target].list,
+                        );
+                    }
+                }
+            }
+        }
+        if is_last {
+            if let (Some(color_id), Some(w)) = (
+                resolved_table.bottom_border_stroke_color.as_deref(),
+                resolved_table.bottom_border_stroke_weight,
+            ) {
+                if w > 0.0 {
+                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) {
+                        emit_rect(
+                            Rect {
+                                x: *frame_table_left,
+                                y: *bottom_y - w * 0.5,
+                                w: total_w,
+                                h: w,
+                            },
+                            paint,
+                            &mut pages[target].list,
+                        );
+                    }
+                }
+            }
+        }
+        // Left/right borders span this frame's portion of the table.
+        let segment_h = bottom_y - top_y;
+        if let (Some(color_id), Some(w)) = (
             resolved_table.left_border_stroke_color.as_deref(),
             resolved_table.left_border_stroke_weight,
-            table_left_pt,
-            table_top_pt,
-            total_h,
-            false,
-        ),
-        (
-            resolved_table.right_border_stroke_color.as_deref(),
-            resolved_table.right_border_stroke_weight,
-            table_left_pt + total_w,
-            table_top_pt,
-            total_h,
-            false,
-        ),
-    ];
-    for (color, weight, x, y, len, horizontal) in table_borders {
-        if let (Some(color_id), Some(w)) = (color, weight) {
+        ) {
             if w > 0.0 {
                 if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) {
-                    let r = if horizontal {
+                    emit_rect(
                         Rect {
-                            x,
-                            y: y - w * 0.5,
-                            w: len,
-                            h: w,
-                        }
-                    } else {
-                        Rect {
-                            x: x - w * 0.5,
-                            y,
+                            x: *frame_table_left - w * 0.5,
+                            y: *top_y,
                             w,
-                            h: len,
-                        }
-                    };
-                    emit_rect(r, paint, &mut pages[target_page].list);
+                            h: segment_h,
+                        },
+                        paint,
+                        &mut pages[target].list,
+                    );
+                }
+            }
+        }
+        if let (Some(color_id), Some(w)) = (
+            resolved_table.right_border_stroke_color.as_deref(),
+            resolved_table.right_border_stroke_weight,
+        ) {
+            if w > 0.0 {
+                if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) {
+                    emit_rect(
+                        Rect {
+                            x: *frame_table_left + total_w - w * 0.5,
+                            y: *top_y,
+                            w,
+                            h: segment_h,
+                        },
+                        paint,
+                        &mut pages[target].list,
+                    );
                 }
             }
         }
     }
 
-    // Advance host frame's y_cursor past the table.
-    let height_64 = (total_h * idml_text::shape::ADVANCE_PRECISION).round() as i32;
-    em.y_cursor = em.y_cursor.max(0) + height_64;
+    // Advance the active frame_idx + y_cursor to the row after the
+    // last one we placed. The host emitter loop reads em.frame_idx
+    // and em.y_cursor when continuing the surrounding paragraph
+    // flow.
+    em.frame_idx = final_chain_idx;
+    em.y_cursor = ((final_y_in_frame + em.options.default_point_size * 0.8)
+        * idml_text::shape::ADVANCE_PRECISION)
+        .round() as i32;
     total_stats.paragraphs += 1;
-    pages[target_page].stats.paragraphs += 1;
+    let stat_page = em.chain_pages[em.frame_idx];
+    pages[stat_page].stats.paragraphs += 1;
 }
 
 /// `CellStyle/$ID/[None]` is IDML's "no style" sentinel. Treat it
