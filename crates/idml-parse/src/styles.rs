@@ -127,6 +127,25 @@ pub struct ResolvedParagraph {
     pub numbering_format: Option<String>,
 }
 
+/// Identifies which kind of style is open while we walk
+/// `<Properties>` children that carry attributes-as-elements
+/// (e.g. `<AppliedFont type="string">…</AppliedFont>`,
+/// `<BasedOn type="string">…</BasedOn>`).
+#[derive(Debug, Clone, Copy)]
+enum CurrentStyle {
+    Character,
+    Paragraph,
+}
+
+/// Element-form attributes inside `<Properties>` we want to push back
+/// into the current style block. Keys are the element name; the
+/// next text event lands here.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CurrentProperty {
+    AppliedFont,
+    BasedOn,
+}
+
 impl StyleSheet {
     pub fn parse(xml: &[u8]) -> Result<Self, ParseError> {
         let mut reader = quick_xml::Reader::from_reader(xml);
@@ -137,22 +156,83 @@ impl StyleSheet {
         // Track the open ParagraphStyle's id so nested <TabStop>
         // children attach to the right entry.
         let mut current_paragraph_style: Option<String> = None;
+        // Same idea for <CharacterStyle>, used when we read
+        // <AppliedFont> as an element inside <Properties>.
+        let mut current_character_style: Option<String> = None;
+        let mut current_style: Option<CurrentStyle> = None;
+        let mut pending_property: Option<CurrentProperty> = None;
         loop {
             match reader.read_event_into(&mut buf)? {
                 Event::Start(e) => match e.name().as_ref() {
                     b"CharacterStyle" => {
                         if let Some(s) = parse_character_style(&e) {
+                            current_character_style = Some(s.self_id.clone());
+                            current_style = Some(CurrentStyle::Character);
                             out.character_styles.insert(s.self_id.clone(), s);
                         }
                     }
                     b"ParagraphStyle" => {
                         if let Some(s) = parse_paragraph_style(&e) {
                             current_paragraph_style = Some(s.self_id.clone());
+                            current_style = Some(CurrentStyle::Paragraph);
                             out.paragraph_styles.insert(s.self_id.clone(), s);
                         }
                     }
+                    b"AppliedFont" if current_style.is_some() => {
+                        pending_property = Some(CurrentProperty::AppliedFont);
+                    }
+                    b"BasedOn" if current_style.is_some() => {
+                        pending_property = Some(CurrentProperty::BasedOn);
+                    }
                     _ => {}
                 },
+                Event::Text(t) if pending_property.is_some() => {
+                    let text = t.unescape().map(|c| c.into_owned()).unwrap_or_default();
+                    if text.is_empty() {
+                        pending_property = None;
+                    } else {
+                        match (current_style, pending_property) {
+                            (Some(CurrentStyle::Paragraph), Some(prop)) => {
+                                if let Some(id) = current_paragraph_style.as_deref() {
+                                    if let Some(p) = out.paragraph_styles.get_mut(id) {
+                                        match prop {
+                                            CurrentProperty::AppliedFont => {
+                                                if p.font.is_none() {
+                                                    p.font = Some(text);
+                                                }
+                                            }
+                                            CurrentProperty::BasedOn => {
+                                                if p.based_on.is_none() {
+                                                    p.based_on = Some(text);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            (Some(CurrentStyle::Character), Some(prop)) => {
+                                if let Some(id) = current_character_style.as_deref() {
+                                    if let Some(c) = out.character_styles.get_mut(id) {
+                                        match prop {
+                                            CurrentProperty::AppliedFont => {
+                                                if c.font.is_none() {
+                                                    c.font = Some(text);
+                                                }
+                                            }
+                                            CurrentProperty::BasedOn => {
+                                                if c.based_on.is_none() {
+                                                    c.based_on = Some(text);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        pending_property = None;
+                    }
+                }
                 Event::Empty(e) => match e.name().as_ref() {
                     b"CharacterStyle" => {
                         if let Some(s) = parse_character_style(&e) {
@@ -186,11 +266,28 @@ impl StyleSheet {
                     }
                     _ => {}
                 },
-                Event::End(e) => {
-                    if e.name().as_ref() == b"ParagraphStyle" {
+                Event::End(e) => match e.name().as_ref() {
+                    b"ParagraphStyle" => {
                         current_paragraph_style = None;
+                        if matches!(current_style, Some(CurrentStyle::Paragraph)) {
+                            current_style = None;
+                        }
                     }
-                }
+                    b"CharacterStyle" => {
+                        current_character_style = None;
+                        if matches!(current_style, Some(CurrentStyle::Character)) {
+                            current_style = None;
+                        }
+                    }
+                    b"AppliedFont" | b"BasedOn" => {
+                        // Pending property is consumed by the next
+                        // Text event; clearing here prevents
+                        // mismatched-tag leaks if the element was
+                        // empty (no text content).
+                        pending_property = None;
+                    }
+                    _ => {}
+                },
                 Event::Eof => break,
                 _ => {}
             }
@@ -448,5 +545,48 @@ mod tests {
         // Both were folded in once; the depth limiter prevents looping.
         assert_eq!(r.point_size, Some(10.0));
         assert_eq!(r.font_style.as_deref(), Some("Bold"));
+    }
+
+    /// InDesign exports `AppliedFont` and `BasedOn` as element-form
+    /// children of `<Properties>` rather than attributes on the
+    /// style element. Without this path the cascade reads
+    /// `font: None` for every paragraph style and runs that only
+    /// inherit a font through their applied paragraph style end up
+    /// fontless — and therefore unshaped — in real-world IDMLs.
+    #[test]
+    fn parses_applied_font_and_based_on_as_property_elements() {
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootParagraphStyleGroup>
+            <ParagraphStyle Self="ParagraphStyle/Body" Name="Body"
+                            FontStyle="Italic" PointSize="8"
+                            FillColor="Color/Red">
+              <Properties>
+                <BasedOn type="string">$ID/[No paragraph style]</BasedOn>
+                <Leading type="unit">12</Leading>
+                <AppliedFont type="string">Open Sans</AppliedFont>
+              </Properties>
+            </ParagraphStyle>
+          </RootParagraphStyleGroup>
+          <RootCharacterStyleGroup>
+            <CharacterStyle Self="CharacterStyle/Emph" Name="Emph">
+              <Properties>
+                <BasedOn type="string">CharacterStyle/Base</BasedOn>
+                <AppliedFont type="string">Minion Pro</AppliedFont>
+              </Properties>
+            </CharacterStyle>
+          </RootCharacterStyleGroup>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let p = s.paragraph_styles.get("ParagraphStyle/Body").unwrap();
+        assert_eq!(p.font.as_deref(), Some("Open Sans"));
+        assert_eq!(p.based_on.as_deref(), Some("$ID/[No paragraph style]"));
+        let c = s.character_styles.get("CharacterStyle/Emph").unwrap();
+        assert_eq!(c.font.as_deref(), Some("Minion Pro"));
+        assert_eq!(c.based_on.as_deref(), Some("CharacterStyle/Base"));
+
+        // Cascade pulls font through to the resolved paragraph attrs.
+        let r = s.resolve_paragraph("ParagraphStyle/Body");
+        assert_eq!(r.font.as_deref(), Some("Open Sans"));
     }
 }

@@ -24,6 +24,14 @@ use crate::ParseError;
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct Spread {
     pub self_id: Option<String>,
+    /// `ItemTransform` on the `<Spread>` (or `<MasterSpread>`)
+    /// element. Per the IDML spec §10.3.3, this maps the spread's
+    /// inner coords into the document's pasteboard. InDesign limits
+    /// this to translation + 0/90/180/270 rotation. Per-page
+    /// rendering doesn't need the value (each page already lives in
+    /// the spread's coord system), but pasteboard-faithful output
+    /// across the whole document does. `None` ⇒ identity.
+    pub item_transform: Option<[f32; 6]>,
     pub pages: Vec<Page>,
     pub text_frames: Vec<TextFrame>,
     /// Axis-aligned rectangles used as pure vector frames (no parent
@@ -46,10 +54,29 @@ pub struct Spread {
 #[derive(Debug, Clone, Serialize)]
 pub struct Page {
     pub self_id: Option<String>,
+    /// Page bounds in the page's *inner* coordinate system. Per the
+    /// IDML spec, `GeometricBounds` describes the page rectangle in
+    /// the page's own coords; the page's `ItemTransform` maps those
+    /// coords into the parent spread. For older single-page-size
+    /// layouts ItemTransform is identity, so the bounds are also
+    /// the spread-space bounds — that's why our synthetic fixtures
+    /// have always "just worked".
     pub bounds: Bounds,
     /// `AppliedMaster` reference — `MasterSpread/<id>` typically.
     /// Resolved to a `MasterSpread` by `idml_scene::Document`.
     pub applied_master: Option<String>,
+    /// `ItemTransform` attribute on the `<Page>` element (CS5+).
+    /// Maps the page's inner coordinate system into the spread's
+    /// inner coordinate system. `None` ⇒ identity, in which case the
+    /// page sits at the spread's origin.
+    pub item_transform: Option<[f32; 6]>,
+    /// `MasterPageTransform` attribute on the `<Page>` element
+    /// (CS5+). Per spec §10.3.3, applied *after* the spread's
+    /// ItemTransform but *before* each master page item's own
+    /// ItemTransform — it positions the master overlay on this
+    /// specific page (the "Master Page Overlay" feature). `None` ⇒
+    /// identity.
+    pub master_page_transform: Option<[f32; 6]>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -219,6 +246,12 @@ pub struct Bounds {
 }
 
 impl Bounds {
+    pub const ZERO: Bounds = Bounds {
+        top: 0.0,
+        left: 0.0,
+        bottom: 0.0,
+        right: 0.0,
+    };
     pub fn width(&self) -> f32 {
         self.right - self.left
     }
@@ -227,13 +260,60 @@ impl Bounds {
     }
 }
 
-/// Tracks which frame the current `<DropShadowSetting>` should
-/// attach to — the most recently opened TextFrame / Rectangle / Oval.
+/// Identifies the most recently opened shape element so child
+/// elements (DropShadowSetting, TextFramePreference, PathPointType,
+/// Image, Link) can attach to the right frame.
 #[derive(Debug, Clone, Copy)]
-enum CurrentFrame {
+enum CurrentFrameKind {
     Text(usize),
     Rect(usize),
     Oval(usize),
+    Line(usize),
+}
+
+/// Per-frame parser state held while a shape element is open.
+/// Tracks whether the bounds came from a `GeometricBounds` attribute
+/// (the legacy synthetic-IDML shape) or need to be derived from the
+/// frame's `<PathGeometry>` (the InDesign-export shape — the format
+/// real-world IDMLs use almost exclusively).
+struct CurrentFrame {
+    kind: CurrentFrameKind,
+    /// True if the open tag had no `GeometricBounds` — bounds must
+    /// then come from `<PathPointType Anchor="...">` children.
+    needs_bounds: bool,
+    /// Path-point anchors accumulated while the frame is open.
+    /// Only populated when `needs_bounds` is true.
+    anchors: Vec<(f32, f32)>,
+}
+
+/// Compute the axis-aligned bounding box of a non-empty point set.
+fn bounds_from_anchors(anchors: &[(f32, f32)]) -> Bounds {
+    let (mut min_x, mut max_x, mut min_y, mut max_y) = (
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+    );
+    for &(x, y) in anchors {
+        if x < min_x {
+            min_x = x;
+        }
+        if x > max_x {
+            max_x = x;
+        }
+        if y < min_y {
+            min_y = y;
+        }
+        if y > max_y {
+            max_y = y;
+        }
+    }
+    Bounds {
+        top: min_y,
+        left: min_x,
+        bottom: max_y,
+        right: max_x,
+    }
 }
 
 impl Spread {
@@ -250,12 +330,49 @@ impl Spread {
         let mut current_frame: Option<CurrentFrame> = None;
         let mut buf = Vec::new();
 
+        // Pop the just-closed frame from its backing vec when no
+        // bounds were ever supplied (neither GeometricBounds attr
+        // nor PathGeometry anchors). Preserves the prior "skip
+        // bounds-less frames" behaviour while letting the open-tag
+        // path stay simple.
+        fn drop_pending(out: &mut Spread, kind: CurrentFrameKind) {
+            match kind {
+                CurrentFrameKind::Text(i) => {
+                    debug_assert_eq!(i + 1, out.text_frames.len());
+                    out.text_frames.pop();
+                }
+                CurrentFrameKind::Rect(i) => {
+                    debug_assert_eq!(i + 1, out.rectangles.len());
+                    out.rectangles.pop();
+                }
+                CurrentFrameKind::Oval(i) => {
+                    debug_assert_eq!(i + 1, out.ovals.len());
+                    out.ovals.pop();
+                }
+                CurrentFrameKind::Line(i) => {
+                    debug_assert_eq!(i + 1, out.graphic_lines.len());
+                    out.graphic_lines.pop();
+                }
+            }
+        }
+        // Apply path-derived bounds to the just-closed frame.
+        fn set_pending_bounds(out: &mut Spread, kind: CurrentFrameKind, bounds: Bounds) {
+            match kind {
+                CurrentFrameKind::Text(i) => out.text_frames[i].bounds = bounds,
+                CurrentFrameKind::Rect(i) => out.rectangles[i].bounds = bounds,
+                CurrentFrameKind::Oval(i) => out.ovals[i].bounds = bounds,
+                CurrentFrameKind::Line(i) => out.graphic_lines[i].bounds = bounds,
+            }
+        }
+
         loop {
             match reader.read_event_into(&mut buf)? {
                 Event::Start(e) | Event::Empty(e) => match e.name().as_ref() {
-                    b"Spread" => {
+                    b"Spread" | b"MasterSpread" => {
                         if out.self_id.is_none() {
                             out.self_id = attr(&e, b"Self");
+                            out.item_transform =
+                                attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s));
                         }
                     }
                     b"Group" => {
@@ -270,15 +387,16 @@ impl Spread {
                                 self_id: attr(&e, b"Self"),
                                 bounds,
                                 applied_master: attr(&e, b"AppliedMaster"),
+                                item_transform: attr(&e, b"ItemTransform")
+                                    .and_then(|s| parse_matrix(&s)),
+                                master_page_transform: attr(&e, b"MasterPageTransform")
+                                    .and_then(|s| parse_matrix(&s)),
                             });
                         }
                     }
                     b"TextFrame" => {
-                        let Some(bounds) =
-                            attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s))
-                        else {
-                            continue;
-                        };
+                        let bounds_attr =
+                            attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
                         let parent_story = attr(&e, b"ParentStory");
                         let item_transform = effective_item_transform(
                             &group_transforms,
@@ -291,7 +409,7 @@ impl Spread {
                         out.text_frames.push(TextFrame {
                             self_id: attr(&e, b"Self"),
                             parent_story,
-                            bounds,
+                            bounds: bounds_attr.unwrap_or(Bounds::ZERO),
                             item_transform,
                             fill_color,
                             stroke_color,
@@ -303,21 +421,22 @@ impl Spread {
                             minimum_first_baseline_offset: None,
                             inset_spacing: None,
                         });
-                        current_frame = Some(CurrentFrame::Text(out.text_frames.len() - 1));
+                        current_frame = Some(CurrentFrame {
+                            kind: CurrentFrameKind::Text(out.text_frames.len() - 1),
+                            needs_bounds: bounds_attr.is_none(),
+                            anchors: Vec::new(),
+                        });
                     }
                     b"Rectangle" => {
-                        let Some(bounds) =
-                            attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s))
-                        else {
-                            continue;
-                        };
+                        let bounds_attr =
+                            attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
                         let item_transform = effective_item_transform(
                             &group_transforms,
                             attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s)),
                         );
                         out.rectangles.push(Rectangle {
                             self_id: attr(&e, b"Self"),
-                            bounds,
+                            bounds: bounds_attr.unwrap_or(Bounds::ZERO),
                             item_transform,
                             fill_color: attr(&e, b"FillColor"),
                             stroke_color: attr(&e, b"StrokeColor"),
@@ -326,21 +445,22 @@ impl Spread {
                             drop_shadow: None,
                             image_link: None,
                         });
-                        current_frame = Some(CurrentFrame::Rect(out.rectangles.len() - 1));
+                        current_frame = Some(CurrentFrame {
+                            kind: CurrentFrameKind::Rect(out.rectangles.len() - 1),
+                            needs_bounds: bounds_attr.is_none(),
+                            anchors: Vec::new(),
+                        });
                     }
                     b"Oval" => {
-                        let Some(bounds) =
-                            attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s))
-                        else {
-                            continue;
-                        };
+                        let bounds_attr =
+                            attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
                         let item_transform = effective_item_transform(
                             &group_transforms,
                             attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s)),
                         );
                         out.ovals.push(Oval {
                             self_id: attr(&e, b"Self"),
-                            bounds,
+                            bounds: bounds_attr.unwrap_or(Bounds::ZERO),
                             item_transform,
                             fill_color: attr(&e, b"FillColor"),
                             stroke_color: attr(&e, b"StrokeColor"),
@@ -348,31 +468,59 @@ impl Spread {
                                 .and_then(|s| s.parse::<f32>().ok()),
                             drop_shadow: None,
                         });
-                        current_frame = Some(CurrentFrame::Oval(out.ovals.len() - 1));
+                        current_frame = Some(CurrentFrame {
+                            kind: CurrentFrameKind::Oval(out.ovals.len() - 1),
+                            needs_bounds: bounds_attr.is_none(),
+                            anchors: Vec::new(),
+                        });
                     }
                     b"DropShadowSetting" => {
-                        if let (Some(cf), Some(setting)) = (current_frame, parse_drop_shadow(&e)) {
+                        if let (Some(cf), Some(setting)) =
+                            (current_frame.as_ref(), parse_drop_shadow(&e))
+                        {
                             // Only "Drop"/"Default" mode results in a
                             // visible shadow. "None" means the shadow
                             // is disabled even though the setting is
                             // serialised.
                             if setting.mode != "None" {
-                                match cf {
-                                    CurrentFrame::Text(i) => {
+                                match cf.kind {
+                                    CurrentFrameKind::Text(i) => {
                                         out.text_frames[i].drop_shadow = Some(setting);
                                     }
-                                    CurrentFrame::Rect(i) => {
+                                    CurrentFrameKind::Rect(i) => {
                                         out.rectangles[i].drop_shadow = Some(setting);
                                     }
-                                    CurrentFrame::Oval(i) => {
+                                    CurrentFrameKind::Oval(i) => {
                                         out.ovals[i].drop_shadow = Some(setting);
+                                    }
+                                    CurrentFrameKind::Line(_) => {
+                                        // GraphicLine has no drop_shadow
+                                        // field; ignore.
                                     }
                                 }
                             }
                         }
                     }
+                    b"PathPointType" => {
+                        // Accumulate path-anchor points so the close
+                        // tag can derive bounds when no
+                        // GeometricBounds attribute was present.
+                        // Real-world InDesign exports always serialise
+                        // geometry this way.
+                        if let Some(cf) = current_frame.as_mut() {
+                            if cf.needs_bounds {
+                                if let Some(anchor) =
+                                    attr(&e, b"Anchor").and_then(|s| parse_xy_pair(&s))
+                                {
+                                    cf.anchors.push(anchor);
+                                }
+                            }
+                        }
+                    }
                     b"TextFramePreference" => {
-                        if let Some(CurrentFrame::Text(i)) = current_frame {
+                        if let Some(CurrentFrameKind::Text(i)) =
+                            current_frame.as_ref().map(|cf| cf.kind)
+                        {
                             let f = &mut out.text_frames[i];
                             if let Some(vj) = attr(&e, b"VerticalJustification")
                                 .as_deref()
@@ -405,8 +553,8 @@ impl Spread {
                         // Either source attaches to the current
                         // Rectangle (the only frame type that hosts
                         // images in this slice).
-                        if let (Some(CurrentFrame::Rect(i)), Some(uri)) = (
-                            current_frame,
+                        if let (Some(CurrentFrameKind::Rect(i)), Some(uri)) = (
+                            current_frame.as_ref().map(|cf| cf.kind),
                             attr(&e, b"LinkResourceURI").or_else(|| attr(&e, b"href")),
                         ) {
                             // First-write-wins so the outer <Image>
@@ -417,22 +565,24 @@ impl Spread {
                         }
                     }
                     b"GraphicLine" => {
-                        let Some(bounds) =
-                            attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s))
-                        else {
-                            continue;
-                        };
+                        let bounds_attr =
+                            attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
                         let item_transform = effective_item_transform(
                             &group_transforms,
                             attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s)),
                         );
                         out.graphic_lines.push(GraphicLine {
                             self_id: attr(&e, b"Self"),
-                            bounds,
+                            bounds: bounds_attr.unwrap_or(Bounds::ZERO),
                             item_transform,
                             stroke_color: attr(&e, b"StrokeColor"),
                             stroke_weight: attr(&e, b"StrokeWeight")
                                 .and_then(|s| s.parse::<f32>().ok()),
+                        });
+                        current_frame = Some(CurrentFrame {
+                            kind: CurrentFrameKind::Line(out.graphic_lines.len() - 1),
+                            needs_bounds: bounds_attr.is_none(),
+                            anchors: Vec::new(),
                         });
                     }
                     _ => {}
@@ -441,10 +591,27 @@ impl Spread {
                     b"Group" if !group_transforms.is_empty() => {
                         group_transforms.pop();
                     }
-                    b"TextFrame" | b"Rectangle" | b"Oval" => {
-                        // Frame is fully parsed; clear the
-                        // drop-shadow attachment context.
-                        current_frame = None;
+                    b"TextFrame" | b"Rectangle" | b"Oval" | b"GraphicLine" => {
+                        // Finalize bounds from accumulated path
+                        // anchors when no GeometricBounds attribute
+                        // was present. If neither source produced
+                        // geometry, drop the placeholder frame so
+                        // downstream code never sees a zero-rect
+                        // ghost (matches the previous behaviour of
+                        // skipping bounds-less shapes).
+                        if let Some(cf) = current_frame.take() {
+                            if cf.needs_bounds {
+                                if cf.anchors.is_empty() {
+                                    drop_pending(&mut out, cf.kind);
+                                } else {
+                                    set_pending_bounds(
+                                        &mut out,
+                                        cf.kind,
+                                        bounds_from_anchors(&cf.anchors),
+                                    );
+                                }
+                            }
+                        }
                     }
                     _ => {}
                 },
@@ -471,6 +638,16 @@ fn parse_bounds(s: &str) -> Option<Bounds> {
         bottom: parts[2],
         right: parts[3],
     })
+}
+
+/// Parse an "x y" pair from an IDML attribute (Anchor /
+/// LeftDirection / RightDirection / etc.). IDML serialises 2D
+/// coordinates as two whitespace-separated f32s.
+fn parse_xy_pair(s: &str) -> Option<(f32, f32)> {
+    let mut it = s.split_whitespace();
+    let x: f32 = it.next()?.parse().ok()?;
+    let y: f32 = it.next()?.parse().ok()?;
+    Some((x, y))
 }
 
 fn parse_drop_shadow(e: &quick_xml::events::BytesStart) -> Option<DropShadowSetting> {
@@ -777,5 +954,175 @@ mod tests {
         let s = Spread::parse(xml).unwrap();
         assert_eq!(s.pages.len(), 1);
         assert_eq!(s.pages[0].self_id.as_deref(), Some("good"));
+    }
+
+    /// Real-world IDMLs almost never serialise `GeometricBounds` on
+    /// shape elements; geometry lives in `<Properties><PathGeometry>`
+    /// instead. The parser must derive the bounds from the path
+    /// anchors so InDesign exports populate frames at all.
+    #[test]
+    fn text_frame_bounds_come_from_path_geometry_when_attribute_absent() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <TextFrame Self="frameA" ParentStory="u1"
+                       ItemTransform="1 0 0 1 0 0">
+              <Properties>
+                <PathGeometry>
+                  <GeometryPathType PathOpen="false">
+                    <PathPointArray>
+                      <PathPointType Anchor="-100 -50"
+                                     LeftDirection="-100 -50"
+                                     RightDirection="-100 -50"/>
+                      <PathPointType Anchor="-100  150"
+                                     LeftDirection="-100  150"
+                                     RightDirection="-100  150"/>
+                      <PathPointType Anchor=" 200  150"
+                                     LeftDirection=" 200  150"
+                                     RightDirection=" 200  150"/>
+                      <PathPointType Anchor=" 200 -50"
+                                     LeftDirection=" 200 -50"
+                                     RightDirection=" 200 -50"/>
+                    </PathPointArray>
+                  </GeometryPathType>
+                </PathGeometry>
+              </Properties>
+            </TextFrame>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.text_frames.len(), 1, "frame must survive without GB");
+        let f = &s.text_frames[0];
+        // Bounding box of (-100,-50) and (200,150) → top=-50, left=-100,
+        // bottom=150, right=200.
+        assert_eq!(f.bounds.top, -50.0);
+        assert_eq!(f.bounds.left, -100.0);
+        assert_eq!(f.bounds.bottom, 150.0);
+        assert_eq!(f.bounds.right, 200.0);
+        assert_eq!(f.bounds.width(), 300.0);
+        assert_eq!(f.bounds.height(), 200.0);
+    }
+
+    #[test]
+    fn rectangle_oval_and_graphic_line_also_derive_bounds_from_path() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Rectangle Self="r1">
+              <Properties>
+                <PathGeometry><GeometryPathType><PathPointArray>
+                  <PathPointType Anchor="0 0"/>
+                  <PathPointType Anchor="40 60"/>
+                </PathPointArray></GeometryPathType></PathGeometry>
+              </Properties>
+            </Rectangle>
+            <Oval Self="o1">
+              <Properties>
+                <PathGeometry><GeometryPathType><PathPointArray>
+                  <PathPointType Anchor="-5 -5"/>
+                  <PathPointType Anchor="15 25"/>
+                </PathPointArray></GeometryPathType></PathGeometry>
+              </Properties>
+            </Oval>
+            <GraphicLine Self="l1">
+              <Properties>
+                <PathGeometry><GeometryPathType><PathPointArray>
+                  <PathPointType Anchor="0 100"/>
+                  <PathPointType Anchor="200 100"/>
+                </PathPointArray></GeometryPathType></PathGeometry>
+              </Properties>
+            </GraphicLine>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.rectangles.len(), 1);
+        assert_eq!(s.rectangles[0].bounds.width(), 40.0);
+        assert_eq!(s.rectangles[0].bounds.height(), 60.0);
+        assert_eq!(s.ovals.len(), 1);
+        assert_eq!(s.ovals[0].bounds.width(), 20.0);
+        assert_eq!(s.ovals[0].bounds.height(), 30.0);
+        assert_eq!(s.graphic_lines.len(), 1);
+        assert_eq!(s.graphic_lines[0].bounds.width(), 200.0);
+        // Degenerate-height line still produces a frame so downstream
+        // can render it as a stroke between the two anchors.
+        assert_eq!(s.graphic_lines[0].bounds.height(), 0.0);
+    }
+
+    #[test]
+    fn frame_with_neither_bounds_attribute_nor_path_is_dropped() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <TextFrame Self="lost" ParentStory="u1">
+              <Properties/>
+            </TextFrame>
+            <TextFrame Self="kept" ParentStory="u2" GeometricBounds="0 0 50 50"/>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.text_frames.len(), 1);
+        assert_eq!(s.text_frames[0].self_id.as_deref(), Some("kept"));
+    }
+
+    /// The CS5+ multi-page-size feature places each `<Page>` in the
+    /// spread via its own ItemTransform. Previously we ignored the
+    /// attribute, which made every real-world IDML page route frames
+    /// to (0, 0) of spread coords and miss every page after the
+    /// first. Capture both the attribute extraction and the
+    /// translation-only common case here.
+    #[test]
+    fn page_carries_item_transform_for_multi_page_spreads() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Page Self="left"
+                  GeometricBounds="0 0 792 612"
+                  ItemTransform="1 0 0 1 -612 -396"/>
+            <Page Self="right"
+                  GeometricBounds="0 0 792 612"
+                  ItemTransform="1 0 0 1 0 -396"/>
+            <Page Self="legacy" GeometricBounds="0 0 792 612"/>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.pages.len(), 3);
+        assert_eq!(
+            s.pages[0].item_transform,
+            Some([1.0, 0.0, 0.0, 1.0, -612.0, -396.0]),
+            "left page's ItemTransform translates by (-612, -396)",
+        );
+        assert_eq!(
+            s.pages[1].item_transform,
+            Some([1.0, 0.0, 0.0, 1.0, 0.0, -396.0]),
+            "right page's ItemTransform translates by (0, -396)",
+        );
+        assert_eq!(
+            s.pages[2].item_transform, None,
+            "legacy page without the attribute reads as identity",
+        );
+    }
+
+    #[test]
+    fn geometric_bounds_attribute_wins_over_path_geometry_when_both_present() {
+        // Defensive: when both shapes carry geometry, the attribute
+        // is the authoritative source (it's what InDesign writes when
+        // emitting a synthetic element). PathGeometry should not
+        // overwrite it.
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <TextFrame Self="frame" ParentStory="u1"
+                       GeometricBounds="0 0 100 200">
+              <Properties>
+                <PathGeometry><GeometryPathType><PathPointArray>
+                  <PathPointType Anchor="999 999"/>
+                </PathPointArray></GeometryPathType></PathGeometry>
+              </Properties>
+            </TextFrame>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.text_frames[0].bounds.right, 200.0);
+        assert_eq!(s.text_frames[0].bounds.bottom, 100.0);
     }
 }

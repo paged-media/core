@@ -46,6 +46,13 @@ pub struct BytesResolver {
     pub fonts: HashMap<String, Bytes>,
     pub images: HashMap<String, Bytes>,
     pub icc: HashMap<String, Bytes>,
+    /// Returned when a font lookup misses both the styled and bare
+    /// family entries. Useful for rendering documents whose fonts
+    /// the host can't ship (Adobe-licensed Minion / Caslon / etc.) —
+    /// callers register a permissively-licensed substitute and every
+    /// run shapes through that. `None` ⇒ unresolved fonts return
+    /// `None` and the renderer falls back to its `font` option.
+    pub default_font: Option<Bytes>,
 }
 
 impl BytesResolver {
@@ -62,6 +69,13 @@ impl BytesResolver {
         self.fonts.insert(font_key(family, style), bytes.into());
     }
 
+    /// Set the catch-all font returned when a `(family, style)` lookup
+    /// misses every registered entry. Builder-style for chaining.
+    pub fn with_default_font(mut self, bytes: impl Into<Bytes>) -> Self {
+        self.default_font = Some(bytes.into());
+        self
+    }
+
     pub fn add_image(&mut self, uri: impl Into<String>, bytes: impl Into<Bytes>) {
         self.images.insert(uri.into(), bytes.into());
     }
@@ -73,10 +87,14 @@ impl BytesResolver {
 
 impl AssetResolver for BytesResolver {
     fn resolve_font(&self, family: &str, style: Option<&str>) -> Option<Bytes> {
-        self.fonts.get(&font_key(family, style)).cloned().or_else(||
+        self.fonts
+            .get(&font_key(family, style))
+            .cloned()
             // Fall through to the bare-family entry when the styled
             // variant isn't registered.
-            self.fonts.get(family).cloned())
+            .or_else(|| self.fonts.get(family).cloned())
+            // …then to the document-wide default font.
+            .or_else(|| self.default_font.clone())
     }
 
     fn resolve_image(&self, uri: &str) -> Option<Bytes> {
@@ -130,5 +148,20 @@ mod tests {
         assert!(r.resolve_font("Nope", None).is_none());
         assert!(r.resolve_image("missing.png").is_none());
         assert!(r.resolve_icc("nope").is_none());
+    }
+
+    #[test]
+    fn default_font_serves_unknown_families() {
+        let r = BytesResolver::new().with_default_font(b"FALLBACK".to_vec());
+        let bytes = r.resolve_font("Minion Pro", Some("Bold")).unwrap();
+        assert_eq!(&bytes[..], b"FALLBACK");
+    }
+
+    #[test]
+    fn registered_family_wins_over_default_font() {
+        let mut r = BytesResolver::new().with_default_font(b"DEFAULT".to_vec());
+        r.add_font("Inter", None, b"INTER".to_vec());
+        assert_eq!(&r.resolve_font("Inter", None).unwrap()[..], b"INTER");
+        assert_eq!(&r.resolve_font("Other", None).unwrap()[..], b"DEFAULT");
     }
 }

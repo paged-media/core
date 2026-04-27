@@ -154,19 +154,25 @@ pub fn build_document(
     let mut page_geometries: Vec<PageGeom> = Vec::new();
     let mut spread_page_ranges: Vec<std::ops::Range<usize>> =
         Vec::with_capacity(document.spreads.len());
-    for parsed in &document.spreads {
+    for (spread_idx, parsed) in document.spreads.iter().enumerate() {
         total_stats.spreads += 1;
         let start = pages.len();
-        for p in &parsed.spread.pages {
-            let geom = PageGeom {
-                bounds_in_spread: p.bounds,
+        for (local_idx, p) in parsed.spread.pages.iter().enumerate() {
+            // Per spec §10.3.3: GeometricBounds is in the page's
+            // *inner* coords; ItemTransform maps page-inner →
+            // spread. Real InDesign exports rely on this — without
+            // it every frame routes to the wrong page (or to none).
+            let bounds_in_spread = transform_bounds(p.bounds, p.item_transform);
+            page_geometries.push(PageGeom {
+                bounds_in_spread,
                 applied_master: p.applied_master.clone(),
-            };
-            page_geometries.push(geom);
+                host_spread_idx: spread_idx,
+                local_page_idx: local_idx,
+            });
             pages.push(BuiltPage {
-                width_pt: p.bounds.width(),
-                height_pt: p.bounds.height(),
-                spread_origin: (p.bounds.left, p.bounds.top),
+                width_pt: bounds_in_spread.width(),
+                height_pt: bounds_in_spread.height(),
+                spread_origin: (bounds_in_spread.left, bounds_in_spread.top),
                 list: DisplayList::new(),
                 stats: PipelineStats::default(),
             });
@@ -192,6 +198,8 @@ pub fn build_document(
                 right: 612.0,
             },
             applied_master: None,
+            host_spread_idx: 0,
+            local_page_idx: 0,
         });
     }
 
@@ -199,6 +207,16 @@ pub fn build_document(
     // bottom of each page's display list (page-level frames overlay on
     // top). Master frames are stamped into every page that references
     // the master.
+    //
+    // Per IDML spec §10.3.3, master items live in master-spread
+    // coords (each master page maps to spread via its own
+    // ItemTransform). The live `<Page>`'s `MasterPageTransform`
+    // positions the master overlay relative to the live page; for
+    // the common case both transforms are identity and the
+    // (dx, dy) collapses to "shift master-page origin → live-page
+    // origin". We compute it via the spread-coord bounds of both
+    // sides so the math composes cleanly with our existing Page
+    // ItemTransform plumbing.
     for (i, geom) in page_geometries.iter().enumerate() {
         let Some(master_ref) = geom.applied_master.as_deref() else {
             continue;
@@ -206,19 +224,25 @@ pub fn build_document(
         let Some(master) = document.master_spread(master_ref) else {
             continue;
         };
-        // Master items are positioned in the master-spread coordinate
-        // system; map them onto the live page by translating from the
-        // master's first page origin to the live page origin. For the
-        // common single-page master this is a straight passthrough.
-        let master_origin = master
+        let master_first_page = match master.spread.pages.first() {
+            Some(p) => p,
+            None => continue,
+        };
+        let master_origin_in_master_spread = {
+            let b = transform_bounds(master_first_page.bounds, master_first_page.item_transform);
+            (b.left, b.top)
+        };
+        let target_origin = pages[i].spread_origin;
+        // MasterPageTransform sits between master-spread coords and
+        // live-page coords; for sample.idml this is identity.
+        let mpt = document.spreads[geom.host_spread_idx]
             .spread
             .pages
-            .first()
-            .map(|p| (p.bounds.left, p.bounds.top))
-            .unwrap_or((0.0, 0.0));
-        let target_origin = pages[i].spread_origin;
-        let dx = target_origin.0 - master_origin.0;
-        let dy = target_origin.1 - master_origin.1;
+            .get(geom.local_page_idx)
+            .and_then(|p| p.master_page_transform);
+        let (mpt_tx, mpt_ty) = mpt.map(|m| (m[4], m[5])).unwrap_or((0.0, 0.0));
+        let dx = target_origin.0 - master_origin_in_master_spread.0 + mpt_tx;
+        let dy = target_origin.1 - master_origin_in_master_spread.1 + mpt_ty;
         for frame in &master.spread.text_frames {
             total_stats.frames += 1;
             let translated = idml_parse::Bounds {
@@ -783,10 +807,64 @@ fn emit_paragraph_into_chain(
 }
 
 /// Wraps a page's bounds for centre-point routing + its master
-/// reference for master-spread application.
+/// reference for master-spread application + its position in the
+/// document so the master pass can read back per-page state
+/// (MasterPageTransform).
 struct PageGeom {
     bounds_in_spread: idml_parse::Bounds,
     applied_master: Option<String>,
+    host_spread_idx: usize,
+    local_page_idx: usize,
+}
+
+/// Apply a 6-element IDML affine `[a b c d e f]` to `(x, y)`.
+/// Per IDML spec §10.3.3 the matrix maps inner→parent coords:
+/// `x' = a*x + c*y + e`, `y' = b*x + d*y + f`.
+fn apply_matrix(m: &[f32; 6], x: f32, y: f32) -> (f32, f32) {
+    let [a, b, c, d, e, f] = *m;
+    (a * x + c * y + e, b * x + d * y + f)
+}
+
+/// Transform an axis-aligned `Bounds` by an IDML affine and return
+/// the AABB of the result. Identity (`None`) is the no-op.
+/// For pure translation (the common Page.ItemTransform case) this
+/// preserves width/height; for the 90° page rotations the spec
+/// allows on whole spreads, the AABB swaps width/height — the right
+/// behaviour for routing + canvas sizing.
+fn transform_bounds(b: idml_parse::Bounds, m: Option<[f32; 6]>) -> idml_parse::Bounds {
+    let Some(m) = m else { return b };
+    let corners = [
+        apply_matrix(&m, b.left, b.top),
+        apply_matrix(&m, b.right, b.top),
+        apply_matrix(&m, b.right, b.bottom),
+        apply_matrix(&m, b.left, b.bottom),
+    ];
+    let (mut min_x, mut max_x, mut min_y, mut max_y) = (
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+    );
+    for (x, y) in corners {
+        if x < min_x {
+            min_x = x;
+        }
+        if x > max_x {
+            max_x = x;
+        }
+        if y < min_y {
+            min_y = y;
+        }
+        if y > max_y {
+            max_y = y;
+        }
+    }
+    idml_parse::Bounds {
+        top: min_y,
+        left: min_x,
+        bottom: max_y,
+        right: max_x,
+    }
 }
 
 fn page_for_frame(frame: &idml_parse::Bounds, pages: &[PageGeom]) -> Option<usize> {

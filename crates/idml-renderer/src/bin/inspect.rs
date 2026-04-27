@@ -20,6 +20,13 @@ struct Args {
     /// Optional TTF/OTF font to use for shaping every run.
     #[arg(long)]
     font: Option<PathBuf>,
+    /// Optional fallback TTF/OTF font registered as the resolver's
+    /// `default_font` — used for any IDML-referenced family that
+    /// isn't explicitly registered. Lets you render documents whose
+    /// fonts you can't ship (Adobe-licensed Minion, Caslon, etc.) by
+    /// substituting a permissive face.
+    #[arg(long)]
+    default_font: Option<PathBuf>,
     /// Default point size used when a run has no explicit PointSize.
     #[arg(long, default_value_t = 12.0)]
     default_size: f32,
@@ -134,9 +141,20 @@ fn main() -> Result<()> {
         .as_deref()
         .map(|p| std::fs::read(p).with_context(|| format!("read font {}", p.display())))
         .transpose()?;
+    let default_font_bytes = args
+        .default_font
+        .as_deref()
+        .map(|p| std::fs::read(p).with_context(|| format!("read default font {}", p.display())))
+        .transpose()?;
+    let resolver = default_font_bytes
+        .as_ref()
+        .map(|bytes| idml_renderer::BytesResolver::new().with_default_font(bytes.clone()));
 
     let mut opts = PipelineOptions {
         font: font_bytes.as_deref(),
+        assets: resolver
+            .as_ref()
+            .map(|r| r as &dyn idml_renderer::AssetResolver),
         default_point_size: args.default_size,
         fallback_column_width_pt: args.column_width_pt,
         ..PipelineOptions::default()
