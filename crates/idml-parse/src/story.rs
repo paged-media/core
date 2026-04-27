@@ -51,6 +51,76 @@ pub struct Paragraph {
     /// applied paragraph style if available).
     pub tab_list: Vec<TabStop>,
     pub runs: Vec<CharacterRun>,
+    /// `<Table>` nested inside the paragraph's CharacterStyleRange.
+    /// When present, the paragraph is rendered as a table at the
+    /// current y_cursor; `runs` is typically empty for these.
+    /// Tables can't currently nest inside tables — only one per
+    /// paragraph.
+    pub table: Option<Table>,
+}
+
+/// `<Table>` element parsed from a Story. Cells reference rows /
+/// columns by their `Name` (the IDML index, "0"..n-1). Cells in
+/// `cells` are stored in document order — IDML serialises them
+/// column-major (all cells in column 0, then column 1, etc.).
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct Table {
+    pub self_id: Option<String>,
+    pub header_row_count: u32,
+    pub footer_row_count: u32,
+    pub body_row_count: u32,
+    pub column_count: u32,
+    /// `AppliedTableStyle="TableStyle/..."` reference. Currently
+    /// recorded; cell rendering uses TextTopInset etc. directly off
+    /// the cell rather than resolving styles.
+    pub applied_table_style: Option<String>,
+    pub rows: Vec<TableRow>,
+    pub columns: Vec<TableColumn>,
+    pub cells: Vec<TableCell>,
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct TableRow {
+    pub self_id: Option<String>,
+    /// IDML index ("0" .. row_count - 1).
+    pub name: Option<String>,
+    pub single_row_height: Option<f32>,
+    pub minimum_height: Option<f32>,
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct TableColumn {
+    pub self_id: Option<String>,
+    pub name: Option<String>,
+    pub single_column_width: Option<f32>,
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct TableCell {
+    pub self_id: Option<String>,
+    /// `Name="col:row"` (zero-indexed). The `row()` and `column()`
+    /// helpers parse this.
+    pub name: Option<String>,
+    pub row_span: u32,
+    pub column_span: u32,
+    pub text_top_inset: f32,
+    pub text_left_inset: f32,
+    pub text_bottom_inset: f32,
+    pub text_right_inset: f32,
+    pub applied_cell_style: Option<String>,
+    /// Cell content — paragraphs, parsed identically to top-level
+    /// story paragraphs.
+    pub paragraphs: Vec<Paragraph>,
+}
+
+impl TableCell {
+    /// Parse `(column, row)` from `Name`. Returns `None` if the
+    /// attribute is absent or doesn't match `col:row`.
+    pub fn coords(&self) -> Option<(u32, u32)> {
+        let name = self.name.as_deref()?;
+        let (c, r) = name.split_once(':')?;
+        Some((c.parse().ok()?, r.parse().ok()?))
+    }
 }
 
 /// One stop in a paragraph's `<TabList>`. Position is in pt from
@@ -95,6 +165,14 @@ impl Story {
         let mut out = Story::default();
         let mut current_paragraph: Option<Paragraph> = None;
         let mut current_run: Option<CharacterRun> = None;
+        let mut current_table: Option<Table> = None;
+        let mut current_cell: Option<TableCell> = None;
+        // While parsing inside a Cell, the outer-paragraph state
+        // (the paragraph that *hosts* the table) is parked here so
+        // cell paragraphs can use the same `current_paragraph` slot
+        // without losing the outer's accumulated metadata.
+        let mut outer_paragraph: Option<Paragraph> = None;
+        let mut outer_run: Option<CharacterRun> = None;
         let mut in_content = false;
         let mut buf = Vec::new();
 
@@ -111,6 +189,61 @@ impl Story {
                             space_after: attr(&e, b"SpaceAfter").and_then(|s| s.parse().ok()),
                             tab_list: Vec::new(),
                             runs: Vec::new(),
+                            table: None,
+                        });
+                    }
+                    b"Table" => {
+                        // Tables nest inside a CharacterStyleRange; the
+                        // run that hosts the table is typically
+                        // contentless, so we let it pass through as-is.
+                        current_table = Some(Table {
+                            self_id: attr(&e, b"Self"),
+                            header_row_count: attr(&e, b"HeaderRowCount")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0),
+                            footer_row_count: attr(&e, b"FooterRowCount")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0),
+                            body_row_count: attr(&e, b"BodyRowCount")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0),
+                            column_count: attr(&e, b"ColumnCount")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0),
+                            applied_table_style: attr(&e, b"AppliedTableStyle"),
+                            rows: Vec::new(),
+                            columns: Vec::new(),
+                            cells: Vec::new(),
+                        });
+                    }
+                    b"Cell" => {
+                        // Park outer paragraph/run so cell content
+                        // can re-use the same slots without leaking.
+                        outer_paragraph = current_paragraph.take();
+                        outer_run = current_run.take();
+                        current_cell = Some(TableCell {
+                            self_id: attr(&e, b"Self"),
+                            name: attr(&e, b"Name"),
+                            row_span: attr(&e, b"RowSpan")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(1),
+                            column_span: attr(&e, b"ColumnSpan")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(1),
+                            text_top_inset: attr(&e, b"TextTopInset")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0.0),
+                            text_left_inset: attr(&e, b"TextLeftInset")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0.0),
+                            text_bottom_inset: attr(&e, b"TextBottomInset")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0.0),
+                            text_right_inset: attr(&e, b"TextRightInset")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0.0),
+                            applied_cell_style: attr(&e, b"AppliedCellStyle"),
+                            paragraphs: Vec::new(),
                         });
                     }
                     b"TabStop" => {
@@ -157,8 +290,38 @@ impl Story {
                     }
                     b"ParagraphStyleRange" => {
                         if let Some(para) = current_paragraph.take() {
-                            if !para.runs.is_empty() {
-                                out.paragraphs.push(para);
+                            // Keep paragraphs that have either a
+                            // shaped run or a hosted table; drop
+                            // truly empty ones.
+                            if !para.runs.is_empty() || para.table.is_some() {
+                                if let Some(cell) = current_cell.as_mut() {
+                                    cell.paragraphs.push(para);
+                                } else {
+                                    out.paragraphs.push(para);
+                                }
+                            }
+                        }
+                    }
+                    b"Cell" => {
+                        if let (Some(cell), Some(table)) =
+                            (current_cell.take(), current_table.as_mut())
+                        {
+                            table.cells.push(cell);
+                        }
+                        // Restore the outer paragraph/run state so
+                        // the next Cell or the closing Table sees
+                        // the host paragraph again.
+                        current_paragraph = outer_paragraph.take();
+                        current_run = outer_run.take();
+                    }
+                    b"Table" => {
+                        // Attach the parsed table to its host
+                        // paragraph. The host's runs are typically
+                        // empty; the ParagraphStyleRange close
+                        // above keeps it because table.is_some().
+                        if let Some(table) = current_table.take() {
+                            if let Some(p) = current_paragraph.as_mut() {
+                                p.table = Some(table);
                             }
                         }
                     }
@@ -187,6 +350,30 @@ impl Story {
                             if let Some(p) = current_paragraph.as_mut() {
                                 p.tab_list.push(stop);
                             }
+                        }
+                    }
+                    // <Row Self="..." Name="..." SingleRowHeight="..."/>
+                    b"Row" => {
+                        if let Some(table) = current_table.as_mut() {
+                            table.rows.push(TableRow {
+                                self_id: attr(&e, b"Self"),
+                                name: attr(&e, b"Name"),
+                                single_row_height: attr(&e, b"SingleRowHeight")
+                                    .and_then(|s| s.parse().ok()),
+                                minimum_height: attr(&e, b"MinimumHeight")
+                                    .and_then(|s| s.parse().ok()),
+                            });
+                        }
+                    }
+                    // <Column Self="..." Name="..." SingleColumnWidth="..."/>
+                    b"Column" => {
+                        if let Some(table) = current_table.as_mut() {
+                            table.columns.push(TableColumn {
+                                self_id: attr(&e, b"Self"),
+                                name: attr(&e, b"Name"),
+                                single_column_width: attr(&e, b"SingleColumnWidth")
+                                    .and_then(|s| s.parse().ok()),
+                            });
                         }
                     }
                     _ => {}
@@ -315,5 +502,86 @@ mod tests {
         assert_eq!(stops[0].alignment.as_deref(), Some("LeftAlign"));
         assert_eq!(stops[1].position, 144.0);
         assert_eq!(stops[1].leader.as_deref(), Some("."));
+    }
+
+    #[test]
+    fn parses_table_with_rows_columns_and_cells() {
+        // Mirrors the IDML serialisation: a Table nested in a
+        // CharacterStyleRange, with Row/Column/Cell siblings inside
+        // the Table. Each cell carries its own paragraph + run.
+        let xml =
+            br#"<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Story Self="s1">
+            <ParagraphStyleRange>
+              <CharacterStyleRange>
+                <Table Self="t1" HeaderRowCount="1" BodyRowCount="2" ColumnCount="2"
+                       AppliedTableStyle="TableStyle/Demo">
+                  <Row Self="r0" Name="0" SingleRowHeight="20"/>
+                  <Row Self="r1" Name="1" SingleRowHeight="18"/>
+                  <Column Self="c0" Name="0" SingleColumnWidth="100"/>
+                  <Column Self="c1" Name="1" SingleColumnWidth="60"/>
+                  <Cell Self="cell00" Name="0:0" RowSpan="1" ColumnSpan="1"
+                        TextTopInset="2" TextLeftInset="3"
+                        TextBottomInset="2" TextRightInset="3">
+                    <ParagraphStyleRange>
+                      <CharacterStyleRange>
+                        <Content>Header A</Content>
+                      </CharacterStyleRange>
+                    </ParagraphStyleRange>
+                  </Cell>
+                  <Cell Self="cell10" Name="1:0">
+                    <ParagraphStyleRange>
+                      <CharacterStyleRange>
+                        <Content>Header B</Content>
+                      </CharacterStyleRange>
+                    </ParagraphStyleRange>
+                  </Cell>
+                  <Cell Self="cell01" Name="0:1">
+                    <ParagraphStyleRange>
+                      <CharacterStyleRange>
+                        <Content>Body A1</Content>
+                      </CharacterStyleRange>
+                    </ParagraphStyleRange>
+                  </Cell>
+                  <Cell Self="cell11" Name="1:1">
+                    <ParagraphStyleRange>
+                      <CharacterStyleRange>
+                        <Content>Body B1</Content>
+                      </CharacterStyleRange>
+                    </ParagraphStyleRange>
+                  </Cell>
+                </Table>
+              </CharacterStyleRange>
+            </ParagraphStyleRange>
+          </Story>
+        </idPkg:Story>"#;
+        let s = Story::parse(xml).unwrap();
+        assert_eq!(s.paragraphs.len(), 1, "table-host paragraph kept");
+        let table = s.paragraphs[0]
+            .table
+            .as_ref()
+            .expect("paragraph hosts a table");
+        assert_eq!(table.column_count, 2);
+        assert_eq!(table.body_row_count, 2);
+        assert_eq!(table.header_row_count, 1);
+        assert_eq!(
+            table.applied_table_style.as_deref(),
+            Some("TableStyle/Demo")
+        );
+        assert_eq!(table.rows.len(), 2);
+        assert_eq!(table.rows[0].single_row_height, Some(20.0));
+        assert_eq!(table.columns.len(), 2);
+        assert_eq!(table.columns[0].single_column_width, Some(100.0));
+        assert_eq!(table.cells.len(), 4);
+        assert_eq!(table.cells[0].coords(), Some((0, 0)));
+        assert_eq!(table.cells[3].coords(), Some((1, 1)));
+        // Cell content lives in cell.paragraphs.
+        let header_a = &table.cells[0].paragraphs[0].runs[0].text;
+        assert_eq!(header_a, "Header A");
+        let body_b1 = &table.cells[3].paragraphs[0].runs[0].text;
+        assert_eq!(body_b1, "Body B1");
+        // Cell insets carried through.
+        assert_eq!(table.cells[0].text_top_inset, 2.0);
+        assert_eq!(table.cells[0].text_left_inset, 3.0);
     }
 }

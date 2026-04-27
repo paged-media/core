@@ -29,7 +29,7 @@ pub use spread::{
     Bounds, DropShadowSetting, FirstBaselineOffset, GraphicLine, Oval, Page, PathAnchor, Polygon,
     Rectangle, Spread, TextFrame, TextWrap, TextWrapMode, VerticalJustification,
 };
-pub use story::{CharacterRun, Paragraph, Story, TabStop};
+pub use story::{CharacterRun, Paragraph, Story, TabStop, Table, TableCell, TableColumn, TableRow};
 pub use styles::{
     CharacterStyleDef, ObjectStyleDef, ParagraphStyleDef, ResolvedCharacter, ResolvedObject,
     ResolvedParagraph, StyleSheet,

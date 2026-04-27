@@ -717,6 +717,13 @@ fn emit_paragraph_into_chain(
     pages: &mut [BuiltPage],
     total_stats: &mut PipelineStats,
 ) {
+    // Tables ride on a paragraph but render with their own
+    // grid-of-mini-frames pipeline. Hand off here so the rest of
+    // this function stays focused on the run/glyph case.
+    if let Some(table) = paragraph.table.as_ref() {
+        emit_table_into_chain(em, table, pages, total_stats);
+        return;
+    }
     total_stats.paragraphs += 1;
     total_stats.runs += paragraph.runs.len();
     pages[em.chain_pages[em.frame_idx]].stats.paragraphs += 1;
@@ -1436,27 +1443,268 @@ fn collect_wrap_rects_per_page(
     out
 }
 
-/// Build a per-line `column_widths` slice + per-line x-shifts for
-/// a paragraph that's about to be laid out into the head frame.
-/// The widths drive Knuth-Plass to break each line at the
-/// available width carved out by any overlapping wrap rect; the
-/// x-shifts are applied to the line's glyphs after layout so each
-/// line starts past the obstacle.
+/// Lay out and emit a `<Table>` at the StoryEmitter's current
+/// cursor in the head frame. Treats every cell as a mini-frame:
+/// computes its rect from cumulative row heights + column widths,
+/// then routes each cell paragraph through `emit_cell_paragraph`
+/// which does a self-contained shape → layout → emit at a fixed
+/// origin and column width.
 ///
-/// Returns the per-line x-shifts in 1/64 pt — empty when no head
-/// wrap rect intersects the head frame, so the existing scalar
-/// `column_width` path still applies.
-///
-/// Approximations:
-/// * Estimates leading from the first run's point size × 1.2 and
-///   the head frame's full height. Real per-line leading depends
-///   on each line's tallest run; a tighter follow-up can recompute
-///   widths as composition proceeds.
-/// * Treats wrap rects as horizontal bands: when a rect overlaps
-///   the line's predicted y-range, the line is split into all
-///   horizontal segments wider than ~24 pt; one composer line is
-///   emitted per segment, twins collapse onto the first segment's
-///   row at emit time (BothSides flow).
+/// Scope:
+/// * Honours per-row `SingleRowHeight` and per-column
+///   `SingleColumnWidth`. Cells with `RowSpan > 1` or
+///   `ColumnSpan > 1` widen / lengthen their rect; multi-cell text
+///   merging across spans isn't separately modelled.
+/// * No cell strokes / fills — those live on `<CellStyle>` and
+///   `<TableStyle>` definitions in `Resources/Styles.xml` we don't
+///   yet resolve.
+/// * Threaded overflow of a table across frames is not modeled
+///   (rare in real-world IDMLs).
+fn emit_table_into_chain(
+    em: &mut StoryEmitter,
+    table: &idml_parse::Table,
+    pages: &mut [BuiltPage],
+    total_stats: &mut PipelineStats,
+) {
+    if table.cells.is_empty() {
+        return;
+    }
+    let frame = em.chain[em.frame_idx];
+    let target_page = em.chain_pages[em.frame_idx];
+    let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
+    let (ox, oy) = pages[target_page].spread_origin;
+    let frame_insets = frame.inset_spacing.unwrap_or([0.0; 4]);
+    let table_left_pt = sx - ox + frame_insets[1] + em.column_x_shift_pt;
+    let baseline_pt = if em.y_cursor >= 0 {
+        em.y_cursor as f32 / idml_text::shape::ADVANCE_PRECISION
+    } else {
+        frame_insets[0]
+    };
+    let table_top_pt = sy - oy + baseline_pt - em.options.default_point_size * 0.8;
+
+    let col_widths: Vec<f32> = table
+        .columns
+        .iter()
+        .map(|c| c.single_column_width.unwrap_or(0.0))
+        .collect();
+    let row_heights: Vec<f32> = table
+        .rows
+        .iter()
+        .map(|r| r.single_row_height.unwrap_or(0.0))
+        .collect();
+    let mut col_x: Vec<f32> = Vec::with_capacity(col_widths.len() + 1);
+    let mut acc = 0.0f32;
+    col_x.push(0.0);
+    for w in &col_widths {
+        acc += *w;
+        col_x.push(acc);
+    }
+    let mut row_y: Vec<f32> = Vec::with_capacity(row_heights.len() + 1);
+    let mut acc = 0.0f32;
+    row_y.push(0.0);
+    for h in &row_heights {
+        acc += *h;
+        row_y.push(acc);
+    }
+    let total_h = acc;
+
+    for cell in &table.cells {
+        let Some((c, r)) = cell.coords() else {
+            continue;
+        };
+        let (c, r) = (c as usize, r as usize);
+        if c >= col_widths.len() || r >= row_heights.len() {
+            continue;
+        }
+        let cell_x_pt = table_left_pt + col_x[c];
+        let cell_y_pt = table_top_pt + row_y[r];
+        let last_c = (c + cell.column_span.max(1) as usize).min(col_widths.len());
+        let last_r = (r + cell.row_span.max(1) as usize).min(row_heights.len());
+        let cell_w_pt = col_x[last_c] - col_x[c];
+        let cell_h_pt = row_y[last_r] - row_y[r];
+
+        let inner_left = cell_x_pt + cell.text_left_inset;
+        let inner_top = cell_y_pt + cell.text_top_inset;
+        let inner_w = (cell_w_pt - cell.text_left_inset - cell.text_right_inset).max(0.0);
+        let inner_h = (cell_h_pt - cell.text_top_inset - cell.text_bottom_inset).max(0.0);
+
+        let mut paragraph_y = 0.0f32;
+        for paragraph in &cell.paragraphs {
+            if paragraph.runs.is_empty() {
+                continue;
+            }
+            let consumed = emit_cell_paragraph(
+                em,
+                paragraph,
+                target_page,
+                (inner_left, inner_top),
+                inner_w,
+                paragraph_y,
+                pages,
+                total_stats,
+            );
+            paragraph_y += consumed;
+            if paragraph_y >= inner_h {
+                break;
+            }
+        }
+    }
+
+    // Advance host frame's y_cursor past the table.
+    let height_64 = (total_h * idml_text::shape::ADVANCE_PRECISION).round() as i32;
+    em.y_cursor = em.y_cursor.max(0) + height_64;
+    total_stats.paragraphs += 1;
+    pages[target_page].stats.paragraphs += 1;
+}
+
+/// Lay out and emit a single cell paragraph at `(origin_pt.0,
+/// origin_pt.1 + paragraph_y)` with `column_width_pt` available.
+/// Returns the vertical extent the paragraph consumed so the
+/// caller can stack subsequent cell paragraphs underneath.
+/// Self-contained shape → layout → emit; no inter-paragraph state.
+#[allow(clippy::too_many_arguments)]
+fn emit_cell_paragraph(
+    em: &StoryEmitter,
+    paragraph: &idml_parse::Paragraph,
+    target_page: usize,
+    origin_pt: (f32, f32),
+    column_width_pt: f32,
+    paragraph_y: f32,
+    pages: &mut [BuiltPage],
+    total_stats: &mut PipelineStats,
+) -> f32 {
+    if column_width_pt <= 0.0 || paragraph.runs.is_empty() {
+        return 0.0;
+    }
+    let resolved_runs: Vec<idml_scene::ResolvedRunAttrs> = paragraph
+        .runs
+        .iter()
+        .map(|r| em.document.resolved_run_attrs(paragraph, r))
+        .collect();
+    let mut bytes_pool: Vec<bytes::Bytes> = Vec::with_capacity(paragraph.runs.len());
+    for resolved in &resolved_runs {
+        let Some(b) = em
+            .font_table
+            .bytes_for(resolved.font.as_deref(), resolved.font_style.as_deref())
+        else {
+            return 0.0;
+        };
+        bytes_pool.push(b);
+    }
+    let mut unique_idx: Vec<usize> = Vec::with_capacity(bytes_pool.len());
+    for (i, b) in bytes_pool.iter().enumerate() {
+        let head = bytes_pool[..i]
+            .iter()
+            .position(|prior| prior.as_ptr() == b.as_ptr())
+            .unwrap_or(i);
+        unique_idx.push(head);
+    }
+    let mut shaping_faces: Vec<Option<rustybuzz::Face>> =
+        (0..bytes_pool.len()).map(|_| None).collect();
+    let mut outline_faces: Vec<Option<ttf_parser::Face>> =
+        (0..bytes_pool.len()).map(|_| None).collect();
+    for i in 0..bytes_pool.len() {
+        if unique_idx[i] != i {
+            continue;
+        }
+        let bytes_ref = bytes_pool[i].as_ref();
+        let Some(rf) = rustybuzz::Face::from_slice(bytes_ref, 0) else {
+            return 0.0;
+        };
+        let Ok(of) = ttf_parser::Face::parse(bytes_ref, 0) else {
+            return 0.0;
+        };
+        shaping_faces[i] = Some(rf);
+        outline_faces[i] = Some(of);
+    }
+    let font_ids: Vec<u32> = bytes_pool.iter().map(|b| fnv_1a_u32(b.as_ref())).collect();
+
+    let styled_runs: Vec<idml_text::StyledRun> = paragraph
+        .runs
+        .iter()
+        .enumerate()
+        .map(|(i, run)| idml_text::StyledRun {
+            text: &run.text,
+            face: shaping_faces[unique_idx[i]].as_ref().unwrap(),
+            point_size: resolved_runs[i]
+                .point_size
+                .unwrap_or(em.options.default_point_size),
+            tracking: resolved_runs[i].tracking,
+            font_id: font_ids[i],
+            underline: resolved_runs[i].underline.unwrap_or(false),
+            strikethru: resolved_runs[i].strikethru.unwrap_or(false),
+        })
+        .collect();
+    let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
+    let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
+    let mut lopts = idml_text::LayoutOptions::new(column_width_pt, paragraph_size);
+    lopts.alignment = map_justification(resolved_paragraph.justification.as_deref());
+    lopts.first_baseline =
+        ((paragraph_size * 0.8) * idml_text::shape::ADVANCE_PRECISION).round() as i32;
+
+    let laid_out = idml_text::layout_runs(&styled_runs, &lopts);
+    if laid_out.lines.is_empty() {
+        return 0.0;
+    }
+
+    let picker = build_run_paint_picker_resolved(
+        paragraph,
+        &resolved_runs,
+        em.palette,
+        em.options.fallback_text_paint,
+    );
+    let leading_pt = paragraph_size * 1.2;
+    let cell_origin = (origin_pt.0, origin_pt.1 + paragraph_y);
+    let list = &mut pages[target_page].list;
+    let mut max_baseline_pt = 0.0f32;
+    for line in &laid_out.lines {
+        let baseline_pt = line.baseline_y as f32 / idml_text::shape::ADVANCE_PRECISION;
+        if baseline_pt > max_baseline_pt {
+            max_baseline_pt = baseline_pt;
+        }
+        let mut start = 0;
+        while start < line.glyphs.len() {
+            let fid = line.glyphs[start].font_id;
+            let mut end = start + 1;
+            while end < line.glyphs.len() && line.glyphs[end].font_id == fid {
+                end += 1;
+            }
+            let face_idx = match font_ids.iter().position(|f| *f == fid) {
+                Some(i) => unique_idx[i],
+                None => {
+                    start = end;
+                    continue;
+                }
+            };
+            let Some(outline) = outline_faces[face_idx].as_ref() else {
+                start = end;
+                continue;
+            };
+            let outliner = TtfOutliner::new(outline);
+            emit_glyph_slice(
+                &line.glyphs[start..end],
+                fid,
+                line.glyphs[start].point_size,
+                |cluster| picker.pick(cluster),
+                cell_origin,
+                &outliner,
+                list,
+            );
+            start = end;
+        }
+    }
+    let glyph_count: usize = laid_out.lines.iter().map(|l| l.glyphs.len()).sum();
+    total_stats.paragraphs += 1;
+    total_stats.runs += paragraph.runs.len();
+    total_stats.glyphs += glyph_count;
+    total_stats.lines += laid_out.lines.len();
+    pages[target_page].stats.paragraphs += 1;
+    pages[target_page].stats.runs += paragraph.runs.len();
+    pages[target_page].stats.glyphs += glyph_count;
+    pages[target_page].stats.lines += laid_out.lines.len();
+    max_baseline_pt + leading_pt * 0.4
+}
+
 struct WrapPlan {
     /// Per-line x-shifts in 1/64 pt. Index `i` = shift for line i.
     line_x_shifts_64: Vec<i32>,
