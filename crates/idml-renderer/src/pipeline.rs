@@ -724,6 +724,22 @@ fn emit_paragraph_into_chain(
         emit_table_into_chain(em, table, pages, total_stats);
         return;
     }
+    // IDML <Br/> serialises as `\n` inside run text; it's a forced
+    // line break, not a paragraph break. paragraph_breaker treats
+    // it as ordinary whitespace, which would let it merge into a
+    // glue and lay text either side of it on the same line. Split
+    // the paragraph at every `\n` boundary and emit each segment
+    // as a sub-paragraph at the same paragraph style — same effect
+    // as a hard break in the composer, no layout-engine change
+    // required. Sub-paragraphs inherit the parent's style; only
+    // SpaceBefore is suppressed for the second-and-later segments
+    // so consecutive bullet rows don't accumulate extra leading.
+    if paragraph.runs.iter().any(|r| r.text.contains('\n')) {
+        for sub in split_paragraph_at_breaks(paragraph) {
+            emit_paragraph_into_chain(em, &sub, pages, total_stats);
+        }
+        return;
+    }
     total_stats.paragraphs += 1;
     total_stats.runs += paragraph.runs.len();
     pages[em.chain_pages[em.frame_idx]].stats.paragraphs += 1;
@@ -1962,6 +1978,92 @@ fn emit_table_into_chain(
 /// as absent so the region cascade kicks in.
 fn is_none_style_id(id: &str) -> bool {
     id == "CellStyle/$ID/[None]" || id == "CellStyle/n" || id.is_empty()
+}
+
+/// Split a paragraph at every `\n` boundary in any run's text into
+/// a sequence of sub-paragraphs, each inheriting the parent's
+/// style. Used to honour IDML `<Br/>` (which serialises as `\n`)
+/// as a forced line break: the layout engine sees each sub-
+/// paragraph independently, so successive bullet items / address
+/// lines / etc. land on their own rows rather than collapsing
+/// into glue-separated runs of one paragraph.
+///
+/// `SpaceBefore` is suppressed on every sub-paragraph past the
+/// first so consecutive lines in the same logical paragraph don't
+/// accumulate extra leading. `tab_list` and other paragraph
+/// metadata copy through unchanged.
+fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_parse::Paragraph> {
+    // Walk runs in order; for each run, split text at '\n' and
+    // emit the leading segment into the in-progress sub-paragraph,
+    // then close the sub-paragraph and start a new one.
+    let mut subs: Vec<idml_parse::Paragraph> = Vec::new();
+    let mut current = idml_parse::Paragraph {
+        paragraph_style: paragraph.paragraph_style.clone(),
+        justification: paragraph.justification.clone(),
+        first_line_indent: paragraph.first_line_indent,
+        space_before: paragraph.space_before,
+        space_after: None, // applied to last sub-paragraph only
+        tab_list: paragraph.tab_list.clone(),
+        runs: Vec::new(),
+        table: None,
+    };
+    for run in &paragraph.runs {
+        if !run.text.contains('\n') {
+            current.runs.push(run.clone());
+            continue;
+        }
+        let segments: Vec<&str> = run.text.split('\n').collect();
+        for (i, seg) in segments.iter().enumerate() {
+            if !seg.is_empty() {
+                let mut copy = run.clone();
+                copy.text = (*seg).to_string();
+                current.runs.push(copy);
+            }
+            if i + 1 < segments.len() {
+                // Close the current sub-paragraph and start a new
+                // one. Discard empty sub-paragraphs (consecutive
+                // `\n`s, common at the end of bullet lists).
+                let mut next = idml_parse::Paragraph {
+                    paragraph_style: paragraph.paragraph_style.clone(),
+                    justification: paragraph.justification.clone(),
+                    first_line_indent: paragraph.first_line_indent,
+                    space_before: None,
+                    space_after: None,
+                    tab_list: paragraph.tab_list.clone(),
+                    runs: Vec::new(),
+                    table: None,
+                };
+                std::mem::swap(&mut current, &mut next);
+                if !next.runs.is_empty() {
+                    subs.push(next);
+                }
+            }
+        }
+    }
+    // Flush the trailing sub-paragraph + propagate the original
+    // SpaceAfter so the chain's vertical spacing matches.
+    if !current.runs.is_empty() {
+        current.space_after = paragraph.space_after;
+        subs.push(current);
+    } else if let Some(last) = subs.last_mut() {
+        last.space_after = paragraph.space_after;
+    }
+    if subs.is_empty() {
+        // Defensive: the original was all `\n`s. Return a single
+        // empty paragraph to keep the upstream loop's stat
+        // bookkeeping consistent without rendering anything.
+        subs.push(idml_parse::Paragraph {
+            paragraph_style: paragraph.paragraph_style.clone(),
+            justification: paragraph.justification.clone(),
+            first_line_indent: paragraph.first_line_indent,
+            space_before: paragraph.space_before,
+            space_after: paragraph.space_after,
+            tab_list: paragraph.tab_list.clone(),
+            runs: Vec::new(),
+            table: None,
+        });
+    }
+    subs
 }
 
 /// Lay out and emit a single cell paragraph at `(origin_pt.0,

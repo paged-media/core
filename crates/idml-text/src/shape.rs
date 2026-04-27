@@ -47,9 +47,35 @@ pub fn shape_run(face: &Face, text: &str, point_size: f32) -> ShapedRun {
     let positions = shaped.glyph_positions();
     debug_assert_eq!(infos.len(), positions.len());
 
+    // Drop control-char glyphs (.notdef "tofu" boxes from ASCII LF /
+    // CR / ZWSP / line / paragraph separators). IDML's <Br/> lands
+    // as `\n` in run text; rustybuzz emits a notdef rectangle for
+    // it. Cluster byte offsets stay valid because we only filter
+    // by the *source* byte, not by reordering.
+    let bytes = text.as_bytes();
+    let is_control_at = |cluster: u32| -> bool {
+        let i = cluster as usize;
+        if i >= bytes.len() {
+            return false;
+        }
+        match bytes[i] {
+            b'\n' | b'\r' | 0x0B | 0x0C => true,
+            // U+2028 LINE SEP and U+2029 PARA SEP are 3-byte UTF-8
+            // starting with 0xE2 0x80 0xA8 / 0xA9. Cheap prefix
+            // check without allocating a chars iterator.
+            0xE2 if i + 2 < bytes.len() && bytes[i + 1] == 0x80 => {
+                matches!(bytes[i + 2], 0xA8 | 0xA9)
+            }
+            _ => false,
+        }
+    };
+
     let mut glyphs = Vec::with_capacity(infos.len());
     let mut total = 0i32;
     for (info, pos) in infos.iter().zip(positions.iter()) {
+        if is_control_at(info.cluster) {
+            continue;
+        }
         let adv = to_fp64(pos.x_advance);
         total += adv;
         glyphs.push(ShapedGlyph {
