@@ -51,6 +51,11 @@ pub struct StyleSheet {
     /// fill / VJ / per-edge strokes when their own attributes are
     /// absent.
     pub cell_styles: BTreeMap<String, CellStyleDef>,
+    /// `<TableStyle>` definitions. Tables reference one via
+    /// `AppliedTableStyle="..."`; the style nominates a default
+    /// CellStyle per region (header, body, footer, left column,
+    /// right column) plus the table-level border strokes.
+    pub table_styles: BTreeMap<String, TableStyleDef>,
 }
 
 /// `<ObjectStyle>` — the page-item analogue of paragraph/character
@@ -93,6 +98,63 @@ pub struct CellStyleDef {
     pub left_edge_stroke_weight: Option<f32>,
     pub right_edge_stroke_color: Option<String>,
     pub right_edge_stroke_weight: Option<f32>,
+}
+
+/// `<TableStyle>` — table-level defaults that flow through to
+/// cells. Carries the region → CellStyle map (Header / Body /
+/// Footer / Left / Right column regions) plus the table border
+/// strokes. BasedOn cascade applies the same way as the other
+/// resolvers.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct TableStyleDef {
+    pub self_id: String,
+    pub name: Option<String>,
+    pub based_on: Option<String>,
+    pub header_region_cell_style: Option<String>,
+    pub body_region_cell_style: Option<String>,
+    pub footer_region_cell_style: Option<String>,
+    pub left_column_region_cell_style: Option<String>,
+    pub right_column_region_cell_style: Option<String>,
+    pub top_border_stroke_color: Option<String>,
+    pub top_border_stroke_weight: Option<f32>,
+    pub bottom_border_stroke_color: Option<String>,
+    pub bottom_border_stroke_weight: Option<f32>,
+    pub left_border_stroke_color: Option<String>,
+    pub left_border_stroke_weight: Option<f32>,
+    pub right_border_stroke_color: Option<String>,
+    pub right_border_stroke_weight: Option<f32>,
+    /// Alternating-row fill: every Nth body row from the top gets
+    /// `start_row_fill_color`. `start_row_fill_count` is the
+    /// number of consecutive rows that participate in the
+    /// "starting" fill before alternating to the end-row fill.
+    pub start_row_fill_color: Option<String>,
+    pub start_row_fill_count: Option<u32>,
+    pub start_row_fill_tint: Option<f32>,
+    pub end_row_fill_color: Option<String>,
+    pub end_row_fill_count: Option<u32>,
+}
+
+/// Effective table-level attributes after walking BasedOn.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ResolvedTable {
+    pub header_region_cell_style: Option<String>,
+    pub body_region_cell_style: Option<String>,
+    pub footer_region_cell_style: Option<String>,
+    pub left_column_region_cell_style: Option<String>,
+    pub right_column_region_cell_style: Option<String>,
+    pub top_border_stroke_color: Option<String>,
+    pub top_border_stroke_weight: Option<f32>,
+    pub bottom_border_stroke_color: Option<String>,
+    pub bottom_border_stroke_weight: Option<f32>,
+    pub left_border_stroke_color: Option<String>,
+    pub left_border_stroke_weight: Option<f32>,
+    pub right_border_stroke_color: Option<String>,
+    pub right_border_stroke_weight: Option<f32>,
+    pub start_row_fill_color: Option<String>,
+    pub start_row_fill_count: Option<u32>,
+    pub start_row_fill_tint: Option<f32>,
+    pub end_row_fill_color: Option<String>,
+    pub end_row_fill_count: Option<u32>,
 }
 
 /// Effective cell-level attributes after walking BasedOn.
@@ -206,6 +268,7 @@ enum CurrentStyle {
     Paragraph,
     Object,
     Cell,
+    Table,
 }
 
 /// Element-form attributes inside `<Properties>` we want to push back
@@ -232,6 +295,7 @@ impl StyleSheet {
         let mut current_character_style: Option<String> = None;
         let mut current_object_style: Option<String> = None;
         let mut current_cell_style: Option<String> = None;
+        let mut current_table_style: Option<String> = None;
         let mut current_style: Option<CurrentStyle> = None;
         let mut pending_property: Option<CurrentProperty> = None;
         loop {
@@ -263,6 +327,13 @@ impl StyleSheet {
                             current_cell_style = Some(s.self_id.clone());
                             current_style = Some(CurrentStyle::Cell);
                             out.cell_styles.insert(s.self_id.clone(), s);
+                        }
+                    }
+                    b"TableStyle" => {
+                        if let Some(s) = parse_table_style(&e) {
+                            current_table_style = Some(s.self_id.clone());
+                            current_style = Some(CurrentStyle::Table);
+                            out.table_styles.insert(s.self_id.clone(), s);
                         }
                     }
                     b"AppliedFont" if current_style.is_some() => {
@@ -333,6 +404,15 @@ impl StyleSheet {
                                     }
                                 }
                             }
+                            (Some(CurrentStyle::Table), Some(CurrentProperty::BasedOn)) => {
+                                if let Some(id) = current_table_style.as_deref() {
+                                    if let Some(t) = out.table_styles.get_mut(id) {
+                                        if t.based_on.is_none() {
+                                            t.based_on = Some(text);
+                                        }
+                                    }
+                                }
+                            }
                             _ => {}
                         }
                         pending_property = None;
@@ -393,6 +473,12 @@ impl StyleSheet {
                     b"CellStyle" => {
                         current_cell_style = None;
                         if matches!(current_style, Some(CurrentStyle::Cell)) {
+                            current_style = None;
+                        }
+                    }
+                    b"TableStyle" => {
+                        current_table_style = None;
+                        if matches!(current_style, Some(CurrentStyle::Table)) {
                             current_style = None;
                         }
                     }
@@ -475,6 +561,23 @@ impl StyleSheet {
         }
         acc
     }
+
+    /// Walk a TableStyle's BasedOn chain. Resolves region →
+    /// CellStyle assignments + table border strokes + alternating
+    /// row fills.
+    pub fn resolve_table(&self, id: &str) -> ResolvedTable {
+        let mut acc = ResolvedTable::default();
+        let mut cursor = Some(id.to_string());
+        for _ in 0..MAX_BASED_ON_DEPTH {
+            let Some(cur_id) = cursor else { break };
+            let Some(s) = self.table_styles.get(&cur_id) else {
+                break;
+            };
+            acc.merge_below(s);
+            cursor = s.based_on.clone();
+        }
+        acc
+    }
 }
 
 impl ResolvedObject {
@@ -486,6 +589,44 @@ impl ResolvedObject {
             self.stroke_color = def.stroke_color.clone();
         }
         self.stroke_weight = self.stroke_weight.or(def.stroke_weight);
+    }
+}
+
+impl ResolvedTable {
+    pub fn merge_below(&mut self, def: &TableStyleDef) {
+        macro_rules! merge_str {
+            ($field:ident) => {
+                if self.$field.is_none() {
+                    self.$field = def.$field.clone();
+                }
+            };
+        }
+        merge_str!(header_region_cell_style);
+        merge_str!(body_region_cell_style);
+        merge_str!(footer_region_cell_style);
+        merge_str!(left_column_region_cell_style);
+        merge_str!(right_column_region_cell_style);
+        merge_str!(top_border_stroke_color);
+        merge_str!(bottom_border_stroke_color);
+        merge_str!(left_border_stroke_color);
+        merge_str!(right_border_stroke_color);
+        merge_str!(start_row_fill_color);
+        merge_str!(end_row_fill_color);
+        self.top_border_stroke_weight = self
+            .top_border_stroke_weight
+            .or(def.top_border_stroke_weight);
+        self.bottom_border_stroke_weight = self
+            .bottom_border_stroke_weight
+            .or(def.bottom_border_stroke_weight);
+        self.left_border_stroke_weight = self
+            .left_border_stroke_weight
+            .or(def.left_border_stroke_weight);
+        self.right_border_stroke_weight = self
+            .right_border_stroke_weight
+            .or(def.right_border_stroke_weight);
+        self.start_row_fill_count = self.start_row_fill_count.or(def.start_row_fill_count);
+        self.start_row_fill_tint = self.start_row_fill_tint.or(def.start_row_fill_tint);
+        self.end_row_fill_count = self.end_row_fill_count.or(def.end_row_fill_count);
     }
 }
 
@@ -602,6 +743,39 @@ fn parse_tab_stop_styles(e: &quick_xml::events::BytesStart) -> Option<TabStop> {
         alignment: attr(e, b"Alignment"),
         alignment_character: attr(e, b"AlignmentCharacter"),
         leader: attr(e, b"Leader"),
+    })
+}
+
+fn parse_table_style(e: &quick_xml::events::BytesStart) -> Option<TableStyleDef> {
+    let self_id = attr(e, b"Self")?;
+    let normalize = |c: Option<String>| match c.as_deref() {
+        Some("Swatch/None") | Some("n") | Some("") => None,
+        _ => c,
+    };
+    Some(TableStyleDef {
+        self_id,
+        name: attr(e, b"Name"),
+        based_on: attr(e, b"BasedOn"),
+        header_region_cell_style: normalize(attr(e, b"HeaderRegionCellStyle")),
+        body_region_cell_style: normalize(attr(e, b"BodyRegionCellStyle")),
+        footer_region_cell_style: normalize(attr(e, b"FooterRegionCellStyle")),
+        left_column_region_cell_style: normalize(attr(e, b"LeftColumnRegionCellStyle")),
+        right_column_region_cell_style: normalize(attr(e, b"RightColumnRegionCellStyle")),
+        top_border_stroke_color: normalize(attr(e, b"TopBorderStrokeColor")),
+        top_border_stroke_weight: attr(e, b"TopBorderStrokeWeight").and_then(|s| s.parse().ok()),
+        bottom_border_stroke_color: normalize(attr(e, b"BottomBorderStrokeColor")),
+        bottom_border_stroke_weight: attr(e, b"BottomBorderStrokeWeight")
+            .and_then(|s| s.parse().ok()),
+        left_border_stroke_color: normalize(attr(e, b"LeftBorderStrokeColor")),
+        left_border_stroke_weight: attr(e, b"LeftBorderStrokeWeight").and_then(|s| s.parse().ok()),
+        right_border_stroke_color: normalize(attr(e, b"RightBorderStrokeColor")),
+        right_border_stroke_weight: attr(e, b"RightBorderStrokeWeight")
+            .and_then(|s| s.parse().ok()),
+        start_row_fill_color: normalize(attr(e, b"StartRowFillColor")),
+        start_row_fill_count: attr(e, b"StartRowFillCount").and_then(|s| s.parse().ok()),
+        start_row_fill_tint: attr(e, b"StartRowFillTint").and_then(|s| s.parse().ok()),
+        end_row_fill_color: normalize(attr(e, b"EndRowFillColor")),
+        end_row_fill_count: attr(e, b"EndRowFillCount").and_then(|s| s.parse().ok()),
     })
 }
 

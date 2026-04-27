@@ -1507,6 +1507,45 @@ fn emit_table_into_chain(
         row_y.push(acc);
     }
     let total_h = acc;
+    let total_w = col_x.last().copied().unwrap_or(0.0);
+
+    // Resolve the table's TableStyle cascade once. Holds the
+    // per-region CellStyle defaults + table-level border strokes
+    // + alternating row fill knobs. Cells fall back to their
+    // region's default when they carry no AppliedCellStyle.
+    let resolved_table = table
+        .applied_table_style
+        .as_deref()
+        .map(|id| em.document.styles.resolve_table(id))
+        .unwrap_or_default();
+
+    // Decide which CellStyle id applies to a cell at (col, row)
+    // when the cell itself has no override. Header rows take
+    // header_region; footer rows take footer; first/last column
+    // take left/right column region; everything else body.
+    let header_count = table.header_row_count as usize;
+    let footer_count = table.footer_row_count as usize;
+    let total_rows = row_heights.len();
+    let total_cols = col_widths.len();
+    let region_cell_style_for = |c: usize, r: usize| -> Option<&str> {
+        if r < header_count {
+            return resolved_table.header_region_cell_style.as_deref();
+        }
+        if total_rows >= footer_count && r >= total_rows - footer_count && footer_count > 0 {
+            return resolved_table.footer_region_cell_style.as_deref();
+        }
+        if c == 0 {
+            if let Some(s) = resolved_table.left_column_region_cell_style.as_deref() {
+                return Some(s);
+            }
+        }
+        if c + 1 == total_cols {
+            if let Some(s) = resolved_table.right_column_region_cell_style.as_deref() {
+                return Some(s);
+            }
+        }
+        resolved_table.body_region_cell_style.as_deref()
+    };
 
     for cell in &table.cells {
         let Some((c, r)) = cell.coords() else {
@@ -1528,12 +1567,15 @@ fn emit_table_into_chain(
         let inner_w = (cell_w_pt - cell.text_left_inset - cell.text_right_inset).max(0.0);
         let inner_h = (cell_h_pt - cell.text_top_inset - cell.text_bottom_inset).max(0.0);
 
-        // Resolve the cell's CellStyle cascade (fill, vertical
-        // justification, per-edge strokes) and apply the visible
-        // bits before laying out cell text.
-        let resolved_cell = cell
+        // Resolve the cell's CellStyle. Per-cell AppliedCellStyle
+        // wins; fall through to the table-style region default
+        // (Header / Body / Footer / left or right column).
+        let cell_style_id = cell
             .applied_cell_style
             .as_deref()
+            .filter(|id| !is_none_style_id(id))
+            .or_else(|| region_cell_style_for(c, r));
+        let resolved_cell = cell_style_id
             .map(|id| em.document.styles.resolve_cell(id))
             .unwrap_or_default();
 
@@ -1676,11 +1718,79 @@ fn emit_table_into_chain(
         }
     }
 
+    // Table-level borders. Same filled-rect trick the per-edge
+    // cell strokes use so the line snaps to the table boundary at
+    // any weight without tiny-skia's stroke-rect centerline drift.
+    let table_borders = [
+        (
+            resolved_table.top_border_stroke_color.as_deref(),
+            resolved_table.top_border_stroke_weight,
+            table_left_pt,
+            table_top_pt,
+            total_w,
+            true,
+        ),
+        (
+            resolved_table.bottom_border_stroke_color.as_deref(),
+            resolved_table.bottom_border_stroke_weight,
+            table_left_pt,
+            table_top_pt + total_h,
+            total_w,
+            true,
+        ),
+        (
+            resolved_table.left_border_stroke_color.as_deref(),
+            resolved_table.left_border_stroke_weight,
+            table_left_pt,
+            table_top_pt,
+            total_h,
+            false,
+        ),
+        (
+            resolved_table.right_border_stroke_color.as_deref(),
+            resolved_table.right_border_stroke_weight,
+            table_left_pt + total_w,
+            table_top_pt,
+            total_h,
+            false,
+        ),
+    ];
+    for (color, weight, x, y, len, horizontal) in table_borders {
+        if let (Some(color_id), Some(w)) = (color, weight) {
+            if w > 0.0 {
+                if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) {
+                    let r = if horizontal {
+                        Rect {
+                            x,
+                            y: y - w * 0.5,
+                            w: len,
+                            h: w,
+                        }
+                    } else {
+                        Rect {
+                            x: x - w * 0.5,
+                            y,
+                            w,
+                            h: len,
+                        }
+                    };
+                    emit_rect(r, paint, &mut pages[target_page].list);
+                }
+            }
+        }
+    }
+
     // Advance host frame's y_cursor past the table.
     let height_64 = (total_h * idml_text::shape::ADVANCE_PRECISION).round() as i32;
     em.y_cursor = em.y_cursor.max(0) + height_64;
     total_stats.paragraphs += 1;
     pages[target_page].stats.paragraphs += 1;
+}
+
+/// `CellStyle/$ID/[None]` is IDML's "no style" sentinel. Treat it
+/// as absent so the region cascade kicks in.
+fn is_none_style_id(id: &str) -> bool {
+    id == "CellStyle/$ID/[None]" || id == "CellStyle/n" || id.is_empty()
 }
 
 /// Lay out and emit a single cell paragraph at `(origin_pt.0,
