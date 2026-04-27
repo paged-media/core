@@ -470,6 +470,18 @@ pub fn build_document(
             .get(head_page_idx)
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
+        // Per-chain wrap rects so threaded frames inherit per-line
+        // wrap. Each chain index maps to its frame's page's
+        // exclusion list.
+        let chain_wrap_rects: Vec<&[idml_parse::Bounds]> = chain_pages
+            .iter()
+            .map(|&p| {
+                wrap_rects_per_page
+                    .get(p)
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[])
+            })
+            .collect();
         let mut emitter = StoryEmitter::new(
             document,
             options,
@@ -479,6 +491,7 @@ pub fn build_document(
             chain,
             chain_pages,
             head_wrap_rects,
+            chain_wrap_rects,
         );
         for paragraph in &parsed.story.paragraphs {
             emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
@@ -525,10 +538,29 @@ struct StoryEmitter<'a> {
     /// these and computes a `column_widths` slice + per-line
     /// glyph x-shifts so body text flows around an island
     /// obstacle (the chairman page's pull quote, for example).
+    /// Superseded by `chain_wrap_rects[0]` for the per-line walk;
+    /// retained alongside `head_frame_spread` for callers that
+    /// want the head's wraps without indexing.
+    #[allow(dead_code)]
     head_wrap_rects: Vec<idml_parse::Bounds>,
     /// Spread-coord bounds of the head frame, cached so the
     /// per-paragraph wrap pass doesn't recompute per paragraph.
+    /// Currently superseded by `chain_spread_bounds[0]` for the
+    /// per-line walk; retained for future per-frame optimisations
+    /// that read the head's bounds without indexing.
+    #[allow(dead_code)]
     head_frame_spread: idml_parse::Bounds,
+    /// Spread-coord wrap exclusion rectangles per chain index — the
+    /// threaded-frame extension of `head_wrap_rects`. Each chain
+    /// index `i` carries the wrap rectangles on chain[i]'s page.
+    /// Used by `build_perline_wrap_widths` so overflow lines that
+    /// land in chain[1+] get the right exclusions for that frame's
+    /// page.
+    chain_wrap_rects: Vec<Vec<idml_parse::Bounds>>,
+    /// Spread-coord bounds for every frame in the chain. Same
+    /// motivation as `chain_wrap_rects`: per-frame per-line wrap
+    /// needs each frame's spread rect.
+    chain_spread_bounds: Vec<idml_parse::Bounds>,
     frame_idx: usize,
     y_cursor: i32,
     frame_cmd_ranges: Vec<Option<(usize, usize)>>,
@@ -552,6 +584,7 @@ impl<'a> StoryEmitter<'a> {
         chain: Vec<&'a TextFrame>,
         chain_pages: Vec<usize>,
         head_wrap_rects: &[idml_parse::Bounds],
+        chain_wrap_rects: Vec<&[idml_parse::Bounds]>,
     ) -> Self {
         // Head frame's L+R insets shrink the column width. Threaded
         // frames usually share the same insets; honouring per-frame
@@ -604,6 +637,12 @@ impl<'a> StoryEmitter<'a> {
         let wrapped_width = (raw_width - shrink_left - shrink_right).max(0.0);
         let column_width_pt = options.fallback_column_width_pt.or(Some(wrapped_width));
         let len = chain.len();
+        let chain_spread_bounds: Vec<idml_parse::Bounds> = chain
+            .iter()
+            .map(|f| transform_bounds(f.bounds, f.item_transform))
+            .collect();
+        let chain_wrap_rects_owned: Vec<Vec<idml_parse::Bounds>> =
+            chain_wrap_rects.iter().map(|s| s.to_vec()).collect();
         Self {
             document,
             options,
@@ -616,6 +655,8 @@ impl<'a> StoryEmitter<'a> {
             column_x_shift_pt: shrink_left,
             head_wrap_rects: head_wrap_rects.to_vec(),
             head_frame_spread,
+            chain_wrap_rects: chain_wrap_rects_owned,
+            chain_spread_bounds,
             frame_idx: 0,
             y_cursor: -1,
             frame_cmd_ranges: vec![None; len],
@@ -800,16 +841,19 @@ fn emit_paragraph_into_chain(
     lopts.first_baseline = em.y_cursor;
 
     // Per-line wrap: build a `column_widths` slice + per-line
-    // x-shifts based on which wrap rectangles each predicted line
-    // intersects. Shifts are stored in `line_x_shifts_64` (1/64 pt)
-    // so the post-layout pass can add them to each glyph's x.
-    let line_x_shifts_64 = build_perline_wrap_widths(em, &styled_runs, &mut lopts);
+    // x-shifts + twin-pair markers based on which wrap rectangles
+    // each predicted line intersects. Shifts are stored in 1/64 pt
+    // so the post-layout pass can add them to each glyph's x;
+    // twin_after[i] = true means line i shares its baseline with
+    // line i-1 (BothSides flow around an obstacle).
+    let WrapPlan {
+        line_x_shifts_64,
+        twin_after,
+    } = build_perline_wrap_widths(em, &styled_runs, &mut lopts);
 
     let mut laid_out = idml_text::layout_runs(&styled_runs, &lopts);
 
-    // Apply per-line x-shifts (text wrap around objects). Each shift
-    // is in 1/64 pt; the layout-time `column_widths` made room for
-    // the obstacle, this pass moves the line right past it.
+    // Apply per-line x-shifts (text wrap around objects).
     if !line_x_shifts_64.is_empty() {
         for (i, line) in laid_out.lines.iter_mut().enumerate() {
             let shift_64 = line_x_shifts_64[i.min(line_x_shifts_64.len() - 1)];
@@ -818,6 +862,36 @@ fn emit_paragraph_into_chain(
             }
             for g in &mut line.glyphs {
                 g.x += shift_64;
+            }
+        }
+    }
+
+    // BothSides flow: collapse twin lines onto the previous line's
+    // baseline so the two segments render side by side at the same
+    // y. Subsequent lines absorb the saved row height by shifting
+    // up cumulatively. Without this pass twins would render as
+    // sequential rows, which Knuth-Plass produced naively.
+    if !twin_after.is_empty() {
+        let mut accumulated_shift = 0i32;
+        let mut prev_baseline = 0i32;
+        for (i, line) in laid_out.lines.iter_mut().enumerate() {
+            let is_twin = twin_after.get(i).copied().unwrap_or(false) && i > 0;
+            if is_twin {
+                let target = prev_baseline;
+                let diff = line.baseline_y - target;
+                line.baseline_y = target;
+                for g in &mut line.glyphs {
+                    g.y -= diff;
+                }
+                accumulated_shift += diff;
+            } else if accumulated_shift > 0 {
+                line.baseline_y -= accumulated_shift;
+                for g in &mut line.glyphs {
+                    g.y -= accumulated_shift;
+                }
+                prev_baseline = line.baseline_y;
+            } else {
+                prev_baseline = line.baseline_y;
             }
         }
     }
@@ -1379,104 +1453,171 @@ fn collect_wrap_rects_per_page(
 ///   on each line's tallest run; a tighter follow-up can recompute
 ///   widths as composition proceeds.
 /// * Treats wrap rects as horizontal bands: when a rect overlaps
-///   the line's predicted y-range, the line gets the larger of the
-///   two open horizontal segments (left of the rect or right of
-///   the rect). True island wrap with both-sides flow needs
-///   column-segment support in `compose_paragraph`; this single-
-///   segment pick handles the common case where text flows past
-///   the obstacle on one side.
+///   the line's predicted y-range, the line is split into all
+///   horizontal segments wider than ~24 pt; one composer line is
+///   emitted per segment, twins collapse onto the first segment's
+///   row at emit time (BothSides flow).
+struct WrapPlan {
+    /// Per-line x-shifts in 1/64 pt. Index `i` = shift for line i.
+    line_x_shifts_64: Vec<i32>,
+    /// Parallel marker: `twin_after[i] == true` means line `i`
+    /// shares a baseline with line `i-1`. Used by the post-layout
+    /// pass to implement BothSides wrap (text on both sides of an
+    /// obstacle in the same row).
+    twin_after: Vec<bool>,
+}
+
 fn build_perline_wrap_widths(
     em: &StoryEmitter,
     styled_runs: &[idml_text::StyledRun],
     lopts: &mut idml_text::LayoutOptions,
-) -> Vec<i32> {
-    if em.frame_idx != 0 || em.head_wrap_rects.is_empty() {
-        return Vec::new();
+) -> WrapPlan {
+    let empty = WrapPlan {
+        line_x_shifts_64: Vec::new(),
+        twin_after: Vec::new(),
+    };
+    if em.frame_idx != 0 {
+        // After the head frame fills, the existing emit loop
+        // advances to chain[1+] using a fixed first-baseline
+        // reset; per-line wrap inside overflow frames is layered
+        // on by the chain walk below — handled when the head
+        // frame's paragraph composes.
+        return empty;
     }
-    // Quick screen: any wrap rect overlap the head frame at all?
-    let frame = em.head_frame_spread;
-    let any_overlap = em.head_wrap_rects.iter().any(|w| {
-        w.bottom > frame.top && w.top < frame.bottom && w.right > frame.left && w.left < frame.right
-    });
-    if !any_overlap {
-        return Vec::new();
+    let any_chain_overlap = em
+        .chain_spread_bounds
+        .iter()
+        .zip(em.chain_wrap_rects.iter())
+        .any(|(b, ws)| {
+            ws.iter().any(|w| {
+                w.bottom > b.top && w.top < b.bottom && w.right > b.left && w.left < b.right
+            })
+        });
+    if !any_chain_overlap {
+        return empty;
     }
     // Estimate leading from the first run's point size × 1.2.
     // Matches idml-text's auto-leading default.
     let head_size_pt = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
     let leading_pt = head_size_pt * 1.2;
     let leading_64 = ((leading_pt * idml_text::shape::ADVANCE_PRECISION).round() as i32).max(1);
-
-    // Predict line baselines starting at the current y_cursor.
-    // Cap the line count so a tiny leading or huge frame can't blow
-    // out memory.
-    let frame_height_pt = frame.height();
-    let remaining_height_pt =
-        (frame_height_pt - em.y_cursor as f32 / idml_text::shape::ADVANCE_PRECISION).max(0.0);
-    let mut n_lines = (remaining_height_pt / leading_pt).ceil() as usize + 1;
-    n_lines = n_lines.min(512);
-    if n_lines == 0 {
-        return Vec::new();
-    }
-
-    let frame_left_pt = frame.left;
-    let frame_right_pt = frame.right;
-    let head_insets = em.chain[0].inset_spacing.unwrap_or([0.0; 4]);
-
-    let mut widths_64: Vec<i32> = Vec::with_capacity(n_lines);
-    let mut shifts_64: Vec<i32> = Vec::with_capacity(n_lines);
     let scalar_width_64 =
         (em.column_width_pt.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION).round() as i32;
 
-    for i in 0..n_lines {
-        let baseline_pt = (lopts.first_baseline + (i as i32) * leading_64) as f32
-            / idml_text::shape::ADVANCE_PRECISION;
-        // Line's vertical band in spread coords. Approximate the
-        // ascender + descender extent from `leading_pt`.
-        let line_top = frame.top + baseline_pt - leading_pt * 0.8;
-        let line_bottom = frame.top + baseline_pt + leading_pt * 0.2;
+    let mut widths_64: Vec<i32> = Vec::new();
+    let mut shifts_64: Vec<i32> = Vec::new();
+    let mut twin_after: Vec<bool> = Vec::new();
 
-        // Start with the inset-respecting full-frame range.
-        let mut effective_left = frame_left_pt + head_insets[1];
-        let mut effective_right = frame_right_pt - head_insets[3];
-        for w in &em.head_wrap_rects {
-            if w.bottom <= line_top || w.top >= line_bottom {
+    // Walk every frame in the chain. Head frame starts at y_cursor
+    // (already accounts for FirstBaselineOffset + SpaceBefore);
+    // overflow frames reset to the same first-baseline the existing
+    // emit loop uses (`paragraph_size * 0.8`). Each frame contributes
+    // its own widths to the combined slice; once layout produces
+    // lines the existing emit pass discovers per-line frame
+    // assignment and reads x-shifts by absolute line index.
+    for (frame_idx, frame_bounds) in em.chain_spread_bounds.iter().enumerate() {
+        let frame_left_pt = frame_bounds.left;
+        let frame_right_pt = frame_bounds.right;
+        let frame = em.chain[frame_idx];
+        let insets = frame.inset_spacing.unwrap_or([0.0; 4]);
+        let frame_height_pt = frame_bounds.height();
+        let frame_first_baseline_64 = if frame_idx == 0 {
+            em.y_cursor.max(0)
+        } else {
+            (head_size_pt * 0.8 * idml_text::shape::ADVANCE_PRECISION).round() as i32
+        };
+        let remaining_height_pt = (frame_height_pt
+            - frame_first_baseline_64 as f32 / idml_text::shape::ADVANCE_PRECISION)
+            .max(0.0);
+        let mut n_lines = (remaining_height_pt / leading_pt).ceil() as usize + 1;
+        n_lines = n_lines.min(512);
+        if n_lines == 0 {
+            continue;
+        }
+        let wraps = &em.chain_wrap_rects[frame_idx];
+        for i in 0..n_lines {
+            let baseline_pt = (frame_first_baseline_64 + (i as i32) * leading_64) as f32
+                / idml_text::shape::ADVANCE_PRECISION;
+            // Line's vertical band in spread coords.
+            let line_top = frame_bounds.top + baseline_pt - leading_pt * 0.8;
+            let line_bottom = frame_bounds.top + baseline_pt + leading_pt * 0.2;
+
+            let frame_inner_left = frame_left_pt + insets[1];
+            let frame_inner_right = frame_right_pt - insets[3];
+            // Build the *gap list* of open horizontal segments on
+            // this line by subtracting each intruding wrap rect
+            // from the [frame_inner_left, frame_inner_right] range.
+            let mut segments: Vec<(f32, f32)> = vec![(frame_inner_left, frame_inner_right)];
+            for w in wraps {
+                if w.bottom <= line_top || w.top >= line_bottom {
+                    continue;
+                }
+                if w.left <= frame_inner_left && w.right >= frame_inner_right {
+                    continue;
+                }
+                let mut next: Vec<(f32, f32)> = Vec::with_capacity(segments.len() + 1);
+                for (a, b) in &segments {
+                    if w.right <= *a || w.left >= *b {
+                        next.push((*a, *b));
+                        continue;
+                    }
+                    if w.left > *a {
+                        next.push((*a, w.left));
+                    }
+                    if w.right < *b {
+                        next.push((w.right, *b));
+                    }
+                }
+                segments = next;
+            }
+            // Drop segments narrower than the per-line floor.
+            const MIN_USABLE_64: i32 = 1536; // 24 pt × 64
+            let usable: Vec<(f32, f32)> = segments
+                .into_iter()
+                .filter(|(a, b)| {
+                    let w64 = ((b - a) * idml_text::shape::ADVANCE_PRECISION).round() as i32;
+                    w64 >= MIN_USABLE_64
+                })
+                .collect();
+            if usable.is_empty() {
+                // Nothing usable: fall back to scalar width with no
+                // shift so this line at least renders something.
+                widths_64.push(scalar_width_64);
+                shifts_64.push(0);
+                twin_after.push(false);
                 continue;
             }
-            // Skip rects that fully cover horizontally — those are
-            // pages/sheets and shouldn't carve text.
-            if w.left <= effective_left && w.right >= effective_right {
-                continue;
-            }
-            // Pick the wider of the two open segments. This is a
-            // single-segment approximation (not BothSides per line),
-            // sufficient for pull-quotes / inline figures.
-            let left_segment = (w.left - effective_left).max(0.0);
-            let right_segment = (effective_right - w.right).max(0.0);
-            if left_segment >= right_segment {
-                effective_right = w.left.min(effective_right);
-            } else {
-                effective_left = w.right.max(effective_left);
+            // Emit one composer line per usable segment. The first
+            // segment owns the actual baseline; the rest are twin
+            // partners that the post-layout pass collapses onto the
+            // first's row. Sort by x so the leftmost segment comes
+            // first — keeps reading order intact.
+            let mut usable_sorted = usable;
+            usable_sorted
+                .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            for (idx, (a, b)) in usable_sorted.iter().enumerate() {
+                let w64 = ((b - a) * idml_text::shape::ADVANCE_PRECISION).round() as i32;
+                let shift_pt = (a - frame_inner_left).max(0.0);
+                widths_64.push(w64);
+                shifts_64.push((shift_pt * idml_text::shape::ADVANCE_PRECISION).round() as i32);
+                // Mark every segment after the first as a twin so
+                // the emit pass collapses it onto the first
+                // segment's row at the same baseline.
+                twin_after.push(idx > 0);
             }
         }
-        let line_width_pt = (effective_right - effective_left).max(0.0);
-        let mut line_width_64 =
-            (line_width_pt * idml_text::shape::ADVANCE_PRECISION).round() as i32;
-        // Floor the per-line width: if a line is narrower than
-        // ~24 pt no real word fits and Knuth-Plass produces
-        // pathological breaks. Fall back to the scalar column
-        // width on those lines (they'll overlap the obstacle but
-        // at least render something). 24 pt × 64 = 1536.
-        if line_width_64 < 1536 {
-            line_width_64 = scalar_width_64;
-        }
-        widths_64.push(line_width_64);
-        let shift_pt = (effective_left - (frame_left_pt + head_insets[1])).max(0.0);
-        shifts_64.push((shift_pt * idml_text::shape::ADVANCE_PRECISION).round() as i32);
     }
-
+    if widths_64.is_empty() {
+        return WrapPlan {
+            line_x_shifts_64: Vec::new(),
+            twin_after: Vec::new(),
+        };
+    }
     lopts.compose.column_widths = Some(widths_64);
-    shifts_64
+    WrapPlan {
+        line_x_shifts_64: shifts_64,
+        twin_after,
+    }
 }
 
 /// Map an inner-coord top-left corner through ItemTransform to its
