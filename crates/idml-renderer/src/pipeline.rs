@@ -224,14 +224,28 @@ pub fn build_document(
         let Some(master) = document.master_spread(master_ref) else {
             continue;
         };
-        let master_first_page = match master.spread.pages.first() {
-            Some(p) => p,
-            None => continue,
-        };
-        let master_origin_in_master_spread = {
-            let b = transform_bounds(master_first_page.bounds, master_first_page.item_transform);
-            (b.left, b.top)
-        };
+        if master.spread.pages.is_empty() {
+            continue;
+        }
+
+        // Each master page in spread coords. Master items get routed
+        // to one of these by their own spread-coord centroid; the
+        // matching live page consumes only the items belonging to
+        // its same-ordinal master page. This is what InDesign's
+        // "Master Page Overlay" feature actually does — without
+        // routing, a master with both white-LEFT-page and navy-RIGHT-
+        // page rectangles would stamp both onto every live page.
+        let master_page_bounds: Vec<idml_parse::Bounds> = master
+            .spread
+            .pages
+            .iter()
+            .map(|p| transform_bounds(p.bounds, p.item_transform))
+            .collect();
+        let local_master_page_idx = geom.local_page_idx.min(master.spread.pages.len() - 1);
+        let master_page_origin = (
+            master_page_bounds[local_master_page_idx].left,
+            master_page_bounds[local_master_page_idx].top,
+        );
         let target_origin = pages[i].spread_origin;
         // MasterPageTransform sits between master-spread coords and
         // live-page coords; for sample.idml this is identity.
@@ -241,18 +255,48 @@ pub fn build_document(
             .get(geom.local_page_idx)
             .and_then(|p| p.master_page_transform);
         let (mpt_tx, mpt_ty) = mpt.map(|m| (m[4], m[5])).unwrap_or((0.0, 0.0));
-        let dx = target_origin.0 - master_origin_in_master_spread.0 + mpt_tx;
-        let dy = target_origin.1 - master_origin_in_master_spread.1 + mpt_ty;
+        let dx = target_origin.0 - master_page_origin.0 + mpt_tx;
+        let dy = target_origin.1 - master_page_origin.1 + mpt_ty;
+
+        // Pick the master page index that contains the centroid of
+        // the given spread-coord bounds; falls back to the nearest
+        // page so items hugging the centre line don't get dropped.
+        let master_page_for = |b: idml_parse::Bounds| -> usize {
+            let cx = (b.left + b.right) * 0.5;
+            let cy = (b.top + b.bottom) * 0.5;
+            for (idx, mb) in master_page_bounds.iter().enumerate() {
+                if cx >= mb.left && cx <= mb.right && cy >= mb.top && cy <= mb.bottom {
+                    return idx;
+                }
+            }
+            // Outside any master page (rare): pick by horizontal proximity.
+            master_page_bounds
+                .iter()
+                .enumerate()
+                .min_by(|(_, a), (_, b)| {
+                    let da = ((a.left + a.right) * 0.5 - cx).abs();
+                    let db = ((b.left + b.right) * 0.5 - cx).abs();
+                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|(idx, _)| idx)
+                .unwrap_or(0)
+        };
+
         for frame in &master.spread.text_frames {
+            let spread_b = transform_bounds(frame.bounds, frame.item_transform);
+            if master_page_for(spread_b) != local_master_page_idx {
+                continue;
+            }
             total_stats.frames += 1;
-            let translated = idml_parse::Bounds {
-                top: frame.bounds.top + dy,
-                left: frame.bounds.left + dx,
-                bottom: frame.bounds.bottom + dy,
-                right: frame.bounds.right + dx,
-            };
+            // Master items live in master-spread coords. Compose an
+            // outer translate(dx, dy) into the frame's existing
+            // ItemTransform so the inner-coord rect ends up in the
+            // *live* spread coords once frame_outer_transform applies.
+            // Mutating bounds (inner coords) would be wrong now that
+            // PathGeometry-derived shapes carry geometry in inner
+            // space.
             let mut copy = frame.clone();
-            copy.bounds = translated;
+            copy.item_transform = Some(compose_outer_translation(copy.item_transform, dx, dy));
             let copy = text_frame_with_object_style(copy, document);
             emit_text_frame_into(
                 &mut pages[i],
@@ -264,15 +308,13 @@ pub fn build_document(
             );
         }
         for rect in &master.spread.rectangles {
+            let spread_b = transform_bounds(rect.bounds, rect.item_transform);
+            if master_page_for(spread_b) != local_master_page_idx {
+                continue;
+            }
             total_stats.frames += 1;
-            let translated = idml_parse::Bounds {
-                top: rect.bounds.top + dy,
-                left: rect.bounds.left + dx,
-                bottom: rect.bounds.bottom + dy,
-                right: rect.bounds.right + dx,
-            };
             let mut copy = rect.clone();
-            copy.bounds = translated;
+            copy.item_transform = Some(compose_outer_translation(copy.item_transform, dx, dy));
             let copy = rectangle_with_object_style(copy, document);
             emit_rectangle_into(
                 &mut pages[i],
@@ -1016,6 +1058,18 @@ fn transform_bounds(b: idml_parse::Bounds, m: Option<[f32; 6]>) -> idml_parse::B
         left: min_x,
         bottom: max_y,
         right: max_x,
+    }
+}
+
+/// Compose `translate(dx, dy)` *after* an existing IDML affine.
+/// `translate ∘ inner` applied to a point: first inner maps the
+/// point, then translate shifts it by (dx, dy). Used by the master-
+/// overlay pass to push master-spread coords into the live spread.
+/// `None` becomes a pure translation.
+fn compose_outer_translation(inner: Option<[f32; 6]>, dx: f32, dy: f32) -> [f32; 6] {
+    match inner {
+        Some([a, b, c, d, e, f]) => [a, b, c, d, e + dx, f + dy],
+        None => [1.0, 0.0, 0.0, 1.0, dx, dy],
     }
 }
 
