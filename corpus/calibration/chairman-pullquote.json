@@ -1,0 +1,18 @@
+{
+  "name": "chairman-pullquote",
+  "comment": "BODY:Pull Quote paragraph from sample.idml story u29b83 (chairman page). Open Sans Italic 8pt. Reference line breaks read from sample.pdf via pdftotext -layout (page 5).",
+  "spec": {
+    "font": "corpus/fonts/OpenSans-Italic.ttf",
+    "point_size": 8.0,
+    "column_width_pt": 356.85,
+    "text": "Magnim incto coresci isciatur sam vellibust autatia consequiam aut proreri andit, cus magnis es est, volor rest inullestibus aut dit mincimin numqui optis alis iunt es sum reritio reicipi ciaepero consed quo mod quidus sunt. Arum volori doloresseque nectus volorest vendem ex ea consequi a peri is a ipsant lat officidel magnim accum il ium ellabore omnimolorro id est arcipsus dem harumque non nulluptaquam quamuscime num ipitem id quoditi qui tempor mo bla cus, conet quo et quo comniendit ium."
+  },
+  "expected_lines": [
+    "Magnim incto coresci isciatur sam vellibust autatia consequiam aut proreri andit, cus magnis es est,",
+    "volor rest inullestibus aut dit mincimin numqui optis alis iunt es sum reritio reicipi ciaepero consed",
+    "quo mod quidus sunt. Arum volori doloresseque nectus volorest vendem ex ea consequi a peri is",
+    "a ipsant lat officidel magnim accum il ium ellabore omnimolorro id est arcipsus dem harumque",
+    "non nulluptaquam quamuscime num ipitem id quoditi qui tempor mo bla cus, conet quo et quo",
+    "comniendit ium."
+  ]
+}

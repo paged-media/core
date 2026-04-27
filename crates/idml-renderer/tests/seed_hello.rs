@@ -171,3 +171,65 @@ fn seed_hello_renders_and_passes_self_diff() {
         assert!(report.mean_delta_e < 1e-6);
     }
 }
+
+/// Snapshot test against pinned golden PNGs. Renders the seed at
+/// 144 dpi and ΔE-diffs every page against the corresponding
+/// `corpus/seeds/hello/golden/page-NN.png`. This is the project's
+/// regression gate: any change to the renderer that visibly
+/// shifts the seed_hello output blocks the merge.
+///
+/// To re-bake the goldens after an intentional renderer change:
+///
+///     IDML_BAKE_GOLDENS=1 cargo test -p idml-renderer \
+///         --test seed_hello -- snapshot --exact
+///
+/// Inspect the diff carefully before re-baking (the golden is
+/// authoritative — that's the whole point).
+#[test]
+fn seed_hello_matches_golden_snapshot() {
+    let bytes = pack_seed(&seed_dir());
+    let document = Document::open(&bytes).unwrap();
+    let opts = PipelineOptions::default();
+    let (_built, images) =
+        pipeline::render_document(&document, &opts, 144.0, Color::WHITE).unwrap();
+
+    let golden_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../corpus/seeds/hello/golden");
+    let bake = std::env::var_os("IDML_BAKE_GOLDENS").is_some();
+    if bake {
+        std::fs::create_dir_all(&golden_dir).expect("create golden dir");
+    }
+
+    for (i, img) in images.iter().enumerate() {
+        let path = golden_dir.join(format!("page-{:02}.png", i + 1));
+        if bake || !path.exists() {
+            img.save(&path).expect("write golden png");
+            // Skip diff on baked-or-just-created entries; the
+            // next test run will diff against this fresh golden.
+            continue;
+        }
+        let expected =
+            image::open(&path).unwrap_or_else(|e| panic!("read golden {}: {e}", path.display()));
+        let candidate_rgb = image::DynamicImage::ImageRgba8(img.clone()).to_rgb8();
+        let expected_rgb = expected.to_rgb8();
+        assert_eq!(
+            (expected_rgb.width(), expected_rgb.height()),
+            (candidate_rgb.width(), candidate_rgb.height()),
+            "golden page {} has different dimensions — re-bake?",
+            i + 1
+        );
+        let (report, _) = idml_fidelity::diff::compare_images(&expected_rgb, &candidate_rgb)
+            .expect("compare images");
+        // Strict regression gate: the seed is deterministic and
+        // self-authored, so we expect byte-identity (mean ΔE ≈ 0).
+        // Allow a tiny epsilon for f32 / sRGB-roundtrip jitter.
+        assert!(
+            report.mean_delta_e < 0.01,
+            "page {} drifted from golden: meanΔE={:.4}, p99ΔE={:.4}, ssim={:.4}",
+            i + 1,
+            report.mean_delta_e,
+            report.p99_delta_e,
+            report.ssim
+        );
+    }
+}
