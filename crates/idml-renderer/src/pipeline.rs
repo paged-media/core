@@ -443,6 +443,13 @@ pub fn build_document(
     // is cheap (parses font tables, no allocation churn).
     let font_table = FontTable::build(document, options);
 
+    // Per-page wrap exclusion rectangles (spread coords, expanded by
+    // the wrap's offsets). Only items with TextWrapMode != "None"
+    // contribute. Used by StoryEmitter::new to shrink the head text
+    // frame's effective column width and shift its origin past any
+    // intruding shape.
+    let wrap_rects_per_page = collect_wrap_rects_per_page(document, &spread_page_ranges);
+
     for parsed in &document.stories {
         total_stats.stories += 1;
         let chain = document.frame_chain(&parsed.self_id);
@@ -458,6 +465,11 @@ pub fn build_document(
                     .unwrap_or(0)
             })
             .collect();
+        let head_page_idx = chain_pages[0];
+        let head_wrap_rects: &[idml_parse::Bounds] = wrap_rects_per_page
+            .get(head_page_idx)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
         let mut emitter = StoryEmitter::new(
             document,
             options,
@@ -466,6 +478,7 @@ pub fn build_document(
             &font_table,
             chain,
             chain_pages,
+            head_wrap_rects,
         );
         for paragraph in &parsed.story.paragraphs {
             emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
@@ -502,6 +515,11 @@ struct StoryEmitter<'a> {
     chain: Vec<&'a TextFrame>,
     chain_pages: Vec<usize>,
     column_width_pt: Option<f32>,
+    /// Inner-coord x-shift to apply to the head frame's text
+    /// origin when an obstacle on the page intrudes from the left
+    /// of the frame. Zero unless wrap rectangles overlap the head
+    /// frame.
+    column_x_shift_pt: f32,
     frame_idx: usize,
     y_cursor: i32,
     frame_cmd_ranges: Vec<Option<(usize, usize)>>,
@@ -524,17 +542,58 @@ impl<'a> StoryEmitter<'a> {
         font_table: &'a FontTable,
         chain: Vec<&'a TextFrame>,
         chain_pages: Vec<usize>,
+        head_wrap_rects: &[idml_parse::Bounds],
     ) -> Self {
         // Head frame's L+R insets shrink the column width. Threaded
         // frames usually share the same insets; honouring per-frame
         // insets requires recomputing the column width when
         // crossing frame boundaries.
         let head_insets = chain[0].inset_spacing.unwrap_or([0.0; 4]);
-        let column_width_pt = options.fallback_column_width_pt.or_else(|| {
-            chain
-                .first()
-                .map(|f| (f.bounds.width() - head_insets[1] - head_insets[3]).max(0.0))
-        });
+        let head_frame_spread = transform_bounds(chain[0].bounds, chain[0].item_transform);
+        let (mut shrink_left, mut shrink_right) = (0.0f32, 0.0f32);
+        // Treat any wrap rectangle that overlaps the head frame's
+        // vertical extent as a side exclusion: extend `shrink_left`
+        // when the rect intrudes from the left, `shrink_right` when
+        // from the right. This is the simplest of the IDML wrap
+        // modes (BoundingBoxTextWrap, BothSides) and handles the
+        // common "image to one side of body text" layout. True
+        // per-line island wrap needs column-segment support in
+        // compose_paragraph and is queued.
+        let frame_height = head_frame_spread.height();
+        for w in head_wrap_rects {
+            // Vertical overlap check.
+            let v_overlap =
+                w.bottom.min(head_frame_spread.bottom) - w.top.max(head_frame_spread.top);
+            if v_overlap <= 0.0 {
+                continue;
+            }
+            // Skip rects that fully cover the frame horizontally.
+            if w.left <= head_frame_spread.left && w.right >= head_frame_spread.right {
+                continue;
+            }
+            // Side-shrink is only correct when the obstacle spans
+            // most of the frame vertically (sidebars, full-height
+            // images). Smaller obstacles (pull quotes, inline
+            // figures) need true per-line island wrap; shrinking
+            // the whole column for them would collapse the body
+            // text. Threshold: ≥ 80% vertical overlap.
+            if frame_height > 0.0 && v_overlap < 0.8 * frame_height {
+                continue;
+            }
+            let frame_cx = (head_frame_spread.left + head_frame_spread.right) * 0.5;
+            let rect_cx = (w.left + w.right) * 0.5;
+            if rect_cx < frame_cx {
+                let new_left = w.right.max(head_frame_spread.left);
+                shrink_left = shrink_left.max(new_left - head_frame_spread.left);
+            } else {
+                let new_right = w.left.min(head_frame_spread.right);
+                shrink_right = shrink_right.max(head_frame_spread.right - new_right);
+            }
+        }
+
+        let raw_width = (head_frame_spread.width() - head_insets[1] - head_insets[3]).max(0.0);
+        let wrapped_width = (raw_width - shrink_left - shrink_right).max(0.0);
+        let column_width_pt = options.fallback_column_width_pt.or(Some(wrapped_width));
         let len = chain.len();
         Self {
             document,
@@ -545,6 +604,7 @@ impl<'a> StoryEmitter<'a> {
             chain,
             chain_pages,
             column_width_pt,
+            column_x_shift_pt: shrink_left,
             frame_idx: 0,
             y_cursor: -1,
             frame_cmd_ranges: vec![None; len],
@@ -821,8 +881,10 @@ fn emit_paragraph_into_chain(
         // (PathGeometry-derived for real-world IDMLs). The frame's
         // ItemTransform maps that to spread coords; subtracting the
         // page's spread_origin then puts text in page-local pt.
+        // column_x_shift_pt is non-zero only when a wrap rectangle
+        // intrudes from the head frame's left side.
         let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
-        let text_origin_pt = (sx - ox + frame_insets[1], sy - oy);
+        let text_origin_pt = (sx - ox + frame_insets[1] + em.column_x_shift_pt, sy - oy);
 
         let before_cmds = pages[target_page].list.commands.len();
 
@@ -1179,6 +1241,93 @@ fn compose_outer_translation(inner: Option<[f32; 6]>, dx: f32, dy: f32) -> [f32;
         Some([a, b, c, d, e, f]) => [a, b, c, d, e + dx, f + dy],
         None => [1.0, 0.0, 0.0, 1.0, dx, dy],
     }
+}
+
+/// Walk the document's spreads and build per-page wrap-exclusion
+/// rectangles in spread coords. Each shape with
+/// `TextWrapMode != "None"` contributes its spread-coord bounds
+/// inflated by the wrap's offsets. Items without TextWrap, items on
+/// no specific page (centroid outside every page bound), and items
+/// with active mode `JumpObjectTextWrap` / `NextColumnTextWrap`
+/// (which the simple side-shrink heuristic can't model) are skipped.
+fn collect_wrap_rects_per_page(
+    document: &Document,
+    spread_page_ranges: &[std::ops::Range<usize>],
+) -> Vec<Vec<idml_parse::Bounds>> {
+    let total_pages: usize = spread_page_ranges.last().map(|r| r.end).unwrap_or(0);
+    let mut out: Vec<Vec<idml_parse::Bounds>> = (0..total_pages).map(|_| Vec::new()).collect();
+    for (spread_idx, parsed) in document.spreads.iter().enumerate() {
+        let range = spread_page_ranges[spread_idx].clone();
+        if range.is_empty() {
+            continue;
+        }
+        // Local page bounds for centroid containment routing.
+        let page_bounds: Vec<idml_parse::Bounds> = parsed
+            .spread
+            .pages
+            .iter()
+            .map(|p| transform_bounds(p.bounds, p.item_transform))
+            .collect();
+        let route = |spread_b: idml_parse::Bounds| -> Option<usize> {
+            let cx = (spread_b.left + spread_b.right) * 0.5;
+            let cy = (spread_b.top + spread_b.bottom) * 0.5;
+            page_bounds
+                .iter()
+                .position(|b| cx >= b.left && cx <= b.right && cy >= b.top && cy <= b.bottom)
+        };
+        let push = |out: &mut Vec<Vec<idml_parse::Bounds>>,
+                    spread_b: idml_parse::Bounds,
+                    wrap: idml_parse::TextWrap| {
+            if !wrap.mode.is_active() {
+                return;
+            }
+            // Side-shrink heuristic only handles BoundingBoxTextWrap.
+            // Other modes (Contour / Jump / NextColumn) need richer
+            // per-line geometry; we ignore them to avoid corrupting
+            // layouts that the side-shrink can't represent.
+            if !matches!(wrap.mode, idml_parse::TextWrapMode::BoundingBoxTextWrap) {
+                return;
+            }
+            let inflated = idml_parse::Bounds {
+                top: spread_b.top - wrap.offsets[0],
+                left: spread_b.left - wrap.offsets[1],
+                bottom: spread_b.bottom + wrap.offsets[2],
+                right: spread_b.right + wrap.offsets[3],
+            };
+            if let Some(local_idx) = route(spread_b) {
+                let page_idx = range.start + local_idx;
+                if page_idx < out.len() {
+                    out[page_idx].push(inflated);
+                }
+            }
+        };
+        for f in &parsed.spread.text_frames {
+            if let Some(w) = f.text_wrap {
+                push(&mut out, transform_bounds(f.bounds, f.item_transform), w);
+            }
+        }
+        for r in &parsed.spread.rectangles {
+            if let Some(w) = r.text_wrap {
+                push(&mut out, transform_bounds(r.bounds, r.item_transform), w);
+            }
+        }
+        for o in &parsed.spread.ovals {
+            if let Some(w) = o.text_wrap {
+                push(&mut out, transform_bounds(o.bounds, o.item_transform), w);
+            }
+        }
+        for p in &parsed.spread.polygons {
+            if let Some(w) = p.text_wrap {
+                push(&mut out, transform_bounds(p.bounds, p.item_transform), w);
+            }
+        }
+        for l in &parsed.spread.graphic_lines {
+            if let Some(w) = l.text_wrap {
+                push(&mut out, transform_bounds(l.bounds, l.item_transform), w);
+            }
+        }
+    }
+    out
 }
 
 /// Map an inner-coord top-left corner through ItemTransform to its

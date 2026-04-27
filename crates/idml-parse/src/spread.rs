@@ -131,6 +131,8 @@ pub struct TextFrame {
     /// per-element FillColor attribute is rare. Resolved by
     /// `idml_scene::Document` against the document's StyleSheet.
     pub applied_object_style: Option<String>,
+    /// `<TextWrapPreference>` parsed off the frame.
+    pub text_wrap: Option<TextWrap>,
 }
 
 /// IDML `<TextFramePreference VerticalJustification="...">` values.
@@ -224,6 +226,8 @@ pub struct Rectangle {
     pub image_link: Option<String>,
     /// `AppliedObjectStyle` reference; see `TextFrame`.
     pub applied_object_style: Option<String>,
+    /// `<TextWrapPreference>` parsed off the rectangle.
+    pub text_wrap: Option<TextWrap>,
 }
 
 /// Axis-aligned ellipse — `<Oval>` in IDML. Same fill/stroke story as
@@ -239,6 +243,8 @@ pub struct Oval {
     pub drop_shadow: Option<DropShadowSetting>,
     /// `AppliedObjectStyle` reference; see `TextFrame`.
     pub applied_object_style: Option<String>,
+    /// `<TextWrapPreference>` parsed off the oval.
+    pub text_wrap: Option<TextWrap>,
 }
 
 /// Straight line — `<GraphicLine>` in IDML. The endpoints are the
@@ -253,6 +259,8 @@ pub struct GraphicLine {
     pub stroke_weight: Option<f32>,
     /// `AppliedObjectStyle` reference; see `TextFrame`.
     pub applied_object_style: Option<String>,
+    /// `<TextWrapPreference>` parsed off the line.
+    pub text_wrap: Option<TextWrap>,
 }
 
 /// One point on an IDML `<PathGeometry>` path. `anchor` is the
@@ -264,6 +272,54 @@ pub struct PathAnchor {
     pub anchor: (f32, f32),
     pub left: (f32, f32),
     pub right: (f32, f32),
+}
+
+/// `<TextWrapPreference>` settings on a page item. Parsed onto
+/// every shape (TextFrame / Rectangle / Oval / Polygon /
+/// GraphicLine). The renderer uses the AABB plus offsets as a
+/// per-page wrap exclusion when laying out other text frames.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct TextWrap {
+    pub mode: TextWrapMode,
+    /// IDML order: `[top, left, bottom, right]`, in pt. Inflates the
+    /// wrap rectangle outwards so text keeps its distance.
+    pub offsets: [f32; 4],
+}
+
+impl TextWrap {
+    pub const NONE: TextWrap = TextWrap {
+        mode: TextWrapMode::None,
+        offsets: [0.0; 4],
+    };
+}
+
+/// `TextWrapMode` enum value. Values not in the IDML spec collapse
+/// to `Other` so the cascade still records *something* the renderer
+/// can decide to ignore.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum TextWrapMode {
+    None,
+    BoundingBoxTextWrap,
+    ContourTextWrap,
+    JumpObjectTextWrap,
+    NextColumnTextWrap,
+    Other,
+}
+
+impl TextWrapMode {
+    pub fn from_idml(s: &str) -> Self {
+        match s {
+            "None" => Self::None,
+            "BoundingBoxTextWrap" => Self::BoundingBoxTextWrap,
+            "ContourTextWrap" => Self::ContourTextWrap,
+            "JumpObjectTextWrap" => Self::JumpObjectTextWrap,
+            "NextColumnTextWrap" => Self::NextColumnTextWrap,
+            _ => Self::Other,
+        }
+    }
+    pub fn is_active(self) -> bool {
+        !matches!(self, Self::None)
+    }
 }
 
 /// `<Polygon>`. Same paint/stroke story as `Rectangle`. `anchors`
@@ -284,6 +340,9 @@ pub struct Polygon {
     /// polygon's inner coords. Empty for synthetic IDMLs that
     /// declared the polygon via `GeometricBounds` only.
     pub anchors: Vec<PathAnchor>,
+    /// `<TextWrapPreference>` parsed off the polygon, if any.
+    /// `None` ⇒ the polygon does not exclude text.
+    pub text_wrap: Option<TextWrap>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
@@ -339,6 +398,53 @@ struct CurrentFrame {
     /// True for Polygons even when `needs_bounds` is false, so the
     /// emitter still gets the curved-path data.
     keep_anchors: bool,
+    /// True while a `<TextWrapPreference>` block is open, so the
+    /// child `<TextWrapOffset>` knows to write back to the current
+    /// shape.
+    in_text_wrap: bool,
+}
+
+/// Read whatever `text_wrap.offsets` has already been recorded on the
+/// current shape, defaulting to all zeros.
+fn current_text_wrap_offsets(out: &Spread, kind: CurrentFrameKind) -> [f32; 4] {
+    let cur = match kind {
+        CurrentFrameKind::Text(i) => out.text_frames.get(i).and_then(|s| s.text_wrap),
+        CurrentFrameKind::Rect(i) => out.rectangles.get(i).and_then(|s| s.text_wrap),
+        CurrentFrameKind::Oval(i) => out.ovals.get(i).and_then(|s| s.text_wrap),
+        CurrentFrameKind::Line(i) => out.graphic_lines.get(i).and_then(|s| s.text_wrap),
+        CurrentFrameKind::Polygon(i) => out.polygons.get(i).and_then(|s| s.text_wrap),
+    };
+    cur.map(|w| w.offsets).unwrap_or([0.0; 4])
+}
+
+fn apply_text_wrap(out: &mut Spread, kind: CurrentFrameKind, wrap: Option<TextWrap>) {
+    match kind {
+        CurrentFrameKind::Text(i) => out.text_frames[i].text_wrap = wrap,
+        CurrentFrameKind::Rect(i) => out.rectangles[i].text_wrap = wrap,
+        CurrentFrameKind::Oval(i) => out.ovals[i].text_wrap = wrap,
+        CurrentFrameKind::Line(i) => out.graphic_lines[i].text_wrap = wrap,
+        CurrentFrameKind::Polygon(i) => out.polygons[i].text_wrap = wrap,
+    }
+}
+
+fn set_text_wrap_offsets(out: &mut Spread, kind: CurrentFrameKind, offsets: [f32; 4]) {
+    let take = |w: &mut Option<TextWrap>| {
+        if let Some(existing) = w.as_mut() {
+            existing.offsets = offsets;
+        } else {
+            *w = Some(TextWrap {
+                mode: TextWrapMode::None,
+                offsets,
+            });
+        }
+    };
+    match kind {
+        CurrentFrameKind::Text(i) => take(&mut out.text_frames[i].text_wrap),
+        CurrentFrameKind::Rect(i) => take(&mut out.rectangles[i].text_wrap),
+        CurrentFrameKind::Oval(i) => take(&mut out.ovals[i].text_wrap),
+        CurrentFrameKind::Line(i) => take(&mut out.graphic_lines[i].text_wrap),
+        CurrentFrameKind::Polygon(i) => take(&mut out.polygons[i].text_wrap),
+    }
 }
 
 /// Compute the axis-aligned bounding box of a non-empty point set,
@@ -484,12 +590,14 @@ impl Spread {
                             minimum_first_baseline_offset: None,
                             inset_spacing: None,
                             applied_object_style: attr(&e, b"AppliedObjectStyle"),
+                            text_wrap: None,
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Text(out.text_frames.len() - 1),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
                             keep_anchors: false,
+                            in_text_wrap: false,
                         });
                     }
                     b"Rectangle" => {
@@ -510,12 +618,14 @@ impl Spread {
                             drop_shadow: None,
                             image_link: None,
                             applied_object_style: attr(&e, b"AppliedObjectStyle"),
+                            text_wrap: None,
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Rect(out.rectangles.len() - 1),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
                             keep_anchors: false,
+                            in_text_wrap: false,
                         });
                     }
                     b"Oval" => {
@@ -535,12 +645,14 @@ impl Spread {
                                 .and_then(|s| s.parse::<f32>().ok()),
                             drop_shadow: None,
                             applied_object_style: attr(&e, b"AppliedObjectStyle"),
+                            text_wrap: None,
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Oval(out.ovals.len() - 1),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
                             keep_anchors: false,
+                            in_text_wrap: false,
                         });
                     }
                     b"DropShadowSetting" => {
@@ -595,6 +707,50 @@ impl Spread {
                                         right,
                                     });
                                 }
+                            }
+                        }
+                    }
+                    b"TextWrapPreference" => {
+                        // The wrap rect itself comes from the
+                        // enclosing shape's geometry; we just record
+                        // mode + offsets here. Offsets serialise as
+                        // a `TextWrapOffset` child element rather
+                        // than attributes, so the actual numbers
+                        // arrive a few events later (handled below).
+                        if let Some(cf) = current_frame.as_mut() {
+                            let mode = attr(&e, b"TextWrapMode")
+                                .as_deref()
+                                .map(TextWrapMode::from_idml)
+                                .unwrap_or(TextWrapMode::None);
+                            let kind = cf.kind;
+                            let prior_offsets = current_text_wrap_offsets(&out, kind);
+                            apply_text_wrap(
+                                &mut out,
+                                kind,
+                                Some(TextWrap {
+                                    mode,
+                                    offsets: prior_offsets,
+                                }),
+                            );
+                            cf.in_text_wrap = true;
+                        }
+                    }
+                    b"TextWrapOffset" => {
+                        if let Some(cf) = current_frame.as_ref() {
+                            if cf.in_text_wrap {
+                                let offsets = [
+                                    attr(&e, b"Top").and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                                    attr(&e, b"Left")
+                                        .and_then(|s| s.parse().ok())
+                                        .unwrap_or(0.0),
+                                    attr(&e, b"Bottom")
+                                        .and_then(|s| s.parse().ok())
+                                        .unwrap_or(0.0),
+                                    attr(&e, b"Right")
+                                        .and_then(|s| s.parse().ok())
+                                        .unwrap_or(0.0),
+                                ];
+                                set_text_wrap_offsets(&mut out, cf.kind, offsets);
                             }
                         }
                     }
@@ -660,12 +816,14 @@ impl Spread {
                             stroke_weight: attr(&e, b"StrokeWeight")
                                 .and_then(|s| s.parse::<f32>().ok()),
                             applied_object_style: attr(&e, b"AppliedObjectStyle"),
+                            text_wrap: None,
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Line(out.graphic_lines.len() - 1),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
                             keep_anchors: false,
+                            in_text_wrap: false,
                         });
                     }
                     b"Polygon" => {
@@ -684,6 +842,7 @@ impl Spread {
                             stroke_weight: attr(&e, b"StrokeWeight")
                                 .and_then(|s| s.parse::<f32>().ok()),
                             applied_object_style: attr(&e, b"AppliedObjectStyle"),
+                            text_wrap: None,
                             anchors: Vec::new(),
                         });
                         current_frame = Some(CurrentFrame {
@@ -694,6 +853,7 @@ impl Spread {
                             // polygons so the renderer can emit a
                             // FillPath instead of a bbox FillRect.
                             keep_anchors: true,
+                            in_text_wrap: false,
                         });
                     }
                     _ => {}
@@ -733,6 +893,11 @@ impl Spread {
                                     }
                                 }
                             }
+                        }
+                    }
+                    b"TextWrapPreference" => {
+                        if let Some(cf) = current_frame.as_mut() {
+                            cf.in_text_wrap = false;
                         }
                     }
                     _ => {}
