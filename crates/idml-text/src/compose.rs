@@ -47,8 +47,17 @@ pub trait TextShaper: AdvanceMeasurer {
 /// on callers — the lifetime is inferred to `'static`.
 #[derive(Debug, Clone)]
 pub struct ComposeOptions<'a> {
-    /// Column width in 1/64 pt.
+    /// Column width in 1/64 pt. Used as the only width when
+    /// `column_widths` is `None`, and as the fallback for lines past
+    /// the end of `column_widths`.
     pub column_width: i32,
+    /// Per-line column widths in 1/64 pt. Index `i` is the width
+    /// available for the `i`-th composed line; lines past the end
+    /// of the slice fall back to `column_width`. `None` means "use
+    /// `column_width` for every line" (the legacy single-width
+    /// shape). Drives text-wrap-around-objects and other layouts
+    /// where a wrap rectangle carves a hole out of specific lines.
+    pub column_widths: Option<Vec<i32>>,
     /// paragraph-breaker tolerance. Higher = more permissive fits.
     pub tolerance: f32,
     /// Looseness bias: >0 prefers longer paragraphs, <0 shorter.
@@ -75,6 +84,7 @@ impl ComposeOptions<'_> {
     pub fn new(column_width_pt: f32) -> Self {
         Self {
             column_width: (column_width_pt * ADVANCE_PRECISION).round() as i32,
+            column_widths: None,
             tolerance: 4.0,
             looseness: 0,
             stretch_ratio: 1.0,
@@ -247,12 +257,18 @@ pub fn compose_paragraph(
         false,
     );
 
-    let breaks: Vec<Breakpoint> = paragraph_breaker::total_fit(
-        &items,
-        &[options.column_width],
-        options.tolerance,
-        options.looseness,
-    );
+    // Per-line widths drive text-wrap-around-objects: each line's
+    // available width is computed from any wrap rectangles
+    // overlapping that line's predicted y-range. Without an
+    // explicit `column_widths`, every line uses `column_width`.
+    let single_width = [options.column_width];
+    let lengths: &[i32] = options
+        .column_widths
+        .as_deref()
+        .filter(|v| !v.is_empty())
+        .unwrap_or(&single_width);
+    let breaks: Vec<Breakpoint> =
+        paragraph_breaker::total_fit(&items, lengths, options.tolerance, options.looseness);
 
     // Translate Breakpoints (item indices) into byte ranges. A break
     // at a flagged hyphenation penalty marks the line for hyphen

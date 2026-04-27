@@ -444,8 +444,14 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     byte_ends.push(paragraph_text.len());
     is_hyphen.push(false);
 
+    let single_width = [opts.column_width];
+    let lengths: &[i32] = opts
+        .column_widths
+        .as_deref()
+        .filter(|v| !v.is_empty())
+        .unwrap_or(&single_width);
     let breaks: Vec<Breakpoint> =
-        paragraph_breaker::total_fit(&items, &[opts.column_width], opts.tolerance, opts.looseness);
+        paragraph_breaker::total_fit(&items, lengths, opts.tolerance, opts.looseness);
 
     // 4. For each chosen line, walk `flat` in cluster order and pull
     // glyphs whose cluster is in the line's byte range. Position
@@ -848,6 +854,7 @@ mod tests {
         LayoutOptions {
             compose: ComposeOptions {
                 column_width: column_chars * 10,
+                column_widths: None,
                 tolerance: 10.0,
                 stretch_ratio: 1.0,
                 shrink_ratio: 0.5,

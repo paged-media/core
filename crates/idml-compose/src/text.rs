@@ -129,6 +129,7 @@ mod tests {
         let opts = LayoutOptions {
             compose: ComposeOptions {
                 column_width: 500 * 8,
+                column_widths: None,
                 tolerance: 10.0,
                 stretch_ratio: 1.0,
                 shrink_ratio: 0.5,

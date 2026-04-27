@@ -517,9 +517,18 @@ struct StoryEmitter<'a> {
     column_width_pt: Option<f32>,
     /// Inner-coord x-shift to apply to the head frame's text
     /// origin when an obstacle on the page intrudes from the left
-    /// of the frame. Zero unless wrap rectangles overlap the head
-    /// frame.
+    /// of the frame for the *whole* frame's height. Zero unless
+    /// wrap rectangles overlap the head frame.
     column_x_shift_pt: f32,
+    /// Spread-coord wrap exclusion rectangles for the head frame's
+    /// page. Per-paragraph wrap (per-line column carving) reads
+    /// these and computes a `column_widths` slice + per-line
+    /// glyph x-shifts so body text flows around an island
+    /// obstacle (the chairman page's pull quote, for example).
+    head_wrap_rects: Vec<idml_parse::Bounds>,
+    /// Spread-coord bounds of the head frame, cached so the
+    /// per-paragraph wrap pass doesn't recompute per paragraph.
+    head_frame_spread: idml_parse::Bounds,
     frame_idx: usize,
     y_cursor: i32,
     frame_cmd_ranges: Vec<Option<(usize, usize)>>,
@@ -605,6 +614,8 @@ impl<'a> StoryEmitter<'a> {
             chain_pages,
             column_width_pt,
             column_x_shift_pt: shrink_left,
+            head_wrap_rects: head_wrap_rects.to_vec(),
+            head_frame_spread,
             frame_idx: 0,
             y_cursor: -1,
             frame_cmd_ranges: vec![None; len],
@@ -788,7 +799,28 @@ fn emit_paragraph_into_chain(
     }
     lopts.first_baseline = em.y_cursor;
 
+    // Per-line wrap: build a `column_widths` slice + per-line
+    // x-shifts based on which wrap rectangles each predicted line
+    // intersects. Shifts are stored in `line_x_shifts_64` (1/64 pt)
+    // so the post-layout pass can add them to each glyph's x.
+    let line_x_shifts_64 = build_perline_wrap_widths(em, &styled_runs, &mut lopts);
+
     let mut laid_out = idml_text::layout_runs(&styled_runs, &lopts);
+
+    // Apply per-line x-shifts (text wrap around objects). Each shift
+    // is in 1/64 pt; the layout-time `column_widths` made room for
+    // the obstacle, this pass moves the line right past it.
+    if !line_x_shifts_64.is_empty() {
+        for (i, line) in laid_out.lines.iter_mut().enumerate() {
+            let shift_64 = line_x_shifts_64[i.min(line_x_shifts_64.len() - 1)];
+            if shift_64 == 0 {
+                continue;
+            }
+            for g in &mut line.glyphs {
+                g.x += shift_64;
+            }
+        }
+    }
 
     // FirstLineIndent shifts the first line's glyphs after
     // breaking — Knuth-Plass can't model a per-line x-shift, so
@@ -1328,6 +1360,123 @@ fn collect_wrap_rects_per_page(
         }
     }
     out
+}
+
+/// Build a per-line `column_widths` slice + per-line x-shifts for
+/// a paragraph that's about to be laid out into the head frame.
+/// The widths drive Knuth-Plass to break each line at the
+/// available width carved out by any overlapping wrap rect; the
+/// x-shifts are applied to the line's glyphs after layout so each
+/// line starts past the obstacle.
+///
+/// Returns the per-line x-shifts in 1/64 pt — empty when no head
+/// wrap rect intersects the head frame, so the existing scalar
+/// `column_width` path still applies.
+///
+/// Approximations:
+/// * Estimates leading from the first run's point size × 1.2 and
+///   the head frame's full height. Real per-line leading depends
+///   on each line's tallest run; a tighter follow-up can recompute
+///   widths as composition proceeds.
+/// * Treats wrap rects as horizontal bands: when a rect overlaps
+///   the line's predicted y-range, the line gets the larger of the
+///   two open horizontal segments (left of the rect or right of
+///   the rect). True island wrap with both-sides flow needs
+///   column-segment support in `compose_paragraph`; this single-
+///   segment pick handles the common case where text flows past
+///   the obstacle on one side.
+fn build_perline_wrap_widths(
+    em: &StoryEmitter,
+    styled_runs: &[idml_text::StyledRun],
+    lopts: &mut idml_text::LayoutOptions,
+) -> Vec<i32> {
+    if em.frame_idx != 0 || em.head_wrap_rects.is_empty() {
+        return Vec::new();
+    }
+    // Quick screen: any wrap rect overlap the head frame at all?
+    let frame = em.head_frame_spread;
+    let any_overlap = em.head_wrap_rects.iter().any(|w| {
+        w.bottom > frame.top && w.top < frame.bottom && w.right > frame.left && w.left < frame.right
+    });
+    if !any_overlap {
+        return Vec::new();
+    }
+    // Estimate leading from the first run's point size × 1.2.
+    // Matches idml-text's auto-leading default.
+    let head_size_pt = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
+    let leading_pt = head_size_pt * 1.2;
+    let leading_64 = ((leading_pt * idml_text::shape::ADVANCE_PRECISION).round() as i32).max(1);
+
+    // Predict line baselines starting at the current y_cursor.
+    // Cap the line count so a tiny leading or huge frame can't blow
+    // out memory.
+    let frame_height_pt = frame.height();
+    let remaining_height_pt =
+        (frame_height_pt - em.y_cursor as f32 / idml_text::shape::ADVANCE_PRECISION).max(0.0);
+    let mut n_lines = (remaining_height_pt / leading_pt).ceil() as usize + 1;
+    n_lines = n_lines.min(512);
+    if n_lines == 0 {
+        return Vec::new();
+    }
+
+    let frame_left_pt = frame.left;
+    let frame_right_pt = frame.right;
+    let head_insets = em.chain[0].inset_spacing.unwrap_or([0.0; 4]);
+
+    let mut widths_64: Vec<i32> = Vec::with_capacity(n_lines);
+    let mut shifts_64: Vec<i32> = Vec::with_capacity(n_lines);
+    let scalar_width_64 =
+        (em.column_width_pt.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION).round() as i32;
+
+    for i in 0..n_lines {
+        let baseline_pt = (lopts.first_baseline + (i as i32) * leading_64) as f32
+            / idml_text::shape::ADVANCE_PRECISION;
+        // Line's vertical band in spread coords. Approximate the
+        // ascender + descender extent from `leading_pt`.
+        let line_top = frame.top + baseline_pt - leading_pt * 0.8;
+        let line_bottom = frame.top + baseline_pt + leading_pt * 0.2;
+
+        // Start with the inset-respecting full-frame range.
+        let mut effective_left = frame_left_pt + head_insets[1];
+        let mut effective_right = frame_right_pt - head_insets[3];
+        for w in &em.head_wrap_rects {
+            if w.bottom <= line_top || w.top >= line_bottom {
+                continue;
+            }
+            // Skip rects that fully cover horizontally — those are
+            // pages/sheets and shouldn't carve text.
+            if w.left <= effective_left && w.right >= effective_right {
+                continue;
+            }
+            // Pick the wider of the two open segments. This is a
+            // single-segment approximation (not BothSides per line),
+            // sufficient for pull-quotes / inline figures.
+            let left_segment = (w.left - effective_left).max(0.0);
+            let right_segment = (effective_right - w.right).max(0.0);
+            if left_segment >= right_segment {
+                effective_right = w.left.min(effective_right);
+            } else {
+                effective_left = w.right.max(effective_left);
+            }
+        }
+        let line_width_pt = (effective_right - effective_left).max(0.0);
+        let mut line_width_64 =
+            (line_width_pt * idml_text::shape::ADVANCE_PRECISION).round() as i32;
+        // Floor the per-line width: if a line is narrower than
+        // ~24 pt no real word fits and Knuth-Plass produces
+        // pathological breaks. Fall back to the scalar column
+        // width on those lines (they'll overlap the obstacle but
+        // at least render something). 24 pt × 64 = 1536.
+        if line_width_64 < 1536 {
+            line_width_64 = scalar_width_64;
+        }
+        widths_64.push(line_width_64);
+        let shift_pt = (effective_left - (frame_left_pt + head_insets[1])).max(0.0);
+        shifts_64.push((shift_pt * idml_text::shape::ADVANCE_PRECISION).round() as i32);
+    }
+
+    lopts.compose.column_widths = Some(widths_64);
+    shifts_64
 }
 
 /// Map an inner-coord top-left corner through ItemTransform to its
