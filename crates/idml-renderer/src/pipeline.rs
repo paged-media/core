@@ -306,7 +306,12 @@ pub fn build_document(
         let local_geoms = &page_geometries[range.clone()];
         for frame in &spread.text_frames {
             total_stats.frames += 1;
-            let local_idx = page_for_frame(&frame.bounds, local_geoms).unwrap_or(0);
+            // Frame.bounds are in the frame's *inner* coords; route
+            // by transforming through ItemTransform first so the
+            // centroid lives in spread coords (matching
+            // page_geometries).
+            let spread_bounds = transform_bounds(frame.bounds, frame.item_transform);
+            let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
             let page_idx = range.start + local_idx;
             if let Some(self_id) = frame.self_id.clone() {
                 frame_to_page.insert(self_id, page_idx);
@@ -322,7 +327,8 @@ pub fn build_document(
         }
         for rect in &spread.rectangles {
             total_stats.frames += 1;
-            let local_idx = page_for_frame(&rect.bounds, local_geoms).unwrap_or(0);
+            let spread_bounds = transform_bounds(rect.bounds, rect.item_transform);
+            let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
             let page_idx = range.start + local_idx;
             emit_rectangle_into(
                 &mut pages[page_idx],
@@ -346,7 +352,8 @@ pub fn build_document(
         }
         for oval in &spread.ovals {
             total_stats.frames += 1;
-            let local_idx = page_for_frame(&oval.bounds, local_geoms).unwrap_or(0);
+            let spread_bounds = transform_bounds(oval.bounds, oval.item_transform);
+            let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
             let page_idx = range.start + local_idx;
             emit_oval_into(
                 &mut pages[page_idx],
@@ -358,7 +365,8 @@ pub fn build_document(
         }
         for line in &spread.graphic_lines {
             total_stats.frames += 1;
-            let local_idx = page_for_frame(&line.bounds, local_geoms).unwrap_or(0);
+            let spread_bounds = transform_bounds(line.bounds, line.item_transform);
+            let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
             let page_idx = range.start + local_idx;
             emit_line_into(&mut pages[page_idx], line, palette, cmyk_xform.as_ref());
         }
