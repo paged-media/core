@@ -261,6 +261,22 @@ pub struct Rectangle {
     /// designmap.xml). The renderer skips this rectangle when its
     /// layer is hidden or non-printable.
     pub item_layer: Option<String>,
+    /// `CornerRadius` in pt; pairs with `corner_option`. `None`
+    /// inherits from the applied object style.
+    pub corner_radius: Option<f32>,
+    /// `CornerOption` (`None`, `Rounded`, etc). The renderer emits a
+    /// rounded-rect path for `Rounded` (and the decorative variants
+    /// fall back to `Rounded` for now).
+    pub corner_option: Option<String>,
+    /// Item-level opacity from `<TransparencySetting>` /
+    /// `<BlendingSetting Opacity="..." />`. Range `0.0..=100.0`. The
+    /// renderer scales every paint's alpha channel by `opacity / 100`
+    /// at emission time. `None` ⇒ fully opaque.
+    pub opacity: Option<f32>,
+    /// `<BlendingSetting BlendMode="..." />` (Normal | Multiply |
+    /// Screen | Overlay | …). Currently parsed for completeness;
+    /// non-Normal modes are not yet honoured by the rasterizer.
+    pub blend_mode: Option<String>,
 }
 
 /// Mirrors IDML's `<FrameFittingOption>` — an optional element nested
@@ -689,6 +705,11 @@ impl Spread {
                             frame_fitting: None,
                             stroke_type: attr(&e, b"StrokeType"),
                             item_layer: attr(&e, b"ItemLayer"),
+                            corner_radius: attr(&e, b"CornerRadius")
+                                .and_then(|s| s.parse().ok()),
+                            corner_option: attr(&e, b"CornerOption"),
+                            opacity: None,
+                            blend_mode: None,
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Rect(out.rectangles.len() - 1),
@@ -750,6 +771,32 @@ impl Spread {
                                         // no drop_shadow field today;
                                         // ignore.
                                     }
+                                }
+                            }
+                        }
+                    }
+                    b"BlendingSetting" => {
+                        // Nested under <TransparencySetting>; we don't
+                        // track the wrapper because no other element
+                        // shares this name. Opacity is 0..=100;
+                        // BlendMode is a string (Normal / Multiply /
+                        // Screen / etc).
+                        if let Some(cf) = current_frame.as_ref() {
+                            let opacity = attr(&e, b"Opacity").and_then(|s| s.parse::<f32>().ok());
+                            let mode = attr(&e, b"BlendMode");
+                            match cf.kind {
+                                CurrentFrameKind::Rect(i) => {
+                                    if opacity.is_some() {
+                                        out.rectangles[i].opacity = opacity;
+                                    }
+                                    if mode.is_some() {
+                                        out.rectangles[i].blend_mode = mode;
+                                    }
+                                }
+                                _ => {
+                                    // Other frame types don't yet
+                                    // surface opacity / blend_mode;
+                                    // ignore until they do.
                                 }
                             }
                         }

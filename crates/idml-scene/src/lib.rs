@@ -393,6 +393,9 @@ impl ResolvedParagraphAttrs {
             minimum_word_spacing: None,
             desired_word_spacing: None,
             maximum_word_spacing: None,
+            drop_cap_characters: None,
+            drop_cap_lines: None,
+            drop_cap_detail: None,
         }
     }
 
@@ -424,6 +427,9 @@ impl ResolvedParagraphAttrs {
         self.minimum_word_spacing = self.minimum_word_spacing.or(p.minimum_word_spacing);
         self.desired_word_spacing = self.desired_word_spacing.or(p.desired_word_spacing);
         self.maximum_word_spacing = self.maximum_word_spacing.or(p.maximum_word_spacing);
+        self.drop_cap_characters = self.drop_cap_characters.or(p.drop_cap_characters);
+        self.drop_cap_lines = self.drop_cap_lines.or(p.drop_cap_lines);
+        self.drop_cap_detail = self.drop_cap_detail.or(p.drop_cap_detail);
     }
 }
 
@@ -517,6 +523,14 @@ pub struct ResolvedParagraphAttrs {
     pub desired_word_spacing: Option<f32>,
     /// `MaximumWordSpacing` (% of normal). 100 = baseline.
     pub maximum_word_spacing: Option<f32>,
+    /// `DropCapCharacters` from the cascaded paragraph style.
+    /// Count of leading characters that drop down across
+    /// `drop_cap_lines` lines. 0 / `None` ⇒ no drop cap.
+    pub drop_cap_characters: Option<u32>,
+    /// `DropCapLines` — vertical extent of the drop cap.
+    pub drop_cap_lines: Option<u32>,
+    /// `DropCapDetail` — InDesign's scaling integer.
+    pub drop_cap_detail: Option<i32>,
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -1217,6 +1217,11 @@ fn emit_paragraph_into_chain(
                     .as_deref()
                     .and_then(|s| s.chars().next())
                     .unwrap_or('.'),
+                leader: t
+                    .leader
+                    .as_deref()
+                    .and_then(|s| s.chars().next())
+                    .filter(|c| !c.is_whitespace()),
             })
             .collect();
         let paragraph_text: String = paragraph
@@ -1370,9 +1375,6 @@ fn text_frame_with_object_style(frame: TextFrame, document: &Document) -> TextFr
 }
 
 fn rectangle_with_object_style(rect: Rectangle, document: &Document) -> Rectangle {
-    if rect.fill_color.is_some() && rect.stroke_color.is_some() && rect.stroke_weight.is_some() {
-        return rect;
-    }
     let Some(id) = rect.applied_object_style.as_deref() else {
         return rect;
     };
@@ -1381,6 +1383,8 @@ fn rectangle_with_object_style(rect: Rectangle, document: &Document) -> Rectangl
         fill_color: rect.fill_color.or(resolved.fill_color),
         stroke_color: rect.stroke_color.or(resolved.stroke_color),
         stroke_weight: rect.stroke_weight.or(resolved.stroke_weight),
+        corner_radius: rect.corner_radius.or(resolved.corner_radius),
+        corner_option: rect.corner_option.or(resolved.corner_option),
         ..rect
     }
 }
@@ -2852,22 +2856,148 @@ fn emit_rectangle_into(
         .as_deref()
         .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
         .unwrap_or(fallback);
-    emit_rect_transformed(r, outer, fill, &mut page.list);
-    if let Some(stroke) = rect
+    let fill = apply_opacity(fill, rect.opacity);
+    let stroke_paint = rect
         .stroke_color
         .as_deref()
         .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
-    {
-        let width = rect.stroke_weight.unwrap_or(1.0);
-        if width > 0.0 {
-            emit_stroke_rect_transformed(
-                r,
-                outer,
-                stroke_for_type(rect.stroke_type.as_deref(), width),
-                stroke,
-                &mut page.list,
-            );
+        .map(|p| apply_opacity(p, rect.opacity));
+    let stroke_width = rect.stroke_weight.unwrap_or(1.0);
+    let radius = corner_radius_for(rect);
+    if let Some(radius) = radius {
+        // Rounded path: build once, intern, fill + (optional) stroke.
+        // Cache key includes the radius so different radii on the
+        // same Self id get distinct interned paths.
+        let path = rounded_rect_path(r, radius);
+        let key_bytes = rect
+            .self_id
+            .as_deref()
+            .map(|s| s.as_bytes().to_vec())
+            .unwrap_or_else(|| format!("{:?}", r).into_bytes());
+        let key = fnv_1a_u64(&[key_bytes.as_slice(), &radius.to_bits().to_le_bytes()].concat());
+        let (path_id, _) = page.list.paths.intern(key, path);
+        page.list.commands.push(DisplayCommand::FillPath {
+            path_id,
+            paint: fill,
+            transform: outer,
+        });
+        if let (Some(stroke), true) = (stroke_paint, stroke_width > 0.0) {
+            page.list.commands.push(DisplayCommand::StrokePath {
+                path_id,
+                paint: stroke,
+                stroke: stroke_for_type(rect.stroke_type.as_deref(), stroke_width),
+                transform: outer,
+            });
         }
+        return;
+    }
+    emit_rect_transformed(r, outer, fill, &mut page.list);
+    if let (Some(stroke), true) = (stroke_paint, stroke_width > 0.0) {
+        emit_stroke_rect_transformed(
+            r,
+            outer,
+            stroke_for_type(rect.stroke_type.as_deref(), stroke_width),
+            stroke,
+            &mut page.list,
+        );
+    }
+}
+
+/// Scale a paint's alpha by the IDML `Opacity` percentage. `None` ⇒
+/// unchanged. Only solid paints get scaled today; gradient stops
+/// would need a per-stop pass that we'll add when frame-level
+/// opacity meets a gradient fill in real samples.
+fn apply_opacity(paint: Paint, opacity_pct: Option<f32>) -> Paint {
+    let Some(o) = opacity_pct else {
+        return paint;
+    };
+    let scale = (o / 100.0).clamp(0.0, 1.0);
+    if (scale - 1.0).abs() < f32::EPSILON {
+        return paint;
+    }
+    match paint {
+        Paint::Solid(c) => Paint::Solid(Color::rgba(c.r, c.g, c.b, c.a * scale)),
+        other => other,
+    }
+}
+
+/// Effective corner radius for a Rectangle, considering CornerOption.
+/// Returns `Some(radius)` only when the corner-option string names a
+/// rounding variant and the radius is positive; otherwise `None` so
+/// the renderer takes the cheap unit-rect path.
+fn corner_radius_for(rect: &Rectangle) -> Option<f32> {
+    let radius = rect.corner_radius?;
+    if radius <= 0.0 {
+        return None;
+    }
+    match rect.corner_option.as_deref() {
+        // The decorative variants (Inverse-Rounded, Inset, Bevel, Fancy)
+        // currently fall back to plain Rounded. Replace per-corner-option
+        // path emission lands later.
+        Some("Rounded") | Some("InverseRounded") | Some("Inset") | Some("Bevel") | Some("Fancy") => {
+            Some(radius)
+        }
+        _ => None,
+    }
+}
+
+/// Build a rounded-rect path with cubic-Bezier quarter-circle corners
+/// (control offset = `radius * 0.5523`). The path is emitted in the
+/// rectangle's *inner* coordinate system (same coords as `rect.x` /
+/// `rect.y`); the renderer's `outer` transform handles spread-origin
+/// and ItemTransform composition the same way it does for polygons.
+/// Walks clockwise from the top edge.
+fn rounded_rect_path(rect: Rect, radius: f32) -> idml_compose::PathData {
+    use idml_compose::PathSegment::*;
+    let r = radius.min(rect.w * 0.5).min(rect.h * 0.5).max(0.0);
+    let l = rect.x;
+    let t = rect.y;
+    let right = rect.x + rect.w;
+    let bot = rect.y + rect.h;
+    // Cubic-Bezier control offset for a quarter-circle of radius r.
+    const KAPPA: f32 = 0.552_284_8;
+    let k = r * KAPPA;
+    idml_compose::PathData {
+        segments: vec![
+            MoveTo { x: l + r, y: t },
+            LineTo { x: right - r, y: t },
+            CubicTo {
+                cx1: right - r + k,
+                cy1: t,
+                cx2: right,
+                cy2: t + r - k,
+                x: right,
+                y: t + r,
+            },
+            LineTo { x: right, y: bot - r },
+            CubicTo {
+                cx1: right,
+                cy1: bot - r + k,
+                cx2: right - r + k,
+                cy2: bot,
+                x: right - r,
+                y: bot,
+            },
+            LineTo { x: l + r, y: bot },
+            CubicTo {
+                cx1: l + r - k,
+                cy1: bot,
+                cx2: l,
+                cy2: bot - r + k,
+                x: l,
+                y: bot - r,
+            },
+            LineTo { x: l, y: t + r },
+            CubicTo {
+                cx1: l,
+                cy1: t + r - k,
+                cx2: l + r - k,
+                cy2: t,
+                x: l + r,
+                y: t,
+            },
+            Close,
+        ],
     }
 }
 

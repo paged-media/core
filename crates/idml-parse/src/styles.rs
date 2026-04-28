@@ -69,6 +69,15 @@ pub struct ObjectStyleDef {
     pub fill_color: Option<String>,
     pub stroke_color: Option<String>,
     pub stroke_weight: Option<f32>,
+    /// `CornerRadius` in pt. Only honoured when `CornerOption` is one
+    /// of the rounding variants (`Rounded`, `InverseRounded`, `Inset`,
+    /// `Bevel`, `Fancy`). `None` ⇒ inherit from BasedOn.
+    pub corner_radius: Option<f32>,
+    /// `CornerOption` value (`None | Rounded | InverseRounded | Inset
+    /// | Bevel | Fancy`). The renderer maps `Rounded` to a rounded-
+    /// rect path; the decorative variants currently fall back to
+    /// `Rounded` until per-shape parsers land.
+    pub corner_option: Option<String>,
 }
 
 /// Effective object-level attributes after walking BasedOn.
@@ -77,6 +86,8 @@ pub struct ResolvedObject {
     pub fill_color: Option<String>,
     pub stroke_color: Option<String>,
     pub stroke_weight: Option<f32>,
+    pub corner_radius: Option<f32>,
+    pub corner_option: Option<String>,
 }
 
 /// `<CellStyle>` — per-cell defaults for fill, edge strokes, and
@@ -257,6 +268,12 @@ pub struct ParagraphStyleDef {
     /// `MaximumWordSpacing` percentage (`133` = 133% of normal).
     /// Drives the composer's stretch ratio.
     pub maximum_word_spacing: Option<f32>,
+    /// `DropCapCharacters` count. 0 / `None` ⇒ no drop cap.
+    pub drop_cap_characters: Option<u32>,
+    /// `DropCapLines` — vertical extent of the drop cap.
+    pub drop_cap_lines: Option<u32>,
+    /// `DropCapDetail` — InDesign's scaling-factor integer.
+    pub drop_cap_detail: Option<i32>,
 }
 
 /// Effective character-level attributes after walking BasedOn.
@@ -308,6 +325,16 @@ pub struct ResolvedParagraph {
     pub minimum_word_spacing: Option<f32>,
     pub desired_word_spacing: Option<f32>,
     pub maximum_word_spacing: Option<f32>,
+    /// `DropCapCharacters` count (number of leading characters that
+    /// drop down across `drop_cap_lines` lines). 0 / `None` ⇒ no
+    /// drop cap.
+    pub drop_cap_characters: Option<u32>,
+    /// `DropCapLines` count (lines the drop cap spans). 0 / `None` ⇒
+    /// no drop cap.
+    pub drop_cap_lines: Option<u32>,
+    /// `DropCapDetail` (the IDML scaling factor InDesign records on
+    /// the drop cap's character formatting; an arbitrary integer).
+    pub drop_cap_detail: Option<i32>,
 }
 
 /// Identifies which kind of style is open while we walk
@@ -641,6 +668,10 @@ impl ResolvedObject {
             self.stroke_color = def.stroke_color.clone();
         }
         self.stroke_weight = self.stroke_weight.or(def.stroke_weight);
+        self.corner_radius = self.corner_radius.or(def.corner_radius);
+        if self.corner_option.is_none() {
+            self.corner_option = def.corner_option.clone();
+        }
     }
 }
 
@@ -798,6 +829,9 @@ impl ResolvedParagraph {
         self.minimum_word_spacing = self.minimum_word_spacing.or(def.minimum_word_spacing);
         self.desired_word_spacing = self.desired_word_spacing.or(def.desired_word_spacing);
         self.maximum_word_spacing = self.maximum_word_spacing.or(def.maximum_word_spacing);
+        self.drop_cap_characters = self.drop_cap_characters.or(def.drop_cap_characters);
+        self.drop_cap_lines = self.drop_cap_lines.or(def.drop_cap_lines);
+        self.drop_cap_detail = self.drop_cap_detail.or(def.drop_cap_detail);
     }
 }
 
@@ -907,6 +941,8 @@ fn parse_object_style(e: &quick_xml::events::BytesStart) -> Option<ObjectStyleDe
         fill_color: normalize(attr(e, b"FillColor")),
         stroke_color: normalize(attr(e, b"StrokeColor")),
         stroke_weight,
+        corner_radius: attr(e, b"CornerRadius").and_then(|s| s.parse().ok()),
+        corner_option: attr(e, b"CornerOption"),
     })
 }
 
@@ -942,6 +978,9 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         minimum_word_spacing: attr(e, b"MinimumWordSpacing").and_then(|s| s.parse().ok()),
         desired_word_spacing: attr(e, b"DesiredWordSpacing").and_then(|s| s.parse().ok()),
         maximum_word_spacing: attr(e, b"MaximumWordSpacing").and_then(|s| s.parse().ok()),
+        drop_cap_characters: attr(e, b"DropCapCharacters").and_then(|s| s.parse().ok()),
+        drop_cap_lines: attr(e, b"DropCapLines").and_then(|s| s.parse().ok()),
+        drop_cap_detail: attr(e, b"DropCapDetail").and_then(|s| s.parse().ok()),
     })
 }
 

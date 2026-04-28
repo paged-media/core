@@ -596,6 +596,12 @@ pub struct TabStopSpec {
     /// IDML defaults to `.` when `<TabStop AlignmentCharacter>` is
     /// absent. Ignored for the other alignments.
     pub alignment_character: char,
+    /// Leader character to tile across the widened tab gap.
+    /// IDML's `<TabStop Leader="..." />` is typically `.` (TOC dot
+    /// leaders) or empty. `None` ⇒ no leader. Currently surfaced for
+    /// downstream emission; the renderer's leader-glyph fill is a
+    /// queued follow-up.
+    pub leader: Option<char>,
 }
 
 impl TabStopSpec {
@@ -608,6 +614,7 @@ impl TabStopSpec {
             position_pt,
             alignment: TabAlignment::Left,
             alignment_character: '.',
+            leader: None,
         }
     }
 }
@@ -1060,6 +1067,7 @@ mod tests {
                 position_pt: 36.0,
                 alignment: TabAlignment::Left,
                 alignment_character: '.',
+            leader: None,
             }],
             0.0,
         );
@@ -1089,6 +1097,7 @@ mod tests {
                 position_pt: 1.0,
                 alignment: TabAlignment::Left,
                 alignment_character: '.',
+            leader: None,
             }],
             0.0,
         );
@@ -1111,6 +1120,7 @@ mod tests {
                 position_pt: 36.0,
                 alignment: TabAlignment::Right,
                 alignment_character: '.',
+            leader: None,
             }],
             0.0,
         );
@@ -1134,6 +1144,7 @@ mod tests {
                 position_pt: 36.0,
                 alignment: TabAlignment::Center,
                 alignment_character: '.',
+            leader: None,
             }],
             0.0,
         );
@@ -1158,6 +1169,7 @@ mod tests {
                 position_pt: 8.0,
                 alignment: TabAlignment::Right,
                 alignment_character: '.',
+            leader: None,
             }],
             0.0,
         );
@@ -1182,6 +1194,7 @@ mod tests {
                 position_pt: 36.0,
                 alignment: TabAlignment::Decimal,
                 alignment_character: '.',
+            leader: None,
             }],
             0.0,
         );
@@ -1203,6 +1216,7 @@ mod tests {
                 position_pt: 36.0,
                 alignment: TabAlignment::Decimal,
                 alignment_character: '.',
+            leader: None,
             }],
             0.0,
         );
@@ -1222,6 +1236,7 @@ mod tests {
                 position_pt: 36.0,
                 alignment: TabAlignment::Decimal,
                 alignment_character: ',',
+            leader: None,
             }],
             0.0,
         );
