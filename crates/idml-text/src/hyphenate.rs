@@ -1,20 +1,21 @@
 //! Hyphenation via TeX patterns.
 //!
-//! Wraps `hyphenation::Standard` with a thin loader that picks a
-//! language at runtime. The composer uses this to insert flagged
-//! penalty break opportunities mid-word; whether to take them is
-//! decided by `paragraph_breaker` against the configured tolerance.
+//! Wraps `hypher` (typst's pattern-trie crate) with a thin loader that
+//! picks a language at runtime. The composer uses this to insert
+//! flagged penalty break opportunities mid-word; whether to take them
+//! is decided by `paragraph_breaker` against the configured tolerance.
 //!
-//! Calibration vs. InDesign's Proximity dictionaries is part of
-//! Spike B; for now the TeX patterns ship with the `embed_all`
-//! feature of the `hyphenation` crate so no runtime asset loading
-//! is required.
+//! `hypher` ships pattern data inline as compact tries (~1-2 MB total
+//! across ~70 languages), so there's no runtime dictionary loading and
+//! no separate asset to bundle for WASM. Same Liang-pattern algorithm
+//! and break quality as the older `hyphenation` crate; the upgrade
+//! reason is purely binary size.
 
-use hyphenation::{Hyphenator as _, Load, Standard};
+use hypher::Lang;
 
-/// Supported hyphenation languages. Map to `hyphenation::Language`
-/// without exposing that crate's whole enum publicly — keeps the API
-/// stable as the dictionary list grows.
+/// Supported hyphenation languages. Maps to `hypher::Lang` without
+/// exposing that crate's whole enum publicly — keeps the API stable
+/// as the dictionary list grows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Language {
     EnglishUS,
@@ -28,40 +29,34 @@ pub enum Language {
 }
 
 impl Language {
-    fn to_hyph(self) -> hyphenation::Language {
-        use hyphenation::Language as H;
+    fn to_hypher(self) -> Lang {
         match self {
-            Language::EnglishUS => H::EnglishUS,
-            Language::EnglishGB => H::EnglishGB,
-            Language::German1996 => H::German1996,
-            Language::French => H::French,
-            Language::Spanish => H::Spanish,
-            Language::Italian => H::Italian,
-            Language::Dutch => H::Dutch,
-            Language::Portuguese => H::Portuguese,
+            // hypher doesn't split English by region — both US/GB land
+            // on the same shared dictionary.
+            Language::EnglishUS | Language::EnglishGB => Lang::English,
+            Language::German1996 => Lang::German,
+            Language::French => Lang::French,
+            Language::Spanish => Lang::Spanish,
+            Language::Italian => Lang::Italian,
+            Language::Dutch => Lang::Dutch,
+            Language::Portuguese => Lang::Portuguese,
         }
     }
 }
 
 /// Hyphenation engine for a single language. Cheap to clone (the
-/// underlying dictionary is shared internally).
+/// underlying language enum is `Copy`).
+#[derive(Debug, Clone, Copy)]
 pub struct Hyphenator {
-    inner: Standard,
-}
-
-impl std::fmt::Debug for Hyphenator {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Hyphenator").finish_non_exhaustive()
-    }
+    lang: Lang,
 }
 
 impl Hyphenator {
-    /// Load the embedded TeX dictionary for `lang`.
+    /// Pick the embedded TeX dictionary for `lang`.
     pub fn for_language(lang: Language) -> Self {
-        // `embed_all` is enabled in Cargo.toml so this is infallible
-        // for the bundled languages — unwrap is safe.
-        let inner = Standard::from_embedded(lang.to_hyph()).expect("embedded dictionary");
-        Self { inner }
+        Self {
+            lang: lang.to_hypher(),
+        }
     }
 
     /// Return a list of byte indices inside `word` where a hyphen
@@ -69,7 +64,24 @@ impl Hyphenator {
     /// "computer" the result is [3, 6] (com-put-er). The list never
     /// contains 0 or `word.len()` (those aren't hyphenation breaks).
     pub fn opportunities(&self, word: &str) -> Vec<usize> {
-        self.inner.hyphenate(word).breaks.into_iter().collect()
+        // hypher::hyphenate yields syllable slices in order. Their
+        // cumulative byte lengths give the break offsets we want.
+        let mut breaks = Vec::new();
+        let mut offset = 0usize;
+        let mut iter = hypher::hyphenate(word, self.lang);
+        // The first syllable doesn't produce a break — skip it.
+        if let Some(first) = iter.next() {
+            offset += first.len();
+        }
+        for syllable in iter {
+            // Successive iterations: the break sits at the boundary
+            // between the previous syllable and this one.
+            if offset > 0 && offset < word.len() {
+                breaks.push(offset);
+            }
+            offset += syllable.len();
+        }
+        breaks
     }
 }
 

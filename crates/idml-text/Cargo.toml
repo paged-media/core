@@ -15,7 +15,7 @@ idml-scene = { path = "../idml-scene" }
 rustybuzz = "0.18"
 ttf-parser = "0.24"
 paragraph-breaker = "0.4"
-hyphenation = { version = "0.8", features = ["embed_all"] }
+hypher = "0.1"
 unicode-bidi = "0.3"
 unicode-segmentation = "1"
 thiserror = { workspace = true }
