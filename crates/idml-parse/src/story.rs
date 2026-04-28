@@ -433,6 +433,24 @@ impl Story {
                             run.text.push('\n');
                         }
                     }
+                    // <TextVariableInstance ResultText="..."
+                    // AssociatedTextVariable="TextVariable/<id>" />
+                    // appears inside <Content> as a placeholder for a
+                    // computed value (running header, file name,
+                    // chapter number, …). InDesign bakes the value
+                    // into ResultText at export time, so inlining the
+                    // attribute reproduces what InDesign saw the last
+                    // time it composed the document. Live per-page
+                    // recomputation (e.g. RunningHeader picking up the
+                    // nearest preceding paragraph at render time) is a
+                    // future task.
+                    b"TextVariableInstance" => {
+                        if let (Some(run), Some(text)) =
+                            (current_run.as_mut(), attr(&e, b"ResultText"))
+                        {
+                            run.text.push_str(&text);
+                        }
+                    }
                     // Tab characters surface as <Tab/>; the layout
                     // pass treats '\t' as wide whitespace until a
                     // proper TabList-aware breaker lands.

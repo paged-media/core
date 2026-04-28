@@ -26,6 +26,25 @@ pub struct DesignMap {
     /// page item references its layer via `ItemLayer="<self_id>"`.
     /// The renderer skips items whose layer is hidden or non-printable.
     pub layers: Vec<Layer>,
+    /// `<TextVariable>` definitions. Each carries a `VariableType`
+    /// (`FileNameVariable`, `RunningHeaderVariable`, `ChapterNumberType`,
+    /// `XrefPageNumberType`, etc.) and is referenced from stories via
+    /// `<TextVariableInstance AssociatedTextVariable="TextVariable/<id>"
+    /// ResultText="..."/>`. The renderer treats `ResultText` as the
+    /// authoritative value at the moment InDesign exported the IDML —
+    /// "live" recomputation per page is a future task.
+    pub text_variables: Vec<TextVariable>,
+}
+
+/// IDML `<TextVariable>` declaration. Parsed for completeness; the
+/// rendered value comes from each `<TextVariableInstance>`'s
+/// `ResultText` attribute, which the parser inlines into the host
+/// run's text.
+#[derive(Debug, Clone, Serialize)]
+pub struct TextVariable {
+    pub self_id: String,
+    pub name: Option<String>,
+    pub variable_type: Option<String>,
 }
 
 /// IDML `<Layer>` definition. Only the fields the renderer needs
@@ -112,6 +131,15 @@ impl DesignMap {
                                 printable: attr(&e, b"Printable")
                                     .and_then(|s| s.parse().ok())
                                     .unwrap_or(true),
+                            });
+                        }
+                    }
+                    if e.name().as_ref() == b"TextVariable" {
+                        if let Some(self_id) = attr(&e, b"Self") {
+                            out.text_variables.push(TextVariable {
+                                self_id,
+                                name: attr(&e, b"Name"),
+                                variable_type: attr(&e, b"VariableType"),
                             });
                         }
                     }
