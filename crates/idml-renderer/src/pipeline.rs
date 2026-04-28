@@ -491,6 +491,13 @@ pub fn build_document(
     // we still build `Face`s on demand — `rustybuzz::Face::from_slice`
     // is cheap (parses font tables, no allocation churn).
     let font_table = FontTable::build(document, options);
+    // One hyphenator per render. We currently only build English-US;
+    // the document's `AppliedLanguage` is honoured via the cascade,
+    // but unrecognised values fall back to this dictionary so we
+    // always have *some* hyphenation when a paragraph requests it.
+    // Multi-language docs will grow this into a HashMap keyed by
+    // resolved language string.
+    let hyphenator = idml_text::Hyphenator::for_language(idml_text::Language::EnglishUS);
 
     // Per-page wrap exclusion rectangles (spread coords, expanded by
     // the wrap's offsets). Only items with TextWrapMode != "None"
@@ -545,6 +552,7 @@ pub fn build_document(
             chain,
             chain_pages,
             &page_labels,
+            Some(&hyphenator),
             head_wrap_rects,
             chain_wrap_rects,
         );
@@ -595,6 +603,7 @@ pub fn build_document(
             chain,
             chain_pages,
             &page_labels,
+            Some(&hyphenator),
             head_wrap_rects,
             chain_wrap_rects,
         );
@@ -637,6 +646,10 @@ struct StoryEmitter<'a> {
     /// `page_labels[chain_pages[frame_idx]]`; ACE 19 looks one slot
     /// further ahead. Owned by the document, not the emitter.
     page_labels: &'a [String],
+    /// Pre-built hyphenator for the document's primary language.
+    /// `None` ⇒ the document opts out of hyphenation entirely (the
+    /// composer skips the language-specific pattern lookup).
+    hyphenator: Option<&'a idml_text::Hyphenator>,
     column_width_pt: Option<f32>,
     /// Inner-coord x-shift to apply to the head frame's text
     /// origin when an obstacle on the page intrudes from the left
@@ -694,6 +707,7 @@ impl<'a> StoryEmitter<'a> {
         chain: Vec<&'a TextFrame>,
         chain_pages: Vec<usize>,
         page_labels: &'a [String],
+        hyphenator: Option<&'a idml_text::Hyphenator>,
         head_wrap_rects: &[idml_parse::Bounds],
         chain_wrap_rects: Vec<&[idml_parse::Bounds]>,
     ) -> Self {
@@ -763,6 +777,7 @@ impl<'a> StoryEmitter<'a> {
             chain,
             chain_pages,
             page_labels,
+            hyphenator,
             column_width_pt,
             column_x_shift_pt: shrink_left,
             head_wrap_rects: head_wrap_rects.to_vec(),
@@ -1027,6 +1042,7 @@ fn emit_paragraph_into_chain(
     };
     let mut lopts = idml_text::LayoutOptions::new(col_pt, paragraph_size);
     lopts.alignment = map_justification(resolved_paragraph.justification.as_deref());
+    apply_paragraph_compose_options(&mut lopts, em.hyphenator, &resolved_paragraph);
 
     if em.y_cursor < 0 {
         let head_font_metrics = font_ids
@@ -2381,6 +2397,7 @@ fn emit_cell_paragraph(
     let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
     let mut lopts = idml_text::LayoutOptions::new(column_width_pt, paragraph_size);
     lopts.alignment = map_justification(resolved_paragraph.justification.as_deref());
+    apply_paragraph_compose_options(&mut lopts, em.hyphenator, &resolved_paragraph);
     lopts.first_baseline =
         ((paragraph_size * 0.8) * idml_text::shape::ADVANCE_PRECISION).round() as i32;
 
@@ -3337,6 +3354,38 @@ fn build_run_paint_picker_resolved(
         cursor += run.text.len() as u32;
     }
     RunPaintPicker { bands, default }
+}
+
+/// Apply IDML paragraph-style attributes that drive the line breaker
+/// onto a fresh `LayoutOptions`. Hyphenation defaults to *on* (IDML's
+/// own default) when the cascade leaves the field unset; explicit
+/// `Hyphenation="false"` disables it. Word-spacing percentages convert
+/// to the composer's stretch / shrink ratios.
+fn apply_paragraph_compose_options<'a>(
+    lopts: &mut idml_text::LayoutOptions<'a>,
+    hyphenator: Option<&'a idml_text::Hyphenator>,
+    resolved: &idml_scene::ResolvedParagraphAttrs,
+) {
+    // Hyphenation: IDML's default is true; only an explicit false
+    // disables it. We treat None as "use the default" which lets
+    // unstyled paragraphs hyphenate just like InDesign would.
+    let hyphenate = resolved.hyphenation.unwrap_or(true);
+    if hyphenate {
+        lopts.compose.hyphenator = hyphenator;
+    } else {
+        lopts.compose.hyphenator = None;
+    }
+    // Word spacing: IDML carries percentages on the [Min..=Desired..=Max]
+    // axis. We translate to the composer's stretch/shrink ratios as
+    // (max - desired) / desired and (desired - min) / desired so the
+    // breaker gets a relative range matching what InDesign penalises.
+    let desired = resolved.desired_word_spacing.unwrap_or(100.0).max(1.0);
+    if let Some(max) = resolved.maximum_word_spacing {
+        lopts.compose.stretch_ratio = ((max - desired) / desired).max(0.0);
+    }
+    if let Some(min) = resolved.minimum_word_spacing {
+        lopts.compose.shrink_ratio = ((desired - min) / desired).clamp(0.0, 1.0);
+    }
 }
 
 /// Map an IDML `StrokeType` reference to a [`Stroke`] of the given

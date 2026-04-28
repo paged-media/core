@@ -228,6 +228,25 @@ pub struct ParagraphStyleDef {
     /// reads only the prefix before the first comma to decide
     /// the format. `None` falls back to Arabic.
     pub numbering_format: Option<String>,
+    /// `Hyphenation` boolean. IDML default is true; the resolver
+    /// only flips a paragraph off when an explicit `Hyphenation="false"`
+    /// lands on the cascade. Drives whether the composer registers a
+    /// language-specific hyphenator with the breaker.
+    pub hyphenation: Option<bool>,
+    /// `AppliedLanguage` reference (e.g. `$ID/English: USA`). Used to
+    /// pick the hyphenation dictionary; unrecognised values fall back
+    /// to English-US so we always have *some* dictionary loaded.
+    pub applied_language: Option<String>,
+    /// `MinimumWordSpacing` percentage (`80` = 80% of normal). Drives
+    /// the composer's shrink ratio.
+    pub minimum_word_spacing: Option<f32>,
+    /// `DesiredWordSpacing` percentage (`100` = 100% of normal). The
+    /// renderer scales `Min`/`Max` against this so the composer's
+    /// ratios stay relative to the desired baseline.
+    pub desired_word_spacing: Option<f32>,
+    /// `MaximumWordSpacing` percentage (`133` = 133% of normal).
+    /// Drives the composer's stretch ratio.
+    pub maximum_word_spacing: Option<f32>,
 }
 
 /// Effective character-level attributes after walking BasedOn.
@@ -264,6 +283,11 @@ pub struct ResolvedParagraph {
     pub bullet_character: Option<u32>,
     pub bullets_text_after: Option<String>,
     pub numbering_format: Option<String>,
+    pub hyphenation: Option<bool>,
+    pub applied_language: Option<String>,
+    pub minimum_word_spacing: Option<f32>,
+    pub desired_word_spacing: Option<f32>,
+    pub maximum_word_spacing: Option<f32>,
 }
 
 /// Identifies which kind of style is open while we walk
@@ -729,6 +753,13 @@ impl ResolvedParagraph {
         if self.numbering_format.is_none() {
             self.numbering_format = def.numbering_format.clone();
         }
+        self.hyphenation = self.hyphenation.or(def.hyphenation);
+        if self.applied_language.is_none() {
+            self.applied_language = def.applied_language.clone();
+        }
+        self.minimum_word_spacing = self.minimum_word_spacing.or(def.minimum_word_spacing);
+        self.desired_word_spacing = self.desired_word_spacing.or(def.desired_word_spacing);
+        self.maximum_word_spacing = self.maximum_word_spacing.or(def.maximum_word_spacing);
     }
 }
 
@@ -858,6 +889,11 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         bullet_character: None,
         bullets_text_after: attr(e, b"BulletsTextAfter"),
         numbering_format: attr(e, b"NumberingFormat"),
+        hyphenation: attr(e, b"Hyphenation").and_then(|s| s.parse().ok()),
+        applied_language: attr(e, b"AppliedLanguage"),
+        minimum_word_spacing: attr(e, b"MinimumWordSpacing").and_then(|s| s.parse().ok()),
+        desired_word_spacing: attr(e, b"DesiredWordSpacing").and_then(|s| s.parse().ok()),
+        maximum_word_spacing: attr(e, b"MaximumWordSpacing").and_then(|s| s.parse().ok()),
     })
 }
 

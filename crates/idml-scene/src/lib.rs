@@ -365,6 +365,11 @@ impl ResolvedParagraphAttrs {
             bullet_character: None,
             bullets_text_after: None,
             numbering_format: None,
+            hyphenation: None,
+            applied_language: None,
+            minimum_word_spacing: None,
+            desired_word_spacing: None,
+            maximum_word_spacing: None,
         }
     }
 
@@ -389,6 +394,13 @@ impl ResolvedParagraphAttrs {
         if self.numbering_format.is_none() {
             self.numbering_format = p.numbering_format.clone();
         }
+        self.hyphenation = self.hyphenation.or(p.hyphenation);
+        if self.applied_language.is_none() {
+            self.applied_language = p.applied_language.clone();
+        }
+        self.minimum_word_spacing = self.minimum_word_spacing.or(p.minimum_word_spacing);
+        self.desired_word_spacing = self.desired_word_spacing.or(p.desired_word_spacing);
+        self.maximum_word_spacing = self.maximum_word_spacing.or(p.maximum_word_spacing);
     }
 }
 
@@ -454,6 +466,18 @@ pub struct ResolvedParagraphAttrs {
     /// Arabic / Roman / alpha / zero-padded formatting for
     /// `NumberedList` paragraphs.
     pub numbering_format: Option<String>,
+    /// `Hyphenation` boolean from the cascaded paragraph style.
+    /// Drives whether the composer wires up a hyphenator.
+    pub hyphenation: Option<bool>,
+    /// `AppliedLanguage` from the cascade — feeds dictionary picking
+    /// for hyphenation. Strings like `"$ID/English: USA"`.
+    pub applied_language: Option<String>,
+    /// `MinimumWordSpacing` (% of normal). 100 = baseline.
+    pub minimum_word_spacing: Option<f32>,
+    /// `DesiredWordSpacing` (% of normal). 100 = baseline.
+    pub desired_word_spacing: Option<f32>,
+    /// `MaximumWordSpacing` (% of normal). 100 = baseline.
+    pub maximum_word_spacing: Option<f32>,
 }
 
 #[derive(Debug, thiserror::Error)]
