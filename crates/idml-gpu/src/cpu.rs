@@ -88,7 +88,11 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     line_cap: map_cap(stroke.cap),
                     line_join: map_join(stroke.join),
                     miter_limit: stroke.miter_limit.max(1.0),
-                    ..Default::default()
+                    dash: if stroke.dash.is_solid() {
+                        None
+                    } else {
+                        tiny_skia::StrokeDash::new(stroke.dash.as_slice().to_vec(), 0.0)
+                    },
                 };
                 pixmap.stroke_path(&path, &ts_paint, &ts_stroke, page_to_px, None);
             }

@@ -2774,7 +2774,13 @@ fn emit_rectangle_into(
     {
         let width = rect.stroke_weight.unwrap_or(1.0);
         if width > 0.0 {
-            emit_stroke_rect_transformed(r, outer, Stroke::new(width), stroke, &mut page.list);
+            emit_stroke_rect_transformed(
+                r,
+                outer,
+                stroke_for_type(rect.stroke_type.as_deref(), width),
+                stroke,
+                &mut page.list,
+            );
         }
     }
 }
@@ -2793,11 +2799,32 @@ fn emit_rectangle_image(
     let Some(uri) = rect.image_link.as_deref() else {
         return;
     };
+    // Default placement = the frame's inner-coord rect. FrameFitting
+    // crops grow / shrink the image bounds — negative crops typically
+    // come from `FillProportionally` (image overflows the frame). We
+    // emit the expanded rect; per-frame clipping will land when the
+    // display list grows a Clip primitive.
+    let frame_left = rect.bounds.left;
+    let frame_top = rect.bounds.top;
+    let frame_w = rect.bounds.width();
+    let frame_h = rect.bounds.height();
+    let (left_crop, top_crop, right_crop, bottom_crop) = rect
+        .frame_fitting
+        .as_ref()
+        .map(|f| {
+            (
+                f.left_crop.unwrap_or(0.0),
+                f.top_crop.unwrap_or(0.0),
+                f.right_crop.unwrap_or(0.0),
+                f.bottom_crop.unwrap_or(0.0),
+            )
+        })
+        .unwrap_or((0.0, 0.0, 0.0, 0.0));
     let r = Rect {
-        x: rect.bounds.left,
-        y: rect.bounds.top,
-        w: rect.bounds.width(),
-        h: rect.bounds.height(),
+        x: frame_left + left_crop,
+        y: frame_top + top_crop,
+        w: (frame_w - left_crop - right_crop).max(0.0),
+        h: (frame_h - top_crop - bottom_crop).max(0.0),
     };
     let outer = frame_outer_transform(page, rect.item_transform);
     let id = if let Some(cached) = page_image_cache.get(uri) {
@@ -3310,6 +3337,49 @@ fn build_run_paint_picker_resolved(
         cursor += run.text.len() as u32;
     }
     RunPaintPicker { bands, default }
+}
+
+/// Map an IDML `StrokeType` reference to a [`Stroke`] of the given
+/// width with the appropriate dash pattern. Recognises the canonical
+/// built-in styles (`StrokeStyle/$ID/Solid`, `Dashed`, `Dotted`,
+/// `Dashed3-2`, `Dashed4-4`, `Dashed5-5`, `Dotted2`, `Dotted4`,
+/// `Dotted8`); custom user-defined `<StrokeStyle>` definitions
+/// fall back to `Solid` until full parser support arrives.
+///
+/// Pattern values are scaled by the stroke width so a heavier stroke
+/// looks proportionally heavier — that mirrors InDesign's behaviour
+/// where the named built-ins describe a multiple of the line weight,
+/// not absolute pt distances.
+fn stroke_for_type(stroke_type: Option<&str>, width: f32) -> Stroke {
+    let mut s = Stroke::new(width);
+    let Some(name) = stroke_type else {
+        return s;
+    };
+    let suffix = name.strip_prefix("StrokeStyle/$ID/").unwrap_or(name);
+    let w = width.max(0.1);
+    let pattern: Option<&[f32]> = match suffix {
+        "Solid" | "" => None,
+        "Dashed" => Some(&[3.0, 2.0]),
+        "Dashed3-2" => Some(&[3.0, 2.0]),
+        "Dashed4-4" => Some(&[4.0, 4.0]),
+        "Dashed5-5" => Some(&[5.0, 5.0]),
+        "Dotted" => Some(&[0.0, 2.0]),
+        "Dotted2" => Some(&[0.0, 2.0]),
+        "Dotted4" => Some(&[0.0, 4.0]),
+        "Dotted8" => Some(&[0.0, 8.0]),
+        _ => None,
+    };
+    if let Some(p) = pattern {
+        let scaled: Vec<f32> = p.iter().map(|v| v * w).collect();
+        s.dash = idml_compose::DashPattern::from_slice(&scaled);
+        // Dotted patterns use round caps so the zero-length on-segment
+        // renders as a dot rather than a needle. Adobe's previews do
+        // the same.
+        if matches!(suffix, "Dotted" | "Dotted2" | "Dotted4" | "Dotted8") {
+            s.cap = idml_compose::LineCap::Round;
+        }
+    }
+    s
 }
 
 /// Scale a paint toward paper white per the IDML `FillTint`

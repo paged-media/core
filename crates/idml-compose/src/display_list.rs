@@ -356,17 +356,54 @@ pub struct Stroke {
     pub cap: LineCap,
     pub join: LineJoin,
     pub miter_limit: f32,
+    /// Optional dash pattern in pt: alternating on/off lengths. Empty
+    /// means solid. The rasterizer is responsible for cycling through
+    /// the array per stroked path.
+    pub dash: DashPattern,
+}
+
+/// Up to four on/off pairs (eight slots) cover IDML's preset stroke
+/// styles (Solid, Dashed, Dotted, Dashed3-2, etc.) without
+/// allocating. Anything richer falls back to `Solid` until the
+/// parser learns custom `<StrokeStyle>` definitions.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct DashPattern {
+    /// Number of valid entries in `pattern`.
+    pub len: u8,
+    /// Up to 8 entries; only `pattern[..len]` is meaningful. An empty
+    /// pattern means solid.
+    pub pattern: [f32; 8],
+}
+
+impl DashPattern {
+    pub fn from_slice(values: &[f32]) -> Self {
+        let mut out = Self::default();
+        for (slot, v) in out.pattern.iter_mut().zip(values.iter()) {
+            *slot = *v;
+        }
+        out.len = values.len().min(8) as u8;
+        out
+    }
+
+    pub fn is_solid(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn as_slice(&self) -> &[f32] {
+        &self.pattern[..self.len as usize]
+    }
 }
 
 impl Stroke {
     /// Minimal defaults: `width` set by caller, butt caps, miter
-    /// joins, miter_limit=4.0 (PDF default).
+    /// joins, miter_limit=4.0 (PDF default), solid dash.
     pub fn new(width: f32) -> Self {
         Self {
             width,
             cap: LineCap::Butt,
             join: LineJoin::Miter,
             miter_limit: 4.0,
+            dash: DashPattern::default(),
         }
     }
 }

@@ -243,6 +243,41 @@ pub struct Rectangle {
     pub applied_object_style: Option<String>,
     /// `<TextWrapPreference>` parsed off the rectangle.
     pub text_wrap: Option<TextWrap>,
+    /// `<FrameFittingOption>` child element (or its inherited
+    /// equivalent on the applied object style). Drives where the
+    /// placed image's pixel grid lands inside the frame and how far
+    /// it can overflow / underflow via `LeftCrop` / `TopCrop` etc.
+    pub frame_fitting: Option<FrameFittingOption>,
+    /// `StrokeType` reference (e.g. `StrokeStyle/$ID/Solid`,
+    /// `StrokeStyle/$ID/Dashed`, `StrokeStyle/$ID/Dotted`). The
+    /// renderer maps the standard built-in names to a dash pattern;
+    /// user-defined custom `<StrokeStyle>` definitions fall back to
+    /// solid until full parser support lands.
+    pub stroke_type: Option<String>,
+}
+
+/// Mirrors IDML's `<FrameFittingOption>` — an optional element nested
+/// inside a Rectangle (or referenced via `AppliedObjectStyle`) that
+/// describes how a placed image fits the frame.
+///
+/// Crop values are signed point offsets *from the corresponding frame
+/// edge inward*. Negative crops grow the image outside the frame
+/// (typical for `Proportionally` / `FillProportionally` fits where the
+/// image is scaled to cover the frame and the overflow is meant to be
+/// clipped). InDesign bakes these out when the user picks a fit, so
+/// the renderer just trusts whatever number lands here.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct FrameFittingOption {
+    pub left_crop: Option<f32>,
+    pub top_crop: Option<f32>,
+    pub right_crop: Option<f32>,
+    pub bottom_crop: Option<f32>,
+    /// `FittingOnEmptyFrame` value: `None | Proportionally |
+    /// FillProportionally | FitContent | FitContentToFrame |
+    /// ContentAwareFit`. We don't currently branch on this — the
+    /// crops alone reproduce InDesign's resolved placement for the
+    /// common cases. The string is kept for future fidelity work.
+    pub fitting_on_empty_frame: Option<String>,
 }
 
 /// Axis-aligned ellipse — `<Oval>` in IDML. Same fill/stroke story as
@@ -640,6 +675,8 @@ impl Spread {
                             image_link: None,
                             applied_object_style: attr(&e, b"AppliedObjectStyle"),
                             text_wrap: None,
+                            frame_fitting: None,
+                            stroke_type: attr(&e, b"StrokeType"),
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Rect(out.rectangles.len() - 1),
@@ -820,6 +857,26 @@ impl Spread {
                             if out.rectangles[i].image_link.is_none() {
                                 out.rectangles[i].image_link = Some(uri);
                             }
+                        }
+                    }
+                    b"FrameFittingOption" => {
+                        // Attaches to the current Rectangle. Crops are
+                        // signed pt offsets — negative values grow the
+                        // image past the frame edge for FillProportionally
+                        // fits.
+                        if let Some(CurrentFrameKind::Rect(i)) =
+                            current_frame.as_ref().map(|cf| cf.kind)
+                        {
+                            out.rectangles[i].frame_fitting = Some(FrameFittingOption {
+                                left_crop: attr(&e, b"LeftCrop")
+                                    .and_then(|s| s.parse().ok()),
+                                top_crop: attr(&e, b"TopCrop").and_then(|s| s.parse().ok()),
+                                right_crop: attr(&e, b"RightCrop")
+                                    .and_then(|s| s.parse().ok()),
+                                bottom_crop: attr(&e, b"BottomCrop")
+                                    .and_then(|s| s.parse().ok()),
+                                fitting_on_empty_frame: attr(&e, b"FittingOnEmptyFrame"),
+                            });
                         }
                     }
                     b"GraphicLine" => {
