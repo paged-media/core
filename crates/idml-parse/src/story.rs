@@ -118,9 +118,42 @@ pub struct TableCell {
     pub text_bottom_inset: f32,
     pub text_right_inset: f32,
     pub applied_cell_style: Option<String>,
+    /// `FirstBaselineOffset` enum (Ascent / Cap / Leading / Emboxed /
+    /// FixedHeight / etc). Drives where the first line of cell text
+    /// drops from the cell's top edge. Parsed for completeness; the
+    /// renderer currently uses Ascent semantics by default.
+    pub first_baseline_offset: Option<String>,
+    /// `MinimumFirstBaselineOffset` in pt — only honoured when
+    /// `first_baseline_offset` is `FixedHeight` (then the value
+    /// becomes the absolute pt drop). Parsed for cascade
+    /// completeness.
+    pub minimum_first_baseline_offset: Option<f32>,
+    /// IDML's per-cell diagonal stroke. The `Left` diagonal in IDML
+    /// goes top-left → bottom-right; the `Right` diagonal goes
+    /// top-right → bottom-left. Stored as a small bag because all
+    /// fields are optional and most cells have neither.
+    pub diagonal: CellDiagonal,
     /// Cell content — paragraphs, parsed identically to top-level
     /// story paragraphs.
     pub paragraphs: Vec<Paragraph>,
+}
+
+/// Mirrors IDML's diagonal-stroke attributes on `<Cell>`. `LeftLine*`
+/// describes the diagonal that drops from top-left to bottom-right;
+/// `RightLine*` describes the opposite diagonal. The renderer emits
+/// one `<GraphicLine>`-equivalent stroke per drawn diagonal.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct CellDiagonal {
+    pub left_line_drawn: Option<bool>,
+    pub left_line_color: Option<String>,
+    pub left_line_weight: Option<f32>,
+    pub right_line_drawn: Option<bool>,
+    pub right_line_color: Option<String>,
+    pub right_line_weight: Option<f32>,
+    /// `DiagonalLineInFront` boolean — true means the diagonal paints
+    /// on top of cell content. The renderer emits diagonals after
+    /// content when this is true.
+    pub diagonal_in_front: Option<bool>,
 }
 
 impl TableCell {
@@ -279,6 +312,26 @@ impl Story {
                                 .and_then(|s| s.parse().ok())
                                 .unwrap_or(0.0),
                             applied_cell_style: attr(&e, b"AppliedCellStyle"),
+                            first_baseline_offset: attr(&e, b"FirstBaselineOffset"),
+                            minimum_first_baseline_offset: attr(
+                                &e,
+                                b"MinimumFirstBaselineOffset",
+                            )
+                            .and_then(|s| s.parse().ok()),
+                            diagonal: CellDiagonal {
+                                left_line_drawn: attr(&e, b"LeftLineDrawn")
+                                    .and_then(|s| s.parse().ok()),
+                                left_line_color: attr(&e, b"LeftLineStrokeColor"),
+                                left_line_weight: attr(&e, b"LeftLineStrokeWeight")
+                                    .and_then(|s| s.parse().ok()),
+                                right_line_drawn: attr(&e, b"RightLineDrawn")
+                                    .and_then(|s| s.parse().ok()),
+                                right_line_color: attr(&e, b"RightLineStrokeColor"),
+                                right_line_weight: attr(&e, b"RightLineStrokeWeight")
+                                    .and_then(|s| s.parse().ok()),
+                                diagonal_in_front: attr(&e, b"DiagonalLineInFront")
+                                    .and_then(|s| s.parse().ok()),
+                            },
                             paragraphs: Vec::new(),
                         });
                     }

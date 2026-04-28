@@ -31,7 +31,7 @@ pub use spread::{
     VerticalJustification,
 };
 pub use story::{
-    CharacterRun, Paragraph, Story, TabStop, Table, TableCell, TableColumn, TableRow,
+    CellDiagonal, CharacterRun, Paragraph, Story, TabStop, Table, TableCell, TableColumn, TableRow,
     AUTO_PAGE_NUMBER_MARKER, NEXT_PAGE_NUMBER_MARKER,
 };
 pub use styles::{

@@ -1782,6 +1782,13 @@ fn emit_table_into_chain(
         .unwrap_or_default();
     let header_count = table.header_row_count as usize;
     let footer_count = table.footer_row_count as usize;
+    // TODO(T3.1): when chain_idx advances at the frame-boundary check
+    // below, re-emit `table.cells` whose row falls in `0..header_count`
+    // at the top of the new frame (and `(total_rows - footer_count)..`
+    // at the bottom of the previous frame). Requires synthesising
+    // RowBasis entries for the duplicates and routing emit_cell_paragraph
+    // through them. Deferred until we have a threaded-table sample to
+    // test against — Sample-3's tables don't span frames.
     let total_rows = row_heights.len();
     let total_cols = col_widths.len();
     let region_cell_style_for = |c: usize, r: usize| -> Option<&str> {
@@ -2092,6 +2099,57 @@ fn emit_table_into_chain(
                 }
             }
         }
+
+        // Diagonal cell strokes. IDML's "Left" diagonal goes
+        // top-left → bottom-right; "Right" goes top-right →
+        // bottom-left. Emitted before content as the simpler default;
+        // `DiagonalLineInFront=true` semantics (paint over content)
+        // are queued — visually this only matters when content
+        // overlaps the diagonal, which is rare.
+        let diag = &cell.diagonal;
+        let diag_emit = |drawn: Option<bool>,
+                         color: Option<&str>,
+                         weight: Option<f32>,
+                         (x1, y1): (f32, f32),
+                         (x2, y2): (f32, f32),
+                         pages: &mut [BuiltPage]| {
+            if drawn != Some(true) {
+                return;
+            }
+            let Some(weight) = weight.filter(|w| *w > 0.0) else {
+                return;
+            };
+            let Some(color_id) = color else {
+                return;
+            };
+            if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) {
+                idml_compose::emit_line(
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    Stroke::new(weight),
+                    paint,
+                    &mut pages[target_page].list,
+                );
+            }
+        };
+        diag_emit(
+            diag.left_line_drawn,
+            diag.left_line_color.as_deref(),
+            diag.left_line_weight,
+            (cell_x_pt, cell_y_pt),
+            (cell_x_pt + cell_w_pt, cell_y_pt + cell_h_pt),
+            pages,
+        );
+        diag_emit(
+            diag.right_line_drawn,
+            diag.right_line_color.as_deref(),
+            diag.right_line_weight,
+            (cell_x_pt + cell_w_pt, cell_y_pt),
+            (cell_x_pt, cell_y_pt + cell_h_pt),
+            pages,
+        );
 
         // Lay out the cell paragraphs into a working buffer first
         // so we know their total height; then apply vertical
