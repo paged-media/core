@@ -151,6 +151,14 @@ pub struct TextFrame {
     /// `ItemLayer` reference. Renderer skips items whose layer is
     /// hidden or non-printable.
     pub item_layer: Option<String>,
+    /// True when the frame is an *anchored object* — defined inside a
+    /// CharacterStyleRange or carrying an `<AnchoredObjectSetting>`.
+    /// The renderer's current pass treats anchored frames the same as
+    /// page-level frames (free-floating). Real text-flow integration
+    /// (inline reservation, custom-position offset from the anchor)
+    /// is a queued follow-up; the flag exists so callers can skip
+    /// these frames pending that work.
+    pub is_anchored: bool,
 }
 
 /// IDML `<TextFramePreference VerticalJustification="...">` values.
@@ -268,6 +276,8 @@ pub struct Rectangle {
     /// rounded-rect path for `Rounded` (and the decorative variants
     /// fall back to `Rounded` for now).
     pub corner_option: Option<String>,
+    /// Anchored object marker; see `TextFrame::is_anchored`.
+    pub is_anchored: bool,
     /// Item-level opacity from `<TransparencySetting>` /
     /// `<BlendingSetting Opacity="..." />`. Range `0.0..=100.0`. The
     /// renderer scales every paint's alpha channel by `opacity / 100`
@@ -277,6 +287,30 @@ pub struct Rectangle {
     /// Screen | Overlay | …). Currently parsed for completeness;
     /// non-Normal modes are not yet honoured by the rasterizer.
     pub blend_mode: Option<String>,
+    /// Visual effects beyond `DropShadow`. All currently parser-only:
+    /// the rasterizer-side blur / composite pipeline they need is a
+    /// future batch (T2.7 in the roadmap). When unset (`None`) the
+    /// renderer treats the field as "no effect"; when set it's
+    /// surfaced for downstream tooling but visibly emits nothing.
+    pub effects: Option<FrameEffects>,
+}
+
+/// Mirror of IDML's optional `InnerShadow`, `OuterGlow`, `InnerGlow`,
+/// `Bevel`, `Satin`, and `FeatherSetting` blocks on a page item. Each
+/// inner field is itself optional; a field of `Some(true)` means the
+/// effect is enabled. We capture it as a flag for now and let the
+/// future effects pipeline interpret per-effect parameters when it
+/// lands.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct FrameEffects {
+    pub inner_shadow: Option<bool>,
+    pub outer_glow: Option<bool>,
+    pub inner_glow: Option<bool>,
+    pub bevel: Option<bool>,
+    pub satin: Option<bool>,
+    pub feather: Option<bool>,
+    pub directional_feather: Option<bool>,
+    pub gradient_feather: Option<bool>,
 }
 
 /// Mirrors IDML's `<FrameFittingOption>` — an optional element nested
@@ -674,6 +708,7 @@ impl Spread {
                             applied_object_style: attr(&e, b"AppliedObjectStyle"),
                             text_wrap: None,
                             item_layer: attr(&e, b"ItemLayer"),
+                            is_anchored: false,
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Text(out.text_frames.len() - 1),
@@ -708,8 +743,10 @@ impl Spread {
                             corner_radius: attr(&e, b"CornerRadius")
                                 .and_then(|s| s.parse().ok()),
                             corner_option: attr(&e, b"CornerOption"),
+                            is_anchored: false,
                             opacity: None,
                             blend_mode: None,
+                            effects: None,
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Rect(out.rectangles.len() - 1),
@@ -772,6 +809,54 @@ impl Spread {
                                         // ignore.
                                     }
                                 }
+                            }
+                        }
+                    }
+                    b"AnchoredObjectSetting" => {
+                        // Mark the current frame as an anchored object.
+                        // Renderer-side text-flow integration is
+                        // queued; today the flag is informational.
+                        if let Some(cf) = current_frame.as_ref() {
+                            match cf.kind {
+                                CurrentFrameKind::Text(i) => {
+                                    out.text_frames[i].is_anchored = true;
+                                }
+                                CurrentFrameKind::Rect(i) => {
+                                    out.rectangles[i].is_anchored = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    b"InnerShadowSetting"
+                    | b"OuterGlowSetting"
+                    | b"InnerGlowSetting"
+                    | b"BevelAndEmbossSetting"
+                    | b"SatinSetting"
+                    | b"FeatherSetting"
+                    | b"DirectionalFeatherSetting"
+                    | b"GradientFeatherSetting" => {
+                        // Surface the effect's enable flag (Applied="true")
+                        // onto the current Rectangle's effects bag. The
+                        // rasterizer doesn't render these yet; the data
+                        // lets future tooling and the eventual effect
+                        // pipeline branch on presence.
+                        if let Some(CurrentFrameKind::Rect(i)) =
+                            current_frame.as_ref().map(|cf| cf.kind)
+                        {
+                            let applied =
+                                attr(&e, b"Applied").and_then(|s| s.parse::<bool>().ok());
+                            let bag = out.rectangles[i].effects.get_or_insert_with(Default::default);
+                            match e.name().as_ref() {
+                                b"InnerShadowSetting" => bag.inner_shadow = applied,
+                                b"OuterGlowSetting" => bag.outer_glow = applied,
+                                b"InnerGlowSetting" => bag.inner_glow = applied,
+                                b"BevelAndEmbossSetting" => bag.bevel = applied,
+                                b"SatinSetting" => bag.satin = applied,
+                                b"FeatherSetting" => bag.feather = applied,
+                                b"DirectionalFeatherSetting" => bag.directional_feather = applied,
+                                b"GradientFeatherSetting" => bag.gradient_feather = applied,
+                                _ => {}
                             }
                         }
                     }

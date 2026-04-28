@@ -26,8 +26,8 @@ pub use graphic::{
     ColorEntry, ColorSpace, GradientEntry, GradientKind, GradientStopRef, Graphic, SwatchEntry,
 };
 pub use spread::{
-    Bounds, DropShadowSetting, FirstBaselineOffset, FrameFittingOption, GraphicLine, Oval, Page,
-    PathAnchor, Polygon, Rectangle, Spread, TextFrame, TextWrap, TextWrapMode,
+    Bounds, DropShadowSetting, FirstBaselineOffset, FrameEffects, FrameFittingOption, GraphicLine,
+    Oval, Page, PathAnchor, Polygon, Rectangle, Spread, TextFrame, TextWrap, TextWrapMode,
     VerticalJustification,
 };
 pub use story::{
