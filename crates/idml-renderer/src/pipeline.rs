@@ -768,18 +768,27 @@ fn emit_paragraph_into_chain(
         return;
     }
 
-    // Dedup faces by Bytes pointer identity: a paragraph with N
-    // runs sharing one font parses one Face instead of N. The
-    // `bytes_pool` Arcs already share buffers when the FontTable
-    // returns the same family for multiple runs, so as_ptr
-    // comparison is the right key. Per-render dedup (across
-    // paragraphs) wants self-referential Face<'static>-over-Bytes
-    // and is left for the next batch.
+    // Per-run wght axis values. Variable fonts ship one TTF that
+    // covers the whole weight axis; a run flagged `FontStyle="Bold"`
+    // would otherwise render at the file's default weight (~400).
+    // Pin a wght axis variation per run so bold / light / etc.
+    // headings get the right thickness.
+    let wghts: Vec<f32> = resolved_runs
+        .iter()
+        .map(|r| wght_for_font_style(r.font_style.as_deref()))
+        .collect();
+
+    // Dedup faces by (Bytes pointer identity, wght). Two runs with
+    // the same font bytes but different weights need separate
+    // faces because each holds a different fvar variation. When a
+    // paragraph is single-weight (the common case) every run still
+    // shares one face.
     let mut unique_idx: Vec<usize> = Vec::with_capacity(bytes_pool.len());
     for (i, b) in bytes_pool.iter().enumerate() {
         let head = bytes_pool[..i]
             .iter()
-            .position(|prior| prior.as_ptr() == b.as_ptr())
+            .zip(wghts[..i].iter())
+            .position(|(prior, w)| prior.as_ptr() == b.as_ptr() && (*w - wghts[i]).abs() < 0.5)
             .unwrap_or(i);
         unique_idx.push(head);
     }
@@ -792,12 +801,20 @@ fn emit_paragraph_into_chain(
             continue;
         }
         let bytes_ref = bytes_pool[i].as_ref();
-        let Some(rf) = rustybuzz::Face::from_slice(bytes_ref, 0) else {
+        let Some(mut rf) = rustybuzz::Face::from_slice(bytes_ref, 0) else {
             return;
         };
-        let Ok(of) = ttf_parser::Face::parse(bytes_ref, 0) else {
+        let Ok(mut of) = ttf_parser::Face::parse(bytes_ref, 0) else {
             return;
         };
+        // Set wght variation on both faces. No-op for static fonts
+        // (set_variation returns Some only when the axis exists).
+        let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
+        rf.set_variations(&[rustybuzz::Variation {
+            tag: wght_tag,
+            value: wghts[i],
+        }]);
+        let _ = of.set_variation(wght_tag, wghts[i]);
         shaping_faces[i] = Some(rf);
         outline_faces[i] = Some(of);
     }
@@ -1978,6 +1995,49 @@ fn emit_table_into_chain(
 /// as absent so the region cascade kicks in.
 fn is_none_style_id(id: &str) -> bool {
     id == "CellStyle/$ID/[None]" || id == "CellStyle/n" || id.is_empty()
+}
+
+/// Map an IDML `FontStyle` attribute string to a numeric wght axis
+/// value (CSS / fvar convention: 100=Thin, 400=Regular, 700=Bold,
+/// 900=Black). Unknown values fall through to 400. Italic / Bold
+/// Italic are matched on substring so combined styles still get
+/// the right weight; the italic axis is handled separately by
+/// loading a different font file (resolver-side).
+fn wght_for_font_style(style: Option<&str>) -> f32 {
+    let s = match style {
+        Some(s) => s,
+        None => return 400.0,
+    };
+    let lower = s.to_ascii_lowercase();
+    if lower.contains("thin") || lower.contains("hairline") {
+        100.0
+    } else if lower.contains("extralight")
+        || lower.contains("extra light")
+        || lower.contains("ultralight")
+    {
+        200.0
+    } else if lower.contains("light") {
+        300.0
+    } else if lower.contains("medium") {
+        500.0
+    } else if lower.contains("semibold")
+        || lower.contains("semi bold")
+        || lower.contains("demibold")
+        || lower.contains("demi bold")
+    {
+        600.0
+    } else if lower.contains("extrabold")
+        || lower.contains("extra bold")
+        || lower.contains("ultrabold")
+    {
+        800.0
+    } else if lower.contains("bold") {
+        700.0
+    } else if lower.contains("black") || lower.contains("heavy") {
+        900.0
+    } else {
+        400.0
+    }
 }
 
 /// Split a paragraph at every `\n` boundary in any run's text into
