@@ -163,6 +163,25 @@ pub struct CharacterRun {
     /// result matches InDesign's preview, where tints sit on top of
     /// the colour-managed pipeline.
     pub fill_tint: Option<f32>,
+    /// `Capitalization` value: `Normal | SmallCaps | AllCaps |
+    /// CapToSmallCap`. `None` ⇒ use the cascade. The renderer
+    /// uppercases the text before shaping when the resolved value is
+    /// `AllCaps` (or `SmallCaps`, until proper OT smcp lookup lands).
+    pub capitalization: Option<String>,
+    /// `BaselineShift` in pt. Positive lifts glyphs above the
+    /// baseline, negative drops them. Applied per-glyph at emit time.
+    pub baseline_shift: Option<f32>,
+    /// `HorizontalScale` percentage (100 = identity). Parsed for
+    /// future per-glyph x-scale; not applied yet.
+    pub horizontal_scale: Option<f32>,
+    /// `VerticalScale` percentage (100 = identity). Parsed for future
+    /// per-glyph y-scale; not applied yet.
+    pub vertical_scale: Option<f32>,
+    /// `Position` value (`Normal | Superscript | Subscript |
+    /// OTSuperscript | OTSubscript | OTNumerator | OTDenominator`).
+    /// Parsed for future scaling/baseline-shift application; not yet
+    /// honoured.
+    pub position: Option<String>,
     /// `Tracking` in 1/1000 em (InDesign's unit — divide by 1000 to
     /// get the em fraction that should be added to every glyph's
     /// advance).
@@ -281,6 +300,14 @@ impl Story {
                             point_size: attr(&e, b"PointSize").and_then(|s| s.parse().ok()),
                             fill_color: attr(&e, b"FillColor"),
                             fill_tint: parse_tint_attr(&e, b"FillTint"),
+                            capitalization: attr(&e, b"Capitalization"),
+                            baseline_shift: attr(&e, b"BaselineShift")
+                                .and_then(|s| s.parse().ok()),
+                            horizontal_scale: attr(&e, b"HorizontalScale")
+                                .and_then(|s| s.parse().ok()),
+                            vertical_scale: attr(&e, b"VerticalScale")
+                                .and_then(|s| s.parse().ok()),
+                            position: attr(&e, b"Position"),
                             tracking: attr(&e, b"Tracking").and_then(|s| s.parse().ok()),
                             underline: attr(&e, b"Underline").and_then(|s| s.parse::<bool>().ok()),
                             strikethru: attr(&e, b"StrikeThru")

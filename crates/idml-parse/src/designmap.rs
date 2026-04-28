@@ -21,6 +21,30 @@ pub struct DesignMap {
     /// bundled profile set and falls back to a naive CMYK→sRGB
     /// approximation when the named profile isn't shipped.
     pub color_settings: ColorSettings,
+    /// Document layers, in serialization order (which mirrors the
+    /// stacking order — first layer = bottom of the z-stack). Each
+    /// page item references its layer via `ItemLayer="<self_id>"`.
+    /// The renderer skips items whose layer is hidden or non-printable.
+    pub layers: Vec<Layer>,
+}
+
+/// IDML `<Layer>` definition. Only the fields the renderer needs
+/// today; visibility / printability decide whether items on that
+/// layer are emitted at all.
+#[derive(Debug, Clone, Serialize)]
+pub struct Layer {
+    pub self_id: String,
+    pub name: Option<String>,
+    /// `Visible="true|false"` — when false the layer is hidden in
+    /// InDesign's view and PDF export skips it.
+    pub visible: bool,
+    /// `Locked="true|false"` — purely an editor concern; the renderer
+    /// ignores it but we surface the field so future tooling can
+    /// honour it.
+    pub locked: bool,
+    /// `Printable="true|false"` — InDesign's "Print Layer" checkbox.
+    /// Non-printable layers are skipped during rendering.
+    pub printable: bool,
 }
 
 /// Document-level color management config. Mirrors the attributes that
@@ -73,6 +97,23 @@ impl DesignMap {
                             after_blending_intent: attr(&e, b"AfterBlendingIntent"),
                             default_image_intent: attr(&e, b"DefaultImageIntent"),
                         };
+                    }
+                    if e.name().as_ref() == b"Layer" {
+                        if let Some(self_id) = attr(&e, b"Self") {
+                            out.layers.push(Layer {
+                                self_id,
+                                name: attr(&e, b"Name"),
+                                visible: attr(&e, b"Visible")
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(true),
+                                locked: attr(&e, b"Locked")
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(false),
+                                printable: attr(&e, b"Printable")
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(true),
+                            });
+                        }
                     }
                     let src = attr(&e, b"src");
                     match e.name().as_ref() {

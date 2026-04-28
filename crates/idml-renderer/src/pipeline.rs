@@ -392,12 +392,33 @@ pub fn build_document(
     // referenced from multiple pages is decoded once. The cached
     // DecodedImage is cloned into each page's image pool — the
     // memcpy is cheap; the saved decode (PNG/JPEG → RGBA) is not.
+    // Build a layer-visibility map once: any item whose `ItemLayer`
+    // points at a hidden or non-printable layer is suppressed. Items
+    // without an explicit ItemLayer always render — matches InDesign's
+    // single-layer-by-default behaviour.
+    let layer_renders: std::collections::HashMap<&str, bool> = document
+        .container
+        .designmap
+        .layers
+        .iter()
+        .map(|l| (l.self_id.as_str(), l.visible && l.printable))
+        .collect();
+    let layer_visible = |layer_ref: Option<&str>| -> bool {
+        match layer_ref {
+            Some(id) => layer_renders.get(id).copied().unwrap_or(true),
+            None => true,
+        }
+    };
+
     let mut decoded_image_cache: HashMap<String, idml_compose::DecodedImage> = HashMap::new();
     for (spread_idx, parsed) in document.spreads.iter().enumerate() {
         let spread = &parsed.spread;
         let range = spread_page_ranges[spread_idx].clone();
         let local_geoms = &page_geometries[range.clone()];
         for frame in &spread.text_frames {
+            if !layer_visible(frame.item_layer.as_deref()) {
+                continue;
+            }
             total_stats.frames += 1;
             // Frame.bounds are in the frame's *inner* coords; route
             // by transforming through ItemTransform first so the
@@ -420,6 +441,9 @@ pub fn build_document(
             );
         }
         for rect in &spread.rectangles {
+            if !layer_visible(rect.item_layer.as_deref()) {
+                continue;
+            }
             total_stats.frames += 1;
             let spread_bounds = transform_bounds(rect.bounds, rect.item_transform);
             let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
@@ -446,6 +470,9 @@ pub fn build_document(
             );
         }
         for oval in &spread.ovals {
+            if !layer_visible(oval.item_layer.as_deref()) {
+                continue;
+            }
             total_stats.frames += 1;
             let spread_bounds = transform_bounds(oval.bounds, oval.item_transform);
             let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
@@ -460,6 +487,9 @@ pub fn build_document(
             );
         }
         for line in &spread.graphic_lines {
+            if !layer_visible(line.item_layer.as_deref()) {
+                continue;
+            }
             total_stats.frames += 1;
             let spread_bounds = transform_bounds(line.bounds, line.item_transform);
             let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
@@ -468,6 +498,9 @@ pub fn build_document(
             emit_line_into(&mut pages[page_idx], &line, palette, cmyk_xform.as_ref());
         }
         for poly in &spread.polygons {
+            if !layer_visible(poly.item_layer.as_deref()) {
+                continue;
+            }
             total_stats.frames += 1;
             let spread_bounds = transform_bounds(poly.bounds, poly.item_transform);
             let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
@@ -1007,6 +1040,36 @@ fn emit_paragraph_into_chain(
         Vec::new()
     };
 
+    // Per-run uppercase override for `Capitalization=AllCaps |
+    // SmallCaps | CapToSmallCap`. We don't yet drive an OT smcp
+    // lookup, so SmallCaps falls back to AllCaps shaping — the metric
+    // gets the right glyph count and width even if the shape isn't
+    // optical-size-tuned. Allocates only for runs whose resolved
+    // capitalization actually differs from their input.
+    let capitalized: Vec<Option<String>> = paragraph
+        .runs
+        .iter()
+        .enumerate()
+        .map(|(i, run)| {
+            match resolved_runs[i].capitalization.as_deref() {
+                Some("AllCaps") | Some("SmallCaps") | Some("CapToSmallCap") => {
+                    let src: &str = if needs_page_subst {
+                        page_substituted[i].as_str()
+                    } else {
+                        &run.text
+                    };
+                    let upper = src.to_uppercase();
+                    if upper != src {
+                        Some(upper)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        })
+        .collect();
+
     let styled_runs: Vec<idml_text::StyledRun> = paragraph
         .runs
         .iter()
@@ -1014,12 +1077,16 @@ fn emit_paragraph_into_chain(
         .map(|(i, run)| idml_text::StyledRun {
             text: if i == 0 {
                 list_first_text.as_deref().unwrap_or_else(|| {
-                    if needs_page_subst {
+                    if let Some(c) = capitalized[i].as_deref() {
+                        c
+                    } else if needs_page_subst {
                         page_substituted[i].as_str()
                     } else {
                         &run.text
                     }
                 })
+            } else if let Some(c) = capitalized[i].as_deref() {
+                c
             } else if needs_page_subst {
                 page_substituted[i].as_str()
             } else {
@@ -1033,6 +1100,7 @@ fn emit_paragraph_into_chain(
             font_id: font_ids[i],
             underline: resolved_runs[i].underline.unwrap_or(false),
             strikethru: resolved_runs[i].strikethru.unwrap_or(false),
+            baseline_shift_pt: resolved_runs[i].baseline_shift.unwrap_or(0.0),
         })
         .collect();
 
@@ -2391,6 +2459,7 @@ fn emit_cell_paragraph(
             font_id: font_ids[i],
             underline: resolved_runs[i].underline.unwrap_or(false),
             strikethru: resolved_runs[i].strikethru.unwrap_or(false),
+            baseline_shift_pt: resolved_runs[i].baseline_shift.unwrap_or(0.0),
         })
         .collect();
     let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);

@@ -185,6 +185,11 @@ pub struct CharacterStyleDef {
     pub fill_color: Option<String>,
     /// `FillTint` — see `CharacterRun::fill_tint` for semantics.
     pub fill_tint: Option<f32>,
+    pub capitalization: Option<String>,
+    pub baseline_shift: Option<f32>,
+    pub horizontal_scale: Option<f32>,
+    pub vertical_scale: Option<f32>,
+    pub position: Option<String>,
     pub tracking: Option<f32>,
     pub underline: Option<bool>,
     pub strikethru: Option<bool>,
@@ -201,6 +206,11 @@ pub struct ParagraphStyleDef {
     pub fill_color: Option<String>,
     /// `FillTint` — see `CharacterRun::fill_tint` for semantics.
     pub fill_tint: Option<f32>,
+    pub capitalization: Option<String>,
+    pub baseline_shift: Option<f32>,
+    pub horizontal_scale: Option<f32>,
+    pub vertical_scale: Option<f32>,
+    pub position: Option<String>,
     pub tracking: Option<f32>,
     pub justification: Option<String>,
     pub first_line_indent: Option<f32>,
@@ -257,6 +267,11 @@ pub struct ResolvedCharacter {
     pub point_size: Option<f32>,
     pub fill_color: Option<String>,
     pub fill_tint: Option<f32>,
+    pub capitalization: Option<String>,
+    pub baseline_shift: Option<f32>,
+    pub horizontal_scale: Option<f32>,
+    pub vertical_scale: Option<f32>,
+    pub position: Option<String>,
     pub tracking: Option<f32>,
     pub underline: Option<bool>,
     pub strikethru: Option<bool>,
@@ -270,6 +285,11 @@ pub struct ResolvedParagraph {
     pub point_size: Option<f32>,
     pub fill_color: Option<String>,
     pub fill_tint: Option<f32>,
+    pub capitalization: Option<String>,
+    pub baseline_shift: Option<f32>,
+    pub horizontal_scale: Option<f32>,
+    pub vertical_scale: Option<f32>,
+    pub position: Option<String>,
     pub tracking: Option<f32>,
     pub justification: Option<String>,
     pub first_line_indent: Option<f32>,
@@ -709,6 +729,15 @@ impl ResolvedCharacter {
             self.fill_color = def.fill_color.clone();
         }
         self.fill_tint = self.fill_tint.or(def.fill_tint);
+        if self.capitalization.is_none() {
+            self.capitalization = def.capitalization.clone();
+        }
+        self.baseline_shift = self.baseline_shift.or(def.baseline_shift);
+        self.horizontal_scale = self.horizontal_scale.or(def.horizontal_scale);
+        self.vertical_scale = self.vertical_scale.or(def.vertical_scale);
+        if self.position.is_none() {
+            self.position = def.position.clone();
+        }
         self.tracking = self.tracking.or(def.tracking);
         self.underline = self.underline.or(def.underline);
         self.strikethru = self.strikethru.or(def.strikethru);
@@ -731,6 +760,15 @@ impl ResolvedParagraph {
             self.fill_color = def.fill_color.clone();
         }
         self.fill_tint = self.fill_tint.or(def.fill_tint);
+        if self.capitalization.is_none() {
+            self.capitalization = def.capitalization.clone();
+        }
+        self.baseline_shift = self.baseline_shift.or(def.baseline_shift);
+        self.horizontal_scale = self.horizontal_scale.or(def.horizontal_scale);
+        self.vertical_scale = self.vertical_scale.or(def.vertical_scale);
+        if self.position.is_none() {
+            self.position = def.position.clone();
+        }
         self.tracking = self.tracking.or(def.tracking);
         if self.justification.is_none() {
             self.justification = def.justification.clone();
@@ -773,6 +811,11 @@ fn parse_character_style(e: &quick_xml::events::BytesStart) -> Option<CharacterS
         point_size: attr(e, b"PointSize").and_then(|s| s.parse().ok()),
         fill_color: attr(e, b"FillColor"),
         fill_tint: parse_tint_attr(e, b"FillTint"),
+        capitalization: attr(e, b"Capitalization"),
+        baseline_shift: attr(e, b"BaselineShift").and_then(|s| s.parse().ok()),
+        horizontal_scale: attr(e, b"HorizontalScale").and_then(|s| s.parse().ok()),
+        vertical_scale: attr(e, b"VerticalScale").and_then(|s| s.parse().ok()),
+        position: attr(e, b"Position"),
         tracking: attr(e, b"Tracking").and_then(|s| s.parse().ok()),
         underline: attr(e, b"Underline").and_then(|s| s.parse().ok()),
         strikethru: attr(e, b"StrikeThru").and_then(|s| s.parse().ok()),
@@ -877,6 +920,11 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         point_size: attr(e, b"PointSize").and_then(|s| s.parse().ok()),
         fill_color: attr(e, b"FillColor"),
         fill_tint: parse_tint_attr(e, b"FillTint"),
+        capitalization: attr(e, b"Capitalization"),
+        baseline_shift: attr(e, b"BaselineShift").and_then(|s| s.parse().ok()),
+        horizontal_scale: attr(e, b"HorizontalScale").and_then(|s| s.parse().ok()),
+        vertical_scale: attr(e, b"VerticalScale").and_then(|s| s.parse().ok()),
+        position: attr(e, b"Position"),
         tracking: attr(e, b"Tracking").and_then(|s| s.parse().ok()),
         justification: attr(e, b"Justification"),
         first_line_indent: attr(e, b"FirstLineIndent").and_then(|s| s.parse().ok()),

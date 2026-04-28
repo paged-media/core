@@ -290,6 +290,11 @@ pub struct StyledRun<'a> {
     pub font_id: u32,
     pub underline: bool,
     pub strikethru: bool,
+    /// IDML `BaselineShift` in pt. Positive lifts glyphs above the
+    /// baseline; negative drops them. Applied per-glyph after layout
+    /// so the line height (computed from font metrics + leading)
+    /// stays unchanged.
+    pub baseline_shift_pt: f32,
 }
 
 /// Multi-font flavour of [`layout_paragraph`].
@@ -482,11 +487,14 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                 continue;
             }
             let run = &runs[fg.run_idx];
+            // IDML BaselineShift is positive-up; layout y grows down,
+            // so subtract.
+            let baseline_shift_64 = (run.baseline_shift_pt * ADVANCE_PRECISION).round() as i32;
             glyphs.push(PositionedGlyph {
                 glyph_id: fg.glyph_id,
                 cluster: fg.cluster,
                 x: pen_x + fg.x_offset,
-                y: baseline + fg.y_offset,
+                y: baseline + fg.y_offset - baseline_shift_64,
                 x_advance: fg.x_advance,
                 font_id: run.font_id,
                 point_size: run.point_size,
@@ -503,13 +511,14 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         if hyphenated {
             if let Some(idx) = last_run_idx {
                 let r = &runs[idx];
+                let baseline_shift_64 = (r.baseline_shift_pt * ADVANCE_PRECISION).round() as i32;
                 let hyphen_shape = shape_run(r.face, "-", r.point_size);
                 for g in &hyphen_shape.glyphs {
                     glyphs.push(PositionedGlyph {
                         glyph_id: g.glyph_id,
                         cluster: end.saturating_sub(1) as u32,
                         x: pen_x + g.x_offset,
-                        y: baseline + g.y_offset,
+                        y: baseline + g.y_offset - baseline_shift_64,
                         x_advance: g.x_advance,
                         font_id: r.font_id,
                         point_size: r.point_size,

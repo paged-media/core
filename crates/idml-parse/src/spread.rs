@@ -148,6 +148,9 @@ pub struct TextFrame {
     pub applied_object_style: Option<String>,
     /// `<TextWrapPreference>` parsed off the frame.
     pub text_wrap: Option<TextWrap>,
+    /// `ItemLayer` reference. Renderer skips items whose layer is
+    /// hidden or non-printable.
+    pub item_layer: Option<String>,
 }
 
 /// IDML `<TextFramePreference VerticalJustification="...">` values.
@@ -254,6 +257,10 @@ pub struct Rectangle {
     /// user-defined custom `<StrokeStyle>` definitions fall back to
     /// solid until full parser support lands.
     pub stroke_type: Option<String>,
+    /// `ItemLayer` reference (`<self_id>` of a `<Layer>` in
+    /// designmap.xml). The renderer skips this rectangle when its
+    /// layer is hidden or non-printable.
+    pub item_layer: Option<String>,
 }
 
 /// Mirrors IDML's `<FrameFittingOption>` — an optional element nested
@@ -295,6 +302,7 @@ pub struct Oval {
     pub applied_object_style: Option<String>,
     /// `<TextWrapPreference>` parsed off the oval.
     pub text_wrap: Option<TextWrap>,
+    pub item_layer: Option<String>,
 }
 
 /// Straight line — `<GraphicLine>` in IDML. The endpoints are the
@@ -311,6 +319,7 @@ pub struct GraphicLine {
     pub applied_object_style: Option<String>,
     /// `<TextWrapPreference>` parsed off the line.
     pub text_wrap: Option<TextWrap>,
+    pub item_layer: Option<String>,
 }
 
 /// One point on an IDML `<PathGeometry>` path. `anchor` is the
@@ -393,6 +402,7 @@ pub struct Polygon {
     /// `<TextWrapPreference>` parsed off the polygon, if any.
     /// `None` ⇒ the polygon does not exclude text.
     pub text_wrap: Option<TextWrap>,
+    pub item_layer: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
@@ -647,6 +657,7 @@ impl Spread {
                             inset_spacing: None,
                             applied_object_style: attr(&e, b"AppliedObjectStyle"),
                             text_wrap: None,
+                            item_layer: attr(&e, b"ItemLayer"),
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Text(out.text_frames.len() - 1),
@@ -677,6 +688,7 @@ impl Spread {
                             text_wrap: None,
                             frame_fitting: None,
                             stroke_type: attr(&e, b"StrokeType"),
+                            item_layer: attr(&e, b"ItemLayer"),
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Rect(out.rectangles.len() - 1),
@@ -704,6 +716,7 @@ impl Spread {
                             drop_shadow: None,
                             applied_object_style: attr(&e, b"AppliedObjectStyle"),
                             text_wrap: None,
+                            item_layer: attr(&e, b"ItemLayer"),
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Oval(out.ovals.len() - 1),
@@ -895,6 +908,7 @@ impl Spread {
                                 .and_then(|s| s.parse::<f32>().ok()),
                             applied_object_style: attr(&e, b"AppliedObjectStyle"),
                             text_wrap: None,
+                            item_layer: attr(&e, b"ItemLayer"),
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Line(out.graphic_lines.len() - 1),
@@ -922,6 +936,7 @@ impl Spread {
                             applied_object_style: attr(&e, b"AppliedObjectStyle"),
                             text_wrap: None,
                             anchors: Vec::new(),
+                            item_layer: attr(&e, b"ItemLayer"),
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Polygon(out.polygons.len() - 1),

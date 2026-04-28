@@ -304,6 +304,11 @@ impl ResolvedRunAttrs {
             point_size: run.point_size,
             fill_color: run.fill_color.clone(),
             fill_tint: run.fill_tint,
+            capitalization: run.capitalization.clone(),
+            baseline_shift: run.baseline_shift,
+            horizontal_scale: run.horizontal_scale,
+            vertical_scale: run.vertical_scale,
+            position: run.position.clone(),
             tracking: run.tracking,
             underline: run.underline,
             strikethru: run.strikethru,
@@ -323,6 +328,15 @@ impl ResolvedRunAttrs {
             self.fill_color = c.fill_color.clone();
         }
         self.fill_tint = self.fill_tint.or(c.fill_tint);
+        if self.capitalization.is_none() {
+            self.capitalization = c.capitalization.clone();
+        }
+        self.baseline_shift = self.baseline_shift.or(c.baseline_shift);
+        self.horizontal_scale = self.horizontal_scale.or(c.horizontal_scale);
+        self.vertical_scale = self.vertical_scale.or(c.vertical_scale);
+        if self.position.is_none() {
+            self.position = c.position.clone();
+        }
         self.tracking = self.tracking.or(c.tracking);
         self.underline = self.underline.or(c.underline);
         self.strikethru = self.strikethru.or(c.strikethru);
@@ -343,6 +357,15 @@ impl ResolvedRunAttrs {
             self.fill_color = p.fill_color.clone();
         }
         self.fill_tint = self.fill_tint.or(p.fill_tint);
+        if self.capitalization.is_none() {
+            self.capitalization = p.capitalization.clone();
+        }
+        self.baseline_shift = self.baseline_shift.or(p.baseline_shift);
+        self.horizontal_scale = self.horizontal_scale.or(p.horizontal_scale);
+        self.vertical_scale = self.vertical_scale.or(p.vertical_scale);
+        if self.position.is_none() {
+            self.position = p.position.clone();
+        }
         self.tracking = self.tracking.or(p.tracking);
         self.underline = self.underline.or(p.underline);
         self.strikethru = self.strikethru.or(p.strikethru);
@@ -438,6 +461,22 @@ pub struct ResolvedRunAttrs {
     /// at full strength. The renderer scales the resolved RGB toward
     /// paper white by `(1 - tint/100)` when `Some`.
     pub fill_tint: Option<f32>,
+    /// `Capitalization` value (Normal/AllCaps/SmallCaps/CapToSmallCap).
+    /// Renderer uppercases the input string before shaping for
+    /// `AllCaps` / `SmallCaps` (the latter without OT smcp lookup is
+    /// just AllCaps until proper font-feature support arrives).
+    pub capitalization: Option<String>,
+    /// `BaselineShift` in pt. Applied as a per-glyph y-offset.
+    pub baseline_shift: Option<f32>,
+    /// `HorizontalScale` percentage (100 = identity). Parsed; not
+    /// yet honoured by the rasterizer.
+    pub horizontal_scale: Option<f32>,
+    /// `VerticalScale` percentage (100 = identity). Parsed; not yet
+    /// honoured.
+    pub vertical_scale: Option<f32>,
+    /// `Position` value (Normal / Superscript / Subscript / etc).
+    /// Parsed; not yet honoured.
+    pub position: Option<String>,
     pub tracking: Option<f32>,
     pub underline: Option<bool>,
     pub strikethru: Option<bool>,
