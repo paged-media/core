@@ -303,6 +303,7 @@ impl ResolvedRunAttrs {
             font_style: run.font_style.clone(),
             point_size: run.point_size,
             fill_color: run.fill_color.clone(),
+            fill_tint: run.fill_tint,
             tracking: run.tracking,
             underline: run.underline,
             strikethru: run.strikethru,
@@ -321,6 +322,7 @@ impl ResolvedRunAttrs {
         if self.fill_color.is_none() {
             self.fill_color = c.fill_color.clone();
         }
+        self.fill_tint = self.fill_tint.or(c.fill_tint);
         self.tracking = self.tracking.or(c.tracking);
         self.underline = self.underline.or(c.underline);
         self.strikethru = self.strikethru.or(c.strikethru);
@@ -340,6 +342,7 @@ impl ResolvedRunAttrs {
         if self.fill_color.is_none() {
             self.fill_color = p.fill_color.clone();
         }
+        self.fill_tint = self.fill_tint.or(p.fill_tint);
         self.tracking = self.tracking.or(p.tracking);
         self.underline = self.underline.or(p.underline);
         self.strikethru = self.strikethru.or(p.strikethru);
@@ -419,6 +422,10 @@ pub struct ResolvedRunAttrs {
     pub font_style: Option<String>,
     pub point_size: Option<f32>,
     pub fill_color: Option<String>,
+    /// `FillTint` percentage (0..=100). `None` ⇒ use the swatch
+    /// at full strength. The renderer scales the resolved RGB toward
+    /// paper white by `(1 - tint/100)` when `Some`.
+    pub fill_tint: Option<f32>,
     pub tracking: Option<f32>,
     pub underline: Option<bool>,
     pub strikethru: Option<bool>,

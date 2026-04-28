@@ -1824,7 +1824,7 @@ fn emit_table_into_chain(
     // `end_row_fill_color` (count rows) starting from the first
     // *body* row. Cells with their own cell-style fill paint over
     // the alternating fill.
-    let alternating_fill_for_body_row = |body_row_idx: usize| -> Option<&str> {
+    let alternating_fill_for_body_row = |body_row_idx: usize| -> Option<(&str, Option<f32>)> {
         let start_n = resolved_table.start_row_fill_count.unwrap_or(0) as usize;
         let end_n = resolved_table.end_row_fill_count.unwrap_or(0) as usize;
         let cycle = start_n + end_n;
@@ -1833,9 +1833,15 @@ fn emit_table_into_chain(
         }
         let pos = body_row_idx % cycle;
         if pos < start_n {
-            resolved_table.start_row_fill_color.as_deref()
+            resolved_table
+                .start_row_fill_color
+                .as_deref()
+                .map(|c| (c, resolved_table.start_row_fill_tint))
         } else {
-            resolved_table.end_row_fill_color.as_deref()
+            resolved_table
+                .end_row_fill_color
+                .as_deref()
+                .map(|c| (c, resolved_table.end_row_fill_tint))
         }
     };
     for r in 0..total_rows {
@@ -1846,12 +1852,13 @@ fn emit_table_into_chain(
             continue;
         }
         let body_idx = r - header_count;
-        let Some(fill_id) = alternating_fill_for_body_row(body_idx) else {
+        let Some((fill_id, tint)) = alternating_fill_for_body_row(body_idx) else {
             continue;
         };
         let Some(paint) = color_id_to_paint(fill_id, em.palette, em.cmyk_xform) else {
             continue;
         };
+        let paint = apply_fill_tint(paint, tint);
         let basis = row_bases[r];
         let rect = Rect {
             x: basis.table_left_pt,
@@ -3276,7 +3283,8 @@ pub fn build_run_paint_picker_with_cmyk(
 
 /// Like [`build_run_paint_picker_with_cmyk`] but uses each run's
 /// cascaded `fill_color` (so a run that only carries an
-/// `AppliedCharacterStyle` still picks up the right paint).
+/// `AppliedCharacterStyle` still picks up the right paint). Applies
+/// the run's resolved `FillTint` after colour conversion.
 fn build_run_paint_picker_resolved(
     paragraph: &idml_parse::Paragraph,
     resolved_runs: &[idml_scene::ResolvedRunAttrs],
@@ -3287,15 +3295,46 @@ fn build_run_paint_picker_resolved(
     let mut bands: Vec<(u32, Paint)> = Vec::with_capacity(paragraph.runs.len());
     let mut cursor: u32 = 0;
     for (i, run) in paragraph.runs.iter().enumerate() {
-        let paint = resolved_runs[i]
+        // Resolve the swatch (or fall through to `default`) FIRST,
+        // then apply the run's `FillTint`. The tint affects both
+        // explicit swatches and the default paint — IDML treats it
+        // as a strength-of-current-fill modifier independent of
+        // whether the run carries a FillColor attribute.
+        let base = resolved_runs[i]
             .fill_color
             .as_deref()
             .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
             .unwrap_or(default);
+        let paint = apply_fill_tint(base, resolved_runs[i].fill_tint);
         bands.push((cursor, paint));
         cursor += run.text.len() as u32;
     }
     RunPaintPicker { bands, default }
+}
+
+/// Scale a paint toward paper white per the IDML `FillTint`
+/// percentage. `tint = 100` is identity; lower values blend toward
+/// white in linear-RGB space, matching InDesign's preview behaviour.
+/// `None` returns the input unchanged. Only applied to solid paints
+/// today — gradient stops are left as-is until the gradient
+/// resolution itself learns about per-stop tints.
+fn apply_fill_tint(paint: Paint, tint_pct: Option<f32>) -> Paint {
+    let Some(t) = tint_pct else {
+        return paint;
+    };
+    let t = (t / 100.0).clamp(0.0, 1.0);
+    if (t - 1.0).abs() < f32::EPSILON {
+        return paint;
+    }
+    match paint {
+        Paint::Solid(c) => Paint::Solid(Color::rgba(
+            1.0 + (c.r - 1.0) * t,
+            1.0 + (c.g - 1.0) * t,
+            1.0 + (c.b - 1.0) * t,
+            c.a,
+        )),
+        other => other,
+    }
 }
 
 /// Walk a laid-out line's glyphs and emit horizontal stroke

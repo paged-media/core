@@ -25,7 +25,7 @@
 use quick_xml::events::Event;
 use serde::Serialize;
 
-use crate::util::attr;
+use crate::util::{attr, parse_tint_attr};
 use crate::ParseError;
 
 /// Private-use Unicode codepoint placed inline by the story parser
@@ -156,6 +156,13 @@ pub struct CharacterRun {
     /// `FillColor="Color/..."` on the CharacterStyleRange; resolved
     /// against `Graphic`.
     pub fill_color: Option<String>,
+    /// `FillTint` percentage (0..=100). IDML semantics: 100% = use the
+    /// swatch at full strength, lower values blend toward paper white.
+    /// `-1` (or absent) means "use the swatch as-is" — translates to
+    /// `None`. The renderer applies the tint after CMYK→RGB so the
+    /// result matches InDesign's preview, where tints sit on top of
+    /// the colour-managed pipeline.
+    pub fill_tint: Option<f32>,
     /// `Tracking` in 1/1000 em (InDesign's unit — divide by 1000 to
     /// get the em fraction that should be added to every glyph's
     /// advance).
@@ -273,6 +280,7 @@ impl Story {
                             font_style: attr(&e, b"FontStyle"),
                             point_size: attr(&e, b"PointSize").and_then(|s| s.parse().ok()),
                             fill_color: attr(&e, b"FillColor"),
+                            fill_tint: parse_tint_attr(&e, b"FillTint"),
                             tracking: attr(&e, b"Tracking").and_then(|s| s.parse().ok()),
                             underline: attr(&e, b"Underline").and_then(|s| s.parse::<bool>().ok()),
                             strikethru: attr(&e, b"StrikeThru")

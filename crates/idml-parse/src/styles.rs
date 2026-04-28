@@ -27,7 +27,7 @@ use quick_xml::events::Event;
 use serde::Serialize;
 
 use crate::story::TabStop;
-use crate::util::attr;
+use crate::util::{attr, parse_tint_attr};
 use crate::ParseError;
 
 /// Maximum BasedOn chain length. IDML doesn't forbid cycles, so the
@@ -132,6 +132,7 @@ pub struct TableStyleDef {
     pub start_row_fill_tint: Option<f32>,
     pub end_row_fill_color: Option<String>,
     pub end_row_fill_count: Option<u32>,
+    pub end_row_fill_tint: Option<f32>,
 }
 
 /// Effective table-level attributes after walking BasedOn.
@@ -155,6 +156,7 @@ pub struct ResolvedTable {
     pub start_row_fill_tint: Option<f32>,
     pub end_row_fill_color: Option<String>,
     pub end_row_fill_count: Option<u32>,
+    pub end_row_fill_tint: Option<f32>,
 }
 
 /// Effective cell-level attributes after walking BasedOn.
@@ -181,6 +183,8 @@ pub struct CharacterStyleDef {
     pub font_style: Option<String>,
     pub point_size: Option<f32>,
     pub fill_color: Option<String>,
+    /// `FillTint` — see `CharacterRun::fill_tint` for semantics.
+    pub fill_tint: Option<f32>,
     pub tracking: Option<f32>,
     pub underline: Option<bool>,
     pub strikethru: Option<bool>,
@@ -195,6 +199,8 @@ pub struct ParagraphStyleDef {
     pub font_style: Option<String>,
     pub point_size: Option<f32>,
     pub fill_color: Option<String>,
+    /// `FillTint` — see `CharacterRun::fill_tint` for semantics.
+    pub fill_tint: Option<f32>,
     pub tracking: Option<f32>,
     pub justification: Option<String>,
     pub first_line_indent: Option<f32>,
@@ -231,6 +237,7 @@ pub struct ResolvedCharacter {
     pub font_style: Option<String>,
     pub point_size: Option<f32>,
     pub fill_color: Option<String>,
+    pub fill_tint: Option<f32>,
     pub tracking: Option<f32>,
     pub underline: Option<bool>,
     pub strikethru: Option<bool>,
@@ -243,6 +250,7 @@ pub struct ResolvedParagraph {
     pub font_style: Option<String>,
     pub point_size: Option<f32>,
     pub fill_color: Option<String>,
+    pub fill_tint: Option<f32>,
     pub tracking: Option<f32>,
     pub justification: Option<String>,
     pub first_line_indent: Option<f32>,
@@ -627,6 +635,7 @@ impl ResolvedTable {
         self.start_row_fill_count = self.start_row_fill_count.or(def.start_row_fill_count);
         self.start_row_fill_tint = self.start_row_fill_tint.or(def.start_row_fill_tint);
         self.end_row_fill_count = self.end_row_fill_count.or(def.end_row_fill_count);
+        self.end_row_fill_tint = self.end_row_fill_tint.or(def.end_row_fill_tint);
     }
 }
 
@@ -675,6 +684,7 @@ impl ResolvedCharacter {
         if self.fill_color.is_none() {
             self.fill_color = def.fill_color.clone();
         }
+        self.fill_tint = self.fill_tint.or(def.fill_tint);
         self.tracking = self.tracking.or(def.tracking);
         self.underline = self.underline.or(def.underline);
         self.strikethru = self.strikethru.or(def.strikethru);
@@ -696,6 +706,7 @@ impl ResolvedParagraph {
         if self.fill_color.is_none() {
             self.fill_color = def.fill_color.clone();
         }
+        self.fill_tint = self.fill_tint.or(def.fill_tint);
         self.tracking = self.tracking.or(def.tracking);
         if self.justification.is_none() {
             self.justification = def.justification.clone();
@@ -730,6 +741,7 @@ fn parse_character_style(e: &quick_xml::events::BytesStart) -> Option<CharacterS
         font_style: attr(e, b"FontStyle"),
         point_size: attr(e, b"PointSize").and_then(|s| s.parse().ok()),
         fill_color: attr(e, b"FillColor"),
+        fill_tint: parse_tint_attr(e, b"FillTint"),
         tracking: attr(e, b"Tracking").and_then(|s| s.parse().ok()),
         underline: attr(e, b"Underline").and_then(|s| s.parse().ok()),
         strikethru: attr(e, b"StrikeThru").and_then(|s| s.parse().ok()),
@@ -773,9 +785,10 @@ fn parse_table_style(e: &quick_xml::events::BytesStart) -> Option<TableStyleDef>
             .and_then(|s| s.parse().ok()),
         start_row_fill_color: normalize(attr(e, b"StartRowFillColor")),
         start_row_fill_count: attr(e, b"StartRowFillCount").and_then(|s| s.parse().ok()),
-        start_row_fill_tint: attr(e, b"StartRowFillTint").and_then(|s| s.parse().ok()),
+        start_row_fill_tint: parse_tint_attr(e, b"StartRowFillTint"),
         end_row_fill_color: normalize(attr(e, b"EndRowFillColor")),
         end_row_fill_count: attr(e, b"EndRowFillCount").and_then(|s| s.parse().ok()),
+        end_row_fill_tint: parse_tint_attr(e, b"EndRowFillTint"),
     })
 }
 
@@ -832,6 +845,7 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         font_style: attr(e, b"FontStyle"),
         point_size: attr(e, b"PointSize").and_then(|s| s.parse().ok()),
         fill_color: attr(e, b"FillColor"),
+        fill_tint: parse_tint_attr(e, b"FillTint"),
         tracking: attr(e, b"Tracking").and_then(|s| s.parse().ok()),
         justification: attr(e, b"Justification"),
         first_line_indent: attr(e, b"FirstLineIndent").and_then(|s| s.parse().ok()),
