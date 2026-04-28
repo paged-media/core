@@ -35,33 +35,93 @@ mod wasm {
         font: Option<Box<[u8]>>,
         dpi: f32,
     ) -> Result<Vec<u8>, JsError> {
+        let mut pngs = render_pages_inner(idml, font, dpi)?;
+        if pngs.is_empty() {
+            return Err(JsError::new("document has no pages"));
+        }
+        Ok(pngs.swap_remove(0))
+    }
+
+    /// Render every page of an IDML and return the PNG bytes as a
+    /// JS `Array<Uint8Array>`. Hosts iterate this to display the
+    /// document page-by-page; the array order matches body-page
+    /// order in the IDML manifest.
+    #[wasm_bindgen]
+    pub fn render_pages(
+        idml: &[u8],
+        font: Option<Box<[u8]>>,
+        dpi: f32,
+    ) -> Result<js_sys::Array, JsError> {
+        let pngs = render_pages_inner(idml, font, dpi)?;
+        let arr = js_sys::Array::new();
+        for png in pngs {
+            let u8a = js_sys::Uint8Array::new_with_length(png.len() as u32);
+            u8a.copy_from(&png);
+            arr.push(&u8a);
+        }
+        Ok(arr)
+    }
+
+    /// Lightweight structural report — page sizes + pipeline stats —
+    /// without rasterising. Hosts can size canvases and show counts
+    /// before kicking off a full render.
+    #[wasm_bindgen]
+    pub fn render_report(idml: &[u8]) -> Result<String, JsError> {
         let document =
             Document::open(idml).map_err(|e| JsError::new(&format!("open IDML: {e}")))?;
+        let opts = PipelineOptions::default();
+        let built = pipeline::build_document(&document, &opts)
+            .map_err(|e| JsError::new(&format!("build: {e}")))?;
+        let mut pages = String::from("[");
+        for (i, page) in built.pages.iter().enumerate() {
+            if i > 0 {
+                pages.push(',');
+            }
+            pages.push_str(&format!(
+                "{{\"index\":{},\"width_pt\":{:.3},\"height_pt\":{:.3}}}",
+                i, page.width_pt, page.height_pt,
+            ));
+        }
+        pages.push(']');
+        Ok(format!(
+            "{{\"pages\":{pages},\"stats\":{{\"spreads\":{},\"pages\":{},\
+             \"frames\":{},\"stories\":{},\"paragraphs\":{},\"runs\":{}}}}}",
+            built.stats.spreads,
+            built.stats.pages,
+            built.stats.frames,
+            built.stats.stories,
+            built.stats.paragraphs,
+            built.stats.runs,
+        ))
+    }
 
+    fn render_pages_inner(
+        idml: &[u8],
+        font: Option<Box<[u8]>>,
+        dpi: f32,
+    ) -> Result<Vec<Vec<u8>>, JsError> {
+        let document =
+            Document::open(idml).map_err(|e| JsError::new(&format!("open IDML: {e}")))?;
         let font_slice = font.as_deref();
         let opts = PipelineOptions {
             font: font_slice,
             ..PipelineOptions::default()
         };
-
-        // First page only — multi-page output goes through the
-        // forthcoming `render_pages_to_pngs` API.
-        let (_built, mut images) = pipeline::render_document(&document, &opts, dpi, Color::WHITE)
+        let (_built, images) = pipeline::render_document(&document, &opts, dpi, Color::WHITE)
             .map_err(|e| JsError::new(&format!("render: {e}")))?;
-        let img = images
-            .drain(..)
-            .next()
-            .ok_or_else(|| JsError::new("document has no pages"))?;
-
-        let mut out = Vec::with_capacity((img.width() * img.height() * 4) as usize);
-        PngEncoder::new(&mut out)
-            .write_image(
-                img.as_raw(),
-                img.width(),
-                img.height(),
-                image::ExtendedColorType::Rgba8,
-            )
-            .map_err(|e| JsError::new(&format!("png encode: {e}")))?;
+        let mut out = Vec::with_capacity(images.len());
+        for img in images {
+            let mut buf = Vec::with_capacity((img.width() * img.height() * 4) as usize);
+            PngEncoder::new(&mut buf)
+                .write_image(
+                    img.as_raw(),
+                    img.width(),
+                    img.height(),
+                    image::ExtendedColorType::Rgba8,
+                )
+                .map_err(|e| JsError::new(&format!("png encode: {e}")))?;
+            out.push(buf);
+        }
         Ok(out)
     }
 
