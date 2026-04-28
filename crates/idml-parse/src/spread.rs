@@ -84,6 +84,13 @@ pub struct Page {
     /// specific page (the "Master Page Overlay" feature). `None` ⇒
     /// identity.
     pub master_page_transform: Option<[f32; 6]>,
+    /// `OverrideList` attribute on the `<Page>` element — space-
+    /// separated list of master-spread item Self ids that this body
+    /// page has overridden. The body page typically holds replacement
+    /// frames for these items, so the original master items must NOT
+    /// be stamped onto the page (the renderer would otherwise paint
+    /// the placeholder under the body content).
+    pub override_list: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -560,6 +567,11 @@ impl Spread {
                                     .and_then(|s| parse_matrix(&s)),
                                 master_page_transform: attr(&e, b"MasterPageTransform")
                                     .and_then(|s| parse_matrix(&s)),
+                                override_list: attr(&e, b"OverrideList")
+                                    .map(|s| {
+                                        s.split_whitespace().map(str::to_string).collect()
+                                    })
+                                    .unwrap_or_default(),
                             });
                         }
                     }

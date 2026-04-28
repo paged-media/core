@@ -28,6 +28,16 @@ use serde::Serialize;
 use crate::util::attr;
 use crate::ParseError;
 
+/// Private-use Unicode codepoint placed inline by the story parser
+/// where IDML carries `<?ACE 18?>` (auto current-page-number).
+/// Renderers substitute this with the live page's number / Name
+/// at emit time. Picked from the U+E0xx Tag block — outside any
+/// rendered glyph plane, never produced by real text.
+pub const AUTO_PAGE_NUMBER_MARKER: char = '\u{E018}';
+/// Same idea for `<?ACE 19?>` (next-page-number marker; used in
+/// "continued on page" footers).
+pub const NEXT_PAGE_NUMBER_MARKER: char = '\u{E019}';
+
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct Story {
     pub paragraphs: Vec<Paragraph>,
@@ -382,6 +392,26 @@ impl Story {
                     if in_content {
                         if let Some(run) = current_run.as_mut() {
                             run.text.push_str(&t.unescape().unwrap_or_default());
+                        }
+                    }
+                }
+                Event::PI(pi) => {
+                    // InDesign serialises auto-page-number markers
+                    // inside <Content> as `<?ACE 18?>` processing
+                    // instructions. Map them to private-use chars
+                    // so the renderer can substitute the actual
+                    // page number per emission. ACE 18 is the
+                    // current-page-number marker; ACE 19 is the
+                    // next-page-number marker.
+                    if in_content {
+                        if let Some(run) = current_run.as_mut() {
+                            let body = pi.as_ref();
+                            let body_str = std::str::from_utf8(body).unwrap_or("");
+                            if body_str.trim_start().starts_with("ACE 18") {
+                                run.text.push(AUTO_PAGE_NUMBER_MARKER);
+                            } else if body_str.trim_start().starts_with("ACE 19") {
+                                run.text.push(NEXT_PAGE_NUMBER_MARKER);
+                            }
                         }
                     }
                 }

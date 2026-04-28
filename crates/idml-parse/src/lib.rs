@@ -29,7 +29,10 @@ pub use spread::{
     Bounds, DropShadowSetting, FirstBaselineOffset, GraphicLine, Oval, Page, PathAnchor, Polygon,
     Rectangle, Spread, TextFrame, TextWrap, TextWrapMode, VerticalJustification,
 };
-pub use story::{CharacterRun, Paragraph, Story, TabStop, Table, TableCell, TableColumn, TableRow};
+pub use story::{
+    CharacterRun, Paragraph, Story, TabStop, Table, TableCell, TableColumn, TableRow,
+    AUTO_PAGE_NUMBER_MARKER, NEXT_PAGE_NUMBER_MARKER,
+};
 pub use styles::{
     CellStyleDef, CharacterStyleDef, ObjectStyleDef, ParagraphStyleDef, ResolvedCell,
     ResolvedCharacter, ResolvedObject, ResolvedParagraph, ResolvedTable, StyleSheet, TableStyleDef,

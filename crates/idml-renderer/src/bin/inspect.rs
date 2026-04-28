@@ -30,8 +30,15 @@ struct Args {
     /// Register a TTF/OTF under a specific IDML family name. Pass as
     /// `--font-family "Open Sans=corpus/fonts/OpenSans.ttf"`. Repeatable.
     /// Takes precedence over `--default-font` for the named family.
-    #[arg(long, value_name = "NAME=PATH")]
+    /// Optional `/STYLE` suffix targets a specific FontStyle:
+    /// `--font-family "Open Sans/Italic=corpus/fonts/OpenSans-Italic.ttf"`.
+    #[arg(long, value_name = "NAME[/STYLE]=PATH")]
     font_family: Vec<String>,
+    /// Directory to search for linked images. The IDML stores URIs
+    /// like `file:///.../Links/Photo.jpg`; the resolver looks up the
+    /// basename in each registered dir. Repeatable.
+    #[arg(long, value_name = "DIR")]
+    links_dir: Vec<PathBuf>,
     /// Default point size used when a run has no explicit PointSize.
     #[arg(long, default_value_t = 12.0)]
     default_size: f32,
@@ -151,22 +158,36 @@ fn main() -> Result<()> {
         .as_deref()
         .map(|p| std::fs::read(p).with_context(|| format!("read default font {}", p.display())))
         .transpose()?;
-    let mut family_registrations: Vec<(String, Vec<u8>)> = Vec::new();
+    // --font-family accepts two shapes:
+    //   "Family=PATH"        — registered for any style of that family
+    //   "Family/Style=PATH"   — registered only for that exact style
+    //                           (matches IDML's "FontStyle" attribute)
+    // Style example: "Italic", "Bold", "Bold Italic", "Light".
+    let mut family_registrations: Vec<(String, Option<String>, Vec<u8>)> = Vec::new();
     for spec in &args.font_family {
-        let (name, path) = spec
+        let (lhs, path) = spec
             .split_once('=')
-            .with_context(|| format!("--font-family expects NAME=PATH, got {spec}"))?;
-        let bytes = std::fs::read(path).with_context(|| format!("read font for {name}: {path}"))?;
-        family_registrations.push((name.to_string(), bytes));
+            .with_context(|| format!("--font-family expects NAME[/STYLE]=PATH, got {spec}"))?;
+        let (family, style) = match lhs.split_once('/') {
+            Some((f, s)) => (f.to_string(), Some(s.to_string())),
+            None => (lhs.to_string(), None),
+        };
+        let bytes =
+            std::fs::read(path).with_context(|| format!("read font for {family}: {path}"))?;
+        family_registrations.push((family, style, bytes));
     }
-    let resolver = if default_font_bytes.is_some() || !family_registrations.is_empty() {
+    let resolver = if default_font_bytes.is_some()
+        || !family_registrations.is_empty()
+        || !args.links_dir.is_empty()
+    {
         let mut r = idml_renderer::BytesResolver::new();
-        for (name, bytes) in &family_registrations {
-            r.add_font(name, None, bytes.clone());
+        for (family, style, bytes) in &family_registrations {
+            r.add_font(family, style.as_deref(), bytes.clone());
         }
         if let Some(bytes) = default_font_bytes.as_ref() {
             r.default_font = Some(bytes.clone().into());
         }
+        r.link_dirs = args.links_dir.clone();
         Some(r)
     } else {
         None

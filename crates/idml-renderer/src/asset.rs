@@ -53,6 +53,13 @@ pub struct BytesResolver {
     /// run shapes through that. `None` ⇒ unresolved fonts return
     /// `None` and the renderer falls back to its `font` option.
     pub default_font: Option<Bytes>,
+    /// Filesystem fallback for linked images. When the in-memory
+    /// `images` HashMap doesn't carry an entry for a URI, the
+    /// resolver tries the basename of the URI under each of these
+    /// directories. Lets templates that ship with a `Links/`
+    /// folder (the customer-template convention) resolve photos
+    /// without manually pre-loading every URI.
+    pub link_dirs: Vec<std::path::PathBuf>,
 }
 
 impl BytesResolver {
@@ -98,7 +105,28 @@ impl AssetResolver for BytesResolver {
     }
 
     fn resolve_image(&self, uri: &str) -> Option<Bytes> {
-        self.images.get(uri).cloned()
+        if let Some(b) = self.images.get(uri).cloned() {
+            return Some(b);
+        }
+        // Filesystem fallback. URIs from real-world IDMLs are
+        // typically `file:///path/to/Links/Photo.jpg` — strip the
+        // scheme and try the basename in each registered dir.
+        let path = uri
+            .strip_prefix("file://")
+            .map(|p| p.strip_prefix('/').unwrap_or(p))
+            .unwrap_or(uri);
+        let basename = std::path::Path::new(path)
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned());
+        for dir in &self.link_dirs {
+            if let Some(name) = basename.as_deref() {
+                let candidate = dir.join(name);
+                if let Ok(bytes) = std::fs::read(&candidate) {
+                    return Some(Bytes::from(bytes));
+                }
+            }
+        }
+        None
     }
 
     fn resolve_icc(&self, name: &str) -> Option<Bytes> {

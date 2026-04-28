@@ -208,6 +208,11 @@ pub fn build_document(
     // top). Master frames are stamped into every page that references
     // the master.
     //
+    // (master_text_emissions is populated in this loop and consumed by
+    // a later master-story pass that emits page-number footers, headers,
+    // and other master story content per body page.)
+    let mut master_text_emissions: Vec<(usize, TextFrame)> = Vec::new();
+    //
     // Per IDML spec §10.3.3, master items live in master-spread
     // coords (each master page maps to spread via its own
     // ItemTransform). The live `<Page>`'s `MasterPageTransform`
@@ -227,6 +232,16 @@ pub fn build_document(
         if master.spread.pages.is_empty() {
             continue;
         }
+        // Body-page OverrideList enumerates master items the body has
+        // replaced with its own copies — skip them here so we don't
+        // stamp the placeholder under the body's override.
+        let body_page = document.spreads[geom.host_spread_idx]
+            .spread
+            .pages
+            .get(geom.local_page_idx);
+        let override_set: std::collections::HashSet<&str> = body_page
+            .map(|p| p.override_list.iter().map(String::as_str).collect())
+            .unwrap_or_default();
 
         // Each master page in spread coords. Master items get routed
         // to one of these by their own spread-coord centroid; the
@@ -287,6 +302,13 @@ pub fn build_document(
             if master_page_for(spread_b) != local_master_page_idx {
                 continue;
             }
+            if frame
+                .self_id
+                .as_deref()
+                .is_some_and(|id| override_set.contains(id))
+            {
+                continue;
+            }
             total_stats.frames += 1;
             // Master items live in master-spread coords. Compose an
             // outer translate(dx, dy) into the frame's existing
@@ -306,10 +328,25 @@ pub fn build_document(
                 cmyk_xform.as_ref(),
                 None, // master items don't carry a drop shadow today.
             );
+            // Stash a relocated copy so the master-story pass below
+            // can flow this frame's hosted story (page-number footers,
+            // running headers, etc.) onto this body page. Skipping it
+            // when ParentStory is missing is fine — the rectangle was
+            // still drawn above.
+            if copy.parent_story.is_some() {
+                master_text_emissions.push((i, copy));
+            }
         }
         for rect in &master.spread.rectangles {
             let spread_b = transform_bounds(rect.bounds, rect.item_transform);
             if master_page_for(spread_b) != local_master_page_idx {
+                continue;
+            }
+            if rect
+                .self_id
+                .as_deref()
+                .is_some_and(|id| override_set.contains(id))
+            {
                 continue;
             }
             total_stats.frames += 1;
@@ -449,6 +486,60 @@ pub fn build_document(
     // frame's effective column width and shift its origin past any
     // intruding shape.
     let wrap_rects_per_page = collect_wrap_rects_per_page(document, &spread_page_ranges);
+
+    // Master-story pass: emit each master text frame's hosted story
+    // (page-number footers, running headers) per body page that
+    // references the master. The frame copies stashed during the
+    // master overlay pass already carry the dx/dy translation from
+    // master-spread coords to live spread coords, so a single-frame
+    // chain is enough for the StoryEmitter.
+    //
+    // Per-page emission is what makes <?ACE 18?> resolve to the live
+    // page number — pipeline.rs::emit_paragraph reads chain_pages[
+    // frame_idx] and substitutes AUTO_PAGE_NUMBER_MARKER with that
+    // body page's index. Run before the body-story pass so master
+    // content sits below body content; future work to hard-enforce
+    // z-order (rather than rely on display-list append order) should
+    // tag these commands as "master layer" if/when we add layering.
+    for (page_idx, master_frame) in &master_text_emissions {
+        let Some(story_id) = master_frame.parent_story.as_deref() else {
+            continue;
+        };
+        // When the body spreads carry their own frame for this same
+        // story, the body has overridden the master placeholder (IDML
+        // "Override Master Page Items"). The body-story pass below
+        // will emit it — skipping here avoids the doubled header you
+        // get when both copies render on top of each other.
+        if !document.frame_chain(story_id).is_empty() {
+            continue;
+        }
+        let Some(parsed) = document
+            .stories
+            .iter()
+            .find(|s| s.self_id == story_id)
+        else {
+            continue;
+        };
+        let chain: Vec<&TextFrame> = vec![master_frame];
+        let chain_pages: Vec<usize> = vec![*page_idx];
+        let head_wrap_rects: &[idml_parse::Bounds] = &[];
+        let chain_wrap_rects: Vec<&[idml_parse::Bounds]> = vec![&[]];
+        let mut emitter = StoryEmitter::new(
+            document,
+            options,
+            palette,
+            cmyk_xform.as_ref(),
+            &font_table,
+            chain,
+            chain_pages,
+            head_wrap_rects,
+            chain_wrap_rects,
+        );
+        for paragraph in &parsed.story.paragraphs {
+            emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
+        }
+        emitter.apply_vertical_justification(&mut pages);
+    }
 
     for parsed in &document.stories {
         total_stats.stories += 1;
@@ -835,13 +926,47 @@ fn emit_paragraph_into_chain(
                 .map(|r| format!("{prefix}{}", r.text))
         });
 
+    // Substitute IDML auto-page-number markers with the current
+    // page number. The parser leaves a private-use sentinel in
+    // run.text; expand here so master-spread footers print the
+    // live page number rather than nothing.
+    let current_page_str = (em.chain_pages[em.frame_idx] + 1).to_string();
+    let next_page_str = (em.chain_pages[em.frame_idx] + 2).to_string();
+    let needs_page_subst = paragraph.runs.iter().any(|r| {
+        r.text.contains(idml_parse::AUTO_PAGE_NUMBER_MARKER)
+            || r.text.contains(idml_parse::NEXT_PAGE_NUMBER_MARKER)
+    }) || list_first_text
+        .as_deref()
+        .is_some_and(|t| t.contains(idml_parse::AUTO_PAGE_NUMBER_MARKER));
+    let page_substituted: Vec<String> = if needs_page_subst {
+        paragraph
+            .runs
+            .iter()
+            .map(|r| {
+                r.text
+                    .replace(idml_parse::AUTO_PAGE_NUMBER_MARKER, &current_page_str)
+                    .replace(idml_parse::NEXT_PAGE_NUMBER_MARKER, &next_page_str)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     let styled_runs: Vec<idml_text::StyledRun> = paragraph
         .runs
         .iter()
         .enumerate()
         .map(|(i, run)| idml_text::StyledRun {
             text: if i == 0 {
-                list_first_text.as_deref().unwrap_or(&run.text)
+                list_first_text.as_deref().unwrap_or_else(|| {
+                    if needs_page_subst {
+                        page_substituted[i].as_str()
+                    } else {
+                        &run.text
+                    }
+                })
+            } else if needs_page_subst {
+                page_substituted[i].as_str()
             } else {
                 &run.text
             },
