@@ -87,17 +87,19 @@ impl IccTransform {
     /// Convert a single CMYK percentage triple to linear RGB.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn cmyk_percent_to_linear_rgb(&self, cmyk: Cmyk) -> LinearRgb {
-        // lcms2 expects CMYK on [0..1] (inverse-density convention),
-        // not percentages. Divide by 100 at the boundary.
-        let input = [[
-            cmyk.c / 100.0,
-            cmyk.m / 100.0,
-            cmyk.y / 100.0,
-            cmyk.k / 100.0,
-        ]];
+        // lcms2 PixelFormat::CMYK_FLT expects values on the 0..100
+        // percentage scale (NOT 0..1 normalised; that produces near-
+        // white output for every input). Pass the IDML percentages
+        // through unchanged. Output values can fall slightly outside
+        // [0,1] for out-of-gamut colours; clamp to the working space.
+        let input = [[cmyk.c, cmyk.m, cmyk.y, cmyk.k]];
         let mut output = [[0.0f32; 3]];
         self.inner.transform.transform_pixels(&input, &mut output);
-        LinearRgb(output[0])
+        LinearRgb([
+            output[0][0].clamp(0.0, 1.0),
+            output[0][1].clamp(0.0, 1.0),
+            output[0][2].clamp(0.0, 1.0),
+        ])
     }
 
     #[cfg(target_arch = "wasm32")]

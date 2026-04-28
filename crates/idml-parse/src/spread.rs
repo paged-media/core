@@ -91,6 +91,14 @@ pub struct Page {
     /// be stamped onto the page (the renderer would otherwise paint
     /// the placeholder under the body content).
     pub override_list: Vec<String>,
+    /// `Name` attribute on the `<Page>` element — the user-visible
+    /// page number/label as InDesign rendered it (already accounting
+    /// for `<Section>` numbering style + start). Typically "1" / "2"
+    /// for plain Arabic, but can be "iii", "A-3", etc. when sections
+    /// override the style. The renderer substitutes this for ACE 18
+    /// auto-page-number markers; if absent, it falls back to the
+    /// 1-based body page index.
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -572,6 +580,7 @@ impl Spread {
                                         s.split_whitespace().map(str::to_string).collect()
                                     })
                                     .unwrap_or_default(),
+                                name: attr(&e, b"Name"),
                             });
                         }
                     }

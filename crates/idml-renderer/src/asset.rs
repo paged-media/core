@@ -108,21 +108,49 @@ impl AssetResolver for BytesResolver {
         if let Some(b) = self.images.get(uri).cloned() {
             return Some(b);
         }
-        // Filesystem fallback. URIs from real-world IDMLs are
-        // typically `file:///path/to/Links/Photo.jpg` — strip the
-        // scheme and try the basename in each registered dir.
+        // Real-world URIs are messy: `file:///abs/path`, `file:C:/...`
+        // (the Windows shape InDesign emits with no double slash),
+        // bare relative paths, or URL-encoded basenames. Strip the
+        // scheme and split into a plain path + basename so we can
+        // probe the image map both ways.
         let path = uri
             .strip_prefix("file://")
+            .or_else(|| uri.strip_prefix("file:"))
             .map(|p| p.strip_prefix('/').unwrap_or(p))
             .unwrap_or(uri);
+        if let Some(b) = self.images.get(path).cloned() {
+            return Some(b);
+        }
         let basename = std::path::Path::new(path)
             .file_name()
             .map(|s| s.to_string_lossy().into_owned());
+        if let Some(name) = basename.as_deref() {
+            if let Some(b) = self.images.get(name).cloned() {
+                return Some(b);
+            }
+            // Some IDMLs URL-encode spaces / unicode in URIs (e.g.
+            // "Pagination.com%20-%20Logo.pdf") while the on-disk
+            // basename is the decoded form. Try a percent-decoded
+            // pass too.
+            let decoded = percent_decode(name);
+            if decoded != name {
+                if let Some(b) = self.images.get(&decoded).cloned() {
+                    return Some(b);
+                }
+            }
+        }
         for dir in &self.link_dirs {
             if let Some(name) = basename.as_deref() {
                 let candidate = dir.join(name);
                 if let Ok(bytes) = std::fs::read(&candidate) {
                     return Some(Bytes::from(bytes));
+                }
+                let decoded = percent_decode(name);
+                if decoded != name {
+                    let candidate = dir.join(&decoded);
+                    if let Ok(bytes) = std::fs::read(&candidate) {
+                        return Some(Bytes::from(bytes));
+                    }
                 }
             }
         }
@@ -139,6 +167,30 @@ fn font_key(family: &str, style: Option<&str>) -> String {
         Some(s) if !s.is_empty() && s != "Regular" => format!("{family} {s}"),
         _ => family.to_string(),
     }
+}
+
+/// Decode `%XX` percent-escapes. Only ASCII hex pairs decode; anything
+/// else passes through untouched. Used by the image resolver because
+/// IDML LinkResourceURIs URL-encode spaces and unicode but on-disk
+/// basenames are usually the decoded form.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(h), Some(l)) = (hi, lo) {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
 }
 
 #[cfg(test)]

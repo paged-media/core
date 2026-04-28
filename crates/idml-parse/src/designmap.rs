@@ -15,6 +15,32 @@ pub struct DesignMap {
     pub spreads: Vec<SpreadRef>,
     pub stories: Vec<StoryRef>,
     pub master_spreads: Vec<String>,
+    /// Document-level color management settings, extracted from the
+    /// root `<Document>` element. Drives ICC transform construction —
+    /// the renderer matches `color_settings.cmyk_profile` against its
+    /// bundled profile set and falls back to a naive CMYK→sRGB
+    /// approximation when the named profile isn't shipped.
+    pub color_settings: ColorSettings,
+}
+
+/// Document-level color management config. Mirrors the attributes that
+/// real InDesign exports carry on the `<Document>` element (CS6 / IDML
+/// 8.0). Empty defaults match "no opinion" and let the renderer pick
+/// a global fallback.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct ColorSettings {
+    /// `CMYKProfile` attribute, e.g. `"Coated FOGRA39 (ISO 12647-2:2004)"`.
+    pub cmyk_profile: Option<String>,
+    /// `RGBProfile` attribute, e.g. `"sRGB IEC61966-2.1"`.
+    pub rgb_profile: Option<String>,
+    /// `SolidColorIntent` — typically `"UseColorSettings"` (use the
+    /// document's working spaces) or one of `Perceptual`,
+    /// `Saturation`, `RelativeColorimetric`, `AbsoluteColorimetric`.
+    pub solid_color_intent: Option<String>,
+    /// `AfterBlendingIntent` — same value space as `solid_color_intent`.
+    pub after_blending_intent: Option<String>,
+    /// `DefaultImageIntent` — same value space.
+    pub default_image_intent: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -39,6 +65,15 @@ impl DesignMap {
         loop {
             match reader.read_event_into(&mut buf)? {
                 Event::Start(e) | Event::Empty(e) => {
+                    if e.name().as_ref() == b"Document" {
+                        out.color_settings = ColorSettings {
+                            cmyk_profile: attr(&e, b"CMYKProfile"),
+                            rgb_profile: attr(&e, b"RGBProfile"),
+                            solid_color_intent: attr(&e, b"SolidColorIntent"),
+                            after_blending_intent: attr(&e, b"AfterBlendingIntent"),
+                            default_image_intent: attr(&e, b"DefaultImageIntent"),
+                        };
+                    }
                     let src = attr(&e, b"src");
                     match e.name().as_ref() {
                         b"idPkg:Spread" => {

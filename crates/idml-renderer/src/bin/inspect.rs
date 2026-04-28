@@ -39,6 +39,14 @@ struct Args {
     /// basename in each registered dir. Repeatable.
     #[arg(long, value_name = "DIR")]
     links_dir: Vec<PathBuf>,
+    /// CMYK ICC profile to use for color conversion. Overrides the
+    /// document's declared `CMYKProfile`. When omitted, the renderer
+    /// auto-probes the Adobe ColorSync directory for a profile matching
+    /// the document's declared name (e.g. "Coated FOGRA39 (ISO
+    /// 12647-2:2004)" → CoatedFOGRA39.icc); falls back to a naive
+    /// CMYK→sRGB approximation when nothing matches.
+    #[arg(long, value_name = "PATH")]
+    cmyk_profile: Option<PathBuf>,
     /// Default point size used when a run has no explicit PointSize.
     #[arg(long, default_value_t = 12.0)]
     default_size: f32,
@@ -176,9 +184,23 @@ fn main() -> Result<()> {
             std::fs::read(path).with_context(|| format!("read font for {family}: {path}"))?;
         family_registrations.push((family, style, bytes));
     }
+    // Pre-load every image-shaped entry from the IDML container so the
+    // resolver can serve URIs that point inside the package (Resources/
+    // *.png, embedded JPEGs, etc.). Indexes by full archive path AND
+    // by basename — IDML LinkResourceURIs are commonly absolute paths
+    // baked at packaging time and we just want to match the basename.
+    let embedded_images: Vec<(String, bytes::Bytes)> = document
+        .container
+        .entries
+        .iter()
+        .filter(|(name, _)| is_image_path(name))
+        .map(|(name, bytes)| (name.clone(), bytes.clone()))
+        .collect();
+
     let resolver = if default_font_bytes.is_some()
         || !family_registrations.is_empty()
         || !args.links_dir.is_empty()
+        || !embedded_images.is_empty()
     {
         let mut r = idml_renderer::BytesResolver::new();
         for (family, style, bytes) in &family_registrations {
@@ -187,8 +209,45 @@ fn main() -> Result<()> {
         if let Some(bytes) = default_font_bytes.as_ref() {
             r.default_font = Some(bytes.clone().into());
         }
+        for (path, bytes) in &embedded_images {
+            r.add_image(path.clone(), bytes.clone());
+            if let Some(name) = std::path::Path::new(path)
+                .file_name()
+                .and_then(|s| s.to_str())
+            {
+                r.add_image(name.to_string(), bytes.clone());
+            }
+        }
         r.link_dirs = args.links_dir.clone();
         Some(r)
+    } else {
+        None
+    };
+
+    // Resolve the CMYK ICC profile bytes — explicit CLI override wins;
+    // otherwise probe the document's declared name against the
+    // host's Adobe ColorSync install. Naive fallback is fine.
+    let cmyk_profile_bytes: Option<Vec<u8>> = if let Some(path) = args.cmyk_profile.as_deref() {
+        Some(std::fs::read(path).with_context(|| format!("read {}", path.display()))?)
+    } else if let Some(name) = document
+        .container
+        .designmap
+        .color_settings
+        .cmyk_profile
+        .as_deref()
+    {
+        match resolve_cmyk_profile_by_name(name) {
+            Some(bytes) => {
+                eprintln!("color: using CMYK profile match for {name:?}");
+                Some(bytes)
+            }
+            None => {
+                eprintln!(
+                    "color: no CMYK profile match for {name:?}; falling back to naive math"
+                );
+                None
+            }
+        }
     } else {
         None
     };
@@ -198,6 +257,7 @@ fn main() -> Result<()> {
         assets: resolver
             .as_ref()
             .map(|r| r as &dyn idml_renderer::AssetResolver),
+        cmyk_icc_profile: cmyk_profile_bytes.as_deref(),
         default_point_size: args.default_size,
         fallback_column_width_pt: args.column_width_pt,
         ..PipelineOptions::default()
@@ -376,6 +436,75 @@ fn build_json_report(
         },
         "renders": renders,
     })
+}
+
+/// Resolve an IDML-declared `CMYKProfile` name (e.g. `"Coated FOGRA39
+/// (ISO 12647-2:2004)"`) to ICC bytes by mapping common Adobe profile
+/// names to Adobe's standard Recommended/ filenames, then probing the
+/// host's per-platform install location. We deliberately avoid bundling
+/// these — they're large and individually licensed by their issuers.
+fn resolve_cmyk_profile_by_name(name: &str) -> Option<Vec<u8>> {
+    // Strip parenthetical suffix and trim — IDML serialises the full
+    // human description, but the Adobe filename only encodes the
+    // profile family.
+    let head = name
+        .split_once('(')
+        .map(|(h, _)| h.trim())
+        .unwrap_or(name)
+        .trim();
+    // Map common names → Adobe Recommended/ filename. The list is
+    // hand-curated; unknown names fall through to None.
+    let filename = match head {
+        "Coated FOGRA39" | "Coated Fogra39" => "CoatedFOGRA39.icc",
+        "Coated FOGRA27" => "CoatedFOGRA27.icc",
+        "Uncoated FOGRA29" => "UncoatedFOGRA29.icc",
+        "Web Coated FOGRA28" => "WebCoatedFOGRA28.icc",
+        "Coated GRACoL 2006" | "Coated GRACoL2006" => "CoatedGRACoL2006.icc",
+        "U.S. Web Coated (SWOP) v2" | "U.S. Web Coated SWOP v2" => "USWebCoatedSWOP.icc",
+        "U.S. Sheetfed Coated v2" => "USSheetfedCoated.icc",
+        "U.S. Sheetfed Uncoated v2" => "USSheetfedUncoated.icc",
+        "U.S. Web Uncoated v2" => "USWebUncoated.icc",
+        "Web Coated SWOP 2006 Grade 3 Paper" => "WebCoatedSWOP2006Grade3.icc",
+        "Web Coated SWOP 2006 Grade 5 Paper" => "WebCoatedSWOP2006Grade5.icc",
+        "Japan Color 2001 Coated" => "JapanColor2001Coated.icc",
+        "Japan Color 2001 Uncoated" => "JapanColor2001Uncoated.icc",
+        "Japan Color 2002 Newspaper" => "JapanColor2002Newspaper.icc",
+        "Japan Color 2003 Web Coated" => "JapanColor2003WebCoated.icc",
+        "Japan Web Coated (Ad)" | "Japan Web Coated" => "JapanWebCoated.icc",
+        "US Newsprint (SNAP 2007)" => "USNewsprintSNAP2007.icc",
+        _ => return None,
+    };
+    // Per-platform Adobe Recommended dirs (Adobe Creative Cloud and
+    // legacy Adobe Color package both install here). The user can
+    // always override via --cmyk-profile when these miss.
+    let dirs: &[&str] = if cfg!(target_os = "macos") {
+        &["/Library/Application Support/Adobe/Color/Profiles/Recommended"]
+    } else if cfg!(target_os = "windows") {
+        &["C:/Program Files (x86)/Common Files/Adobe/Color/Profiles/Recommended"]
+    } else {
+        &["/usr/share/color/icc", "/usr/share/color/icc/colord"]
+    };
+    for dir in dirs {
+        let candidate = std::path::Path::new(dir).join(filename);
+        if let Ok(bytes) = std::fs::read(&candidate) {
+            return Some(bytes);
+        }
+    }
+    None
+}
+
+/// True for archive paths whose extension marks them as a bitmap or
+/// PDF placed-content asset. Used to harvest the IDML container's
+/// embedded images into the asset resolver so LinkResourceURIs that
+/// point inside the package resolve without an external Links/ dir.
+fn is_image_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    matches!(
+        std::path::Path::new(&lower)
+            .extension()
+            .and_then(|s| s.to_str()),
+        Some("png" | "jpg" | "jpeg" | "gif" | "tif" | "tiff" | "bmp" | "webp" | "pdf" | "psd" | "ai")
+    )
 }
 
 fn page_output_path(base: &std::path::Path, page_index: usize) -> std::path::PathBuf {

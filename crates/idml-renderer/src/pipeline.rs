@@ -152,6 +152,7 @@ pub fn build_document(
     // only to that range, since each IDML spread has its own
     // coordinate system and two spreads' page bounds can collide.
     let mut page_geometries: Vec<PageGeom> = Vec::new();
+    let mut page_labels: Vec<String> = Vec::new();
     let mut spread_page_ranges: Vec<std::ops::Range<usize>> =
         Vec::with_capacity(document.spreads.len());
     for (spread_idx, parsed) in document.spreads.iter().enumerate() {
@@ -169,6 +170,16 @@ pub fn build_document(
                 host_spread_idx: spread_idx,
                 local_page_idx: local_idx,
             });
+            // Page.Name carries the user-visible label as InDesign
+            // rendered it (Arabic / Roman / arbitrary section
+            // override). Falling back to the 1-based body-page index
+            // matches the pre-Section behaviour for IDMLs that omit
+            // Name (rare; mostly synthetic test fixtures).
+            page_labels.push(
+                p.name
+                    .clone()
+                    .unwrap_or_else(|| (pages.len() + 1).to_string()),
+            );
             pages.push(BuiltPage {
                 width_pt: bounds_in_spread.width(),
                 height_pt: bounds_in_spread.height(),
@@ -201,6 +212,7 @@ pub fn build_document(
             host_spread_idx: 0,
             local_page_idx: 0,
         });
+        page_labels.push("1".to_string());
     }
 
     // Master-spread pass — runs first so master items end up at the
@@ -532,6 +544,7 @@ pub fn build_document(
             &font_table,
             chain,
             chain_pages,
+            &page_labels,
             head_wrap_rects,
             chain_wrap_rects,
         );
@@ -581,6 +594,7 @@ pub fn build_document(
             &font_table,
             chain,
             chain_pages,
+            &page_labels,
             head_wrap_rects,
             chain_wrap_rects,
         );
@@ -618,6 +632,11 @@ struct StoryEmitter<'a> {
     font_table: &'a FontTable,
     chain: Vec<&'a TextFrame>,
     chain_pages: Vec<usize>,
+    /// User-visible page labels indexed by flat body-page idx (parallel
+    /// to `pages`). The auto-page-number marker substitutes
+    /// `page_labels[chain_pages[frame_idx]]`; ACE 19 looks one slot
+    /// further ahead. Owned by the document, not the emitter.
+    page_labels: &'a [String],
     column_width_pt: Option<f32>,
     /// Inner-coord x-shift to apply to the head frame's text
     /// origin when an obstacle on the page intrudes from the left
@@ -674,6 +693,7 @@ impl<'a> StoryEmitter<'a> {
         font_table: &'a FontTable,
         chain: Vec<&'a TextFrame>,
         chain_pages: Vec<usize>,
+        page_labels: &'a [String],
         head_wrap_rects: &[idml_parse::Bounds],
         chain_wrap_rects: Vec<&[idml_parse::Bounds]>,
     ) -> Self {
@@ -742,6 +762,7 @@ impl<'a> StoryEmitter<'a> {
             font_table,
             chain,
             chain_pages,
+            page_labels,
             column_width_pt,
             column_x_shift_pt: shrink_left,
             head_wrap_rects: head_wrap_rects.to_vec(),
@@ -930,8 +951,27 @@ fn emit_paragraph_into_chain(
     // page number. The parser leaves a private-use sentinel in
     // run.text; expand here so master-spread footers print the
     // live page number rather than nothing.
-    let current_page_str = (em.chain_pages[em.frame_idx] + 1).to_string();
-    let next_page_str = (em.chain_pages[em.frame_idx] + 2).to_string();
+    // Auto-page-number substitution. The page-labels table is keyed
+    // by flat body-page index and already carries the user-visible
+    // label (Arabic / Roman / section-overridden). ACE 19 (next-page)
+    // peeks one slot ahead in the same table; for the last page it
+    // numerically increments the current label as a best-effort.
+    let cur_idx = em.chain_pages[em.frame_idx];
+    let current_page_str = em
+        .page_labels
+        .get(cur_idx)
+        .cloned()
+        .unwrap_or_else(|| (cur_idx + 1).to_string());
+    let next_page_str = em
+        .page_labels
+        .get(cur_idx + 1)
+        .cloned()
+        .unwrap_or_else(|| {
+            current_page_str
+                .parse::<i64>()
+                .map(|n| (n + 1).to_string())
+                .unwrap_or_else(|_| current_page_str.clone())
+        });
     let needs_page_subst = paragraph.runs.iter().any(|r| {
         r.text.contains(idml_parse::AUTO_PAGE_NUMBER_MARKER)
             || r.text.contains(idml_parse::NEXT_PAGE_NUMBER_MARKER)
@@ -1116,6 +1156,7 @@ fn emit_paragraph_into_chain(
         paragraph,
         &resolved_runs,
         em.palette,
+        em.cmyk_xform,
         em.options.fallback_text_paint,
     );
 
@@ -2345,6 +2386,7 @@ fn emit_cell_paragraph(
         paragraph,
         &resolved_runs,
         em.palette,
+        em.cmyk_xform,
         em.options.fallback_text_paint,
     );
     let leading_pt = paragraph_size * 1.2;
@@ -3204,15 +3246,27 @@ pub fn build_run_paint_picker(
     palette: &Graphic,
     default: Paint,
 ) -> RunPaintPicker {
+    build_run_paint_picker_with_cmyk(paragraph, palette, None, default)
+}
+
+/// Variant of [`build_run_paint_picker`] that routes CMYK swatches
+/// through the document's ICC transform when one is available. Without
+/// this the per-glyph fill picker would silently fall back to the
+/// naive CMYK→sRGB approximation in `graphic::to_linear_rgb`, undoing
+/// the work of building the transform.
+pub fn build_run_paint_picker_with_cmyk(
+    paragraph: &idml_parse::Paragraph,
+    palette: &Graphic,
+    cmyk_xform: Option<&idml_color::IccTransform>,
+    default: Paint,
+) -> RunPaintPicker {
     let mut bands: Vec<(u32, Paint)> = Vec::with_capacity(paragraph.runs.len());
     let mut cursor: u32 = 0;
     for run in &paragraph.runs {
         let paint = run
             .fill_color
             .as_deref()
-            .and_then(|id| palette.resolve(id))
-            .and_then(graphic::to_linear_rgb)
-            .map(|[r, g, b]| Paint::Solid(Color::rgba(r, g, b, 1.0)))
+            .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
             .unwrap_or(default);
         bands.push((cursor, paint));
         cursor += run.text.len() as u32;
@@ -3220,13 +3274,14 @@ pub fn build_run_paint_picker(
     RunPaintPicker { bands, default }
 }
 
-/// Like [`build_run_paint_picker`] but uses each run's cascaded
-/// `fill_color` (so a run that only carries an `AppliedCharacterStyle`
-/// still picks up the right paint).
+/// Like [`build_run_paint_picker_with_cmyk`] but uses each run's
+/// cascaded `fill_color` (so a run that only carries an
+/// `AppliedCharacterStyle` still picks up the right paint).
 fn build_run_paint_picker_resolved(
     paragraph: &idml_parse::Paragraph,
     resolved_runs: &[idml_scene::ResolvedRunAttrs],
     palette: &Graphic,
+    cmyk_xform: Option<&idml_color::IccTransform>,
     default: Paint,
 ) -> RunPaintPicker {
     let mut bands: Vec<(u32, Paint)> = Vec::with_capacity(paragraph.runs.len());
@@ -3235,9 +3290,7 @@ fn build_run_paint_picker_resolved(
         let paint = resolved_runs[i]
             .fill_color
             .as_deref()
-            .and_then(|id| palette.resolve(id))
-            .and_then(graphic::to_linear_rgb)
-            .map(|[r, g, b]| Paint::Solid(Color::rgba(r, g, b, 1.0)))
+            .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
             .unwrap_or(default);
         bands.push((cursor, paint));
         cursor += run.text.len() as u32;
