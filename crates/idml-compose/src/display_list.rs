@@ -248,11 +248,8 @@ impl GlyphCacheKey {
 /// Drop-shadow parameters. All measurements are in pt; `color` is
 /// linear RGB; `opacity` is multiplied into the shadow alpha.
 ///
-/// Today's rasterizer renders the shadow as a hard-edged offset fill
-/// — the spec's separable Gaussian blur (idea.md §10.4) needs an
-/// offscreen pass which lands once the layered-render plumbing
-/// exists. `blur_radius` is parsed and stored so the rasterizer can
-/// pick it up later without breaking the display-list contract.
+/// `blur_radius` is honoured by the CPU rasterizer as σ in pt for a
+/// separable Gaussian convolution over a padded offscreen stamp.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DropShadow {
     pub offset_x: f32,
@@ -276,6 +273,33 @@ impl DropShadow {
     }
 }
 
+/// IDML compositing blend mode. `Normal` (the default, source-over
+/// alpha composite) keeps the existing fast path; everything else
+/// requires the rasterizer to render the fill into an offscreen
+/// pixmap and composite onto the page with the named blend mode.
+/// Names match Adobe / Skia conventions; map straight to
+/// `tiny_skia::BlendMode` in the rasterizer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BlendMode {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
+}
+
 /// One command in the display list.
 #[derive(Debug, Clone)]
 pub enum DisplayCommand {
@@ -284,6 +308,17 @@ pub enum DisplayCommand {
         path_id: PathId,
         paint: Paint,
         transform: Transform,
+    },
+    /// Same as `FillPath` but composites onto the page with a
+    /// non-Normal blend mode. Rasterizer routes this through an
+    /// offscreen pixmap so the blend reads the page contents below.
+    /// The fast `FillPath` path stays untouched for the common
+    /// Normal case.
+    FillPathBlend {
+        path_id: PathId,
+        paint: Paint,
+        transform: Transform,
+        blend_mode: BlendMode,
     },
     /// Stroke a path with a paint + stroke parameters, positioned by
     /// `transform`. Stroke width is in pt, *after* `transform` is
@@ -326,6 +361,7 @@ impl DisplayCommand {
     pub fn transform_mut(&mut self) -> &mut Transform {
         match self {
             DisplayCommand::FillPath { transform, .. }
+            | DisplayCommand::FillPathBlend { transform, .. }
             | DisplayCommand::StrokePath { transform, .. }
             | DisplayCommand::DropShadow { transform, .. }
             | DisplayCommand::Image { transform, .. } => transform,

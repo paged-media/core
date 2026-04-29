@@ -36,6 +36,34 @@ pub fn emit_rect_transformed(rect: Rect, outer: Transform, paint: Paint, list: &
     });
 }
 
+/// Same as [`emit_rect_transformed`] but composites with a non-Normal
+/// blend mode. `BlendMode::Normal` falls through to a regular
+/// `FillPath` so the fast path stays single-allocation.
+pub fn emit_rect_transformed_blend(
+    rect: Rect,
+    outer: Transform,
+    paint: Paint,
+    blend_mode: crate::display_list::BlendMode,
+    list: &mut DisplayList,
+) {
+    let (path_id, _) = list.paths.intern(UNIT_RECT_KEY, unit_rect());
+    let transform = Transform::for_rect_in(rect, outer);
+    if matches!(blend_mode, crate::display_list::BlendMode::Normal) {
+        list.push(DisplayCommand::FillPath {
+            path_id,
+            paint,
+            transform,
+        });
+    } else {
+        list.push(DisplayCommand::FillPathBlend {
+            path_id,
+            paint,
+            transform,
+            blend_mode,
+        });
+    }
+}
+
 /// Emit a `StrokePath` command for an axis-aligned rectangle. Reuses
 /// the same interned unit-rect path as [`emit_rect`], so a document
 /// with N stroked frames still stores exactly one rect outline.
@@ -293,6 +321,7 @@ mod tests {
         );
         let t = match &list.commands[0] {
             DisplayCommand::FillPath { transform, .. } => *transform,
+            DisplayCommand::FillPathBlend { transform, .. } => *transform,
             DisplayCommand::StrokePath { transform, .. } => *transform,
             DisplayCommand::DropShadow { transform, .. } => *transform,
             DisplayCommand::Image { transform, .. } => *transform,

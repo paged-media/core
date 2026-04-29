@@ -67,6 +67,19 @@ impl XmlBuilder {
             .expect("write decl");
     }
 
+    /// Emit a processing instruction `<?target content?>`. Used by
+    /// designmap.xml to carry the `<?aid?>` PI that real InDesign
+    /// readers gate IDML import on (without it, the file is rejected
+    /// as "format not supported"). Content is emitted verbatim — no
+    /// escaping; callers are responsible for keeping the body XML-PI
+    /// safe.
+    pub fn write_pi(&mut self, target: &str, content: &str) {
+        let body = format!("{} {}", target, content);
+        self.writer
+            .write_event(Event::PI(quick_xml::events::BytesPI::new(body)))
+            .expect("write pi");
+    }
+
     /// Emit `<name attr="value" ...>` (open tag only). Attributes are
     /// emitted in the slice's order. Caller closes via `end`.
     pub fn start(&mut self, name: &str, attrs: &[(&str, &str)]) {

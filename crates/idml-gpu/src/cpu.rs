@@ -14,14 +14,15 @@
 //! `idml-color` — this module stays in the simple path.
 
 use idml_compose::{
-    Color as CComposeColor, DisplayCommand, DisplayList, LineCap, LineJoin, Paint, PathData,
-    PathSegment, Transform as CTransform,
+    BlendMode, Color as CComposeColor, DisplayCommand, DisplayList, LineCap, LineJoin, Paint,
+    PathData, PathSegment, Transform as CTransform,
 };
 use image::{Rgba, RgbaImage};
 use tiny_skia::{
-    FillRule, GradientStop as TsGradientStop, LineCap as TsLineCap, LineJoin as TsLineJoin,
-    LinearGradient as TsLinearGradient, Paint as TsPaint, PathBuilder, Pixmap, PixmapPaint,
-    Point as TsPoint, Shader, SpreadMode, Stroke as TsStroke, Transform as TsTransform,
+    BlendMode as TsBlendMode, FillRule, GradientStop as TsGradientStop, LineCap as TsLineCap,
+    LineJoin as TsLineJoin, LinearGradient as TsLinearGradient, Paint as TsPaint, PathBuilder,
+    Pixmap, PixmapPaint, Point as TsPoint, Shader, SpreadMode, Stroke as TsStroke,
+    Transform as TsTransform,
 };
 
 use crate::{PathRasterizer, RasterOptions};
@@ -70,6 +71,72 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 let ts_paint = paint_to_ts(paint, list, transform, page_to_px);
                 pixmap.fill_path(&path, &ts_paint, FillRule::Winding, page_to_px, None);
             }
+            DisplayCommand::FillPathBlend {
+                path_id,
+                paint,
+                transform,
+                blend_mode,
+            } => {
+                let Some(path_data) = list.paths.get(*path_id) else {
+                    continue;
+                };
+                let Some(path) = build_path_transformed(path_data, transform) else {
+                    continue;
+                };
+                let ts_paint = paint_to_ts(paint, list, transform, page_to_px);
+                let ts_mode = blend_mode_to_ts(*blend_mode);
+                if matches!(ts_mode, TsBlendMode::SourceOver) {
+                    // Normal blend ⇒ same fast path as FillPath.
+                    pixmap.fill_path(&path, &ts_paint, FillRule::Winding, page_to_px, None);
+                } else {
+                    // Non-Normal: render the fill into a scratch
+                    // pixmap covering the path's pixel bounds, then
+                    // composite the stamp onto the page with the
+                    // requested blend mode. Blend modes are
+                    // pixel-local so the scratch only needs the path
+                    // bbox + 1px anti-alias slack.
+                    let bbox = path.bounds();
+                    let pad_pt = 1.0;
+                    let min_x_pt = bbox.left() - pad_pt;
+                    let min_y_pt = bbox.top() - pad_pt;
+                    let max_x_pt = bbox.right() + pad_pt;
+                    let max_y_pt = bbox.bottom() + pad_pt;
+                    let off_x_px = (min_x_pt * scale).floor() as i32;
+                    let off_y_px = (min_y_pt * scale).floor() as i32;
+                    let max_x_px = (max_x_pt * scale).ceil() as i32;
+                    let max_y_px = (max_y_pt * scale).ceil() as i32;
+                    let w_px = (max_x_px - off_x_px).max(1) as u32;
+                    let h_px = (max_y_px - off_y_px).max(1) as u32;
+                    if let Some(mut scratch) = Pixmap::new(w_px, h_px) {
+                        let scratch_xform = TsTransform::from_translate(
+                            -off_x_px as f32,
+                            -off_y_px as f32,
+                        )
+                        .pre_concat(TsTransform::from_scale(scale, scale));
+                        let scratch_paint =
+                            paint_to_ts(paint, list, transform, scratch_xform);
+                        scratch.fill_path(
+                            &path,
+                            &scratch_paint,
+                            FillRule::Winding,
+                            scratch_xform,
+                            None,
+                        );
+                        let mut composite = PixmapPaint::default();
+                        composite.blend_mode = ts_mode;
+                        pixmap.draw_pixmap(
+                            off_x_px,
+                            off_y_px,
+                            scratch.as_ref(),
+                            &composite,
+                            TsTransform::identity(),
+                            None,
+                        );
+                    } else {
+                        pixmap.fill_path(&path, &ts_paint, FillRule::Winding, page_to_px, None);
+                    }
+                }
+            }
             DisplayCommand::StrokePath {
                 path_id,
                 paint,
@@ -105,9 +172,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     continue;
                 };
                 // Build the path in page space, then translate by
-                // the shadow offset. Hard-edge today; idea.md §10.4's
-                // separable Gaussian blur lands once the offscreen
-                // layer pipeline is in place.
+                // the shadow offset.
                 let mut shifted = *transform;
                 shifted.0[4] += shadow.offset_x;
                 shifted.0[5] += shadow.offset_y;
@@ -121,7 +186,70 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     ..Default::default()
                 };
                 p.set_color(linear_color_to_ts(shadow_color));
-                pixmap.fill_path(&path, &p, FillRule::Winding, page_to_px, None);
+
+                // σ in pt → σ in pixels via the renderer's pt→px scale.
+                let sigma_px = shadow.blur_radius.max(0.0) * scale;
+                if sigma_px <= 0.5 {
+                    // Fast path: blur is sub-pixel; the existing
+                    // hard-edge fill is visually indistinguishable
+                    // from a 0.5σ kernel, so skip the offscreen.
+                    pixmap.fill_path(&path, &p, FillRule::Winding, page_to_px, None);
+                } else {
+                    // Offscreen path: rasterise the shadow stamp
+                    // into a padded scratch pixmap, blur with a
+                    // separable Gaussian, composite over the page.
+                    // Path bounds are in page-space pt; pad by 3σ
+                    // (kernel tail) to keep the whole soft edge
+                    // inside the scratch buffer.
+                    let bbox = path.bounds();
+                    let pad_pt = 3.0 * shadow.blur_radius.max(0.0) + 1.0;
+                    let min_x_pt = bbox.left() - pad_pt;
+                    let min_y_pt = bbox.top() - pad_pt;
+                    let max_x_pt = bbox.right() + pad_pt;
+                    let max_y_pt = bbox.bottom() + pad_pt;
+                    // Snap top-left to whole pixels so draw_pixmap
+                    // (integer offsets) is pixel-aligned and the
+                    // composite isn't bilinearly resampled.
+                    let off_x_px = (min_x_pt * scale).floor() as i32;
+                    let off_y_px = (min_y_pt * scale).floor() as i32;
+                    let max_x_px = (max_x_pt * scale).ceil() as i32;
+                    let max_y_px = (max_y_pt * scale).ceil() as i32;
+                    let w_px = (max_x_px - off_x_px).max(1) as u32;
+                    let h_px = (max_y_px - off_y_px).max(1) as u32;
+                    if let Some(mut scratch) = Pixmap::new(w_px, h_px) {
+                        // Translate so the scratch's pixel (0,0)
+                        // corresponds to (off_x_px / scale, off_y_px / scale)
+                        // in page space, then apply the same pt→px
+                        // scale used elsewhere.
+                        let scratch_xform = TsTransform::from_translate(
+                            -off_x_px as f32,
+                            -off_y_px as f32,
+                        )
+                        .pre_concat(TsTransform::from_scale(scale, scale));
+                        scratch.fill_path(&path, &p, FillRule::Winding, scratch_xform, None);
+                        // tiny-skia stores RGBA8 premultiplied — the
+                        // Gaussian blurs each channel independently
+                        // over premultiplied alpha, which is the
+                        // correct convolution for a glow/shadow stamp
+                        // (blurring straight alpha would brighten the
+                        // edges into a halo).
+                        let kernel = gaussian_kernel(sigma_px);
+                        gaussian_blur_premul(scratch.data_mut(), w_px, h_px, &kernel);
+                        pixmap.draw_pixmap(
+                            off_x_px,
+                            off_y_px,
+                            scratch.as_ref(),
+                            &PixmapPaint::default(),
+                            TsTransform::identity(),
+                            None,
+                        );
+                    } else {
+                        // Allocation failed (pathological size) —
+                        // fall back to the hard-edge fill rather
+                        // than skipping the shadow entirely.
+                        pixmap.fill_path(&path, &p, FillRule::Winding, page_to_px, None);
+                    }
+                }
             }
             DisplayCommand::Image {
                 image_id,
@@ -277,7 +405,13 @@ fn build_linear_gradient_shader(
         .map(|s| TsGradientStop::new(s.offset.clamp(0.0, 1.0), linear_color_to_ts(s.color)))
         .collect();
 
-    TsLinearGradient::new(start, end, stops, SpreadMode::Pad, page_to_px)
+    let _ = page_to_px;
+    // Shader endpoints already live in page (path) space, which
+    // matches the path's pre-transformed coordinates. tiny-skia
+    // composes the shader transform with the fill_path transform
+    // automatically, so an identity here is correct — passing
+    // page_to_px would double-scale at non-72-DPI renders.
+    TsLinearGradient::new(start, end, stops, SpreadMode::Pad, TsTransform::identity())
 }
 
 /// Linear RGB (0..=1) → sRGB-encoded tiny_skia::Color.
@@ -297,6 +431,85 @@ fn linear_to_srgb(c: f32) -> f32 {
     }
 }
 
+/// 1-D Gaussian kernel sampled at integer pixel offsets, truncated at
+/// 3σ on each side and normalised to sum to 1. Returned vector is
+/// symmetric around index `kernel.len() / 2`.
+fn gaussian_kernel(sigma: f32) -> Vec<f32> {
+    let radius = (3.0 * sigma).ceil().max(1.0) as i32;
+    let two_sigma_sq = 2.0 * sigma * sigma;
+    let mut k = Vec::with_capacity(2 * radius as usize + 1);
+    let mut sum = 0.0f32;
+    for i in -radius..=radius {
+        let v = (-(i as f32) * (i as f32) / two_sigma_sq).exp();
+        k.push(v);
+        sum += v;
+    }
+    if sum > 0.0 {
+        for v in &mut k {
+            *v /= sum;
+        }
+    }
+    k
+}
+
+/// Separable Gaussian blur over a tiny-skia premultiplied RGBA8 buffer
+/// (`width * height * 4` bytes, row-major). Two passes: horizontal then
+/// vertical. Edges use clamp-to-edge addressing — the scratch buffer is
+/// padded by 3σ before this is called, so clamping reads the (zero)
+/// background, which is exactly what we want for an isolated stamp.
+fn gaussian_blur_premul(data: &mut [u8], width: u32, height: u32, kernel: &[f32]) {
+    if kernel.len() < 2 || width == 0 || height == 0 {
+        return;
+    }
+    let w = width as usize;
+    let h = height as usize;
+    let radius = (kernel.len() / 2) as isize;
+
+    // Horizontal pass: data → tmp.
+    let mut tmp = vec![0u8; data.len()];
+    for y in 0..h {
+        let row = y * w * 4;
+        for x in 0..w {
+            let mut acc = [0.0f32; 4];
+            for (k_idx, &coeff) in kernel.iter().enumerate() {
+                let sx = (x as isize + k_idx as isize - radius)
+                    .clamp(0, w as isize - 1) as usize;
+                let p = row + sx * 4;
+                acc[0] += data[p] as f32 * coeff;
+                acc[1] += data[p + 1] as f32 * coeff;
+                acc[2] += data[p + 2] as f32 * coeff;
+                acc[3] += data[p + 3] as f32 * coeff;
+            }
+            let q = row + x * 4;
+            tmp[q] = acc[0].round().clamp(0.0, 255.0) as u8;
+            tmp[q + 1] = acc[1].round().clamp(0.0, 255.0) as u8;
+            tmp[q + 2] = acc[2].round().clamp(0.0, 255.0) as u8;
+            tmp[q + 3] = acc[3].round().clamp(0.0, 255.0) as u8;
+        }
+    }
+
+    // Vertical pass: tmp → data.
+    for y in 0..h {
+        for x in 0..w {
+            let mut acc = [0.0f32; 4];
+            for (k_idx, &coeff) in kernel.iter().enumerate() {
+                let sy = (y as isize + k_idx as isize - radius)
+                    .clamp(0, h as isize - 1) as usize;
+                let p = (sy * w + x) * 4;
+                acc[0] += tmp[p] as f32 * coeff;
+                acc[1] += tmp[p + 1] as f32 * coeff;
+                acc[2] += tmp[p + 2] as f32 * coeff;
+                acc[3] += tmp[p + 3] as f32 * coeff;
+            }
+            let q = (y * w + x) * 4;
+            data[q] = acc[0].round().clamp(0.0, 255.0) as u8;
+            data[q + 1] = acc[1].round().clamp(0.0, 255.0) as u8;
+            data[q + 2] = acc[2].round().clamp(0.0, 255.0) as u8;
+            data[q + 3] = acc[3].round().clamp(0.0, 255.0) as u8;
+        }
+    }
+}
+
 fn map_cap(cap: LineCap) -> TsLineCap {
     match cap {
         LineCap::Butt => TsLineCap::Butt,
@@ -310,6 +523,30 @@ fn map_join(join: LineJoin) -> TsLineJoin {
         LineJoin::Miter => TsLineJoin::Miter,
         LineJoin::Round => TsLineJoin::Round,
         LineJoin::Bevel => TsLineJoin::Bevel,
+    }
+}
+
+/// Map the IDML / compose-layer `BlendMode` to tiny-skia's enum.
+/// Names line up 1:1 — Normal becomes SourceOver (the canonical
+/// alpha-composite default).
+fn blend_mode_to_ts(m: BlendMode) -> TsBlendMode {
+    match m {
+        BlendMode::Normal => TsBlendMode::SourceOver,
+        BlendMode::Multiply => TsBlendMode::Multiply,
+        BlendMode::Screen => TsBlendMode::Screen,
+        BlendMode::Overlay => TsBlendMode::Overlay,
+        BlendMode::Darken => TsBlendMode::Darken,
+        BlendMode::Lighten => TsBlendMode::Lighten,
+        BlendMode::ColorDodge => TsBlendMode::ColorDodge,
+        BlendMode::ColorBurn => TsBlendMode::ColorBurn,
+        BlendMode::HardLight => TsBlendMode::HardLight,
+        BlendMode::SoftLight => TsBlendMode::SoftLight,
+        BlendMode::Difference => TsBlendMode::Difference,
+        BlendMode::Exclusion => TsBlendMode::Exclusion,
+        BlendMode::Hue => TsBlendMode::Hue,
+        BlendMode::Saturation => TsBlendMode::Saturation,
+        BlendMode::Color => TsBlendMode::Color,
+        BlendMode::Luminosity => TsBlendMode::Luminosity,
     }
 }
 

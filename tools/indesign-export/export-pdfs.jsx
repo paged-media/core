@@ -17,24 +17,62 @@
  */
 
 (function () {
+    // Verbose log next to the IDMLs so the harness can read back what
+    // happened — `$.writeln` only reaches the ExtendScript Toolkit
+    // console, which isn't accessible from `osascript`.
+    var LOG_PATH = "/tmp/idml-export.log";
+    var log = File(LOG_PATH);
+    log.encoding = "UTF-8";
+    log.open("w");
+    function logln(msg) {
+        log.writeln(msg);
+        $.writeln(msg);
+    }
+    logln("# log start " + new Date());
+    try {
+
     var INPUT_DIR = "~/idml/corpus/generated";
-    var PRESET_NAME = "[High Quality Print]";
+    // Preset name varies by locale: "[High Quality Print]" on en_US,
+    // "[Qualitativ hochwertiger Druck]" on de_DE, etc. The first
+    // entry that resolves wins. Localized lists captured from
+    // shipping InDesign 20.x; extend as new locales appear.
+    var PRESET_CANDIDATES = [
+        "[High Quality Print]",
+        "[Qualitativ hochwertiger Druck]",
+        "[Calidad de impresión alta]",
+        "[Qualité supérieure]",
+        "[高品質印刷]"
+    ];
 
     app.scriptPreferences.userInteractionLevel =
         UserInteractionLevels.NEVER_INTERACT;
 
     var inputFolder = Folder(INPUT_DIR);
+    logln("input folder: " + inputFolder.fsName + " (exists=" + inputFolder.exists + ")");
     if (!inputFolder.exists) {
-        $.writeln("input folder not found: " + inputFolder.fsName);
         return;
     }
 
     var idmlFiles = inputFolder.getFiles("*.idml");
-    var preset = app.pdfExportPresets.itemByName(PRESET_NAME);
-    if (!preset.isValid) {
-        $.writeln("PDF preset not found: " + PRESET_NAME);
+    logln("found " + idmlFiles.length + " idml files");
+    var preset = null;
+    var presetName = null;
+    for (var pi = 0; pi < PRESET_CANDIDATES.length; pi++) {
+        var candidate = app.pdfExportPresets.itemByName(PRESET_CANDIDATES[pi]);
+        if (candidate.isValid) {
+            preset = candidate;
+            presetName = PRESET_CANDIDATES[pi];
+            break;
+        }
+    }
+    if (preset === null) {
+        logln(
+            "no high-quality-print preset matched; tried: "
+                + PRESET_CANDIDATES.join(", ")
+        );
         return;
     }
+    logln("using preset: " + presetName);
 
     var indesignVersion = app.version;
     var nowISO = new Date().toISOString
@@ -46,14 +84,14 @@
         var stem = idml.name.replace(/\.idml$/i, "");
         var pdfPath = File(idml.path + "/" + stem + ".pdf");
         var metaPath = File(idml.path + "/" + stem + ".export.meta.json");
-        $.writeln("export " + idml.name + " → " + pdfPath.name);
+        logln("export " + idml.name + " → " + pdfPath.name);
 
         var doc = null;
         try {
             doc = app.open(idml, false); // false = don't show window
             doc.exportFile(ExportFormat.PDF_TYPE, pdfPath, false, preset);
         } catch (e) {
-            $.writeln("  failed: " + e);
+            logln("  failed: " + e);
             if (doc !== null) doc.close(SaveOptions.NO);
             continue;
         }
@@ -64,7 +102,7 @@
             '  "idml": "' + idml.name + '",\n' +
             '  "pdf": "' + pdfPath.name + '",\n' +
             '  "indesign_version": "' + indesignVersion + '",\n' +
-            '  "preset": "' + PRESET_NAME + '",\n' +
+            '  "preset": "' + presetName + '",\n' +
             '  "exported_at": "' + nowISO + '"\n' +
             "}\n";
         metaPath.encoding = "UTF-8";
@@ -73,5 +111,9 @@
         metaPath.close();
     }
 
-    $.writeln("done");
+    logln("done");
+    } catch (outerErr) {
+        logln("UNCAUGHT: " + outerErr);
+    }
+    log.close();
 })();

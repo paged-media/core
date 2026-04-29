@@ -19,6 +19,13 @@ pub struct Master {
 }
 
 pub fn write_master(m: &Master) -> Vec<u8> {
+    // The IDML component-name rule requires the file name's stem to
+    // match `<Type>_<bare Self>` (spec §8.2). Real InDesign exports
+    // strip any namespace-style prefix before emitting Self — so a
+    // sample passing `"MasterSpread/u<hex>"` would produce a Self
+    // that doesn't match the writer's filename. Strip here so the
+    // call sites can keep their existing prefix conventions.
+    let bare_self = strip_type_prefix(&m.self_id);
     let mut b = XmlBuilder::new();
     b.write_decl();
     b.start("idPkg:MasterSpread", &[PKG_NS, DOM_VERSION]);
@@ -39,7 +46,7 @@ pub fn write_master(m: &Master) -> Vec<u8> {
     b.start(
         "MasterSpread",
         &[
-            ("Self", m.self_id.as_str()),
+            ("Self", bare_self),
             ("Name", "$ID/None"),
             ("PageCount", "1"),
             ("ShowMasterItems", "false"),
@@ -59,4 +66,11 @@ pub fn write_master(m: &Master) -> Vec<u8> {
     b.end("MasterSpread");
     b.end("idPkg:MasterSpread");
     b.into_bytes()
+}
+
+/// Drop a leading `<Type>/` (e.g. `MasterSpread/u<hex>` →
+/// `u<hex>`) so emitted `Self` attributes match the
+/// `<Type>_<Self>.xml` filename convention.
+fn strip_type_prefix(id: &str) -> &str {
+    id.split_once('/').map(|(_, rest)| rest).unwrap_or(id)
 }

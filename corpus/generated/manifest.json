@@ -1,0 +1,85 @@
+{
+  "samples": [
+    {
+      "name": "effects",
+      "idml": "effects.idml",
+      "pdf": "effects.pdf",
+      "pages": 12,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-diff-effects",
+      "report": "/tmp/idml-diff-effects/report.json"
+    },
+    {
+      "name": "geometry",
+      "idml": "geometry.idml",
+      "pdf": "geometry.pdf",
+      "pages": 20,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-diff-geometry",
+      "report": "/tmp/idml-diff-geometry/report.json"
+    },
+    {
+      "name": "geometry-groups",
+      "idml": "geometry-groups.idml",
+      "pdf": "geometry-groups.pdf",
+      "pages": 6,
+      "passing": 3,
+      "diff_dir": "/tmp/idml-diff-geometry-groups",
+      "report": "/tmp/idml-diff-geometry-groups/report.json"
+    },
+    {
+      "name": "gradients",
+      "idml": "gradients.idml",
+      "pdf": "gradients.pdf",
+      "pages": 5,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-diff-gradients",
+      "report": "/tmp/idml-diff-gradients/report.json"
+    },
+    {
+      "name": "images",
+      "idml": "images.idml",
+      "pdf": "images.pdf",
+      "pages": 5,
+      "passing": 5,
+      "diff_dir": "/tmp/idml-diff-images",
+      "report": "/tmp/idml-diff-images/report.json"
+    },
+    {
+      "name": "strokes-fills",
+      "idml": "strokes-fills.idml",
+      "pdf": "strokes-fills.pdf",
+      "pages": 17,
+      "passing": 11,
+      "diff_dir": "/tmp/idml-diff-strokes-fills",
+      "report": "/tmp/idml-diff-strokes-fills/report.json"
+    },
+    {
+      "name": "tables",
+      "idml": "tables.idml",
+      "pdf": "tables.pdf",
+      "pages": 7,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-diff-tables",
+      "report": "/tmp/idml-diff-tables/report.json"
+    },
+    {
+      "name": "text",
+      "idml": "text.idml",
+      "pdf": "text.pdf",
+      "pages": 13,
+      "passing": 3,
+      "diff_dir": "/tmp/idml-diff-text",
+      "report": "/tmp/idml-diff-text/report.json"
+    },
+    {
+      "name": "text-advanced",
+      "idml": "text-advanced.idml",
+      "pdf": "text-advanced.pdf",
+      "pages": 6,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-diff-text-advanced",
+      "report": "/tmp/idml-diff-text-advanced/report.json"
+    }
+  ]
+}

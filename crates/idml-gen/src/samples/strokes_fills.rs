@@ -26,7 +26,7 @@ use crate::builders::{
         ExtraColor,
     },
     spread::{write_spread, Spread},
-    story::{write_story, Story},
+    story::{write_story, Paragraph, Story},
     xml_folder::{backing_story_xml, mapping_xml, tags_xml},
 };
 use crate::geometry::{translate, Matrix, IDENTITY};
@@ -223,7 +223,7 @@ pub fn build() -> Sample {
             story_id.clone(),
             write_story(&Story {
                 self_id: story_id.clone(),
-                paragraphs: vec![variant.name.to_string()],
+                paragraphs: vec![Paragraph::plain(variant.name)],
             }),
         ));
         story_refs.push(story_id.clone());
@@ -238,6 +238,9 @@ pub fn build() -> Sample {
             stroke_weight_pt: None,
             parent_story: Some(story_id.clone()),
             extra_attrs: Vec::new(),
+            blending: None,
+            drop_shadow: None,
+            placed_image: None,
         };
 
         // Demo rectangle centred on the page. Baseline: black 6pt
@@ -260,6 +263,9 @@ pub fn build() -> Sample {
                 .iter()
                 .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
                 .collect(),
+            blending: None,
+            drop_shadow: None,
+            placed_image: None,
         };
 
         spreads.push((
@@ -271,7 +277,7 @@ pub fn build() -> Sample {
                 applied_master: format!("MasterSpread/{master_id}"),
                 page_width_pt: PAGE_W_PT,
                 page_height_pt: PAGE_H_PT,
-                page_items: vec![label, demo],
+                page_items: vec![label.into(), demo.into()],
             }),
         ));
         spread_refs.push(spread_id);

@@ -19,6 +19,18 @@ pub struct DesignMap {
 pub fn write_designmap(dm: &DesignMap) -> Vec<u8> {
     let mut b = XmlBuilder::new();
     b.write_decl();
+    // <?aid?> processing instruction. InDesign's IDML reader rejects
+    // documents without it as "format not supported" — even when the
+    // DOMVersion is correct and the ZIP is well-formed. Fields:
+    //   style="50"          IDML format style
+    //   type="document"     top-level document (vs snippet/icml)
+    //   readerVersion="6.0" minimum IDML reader version (CS6+)
+    //   featureSet="257"    feature bitmask the document uses
+    //   product="20.0(32)"  exporter product version
+    b.write_pi(
+        "aid",
+        r#"style="50" type="document" readerVersion="6.0" featureSet="257" product="20.0(32)""#,
+    );
     b.start(
         "Document",
         &[

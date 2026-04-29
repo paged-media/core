@@ -27,12 +27,12 @@ use std::cell::RefCell;
 use idml_compose::{
     Color as ComposeColor, DisplayCommand, DisplayList, LineCap, LineJoin, Paint, PathSegment,
 };
+use vello::kurbo::{self, Stroke as KurboStroke};
 use vello::peniko::{
-    kurbo::{self, Stroke as KurboStroke},
-    Blob, BrushRef, Color as PenikoColor, ColorStop as PenikoColorStop, Fill,
-    Format as PenikoFormat, Gradient as PenikoGradient, Image as PenikoImage,
+    BrushRef, Color as PenikoColor, ColorStop as PenikoColorStop, Fill,
+    Gradient as PenikoGradient,
 };
-use vello::wgpu;
+use wgpu;
 use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene};
 
 use crate::{PathRasterizer, RasterOptions};
@@ -94,30 +94,30 @@ impl PathRasterizer for VelloRasterizer {
 }
 
 fn init_gpu() -> Result<GpuState, String> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: None,
         force_fallback_adapter: false,
     }))
-    .ok_or_else(|| "no wgpu adapter available".to_string())?;
-    let (device, queue) = pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("idml-gpu vello device"),
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
-            memory_hints: wgpu::MemoryHints::default(),
-        },
-        None,
-    ))
+    .map_err(|e| format!("no wgpu adapter available: {e:?}"))?;
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("idml-gpu vello device"),
+        required_features: wgpu::Features::empty(),
+        required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
+        memory_hints: wgpu::MemoryHints::default(),
+        trace: wgpu::Trace::Off,
+        experimental_features: wgpu::ExperimentalFeatures::default(),
+    }))
     .map_err(|e| e.to_string())?;
     let renderer = Renderer::new(
         &device,
         RendererOptions {
-            surface_format: None,
             use_cpu: false,
             antialiasing_support: AaSupport::area_only(),
             num_init_threads: std::num::NonZeroUsize::new(1),
+            pipeline_cache: None,
         },
     )
     .map_err(|e| format!("Renderer::new: {e:?}"))?;
@@ -172,6 +172,25 @@ fn build_scene_with_transform(list: &DisplayList, page_to_px: kurbo::Affine) -> 
                 };
                 scene.fill(Fill::NonZero, page_to_px, brush.as_ref(), None, &path);
             }
+            DisplayCommand::FillPathBlend {
+                path_id,
+                paint,
+                transform,
+                blend_mode: _,
+            } => {
+                // Vello backend doesn't yet implement non-Normal
+                // blend compositing — fall back to a normal fill so
+                // the GPU path stays usable. The CPU rasterizer is
+                // the path of record for the fidelity harness.
+                let Some(path_data) = list.paths.get(*path_id) else {
+                    continue;
+                };
+                let path = path_to_bez(path_data, transform);
+                let Some(brush) = resolve_paint(paint, list, transform) else {
+                    continue;
+                };
+                scene.fill(Fill::NonZero, page_to_px, brush.as_ref(), None, &path);
+            }
             DisplayCommand::StrokePath {
                 path_id,
                 paint,
@@ -191,39 +210,10 @@ fn build_scene_with_transform(list: &DisplayList, page_to_px: kurbo::Affine) -> 
                     .with_miter_limit(stroke.miter_limit.max(1.0) as f64);
                 scene.stroke(&ks, page_to_px, brush.as_ref(), None, &path);
             }
-            DisplayCommand::Image {
-                image_id,
-                transform,
-            } => {
-                let Some(decoded) = list.image(*image_id) else {
-                    continue;
-                };
-                if decoded.width == 0
-                    || decoded.height == 0
-                    || decoded.rgba.len() != (decoded.width as usize * decoded.height as usize * 4)
-                {
-                    continue;
-                }
-                let blob = Blob::new(std::sync::Arc::new(decoded.rgba.clone()));
-                let img =
-                    PenikoImage::new(blob, PenikoFormat::Rgba8, decoded.width, decoded.height);
-                // Display-list transform maps unit-rect (0..1, 0..1)
-                // → page coords. The image's pixel grid lives in
-                // (0..w, 0..h), so divide by (w, h) before composing
-                // with the unit-rect transform and the page→px scale.
-                let inv_w = 1.0 / decoded.width as f64;
-                let inv_h = 1.0 / decoded.height as f64;
-                let pixel_to_unit = kurbo::Affine::scale_non_uniform(inv_w, inv_h);
-                let unit_to_page = kurbo::Affine::new([
-                    transform.0[0] as f64,
-                    transform.0[1] as f64,
-                    transform.0[2] as f64,
-                    transform.0[3] as f64,
-                    transform.0[4] as f64,
-                    transform.0[5] as f64,
-                ]);
-                let pixel_to_px = page_to_px * unit_to_page * pixel_to_unit;
-                scene.draw_image(&img, pixel_to_px);
+            DisplayCommand::Image { .. } => {
+                // peniko 0.6 reshaped the image API (Image → ImageData
+                // + ImageBrush). The migration is queued behind the
+                // wgpu 29 / vello-main bump; M-temp draws no images.
             }
             DisplayCommand::DropShadow { .. } => {
                 // Stub — needs Vello's offscreen-layer + Gaussian
@@ -290,15 +280,15 @@ fn render_scene_to_buffer(
             label: Some("idml-gpu vello readback enc"),
         });
     encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture {
+        wgpu::TexelCopyTextureInfo {
             texture: &texture,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        wgpu::ImageCopyBuffer {
+        wgpu::TexelCopyBufferInfo {
             buffer: &buffer,
-            layout: wgpu::ImageDataLayout {
+            layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(bpr_aligned),
                 rows_per_image: Some(height),
@@ -316,7 +306,7 @@ fn render_scene_to_buffer(
     slice.map_async(wgpu::MapMode::Read, move |res| {
         tx.send(res).ok();
     });
-    state.device.poll(wgpu::Maintain::Wait);
+    let _ = state.device.poll(wgpu::PollType::wait_indefinitely());
     rx.recv()
         .map_err(|e| format!("map_async recv: {e}"))?
         .map_err(|e| format!("buffer map: {e:?}"))?;
@@ -408,7 +398,7 @@ fn resolve_paint(
                 .iter()
                 .map(|s| PenikoColorStop {
                     offset: s.offset,
-                    color: linear_to_peniko(s.color),
+                    color: linear_to_peniko(s.color).into(),
                 })
                 .collect();
             let pg = PenikoGradient::new_linear(
@@ -448,7 +438,7 @@ pub(crate) fn linear_to_peniko(c: ComposeColor) -> PenikoColor {
         };
         (s.clamp(0.0, 1.0) * 255.0).round() as u8
     };
-    PenikoColor::rgba8(
+    PenikoColor::from_rgba8(
         to_srgb(c.r),
         to_srgb(c.g),
         to_srgb(c.b),

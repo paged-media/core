@@ -89,6 +89,11 @@ pub struct LayoutOptions<'a> {
     pub first_baseline: i32,
     /// Horizontal alignment. Left by default.
     pub alignment: Alignment,
+    /// When `Some`, every line's height is forced to this value
+    /// (1/64 pt) instead of being computed from glyph point sizes
+    /// (auto leading). Mirrors IDML's explicit `Leading` attribute on
+    /// the leading run of a paragraph.
+    pub leading_override: Option<i32>,
 }
 
 impl LayoutOptions<'_> {
@@ -102,6 +107,7 @@ impl LayoutOptions<'_> {
             compose: ComposeOptions::new(column_width_pt),
             line_height,
             first_baseline,
+            leading_override: None,
             alignment: Alignment::Left,
         }
     }
@@ -538,11 +544,15 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             i == last_break,
             bytes,
         );
-        // Per-line line-height: largest run's point size on the
-        // line × 1.2 (Adobe's Auto leading default). Falls back to
-        // options.line_height for empty lines so callers that pass a
-        // tuned value still see it honoured.
-        let line_height = max_line_height_for_glyphs(&glyphs).unwrap_or(options.line_height);
+        // Per-line line-height: explicit `leading_override` wins
+        // (mirrors IDML's `Leading` attribute), otherwise the largest
+        // run's point size on the line × 1.2 (Adobe's Auto leading
+        // default), with `options.line_height` as the empty-line
+        // fallback.
+        let line_height = options
+            .leading_override
+            .or_else(|| max_line_height_for_glyphs(&glyphs))
+            .unwrap_or(options.line_height);
         lines.push(LaidOutLine {
             byte_range: start..end,
             baseline_y: baseline,
@@ -881,6 +891,7 @@ mod tests {
             line_height: 20,
             first_baseline: 15,
             alignment,
+            leading_override: None,
         }
     }
 

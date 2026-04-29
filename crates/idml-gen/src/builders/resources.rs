@@ -42,19 +42,44 @@ pub struct ExtraColor {
     pub value: String,
 }
 
+/// One gradient swatch declaration. Stops reference Color self-ids
+/// either from the built-in pair (`Color/Black`, `Color/Paper`) or
+/// from `ExtraColor` entries declared alongside.
+pub struct ExtraGradient {
+    pub self_id: String,
+    pub name: String,
+    /// `"Linear"` or `"Radial"`.
+    pub kind: &'static str,
+    pub stops: Vec<GradientStop>,
+}
+
+pub struct GradientStop {
+    pub stop_color: String,
+    /// `Location` attribute, 0..=100 in IDML.
+    pub location_pct: f32,
+}
+
 /// Same as [`graphic_xml`] but appends caller-supplied custom swatches
 /// after the built-in Black + Paper.
 pub fn graphic_xml_with_extras(extras: &[ExtraColor]) -> Vec<u8> {
-    write_graphic(extras)
+    write_graphic(extras, &[])
+}
+
+/// Like [`graphic_xml_with_extras`] but also emits gradient swatches.
+pub fn graphic_xml_with_extras_and_gradients(
+    extras: &[ExtraColor],
+    gradients: &[ExtraGradient],
+) -> Vec<u8> {
+    write_graphic(extras, gradients)
 }
 
 /// `Resources/Graphic.xml` — registers `Color/Black` and `Color/Paper`,
 /// the two swatches every IDML carries by default.
 pub fn graphic_xml() -> Vec<u8> {
-    write_graphic(&[])
+    write_graphic(&[], &[])
 }
 
-fn write_graphic(extras: &[ExtraColor]) -> Vec<u8> {
+fn write_graphic(extras: &[ExtraColor], gradients: &[ExtraGradient]) -> Vec<u8> {
     let mut b = XmlBuilder::new();
     b.write_decl();
     b.start(
@@ -106,6 +131,27 @@ fn write_graphic(extras: &[ExtraColor]) -> Vec<u8> {
                 ("Name", extra.name.as_str()),
             ],
         );
+    }
+    for grad in gradients {
+        b.start(
+            "Gradient",
+            &[
+                ("Self", grad.self_id.as_str()),
+                ("Name", grad.name.as_str()),
+                ("Type", grad.kind),
+            ],
+        );
+        for stop in &grad.stops {
+            let loc = crate::xml::format_f32(stop.location_pct);
+            b.empty(
+                "GradientStop",
+                &[
+                    ("StopColor", stop.stop_color.as_str()),
+                    ("Location", loc.as_str()),
+                ],
+            );
+        }
+        b.end("Gradient");
     }
     b.end("idPkg:Graphic");
     b.into_bytes()

@@ -269,6 +269,24 @@ pub struct Rectangle {
     /// user-defined custom `<StrokeStyle>` definitions fall back to
     /// solid until full parser support lands.
     pub stroke_type: Option<String>,
+    /// `StrokeAlignment` — `CenterAlignment` (default, stroke
+    /// straddles the path), `InsideAlignment` (stroke lies inside
+    /// the geometry), or `OutsideAlignment` (outside). The renderer
+    /// inset/outsets the rectangle by half the stroke weight to
+    /// approximate Inside/Outside without clipping.
+    pub stroke_alignment: Option<String>,
+    /// `EndCap` — `ButtEndCap` (default), `RoundEndCap`, or
+    /// `ProjectingEndCap`. Maps to tiny-skia's `LineCap`. Only
+    /// visible on open paths or dashed/dotted strokes.
+    pub end_cap: Option<String>,
+    /// `EndJoin` — `MiterEndJoin` (default), `RoundEndJoin`, or
+    /// `BevelEndJoin`. Controls how stroke segments meet at
+    /// corners (e.g. the four corners of a rectangle).
+    pub end_join: Option<String>,
+    /// `MiterLimit` — when joins are mitered, the maximum miter
+    /// length expressed as a multiple of the stroke width before
+    /// the join falls back to bevel. InDesign defaults to 4.0.
+    pub miter_limit: Option<f32>,
     /// `ItemLayer` reference (`<self_id>` of a `<Layer>` in
     /// designmap.xml). The renderer skips this rectangle when its
     /// layer is hidden or non-printable.
@@ -742,6 +760,11 @@ impl Spread {
                             text_wrap: None,
                             frame_fitting: None,
                             stroke_type: attr(&e, b"StrokeType"),
+                            stroke_alignment: attr(&e, b"StrokeAlignment"),
+                            end_cap: attr(&e, b"EndCap"),
+                            end_join: attr(&e, b"EndJoin"),
+                            miter_limit: attr(&e, b"MiterLimit")
+                                .and_then(|s| s.parse::<f32>().ok()),
                             item_layer: attr(&e, b"ItemLayer"),
                             corner_radius: attr(&e, b"CornerRadius").and_then(|s| s.parse().ok()),
                             corner_option: attr(&e, b"CornerOption"),

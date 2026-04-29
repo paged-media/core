@@ -312,6 +312,7 @@ impl ResolvedRunAttrs {
             tracking: run.tracking,
             underline: run.underline,
             strikethru: run.strikethru,
+            leading: run.leading,
         }
     }
 
@@ -486,6 +487,9 @@ pub struct ResolvedRunAttrs {
     pub tracking: Option<f32>,
     pub underline: Option<bool>,
     pub strikethru: Option<bool>,
+    /// Explicit `Leading` in pt. `None` ⇒ Auto leading
+    /// (`point_size × 1.2`).
+    pub leading: Option<f32>,
 }
 
 /// Effective paragraph-level attributes after walking the cascade

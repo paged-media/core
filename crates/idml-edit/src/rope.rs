@@ -44,6 +44,7 @@ pub struct RunAttrs {
     pub tracking: Option<f32>,
     pub underline: Option<bool>,
     pub strikethru: Option<bool>,
+    pub leading: Option<f32>,
 }
 
 impl RunAttrs {
@@ -63,6 +64,7 @@ impl RunAttrs {
             tracking: r.tracking,
             underline: r.underline,
             strikethru: r.strikethru,
+            leading: r.leading,
         }
     }
 
@@ -82,6 +84,7 @@ impl RunAttrs {
             tracking: self.tracking,
             underline: self.underline,
             strikethru: self.strikethru,
+            leading: self.leading,
             text,
         }
     }
@@ -438,6 +441,7 @@ mod tests {
                         tracking: None,
                         underline: None,
                         strikethru: None,
+                        leading: None,
                         text: "Hello, ".into(),
                     },
                     CharacterRun {
@@ -455,6 +459,7 @@ mod tests {
                         tracking: None,
                         underline: None,
                         strikethru: None,
+                        leading: None,
                         text: "world".into(),
                     },
                 ],

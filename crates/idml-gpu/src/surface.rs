@@ -21,7 +21,6 @@
 #![cfg(target_arch = "wasm32")]
 
 use idml_compose::{Color, DisplayList};
-use vello::wgpu;
 use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions};
 
 use crate::vello_rs::{build_scene_for_surface, linear_to_peniko};
@@ -79,8 +78,8 @@ pub enum SurfaceError {
     RendererInit(String),
     #[error("get_current_texture failed: {0}")]
     GetTexture(String),
-    #[error("render_to_surface failed: {0}")]
-    RenderToSurface(String),
+    #[error("render failed: {0}")]
+    Render(String),
 }
 
 /// Long-lived presenter bound to one canvas. Constructed once at
@@ -91,6 +90,13 @@ pub struct SurfacePresenter {
     queue: wgpu::Queue,
     renderer: Renderer,
     surface_format: wgpu::TextureFormat,
+    /// Intermediate Rgba8Unorm storage texture Vello renders into.
+    /// Vello's compute pipeline cannot bind the surface texture
+    /// directly on most GPUs (Apple Metal in particular silently
+    /// drops the writes), so we render here and then blit.
+    target_texture: wgpu::Texture,
+    target_view: wgpu::TextureView,
+    blitter: wgpu::util::TextureBlitter,
     width: u32,
     height: u32,
 }
@@ -106,7 +112,8 @@ impl SurfacePresenter {
         width: u32,
         height: u32,
     ) -> Result<Self, SurfaceError> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
             .map_err(|e| SurfaceError::CreateSurface(format!("{e:?}")))?;
@@ -118,43 +125,65 @@ impl SurfacePresenter {
                 force_fallback_adapter: false,
             })
             .await
-            .ok_or(SurfaceError::NoAdapter)?;
+            .map_err(|_| SurfaceError::NoAdapter)?;
 
+        // Chrome's canvas typically only exposes `Bgra8Unorm` /
+        // `Bgra8UnormSrgb`. Vello renders into a STORAGE_BINDING
+        // texture; writing to a Bgra8Unorm storage texture requires
+        // the `BGRA8UNORM_STORAGE` device feature. Request it when
+        // the adapter advertises it; gracefully fall back if not.
+        let mut required_features = wgpu::Features::empty();
+        if adapter
+            .features()
+            .contains(wgpu::Features::BGRA8UNORM_STORAGE)
+        {
+            required_features |= wgpu::Features::BGRA8UNORM_STORAGE;
+        }
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("idml-gpu surface device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::downlevel_webgl2_defaults()
-                        .using_resolution(adapter.limits()),
-                    memory_hints: wgpu::MemoryHints::default(),
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("idml-gpu surface device"),
+                required_features,
+                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
+                    .using_resolution(adapter.limits()),
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: wgpu::Trace::Off,
+                experimental_features: wgpu::ExperimentalFeatures::default(),
+            })
             .await
             .map_err(|e| SurfaceError::RequestDevice(format!("{e:?}")))?;
 
-        // Pick the canvas's preferred format; fall back to a sensible
-        // default if the capabilities query returns nothing.
+        // Vello renders into an intermediate Rgba8Unorm storage
+        // texture; `TextureBlitter` then copies it onto the surface
+        // (which keeps RENDER_ATTACHMENT-only usage). This matches
+        // vello/util's recommended pattern.
         let caps = surface.get_capabilities(&adapter);
         let surface_format = caps
             .formats
             .iter()
             .copied()
-            .find(|f| f.is_srgb())
+            .find(|f| {
+                matches!(
+                    f,
+                    wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
+                )
+            })
+            .or_else(|| caps.formats.iter().copied().find(|f| !f.is_srgb()))
             .or_else(|| caps.formats.first().copied())
             .unwrap_or(wgpu::TextureFormat::Rgba8Unorm);
 
         let renderer = Renderer::new(
             &device,
             RendererOptions {
-                surface_format: Some(surface_format),
                 use_cpu: false,
                 antialiasing_support: AaSupport::area_only(),
                 num_init_threads: std::num::NonZeroUsize::new(1),
+                pipeline_cache: None,
             },
         )
         .map_err(|e| SurfaceError::RendererInit(format!("{e:?}")))?;
+
+        let (target_texture, target_view) = create_target(width, height, &device);
+        let blitter = wgpu::util::TextureBlitter::new(&device, surface_format);
 
         let presenter = Self {
             surface,
@@ -162,6 +191,9 @@ impl SurfacePresenter {
             queue,
             renderer,
             surface_format,
+            target_texture,
+            target_view,
+            blitter,
             width,
             height,
         };
@@ -174,6 +206,9 @@ impl SurfacePresenter {
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width.max(1);
         self.height = height.max(1);
+        let (t, v) = create_target(self.width, self.height, &self.device);
+        self.target_texture = t;
+        self.target_view = v;
         self.configure_surface();
     }
 
@@ -181,6 +216,9 @@ impl SurfacePresenter {
         self.surface.configure(
             &self.device,
             &wgpu::SurfaceConfiguration {
+                // RENDER_ATTACHMENT only — Vello's compute pipeline
+                // cannot bind the surface texture directly on most
+                // GPUs. The blit happens through `TextureBlitter`.
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 format: self.surface_format,
                 width: self.width,
@@ -196,25 +234,34 @@ impl SurfacePresenter {
     /// Render `list` and present onto the bound canvas. The viewport
     /// composes the page → surface transform; `background` is the
     /// canvas clear color (linear RGB, per display-list convention).
+    ///
+    /// Vello main no longer exposes `render_to_surface`; we render to
+    /// an intermediate offscreen texture and blit it onto the surface.
+    /// The editor's hot path stays GPU-only — no CPU readback.
     pub fn present(
         &mut self,
         list: &DisplayList,
         viewport: Viewport,
         background: Color,
     ) -> Result<(), SurfaceError> {
-        let frame = self
-            .surface
-            .get_current_texture()
-            .map_err(|e| SurfaceError::GetTexture(format!("{e:?}")))?;
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(t)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+            other => {
+                return Err(SurfaceError::GetTexture(format!("{other:?}")));
+            }
+        };
 
         let scene = build_scene_for_surface(list, viewport);
 
+        // Vello renders into the intermediate Rgba8Unorm storage
+        // texture (`target_view`); we then blit it onto the surface.
         self.renderer
-            .render_to_surface(
+            .render_to_texture(
                 &self.device,
                 &self.queue,
                 &scene,
-                &frame,
+                &self.target_view,
                 &RenderParams {
                     base_color: linear_to_peniko(background),
                     width: self.width,
@@ -222,9 +269,48 @@ impl SurfacePresenter {
                     antialiasing_method: AaConfig::Area,
                 },
             )
-            .map_err(|e| SurfaceError::RenderToSurface(format!("{e:?}")))?;
+            .map_err(|e| SurfaceError::Render(format!("{e:?}")))?;
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("idml-gpu surface blit"),
+            });
+        let surface_view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.blitter.copy(
+            &self.device,
+            &mut encoder,
+            &self.target_view,
+            &surface_view,
+        );
+        self.queue.submit([encoder.finish()]);
 
         frame.present();
         Ok(())
     }
+}
+
+fn create_target(
+    width: u32,
+    height: u32,
+    device: &wgpu::Device,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("idml-gpu vello target"),
+        size: wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
 }

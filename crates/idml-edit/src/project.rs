@@ -420,6 +420,7 @@ impl Project {
             tracking: r.tracking,
             underline: r.underline,
             strikethru: r.strikethru,
+            leading: r.leading,
         })
     }
 
@@ -1750,6 +1751,7 @@ impl Project {
             },
             item_transform,
             fill_color,
+            fill_tint: None,
             stroke_color,
             stroke_weight,
             drop_shadow: None,
@@ -1758,6 +1760,10 @@ impl Project {
             text_wrap: None,
             frame_fitting: None,
             stroke_type: None,
+            stroke_alignment: None,
+            end_cap: None,
+            end_join: None,
+            miter_limit: None,
             item_layer: None,
             corner_radius: None,
             corner_option: None,

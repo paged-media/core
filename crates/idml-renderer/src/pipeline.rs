@@ -1139,6 +1139,16 @@ fn emit_paragraph_into_chain(
     let mut lopts = idml_text::LayoutOptions::new(col_pt, paragraph_size);
     lopts.alignment = map_justification(resolved_paragraph.justification.as_deref());
     apply_paragraph_compose_options(&mut lopts, em.hyphenator, &resolved_paragraph);
+    // Explicit `Leading` on the leading run mirrors IDML semantics:
+    // every line uses the override regardless of the largest glyph
+    // size on the line. Auto leading (no override) keeps existing
+    // behaviour.
+    if let Some(leading_pt) = resolved_runs.first().and_then(|r| r.leading) {
+        if leading_pt > 0.0 {
+            lopts.leading_override =
+                Some((leading_pt * idml_text::shape::ADVANCE_PRECISION).round() as i32);
+        }
+    }
 
     if em.y_cursor < 0 {
         let head_font_metrics = font_ids
@@ -2040,10 +2050,16 @@ fn emit_table_into_chain(
             .unwrap_or_default();
 
         // Cell fill — drawn before text so glyphs paint on top.
-        if let Some(fill) = resolved_cell
+        // Inline FillColor on the <Cell> wins over the cascaded
+        // cell-style fill — same precedence as the per-edge stroke
+        // overrides above.
+        let cell_fill_id = cell
             .fill_color
             .as_deref()
-            .and_then(|id| color_id_to_paint(id, em.palette, em.cmyk_xform))
+            .filter(|c| !is_none_swatch_id(c))
+            .or(resolved_cell.fill_color.as_deref());
+        if let Some(fill) =
+            cell_fill_id.and_then(|id| color_id_to_paint(id, em.palette, em.cmyk_xform))
         {
             emit_rect(
                 Rect {
@@ -3016,6 +3032,7 @@ fn emit_rectangle_into(
         .as_deref()
         .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
         .unwrap_or(fallback);
+    let fill = apply_fill_tint(fill, rect.fill_tint);
     let fill = apply_opacity(fill, rect.opacity);
     let stroke_paint = rect
         .stroke_color
@@ -3023,6 +3040,8 @@ fn emit_rectangle_into(
         .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
         .map(|p| apply_opacity(p, rect.opacity));
     let stroke_width = rect.stroke_weight.unwrap_or(1.0);
+    let stroke_offset = stroke_alignment_offset(rect.stroke_alignment.as_deref(), stroke_width);
+    let blend_mode = blend_mode_from_idml(rect.blend_mode.as_deref());
     let radius = corner_radius_for(rect);
     if let Some(radius) = radius {
         // Rounded path: build once, intern, fill + (optional) stroke.
@@ -3036,30 +3055,114 @@ fn emit_rectangle_into(
             .unwrap_or_else(|| format!("{:?}", r).into_bytes());
         let key = fnv_1a_u64(&[key_bytes.as_slice(), &radius.to_bits().to_le_bytes()].concat());
         let (path_id, _) = page.list.paths.intern(key, path);
-        page.list.commands.push(DisplayCommand::FillPath {
-            path_id,
-            paint: fill,
-            transform: outer,
-        });
-        if let (Some(stroke), true) = (stroke_paint, stroke_width > 0.0) {
-            page.list.commands.push(DisplayCommand::StrokePath {
+        if matches!(blend_mode, idml_compose::BlendMode::Normal) {
+            page.list.commands.push(DisplayCommand::FillPath {
                 path_id,
+                paint: fill,
+                transform: outer,
+            });
+        } else {
+            page.list.commands.push(DisplayCommand::FillPathBlend {
+                path_id,
+                paint: fill,
+                transform: outer,
+                blend_mode,
+            });
+        }
+        if let (Some(stroke), true) = (stroke_paint, stroke_width > 0.0) {
+            // Inside/Outside alignment shifts the stroke path inward
+            // or outward by W/2, with matching radius adjustment so
+            // the corners stay tangent to the geometry.
+            let stroke_rect = inset_rect(r, stroke_offset);
+            let stroke_radius = (radius - stroke_offset).max(0.0);
+            let stroke_path = rounded_rect_path(stroke_rect, stroke_radius);
+            let stroke_key = fnv_1a_u64(
+                &[
+                    key_bytes.as_slice(),
+                    &stroke_radius.to_bits().to_le_bytes(),
+                    &stroke_offset.to_bits().to_le_bytes(),
+                    b"sa",
+                ]
+                .concat(),
+            );
+            let (stroke_path_id, _) = page.list.paths.intern(stroke_key, stroke_path);
+            page.list.commands.push(DisplayCommand::StrokePath {
+                path_id: stroke_path_id,
                 paint: stroke,
-                stroke: stroke_for_type(rect.stroke_type.as_deref(), stroke_width),
+                stroke: stroke_for(
+                    rect.stroke_type.as_deref(),
+                    stroke_width,
+                    rect.end_cap.as_deref(),
+                    rect.end_join.as_deref(),
+                    rect.miter_limit,
+                ),
                 transform: outer,
             });
         }
         return;
     }
-    emit_rect_transformed(r, outer, fill, &mut page.list);
+    idml_compose::emit_rect_transformed_blend(r, outer, fill, blend_mode, &mut page.list);
     if let (Some(stroke), true) = (stroke_paint, stroke_width > 0.0) {
         emit_stroke_rect_transformed(
-            r,
+            inset_rect(r, stroke_offset),
             outer,
-            stroke_for_type(rect.stroke_type.as_deref(), stroke_width),
+            stroke_for(
+                rect.stroke_type.as_deref(),
+                stroke_width,
+                rect.end_cap.as_deref(),
+                rect.end_join.as_deref(),
+                rect.miter_limit,
+            ),
             stroke,
             &mut page.list,
         );
+    }
+}
+
+/// Half the stroke width to shift the stroke path by, signed so that
+/// positive shrinks inward (Inside alignment) and negative grows
+/// outward (Outside alignment). `CenterAlignment` and `None` return 0.
+fn stroke_alignment_offset(alignment: Option<&str>, stroke_width: f32) -> f32 {
+    match alignment {
+        Some("InsideAlignment") => stroke_width * 0.5,
+        Some("OutsideAlignment") => -stroke_width * 0.5,
+        _ => 0.0,
+    }
+}
+
+/// Map IDML's `<BlendingSetting BlendMode="...">` enum string to the
+/// compose-layer `BlendMode`. Unknown / absent values fall back to
+/// Normal. Names mirror Adobe's PDF blend-mode catalogue.
+fn blend_mode_from_idml(name: Option<&str>) -> idml_compose::BlendMode {
+    use idml_compose::BlendMode;
+    match name {
+        Some("Multiply") => BlendMode::Multiply,
+        Some("Screen") => BlendMode::Screen,
+        Some("Overlay") => BlendMode::Overlay,
+        Some("Darken") => BlendMode::Darken,
+        Some("Lighten") => BlendMode::Lighten,
+        Some("ColorDodge") => BlendMode::ColorDodge,
+        Some("ColorBurn") => BlendMode::ColorBurn,
+        Some("HardLight") => BlendMode::HardLight,
+        Some("SoftLight") => BlendMode::SoftLight,
+        Some("Difference") => BlendMode::Difference,
+        Some("Exclusion") => BlendMode::Exclusion,
+        Some("Hue") => BlendMode::Hue,
+        Some("Saturation") => BlendMode::Saturation,
+        Some("Color") => BlendMode::Color,
+        Some("Luminosity") => BlendMode::Luminosity,
+        _ => BlendMode::Normal,
+    }
+}
+
+/// Inset (positive) or outset (negative) all four edges of a rect by
+/// `delta`. Used for stroke-alignment shifts on rectangles.
+fn inset_rect(r: Rect, delta: f32) -> Rect {
+    Rect {
+        x: r.x + delta,
+        y: r.y + delta,
+        w: (r.w - 2.0 * delta).max(0.0),
+        h: (r.h - 2.0 * delta).max(0.0),
     }
 }
 
@@ -3763,8 +3866,23 @@ fn apply_paragraph_compose_options<'a>(
 /// looks proportionally heavier — that mirrors InDesign's behaviour
 /// where the named built-ins describe a multiple of the line weight,
 /// not absolute pt distances.
-fn stroke_for_type(stroke_type: Option<&str>, width: f32) -> Stroke {
+fn stroke_for(
+    stroke_type: Option<&str>,
+    width: f32,
+    end_cap: Option<&str>,
+    end_join: Option<&str>,
+    miter_limit: Option<f32>,
+) -> Stroke {
     let mut s = Stroke::new(width);
+    if let Some(cap) = end_cap_from(end_cap) {
+        s.cap = cap;
+    }
+    if let Some(join) = end_join_from(end_join) {
+        s.join = join;
+    }
+    if let Some(ml) = miter_limit {
+        s.miter_limit = ml;
+    }
     let Some(name) = stroke_type else {
         return s;
     };
@@ -3785,14 +3903,34 @@ fn stroke_for_type(stroke_type: Option<&str>, width: f32) -> Stroke {
     if let Some(p) = pattern {
         let scaled: Vec<f32> = p.iter().map(|v| v * w).collect();
         s.dash = idml_compose::DashPattern::from_slice(&scaled);
-        // Dotted patterns use round caps so the zero-length on-segment
-        // renders as a dot rather than a needle. Adobe's previews do
-        // the same.
-        if matches!(suffix, "Dotted" | "Dotted2" | "Dotted4" | "Dotted8") {
+        // Dotted patterns force round caps when the IDML didn't carry
+        // an explicit `EndCap`, otherwise the zero-length on-segment
+        // would render as a needle. Adobe previews behave the same.
+        if matches!(suffix, "Dotted" | "Dotted2" | "Dotted4" | "Dotted8")
+            && end_cap.is_none()
+        {
             s.cap = idml_compose::LineCap::Round;
         }
     }
     s
+}
+
+fn end_cap_from(name: Option<&str>) -> Option<idml_compose::LineCap> {
+    match name? {
+        "ButtEndCap" => Some(idml_compose::LineCap::Butt),
+        "RoundEndCap" => Some(idml_compose::LineCap::Round),
+        "ProjectingEndCap" => Some(idml_compose::LineCap::Square),
+        _ => None,
+    }
+}
+
+fn end_join_from(name: Option<&str>) -> Option<idml_compose::LineJoin> {
+    match name? {
+        "MiterEndJoin" => Some(idml_compose::LineJoin::Miter),
+        "RoundEndJoin" => Some(idml_compose::LineJoin::Round),
+        "BevelEndJoin" => Some(idml_compose::LineJoin::Bevel),
+        _ => None,
+    }
 }
 
 /// Scale a paint toward paper white per the IDML `FillTint`

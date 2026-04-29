@@ -15,7 +15,7 @@ default = ["cpu"]
 # Selects the active rasterizer. Only one may be enabled at a time; the
 # default (none) means the crate exposes only the trait surface. The
 # concrete choice is made after Spike A concludes.
-vello-backend = ["dep:vello"]
+vello-backend = ["dep:vello", "dep:wgpu"]
 # CPU rasterizer via tiny-skia — always buildable, exercises the full
 # pipeline in environments without a GPU. Primarily used by tests and
 # the fidelity harness.
@@ -23,15 +23,19 @@ cpu = ["dep:tiny-skia", "dep:image"]
 
 [dependencies]
 idml-compose = { path = "../idml-compose" }
-wgpu = "22"
+# vello 0.8 / tiny-skia 0.12 / wgpu 29 — current Chrome ships the
+# post-2024 WebGPU spec and rejects wgpu < 24's
+# `maxInterStageShaderComponents` limit. wgpu is direct-deps so its
+# version is explicit; we still use vello for the path rasterizer.
 bytemuck = { version = "1", features = ["derive"] }
 pollster = "0.4"
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
-vello = { version = "0.3", optional = true }
-tiny-skia = { version = "0.11", optional = true }
+vello = { git = "https://github.com/linebender/vello.git", branch = "main", optional = true, default-features = false, features = ["wgpu"] }
+tiny-skia = { version = "0.12", optional = true }
 image = { workspace = true, optional = true }
+wgpu = { version = "29.0.1", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3", features = ["HtmlCanvasElement"] }

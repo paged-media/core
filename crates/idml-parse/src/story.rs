@@ -135,6 +135,12 @@ pub struct TableCell {
     pub right_edge_stroke_color: Option<String>,
     pub right_edge_stroke_weight: Option<f32>,
     pub right_edge_stroke_tint: Option<f32>,
+    /// Inline `FillColor="Color/..."` on the `<Cell>` element.
+    /// Wins over the cell-style cascade — used by header / body /
+    /// alternating-fill rows when the table doesn't carry an
+    /// AppliedTableStyle. `None` ⇒ inherit from the resolved cell
+    /// style.
+    pub fill_color: Option<String>,
     /// `FirstBaselineOffset` enum (Ascent / Cap / Leading / Emboxed /
     /// FixedHeight / etc). Drives where the first line of cell text
     /// drops from the cell's top edge. Parsed for completeness; the
@@ -240,6 +246,11 @@ pub struct CharacterRun {
     pub underline: Option<bool>,
     /// `StrikeThru="true"` on the CharacterStyleRange.
     pub strikethru: Option<bool>,
+    /// Explicit `Leading` in pt. `None` ⇒ Auto leading
+    /// (`point_size × 1.2`). InDesign serialises `Leading` as a
+    /// number on the CharacterStyleRange, with magic `Auto` not
+    /// modelled here (we treat absence == Auto).
+    pub leading: Option<f32>,
     pub text: String,
 }
 
@@ -345,6 +356,7 @@ impl Story {
                             right_edge_stroke_weight: attr(&e, b"RightEdgeStrokeWeight")
                                 .and_then(|s| s.parse().ok()),
                             right_edge_stroke_tint: parse_tint_attr(&e, b"RightEdgeStrokeTint"),
+                            fill_color: attr(&e, b"FillColor"),
                             first_baseline_offset: attr(&e, b"FirstBaselineOffset"),
                             minimum_first_baseline_offset: attr(&e, b"MinimumFirstBaselineOffset")
                                 .and_then(|s| s.parse().ok()),
@@ -393,6 +405,7 @@ impl Story {
                             underline: attr(&e, b"Underline").and_then(|s| s.parse::<bool>().ok()),
                             strikethru: attr(&e, b"StrikeThru")
                                 .and_then(|s| s.parse::<bool>().ok()),
+                            leading: attr(&e, b"Leading").and_then(|s| s.parse::<f32>().ok()),
                             text: String::new(),
                         });
                     }

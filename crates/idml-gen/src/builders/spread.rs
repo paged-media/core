@@ -2,7 +2,7 @@
 //! single-page-per-spread). Page items live as direct children of the
 //! `Spread` element, not the `Page` — that's IDML's convention.
 
-use crate::builders::page_item::Rect;
+use crate::builders::page_item::PageItem;
 use crate::geometry::IDENTITY;
 use crate::xml::{format_f32, XmlBuilder};
 
@@ -19,7 +19,7 @@ pub struct Spread {
     pub applied_master: String,
     pub page_width_pt: f32,
     pub page_height_pt: f32,
-    pub page_items: Vec<Rect>,
+    pub page_items: Vec<PageItem>,
 }
 
 pub fn write_spread(s: &Spread) -> Vec<u8> {
@@ -52,12 +52,17 @@ pub fn write_spread(s: &Spread) -> Vec<u8> {
             ("ItemTransform", &identity),
         ],
     );
+    // AppliedMaster must reference the bare `<MasterSpread Self="...">`
+    // id, not the `MasterSpread/<id>` filename prefix the call sites
+    // tend to compose. Real InDesign exports use bare ids (e.g.
+    // `AppliedMaster="ub4"`) — match that.
+    let applied_master = strip_type_prefix(&s.applied_master);
     b.empty(
         "Page",
         &[
             ("Self", s.page_self_id.as_str()),
             ("Name", s.page_name.as_str()),
-            ("AppliedMaster", s.applied_master.as_str()),
+            ("AppliedMaster", applied_master),
             ("ItemTransform", &identity),
             ("GeometricBounds", &bounds),
             ("MasterPageTransform", &identity),
@@ -69,4 +74,8 @@ pub fn write_spread(s: &Spread) -> Vec<u8> {
     b.end("Spread");
     b.end("idPkg:Spread");
     b.into_bytes()
+}
+
+fn strip_type_prefix(id: &str) -> &str {
+    id.split_once('/').map(|(_, rest)| rest).unwrap_or(id)
 }

@@ -1,0 +1,450 @@
+//! Phase-1 mega-file: `tables.idml`.
+//!
+//! Pages exercise table rendering — the renderer's table cell
+//! emission path that no prior generator sample touches. Each
+//! variant lives on its own A4 page. The host TextFrame holds a
+//! single paragraph whose CharacterStyleRange contains a `<Table>`.
+//!
+//! Variants:
+//!   * 2×2 plain table — body content only
+//!   * 3×3 with one header row
+//!   * 3×3 with alternating row fills
+//!   * 3×3 with per-cell stroke colour overrides
+
+use crate::builders::{
+    designmap::{write_designmap, DesignMap},
+    master::{write_master, Master},
+    page_item::Rect,
+    resources::{
+        container_xml, fonts_xml, graphic_xml_with_extras, preferences_xml, styles_xml,
+        ExtraColor,
+    },
+    spread::{write_spread, Spread},
+    story::{write_story, Cell, Paragraph, Run, Story, Table},
+    xml_folder::{backing_story_xml, mapping_xml, tags_xml},
+};
+use crate::geometry::{translate, Matrix, IDENTITY};
+use crate::ids::self_id;
+use crate::package::Sample;
+
+const SAMPLE: &str = "tables";
+const PAGE_W_PT: f32 = 595.276;
+const PAGE_H_PT: f32 = 841.890;
+const FRAME_W_PT: f32 = 480.0;
+const FRAME_H_PT: f32 = 360.0;
+const ROW_H_PT: f32 = 28.0;
+const COL_W_PT: f32 = 120.0;
+
+struct Variant {
+    name: &'static str,
+    /// Builder closure produces the Table given a Self id; lets each
+    /// variant emit a different shape without modelling another data
+    /// type per case.
+    table: Box<dyn Fn(&str) -> Table>,
+}
+
+fn variants() -> Vec<Variant> {
+    vec![
+        Variant {
+            name: "tables · 2x2 · plain",
+            table: Box::new(|id| Table {
+                self_id: id.to_string(),
+                header_row_count: 0,
+                footer_row_count: 0,
+                body_row_count: 2,
+                column_count: 2,
+                row_heights_pt: vec![ROW_H_PT; 2],
+                column_widths_pt: vec![COL_W_PT; 2],
+                cells: vec![
+                    Cell::plain("A1"),
+                    Cell::plain("A2"),
+                    Cell::plain("B1"),
+                    Cell::plain("B2"),
+                ],
+            }),
+        },
+        Variant {
+            name: "tables · 3x3 · header-row",
+            table: Box::new(|id| Table {
+                self_id: id.to_string(),
+                header_row_count: 1,
+                footer_row_count: 0,
+                body_row_count: 2,
+                column_count: 3,
+                row_heights_pt: vec![ROW_H_PT; 3],
+                column_widths_pt: vec![COL_W_PT; 3],
+                // column-major: col 0 then col 1 then col 2
+                cells: {
+                    let mut v = Vec::new();
+                    for c in 0..3 {
+                        for r in 0..3 {
+                            let label = if r == 0 {
+                                format!("Hdr {}", c + 1)
+                            } else {
+                                format!("R{}C{}", r, c + 1)
+                            };
+                            let mut cell = Cell::plain(label);
+                            if r == 0 {
+                                cell.fill_color = Some("Color/CMYKCyan20".to_string());
+                            }
+                            v.push(cell);
+                        }
+                    }
+                    v
+                },
+            }),
+        },
+        Variant {
+            name: "tables · 3x3 · alternating-rows",
+            table: Box::new(|id| Table {
+                self_id: id.to_string(),
+                header_row_count: 0,
+                footer_row_count: 0,
+                body_row_count: 3,
+                column_count: 3,
+                row_heights_pt: vec![ROW_H_PT; 3],
+                column_widths_pt: vec![COL_W_PT; 3],
+                cells: {
+                    let mut v = Vec::new();
+                    for c in 0..3 {
+                        for r in 0..3 {
+                            let mut cell = Cell::plain(format!("R{}C{}", r + 1, c + 1));
+                            // Even rows (0, 2) get the alternating fill.
+                            if r % 2 == 0 {
+                                cell.fill_color = Some("Color/CMYKCyan20".to_string());
+                            }
+                            v.push(cell);
+                        }
+                    }
+                    v
+                },
+            }),
+        },
+        Variant {
+            name: "tables · 3x3 · cell-strokes",
+            table: Box::new(|id| Table {
+                self_id: id.to_string(),
+                header_row_count: 0,
+                footer_row_count: 0,
+                body_row_count: 3,
+                column_count: 3,
+                row_heights_pt: vec![ROW_H_PT; 3],
+                column_widths_pt: vec![COL_W_PT; 3],
+                cells: {
+                    let mut v = Vec::new();
+                    for c in 0..3 {
+                        for r in 0..3 {
+                            let mut cell = Cell::plain(format!("R{}C{}", r + 1, c + 1));
+                            // Highlight the centre cell with a heavy
+                            // magenta border on every side. The
+                            // surrounding cells inherit cascade
+                            // defaults so the diff harness can attribute
+                            // any over-paint to the override path.
+                            if r == 1 && c == 1 {
+                                cell.top_edge_stroke_color = Some("Color/CMYKMagenta");
+                                cell.bottom_edge_stroke_color = Some("Color/CMYKMagenta");
+                                cell.left_edge_stroke_color = Some("Color/CMYKMagenta");
+                                cell.right_edge_stroke_color = Some("Color/CMYKMagenta");
+                                cell.top_edge_stroke_weight = Some(3.0);
+                                cell.bottom_edge_stroke_weight = Some(3.0);
+                                cell.left_edge_stroke_weight = Some(3.0);
+                                cell.right_edge_stroke_weight = Some(3.0);
+                            }
+                            v.push(cell);
+                        }
+                    }
+                    v
+                },
+            }),
+        },
+        // Merged-cells: row 0 column 0 spans 2 columns; row 0 column 2
+        // also spans 2 rows. The IDML convention is column-major, with
+        // covered slots omitted from the cell list (the spanning cell
+        // owns them).
+        Variant {
+            name: "tables · 3x3 · merged-cells",
+            table: Box::new(|id| Table {
+                self_id: id.to_string(),
+                header_row_count: 0,
+                footer_row_count: 0,
+                body_row_count: 3,
+                column_count: 3,
+                row_heights_pt: vec![ROW_H_PT; 3],
+                column_widths_pt: vec![COL_W_PT; 3],
+                cells: {
+                    // Col 0: row 0 spans 2 cols (occupies col 0..1
+                    // row 0); rows 1, 2 plain. Cells are listed
+                    // column-major; the (col=1 row=0) slot is covered
+                    // by the span and omitted.
+                    // Col 1: only rows 1 and 2 (row 0 covered).
+                    // Col 2: row 0 spans 2 rows (occupies col 2 rows
+                    // 0..1); row 2 plain. The (col=2 row=1) slot is
+                    // covered.
+                    vec![
+                        // col 0
+                        Cell::plain("Spans 2 columns").with_span(1, 2),
+                        Cell::plain("R2C1"),
+                        Cell::plain("R3C1"),
+                        // col 1 — row 0 covered by the col 0 column-span
+                        Cell::plain("R2C2"),
+                        Cell::plain("R3C2"),
+                        // col 2
+                        Cell::plain("Spans 2 rows").with_span(2, 1),
+                        // (col 2 row 1 covered by the col 2 row-span)
+                        Cell::plain("R3C3"),
+                    ]
+                },
+            }),
+        },
+        // Multi-paragraph cell content. Verifies the renderer flows
+        // multiple paragraphs vertically inside one cell using the
+        // standard ParagraphStyleRange/CharacterStyleRange machinery.
+        Variant {
+            name: "tables · 2x2 · multi-paragraph-cells",
+            table: Box::new(|id| Table {
+                self_id: id.to_string(),
+                header_row_count: 0,
+                footer_row_count: 0,
+                body_row_count: 2,
+                column_count: 2,
+                // Tall rows so two paragraphs fit comfortably.
+                row_heights_pt: vec![60.0, 60.0],
+                column_widths_pt: vec![COL_W_PT * 1.5; 2],
+                cells: vec![
+                    // col 0 row 0: two paragraphs in one cell
+                    Cell {
+                        paragraphs: vec![
+                            Paragraph::plain("Line 1"),
+                            Paragraph::plain("Line 2"),
+                        ],
+                        ..Cell::plain("")
+                    },
+                    Cell::plain("Single line"),
+                    // col 1
+                    Cell::plain("Single line"),
+                    Cell {
+                        paragraphs: vec![
+                            Paragraph::plain("First"),
+                            Paragraph::plain("Second"),
+                            Paragraph::plain("Third"),
+                        ],
+                        ..Cell::plain("")
+                    },
+                ],
+            }),
+        },
+        // Right-aligned cell text — one paragraph with explicit
+        // RightAlign Justification on the cell's paragraph style.
+        Variant {
+            name: "tables · 2x2 · right-aligned",
+            table: Box::new(|id| Table {
+                self_id: id.to_string(),
+                header_row_count: 0,
+                footer_row_count: 0,
+                body_row_count: 2,
+                column_count: 2,
+                row_heights_pt: vec![ROW_H_PT; 2],
+                column_widths_pt: vec![COL_W_PT * 1.5; 2],
+                cells: {
+                    let right_aligned = |s: &str| Cell {
+                        paragraphs: vec![Paragraph {
+                            justification: Some("RightAlign"),
+                            space_before: None,
+                            space_after: None,
+                            leading: None,
+                            first_line_indent: None,
+                            left_indent: None,
+                            right_indent: None,
+                            drop_cap_characters: None,
+                            drop_cap_lines: None,
+                            tab_list: Vec::new(),
+                            table: None,
+                            runs: vec![Run {
+                                text: s.to_string(),
+                                point_size: None,
+                                fill_color: None,
+                                font_style: None,
+                                tracking: None,
+                                baseline_shift: None,
+                                underline: None,
+                                applied_font: None,
+                            }],
+                        }],
+                        ..Cell::plain("")
+                    };
+                    vec![
+                        right_aligned("$1,234"),
+                        right_aligned("$56,789"),
+                        right_aligned("$10"),
+                        right_aligned("$200,000"),
+                    ]
+                },
+            }),
+        },
+    ]
+}
+
+fn extra_colors() -> Vec<ExtraColor> {
+    vec![
+        // 20% cyan tint for header / alternating-row fills.
+        ExtraColor {
+            self_id: "Color/CMYKCyan20".to_string(),
+            name: "CMYK Cyan 20".to_string(),
+            space: "CMYK",
+            value: "20 0 0 0".to_string(),
+        },
+        // Pure magenta for cell-stroke highlights.
+        ExtraColor {
+            self_id: "Color/CMYKMagenta".to_string(),
+            name: "CMYK Magenta".to_string(),
+            space: "CMYK",
+            value: "0 100 0 0".to_string(),
+        },
+    ]
+}
+
+pub fn build() -> Sample {
+    let variants = variants();
+
+    let mut master_spreads = Vec::with_capacity(variants.len());
+    let mut spreads = Vec::with_capacity(variants.len());
+    let mut stories = Vec::with_capacity(variants.len());
+    let mut master_refs = Vec::with_capacity(variants.len());
+    let mut spread_refs = Vec::with_capacity(variants.len());
+    let mut story_refs = Vec::with_capacity(variants.len());
+
+    for (i, variant) in variants.iter().enumerate() {
+        let seq = i as u32;
+        let master_id = self_id(SAMPLE, "MasterSpread", seq);
+        let master_page_id = self_id(SAMPLE, "MasterPage", seq);
+        let spread_id = self_id(SAMPLE, "Spread", seq);
+        let page_id = self_id(SAMPLE, "Page", seq);
+        let story_id = self_id(SAMPLE, "Story", seq);
+        let label_story_id = self_id(SAMPLE, "LabelStory", seq);
+        let label_frame_id = self_id(SAMPLE, "LabelFrame", seq);
+        let body_frame_id = self_id(SAMPLE, "TextFrame", seq);
+        let table_self_id = self_id(SAMPLE, "Table", seq);
+
+        master_spreads.push((
+            master_id.clone(),
+            write_master(&Master {
+                self_id: format!("MasterSpread/{master_id}"),
+                page_self_id: master_page_id.clone(),
+                page_width_pt: PAGE_W_PT,
+                page_height_pt: PAGE_H_PT,
+            }),
+        ));
+        master_refs.push(master_id.clone());
+
+        // Top-left label story.
+        stories.push((
+            label_story_id.clone(),
+            write_story(&Story {
+                self_id: label_story_id.clone(),
+                paragraphs: vec![Paragraph::plain(variant.name)],
+            }),
+        ));
+        story_refs.push(label_story_id.clone());
+
+        // Body story containing the table host paragraph.
+        let table = (variant.table)(&table_self_id);
+        let host_paragraph = Paragraph {
+            justification: None,
+            space_before: None,
+            space_after: None,
+            leading: None,
+            first_line_indent: None,
+            left_indent: None,
+            right_indent: None,
+            drop_cap_characters: None,
+            drop_cap_lines: None,
+            tab_list: Vec::new(),
+            table: Some(table),
+            runs: Vec::new(),
+        };
+        stories.push((
+            story_id.clone(),
+            write_story(&Story {
+                self_id: story_id.clone(),
+                paragraphs: vec![host_paragraph],
+            }),
+        ));
+        story_refs.push(story_id.clone());
+
+        let label_frame = Rect {
+            self_id: label_frame_id,
+            width_pt: 360.0,
+            height_pt: 24.0,
+            item_transform: translate(36.0, 36.0),
+            fill_color: None,
+            stroke_color: None,
+            stroke_weight_pt: None,
+            parent_story: Some(label_story_id),
+            extra_attrs: Vec::new(),
+            blending: None,
+            drop_shadow: None,
+            placed_image: None,
+        };
+
+        let body_frame = Rect {
+            self_id: body_frame_id,
+            width_pt: FRAME_W_PT,
+            height_pt: FRAME_H_PT,
+            item_transform: compose_translate(
+                (PAGE_W_PT - FRAME_W_PT) * 0.5,
+                (PAGE_H_PT - FRAME_H_PT) * 0.33,
+            ),
+            fill_color: None,
+            stroke_color: None,
+            stroke_weight_pt: None,
+            parent_story: Some(story_id.clone()),
+            extra_attrs: Vec::new(),
+            blending: None,
+            drop_shadow: None,
+            placed_image: None,
+        };
+
+        spreads.push((
+            spread_id.clone(),
+            write_spread(&Spread {
+                self_id: spread_id.clone(),
+                page_self_id: page_id,
+                page_name: variant.name.to_string(),
+                applied_master: format!("MasterSpread/{master_id}"),
+                page_width_pt: PAGE_W_PT,
+                page_height_pt: PAGE_H_PT,
+                page_items: vec![label_frame.into(), body_frame.into()],
+            }),
+        ));
+        spread_refs.push(spread_id);
+    }
+
+    let designmap = write_designmap(&DesignMap {
+        self_id: "d".to_string(),
+        master_spreads: master_refs,
+        spreads: spread_refs,
+        stories: story_refs,
+    });
+
+    Sample {
+        container_xml: container_xml(),
+        designmap_xml: designmap,
+        graphic_xml: graphic_xml_with_extras(&extra_colors()),
+        fonts_xml: fonts_xml(),
+        styles_xml: styles_xml(),
+        preferences_xml: preferences_xml(),
+        backing_story_xml: backing_story_xml(),
+        tags_xml: tags_xml(),
+        mapping_xml: mapping_xml(),
+        master_spreads,
+        spreads,
+        stories,
+    }
+}
+
+fn compose_translate(tx: f32, ty: f32) -> Matrix {
+    let mut m = IDENTITY;
+    m[4] = tx;
+    m[5] = ty;
+    m
+}
