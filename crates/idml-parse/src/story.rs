@@ -272,6 +272,24 @@ impl Story {
         let mut outer_run: Option<CharacterRun> = None;
         let mut in_content = false;
         let mut buf = Vec::new();
+        // `<Properties>` child elements appear *inside* a CharacterStyleRange
+        // or ParagraphStyleRange to carry typed values that the spec lets
+        // InDesign serialise either as XML attributes or as nested elements
+        // with `type="string"|"unit"|"enumeration"`. Real exports prefer the
+        // child-element form for AppliedFont, Leading, BulletsFont, etc., so
+        // a parser that only reads attributes loses the data entirely. We
+        // track the *enclosing* container of the Properties block plus the
+        // currently-open child name so the Text event can accumulate the
+        // value.
+        //
+        //   1 → Properties under a CharacterStyleRange (run-level)
+        //   2 → Properties under a ParagraphStyleRange (paragraph-level)
+        //
+        // 0 / None means Properties belongs to a Story / TextFrame / other
+        // container we don't extract typed children from yet.
+        let mut properties_kind: u8 = 0;
+        let mut properties_field: Option<Vec<u8>> = None;
+        let mut properties_text = String::new();
 
         loop {
             match reader.read_event_into(&mut buf)? {
@@ -412,11 +430,75 @@ impl Story {
                     b"Content" => {
                         in_content = true;
                     }
+                    b"Properties" => {
+                        // Disambiguate by which container is currently
+                        // open. A Properties child of CharacterStyleRange
+                        // takes precedence (current_run is open while we
+                        // walk the run's children). The paragraph-level
+                        // form fires when we're between runs but still
+                        // inside an open ParagraphStyleRange.
+                        properties_kind = if current_run.is_some() {
+                            1
+                        } else if current_paragraph.is_some() {
+                            2
+                        } else {
+                            0
+                        };
+                    }
+                    other if properties_kind != 0 => {
+                        // Capture the next Text events as the value of
+                        // this typed child element. The `type` attribute
+                        // (`string` / `unit` / `enumeration`) is
+                        // informational; we infer the destination field
+                        // from the element name on End.
+                        properties_field = Some(other.to_vec());
+                        properties_text.clear();
+                    }
                     _ => {}
                 },
                 Event::End(e) => match e.name().as_ref() {
                     b"Content" => {
                         in_content = false;
+                    }
+                    b"Properties" => {
+                        properties_kind = 0;
+                        properties_field = None;
+                        properties_text.clear();
+                    }
+                    name if properties_kind != 0
+                        && properties_field.as_deref() == Some(name) =>
+                    {
+                        let value = properties_text.trim().to_string();
+                        match (properties_kind, name) {
+                            // CharacterStyleRange Properties.
+                            (1, b"AppliedFont") => {
+                                if let Some(run) = current_run.as_mut() {
+                                    if !value.is_empty() {
+                                        run.font = Some(value);
+                                    }
+                                }
+                            }
+                            (1, b"FontStyle") => {
+                                if let Some(run) = current_run.as_mut() {
+                                    if !value.is_empty() {
+                                        run.font_style = Some(value);
+                                    }
+                                }
+                            }
+                            (1, b"Leading") => {
+                                if let Some(run) = current_run.as_mut() {
+                                    if let Ok(v) = value.parse::<f32>() {
+                                        run.leading = Some(v);
+                                    }
+                                }
+                            }
+                            // ParagraphStyleRange Properties: no fields
+                            // surfaced on Paragraph yet; the typed
+                            // children land in followup parser slices.
+                            _ => {}
+                        }
+                        properties_field = None;
+                        properties_text.clear();
                     }
                     b"CharacterStyleRange" => {
                         if let (Some(run), Some(para)) =
@@ -540,6 +622,8 @@ impl Story {
                         if let Some(run) = current_run.as_mut() {
                             run.text.push_str(&t.unescape().unwrap_or_default());
                         }
+                    } else if properties_field.is_some() {
+                        properties_text.push_str(&t.unescape().unwrap_or_default());
                     }
                 }
                 Event::PI(pi) => {
