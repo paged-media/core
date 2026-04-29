@@ -242,9 +242,7 @@ fn main() -> Result<()> {
                 Some(bytes)
             }
             None => {
-                eprintln!(
-                    "color: no CMYK profile match for {name:?}; falling back to naive math"
-                );
+                eprintln!("color: no CMYK profile match for {name:?}; falling back to naive math");
                 None
             }
         }
@@ -503,7 +501,9 @@ fn is_image_path(path: &str) -> bool {
         std::path::Path::new(&lower)
             .extension()
             .and_then(|s| s.to_str()),
-        Some("png" | "jpg" | "jpeg" | "gif" | "tif" | "tiff" | "bmp" | "webp" | "pdf" | "psd" | "ai")
+        Some(
+            "png" | "jpg" | "jpeg" | "gif" | "tif" | "tiff" | "bmp" | "webp" | "pdf" | "psd" | "ai"
+        )
     )
 }
 

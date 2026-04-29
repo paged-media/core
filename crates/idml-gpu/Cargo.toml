@@ -32,3 +32,6 @@ tracing = { workspace = true }
 vello = { version = "0.3", optional = true }
 tiny-skia = { version = "0.11", optional = true }
 image = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["HtmlCanvasElement"] }

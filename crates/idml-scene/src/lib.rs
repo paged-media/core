@@ -18,7 +18,7 @@ use idml_parse::{
 };
 
 /// Owned, parsed representation of an IDML document.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Document {
     pub container: Container,
     pub palette: Graphic,

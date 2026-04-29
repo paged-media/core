@@ -15,6 +15,8 @@ use idml_compose::{Color, DisplayList};
 
 #[cfg(feature = "cpu")]
 pub mod cpu;
+#[cfg(all(feature = "vello-backend", target_arch = "wasm32"))]
+pub mod surface;
 #[cfg(feature = "vello-backend")]
 pub mod vello_rs;
 
@@ -22,6 +24,8 @@ pub mod vello_rs;
 pub use cpu::rasterize;
 #[cfg(feature = "cpu")]
 pub use cpu::CpuRasterizer;
+#[cfg(all(feature = "vello-backend", target_arch = "wasm32"))]
+pub use surface::{SurfaceError, SurfacePresenter, Viewport};
 #[cfg(feature = "vello-backend")]
 pub use vello_rs::VelloRasterizer;
 

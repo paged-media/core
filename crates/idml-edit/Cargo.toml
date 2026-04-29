@@ -1,0 +1,24 @@
+[package]
+name = "idml-edit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Mutable editing layer over an immutable idml-scene::Document. Owns the command bus, undo stack, NodeId space, and the Patch type that drives incremental render invalidation."
+
+[lints]
+workspace = true
+
+[dependencies]
+idml-scene = { path = "../idml-scene" }
+idml-parse = { path = "../idml-parse" }
+serde = { workspace = true }
+serde_json = "1"
+base64 = "0.22"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+serde_json = "1"
+zip = { workspace = true }

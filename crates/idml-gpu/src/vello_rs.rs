@@ -132,9 +132,29 @@ fn init_gpu() -> Result<GpuState, String> {
 /// don't yet handle log + skip; the scene still renders the parts
 /// we do understand so the result isn't all-or-nothing.
 fn build_scene(list: &DisplayList, options: &RasterOptions) -> Scene {
-    let mut scene = Scene::new();
     let scale = options.dpi / 72.0;
     let page_to_px = kurbo::Affine::scale(scale as f64);
+    build_scene_with_transform(list, page_to_px)
+}
+
+/// Surface-presenter entrypoint. Same scene-building as `build_scene`
+/// but parameterised by the editor's `Viewport` (page → device-pixel
+/// transform). Lives behind the wasm32 cfg because `Viewport` is in
+/// `surface.rs` which only compiles for browser builds.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn build_scene_for_surface(
+    list: &DisplayList,
+    viewport: crate::surface::Viewport,
+) -> Scene {
+    let scale = (viewport.base_scale * viewport.zoom * viewport.dpr) as f64;
+    let pan_x = (viewport.pan_x * viewport.dpr) as f64;
+    let pan_y = (viewport.pan_y * viewport.dpr) as f64;
+    let page_to_surface = kurbo::Affine::translate((pan_x, pan_y)) * kurbo::Affine::scale(scale);
+    build_scene_with_transform(list, page_to_surface)
+}
+
+fn build_scene_with_transform(list: &DisplayList, page_to_px: kurbo::Affine) -> Scene {
+    let mut scene = Scene::new();
 
     for cmd in &list.commands {
         match cmd {
@@ -419,7 +439,7 @@ fn map_join(j: LineJoin) -> kurbo::Join {
 
 /// Linear RGB (0..1) → sRGB-encoded peniko Color (the format
 /// vello expects). Mirrors cpu.rs's `linear_color_to_ts`.
-fn linear_to_peniko(c: ComposeColor) -> PenikoColor {
+pub(crate) fn linear_to_peniko(c: ComposeColor) -> PenikoColor {
     let to_srgb = |v: f32| -> u8 {
         let s = if v <= 0.0031308 {
             12.92 * v

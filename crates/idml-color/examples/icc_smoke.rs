@@ -3,12 +3,12 @@
 //! a direct lcms2 path so anomalies between the two can be diagnosed
 //! at a glance.
 use idml_color::{Cmyk, IccTransform, LinearRgb};
-use lcms2::{
-    CIExyY, CIExyYTRIPLE, Flags, Intent, PixelFormat, Profile, ToneCurve, Transform,
-};
+use lcms2::{CIExyY, CIExyYTRIPLE, Flags, Intent, PixelFormat, Profile, ToneCurve, Transform};
 
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: icc_smoke <profile.icc>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: icc_smoke <profile.icc>");
     let bytes = std::fs::read(&path).unwrap();
     let xform = IccTransform::cmyk_to_linear_rgb(&bytes).unwrap();
     for (label, c, m, y, k) in [
@@ -22,11 +22,27 @@ fn main() {
     }
     let src = Profile::new_icc(&bytes).unwrap();
     let _primaries = CIExyYTRIPLE {
-        Red: CIExyY { x: 0.6400, y: 0.3300, Y: 1.0 },
-        Green: CIExyY { x: 0.3000, y: 0.6000, Y: 1.0 },
-        Blue: CIExyY { x: 0.1500, y: 0.0600, Y: 1.0 },
+        Red: CIExyY {
+            x: 0.6400,
+            y: 0.3300,
+            Y: 1.0,
+        },
+        Green: CIExyY {
+            x: 0.3000,
+            y: 0.6000,
+            Y: 1.0,
+        },
+        Blue: CIExyY {
+            x: 0.1500,
+            y: 0.0600,
+            Y: 1.0,
+        },
     };
-    let _white = CIExyY { x: 0.3127, y: 0.3290, Y: 1.0 };
+    let _white = CIExyY {
+        x: 0.3127,
+        y: 0.3290,
+        Y: 1.0,
+    };
     let _srgb_curve = ToneCurve::new(2.4);
     // Use lcms's built-in sRGB profile as the destination — known good.
     let dst = Profile::new_srgb();

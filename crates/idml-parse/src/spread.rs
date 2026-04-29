@@ -18,7 +18,7 @@
 use quick_xml::events::Event;
 use serde::Serialize;
 
-use crate::util::attr;
+use crate::util::{attr, parse_tint_attr};
 use crate::ParseError;
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -242,6 +242,10 @@ pub struct Rectangle {
     pub bounds: Bounds,
     pub item_transform: Option<[f32; 6]>,
     pub fill_color: Option<String>,
+    /// `FillTint` percentage (0..=100). `None` ⇒ use the swatch at
+    /// full strength. The renderer scales the resolved RGB toward
+    /// paper white by `(1 - tint/100)` when `Some`.
+    pub fill_tint: Option<f32>,
     pub stroke_color: Option<String>,
     pub stroke_weight: Option<f32>,
     pub drop_shadow: Option<DropShadowSetting>,
@@ -671,9 +675,7 @@ impl Spread {
                                 master_page_transform: attr(&e, b"MasterPageTransform")
                                     .and_then(|s| parse_matrix(&s)),
                                 override_list: attr(&e, b"OverrideList")
-                                    .map(|s| {
-                                        s.split_whitespace().map(str::to_string).collect()
-                                    })
+                                    .map(|s| s.split_whitespace().map(str::to_string).collect())
                                     .unwrap_or_default(),
                                 name: attr(&e, b"Name"),
                             });
@@ -730,6 +732,7 @@ impl Spread {
                             bounds: bounds_attr.unwrap_or(Bounds::ZERO),
                             item_transform,
                             fill_color: attr(&e, b"FillColor"),
+                            fill_tint: parse_tint_attr(&e, b"FillTint"),
                             stroke_color: attr(&e, b"StrokeColor"),
                             stroke_weight: attr(&e, b"StrokeWeight")
                                 .and_then(|s| s.parse::<f32>().ok()),
@@ -740,8 +743,7 @@ impl Spread {
                             frame_fitting: None,
                             stroke_type: attr(&e, b"StrokeType"),
                             item_layer: attr(&e, b"ItemLayer"),
-                            corner_radius: attr(&e, b"CornerRadius")
-                                .and_then(|s| s.parse().ok()),
+                            corner_radius: attr(&e, b"CornerRadius").and_then(|s| s.parse().ok()),
                             corner_option: attr(&e, b"CornerOption"),
                             is_anchored: false,
                             opacity: None,
@@ -844,9 +846,10 @@ impl Spread {
                         if let Some(CurrentFrameKind::Rect(i)) =
                             current_frame.as_ref().map(|cf| cf.kind)
                         {
-                            let applied =
-                                attr(&e, b"Applied").and_then(|s| s.parse::<bool>().ok());
-                            let bag = out.rectangles[i].effects.get_or_insert_with(Default::default);
+                            let applied = attr(&e, b"Applied").and_then(|s| s.parse::<bool>().ok());
+                            let bag = out.rectangles[i]
+                                .effects
+                                .get_or_insert_with(Default::default);
                             match e.name().as_ref() {
                                 b"InnerShadowSetting" => bag.inner_shadow = applied,
                                 b"OuterGlowSetting" => bag.outer_glow = applied,
@@ -1013,13 +1016,10 @@ impl Spread {
                             current_frame.as_ref().map(|cf| cf.kind)
                         {
                             out.rectangles[i].frame_fitting = Some(FrameFittingOption {
-                                left_crop: attr(&e, b"LeftCrop")
-                                    .and_then(|s| s.parse().ok()),
+                                left_crop: attr(&e, b"LeftCrop").and_then(|s| s.parse().ok()),
                                 top_crop: attr(&e, b"TopCrop").and_then(|s| s.parse().ok()),
-                                right_crop: attr(&e, b"RightCrop")
-                                    .and_then(|s| s.parse().ok()),
-                                bottom_crop: attr(&e, b"BottomCrop")
-                                    .and_then(|s| s.parse().ok()),
+                                right_crop: attr(&e, b"RightCrop").and_then(|s| s.parse().ok()),
+                                bottom_crop: attr(&e, b"BottomCrop").and_then(|s| s.parse().ok()),
                                 fitting_on_empty_frame: attr(&e, b"FittingOnEmptyFrame"),
                             });
                         }

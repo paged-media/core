@@ -4,7 +4,10 @@
 use std::path::PathBuf;
 
 fn main() {
-    let path: PathBuf = std::env::args().nth(1).expect("usage: dump_markers <idml>").into();
+    let path: PathBuf = std::env::args()
+        .nth(1)
+        .expect("usage: dump_markers <idml>")
+        .into();
     let bytes = std::fs::read(&path).unwrap();
     let container = idml_parse::Container::open(&bytes).unwrap();
     for (name, raw) in container.entries.iter() {

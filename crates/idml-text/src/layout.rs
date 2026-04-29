@@ -1067,7 +1067,7 @@ mod tests {
                 position_pt: 36.0,
                 alignment: TabAlignment::Left,
                 alignment_character: '.',
-            leader: None,
+                leader: None,
             }],
             0.0,
         );
@@ -1097,7 +1097,7 @@ mod tests {
                 position_pt: 1.0,
                 alignment: TabAlignment::Left,
                 alignment_character: '.',
-            leader: None,
+                leader: None,
             }],
             0.0,
         );
@@ -1120,7 +1120,7 @@ mod tests {
                 position_pt: 36.0,
                 alignment: TabAlignment::Right,
                 alignment_character: '.',
-            leader: None,
+                leader: None,
             }],
             0.0,
         );
@@ -1144,7 +1144,7 @@ mod tests {
                 position_pt: 36.0,
                 alignment: TabAlignment::Center,
                 alignment_character: '.',
-            leader: None,
+                leader: None,
             }],
             0.0,
         );
@@ -1169,7 +1169,7 @@ mod tests {
                 position_pt: 8.0,
                 alignment: TabAlignment::Right,
                 alignment_character: '.',
-            leader: None,
+                leader: None,
             }],
             0.0,
         );
@@ -1194,7 +1194,7 @@ mod tests {
                 position_pt: 36.0,
                 alignment: TabAlignment::Decimal,
                 alignment_character: '.',
-            leader: None,
+                leader: None,
             }],
             0.0,
         );
@@ -1216,7 +1216,7 @@ mod tests {
                 position_pt: 36.0,
                 alignment: TabAlignment::Decimal,
                 alignment_character: '.',
-            leader: None,
+                leader: None,
             }],
             0.0,
         );
@@ -1236,7 +1236,7 @@ mod tests {
                 position_pt: 36.0,
                 alignment: TabAlignment::Decimal,
                 alignment_character: ',',
-            leader: None,
+                leader: None,
             }],
             0.0,
         );
