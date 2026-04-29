@@ -5,7 +5,7 @@
       "idml": "effects.idml",
       "pdf": "effects.pdf",
       "pages": 12,
-      "passing": 0,
+      "passing": 1,
       "diff_dir": "/tmp/idml-diff-effects",
       "report": "/tmp/idml-diff-effects/report.json"
     },

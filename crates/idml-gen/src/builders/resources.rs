@@ -232,6 +232,35 @@ pub fn styles_xml() -> Vec<u8> {
         ],
     );
     b.end("RootParagraphStyleGroup");
+    // ObjectStyle root — declares `[None]` with the no-stroke /
+    // no-fill cascade. Without this, InDesign falls back to its
+    // built-in `[Normal Graphics Frame]` style which has a 1pt
+    // black stroke, overriding our explicit `StrokeColor="Swatch/None"`
+    // and `StrokeWeight="0"` on every Rectangle.
+    b.start("RootObjectStyleGroup", &[]);
+    b.empty(
+        "ObjectStyle",
+        &[
+            ("Self", "ObjectStyle/$ID/[None]"),
+            ("Name", "$ID/[None]"),
+            ("FillColor", "Swatch/None"),
+            ("StrokeColor", "Swatch/None"),
+            ("StrokeWeight", "0"),
+            (
+                "AppliedParagraphStyle",
+                "ParagraphStyle/$ID/[No paragraph style]",
+            ),
+            ("CornerOption", "None"),
+            ("CornerRadius", "0"),
+            ("EndCap", "ButtEndCap"),
+            ("EndJoin", "MiterEndJoin"),
+            ("MiterLimit", "4"),
+            ("StrokeAlignment", "CenterAlignment"),
+            ("StrokeType", "StrokeStyle/$ID/Solid"),
+            ("Nonprinting", "false"),
+        ],
+    );
+    b.end("RootObjectStyleGroup");
     b.end("idPkg:Styles");
     b.into_bytes()
 }

@@ -299,6 +299,21 @@ impl Rect {
             attrs.push(("NextTextFrame", "n".to_string()));
             attrs.push(("ContentType", "TextType".to_string()));
         }
+        // Pin AppliedObjectStyle to the built-in `[None]` style so
+        // InDesign doesn't cascade the default Object Style's 1pt
+        // black stroke (and other surprises) over our explicit
+        // attributes. Real InDesign exports always emit this — even
+        // when the object visually has no style applied. Without it
+        // the BlendingSetting cascade under the default object style
+        // overrides our per-rectangle BlendingSetting back to Normal,
+        // and StrokeColor="Swatch/None" gets shadowed by the default
+        // 1pt stroke.
+        attrs.push((
+            "AppliedObjectStyle",
+            "ObjectStyle/$ID/[None]".to_string(),
+        ));
+        attrs.push(("Visible", "true".to_string()));
+        attrs.push(("Name", "$ID/".to_string()));
         attrs.push(("ItemTransform", format_matrix(&self.item_transform)));
         attrs.push((
             "FillColor",
@@ -312,9 +327,11 @@ impl Rect {
                 .clone()
                 .unwrap_or_else(|| "Swatch/None".to_string()),
         ));
-        if let Some(w) = self.stroke_weight_pt {
-            attrs.push(("StrokeWeight", format_f32(w)));
-        }
+        // Always emit StrokeWeight — when no stroke is wanted, "0"
+        // makes the no-stroke explicit so InDesign's cascade default
+        // doesn't fill in 1pt.
+        let stroke_weight = self.stroke_weight_pt.unwrap_or(0.0);
+        attrs.push(("StrokeWeight", format_f32(stroke_weight)));
         for (k, v) in &self.extra_attrs {
             attrs.push((k.as_str(), v.clone()));
         }
@@ -322,6 +339,13 @@ impl Rect {
         b.start(kind, &attr_refs);
         b.start("Properties", &[]);
         write_path_geometry(b, self.width_pt, self.height_pt);
+        b.end("Properties");
+        // TransparencySetting is a SIBLING of Properties under the
+        // page item, not a child (spec §IDML File Reference: Spreads
+        // and Master Spreads — Rectangle content model). When we
+        // earlier nested it inside Properties, InDesign silently
+        // dropped the BlendingSetting and the blend reverted to
+        // Normal in the exported PDF.
         if self.blending.is_some() || self.drop_shadow.is_some() {
             b.start("TransparencySetting", &[]);
             if let Some(bl) = &self.blending {
@@ -355,7 +379,6 @@ impl Rect {
             }
             b.end("TransparencySetting");
         }
-        b.end("Properties");
         if let Some(img) = &self.placed_image {
             // `<FrameFittingOption>` is a direct child of the
             // Rectangle (not inside Properties) — matches what
