@@ -118,6 +118,23 @@ pub struct TableCell {
     pub text_bottom_inset: f32,
     pub text_right_inset: f32,
     pub applied_cell_style: Option<String>,
+    /// Per-cell edge-stroke overrides. IDML serialises every cell
+    /// boundary explicitly on the `<Cell>` element when a TableStyle
+    /// applies a divider style, even though the AppliedCellStyle is
+    /// `[None]`. Without honouring these, the row/column dividers
+    /// vanish entirely. `None` ⇒ inherit from the cell-style cascade.
+    pub top_edge_stroke_color: Option<String>,
+    pub top_edge_stroke_weight: Option<f32>,
+    pub top_edge_stroke_tint: Option<f32>,
+    pub bottom_edge_stroke_color: Option<String>,
+    pub bottom_edge_stroke_weight: Option<f32>,
+    pub bottom_edge_stroke_tint: Option<f32>,
+    pub left_edge_stroke_color: Option<String>,
+    pub left_edge_stroke_weight: Option<f32>,
+    pub left_edge_stroke_tint: Option<f32>,
+    pub right_edge_stroke_color: Option<String>,
+    pub right_edge_stroke_weight: Option<f32>,
+    pub right_edge_stroke_tint: Option<f32>,
     /// `FirstBaselineOffset` enum (Ascent / Cap / Leading / Emboxed /
     /// FixedHeight / etc). Drives where the first line of cell text
     /// drops from the cell's top edge. Parsed for completeness; the
@@ -312,12 +329,25 @@ impl Story {
                                 .and_then(|s| s.parse().ok())
                                 .unwrap_or(0.0),
                             applied_cell_style: attr(&e, b"AppliedCellStyle"),
+                            top_edge_stroke_color: attr(&e, b"TopEdgeStrokeColor"),
+                            top_edge_stroke_weight: attr(&e, b"TopEdgeStrokeWeight")
+                                .and_then(|s| s.parse().ok()),
+                            top_edge_stroke_tint: parse_tint_attr(&e, b"TopEdgeStrokeTint"),
+                            bottom_edge_stroke_color: attr(&e, b"BottomEdgeStrokeColor"),
+                            bottom_edge_stroke_weight: attr(&e, b"BottomEdgeStrokeWeight")
+                                .and_then(|s| s.parse().ok()),
+                            bottom_edge_stroke_tint: parse_tint_attr(&e, b"BottomEdgeStrokeTint"),
+                            left_edge_stroke_color: attr(&e, b"LeftEdgeStrokeColor"),
+                            left_edge_stroke_weight: attr(&e, b"LeftEdgeStrokeWeight")
+                                .and_then(|s| s.parse().ok()),
+                            left_edge_stroke_tint: parse_tint_attr(&e, b"LeftEdgeStrokeTint"),
+                            right_edge_stroke_color: attr(&e, b"RightEdgeStrokeColor"),
+                            right_edge_stroke_weight: attr(&e, b"RightEdgeStrokeWeight")
+                                .and_then(|s| s.parse().ok()),
+                            right_edge_stroke_tint: parse_tint_attr(&e, b"RightEdgeStrokeTint"),
                             first_baseline_offset: attr(&e, b"FirstBaselineOffset"),
-                            minimum_first_baseline_offset: attr(
-                                &e,
-                                b"MinimumFirstBaselineOffset",
-                            )
-                            .and_then(|s| s.parse().ok()),
+                            minimum_first_baseline_offset: attr(&e, b"MinimumFirstBaselineOffset")
+                                .and_then(|s| s.parse().ok()),
                             diagonal: CellDiagonal {
                                 left_line_drawn: attr(&e, b"LeftLineDrawn")
                                     .and_then(|s| s.parse().ok()),
@@ -354,12 +384,10 @@ impl Story {
                             fill_color: attr(&e, b"FillColor"),
                             fill_tint: parse_tint_attr(&e, b"FillTint"),
                             capitalization: attr(&e, b"Capitalization"),
-                            baseline_shift: attr(&e, b"BaselineShift")
-                                .and_then(|s| s.parse().ok()),
+                            baseline_shift: attr(&e, b"BaselineShift").and_then(|s| s.parse().ok()),
                             horizontal_scale: attr(&e, b"HorizontalScale")
                                 .and_then(|s| s.parse().ok()),
-                            vertical_scale: attr(&e, b"VerticalScale")
-                                .and_then(|s| s.parse().ok()),
+                            vertical_scale: attr(&e, b"VerticalScale").and_then(|s| s.parse().ok()),
                             position: attr(&e, b"Position"),
                             tracking: attr(&e, b"Tracking").and_then(|s| s.parse().ok()),
                             underline: attr(&e, b"Underline").and_then(|s| s.parse::<bool>().ok()),

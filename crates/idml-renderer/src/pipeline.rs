@@ -2059,26 +2059,49 @@ fn emit_table_into_chain(
         // Per-edge cell strokes. Each edge gets its own thin rect
         // (filled, since rect-stroke aligns to centerlines and we
         // want the edge to sit precisely on the cell boundary).
+        // Per-cell overrides (declared inline on the <Cell> element)
+        // win over the cascaded CellStyle — IDML serialises real row
+        // dividers there even when AppliedCellStyle is `[None]`.
+        let cell_top_color = cell
+            .top_edge_stroke_color
+            .as_deref()
+            .filter(|c| !is_none_swatch_id(c))
+            .or(resolved_cell.top_edge_stroke_color.as_deref());
+        let cell_top_weight = cell
+            .top_edge_stroke_weight
+            .or(resolved_cell.top_edge_stroke_weight);
+        let cell_bot_color = cell
+            .bottom_edge_stroke_color
+            .as_deref()
+            .filter(|c| !is_none_swatch_id(c))
+            .or(resolved_cell.bottom_edge_stroke_color.as_deref());
+        let cell_bot_weight = cell
+            .bottom_edge_stroke_weight
+            .or(resolved_cell.bottom_edge_stroke_weight);
         let edges = [
             (
-                resolved_cell.top_edge_stroke_color.as_deref(),
-                resolved_cell.top_edge_stroke_weight,
+                cell_top_color,
+                cell_top_weight,
+                cell.top_edge_stroke_tint,
                 cell_x_pt,
                 cell_y_pt,
                 cell_w_pt,
             ),
             (
-                resolved_cell.bottom_edge_stroke_color.as_deref(),
-                resolved_cell.bottom_edge_stroke_weight,
+                cell_bot_color,
+                cell_bot_weight,
+                cell.bottom_edge_stroke_tint,
                 cell_x_pt,
                 cell_y_pt + cell_h_pt,
                 cell_w_pt,
             ),
         ];
-        for (color, weight, x, y, w) in edges {
+        for (color, weight, tint, x, y, w) in edges {
             if let (Some(color_id), Some(weight)) = (color, weight) {
                 if weight > 0.0 {
-                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) {
+                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform)
+                        .map(|p| apply_fill_tint(p, tint))
+                    {
                         emit_rect(
                             Rect {
                                 x,
@@ -2093,26 +2116,46 @@ fn emit_table_into_chain(
                 }
             }
         }
+        let cell_left_color = cell
+            .left_edge_stroke_color
+            .as_deref()
+            .filter(|c| !is_none_swatch_id(c))
+            .or(resolved_cell.left_edge_stroke_color.as_deref());
+        let cell_left_weight = cell
+            .left_edge_stroke_weight
+            .or(resolved_cell.left_edge_stroke_weight);
+        let cell_right_color = cell
+            .right_edge_stroke_color
+            .as_deref()
+            .filter(|c| !is_none_swatch_id(c))
+            .or(resolved_cell.right_edge_stroke_color.as_deref());
+        let cell_right_weight = cell
+            .right_edge_stroke_weight
+            .or(resolved_cell.right_edge_stroke_weight);
         let v_edges = [
             (
-                resolved_cell.left_edge_stroke_color.as_deref(),
-                resolved_cell.left_edge_stroke_weight,
+                cell_left_color,
+                cell_left_weight,
+                cell.left_edge_stroke_tint,
                 cell_x_pt,
                 cell_y_pt,
                 cell_h_pt,
             ),
             (
-                resolved_cell.right_edge_stroke_color.as_deref(),
-                resolved_cell.right_edge_stroke_weight,
+                cell_right_color,
+                cell_right_weight,
+                cell.right_edge_stroke_tint,
                 cell_x_pt + cell_w_pt,
                 cell_y_pt,
                 cell_h_pt,
             ),
         ];
-        for (color, weight, x, y, h) in v_edges {
+        for (color, weight, tint, x, y, h) in v_edges {
             if let (Some(color_id), Some(weight)) = (color, weight) {
                 if weight > 0.0 {
-                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) {
+                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform)
+                        .map(|p| apply_fill_tint(p, tint))
+                    {
                         emit_rect(
                             Rect {
                                 x: x - weight * 0.5,
@@ -2342,6 +2385,13 @@ fn emit_table_into_chain(
 /// as absent so the region cascade kicks in.
 fn is_none_style_id(id: &str) -> bool {
     id == "CellStyle/$ID/[None]" || id == "CellStyle/n" || id.is_empty()
+}
+
+/// True for swatch IDs that resolve to "no paint" — used by per-cell
+/// stroke override to fall through to the cascaded cell-style colour
+/// when the inline `<Cell>` attribute carries `Swatch/None`.
+fn is_none_swatch_id(id: &str) -> bool {
+    id == "Swatch/None" || id == "n" || id.is_empty()
 }
 
 /// Map an IDML `FontStyle` attribute string to a numeric wght axis
