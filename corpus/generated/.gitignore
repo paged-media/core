@@ -1,0 +1,4 @@
+# Generated IDMLs are reproducible from `cargo run -p idml-gen` —
+# don't commit them. Reference PDFs *are* committed once exported,
+# pinned to the InDesign version recorded in <stem>.export.meta.json.
+*.idml
