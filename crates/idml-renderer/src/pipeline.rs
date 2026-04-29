@@ -565,11 +565,7 @@ pub fn build_document(
         if !document.frame_chain(story_id).is_empty() {
             continue;
         }
-        let Some(parsed) = document
-            .stories
-            .iter()
-            .find(|s| s.self_id == story_id)
-        else {
+        let Some(parsed) = document.stories.iter().find(|s| s.self_id == story_id) else {
             continue;
         };
         let chain: Vec<&TextFrame> = vec![master_frame];
@@ -900,6 +896,42 @@ fn emit_paragraph_into_chain(
         }
         return;
     }
+    // Empty paragraph: a sub-paragraph produced by `<Br/><Br/>` and
+    // similar patterns. Advance the baseline cursor by one line of
+    // auto-leading at the paragraph style's resolved point size so
+    // the visible vertical rhythm matches InDesign. No glyphs emit.
+    let runs_have_text = paragraph
+        .runs
+        .iter()
+        .any(|r| !r.text.is_empty() && r.text != "\n");
+    if !runs_have_text {
+        let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
+        let para_pt = em
+            .document
+            .styles
+            .resolve_paragraph(
+                paragraph
+                    .paragraph_style
+                    .as_deref()
+                    .unwrap_or("ParagraphStyle/$ID/[No paragraph style]"),
+            )
+            .point_size
+            .unwrap_or(em.options.default_point_size);
+        let space_before_64 =
+            resolved_paragraph.space_before.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION;
+        let line_height_64 = (para_pt * 1.2 * idml_text::shape::ADVANCE_PRECISION).round() as i32;
+        // Establish the first baseline if we haven't placed any
+        // content yet — same convention as the populated branch
+        // below — then advance by a full line height.
+        if em.y_cursor < 0 {
+            em.y_cursor = (para_pt * 0.8 * idml_text::shape::ADVANCE_PRECISION).round() as i32;
+        }
+        em.y_cursor += space_before_64.round() as i32 + line_height_64;
+        let space_after_64 =
+            resolved_paragraph.space_after.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION;
+        em.y_cursor += space_after_64.round() as i32;
+        return;
+    }
     total_stats.paragraphs += 1;
     total_stats.runs += paragraph.runs.len();
     pages[em.chain_pages[em.frame_idx]].stats.paragraphs += 1;
@@ -1010,16 +1042,12 @@ fn emit_paragraph_into_chain(
         .get(cur_idx)
         .cloned()
         .unwrap_or_else(|| (cur_idx + 1).to_string());
-    let next_page_str = em
-        .page_labels
-        .get(cur_idx + 1)
-        .cloned()
-        .unwrap_or_else(|| {
-            current_page_str
-                .parse::<i64>()
-                .map(|n| (n + 1).to_string())
-                .unwrap_or_else(|_| current_page_str.clone())
-        });
+    let next_page_str = em.page_labels.get(cur_idx + 1).cloned().unwrap_or_else(|| {
+        current_page_str
+            .parse::<i64>()
+            .map(|n| (n + 1).to_string())
+            .unwrap_or_else(|_| current_page_str.clone())
+    });
     let needs_page_subst = paragraph.runs.iter().any(|r| {
         r.text.contains(idml_parse::AUTO_PAGE_NUMBER_MARKER)
             || r.text.contains(idml_parse::NEXT_PAGE_NUMBER_MARKER)
@@ -1050,8 +1078,8 @@ fn emit_paragraph_into_chain(
         .runs
         .iter()
         .enumerate()
-        .map(|(i, run)| {
-            match resolved_runs[i].capitalization.as_deref() {
+        .map(
+            |(i, run)| match resolved_runs[i].capitalization.as_deref() {
                 Some("AllCaps") | Some("SmallCaps") | Some("CapToSmallCap") => {
                     let src: &str = if needs_page_subst {
                         page_substituted[i].as_str()
@@ -1066,8 +1094,8 @@ fn emit_paragraph_into_chain(
                     }
                 }
                 _ => None,
-            }
-        })
+            },
+        )
         .collect();
 
     let styled_runs: Vec<idml_text::StyledRun> = paragraph
@@ -2413,9 +2441,12 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
                     table: None,
                 };
                 std::mem::swap(&mut current, &mut next);
-                if !next.runs.is_empty() {
-                    subs.push(next);
-                }
+                // Keep empty sub-paragraphs — `<Br/><Br/>` and similar
+                // patterns mean "advance one line of vertical space".
+                // The emitter renders them as a single line-height
+                // step (no glyphs) so the surrounding text keeps its
+                // visual rhythm.
+                subs.push(next);
             }
         }
     }
@@ -2992,9 +3023,11 @@ fn corner_radius_for(rect: &Rectangle) -> Option<f32> {
         // The decorative variants (Inverse-Rounded, Inset, Bevel, Fancy)
         // currently fall back to plain Rounded. Replace per-corner-option
         // path emission lands later.
-        Some("Rounded") | Some("InverseRounded") | Some("Inset") | Some("Bevel") | Some("Fancy") => {
-            Some(radius)
-        }
+        Some("Rounded")
+        | Some("InverseRounded")
+        | Some("Inset")
+        | Some("Bevel")
+        | Some("Fancy") => Some(radius),
         _ => None,
     }
 }
@@ -3027,7 +3060,10 @@ fn rounded_rect_path(rect: Rect, radius: f32) -> idml_compose::PathData {
                 x: right,
                 y: t + r,
             },
-            LineTo { x: right, y: bot - r },
+            LineTo {
+                x: right,
+                y: bot - r,
+            },
             CubicTo {
                 cx1: right,
                 cy1: bot - r + k,
