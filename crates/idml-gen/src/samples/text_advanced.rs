@@ -63,6 +63,8 @@ fn variants() -> Vec<Variant> {
                 drop_cap_characters: Some(2),
                 drop_cap_lines: Some(3),
                 tab_list: Vec::new(),
+                bullets_list_type: None,
+                bullet_character: None,
                 runs: vec![Run {
                     text: drop_cap_body.to_string(),
                     point_size: Some(12.0),
@@ -90,6 +92,8 @@ fn variants() -> Vec<Variant> {
                 drop_cap_characters: None,
                 drop_cap_lines: None,
                 tab_list: Vec::new(),
+                bullets_list_type: None,
+                bullet_character: None,
                 runs: vec![Run {
                     text: lorem_long.to_string(),
                     point_size: Some(12.0),
@@ -119,6 +123,8 @@ fn variants() -> Vec<Variant> {
                 drop_cap_characters: None,
                 drop_cap_lines: None,
                 tab_list: Vec::new(),
+                bullets_list_type: None,
+                bullet_character: None,
                 runs: vec![Run {
                     text: lorem_long.to_string(),
                     point_size: Some(12.0),
@@ -146,6 +152,8 @@ fn variants() -> Vec<Variant> {
                 drop_cap_characters: None,
                 drop_cap_lines: None,
                 tab_list: Vec::new(),
+                bullets_list_type: None,
+                bullet_character: None,
                 runs: vec![Run {
                     text: lorem_long.to_string(),
                     point_size: Some(12.0),
@@ -193,6 +201,8 @@ fn variants() -> Vec<Variant> {
                             leader: Some(".".to_string()),
                         },
                     ],
+                    bullets_list_type: None,
+                    bullet_character: None,
                     runs: vec![Run {
                         text: "Apples\t1.20\t10\t12.00".to_string(),
                         point_size: Some(12.0),
@@ -232,6 +242,8 @@ fn variants() -> Vec<Variant> {
                             leader: Some(".".to_string()),
                         },
                     ],
+                    bullets_list_type: None,
+                    bullet_character: None,
                     runs: vec![Run {
                         text: "Bread\t3.50\t2\t7.00".to_string(),
                         point_size: Some(12.0),
@@ -271,6 +283,8 @@ fn variants() -> Vec<Variant> {
                             leader: Some(".".to_string()),
                         },
                     ],
+                    bullets_list_type: None,
+                    bullet_character: None,
                     runs: vec![Run {
                         text: "Cheese\t8.99\t1\t8.99".to_string(),
                         point_size: Some(12.0),
@@ -285,7 +299,102 @@ fn variants() -> Vec<Variant> {
                 },
             ],
         },
-        // 6. Justified paragraph — LeftJustified means each line fills
+        // 6a. BulletList — three paragraphs share the same list
+        // type. Renderer prepends the renderer's default `•` glyph
+        // (U+2022) per item since no inline override is set.
+        Variant {
+            name: "text-adv · bullets · default-bullet",
+            paragraphs: (0..3)
+                .map(|i| Paragraph {
+                    justification: None,
+                    space_before: None,
+                    space_after: None,
+                    leading: None,
+                    first_line_indent: None,
+                    left_indent: Some(18.0),
+                    right_indent: None,
+                    drop_cap_characters: None,
+                    drop_cap_lines: None,
+                    tab_list: Vec::new(),
+                    bullets_list_type: Some("BulletList"),
+                    bullet_character: None,
+                    runs: vec![Run {
+                        text: format!("Bulleted item {}", i + 1),
+                        point_size: Some(12.0),
+                        fill_color: None,
+                        font_style: None,
+                        tracking: None,
+                        baseline_shift: None,
+                        underline: None,
+                        applied_font: None,
+                    }],
+                    table: None,
+                })
+                .collect(),
+        },
+        // 6b. BulletList with inline `»` (U+00BB) override.
+        Variant {
+            name: "text-adv · bullets · arrow-override",
+            paragraphs: (0..2)
+                .map(|i| Paragraph {
+                    justification: None,
+                    space_before: None,
+                    space_after: None,
+                    leading: None,
+                    first_line_indent: None,
+                    left_indent: Some(18.0),
+                    right_indent: None,
+                    drop_cap_characters: None,
+                    drop_cap_lines: None,
+                    tab_list: Vec::new(),
+                    bullets_list_type: Some("BulletList"),
+                    bullet_character: Some(0x00BB),
+                    runs: vec![Run {
+                        text: format!("Arrow-bullet item {}", i + 1),
+                        point_size: Some(12.0),
+                        fill_color: None,
+                        font_style: None,
+                        tracking: None,
+                        baseline_shift: None,
+                        underline: None,
+                        applied_font: None,
+                    }],
+                    table: None,
+                })
+                .collect(),
+        },
+        // 6c. NumberedList — three items, default Arabic numerals.
+        Variant {
+            name: "text-adv · numbered · arabic",
+            paragraphs: (0..3)
+                .map(|i| Paragraph {
+                    justification: None,
+                    space_before: None,
+                    space_after: None,
+                    leading: None,
+                    first_line_indent: None,
+                    left_indent: Some(18.0),
+                    right_indent: None,
+                    drop_cap_characters: None,
+                    drop_cap_lines: None,
+                    tab_list: Vec::new(),
+                    bullets_list_type: Some("NumberedList"),
+                    bullet_character: None,
+                    runs: vec![Run {
+                        text: format!("Numbered item {}", i + 1),
+                        point_size: Some(12.0),
+                        fill_color: None,
+                        font_style: None,
+                        tracking: None,
+                        baseline_shift: None,
+                        underline: None,
+                        applied_font: None,
+                    }],
+                    table: None,
+                })
+                .collect(),
+        },
+        // 7. Justified paragraph — LeftJustified means each line fills
         // the column except the last, which left-aligns. The renderer
         // should stretch word-spacing to reach the right edge.
         Variant {
@@ -301,6 +410,8 @@ fn variants() -> Vec<Variant> {
                 drop_cap_characters: None,
                 drop_cap_lines: None,
                 tab_list: Vec::new(),
+                bullets_list_type: None,
+                bullet_character: None,
                 runs: vec![Run {
                     text: lorem_long.to_string(),
                     point_size: Some(12.0),
@@ -384,6 +495,8 @@ pub fn build() -> Sample {
                         leader: s.leader.clone(),
                     })
                     .collect(),
+                bullets_list_type: p.bullets_list_type,
+                bullet_character: p.bullet_character,
                 runs: p
                     .runs
                     .iter()

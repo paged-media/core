@@ -46,6 +46,16 @@ pub struct Paragraph {
     /// <TabStop .../></ListItem>…</TabList></Properties>` matching
     /// the parser's expected shape.
     pub tab_list: Vec<TabStop>,
+    /// `BulletsAndNumberingListType` attribute on the
+    /// `<ParagraphStyleRange>` — `"BulletList"`, `"NumberedList"`,
+    /// or `"NoList"`. None ⇒ no bullet/number marker.
+    pub bullets_list_type: Option<&'static str>,
+    /// Inline bullet glyph override emitted as
+    /// `<Properties><BulletChar BulletCharacterType="UnicodeWithFont"
+    /// BulletCharacterValue="…"/></Properties>`. Useful for non-default
+    /// bullet glyphs (e.g. U+00BB `»`). When `None`, BulletList
+    /// paragraphs render the renderer's default `•` (U+2022).
+    pub bullet_character: Option<u32>,
     pub runs: Vec<Run>,
     /// Optional `<Table>` payload — when set, a table is emitted
     /// nested inside this paragraph's first CharacterStyleRange,
@@ -177,6 +187,8 @@ impl Paragraph {
             drop_cap_characters: None,
             drop_cap_lines: None,
             tab_list: Vec::new(),
+            bullets_list_type: None,
+            bullet_character: None,
             runs: vec![Run {
                 text: text.into(),
                 point_size: None,
@@ -240,27 +252,45 @@ pub fn write_story(s: &Story) -> Vec<u8> {
             drop_cap_lines_str = dl.to_string();
             p_attrs.push(("DropCapLines", drop_cap_lines_str.as_str()));
         }
+        if let Some(blt) = paragraph.bullets_list_type {
+            p_attrs.push(("BulletsAndNumberingListType", blt));
+        }
         b.start("ParagraphStyleRange", &p_attrs);
-        // Emit the tab list (when present) before the runs — IDML
-        // wraps it in <Properties><TabList><ListItem>… so the parser
-        // sees TabStop children of an open ParagraphStyleRange.
-        if !paragraph.tab_list.is_empty() {
+        // Bullet/tab Properties container — combines the inline
+        // BulletChar override (when set) with the TabList. Real
+        // InDesign emits these as siblings inside one <Properties>
+        // block; the parser walks the children so emitting them in
+        // order is enough.
+        let has_bullet_char = paragraph.bullet_character.is_some();
+        if has_bullet_char || !paragraph.tab_list.is_empty() {
             b.start("Properties", &[]);
-            b.start("TabList", &[]);
-            for stop in &paragraph.tab_list {
-                let pos = crate::xml::format_f32(stop.position_pt);
-                b.start("ListItem", &[("type", "object")]);
-                let mut attrs: Vec<(&str, &str)> = vec![
-                    ("Position", pos.as_str()),
-                    ("Alignment", stop.alignment),
-                ];
-                if let Some(ld) = &stop.leader {
-                    attrs.push(("Leader", ld.as_str()));
-                }
-                b.empty("TabStop", &attrs);
-                b.end("ListItem");
+            if let Some(cp) = paragraph.bullet_character {
+                let cp_str = cp.to_string();
+                b.empty(
+                    "BulletChar",
+                    &[
+                        ("BulletCharacterType", "UnicodeWithFont"),
+                        ("BulletCharacterValue", cp_str.as_str()),
+                    ],
+                );
             }
-            b.end("TabList");
+            if !paragraph.tab_list.is_empty() {
+                b.start("TabList", &[]);
+                for stop in &paragraph.tab_list {
+                    let pos = crate::xml::format_f32(stop.position_pt);
+                    b.start("ListItem", &[("type", "object")]);
+                    let mut attrs: Vec<(&str, &str)> = vec![
+                        ("Position", pos.as_str()),
+                        ("Alignment", stop.alignment),
+                    ];
+                    if let Some(ld) = &stop.leader {
+                        attrs.push(("Leader", ld.as_str()));
+                    }
+                    b.empty("TabStop", &attrs);
+                    b.end("ListItem");
+                }
+                b.end("TabList");
+            }
             b.end("Properties");
         }
         // Tables nest inside a CharacterStyleRange child of the

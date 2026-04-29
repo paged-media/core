@@ -135,6 +135,22 @@ fn variants() -> Vec<Variant> {
             stroke_weight_pt: None,
             fill_color: None,
         },
+        // InDesign's user-facing built-in stroke styles serialise
+        // with a "Canned " prefix on the $ID/-namespaced reference.
+        // Verifies the renderer strips the prefix before pattern
+        // dispatch.
+        Variant {
+            name: "strokes · type · canned-dotted",
+            overrides: vec![("StrokeType", "StrokeStyle/$ID/Canned Dotted")],
+            stroke_weight_pt: None,
+            fill_color: None,
+        },
+        Variant {
+            name: "strokes · type · japanese-dots",
+            overrides: vec![("StrokeType", "StrokeStyle/$ID/Japanese Dots")],
+            stroke_weight_pt: None,
+            fill_color: None,
+        },
         // Heavy stroke — verifies stroke weight scales correctly and
         // that the rasterizer's path-stroke pass widens the line.
         Variant {

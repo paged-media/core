@@ -23,7 +23,7 @@
       "idml": "geometry-groups.idml",
       "pdf": "geometry-groups.pdf",
       "pages": 6,
-      "passing": 3,
+      "passing": 4,
       "diff_dir": "/tmp/idml-diff-geometry-groups",
       "report": "/tmp/idml-diff-geometry-groups/report.json"
     },
@@ -49,7 +49,7 @@
       "name": "strokes-fills",
       "idml": "strokes-fills.idml",
       "pdf": "strokes-fills.pdf",
-      "pages": 17,
+      "pages": 19,
       "passing": 11,
       "diff_dir": "/tmp/idml-diff-strokes-fills",
       "report": "/tmp/idml-diff-strokes-fills/report.json"
@@ -68,7 +68,7 @@
       "idml": "text.idml",
       "pdf": "text.pdf",
       "pages": 13,
-      "passing": 3,
+      "passing": 5,
       "diff_dir": "/tmp/idml-diff-text",
       "report": "/tmp/idml-diff-text/report.json"
     },
@@ -76,7 +76,7 @@
       "name": "text-advanced",
       "idml": "text-advanced.idml",
       "pdf": "text-advanced.pdf",
-      "pages": 6,
+      "pages": 9,
       "passing": 0,
       "diff_dir": "/tmp/idml-diff-text-advanced",
       "report": "/tmp/idml-diff-text-advanced/report.json"

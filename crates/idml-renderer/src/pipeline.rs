@@ -3031,23 +3031,31 @@ fn emit_line_into(
     cmyk_xform: Option<&idml_color::IccTransform>,
 ) {
     page.stats.frames += 1;
-    let Some(stroke_paint) = line
+    // GraphicLines without an explicit StrokeColor inherit the
+    // document cascade default (Color/Black). Falling back here
+    // keeps real-InDesign exports rendering with visible lines —
+    // those frequently leave StrokeColor implicit.
+    let stroke_paint = line
         .stroke_color
         .as_deref()
         .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
-    else {
-        return;
-    };
+        .or_else(|| color_id_to_paint("Color/Black", palette, cmyk_xform))
+        .unwrap_or(Paint::Solid(Color::BLACK));
     let width = line.stroke_weight.unwrap_or(1.0);
     if width <= 0.0 {
         return;
     }
+    // GraphicLine.bounds is in inner coords; ItemTransform maps it
+    // to spread coords. Without the transform pass the line draws
+    // at its untransformed inner-coord origin (typically (0, 0))
+    // and disappears off-page when the spread has any origin offset.
+    let spread_bounds = transform_bounds(line.bounds, line.item_transform);
     let (ox, oy) = page.spread_origin;
     emit_line(
-        line.bounds.left - ox,
-        line.bounds.top - oy,
-        line.bounds.right - ox,
-        line.bounds.bottom - oy,
+        spread_bounds.left - ox,
+        spread_bounds.top - oy,
+        spread_bounds.right - ox,
+        spread_bounds.bottom - oy,
         Stroke::new(width),
         stroke_paint,
         &mut page.list,
@@ -3967,7 +3975,20 @@ fn stroke_for(
     };
     let suffix = name.strip_prefix("StrokeStyle/$ID/").unwrap_or(name);
     let w = width.max(0.1);
-    let pattern: Option<&[f32]> = match suffix {
+    // IDML's "Canned" prefix denotes built-in user-facing stroke
+    // styles InDesign ships in the Stroke panel — InDesign serialises
+    // them as `StrokeStyle/$ID/Canned <Name>` references. Map the
+    // common ones to the same pattern table the bare names use so
+    // real IDMLs render with the right dash/dot style without each
+    // sample needing to declare a custom <StrokeStyle>.
+    let normalised = suffix
+        .strip_prefix("Canned ")
+        .unwrap_or(suffix);
+    let is_dotted = matches!(
+        normalised,
+        "Dotted" | "Dotted2" | "Dotted4" | "Dotted8" | "Japanese Dots"
+    );
+    let pattern: Option<&[f32]> = match normalised {
         "Solid" | "" => None,
         "Dashed" => Some(&[3.0, 2.0]),
         "Dashed3-2" => Some(&[3.0, 2.0]),
@@ -3977,6 +3998,9 @@ fn stroke_for(
         "Dotted2" => Some(&[0.0, 2.0]),
         "Dotted4" => Some(&[0.0, 4.0]),
         "Dotted8" => Some(&[0.0, 8.0]),
+        // InDesign's "Japanese Dots" is denser than the standard
+        // Dotted (smaller gap, same on-zero-length).
+        "Japanese Dots" => Some(&[0.0, 1.5]),
         _ => None,
     };
     if let Some(p) = pattern {
@@ -3985,9 +4009,7 @@ fn stroke_for(
         // Dotted patterns force round caps when the IDML didn't carry
         // an explicit `EndCap`, otherwise the zero-length on-segment
         // would render as a needle. Adobe previews behave the same.
-        if matches!(suffix, "Dotted" | "Dotted2" | "Dotted4" | "Dotted8")
-            && end_cap.is_none()
-        {
+        if is_dotted && end_cap.is_none() {
             s.cap = idml_compose::LineCap::Round;
         }
     }

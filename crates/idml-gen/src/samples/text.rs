@@ -103,6 +103,8 @@ fn variants() -> Vec<Variant> {
                 drop_cap_characters: None,
                 drop_cap_lines: None,
                 tab_list: Vec::new(),
+                bullets_list_type: None,
+                bullet_character: None,
                 table: None,
                 runs: vec![Run {
                     text: lorem.to_string(),
@@ -133,6 +135,8 @@ fn variants() -> Vec<Variant> {
                     drop_cap_characters: None,
                     drop_cap_lines: None,
                     tab_list: Vec::new(),
+                    bullets_list_type: None,
+                    bullet_character: None,
                     table: None,
                     runs: vec![Run {
                         text: format!("Paragraph {} of three", i + 1),
@@ -163,6 +167,8 @@ fn variants() -> Vec<Variant> {
                 drop_cap_characters: None,
                 drop_cap_lines: None,
                 tab_list: Vec::new(),
+                bullets_list_type: None,
+                bullet_character: None,
                 table: None,
                 runs: vec![
                     Run {
@@ -212,6 +218,8 @@ fn variants() -> Vec<Variant> {
                 drop_cap_characters: None,
                 drop_cap_lines: None,
                 tab_list: Vec::new(),
+                bullets_list_type: None,
+                bullet_character: None,
                 table: None,
                 runs: vec![Run {
                     text: "wide-tracked headline".to_string(),
@@ -239,6 +247,8 @@ fn variants() -> Vec<Variant> {
                 drop_cap_characters: None,
                 drop_cap_lines: None,
                 tab_list: Vec::new(),
+                bullets_list_type: None,
+                bullet_character: None,
                 table: None,
                 runs: vec![Run {
                     text: "underlined run".to_string(),
@@ -266,6 +276,8 @@ fn variants() -> Vec<Variant> {
                 drop_cap_characters: None,
                 drop_cap_lines: None,
                 tab_list: Vec::new(),
+                bullets_list_type: None,
+                bullet_character: None,
                 table: None,
                 runs: vec![
                     Run {
@@ -308,6 +320,8 @@ fn variants() -> Vec<Variant> {
                 drop_cap_characters: None,
                 drop_cap_lines: None,
                 tab_list: Vec::new(),
+                bullets_list_type: None,
+                bullet_character: None,
                 table: None,
                 runs: vec![Run {
                     text: "italic Open Sans run".to_string(),
@@ -342,6 +356,8 @@ fn one_run(
         drop_cap_characters: None,
         drop_cap_lines: None,
         tab_list: Vec::new(),
+        bullets_list_type: None,
+        bullet_character: None,
         table: None,
         runs: vec![Run {
             text: text.to_string(),
@@ -417,6 +433,8 @@ pub fn build() -> Sample {
                             alignment: s.alignment,
                             leader: s.leader.clone(),
                         }).collect(),
+                        bullets_list_type: p.bullets_list_type,
+                        bullet_character: p.bullet_character,
                         table: None,
                         runs: p
                             .runs

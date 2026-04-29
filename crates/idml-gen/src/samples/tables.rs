@@ -258,6 +258,8 @@ fn variants() -> Vec<Variant> {
                             drop_cap_characters: None,
                             drop_cap_lines: None,
                             tab_list: Vec::new(),
+                            bullets_list_type: None,
+                            bullet_character: None,
                             table: None,
                             runs: vec![Run {
                                 text: s.to_string(),
@@ -358,6 +360,8 @@ pub fn build() -> Sample {
             right_indent: None,
             drop_cap_characters: None,
             drop_cap_lines: None,
+            bullets_list_type: None,
+            bullet_character: None,
             tab_list: Vec::new(),
             table: Some(table),
             runs: Vec::new(),
