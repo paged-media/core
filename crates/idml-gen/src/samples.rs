@@ -2,3 +2,4 @@
 //! function returning a fully-populated `Sample`.
 
 pub mod geometry;
+pub mod strokes_fills;

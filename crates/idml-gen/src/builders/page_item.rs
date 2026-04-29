@@ -20,6 +20,52 @@ pub struct Rect {
     /// becomes a text frame (kind = `TextFrame` in the XML). Phase-0
     /// labels live in stories on the page they describe.
     pub parent_story: Option<String>,
+    /// Sample-specific attribute overrides emitted after the standard
+    /// fill/stroke attrs (so they win on duplicate keys per IDML's
+    /// "last attribute wins" reader behaviour). Values come straight
+    /// from the IDML enum tables — `("StrokeType", "StrokeStyle/$ID/Dashed")`,
+    /// `("EndCap", "RoundEndCap")`, `("StrokeAlignment", "InsideAlignment")`,
+    /// etc. Avoids ballooning the struct as more samples land.
+    pub extra_attrs: Vec<(String, String)>,
+}
+
+impl Rect {
+    /// Convenience constructor for the common "filled rectangle, no
+    /// stroke, no parent story" shape.
+    pub fn filled(self_id: impl Into<String>, w: f32, h: f32, item_transform: Matrix) -> Self {
+        Self {
+            self_id: self_id.into(),
+            width_pt: w,
+            height_pt: h,
+            item_transform,
+            fill_color: Some("Color/Black".into()),
+            stroke_color: None,
+            stroke_weight_pt: None,
+            parent_story: None,
+            extra_attrs: Vec::new(),
+        }
+    }
+
+    pub fn with_fill(mut self, color: impl Into<String>) -> Self {
+        self.fill_color = Some(color.into());
+        self
+    }
+
+    pub fn with_stroke(mut self, color: impl Into<String>, weight_pt: f32) -> Self {
+        self.stroke_color = Some(color.into());
+        self.stroke_weight_pt = Some(weight_pt);
+        self
+    }
+
+    pub fn with_attr(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.extra_attrs.push((key.into(), value.into()));
+        self
+    }
+
+    pub fn with_parent_story(mut self, story_id: impl Into<String>) -> Self {
+        self.parent_story = Some(story_id.into());
+        self
+    }
 }
 
 impl Rect {
@@ -54,6 +100,9 @@ impl Rect {
         ));
         if let Some(w) = self.stroke_weight_pt {
             attrs.push(("StrokeWeight", format_f32(w)));
+        }
+        for (k, v) in &self.extra_attrs {
+            attrs.push((k.as_str(), v.clone()));
         }
         let attr_refs: Vec<(&str, &str)> = attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
         b.start(kind, &attr_refs);

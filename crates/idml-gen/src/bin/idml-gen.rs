@@ -35,7 +35,8 @@ fn main() -> Result<()> {
 fn emit_sample(name: &str, out_dir: &std::path::Path) -> Result<()> {
     let sample = match name {
         "geometry" => idml_gen::samples::geometry::build(),
-        other => anyhow::bail!("unknown sample {other:?}; known: geometry"),
+        "strokes-fills" => idml_gen::samples::strokes_fills::build(),
+        other => anyhow::bail!("unknown sample {other:?}; known: geometry, strokes-fills"),
     };
     let bytes = idml_gen::write_idml(&sample).context("write idml")?;
     std::fs::create_dir_all(out_dir).with_context(|| format!("mkdir {}", out_dir.display()))?;

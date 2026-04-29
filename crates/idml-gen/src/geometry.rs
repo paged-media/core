@@ -32,6 +32,20 @@ pub fn rotate_deg(deg: f32) -> Matrix {
     [c, s, -s, c, 0.0, 0.0]
 }
 
+/// Horizontal shear by `deg` degrees. Slants vertical lines toward
+/// the right by `tan(deg)` per unit of y. `deg = 0` is identity.
+pub fn skew_x_deg(deg: f32) -> Matrix {
+    let t = deg.to_radians().tan();
+    [1.0, 0.0, t, 1.0, 0.0, 0.0]
+}
+
+/// Vertical shear by `deg` degrees. Slants horizontal lines downward
+/// by `tan(deg)` per unit of x.
+pub fn skew_y_deg(deg: f32) -> Matrix {
+    let t = deg.to_radians().tan();
+    [1.0, t, 0.0, 1.0, 0.0, 0.0]
+}
+
 /// Apply `b` after `a` (i.e. `compose(translate, rotate)` rotates
 /// first, then translates the rotated coordinate frame).
 pub fn compose(a: Matrix, b: Matrix) -> Matrix {

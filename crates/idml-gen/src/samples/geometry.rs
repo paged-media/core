@@ -15,7 +15,9 @@ use crate::builders::{
     story::{write_story, Story},
     xml_folder::{backing_story_xml, mapping_xml, tags_xml},
 };
-use crate::geometry::{compose, rotate_deg, scale, translate, Matrix, IDENTITY};
+use crate::geometry::{
+    compose, rotate_deg, scale, skew_x_deg, skew_y_deg, translate, Matrix, IDENTITY,
+};
 use crate::ids::self_id;
 use crate::package::Sample;
 
@@ -33,7 +35,11 @@ struct Variant {
 }
 
 fn variants() -> Vec<Variant> {
+    // Spec §4.16 cross-cutting geometry: each page exercises one
+    // rendering concern. Names embed the exact transform the reader
+    // can read off when failure attribution names a page.
     vec![
+        // Identity / pure translation.
         Variant {
             name: "geometry · rect · identity",
             transform: IDENTITY,
@@ -43,16 +49,86 @@ fn variants() -> Vec<Variant> {
             transform: translate(72.0, 72.0),
         },
         Variant {
+            name: "geometry · rect · translate-neg-50-100",
+            transform: translate(-50.0, 100.0),
+        },
+        // Rotation — every cardinal angle plus a sub-degree case to
+        // catch matrices that snap to integer angles.
+        Variant {
+            name: "geometry · rect · rotate-30",
+            transform: rotate_deg(30.0),
+        },
+        Variant {
             name: "geometry · rect · rotate-45",
             transform: rotate_deg(45.0),
+        },
+        Variant {
+            name: "geometry · rect · rotate-90",
+            transform: rotate_deg(90.0),
+        },
+        Variant {
+            name: "geometry · rect · rotate-180",
+            transform: rotate_deg(180.0),
+        },
+        Variant {
+            name: "geometry · rect · rotate-270",
+            transform: rotate_deg(270.0),
+        },
+        Variant {
+            name: "geometry · rect · rotate-359",
+            transform: rotate_deg(359.0),
+        },
+        Variant {
+            name: "geometry · rect · rotate-tiny-0.1",
+            transform: rotate_deg(0.1),
+        },
+        Variant {
+            name: "geometry · rect · rotate-neg-30",
+            transform: rotate_deg(-30.0),
+        },
+        // Scale — uniform, non-uniform, mirror via negative axis.
+        Variant {
+            name: "geometry · rect · scale-uniform-2x",
+            transform: scale(2.0, 2.0),
         },
         Variant {
             name: "geometry · rect · scale-2x-1y",
             transform: scale(2.0, 1.0),
         },
         Variant {
+            name: "geometry · rect · scale-mirror-x",
+            transform: scale(-1.0, 1.0),
+        },
+        Variant {
+            name: "geometry · rect · scale-mirror-y",
+            transform: scale(1.0, -1.0),
+        },
+        // Skew on each axis.
+        Variant {
+            name: "geometry · rect · skew-x-15",
+            transform: skew_x_deg(15.0),
+        },
+        Variant {
+            name: "geometry · rect · skew-y-15",
+            transform: skew_y_deg(15.0),
+        },
+        // Composite — two pages prove that order matters: the same
+        // pieces in opposite orders land in different page positions.
+        Variant {
             name: "geometry · rect · rotate-30-then-translate-50-50",
             transform: compose(rotate_deg(30.0), translate(50.0, 50.0)),
+        },
+        Variant {
+            name: "geometry · rect · translate-50-50-then-rotate-30",
+            transform: compose(translate(50.0, 50.0), rotate_deg(30.0)),
+        },
+        // Triple compose — translate → rotate → scale.
+        Variant {
+            name: "geometry · rect · translate-then-rotate-then-scale",
+            transform: compose(
+                compose(translate(20.0, 0.0), rotate_deg(30.0)),
+                scale(1.5, 1.0),
+            ),
         },
     ]
 }
@@ -112,6 +188,7 @@ pub fn build() -> Sample {
             stroke_color: None,
             stroke_weight_pt: None,
             parent_story: Some(story_id.clone()),
+            extra_attrs: Vec::new(),
         };
         let demo_rect = Rect {
             self_id: rect_id,
@@ -131,6 +208,7 @@ pub fn build() -> Sample {
             stroke_color: None,
             stroke_weight_pt: None,
             parent_story: None,
+            extra_attrs: Vec::new(),
         };
 
         spreads.push((

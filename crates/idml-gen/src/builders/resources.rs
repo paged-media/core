@@ -27,9 +27,34 @@ pub fn container_xml() -> Vec<u8> {
     b.into_bytes()
 }
 
+/// One extra colour to emit alongside the built-in Black + Paper.
+/// Used by samples that need additional swatches without re-defining
+/// the whole resource file.
+pub struct ExtraColor {
+    pub self_id: String,
+    pub name: String,
+    /// `"RGB"`, `"CMYK"`, `"LAB"`, `"Spot"`, `"MixedInk"` —
+    /// passed straight through to the IDML `Space` attribute.
+    pub space: &'static str,
+    /// Whitespace-separated channel values matching `space`. RGB is
+    /// `"r g b"` on the 0..255 scale (yes, IDML serialises RGB that
+    /// way despite emitting CMYK on 0..100).
+    pub value: String,
+}
+
+/// Same as [`graphic_xml`] but appends caller-supplied custom swatches
+/// after the built-in Black + Paper.
+pub fn graphic_xml_with_extras(extras: &[ExtraColor]) -> Vec<u8> {
+    write_graphic(extras)
+}
+
 /// `Resources/Graphic.xml` — registers `Color/Black` and `Color/Paper`,
 /// the two swatches every IDML carries by default.
 pub fn graphic_xml() -> Vec<u8> {
+    write_graphic(&[])
+}
+
+fn write_graphic(extras: &[ExtraColor]) -> Vec<u8> {
     let mut b = XmlBuilder::new();
     b.write_decl();
     b.start(
@@ -70,6 +95,18 @@ pub fn graphic_xml() -> Vec<u8> {
             ("Visible", "true"),
         ],
     );
+    for extra in extras {
+        b.empty(
+            "Color",
+            &[
+                ("Self", extra.self_id.as_str()),
+                ("Model", "Process"),
+                ("Space", extra.space),
+                ("ColorValue", extra.value.as_str()),
+                ("Name", extra.name.as_str()),
+            ],
+        );
+    }
     b.end("idPkg:Graphic");
     b.into_bytes()
 }
