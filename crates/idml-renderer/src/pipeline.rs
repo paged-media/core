@@ -1331,6 +1331,19 @@ fn emit_paragraph_into_chain(
         // intrudes from the head frame's left side.
         let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
         let text_origin_pt = (sx - ox + frame_insets[1] + em.column_x_shift_pt, sy - oy);
+        // Pull just the rotation/scale 2×2 from the frame's
+        // ItemTransform. emit_glyph_slice positions glyphs in upright
+        // page coords offset by `text_origin_pt`; the post-emit pass
+        // below rotates each glyph command around the frame's spread
+        // top-left so rotated TextFrames render with text rotated.
+        let frame_linear = frame
+            .item_transform
+            .map(|m| [m[0], m[1], m[2], m[3]])
+            .unwrap_or([1.0, 0.0, 0.0, 1.0]);
+        let frame_is_upright = (frame_linear[1].abs() < 1e-5)
+            && (frame_linear[2].abs() < 1e-5)
+            && ((frame_linear[0] - 1.0).abs() < 1e-5)
+            && ((frame_linear[3] - 1.0).abs() < 1e-5);
 
         let before_cmds = pages[target_page].list.commands.len();
 
@@ -1370,6 +1383,21 @@ fn emit_paragraph_into_chain(
             (sx - ox, sy - oy),
             &mut pages[target_page].list,
         );
+
+        // For rotated/sheared TextFrames, post-multiply each glyph
+        // command's transform by the frame's linear 2×2, pivoting
+        // around the frame's page-space top-left so glyphs end up
+        // rotated *with* their host frame. Upright frames skip the
+        // pass entirely (the common case).
+        let after_glyph_cmds = pages[target_page].list.commands.len();
+        if !frame_is_upright {
+            let pivot_x = sx - ox;
+            let pivot_y = sy - oy;
+            for cmd in &mut pages[target_page].list.commands[before_cmds..after_glyph_cmds] {
+                let xf = cmd.transform_mut();
+                rotate_transform_around(xf, frame_linear, pivot_x, pivot_y);
+            }
+        }
 
         let after_cmds = pages[target_page].list.commands.len();
         let frame_idx = em.frame_idx;
@@ -3430,6 +3458,37 @@ fn first_baseline_for_frame(
 /// `ItemTransform` (identity when absent). Identity ItemTransform is
 /// the common case — the result collapses to a pure translation, so
 /// the rasterizer's axis-aligned fast paths still apply.
+/// Post-multiply `xf` by a rotation/scale `linear` (2×2: a b c d in
+/// row-major IDML convention) pivoted around the page-space point
+/// `(pivot_x, pivot_y)`. Mathematically:
+///   xf := T(pivot) · L · T(-pivot) · xf
+/// Used by the text-emission path so glyph commands inside a
+/// rotated/sheared TextFrame inherit the frame's ItemTransform
+/// rotation around the frame's top-left.
+fn rotate_transform_around(
+    xf: &mut Transform,
+    linear: [f32; 4],
+    pivot_x: f32,
+    pivot_y: f32,
+) {
+    let [a, b, c, d] = linear;
+    // The pivoted rotation is:
+    //   M = [a c (pivot_x - a*pivot_x - c*pivot_y);
+    //        b d (pivot_y - b*pivot_x - d*pivot_y);
+    //        0 0 1]
+    // Compose as M · xf.
+    let [xa, xb, xc, xd, xtx, xty] = xf.0;
+    let m_tx = pivot_x - a * pivot_x - c * pivot_y;
+    let m_ty = pivot_y - b * pivot_x - d * pivot_y;
+    let new_a = a * xa + c * xb;
+    let new_b = b * xa + d * xb;
+    let new_c = a * xc + c * xd;
+    let new_d = b * xc + d * xd;
+    let new_tx = a * xtx + c * xty + m_tx;
+    let new_ty = b * xtx + d * xty + m_ty;
+    xf.0 = [new_a, new_b, new_c, new_d, new_tx, new_ty];
+}
+
 fn frame_outer_transform(page: &BuiltPage, item_transform: Option<[f32; 6]>) -> Transform {
     let (ox, oy) = page.spread_origin;
     let page_origin = Transform::translate(-ox, -oy);
