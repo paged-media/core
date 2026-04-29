@@ -2510,11 +2510,26 @@ fn emit_cell_paragraph(
         };
         bytes_pool.push(b);
     }
+    // Per-run wght axis values, derived from the resolved FontStyle.
+    // Identical wiring to the main `emit_paragraph_into_chain` path —
+    // table-cell text needs Bold / Light pinning too. Without this,
+    // table column labels styled with a Bold paragraph style render
+    // at the variable font's default weight (visible regression on
+    // any catalog with bold table headers).
+    let wghts: Vec<f32> = resolved_runs
+        .iter()
+        .map(|r| wght_for_font_style(r.font_style.as_deref()))
+        .collect();
+    // Reuse a shaped face only when both bytes AND weight match; a
+    // bold + regular pair sharing the same Inter.ttf bytes still
+    // needs two distinct rustybuzz::Face objects so set_variations
+    // doesn't fight itself.
     let mut unique_idx: Vec<usize> = Vec::with_capacity(bytes_pool.len());
     for (i, b) in bytes_pool.iter().enumerate() {
         let head = bytes_pool[..i]
             .iter()
-            .position(|prior| prior.as_ptr() == b.as_ptr())
+            .zip(wghts[..i].iter())
+            .position(|(prior, w)| prior.as_ptr() == b.as_ptr() && (*w - wghts[i]).abs() < 0.5)
             .unwrap_or(i);
         unique_idx.push(head);
     }
@@ -2527,12 +2542,18 @@ fn emit_cell_paragraph(
             continue;
         }
         let bytes_ref = bytes_pool[i].as_ref();
-        let Some(rf) = rustybuzz::Face::from_slice(bytes_ref, 0) else {
+        let Some(mut rf) = rustybuzz::Face::from_slice(bytes_ref, 0) else {
             return 0.0;
         };
-        let Ok(of) = ttf_parser::Face::parse(bytes_ref, 0) else {
+        let Ok(mut of) = ttf_parser::Face::parse(bytes_ref, 0) else {
             return 0.0;
         };
+        let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
+        rf.set_variations(&[rustybuzz::Variation {
+            tag: wght_tag,
+            value: wghts[i],
+        }]);
+        let _ = of.set_variation(wght_tag, wghts[i]);
         shaping_faces[i] = Some(rf);
         outline_faces[i] = Some(of);
     }
