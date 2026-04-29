@@ -375,9 +375,9 @@ impl ResolvedRunAttrs {
 
 impl ResolvedParagraphAttrs {
     /// Capture a paragraph's directly-set fields. Style cascade
-    /// fallbacks apply via `merge_below`. Bullet fields aren't on
-    /// `Paragraph` (IDML carries them only on the style), so they
-    /// always start `None` here and arrive via the cascade.
+    /// fallbacks apply via `merge_below`. Local override values
+    /// (BulletsAndNumberingListType / BulletChar) carried directly on
+    /// the ParagraphStyleRange win over the cascaded paragraph style.
     pub fn from_paragraph(paragraph: &Paragraph) -> Self {
         Self {
             justification: paragraph.justification.clone(),
@@ -385,8 +385,8 @@ impl ResolvedParagraphAttrs {
             space_before: paragraph.space_before,
             space_after: paragraph.space_after,
             tab_list: paragraph.tab_list.clone(),
-            bullets_list_type: None,
-            bullet_character: None,
+            bullets_list_type: paragraph.bullets_list_type.clone(),
+            bullet_character: paragraph.bullet_character,
             bullets_text_after: None,
             numbering_format: None,
             hyphenation: None,

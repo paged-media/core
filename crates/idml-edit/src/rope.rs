@@ -320,6 +320,8 @@ impl StoryRope {
                     space_before: p.attrs.space_before,
                     space_after: p.attrs.space_after,
                     tab_list: p.attrs.tab_list.clone(),
+                    bullets_list_type: None,
+                    bullet_character: None,
                     runs,
                     table: p.table.clone(),
                 }

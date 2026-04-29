@@ -2484,6 +2484,8 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
         space_before: paragraph.space_before,
         space_after: None, // applied to last sub-paragraph only
         tab_list: paragraph.tab_list.clone(),
+        bullets_list_type: paragraph.bullets_list_type.clone(),
+        bullet_character: paragraph.bullet_character,
         runs: Vec::new(),
         table: None,
     };
@@ -2510,6 +2512,8 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
                     space_before: None,
                     space_after: None,
                     tab_list: paragraph.tab_list.clone(),
+                    bullets_list_type: paragraph.bullets_list_type.clone(),
+                    bullet_character: paragraph.bullet_character,
                     runs: Vec::new(),
                     table: None,
                 };
@@ -2542,6 +2546,8 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
             space_before: paragraph.space_before,
             space_after: paragraph.space_after,
             tab_list: paragraph.tab_list.clone(),
+            bullets_list_type: paragraph.bullets_list_type.clone(),
+            bullet_character: paragraph.bullet_character,
             runs: Vec::new(),
             table: None,
         });
@@ -4067,7 +4073,12 @@ fn list_prefix(p: &idml_scene::ResolvedParagraphAttrs, counter: &mut u32) -> Opt
     match p.bullets_list_type.as_deref() {
         Some("BulletList") => {
             *counter = 0;
-            let cp = p.bullet_character?;
+            // InDesign's default bullet glyph when none is declared
+            // is U+2022 (•). Real IDML usually carries an explicit
+            // BulletChar, but real-world exports sometimes leave it
+            // implicit on the cascade — fall back so visible bullets
+            // still appear.
+            let cp = p.bullet_character.unwrap_or(0x2022);
             let ch = char::from_u32(cp)?;
             // `^t` in IDML serialises a literal tab in BulletsTextAfter.
             let after = p
@@ -4080,7 +4091,12 @@ fn list_prefix(p: &idml_scene::ResolvedParagraphAttrs, counter: &mut u32) -> Opt
         Some("NumberedList") => {
             *counter = counter.checked_add(1).unwrap_or(1);
             let formatted = format_number(*counter, p.numbering_format.as_deref());
-            Some(format!("{formatted}.\t"))
+            // Two regular spaces after the period — a literal tab
+            // would shape via the font's .notdef glyph (tofu) when
+            // the run's font lacks a tab mapping. The original
+            // intent is "advance past the marker"; two spaces gives
+            // a similar visual gap without a missing-glyph rectangle.
+            Some(format!("{formatted}.  "))
         }
         _ => {
             *counter = 0;

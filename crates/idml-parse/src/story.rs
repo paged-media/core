@@ -60,6 +60,15 @@ pub struct Paragraph {
     /// declared on this paragraph (the cascade fills in from the
     /// applied paragraph style if available).
     pub tab_list: Vec<TabStop>,
+    /// `BulletsAndNumberingListType` local override —
+    /// `BulletList`, `NumberedList`, or `NoList`. `None` ⇒ inherit
+    /// from the applied paragraph style.
+    pub bullets_list_type: Option<String>,
+    /// Bullet glyph codepoint, parsed from
+    /// `<Properties><BulletChar BulletCharacterValue="…"/></Properties>`.
+    /// Acts as a local override of the cascaded paragraph style's
+    /// bullet character.
+    pub bullet_character: Option<u32>,
     pub runs: Vec<CharacterRun>,
     /// `<Table>` nested inside the paragraph's CharacterStyleRange.
     /// When present, the paragraph is rendered as a table at the
@@ -303,6 +312,8 @@ impl Story {
                             space_before: attr(&e, b"SpaceBefore").and_then(|s| s.parse().ok()),
                             space_after: attr(&e, b"SpaceAfter").and_then(|s| s.parse().ok()),
                             tab_list: Vec::new(),
+                            bullets_list_type: attr(&e, b"BulletsAndNumberingListType"),
+                            bullet_character: None,
                             runs: Vec::new(),
                             table: None,
                         });
@@ -549,6 +560,20 @@ impl Story {
                     _ => {}
                 },
                 Event::Empty(e) => match e.name().as_ref() {
+                    // <BulletChar BulletCharacterType="UnicodeWithFont"
+                    // BulletCharacterValue="187"/> appears inside
+                    // <Properties> of an open <ParagraphStyleRange> as
+                    // a local override of the cascaded bullet glyph.
+                    // Valid only at paragraph-level Properties (kind 2).
+                    b"BulletChar" if properties_kind == 2 => {
+                        if let Some(p) = current_paragraph.as_mut() {
+                            if let Some(v) = attr(&e, b"BulletCharacterValue") {
+                                if let Ok(cp) = v.parse::<u32>() {
+                                    p.bullet_character = Some(cp);
+                                }
+                            }
+                        }
+                    }
                     // Line breaks inside a paragraph surface as <Br/> — treat
                     // them as a logical newline in the current run.
                     b"Br" => {
