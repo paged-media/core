@@ -1011,7 +1011,14 @@ fn emit_paragraph_into_chain(
         outline_faces[i] = Some(of);
     }
 
-    let font_ids: Vec<u32> = bytes_pool.iter().map(|b| fnv_1a_u32(b.as_ref())).collect();
+    // font_id mixes in the wght variation so the glyph-outline cache
+    // (keyed on (font_id, glyph_id)) doesn't conflate outlines from a
+    // variable font fed at two different wght axis values.
+    let font_ids: Vec<u32> = bytes_pool
+        .iter()
+        .zip(wghts.iter())
+        .map(|(b, w)| fnv_1a_u32(b.as_ref()) ^ w.to_bits())
+        .collect();
 
     // Bulleted paragraphs prepend `<bullet><separator>` to the
     // first run's text. The bullet picks up the first run's font
@@ -2623,7 +2630,14 @@ fn emit_cell_paragraph(
         shaping_faces[i] = Some(rf);
         outline_faces[i] = Some(of);
     }
-    let font_ids: Vec<u32> = bytes_pool.iter().map(|b| fnv_1a_u32(b.as_ref())).collect();
+    // font_id mixes in the wght variation so the glyph-outline cache
+    // (keyed on (font_id, glyph_id)) doesn't conflate outlines from a
+    // variable font fed at two different wght axis values.
+    let font_ids: Vec<u32> = bytes_pool
+        .iter()
+        .zip(wghts.iter())
+        .map(|(b, w)| fnv_1a_u32(b.as_ref()) ^ w.to_bits())
+        .collect();
 
     let styled_runs: Vec<idml_text::StyledRun> = paragraph
         .runs

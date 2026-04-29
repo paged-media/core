@@ -283,7 +283,6 @@ pub fn write_story(s: &Story) -> Vec<u8> {
         }
         for (idx, run) in paragraph.runs.iter().enumerate() {
             let point_size_str: String;
-            let leading_str: String;
             let tracking_str: String;
             let baseline_str: String;
             let mut r_attrs: Vec<(&str, &str)> = vec![(
@@ -311,16 +310,31 @@ pub fn write_story(s: &Story) -> Vec<u8> {
             if let Some(true) = run.underline {
                 r_attrs.push(("Underline", "true"));
             }
-            if let Some(font) = run.applied_font {
-                r_attrs.push(("AppliedFont", font));
-            }
-            if idx == 0 {
-                if let Some(lead) = paragraph.leading {
-                    leading_str = crate::xml::format_f32(lead);
-                    r_attrs.push(("Leading", leading_str.as_str()));
-                }
-            }
             b.start("CharacterStyleRange", &r_attrs);
+            // AppliedFont + Leading land as typed children of
+            // <Properties> — that's how real InDesign serialises them
+            // and what idml-parse reads after the Properties slice.
+            // Emitting them as attributes works too (the spec allows
+            // both forms) but the child-element form is canonical and
+            // round-trips cleanly through InDesign's IDML reader.
+            let want_leading = idx == 0 && paragraph.leading.is_some();
+            if run.applied_font.is_some() || want_leading {
+                b.start("Properties", &[]);
+                if let Some(font) = run.applied_font {
+                    b.start("AppliedFont", &[("type", "string")]);
+                    b.text(font);
+                    b.end("AppliedFont");
+                }
+                if want_leading {
+                    if let Some(lead) = paragraph.leading {
+                        let s = crate::xml::format_f32(lead);
+                        b.start("Leading", &[("type", "unit")]);
+                        b.text(&s);
+                        b.end("Leading");
+                    }
+                }
+                b.end("Properties");
+            }
             write_run_content(&mut b, &run.text);
             b.end("CharacterStyleRange");
         }
@@ -526,6 +540,13 @@ fn write_cell_paragraph(b: &mut XmlBuilder, paragraph: &Paragraph) {
             r_attrs.push(("FontStyle", style));
         }
         b.start("CharacterStyleRange", &r_attrs);
+        if let Some(font) = run.applied_font {
+            b.start("Properties", &[]);
+            b.start("AppliedFont", &[("type", "string")]);
+            b.text(font);
+            b.end("AppliedFont");
+            b.end("Properties");
+        }
         write_run_content(b, &run.text);
         b.end("CharacterStyleRange");
     }
