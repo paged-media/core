@@ -3185,6 +3185,13 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
         tab_list: paragraph.tab_list.clone(),
         bullets_list_type: paragraph.bullets_list_type.clone(),
         bullet_character: paragraph.bullet_character,
+        // Drop-cap + anchored frames carry on the FIRST sub-paragraph
+        // only; the splits below clone from the source paragraph and
+        // overwrite these to defaults so the cap doesn't repeat.
+        drop_cap_characters: paragraph.drop_cap_characters,
+        drop_cap_lines: paragraph.drop_cap_lines,
+        drop_cap_detail: paragraph.drop_cap_detail,
+        anchored_frames: paragraph.anchored_frames.clone(),
         runs: Vec::new(),
         table: None,
     };
@@ -3213,6 +3220,12 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
                     tab_list: paragraph.tab_list.clone(),
                     bullets_list_type: paragraph.bullets_list_type.clone(),
                     bullet_character: paragraph.bullet_character,
+                    // Drop cap + anchored frames are first-paragraph-only;
+                    // sub-paragraphs after a `\n` reset to defaults.
+                    drop_cap_characters: 0,
+                    drop_cap_lines: 0,
+                    drop_cap_detail: 0,
+                    anchored_frames: Vec::new(),
                     runs: Vec::new(),
                     table: None,
                 };
@@ -3247,6 +3260,13 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
             tab_list: paragraph.tab_list.clone(),
             bullets_list_type: paragraph.bullets_list_type.clone(),
             bullet_character: paragraph.bullet_character,
+            // All-`\n` source paragraph: defensive placeholder.
+            // Drop cap + anchored frames don't apply to a glyph-less
+            // paragraph; default them.
+            drop_cap_characters: 0,
+            drop_cap_lines: 0,
+            drop_cap_detail: 0,
+            anchored_frames: Vec::new(),
             runs: Vec::new(),
             table: None,
         });

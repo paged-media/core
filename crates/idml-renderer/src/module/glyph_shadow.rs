@@ -113,16 +113,20 @@ pub(crate) fn emit_glyph_shadow_pass(
     let group_opacity = shadow.opacity.clamp(0.0, 1.0);
     let inserted_shadow_count = inserts.len();
     let abs_start = glyph_command_range.start;
-    // Splice all PathShadow commands first (without End/Begin), then
-    // insert End at `range.start + n_shadows`, then insert Begin at
+    // Splice all PathShadow commands clustered together at
+    // `range.start`, then End at `range.start + n`, then Begin at
     // `range.start`. Final layout:
     //   range.start: BeginBlendGroup
-    //   range.start + 1..=n: PathShadow stamps
+    //   range.start + 1..=n: PathShadow stamps (in original glyph order)
     //   range.start + n + 1: EndBlendGroup
     //   range.start + n + 2..: (original glyph fills, shifted)
-    for (idx, transform, path_id) in inserts.into_iter().rev() {
+    //
+    // We insert each shadow at `abs_start` in reverse-collected order
+    // so the order at `abs_start..abs_start+n` matches the original
+    // glyph emission order.
+    for (_idx, transform, path_id) in inserts.into_iter().rev() {
         page.list.commands.insert(
-            idx,
+            abs_start,
             DisplayCommand::PathShadow {
                 path_id,
                 transform,
