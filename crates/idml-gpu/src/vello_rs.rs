@@ -220,6 +220,12 @@ fn build_scene_with_transform(list: &DisplayList, page_to_px: kurbo::Affine) -> 
                 // blur path which only lands cleanly with the
                 // §10.4 effect plumbing.
             }
+            DisplayCommand::PushClip { .. } | DisplayCommand::PopClip(_) => {
+                // Vello backend doesn't enforce clip primitives yet
+                // — matches the existing "Image / DropShadow ⇒
+                // no-op" policy. The CPU rasterizer is the
+                // path-of-record for the fidelity harness.
+            }
         }
     }
     scene

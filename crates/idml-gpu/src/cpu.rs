@@ -20,9 +20,9 @@ use idml_compose::{
 use image::{Rgba, RgbaImage};
 use tiny_skia::{
     BlendMode as TsBlendMode, FillRule, GradientStop as TsGradientStop, LineCap as TsLineCap,
-    LineJoin as TsLineJoin, LinearGradient as TsLinearGradient, Paint as TsPaint, PathBuilder,
-    Pixmap, PixmapPaint, Point as TsPoint, RadialGradient as TsRadialGradient, Shader, SpreadMode,
-    Stroke as TsStroke, Transform as TsTransform,
+    LineJoin as TsLineJoin, LinearGradient as TsLinearGradient, Mask as TsMask, Paint as TsPaint,
+    PathBuilder, Pixmap, PixmapPaint, Point as TsPoint, RadialGradient as TsRadialGradient, Shader,
+    SpreadMode, Stroke as TsStroke, Transform as TsTransform,
 };
 
 use crate::{PathRasterizer, RasterOptions};
@@ -55,6 +55,20 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
     // Everything pt-space is scaled uniformly by `scale` into px-space.
     let page_to_px = TsTransform::from_scale(scale, scale);
 
+    // Clip stack. Each entry is the cumulative intersection of every
+    // pushed clip up to and including that level. `None` ⇒ no clipping
+    // (the common case). Push: clone the current top (or the first
+    // mask is built from a fresh white pixmap and intersected with the
+    // pushed path), then `intersect_path` it. Pop: pop the top.
+    //
+    // tiny-skia masks live in pixel space; we transform paths through
+    // `page_to_px` when filling. For Push, intersect at pixel
+    // resolution to inherit anti-alias behaviour.
+    let mut clip_stack: Vec<TsMask> = Vec::new();
+    fn active_mask(stack: &[TsMask]) -> Option<&TsMask> {
+        stack.last()
+    }
+
     for cmd in &list.commands {
         match cmd {
             DisplayCommand::FillPath {
@@ -69,7 +83,13 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     continue;
                 };
                 let ts_paint = paint_to_ts(paint, list, transform, page_to_px);
-                pixmap.fill_path(&path, &ts_paint, FillRule::Winding, page_to_px, None);
+                pixmap.fill_path(
+                    &path,
+                    &ts_paint,
+                    FillRule::Winding,
+                    page_to_px,
+                    active_mask(&clip_stack),
+                );
             }
             DisplayCommand::FillPathBlend {
                 path_id,
@@ -87,7 +107,13 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 let ts_mode = blend_mode_to_ts(*blend_mode);
                 if matches!(ts_mode, TsBlendMode::SourceOver) {
                     // Normal blend ⇒ same fast path as FillPath.
-                    pixmap.fill_path(&path, &ts_paint, FillRule::Winding, page_to_px, None);
+                    pixmap.fill_path(
+                        &path,
+                        &ts_paint,
+                        FillRule::Winding,
+                        page_to_px,
+                        active_mask(&clip_stack),
+                    );
                 } else {
                     // Non-Normal: render the fill into a scratch
                     // pixmap covering the path's pixel bounds, then
@@ -130,10 +156,16 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                             scratch.as_ref(),
                             &composite,
                             TsTransform::identity(),
-                            None,
+                            active_mask(&clip_stack),
                         );
                     } else {
-                        pixmap.fill_path(&path, &ts_paint, FillRule::Winding, page_to_px, None);
+                        pixmap.fill_path(
+                            &path,
+                            &ts_paint,
+                            FillRule::Winding,
+                            page_to_px,
+                            active_mask(&clip_stack),
+                        );
                     }
                 }
             }
@@ -161,7 +193,13 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                         tiny_skia::StrokeDash::new(stroke.dash.as_slice().to_vec(), 0.0)
                     },
                 };
-                pixmap.stroke_path(&path, &ts_paint, &ts_stroke, page_to_px, None);
+                pixmap.stroke_path(
+                    &path,
+                    &ts_paint,
+                    &ts_stroke,
+                    page_to_px,
+                    active_mask(&clip_stack),
+                );
             }
             DisplayCommand::DropShadow {
                 path_id,
@@ -193,7 +231,13 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     // Fast path: blur is sub-pixel; the existing
                     // hard-edge fill is visually indistinguishable
                     // from a 0.5σ kernel, so skip the offscreen.
-                    pixmap.fill_path(&path, &p, FillRule::Winding, page_to_px, None);
+                    pixmap.fill_path(
+                        &path,
+                        &p,
+                        FillRule::Winding,
+                        page_to_px,
+                        active_mask(&clip_stack),
+                    );
                 } else {
                     // Offscreen path: rasterise the shadow stamp
                     // into a padded scratch pixmap, blur with a
@@ -241,13 +285,19 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                             scratch.as_ref(),
                             &PixmapPaint::default(),
                             TsTransform::identity(),
-                            None,
+                            active_mask(&clip_stack),
                         );
                     } else {
                         // Allocation failed (pathological size) —
                         // fall back to the hard-edge fill rather
                         // than skipping the shadow entirely.
-                        pixmap.fill_path(&path, &p, FillRule::Winding, page_to_px, None);
+                        pixmap.fill_path(
+                            &path,
+                            &p,
+                            FillRule::Winding,
+                            page_to_px,
+                            active_mask(&clip_stack),
+                        );
                     }
                 }
             }
@@ -295,8 +345,53 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     src.as_ref(),
                     &PixmapPaint::default(),
                     pixel_to_px,
-                    None,
+                    active_mask(&clip_stack),
                 );
+            }
+            DisplayCommand::PushClip { path_id, transform } => {
+                // Build the clip path in page-space pt; the mask
+                // rasteriser then applies the same `page_to_px`
+                // scale used for fills/strokes so the clip lives in
+                // pixel space.
+                let Some(path_data) = list.paths.get(*path_id) else {
+                    // Push an empty mask so the matching pop balances
+                    // the stack — then drawing is unaffected (an empty
+                    // clip would mean "draw nothing", but the missing
+                    // path is more likely a renderer bug than a real
+                    // empty clip; keep the un-clipped behaviour).
+                    if let Some(top) = clip_stack.last().cloned() {
+                        clip_stack.push(top);
+                    } else if let Some(m) = TsMask::new(px_w, px_h) {
+                        // Fresh white mask = no clipping.
+                        let mut m = m;
+                        // tiny_skia::Mask::new returns a black (zero)
+                        // mask; flip it via invert so "no clip"
+                        // semantics match (white = drawable).
+                        m.invert();
+                        clip_stack.push(m);
+                    }
+                    continue;
+                };
+                let Some(path) = build_path_transformed(path_data, transform) else {
+                    if let Some(top) = clip_stack.last().cloned() {
+                        clip_stack.push(top);
+                    }
+                    continue;
+                };
+                if let Some(parent) = clip_stack.last() {
+                    let mut child = parent.clone();
+                    child.intersect_path(&path, FillRule::Winding, true, page_to_px);
+                    clip_stack.push(child);
+                } else if let Some(mut fresh) = TsMask::new(px_w, px_h) {
+                    // First clip on the stack: build from a fresh
+                    // (transparent) mask filled with the path. Any
+                    // subsequent push intersects against this base.
+                    fresh.fill_path(&path, FillRule::Winding, true, page_to_px);
+                    clip_stack.push(fresh);
+                }
+            }
+            DisplayCommand::PopClip(_) => {
+                clip_stack.pop();
             }
         }
     }
