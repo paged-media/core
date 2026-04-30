@@ -270,6 +270,7 @@ fn variants() -> Vec<Variant> {
                                 baseline_shift: None,
                                 underline: None,
                                 applied_font: None,
+                                anchored_frame: None,
                             }],
                         }],
                         ..Cell::plain("")
@@ -280,6 +281,43 @@ fn variants() -> Vec<Variant> {
                         right_aligned("$10"),
                         right_aligned("$200,000"),
                     ]
+                },
+            }),
+        },
+        // 90° text orientation in header cells — `RotationAngle="90"`
+        // plus the matching `TableTextRotation="Rotate90Degrees"`.
+        // Body cells stay axis-aligned so the diff harness can
+        // attribute any rotation regression to the header row.
+        Variant {
+            name: "tables · text-orientation · 90deg-vertical",
+            table: Box::new(|id| Table {
+                self_id: id.to_string(),
+                header_row_count: 1,
+                footer_row_count: 0,
+                body_row_count: 2,
+                column_count: 3,
+                // Tall header so the rotated label fits comfortably
+                // upright when displayed at 90°.
+                row_heights_pt: vec![60.0, ROW_H_PT, ROW_H_PT],
+                column_widths_pt: vec![COL_W_PT; 3],
+                cells: {
+                    let mut v = Vec::new();
+                    for c in 0..3 {
+                        for r in 0..3 {
+                            let label = if r == 0 {
+                                format!("Hdr {}", c + 1)
+                            } else {
+                                format!("R{}C{}", r, c + 1)
+                            };
+                            let mut cell = Cell::plain(label);
+                            if r == 0 {
+                                cell.fill_color = Some("Color/CMYKCyan20".to_string());
+                                cell.rotation_angle = Some(90.0);
+                            }
+                            v.push(cell);
+                        }
+                    }
+                    v
                 },
             }),
         },
@@ -388,6 +426,8 @@ pub fn build() -> Sample {
             blending: None,
             drop_shadow: None,
             placed_image: None,
+            text_wrap: None,
+            anchored_setting: None,
         };
 
         let body_frame = Rect {
@@ -406,6 +446,8 @@ pub fn build() -> Sample {
             blending: None,
             drop_shadow: None,
             placed_image: None,
+            text_wrap: None,
+            anchored_setting: None,
         };
 
         spreads.push((
