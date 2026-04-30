@@ -256,9 +256,11 @@ fn display_list_flag_emits_one_command_per_frame_without_font() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Two frames split across the spread's two pages → 3 commands
-    // total (frame A fill + stroke on page 1; frame B fill on page 2).
-    // Each page interns its own unit-rect path → 2 paths total.
-    assert!(stdout.contains("3 command(s) total"), "stdout:\n{stdout}");
-    assert!(stdout.contains("2 path(s) total"), "stdout:\n{stdout}");
+    // Two frames split across the spread's two pages: frame A has
+    // a fill + stroke (2 commands) on page 1; frame B has no fill
+    // and no stroke (transparent text frame, 0 commands) on page 2.
+    // Frame A's page interns one unit-rect path; frame B contributes
+    // none → 1 path total.
+    assert!(stdout.contains("2 command(s) total"), "stdout:\n{stdout}");
+    assert!(stdout.contains("1 path(s) total"), "stdout:\n{stdout}");
 }

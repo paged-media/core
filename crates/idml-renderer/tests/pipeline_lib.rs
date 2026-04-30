@@ -646,16 +646,20 @@ fn threaded_story_renders_without_panic() {
     let built = pipeline::build_document(&document, &opts).unwrap();
     // Exactly one page in this synthetic IDML.
     assert_eq!(built.pages.len(), 1);
-    // Three frames in the chain → three FillPath rectangles emitted
-    // for the frame backgrounds (plus zero text glyphs).
+    // The three TextFrames in the chain carry no FillColor, so the
+    // renderer skips frame-background fills (transparent frames are
+    // pure layout containers in InDesign). With no font registered
+    // there are also no glyph fills — the pipeline ran cleanly with
+    // an empty display list, which is what this smoke test cares
+    // about.
     let frame_fills = built.pages[0]
         .list
         .commands
         .iter()
         .filter(|c| matches!(c, idml_compose::DisplayCommand::FillPath { .. }))
         .count();
-    assert!(
-        frame_fills >= 3,
-        "expected ≥3 frame fills, got {frame_fills}"
+    assert_eq!(
+        frame_fills, 0,
+        "transparent text frames + no font ⇒ zero fills, got {frame_fills}"
     );
 }

@@ -1565,6 +1565,7 @@ fn emit_polygon_into(
 ) {
     page.stats.frames += 1;
     let outer = frame_outer_transform(page, poly.item_transform);
+    let fill_transparent = frame_fill_is_transparent(poly.fill_color.as_deref());
     let fill = poly
         .fill_color
         .as_deref()
@@ -1587,7 +1588,9 @@ fn emit_polygon_into(
             w: poly.bounds.width(),
             h: poly.bounds.height(),
         };
-        emit_rect_transformed(r, outer, fill, &mut page.list);
+        if !fill_transparent {
+            emit_rect_transformed(r, outer, fill, &mut page.list);
+        }
         if let Some(stroke) = poly
             .stroke_color
             .as_deref()
@@ -1613,11 +1616,13 @@ fn emit_polygon_into(
         None => path_signature(&poly.anchors),
     };
     let (path_id, _) = page.list.paths.intern(cache_key, path);
-    page.list.commands.push(DisplayCommand::FillPath {
-        path_id,
-        paint: fill,
-        transform: outer,
-    });
+    if !fill_transparent {
+        page.list.commands.push(DisplayCommand::FillPath {
+            path_id,
+            paint: fill,
+            transform: outer,
+        });
+    }
     if let Some(stroke_paint) = poly
         .stroke_color
         .as_deref()
@@ -2453,6 +2458,19 @@ fn is_none_swatch_id(id: &str) -> bool {
     id == "Swatch/None" || id == "n" || id.is_empty()
 }
 
+/// True when an `Option<String>` FillColor on a page item should be
+/// treated as fully transparent — i.e. no background rect should be
+/// emitted at all. Mirrors InDesign's behaviour for both "FillColor
+/// attribute absent" and `FillColor="Swatch/None"`. Distinct from the
+/// "palette lookup miss" case — when an id is present but unresolved
+/// the renderer still falls back to the gray preview swatch.
+fn frame_fill_is_transparent(id: Option<&str>) -> bool {
+    match id {
+        None => true,
+        Some(s) => is_none_swatch_id(s),
+    }
+}
+
 /// Map an IDML `FontStyle` attribute string to a numeric wght axis
 /// value (CSS / fvar convention: 100=Thin, 400=Regular, 700=Bold,
 /// 900=Black). Unknown values fall through to 400. Italic / Bold
@@ -2974,12 +2992,14 @@ fn emit_text_frame_into(
     {
         emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list);
     }
-    let fill = frame
-        .fill_color
-        .as_deref()
-        .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
-        .unwrap_or(fallback);
-    emit_rect_transformed(r, outer, fill, &mut page.list);
+    if !frame_fill_is_transparent(frame.fill_color.as_deref()) {
+        let fill = frame
+            .fill_color
+            .as_deref()
+            .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
+            .unwrap_or(fallback);
+        emit_rect_transformed(r, outer, fill, &mut page.list);
+    }
     if let Some(stroke) = frame
         .stroke_color
         .as_deref()
@@ -3014,20 +3034,22 @@ fn emit_oval_into(
     {
         emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list);
     }
-    let fill = oval
-        .fill_color
-        .as_deref()
-        .and_then(|id| {
-            color_id_to_paint_with_list_dir(
-                id,
-                palette,
-                cmyk_xform,
-                &mut page.list,
-                oval.gradient_fill_angle,
-            )
-        })
-        .unwrap_or(fallback);
-    emit_ellipse_transformed(r, outer, fill, &mut page.list);
+    if !frame_fill_is_transparent(oval.fill_color.as_deref()) {
+        let fill = oval
+            .fill_color
+            .as_deref()
+            .and_then(|id| {
+                color_id_to_paint_with_list_dir(
+                    id,
+                    palette,
+                    cmyk_xform,
+                    &mut page.list,
+                    oval.gradient_fill_angle,
+                )
+            })
+            .unwrap_or(fallback);
+        emit_ellipse_transformed(r, outer, fill, &mut page.list);
+    }
     if let Some(stroke) = oval
         .stroke_color
         .as_deref()
@@ -3099,6 +3121,7 @@ fn emit_rectangle_into(
     {
         emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list);
     }
+    let fill_transparent = frame_fill_is_transparent(rect.fill_color.as_deref());
     let fill = rect
         .fill_color
         .as_deref()
@@ -3135,19 +3158,21 @@ fn emit_rectangle_into(
             .unwrap_or_else(|| format!("{:?}", r).into_bytes());
         let key = fnv_1a_u64(&[key_bytes.as_slice(), &radius.to_bits().to_le_bytes()].concat());
         let (path_id, _) = page.list.paths.intern(key, path);
-        if matches!(blend_mode, idml_compose::BlendMode::Normal) {
-            page.list.commands.push(DisplayCommand::FillPath {
-                path_id,
-                paint: fill,
-                transform: outer,
-            });
-        } else {
-            page.list.commands.push(DisplayCommand::FillPathBlend {
-                path_id,
-                paint: fill,
-                transform: outer,
-                blend_mode,
-            });
+        if !fill_transparent {
+            if matches!(blend_mode, idml_compose::BlendMode::Normal) {
+                page.list.commands.push(DisplayCommand::FillPath {
+                    path_id,
+                    paint: fill,
+                    transform: outer,
+                });
+            } else {
+                page.list.commands.push(DisplayCommand::FillPathBlend {
+                    path_id,
+                    paint: fill,
+                    transform: outer,
+                    blend_mode,
+                });
+            }
         }
         if let (Some(stroke), true) = (stroke_paint, stroke_width > 0.0) {
             // Inside/Outside alignment shifts the stroke path inward
@@ -3181,7 +3206,9 @@ fn emit_rectangle_into(
         }
         return;
     }
-    idml_compose::emit_rect_transformed_blend(r, outer, fill, blend_mode, &mut page.list);
+    if !fill_transparent {
+        idml_compose::emit_rect_transformed_blend(r, outer, fill, blend_mode, &mut page.list);
+    }
     if let (Some(stroke), true) = (stroke_paint, stroke_width > 0.0) {
         emit_stroke_rect_transformed(
             inset_rect(r, stroke_offset),
@@ -3555,6 +3582,14 @@ fn convert_setting_to_shadow(
 ) -> Option<DropShadow> {
     let opacity = (setting.opacity_pct / 100.0).clamp(0.0, 1.0);
     if opacity == 0.0 {
+        return None;
+    }
+    // A `<DropShadowSetting Mode="Drop"/>` with every offset/size
+    // attribute absent serialises as zeros. InDesign treats that as
+    // "no visible shadow" — there's nothing to offset and no blur,
+    // so the stamp would just be a solid black rect at 75% opacity
+    // directly behind the frame. Skip it.
+    if setting.x_offset == 0.0 && setting.y_offset == 0.0 && setting.size == 0.0 {
         return None;
     }
     let color = setting

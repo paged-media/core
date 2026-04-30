@@ -545,6 +545,12 @@ struct CurrentFrame {
     /// child `<TextWrapOffset>` knows to write back to the current
     /// shape.
     in_text_wrap: bool,
+    /// Counter for nested `<StrokeTransparencySetting>` /
+    /// `<ContentTransparencySetting>` containers. When > 0, child
+    /// `<DropShadowSetting>` blocks describe stroke-only or
+    /// content-only shadows that shouldn't paint a frame-fill
+    /// shadow. Incremented on Start, decremented on End.
+    non_fill_transparency_depth: u32,
 }
 
 /// Read whatever `text_wrap.offsets` has already been recorded on the
@@ -747,6 +753,7 @@ impl Spread {
                             anchors: Vec::new(),
                             keep_anchors: false,
                             in_text_wrap: false,
+                            non_fill_transparency_depth: 0,
                         });
                     }
                     b"Rectangle" => {
@@ -792,6 +799,7 @@ impl Spread {
                             anchors: Vec::new(),
                             keep_anchors: false,
                             in_text_wrap: false,
+                            non_fill_transparency_depth: 0,
                         });
                     }
                     b"Oval" => {
@@ -822,17 +830,33 @@ impl Spread {
                             anchors: Vec::new(),
                             keep_anchors: false,
                             in_text_wrap: false,
+                            non_fill_transparency_depth: 0,
                         });
+                    }
+                    b"StrokeTransparencySetting" | b"ContentTransparencySetting" => {
+                        // Drop shadows under these wrappers describe
+                        // stroke- or content-only shadows that don't
+                        // map onto our single-shadow-per-frame model.
+                        // Track the depth so the DropShadowSetting
+                        // arm can skip them.
+                        if let Some(cf) = current_frame.as_mut() {
+                            cf.non_fill_transparency_depth += 1;
+                        }
                     }
                     b"DropShadowSetting" => {
                         if let (Some(cf), Some(setting)) =
                             (current_frame.as_ref(), parse_drop_shadow(&e))
                         {
-                            // Only "Drop"/"Default" mode results in a
-                            // visible shadow. "None" means the shadow
-                            // is disabled even though the setting is
-                            // serialised.
-                            if setting.mode != "None" {
+                            // Skip stroke- / content-only drop shadows;
+                            // those don't paint a fill-shaped backdrop
+                            // and otherwise leak as opaque rectangles
+                            // when the frame's fill is transparent.
+                            if cf.non_fill_transparency_depth == 0
+                                // Only "Drop"/"Default" mode results in a
+                                // visible shadow. "None" means the shadow
+                                // is disabled even though the setting is
+                                // serialised.
+                                && setting.mode != "None" {
                                 match cf.kind {
                                     CurrentFrameKind::Text(i) => {
                                         out.text_frames[i].drop_shadow = Some(setting);
@@ -1086,6 +1110,7 @@ impl Spread {
                             anchors: Vec::new(),
                             keep_anchors: false,
                             in_text_wrap: false,
+                            non_fill_transparency_depth: 0,
                         });
                     }
                     b"Polygon" => {
@@ -1119,6 +1144,7 @@ impl Spread {
                             // FillPath instead of a bbox FillRect.
                             keep_anchors: true,
                             in_text_wrap: false,
+                            non_fill_transparency_depth: 0,
                         });
                     }
                     _ => {}
@@ -1163,6 +1189,13 @@ impl Spread {
                     b"TextWrapPreference" => {
                         if let Some(cf) = current_frame.as_mut() {
                             cf.in_text_wrap = false;
+                        }
+                    }
+                    b"StrokeTransparencySetting" | b"ContentTransparencySetting" => {
+                        if let Some(cf) = current_frame.as_mut() {
+                            if cf.non_fill_transparency_depth > 0 {
+                                cf.non_fill_transparency_depth -= 1;
+                            }
                         }
                     }
                     _ => {}

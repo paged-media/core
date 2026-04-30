@@ -108,13 +108,16 @@ fn seed_hello_builds_multi_page_display_list() {
     for page in &built.pages {
         assert_eq!(page.width_pt, 612.0);
         assert_eq!(page.height_pt, 792.0);
-        // Master items (band + footer rule) + page-level items (one
-        // rectangle + one text-frame fill) = 4 FillPath commands per
-        // page. No strokes anywhere (StrokeWeight=0 throughout).
+        // Master items (band + footer rule) + page-level rect = 3
+        // FillPath commands per page. The body TextFrame carries
+        // `FillColor="Swatch/None"`, which the renderer treats as
+        // transparent and emits no fill rect for. No strokes anywhere
+        // (StrokeWeight=0 throughout).
         assert_eq!(
             page.list.commands.len(),
-            4,
-            "expected 2 master items + 2 page items per page",
+            3,
+            "expected 2 master items + 1 page rect per page \
+             (transparent text frame contributes no fill)",
         );
     }
     assert_eq!(built.stats.spreads, 2);
