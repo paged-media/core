@@ -93,6 +93,151 @@ pub fn shape_run(face: &Face, text: &str, point_size: f32) -> ShapedRun {
     }
 }
 
+/// Which margin a glyph sits against. The optical-margin trim table
+/// is asymmetric — a comma at the right edge hangs *outward* (positive
+/// shift past the column edge) so the visual margin reads straight,
+/// while at the left edge it hangs *inward* the same distance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarginSide {
+    Left,
+    Right,
+}
+
+/// Optical-margin trim factor for a single codepoint, expressed as a
+/// fraction of the run's point size. Returns `0.0` for glyphs that
+/// shouldn't hang (the common case).
+///
+/// IDML's `<StoryPreference OpticalMarginAlignment="true"
+/// OpticalMarginSize="12">` enables hanging punctuation: at a
+/// paragraph's left and right margins, certain glyphs (commas,
+/// periods, dashes, hyphens, quotes) shift slightly outward so the
+/// optical edge of the column reads straight to the eye.
+///
+/// This table is a coarse approximation — Adobe's published values
+/// are font-specific (per-glyph metrics tables in the font), but a
+/// font-independent table covers ~90% of the visual win for the
+/// typefaces we exercise. The trim factors below match published
+/// rules of thumb (Bringhurst, *Elements of Typographic Style*; Adobe
+/// optical-margin examples).
+///
+/// `point_size` here is the run's pt size — the result is *not* in
+/// 1/64 pt, callers scale appropriately.
+pub fn optical_margin_offset(codepoint: char, side: MarginSide, point_size: f32) -> f32 {
+    let factor = trim_factor(codepoint, side);
+    factor * point_size
+}
+
+/// Lookup of trim factors. Public so callers building their own
+/// margin-trim passes can consult the table without going through
+/// the per-call multiplication.
+fn trim_factor(c: char, side: MarginSide) -> f32 {
+    // The asymmetry: opening punctuation hangs more at the left,
+    // closing punctuation more at the right, but for the common
+    // ASCII set the two sides agree on most glyphs. Where Adobe's
+    // documentation differs we keep the same value either side and
+    // let the layer above tune.
+    match c {
+        // Period / comma — hang ~half their point size.
+        '.' | ',' => 0.5,
+        // En / em dash and hyphen — modest hang.
+        '-' | '\u{2013}' | '\u{2014}' => 0.3,
+        // Hyphen-minus visual variants.
+        '\u{2010}' | '\u{2011}' => 0.3,
+        // ASCII straight quotes.
+        '"' | '\'' => 0.5,
+        // Curly quotes — left/right pairs hang on their natural side
+        // but we apply the same factor either way; the layer above
+        // never asks for a left-side optical trim of a closing quote.
+        '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}' => 0.5,
+        // Guillemets (French quotes).
+        '\u{00AB}' | '\u{00BB}' => 0.4,
+        // Colon / semicolon — small hang.
+        ':' | ';' => 0.2,
+        // Bullet / middot — small hang.
+        '\u{2022}' | '\u{00B7}' => 0.2,
+        // Inter-word space at the right margin only — never on the
+        // left (a leading space is a paragraph-indent, not optical
+        // margin). This handles the trailing-space case where the
+        // shaped line happens to end with a space glyph.
+        ' ' if side == MarginSide::Right => 0.5,
+        _ => 0.0,
+    }
+}
+
+/// Adjust the leftmost / rightmost glyphs in `glyphs` for optical
+/// margin alignment. The leftmost glyph's `x_offset` shifts
+/// *negative* (hangs outward past the column's left edge); the
+/// rightmost glyph's `x_advance` shrinks (so the next glyph would
+/// sit further right, but for the rightmost glyph the result is the
+/// line *natural width* shrinks, letting the alignment pass push the
+/// rest of the line further out).
+///
+/// `point_size` is the shaping point size. `optical_margin_size_pt`
+/// is the IDML `OpticalMarginSize` attribute (typically 12pt) — when
+/// non-zero it scales the trim. We treat any non-zero value as
+/// "trim at the table's natural strength scaled by min(point_size,
+/// optical_margin_size_pt) / point_size". This matches Adobe's
+/// behaviour where the OpticalMarginSize bounds how far smaller-than-
+/// margin-size glyphs hang.
+///
+/// Caller responsibility: the source codepoint of a glyph isn't
+/// stored in `ShapedRun` (only the cluster). The caller passes the
+/// first / last codepoint via `leftmost_char` / `rightmost_char`.
+/// This keeps shape.rs from needing the source string.
+pub fn apply_optical_margin(
+    run: &mut ShapedRun,
+    leftmost_char: Option<char>,
+    rightmost_char: Option<char>,
+    point_size: f32,
+    optical_margin_size_pt: f32,
+) {
+    if run.glyphs.is_empty() {
+        return;
+    }
+    // OpticalMarginSize bounds the hang for glyphs smaller than the
+    // configured size: at 12pt margin and 6pt glyphs, the hang is
+    // half what the table says. At point_size >= margin_size, full
+    // hang. At margin_size <= 0, the feature is off.
+    if optical_margin_size_pt <= 0.0 {
+        return;
+    }
+    let scale = if point_size >= optical_margin_size_pt {
+        1.0
+    } else {
+        point_size / optical_margin_size_pt
+    };
+    if let Some(c) = leftmost_char {
+        let off_pt = optical_margin_offset(c, MarginSide::Left, point_size) * scale;
+        if off_pt != 0.0 {
+            let off_64 = (off_pt * ADVANCE_PRECISION).round() as i32;
+            // Hang outward: shift the glyph left by `off_64`. We
+            // apply via `x_offset` so the run's `total_advance`
+            // (sum of advances) is unchanged — the alignment pass
+            // still sees the same natural width.
+            if let Some(g) = run.glyphs.first_mut() {
+                g.x_offset -= off_64;
+            }
+        }
+    }
+    if let Some(c) = rightmost_char {
+        let off_pt = optical_margin_offset(c, MarginSide::Right, point_size) * scale;
+        if off_pt != 0.0 {
+            let off_64 = (off_pt * ADVANCE_PRECISION).round() as i32;
+            // Right-side hang: shrink the rightmost glyph's
+            // *advance* so the line's natural width drops by
+            // `off_64`. The glyph itself paints at the same
+            // position — we only steal trailing whitespace from
+            // the column. `total_advance` updates in lockstep so
+            // alignment / justification sees the trimmed width.
+            if let Some(g) = run.glyphs.last_mut() {
+                let trim = off_64.min(g.x_advance);
+                g.x_advance -= trim;
+                run.total_advance -= trim;
+            }
+        }
+    }
+}
+
 /// Apply InDesign-style letter-spacing (Tracking) to an already-shaped
 /// run. Tracking is in 1/1000 em units (the IDML convention) — at
 /// `point_size` pt and 1/64 pt advance precision, every glyph's
@@ -166,5 +311,80 @@ mod tests {
         apply_tracking(&mut r, -50.0, 12.0);
         assert!(r.glyphs[0].x_advance < 200);
         assert_eq!(r.total_advance, 2 * r.glyphs[0].x_advance);
+    }
+
+    #[test]
+    fn optical_margin_table_known_glyphs() {
+        // Period / comma at the right margin hang half their pt size.
+        let off_period = optical_margin_offset('.', MarginSide::Right, 12.0);
+        assert!((off_period - 6.0).abs() < 1e-6, "{}", off_period);
+        let off_comma = optical_margin_offset(',', MarginSide::Right, 12.0);
+        assert!((off_comma - 6.0).abs() < 1e-6, "{}", off_comma);
+        // Hyphen / dashes at 0.3 of pt size.
+        let off_hyphen = optical_margin_offset('-', MarginSide::Right, 10.0);
+        assert!((off_hyphen - 3.0).abs() < 1e-6, "{}", off_hyphen);
+        let off_endash = optical_margin_offset('\u{2013}', MarginSide::Right, 10.0);
+        assert!((off_endash - 3.0).abs() < 1e-6, "{}", off_endash);
+        // Quote 0.5.
+        let off_quote = optical_margin_offset('"', MarginSide::Left, 10.0);
+        assert!((off_quote - 5.0).abs() < 1e-6, "{}", off_quote);
+        // Letter — no hang.
+        let off_a = optical_margin_offset('a', MarginSide::Right, 12.0);
+        assert_eq!(off_a, 0.0);
+        // Space hangs only on the right margin (trailing whitespace).
+        assert_eq!(optical_margin_offset(' ', MarginSide::Left, 12.0), 0.0);
+        assert!((optical_margin_offset(' ', MarginSide::Right, 12.0) - 6.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn apply_optical_margin_disabled_when_size_zero() {
+        let mut r = run(&[100, 80, 120]);
+        let original_total = r.total_advance;
+        let original_first_offset = r.glyphs[0].x_offset;
+        apply_optical_margin(&mut r, Some('"'), Some('.'), 12.0, 0.0);
+        assert_eq!(r.total_advance, original_total);
+        assert_eq!(r.glyphs[0].x_offset, original_first_offset);
+    }
+
+    #[test]
+    fn apply_optical_margin_hangs_left_glyph_outward() {
+        // Three glyphs, leftmost is a quote. At 12pt with 12pt
+        // margin, the trim is 0.5 * 12 = 6.0 pt = 384 in 1/64pt.
+        let mut r = run(&[100, 80, 120]);
+        apply_optical_margin(&mut r, Some('"'), None, 12.0, 12.0);
+        assert_eq!(r.glyphs[0].x_offset, -384);
+        // Total advance unchanged (we only moved x_offset).
+        assert_eq!(r.total_advance, 300);
+    }
+
+    #[test]
+    fn apply_optical_margin_trims_right_glyph_advance() {
+        // Last glyph is a period. At 12pt with 12pt margin,
+        // trim = 0.5 * 12 = 6.0 pt = 384 in 1/64pt. But the
+        // glyph's advance is only 120, so we cap at 120.
+        let mut r = run(&[100, 80, 120]);
+        apply_optical_margin(&mut r, None, Some('.'), 12.0, 12.0);
+        assert_eq!(r.glyphs[2].x_advance, 0);
+        assert_eq!(r.total_advance, 100 + 80);
+    }
+
+    #[test]
+    fn apply_optical_margin_scales_below_margin_size() {
+        // Glyph at 6pt with 12pt margin → half trim.
+        let mut r = run(&[100, 80, 1000]);
+        apply_optical_margin(&mut r, None, Some('.'), 6.0, 12.0);
+        // 0.5 * 6.0 * (6.0/12.0) = 1.5 pt = 96 in 1/64pt.
+        assert_eq!(r.glyphs[2].x_advance, 1000 - 96);
+        assert_eq!(r.total_advance, 100 + 80 + (1000 - 96));
+    }
+
+    #[test]
+    fn apply_optical_margin_noop_for_letters() {
+        let mut r = run(&[100, 80, 120]);
+        let total = r.total_advance;
+        apply_optical_margin(&mut r, Some('a'), Some('z'), 12.0, 12.0);
+        assert_eq!(r.total_advance, total);
+        assert_eq!(r.glyphs[0].x_offset, 0);
+        assert_eq!(r.glyphs[2].x_advance, 120);
     }
 }
