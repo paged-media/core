@@ -56,6 +56,72 @@ pub struct Spread {
     /// Group. Exposed so callers can flag lossy parses without reading
     /// logs.
     pub skipped_nested_frames: usize,
+    /// `<Group>` records, one per group element seen. Each entry
+    /// names the page items it wraps (TextFrame / Rectangle / Oval /
+    /// GraphicLine / Polygon / sub-groups) and the group-level
+    /// transparency settings (`<BlendingSetting>` / `<DropShadowSetting>`)
+    /// the IDML attached. Real-world IDMLs use a Group around several
+    /// shapes when the user wants a single Opacity / BlendMode / drop
+    /// shadow to apply uniformly to the cluster — the renderer
+    /// brackets the frame range with a transparency group and reuses
+    /// the per-frame paint pipeline inside.
+    ///
+    /// Outermost groups appear first; nested groups come later in the
+    /// vec. Child shape indices are recorded in the order the parser
+    /// encountered them.
+    pub groups: Vec<Group>,
+}
+
+/// One `<Group>` page-item record. The renderer walks `members` to
+/// know which frames sit inside this group, and `transparency` to
+/// decide whether to bracket the range with a transparency-group
+/// composite.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Group {
+    pub self_id: Option<String>,
+    /// Page items wrapped by this group, in document order.
+    pub members: Vec<FrameRef>,
+    pub transparency: GroupTransparency,
+    /// `ItemTransform` attribute on the `<Group>` element. The
+    /// per-frame `item_transform` already composes this in (see
+    /// [`effective_item_transform`]); this field exists so renderers
+    /// that need the un-composed group transform on its own can
+    /// recover it without re-walking the spread.
+    pub item_transform: Option<[f32; 6]>,
+}
+
+/// Reference to one of a `Spread`'s page-item vecs. Carries the
+/// integer index back into the matching `Vec<...>` so the renderer
+/// can look up the frame's data without a name search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum FrameRef {
+    TextFrame(usize),
+    Rectangle(usize),
+    Oval(usize),
+    GraphicLine(usize),
+    Polygon(usize),
+    /// Index into `Spread::groups` — sub-groups are first-class
+    /// members so the renderer can bracket each one independently.
+    Group(usize),
+}
+
+/// Group-level transparency block parsed from `<TransparencySetting>` /
+/// `<BlendingSetting>` / `<DropShadowSetting>` attached directly to a
+/// `<Group>` element. Mirrors the per-frame fields of [`Rectangle`] /
+/// [`TextFrame`] but applies to every member of the group at once.
+/// Empty (`Default::default()`) when the group carried no
+/// transparency block.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct GroupTransparency {
+    /// `<BlendingSetting BlendMode="…" />`. Same value space as
+    /// `Rectangle::blend_mode` — `Normal | Multiply | Screen | …`.
+    pub blend_mode: Option<String>,
+    /// `<BlendingSetting Opacity="…" />`. Range `0.0..=100.0`.
+    pub opacity: Option<f32>,
+    /// `<DropShadowSetting>` attached to the group. The renderer
+    /// emits the shadow against the group's flattened raster (so
+    /// child fills don't double-stamp under it).
+    pub drop_shadow: Option<DropShadowSetting>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -622,6 +688,23 @@ enum CurrentFrameKind {
     Polygon(usize),
 }
 
+/// Per-`<Group>` parser state. Accumulates the group's child page
+/// items and the transparency block as each fires; finalised into a
+/// `Group` record on the closing `</Group>` tag.
+struct GroupBuilder {
+    self_id: Option<String>,
+    item_transform: Option<[f32; 6]>,
+    members: Vec<FrameRef>,
+    transparency: GroupTransparency,
+    /// Depth counter for nested `<StrokeTransparencySetting>` /
+    /// `<ContentTransparencySetting>` containers seen *while no inner
+    /// page-item is open*. Routes child `<DropShadowSetting>` blocks
+    /// to the right place: stroke-only / content-only shadows attached
+    /// to a Group don't map onto our model and are skipped.
+    stroke_transparency_depth: u32,
+    content_transparency_depth: u32,
+}
+
 /// Per-frame parser state held while a shape element is open.
 /// Tracks whether the bounds came from a `GeometricBounds` attribute
 /// (the legacy synthetic-IDML shape) or need to be derived from the
@@ -812,8 +895,42 @@ impl Spread {
         // effective spread-space transform is the composition of
         // those group transforms with its own ItemTransform.
         let mut group_transforms: Vec<Option<[f32; 6]>> = Vec::new();
+        // Stack of `<Group>` builders parallel to `group_transforms`.
+        // Each entry accumulates the group's members + transparency
+        // block until the closing tag fires, at which point the
+        // builder is finalised into `out.groups`. Sub-groups register
+        // themselves with the outer builder once they close, so the
+        // outer group's `members` can carry a `FrameRef::Group(idx)`.
+        let mut group_builders: Vec<GroupBuilder> = Vec::new();
         let mut current_frame: Option<CurrentFrame> = None;
         let mut buf = Vec::new();
+
+        // Register a freshly-opened frame with the innermost
+        // `<Group>` builder, if one is active. The builder records
+        // a `FrameRef` keyed by the frame's index in its backing
+        // vec — that index is stable for the rest of the parse
+        // (frames never get reordered after creation).
+        //
+        // Registration happens at open time so self-closing
+        // `<Rectangle/>` etc. (which fire as `Event::Empty` and
+        // never visit the `End` arm) still get recorded. The
+        // close handler below unregisters frames that ultimately
+        // got dropped for missing bounds.
+        fn register_with_group(group_builders: &mut [GroupBuilder], frame_ref: FrameRef) {
+            if let Some(b) = group_builders.last_mut() {
+                b.members.push(frame_ref);
+            }
+        }
+        fn unregister_last_in_group(
+            group_builders: &mut [GroupBuilder],
+            expected: FrameRef,
+        ) {
+            if let Some(b) = group_builders.last_mut() {
+                if b.members.last() == Some(&expected) {
+                    b.members.pop();
+                }
+            }
+        }
 
         // Pop the just-closed frame from its backing vec when no
         // bounds were ever supplied (neither GeometricBounds attr
@@ -868,6 +985,14 @@ impl Spread {
                     b"Group" => {
                         let t = attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s));
                         group_transforms.push(t);
+                        group_builders.push(GroupBuilder {
+                            self_id: attr(&e, b"Self"),
+                            item_transform: t,
+                            members: Vec::new(),
+                            transparency: GroupTransparency::default(),
+                            stroke_transparency_depth: 0,
+                            content_transparency_depth: 0,
+                        });
                     }
                     b"Page" => {
                         if let Some(bounds) =
@@ -916,8 +1041,13 @@ impl Spread {
                             opacity: None,
                             blend_mode: None,
                         });
+                        let idx = out.text_frames.len() - 1;
+                        register_with_group(
+                            &mut group_builders,
+                            FrameRef::TextFrame(idx),
+                        );
                         current_frame = Some(CurrentFrame {
-                            kind: CurrentFrameKind::Text(out.text_frames.len() - 1),
+                            kind: CurrentFrameKind::Text(idx),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
                             keep_anchors: false,
@@ -964,8 +1094,13 @@ impl Spread {
                             gradient_fill_angle: common.gradient_fill_angle,
                             text_paths: Vec::new(),
                         });
+                        let idx = out.rectangles.len() - 1;
+                        register_with_group(
+                            &mut group_builders,
+                            FrameRef::Rectangle(idx),
+                        );
                         current_frame = Some(CurrentFrame {
-                            kind: CurrentFrameKind::Rect(out.rectangles.len() - 1),
+                            kind: CurrentFrameKind::Rect(idx),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
                             keep_anchors: false,
@@ -996,8 +1131,10 @@ impl Spread {
                             opacity: None,
                             blend_mode: None,
                         });
+                        let idx = out.ovals.len() - 1;
+                        register_with_group(&mut group_builders, FrameRef::Oval(idx));
                         current_frame = Some(CurrentFrame {
-                            kind: CurrentFrameKind::Oval(out.ovals.len() - 1),
+                            kind: CurrentFrameKind::Oval(idx),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
                             keep_anchors: false,
@@ -1013,6 +1150,8 @@ impl Spread {
                         // on stroke visibility.
                         if let Some(cf) = current_frame.as_mut() {
                             cf.stroke_transparency_depth += 1;
+                        } else if let Some(b) = group_builders.last_mut() {
+                            b.stroke_transparency_depth += 1;
                         }
                     }
                     b"ContentTransparencySetting" => {
@@ -1021,57 +1160,74 @@ impl Spread {
                         // single-shadow-per-frame model; skipped.
                         if let Some(cf) = current_frame.as_mut() {
                             cf.content_transparency_depth += 1;
+                        } else if let Some(b) = group_builders.last_mut() {
+                            b.content_transparency_depth += 1;
                         }
                     }
                     b"DropShadowSetting" => {
-                        if let (Some(cf), Some(setting)) =
-                            (current_frame.as_ref(), parse_drop_shadow(&e))
-                        {
+                        if let Some(setting) = parse_drop_shadow(&e) {
                             // Only "Drop"/"Default" mode results in a
                             // visible shadow. "None" means the shadow
                             // is disabled even though the setting is
                             // serialised.
                             if setting.mode != "None" {
-                                if cf.content_transparency_depth > 0 {
-                                    // Content-only shadow — skip.
-                                } else if cf.stroke_transparency_depth > 0 {
-                                    // Stroke-only shadow — captured for
-                                    // conditional emission by the
-                                    // renderer.
-                                    match cf.kind {
-                                        CurrentFrameKind::Text(i) => {
-                                            out.text_frames[i].stroke_drop_shadow = Some(setting);
+                                if let Some(cf) = current_frame.as_ref() {
+                                    if cf.content_transparency_depth > 0 {
+                                        // Content-only shadow — skip.
+                                    } else if cf.stroke_transparency_depth > 0 {
+                                        // Stroke-only shadow — captured for
+                                        // conditional emission by the
+                                        // renderer.
+                                        match cf.kind {
+                                            CurrentFrameKind::Text(i) => {
+                                                out.text_frames[i].stroke_drop_shadow =
+                                                    Some(setting);
+                                            }
+                                            CurrentFrameKind::Rect(i) => {
+                                                out.rectangles[i].stroke_drop_shadow =
+                                                    Some(setting);
+                                            }
+                                            CurrentFrameKind::Oval(i) => {
+                                                out.ovals[i].stroke_drop_shadow = Some(setting);
+                                            }
+                                            CurrentFrameKind::Line(_)
+                                            | CurrentFrameKind::Polygon(_) => {
+                                                // GraphicLine + Polygon have
+                                                // no shadow fields today;
+                                                // ignore.
+                                            }
                                         }
-                                        CurrentFrameKind::Rect(i) => {
-                                            out.rectangles[i].stroke_drop_shadow = Some(setting);
-                                        }
-                                        CurrentFrameKind::Oval(i) => {
-                                            out.ovals[i].stroke_drop_shadow = Some(setting);
-                                        }
-                                        CurrentFrameKind::Line(_)
-                                        | CurrentFrameKind::Polygon(_) => {
-                                            // GraphicLine + Polygon have
-                                            // no shadow fields today;
-                                            // ignore.
+                                    } else {
+                                        match cf.kind {
+                                            CurrentFrameKind::Text(i) => {
+                                                out.text_frames[i].drop_shadow = Some(setting);
+                                            }
+                                            CurrentFrameKind::Rect(i) => {
+                                                out.rectangles[i].drop_shadow = Some(setting);
+                                            }
+                                            CurrentFrameKind::Oval(i) => {
+                                                out.ovals[i].drop_shadow = Some(setting);
+                                            }
+                                            CurrentFrameKind::Line(_)
+                                            | CurrentFrameKind::Polygon(_) => {
+                                                // GraphicLine + Polygon have
+                                                // no drop_shadow field today;
+                                                // ignore.
+                                            }
                                         }
                                     }
-                                } else {
-                                    match cf.kind {
-                                        CurrentFrameKind::Text(i) => {
-                                            out.text_frames[i].drop_shadow = Some(setting);
-                                        }
-                                        CurrentFrameKind::Rect(i) => {
-                                            out.rectangles[i].drop_shadow = Some(setting);
-                                        }
-                                        CurrentFrameKind::Oval(i) => {
-                                            out.ovals[i].drop_shadow = Some(setting);
-                                        }
-                                        CurrentFrameKind::Line(_)
-                                        | CurrentFrameKind::Polygon(_) => {
-                                            // GraphicLine + Polygon have
-                                            // no drop_shadow field today;
-                                            // ignore.
-                                        }
+                                } else if let Some(b) = group_builders.last_mut() {
+                                    // No frame is open but a `<Group>`
+                                    // is — route the shadow to the
+                                    // innermost group's transparency
+                                    // block. Stroke-/content-only
+                                    // wrappers around a group don't
+                                    // map onto our model and are
+                                    // skipped.
+                                    if b.content_transparency_depth == 0
+                                        && b.stroke_transparency_depth == 0
+                                    {
+                                        b.transparency.drop_shadow = Some(setting);
                                     }
                                 }
                             }
@@ -1132,9 +1288,9 @@ impl Spread {
                         // shares this name. Opacity is 0..=100;
                         // BlendMode is a string (Normal / Multiply /
                         // Screen / etc).
+                        let opacity = attr(&e, b"Opacity").and_then(|s| s.parse::<f32>().ok());
+                        let mode = attr(&e, b"BlendMode");
                         if let Some(cf) = current_frame.as_ref() {
-                            let opacity = attr(&e, b"Opacity").and_then(|s| s.parse::<f32>().ok());
-                            let mode = attr(&e, b"BlendMode");
                             match cf.kind {
                                 CurrentFrameKind::Rect(i) => {
                                     if opacity.is_some() {
@@ -1173,6 +1329,19 @@ impl Spread {
                                     // opacity / blend_mode;
                                     // ignore until they do.
                                 }
+                            }
+                        } else if let Some(b) = group_builders.last_mut() {
+                            // No frame is open but a `<Group>` is —
+                            // route the BlendingSetting to the
+                            // innermost group's transparency block so
+                            // the renderer can bracket the group's
+                            // member range with a single opacity /
+                            // blend mode.
+                            if opacity.is_some() {
+                                b.transparency.opacity = opacity;
+                            }
+                            if mode.is_some() {
+                                b.transparency.blend_mode = mode;
                             }
                         }
                     }
@@ -1397,8 +1566,13 @@ impl Spread {
                             anchors: Vec::new(),
                             text_paths: Vec::new(),
                         });
+                        let idx = out.graphic_lines.len() - 1;
+                        register_with_group(
+                            &mut group_builders,
+                            FrameRef::GraphicLine(idx),
+                        );
                         current_frame = Some(CurrentFrame {
-                            kind: CurrentFrameKind::Line(out.graphic_lines.len() - 1),
+                            kind: CurrentFrameKind::Line(idx),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
                             // Always retain Bezier path anchors for
@@ -1434,8 +1608,10 @@ impl Spread {
                             image_link: None,
                             image_item_transform: None,
                         });
+                        let idx = out.polygons.len() - 1;
+                        register_with_group(&mut group_builders, FrameRef::Polygon(idx));
                         current_frame = Some(CurrentFrame {
-                            kind: CurrentFrameKind::Polygon(out.polygons.len() - 1),
+                            kind: CurrentFrameKind::Polygon(idx),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
                             // Always retain Bezier path anchors for
@@ -1452,6 +1628,23 @@ impl Spread {
                 Event::End(e) => match e.name().as_ref() {
                     b"Group" if !group_transforms.is_empty() => {
                         group_transforms.pop();
+                        if let Some(builder) = group_builders.pop() {
+                            let group = Group {
+                                self_id: builder.self_id,
+                                item_transform: builder.item_transform,
+                                members: builder.members,
+                                transparency: builder.transparency,
+                            };
+                            let group_idx = out.groups.len();
+                            out.groups.push(group);
+                            // Register this sub-group with the
+                            // enclosing group, if any, so the
+                            // outer's `members` list captures
+                            // sub-groups in document order.
+                            if let Some(outer) = group_builders.last_mut() {
+                                outer.members.push(FrameRef::Group(group_idx));
+                            }
+                        }
                     }
                     b"TextFrame" | b"Rectangle" | b"Oval" | b"GraphicLine" | b"Polygon" => {
                         // Finalize bounds from accumulated path
@@ -1465,6 +1658,20 @@ impl Spread {
                             if cf.needs_bounds {
                                 if cf.anchors.is_empty() {
                                     drop_pending(&mut out, cf.kind);
+                                    // The frame was registered with
+                                    // the open group at open time;
+                                    // unregister now that it has been
+                                    // discarded so the group's member
+                                    // list never points to a stale
+                                    // frame index.
+                                    let frame_ref = match cf.kind {
+                                        CurrentFrameKind::Text(i) => FrameRef::TextFrame(i),
+                                        CurrentFrameKind::Rect(i) => FrameRef::Rectangle(i),
+                                        CurrentFrameKind::Oval(i) => FrameRef::Oval(i),
+                                        CurrentFrameKind::Line(i) => FrameRef::GraphicLine(i),
+                                        CurrentFrameKind::Polygon(i) => FrameRef::Polygon(i),
+                                    };
+                                    unregister_last_in_group(&mut group_builders, frame_ref);
                                 } else {
                                     set_pending_bounds(
                                         &mut out,
@@ -1506,12 +1713,20 @@ impl Spread {
                             if cf.stroke_transparency_depth > 0 {
                                 cf.stroke_transparency_depth -= 1;
                             }
+                        } else if let Some(b) = group_builders.last_mut() {
+                            if b.stroke_transparency_depth > 0 {
+                                b.stroke_transparency_depth -= 1;
+                            }
                         }
                     }
                     b"ContentTransparencySetting" => {
                         if let Some(cf) = current_frame.as_mut() {
                             if cf.content_transparency_depth > 0 {
                                 cf.content_transparency_depth -= 1;
+                            }
+                        } else if let Some(b) = group_builders.last_mut() {
+                            if b.content_transparency_depth > 0 {
+                                b.content_transparency_depth -= 1;
                             }
                         }
                     }
@@ -2148,6 +2363,120 @@ mod tests {
         assert!(s.polygons[1].image_item_transform.is_none());
         // Rectangles in the same spread keep working.
         assert_eq!(s.rectangles.len(), 0);
+    }
+
+    #[test]
+    fn group_records_members_and_transparency_block() {
+        // A `<Group>` wrapping two rectangles with its own
+        // `<TransparencySetting>` / `<BlendingSetting>` /
+        // `<DropShadowSetting>` block. The group entry should carry
+        // the blend mode + opacity + drop shadow; member FrameRefs
+        // should match the rectangles' indices in document order.
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Group Self="grp1" ItemTransform="1 0 0 1 5 7">
+              <Properties>
+                <TransparencySetting>
+                  <BlendingSetting Opacity="60" BlendMode="Multiply"/>
+                  <DropShadowSetting Mode="Drop" XOffset="2" YOffset="3" Size="5"
+                                     Opacity="80" EffectColor="Color/Black"/>
+                </TransparencySetting>
+              </Properties>
+              <Rectangle Self="r1" GeometricBounds="0 0 50 50"/>
+              <Rectangle Self="r2" GeometricBounds="0 60 50 110"/>
+            </Group>
+            <Rectangle Self="r3" GeometricBounds="100 0 150 50"/>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.rectangles.len(), 3);
+        assert_eq!(s.groups.len(), 1);
+        let g = &s.groups[0];
+        assert_eq!(g.self_id.as_deref(), Some("grp1"));
+        assert_eq!(g.item_transform, Some([1.0, 0.0, 0.0, 1.0, 5.0, 7.0]));
+        assert_eq!(g.transparency.blend_mode.as_deref(), Some("Multiply"));
+        assert_eq!(g.transparency.opacity, Some(60.0));
+        let shadow = g
+            .transparency
+            .drop_shadow
+            .as_ref()
+            .expect("drop shadow on group");
+        assert_eq!(shadow.mode, "Drop");
+        assert_eq!(shadow.x_offset, 2.0);
+        assert_eq!(shadow.opacity_pct, 80.0);
+        // Members are the two grouped rectangles in document order;
+        // r3 sits outside and is NOT a member.
+        assert_eq!(
+            g.members,
+            vec![FrameRef::Rectangle(0), FrameRef::Rectangle(1)]
+        );
+    }
+
+    #[test]
+    fn nested_groups_register_subgroup_members() {
+        // Outer group contains a sub-group + a TextFrame. The
+        // sub-group contains two Polygons. Outer's members should
+        // list TextFrame(0), Group(0). Inner's members should list
+        // both polygons.
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Group Self="outer">
+              <TextFrame Self="t1" ParentStory="u1" GeometricBounds="0 0 10 10"/>
+              <Group Self="inner">
+                <Polygon Self="p1" GeometricBounds="0 0 5 5"/>
+                <Polygon Self="p2" GeometricBounds="0 0 6 6"/>
+              </Group>
+            </Group>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.groups.len(), 2);
+        // Inner group closes first → at index 0.
+        let inner = &s.groups[0];
+        assert_eq!(inner.self_id.as_deref(), Some("inner"));
+        assert_eq!(
+            inner.members,
+            vec![FrameRef::Polygon(0), FrameRef::Polygon(1)]
+        );
+        let outer = &s.groups[1];
+        assert_eq!(outer.self_id.as_deref(), Some("outer"));
+        assert_eq!(
+            outer.members,
+            vec![FrameRef::TextFrame(0), FrameRef::Group(0)]
+        );
+        // Group transparency defaults to all-None when absent.
+        assert!(outer.transparency.blend_mode.is_none());
+        assert!(outer.transparency.opacity.is_none());
+        assert!(outer.transparency.drop_shadow.is_none());
+    }
+
+    #[test]
+    fn group_blending_setting_does_not_leak_into_inner_frame() {
+        // BlendingSetting attached to the Group must update the
+        // group's transparency, not the inner frames' opacity. The
+        // current_frame check in the BlendingSetting arm already
+        // disambiguates; this test pins the contract.
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Group Self="grp">
+              <Properties>
+                <TransparencySetting>
+                  <BlendingSetting Opacity="40" BlendMode="Screen"/>
+                </TransparencySetting>
+              </Properties>
+              <Rectangle Self="r1" GeometricBounds="0 0 50 50"/>
+            </Group>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert!(s.rectangles[0].opacity.is_none());
+        assert!(s.rectangles[0].blend_mode.is_none());
+        assert_eq!(s.groups.len(), 1);
+        assert_eq!(s.groups[0].transparency.opacity, Some(40.0));
+        assert_eq!(s.groups[0].transparency.blend_mode.as_deref(), Some("Screen"));
     }
 
     #[test]
