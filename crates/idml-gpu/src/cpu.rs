@@ -21,8 +21,8 @@ use image::{Rgba, RgbaImage};
 use tiny_skia::{
     BlendMode as TsBlendMode, FillRule, GradientStop as TsGradientStop, LineCap as TsLineCap,
     LineJoin as TsLineJoin, LinearGradient as TsLinearGradient, Paint as TsPaint, PathBuilder,
-    Pixmap, PixmapPaint, Point as TsPoint, Shader, SpreadMode, Stroke as TsStroke,
-    Transform as TsTransform,
+    Pixmap, PixmapPaint, Point as TsPoint, RadialGradient as TsRadialGradient, Shader, SpreadMode,
+    Stroke as TsStroke, Transform as TsTransform,
 };
 
 use crate::{PathRasterizer, RasterOptions};
@@ -378,6 +378,18 @@ fn paint_to_ts(
                 p.set_color(tiny_skia::Color::BLACK);
             }
         }
+        Paint::RadialGradient(id) => {
+            if let Some(grad) = list.radial_gradient(*id) {
+                if let Some(shader) = build_radial_gradient_shader(grad, path_transform, page_to_px)
+                {
+                    p.shader = shader;
+                } else {
+                    p.set_color(tiny_skia::Color::BLACK);
+                }
+            } else {
+                p.set_color(tiny_skia::Color::BLACK);
+            }
+        }
     }
     p
 }
@@ -412,6 +424,51 @@ fn build_linear_gradient_shader(
     // automatically, so an identity here is correct — passing
     // page_to_px would double-scale at non-72-DPI renders.
     TsLinearGradient::new(start, end, stops, SpreadMode::Pad, TsTransform::identity())
+}
+
+fn build_radial_gradient_shader(
+    grad: &idml_compose::RadialGradient,
+    path_transform: &CTransform,
+    page_to_px: TsTransform,
+) -> Option<Shader<'static>> {
+    if grad.stops.len() < 2 {
+        return None;
+    }
+    let [a, b, c, d, tx, ty] = path_transform.0;
+    let to_page =
+        |x: f32, y: f32| -> TsPoint { TsPoint::from_xy(a * x + c * y + tx, b * x + d * y + ty) };
+    let center = to_page(grad.center.0, grad.center.1);
+    // tiny-skia takes one focal point + radius. Compute the page-
+    // space radius by mapping a unit-axis vector and averaging the
+    // two axes — handles non-uniform scale-into-rect with a single
+    // circle, matching how InDesign warps a Radial gradient when
+    // the path's local rect is non-square (it ovals out with it).
+    let rx = (a * grad.radius).hypot(b * grad.radius);
+    let ry = (c * grad.radius).hypot(d * grad.radius);
+    let radius = (rx + ry) * 0.5;
+    if !radius.is_finite() || radius <= 0.0 {
+        return None;
+    }
+
+    let stops: Vec<TsGradientStop> = grad
+        .stops
+        .iter()
+        .map(|s| TsGradientStop::new(s.offset.clamp(0.0, 1.0), linear_color_to_ts(s.color)))
+        .collect();
+
+    let _ = page_to_px;
+    // tiny-skia takes (start_point, start_radius, end_point,
+    // end_radius). Same point + zero start radius models the
+    // common single-circle radial fill (focal == center).
+    TsRadialGradient::new(
+        center,
+        0.0,
+        center,
+        radius,
+        stops,
+        SpreadMode::Pad,
+        TsTransform::identity(),
+    )
 }
 
 /// Linear RGB (0..=1) → sRGB-encoded tiny_skia::Color.

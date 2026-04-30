@@ -427,6 +427,8 @@ mod tests {
                 space_before: None,
                 space_after: None,
                 tab_list: vec![],
+                bullets_list_type: None,
+                bullet_character: None,
                 runs: vec![
                     CharacterRun {
                         character_style: None,

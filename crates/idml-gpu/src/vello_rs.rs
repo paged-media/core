@@ -408,6 +408,34 @@ fn resolve_paint(
             .with_stops(stops.as_slice());
             Some(VelloBrush::Gradient(pg))
         }
+        Paint::RadialGradient(id) => {
+            let g = list.radial_gradient(*id)?;
+            if g.stops.len() < 2 {
+                return None;
+            }
+            let (cx, cy) = transform.apply(g.center.0, g.center.1);
+            // Match cpu.rs: average the mapped per-axis radii so a
+            // non-square unit rect ovals the gradient with the path.
+            let [a, b, c, d, _, _] = transform.0;
+            let rx = (a * g.radius).hypot(b * g.radius);
+            let ry = (c * g.radius).hypot(d * g.radius);
+            let radius = (rx + ry) * 0.5;
+            if !radius.is_finite() || radius <= 0.0 {
+                return None;
+            }
+            let stops: Vec<PenikoColorStop> = g
+                .stops
+                .iter()
+                .map(|s| PenikoColorStop {
+                    offset: s.offset,
+                    color: linear_to_peniko(s.color).into(),
+                })
+                .collect();
+            let pg =
+                PenikoGradient::new_radial(kurbo::Point::new(cx as f64, cy as f64), radius)
+                    .with_stops(stops.as_slice());
+            Some(VelloBrush::Gradient(pg))
+        }
     }
 }
 

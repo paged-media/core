@@ -262,7 +262,9 @@ fn pipeline_options_default_uses_gray_fallback() {
             assert_eq!(c.r, c.g);
             assert_eq!(c.g, c.b);
         }
-        Paint::LinearGradient(_) => panic!("default should be a solid grey, not a gradient"),
+        Paint::LinearGradient(_) | Paint::RadialGradient(_) => {
+            panic!("default should be a solid grey, not a gradient")
+        }
     }
 }
 

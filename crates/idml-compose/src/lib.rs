@@ -14,7 +14,7 @@ pub mod text;
 pub use display_list::{
     BlendMode, Color, DashPattern, DecodedImage, DisplayCommand, DisplayList, DropShadow,
     GlyphCacheKey, GradientId, GradientStop, ImageId, LineCap, LineJoin, LinearGradient, Paint,
-    PathBuffer, PathData, PathId, PathSegment, Rect, Stroke, Transform,
+    PathBuffer, PathData, PathId, PathSegment, RadialGradient, Rect, Stroke, Transform,
 };
 pub use glyph::{GlyphOutliner, TtfOutliner, UnitSquareOutliner};
 pub use primitives::{

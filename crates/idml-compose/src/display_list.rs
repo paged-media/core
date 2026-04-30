@@ -46,9 +46,14 @@ impl Color {
 pub enum Paint {
     Solid(Color),
     LinearGradient(GradientId),
+    /// Radial gradient — `center → center + radius` in unit-rect
+    /// coords. Same id-space as linear gradients but resolved against
+    /// `DisplayList::radial_gradients` instead of `gradients`.
+    RadialGradient(GradientId),
 }
 
-/// Index into `DisplayList::gradients`.
+/// Index into `DisplayList::gradients` *or* `DisplayList::radial_gradients`,
+/// depending on the [`Paint`] variant carrying it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GradientId(pub u32);
 
@@ -68,6 +73,20 @@ pub struct GradientStop {
 pub struct LinearGradient {
     pub start: (f32, f32),
     pub end: (f32, f32),
+    pub stops: Vec<GradientStop>,
+}
+
+/// Radial gradient definition. `center` is in unit-rect coords
+/// (`(0.5, 0.5)` is the centre of the path's local rect); `radius`
+/// is in the same coord space (`0.5` covers half the unit rect).
+/// IDML's `GradientFillStart` + `GradientFillLength` translate to
+/// page-space center + half-length, but the renderer currently
+/// places the radial gradient at the unit-rect centre with full
+/// radius — that matches the common case (Oval-with-radial fills).
+#[derive(Debug, Clone)]
+pub struct RadialGradient {
+    pub center: (f32, f32),
+    pub radius: f32,
     pub stops: Vec<GradientStop>,
 }
 
@@ -463,6 +482,7 @@ pub struct DisplayList {
     pub paths: PathBuffer,
     pub commands: Vec<DisplayCommand>,
     pub gradients: Vec<LinearGradient>,
+    pub radial_gradients: Vec<RadialGradient>,
     pub images: Vec<DecodedImage>,
 }
 
@@ -484,6 +504,17 @@ impl DisplayList {
 
     pub fn linear_gradient(&self, id: GradientId) -> Option<&LinearGradient> {
         self.gradients.get(id.0 as usize)
+    }
+
+    /// Append a radial gradient and return its id.
+    pub fn push_radial_gradient(&mut self, g: RadialGradient) -> GradientId {
+        let id = GradientId(self.radial_gradients.len() as u32);
+        self.radial_gradients.push(g);
+        id
+    }
+
+    pub fn radial_gradient(&self, id: GradientId) -> Option<&RadialGradient> {
+        self.radial_gradients.get(id.0 as usize)
     }
 
     /// Append a decoded image and return its id. Callers are expected

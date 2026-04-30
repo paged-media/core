@@ -3850,6 +3850,21 @@ pub fn color_id_to_paint_with_list_dir(
         if stops.len() < 2 {
             return None;
         }
+        // Radial gradients fill from the unit-rect centre outwards
+        // to its corners — that matches IDML's convention of placing
+        // the radial gradient at the frame's centre with the radius
+        // touching the bounding-rect corners (Pythagorean half-
+        // diagonal of a unit square = √0.5 ≈ 0.7071). For Ovals the
+        // path itself clips the gradient to the ellipse; for
+        // Rectangles the corners get hit too. Both match InDesign.
+        if matches!(grad.kind, idml_parse::GradientKind::Radial) {
+            let id = list.push_radial_gradient(idml_compose::RadialGradient {
+                center: (0.5, 0.5),
+                radius: std::f32::consts::FRAC_1_SQRT_2,
+                stops,
+            });
+            return Some(Paint::RadialGradient(id));
+        }
         // Compute unit-rect endpoints (the renderer's gradient lives
         // in the path's local 0..1 space). Default: top → bottom.
         // GradientFillAngle rotates the line around the rect centre
@@ -4520,9 +4535,9 @@ mod tests {
     fn list_prefix_numbered_increments_across_paragraphs() {
         let mut counter = 0;
         let attrs = attrs(Some("NumberedList"), None, None);
-        assert_eq!(list_prefix(&attrs, &mut counter).as_deref(), Some("1.\t"));
-        assert_eq!(list_prefix(&attrs, &mut counter).as_deref(), Some("2.\t"));
-        assert_eq!(list_prefix(&attrs, &mut counter).as_deref(), Some("3.\t"));
+        assert_eq!(list_prefix(&attrs, &mut counter).as_deref(), Some("1.  "));
+        assert_eq!(list_prefix(&attrs, &mut counter).as_deref(), Some("2.  "));
+        assert_eq!(list_prefix(&attrs, &mut counter).as_deref(), Some("3.  "));
         assert_eq!(counter, 3);
     }
 
@@ -4535,7 +4550,7 @@ mod tests {
         list_prefix(&n, &mut counter); // 2.
         list_prefix(&none, &mut counter); // resets
         assert_eq!(counter, 0);
-        assert_eq!(list_prefix(&n, &mut counter).as_deref(), Some("1.\t"));
+        assert_eq!(list_prefix(&n, &mut counter).as_deref(), Some("1.  "));
     }
 
     #[test]
@@ -4549,13 +4564,17 @@ mod tests {
         );
         assert_eq!(counter, 0);
         let n = attrs(Some("NumberedList"), None, None);
-        assert_eq!(list_prefix(&n, &mut counter).as_deref(), Some("1.\t"));
+        assert_eq!(list_prefix(&n, &mut counter).as_deref(), Some("1.  "));
     }
 
     #[test]
-    fn list_prefix_bullet_none_when_codepoint_missing() {
+    fn list_prefix_bullet_falls_back_to_default_when_codepoint_missing() {
+        // BulletList without an explicit BulletChar still emits the
+        // U+2022 default — matches InDesign's behaviour and lets
+        // real-export IDMLs render visible bullets.
         let mut counter = 0;
-        assert!(list_prefix(&attrs(Some("BulletList"), None, Some(" ")), &mut counter).is_none());
+        let prefix = list_prefix(&attrs(Some("BulletList"), None, Some(" ")), &mut counter);
+        assert_eq!(prefix.as_deref(), Some("\u{2022} "));
     }
 
     #[test]
@@ -4603,8 +4622,8 @@ mod tests {
         let mut counter = 0;
         let mut a = attrs(Some("NumberedList"), None, None);
         a.numbering_format = Some("I, II, III, IV...".to_string());
-        assert_eq!(list_prefix(&a, &mut counter).as_deref(), Some("I.\t"));
-        assert_eq!(list_prefix(&a, &mut counter).as_deref(), Some("II.\t"));
-        assert_eq!(list_prefix(&a, &mut counter).as_deref(), Some("III.\t"));
+        assert_eq!(list_prefix(&a, &mut counter).as_deref(), Some("I.  "));
+        assert_eq!(list_prefix(&a, &mut counter).as_deref(), Some("II.  "));
+        assert_eq!(list_prefix(&a, &mut counter).as_deref(), Some("III.  "));
     }
 }
