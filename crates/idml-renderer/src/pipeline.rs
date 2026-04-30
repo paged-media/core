@@ -12,10 +12,12 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use idml_compose::{
     emit_glyph_slice, emit_glyph_slice_blend, emit_line, emit_paragraph, emit_rect,
-    emit_stroke_rect, emit_stroke_rect_transformed, Color, DisplayList, DropShadow, Paint,
-    PathData, PathSegment, Rect, Stroke, Transform, TtfOutliner,
+    emit_stroke_rect, emit_stroke_rect_transformed, Color, DisplayList, DropShadow, GlyphCacheKey,
+    GlyphOutliner, Paint, PathData, PathSegment, Rect, Stroke, Transform, TtfOutliner,
 };
-use idml_parse::{graphic, Graphic, GraphicLine, Oval, PathAnchor, Polygon, Rectangle, TextFrame};
+use idml_parse::{
+    graphic, Graphic, GraphicLine, Oval, PathAnchor, Polygon, Rectangle, TextFrame, TextPath,
+};
 use idml_scene::Document;
 
 use crate::module::{Geometry, ResolvedFrame};
@@ -588,6 +590,141 @@ pub fn build_document(
             emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
         }
         emitter.apply_vertical_justification(&mut pages);
+    }
+
+    // Text-on-path pass: walk every spread's shapes and emit any
+    // attached `<TextPath>` along the host's tessellated curve.
+    // Stories that flow only via TextPath have an empty
+    // `frame_chain`, so the body-story pass below skips them — this
+    // pass is what gives those stories their visible glyphs.
+    for (spread_idx, parsed) in document.spreads.iter().enumerate() {
+        let spread = &parsed.spread;
+        let range = spread_page_ranges[spread_idx].clone();
+        let local_geoms = &page_geometries[range.clone()];
+        for poly in &spread.polygons {
+            if poly.text_paths.is_empty() {
+                continue;
+            }
+            if !layer_visible(poly.item_layer.as_deref()) {
+                continue;
+            }
+            let spread_bounds = transform_bounds(poly.bounds, poly.item_transform);
+            let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
+            let page_idx = range.start + local_idx;
+            for tp in &poly.text_paths {
+                emit_text_path_into(
+                    &mut pages[page_idx],
+                    tp,
+                    &poly.anchors,
+                    poly.item_transform,
+                    document,
+                    options,
+                    palette,
+                    cmyk_xform.as_ref(),
+                    &font_table,
+                );
+            }
+        }
+        for rect in &spread.rectangles {
+            if rect.text_paths.is_empty() {
+                continue;
+            }
+            if !layer_visible(rect.item_layer.as_deref()) {
+                continue;
+            }
+            let spread_bounds = transform_bounds(rect.bounds, rect.item_transform);
+            let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
+            let page_idx = range.start + local_idx;
+            // Rectangles serialise their corners as PathPointType
+            // anchors only when they carry custom geometry; the
+            // simple-rect case stores `GeometricBounds` only. Build
+            // a 4-corner anchor list as a fallback so straight-edge
+            // rect-hosted TextPaths still flow.
+            let synth_corners: Vec<PathAnchor>;
+            let anchors: &[PathAnchor] = {
+                synth_corners = vec![
+                    PathAnchor {
+                        anchor: (rect.bounds.left, rect.bounds.top),
+                        left: (rect.bounds.left, rect.bounds.top),
+                        right: (rect.bounds.left, rect.bounds.top),
+                    },
+                    PathAnchor {
+                        anchor: (rect.bounds.right, rect.bounds.top),
+                        left: (rect.bounds.right, rect.bounds.top),
+                        right: (rect.bounds.right, rect.bounds.top),
+                    },
+                    PathAnchor {
+                        anchor: (rect.bounds.right, rect.bounds.bottom),
+                        left: (rect.bounds.right, rect.bounds.bottom),
+                        right: (rect.bounds.right, rect.bounds.bottom),
+                    },
+                    PathAnchor {
+                        anchor: (rect.bounds.left, rect.bounds.bottom),
+                        left: (rect.bounds.left, rect.bounds.bottom),
+                        right: (rect.bounds.left, rect.bounds.bottom),
+                    },
+                ];
+                &synth_corners
+            };
+            for tp in &rect.text_paths {
+                emit_text_path_into(
+                    &mut pages[page_idx],
+                    tp,
+                    anchors,
+                    rect.item_transform,
+                    document,
+                    options,
+                    palette,
+                    cmyk_xform.as_ref(),
+                    &font_table,
+                );
+            }
+        }
+        for line in &spread.graphic_lines {
+            if line.text_paths.is_empty() {
+                continue;
+            }
+            if !layer_visible(line.item_layer.as_deref()) {
+                continue;
+            }
+            let spread_bounds = transform_bounds(line.bounds, line.item_transform);
+            let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
+            let page_idx = range.start + local_idx;
+            // GraphicLines without anchors fall back to the bounds
+            // diagonal endpoints — matches the line-renderer's
+            // fallback geometry.
+            let synth_endpoints: Vec<PathAnchor>;
+            let anchors: &[PathAnchor] = if !line.anchors.is_empty() {
+                line.anchors.as_slice()
+            } else {
+                synth_endpoints = vec![
+                    PathAnchor {
+                        anchor: (line.bounds.left, line.bounds.top),
+                        left: (line.bounds.left, line.bounds.top),
+                        right: (line.bounds.left, line.bounds.top),
+                    },
+                    PathAnchor {
+                        anchor: (line.bounds.right, line.bounds.bottom),
+                        left: (line.bounds.right, line.bounds.bottom),
+                        right: (line.bounds.right, line.bounds.bottom),
+                    },
+                ];
+                &synth_endpoints
+            };
+            for tp in &line.text_paths {
+                emit_text_path_into(
+                    &mut pages[page_idx],
+                    tp,
+                    anchors,
+                    line.item_transform,
+                    document,
+                    options,
+                    palette,
+                    cmyk_xform.as_ref(),
+                    &font_table,
+                );
+            }
+        }
     }
 
     for parsed in &document.stories {
@@ -1516,6 +1653,390 @@ fn emit_polygon_into(
         path_id,
         Stroke::new(resolved.effective_stroke_weight()),
     );
+}
+
+/// One sample of a host shape's path in inner coords. `cum` is the
+/// cumulative arc length from the path's start (point 0) to this
+/// sample, in pt. Built once per emit and indexed binary-search style
+/// by `sample_path_at`.
+#[derive(Debug, Clone, Copy)]
+struct PathSample {
+    x: f32,
+    y: f32,
+    cum: f32,
+}
+
+/// Tessellate an IDML path (anchors + Bezier control points) into a
+/// dense polyline, sampling each cubic at `samples_per_segment`
+/// points so curved paths get a smooth approximation.
+///
+/// Open paths (GraphicLine / open Polygon) only walk anchor pairs; we
+/// don't synthesise a closing segment because a TextPath's text
+/// flows from the open path's start to its end. Closed polygons
+/// (the manual-sample arch) carry the closing curve in their
+/// last→first anchor pair already, so we still tessellate it.
+fn tessellate_anchors(anchors: &[PathAnchor], samples_per_segment: u32) -> Vec<PathSample> {
+    if anchors.is_empty() {
+        return Vec::new();
+    }
+    let n = samples_per_segment.max(1);
+    let mut samples: Vec<PathSample> = Vec::with_capacity(anchors.len() * n as usize + 1);
+    let (x0, y0) = anchors[0].anchor;
+    samples.push(PathSample {
+        x: x0,
+        y: y0,
+        cum: 0.0,
+    });
+    let mut cum = 0.0f32;
+    for window in anchors.windows(2) {
+        let from = &window[0];
+        let to = &window[1];
+        let (p0x, p0y) = from.anchor;
+        let (c1x, c1y) = from.right;
+        let (c2x, c2y) = to.left;
+        let (p1x, p1y) = to.anchor;
+        let mut prev_x = p0x;
+        let mut prev_y = p0y;
+        for i in 1..=n {
+            let t = i as f32 / n as f32;
+            let mt = 1.0 - t;
+            // Cubic Bezier evaluation. When the control points
+            // collapse onto the anchors (the common straight-line
+            // case), this reduces exactly to a linear interpolation
+            // — degenerate but correct.
+            let x = mt * mt * mt * p0x
+                + 3.0 * mt * mt * t * c1x
+                + 3.0 * mt * t * t * c2x
+                + t * t * t * p1x;
+            let y = mt * mt * mt * p0y
+                + 3.0 * mt * mt * t * c1y
+                + 3.0 * mt * t * t * c2y
+                + t * t * t * p1y;
+            let dx = x - prev_x;
+            let dy = y - prev_y;
+            cum += (dx * dx + dy * dy).sqrt();
+            samples.push(PathSample { x, y, cum });
+            prev_x = x;
+            prev_y = y;
+        }
+    }
+    samples
+}
+
+/// Find the sample whose cumulative arc length brackets `s`, then
+/// linearly interpolate to get `(x, y)` plus the local tangent angle
+/// in radians (atan2 of the segment direction). Out-of-range `s`
+/// clamps to the nearest endpoint so glyphs that overflow the path
+/// pile up at the end rather than disappearing.
+fn sample_path_at(samples: &[PathSample], s: f32) -> Option<(f32, f32, f32)> {
+    if samples.len() < 2 {
+        return None;
+    }
+    if s <= samples[0].cum {
+        let dx = samples[1].x - samples[0].x;
+        let dy = samples[1].y - samples[0].y;
+        return Some((samples[0].x, samples[0].y, dy.atan2(dx)));
+    }
+    let last = samples.last().unwrap();
+    if s >= last.cum {
+        let n = samples.len();
+        let dx = samples[n - 1].x - samples[n - 2].x;
+        let dy = samples[n - 1].y - samples[n - 2].y;
+        return Some((last.x, last.y, dy.atan2(dx)));
+    }
+    // Binary search for the segment containing `s`. Each window pair
+    // is monotonically increasing in `cum` by construction.
+    let mut lo = 0usize;
+    let mut hi = samples.len() - 1;
+    while hi - lo > 1 {
+        let mid = (lo + hi) / 2;
+        if samples[mid].cum <= s {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let a = &samples[lo];
+    let b = &samples[hi];
+    let span = (b.cum - a.cum).max(1e-6);
+    let t = ((s - a.cum) / span).clamp(0.0, 1.0);
+    let x = a.x + t * (b.x - a.x);
+    let y = a.y + t * (b.y - a.y);
+    let angle = (b.y - a.y).atan2(b.x - a.x);
+    Some((x, y, angle))
+}
+
+/// Emit the glyphs for a `<TextPath>` along the host shape's
+/// tessellated curve. Approximates IDML's text-on-path:
+///
+///   - Concatenates every paragraph's runs into a single styled
+///     string and shapes them with rustybuzz, exactly like the body
+///     text path. Per-paragraph styles (alignment, leading, tabs)
+///     are intentionally ignored — text-on-path is a single
+///     baseline, not a multi-line column.
+///   - Walks the shape's polyline by cumulative arc length: for
+///     each glyph the cursor advances by the glyph's `x_advance` and
+///     we look up `(x, y, angle)` at the cursor's midpoint. The
+///     glyph is then emitted with a per-glyph rotated transform.
+///   - Honours the `flip_path_effect` attribute: `Flipped` reverses
+///     the path direction so text reads from end-to-start.
+///
+/// Path-effect modes (`RainbowPathEffect` / `SkewPathEffect` /
+/// `Path3DRibbonEffect` / `StairStepPathEffect` / `GravityPathEffect`)
+/// are all rendered as plain rainbow today. The first three look the
+/// same on a gentle arch like manual-sample's polygon; the latter
+/// two need a per-glyph projection that lands later.
+fn emit_text_path_into(
+    page: &mut BuiltPage,
+    text_path: &TextPath,
+    anchors: &[PathAnchor],
+    item_transform: Option<[f32; 6]>,
+    document: &Document,
+    options: &PipelineOptions,
+    palette: &Graphic,
+    cmyk_xform: Option<&idml_color::IccTransform>,
+    font_table: &FontTable,
+) {
+    if anchors.len() < 2 {
+        return;
+    }
+    let Some(parsed_story) = document
+        .stories
+        .iter()
+        .find(|s| s.self_id == text_path.parent_story)
+    else {
+        return;
+    };
+
+    // Build the shape's polyline in inner coords.
+    let mut samples = tessellate_anchors(anchors, 8);
+    if samples.len() < 2 {
+        return;
+    }
+    // Honour FlipPathEffect by reversing the polyline. Cumulative
+    // distances must be recomputed so binary search still works.
+    if text_path.flip_path_effect.as_deref() == Some("Flipped") {
+        samples.reverse();
+        let mut cum = 0.0f32;
+        for i in 0..samples.len() {
+            if i > 0 {
+                let dx = samples[i].x - samples[i - 1].x;
+                let dy = samples[i].y - samples[i - 1].y;
+                cum += (dx * dx + dy * dy).sqrt();
+            }
+            samples[i].cum = cum;
+        }
+    }
+    let total_len = samples.last().map(|s| s.cum).unwrap_or(0.0);
+    if total_len <= 0.0 {
+        return;
+    }
+
+    // Resolve every paragraph's runs into face + size + paint. We
+    // shape each run separately and concatenate the resulting glyphs;
+    // line-breaking and column flow don't apply to text-on-path so
+    // the simpler per-run shape suffices.
+    struct PathGlyph {
+        glyph_id: u32,
+        x_advance_64: i32,
+        y_offset_64: i32,
+        x_offset_64: i32,
+        face_idx: usize,
+        point_size: f32,
+        paint: Paint,
+    }
+    let mut glyphs: Vec<PathGlyph> = Vec::new();
+    // Faces are indexed; outline + font_id parallel arrays.
+    let mut face_bytes: Vec<Bytes> = Vec::new();
+    let mut face_font_ids: Vec<u32> = Vec::new();
+
+    let find_or_push_face = |bytes: &Bytes,
+                              face_bytes: &mut Vec<Bytes>,
+                              face_font_ids: &mut Vec<u32>|
+     -> usize {
+        if let Some(i) = face_bytes
+            .iter()
+            .position(|b| b.as_ptr() == bytes.as_ptr())
+        {
+            return i;
+        }
+        face_bytes.push(bytes.clone());
+        face_font_ids.push(fnv_1a_u32(bytes.as_ref()));
+        face_bytes.len() - 1
+    };
+
+    let default_paint = options.fallback_text_paint;
+    for paragraph in &parsed_story.story.paragraphs {
+        for run in &paragraph.runs {
+            if run.text.is_empty() {
+                continue;
+            }
+            let resolved = document.resolved_run_attrs(paragraph, run);
+            // Try the FontTable cache first (built from
+            // resolver-resolved (family, style) keys). If that misses
+            // — typically because the run's font resolves only via
+            // the BasedOn chain and the chain's id form differs from
+            // the cache key — fall back to the resolver's
+            // `default_font` directly. Without this the text-on-path
+            // would silently emit zero glyphs whenever the host
+            // story's runs lack a directly-set `AppliedFont`.
+            let face_bytes_b = font_table
+                .bytes_for(resolved.font.as_deref(), resolved.font_style.as_deref())
+                .or_else(|| {
+                    options.assets.and_then(|r| {
+                        r.resolve_font(
+                            resolved.font.as_deref().unwrap_or(""),
+                            resolved.font_style.as_deref(),
+                        )
+                    })
+                });
+            let Some(face_bytes_b) = face_bytes_b else {
+                continue;
+            };
+            let face_idx = find_or_push_face(&face_bytes_b, &mut face_bytes, &mut face_font_ids);
+            let point_size = resolved
+                .point_size
+                .unwrap_or(options.default_point_size);
+            let paint = resolved
+                .fill_color
+                .as_deref()
+                .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+                .map(|p| apply_fill_tint(p, resolved.fill_tint))
+                .unwrap_or(default_paint);
+            let Some(rb_face) = rustybuzz::Face::from_slice(face_bytes_b.as_ref(), 0) else {
+                continue;
+            };
+            let mut shaped = idml_text::shape::shape_run(&rb_face, &run.text, point_size);
+            if let Some(t) = resolved.tracking {
+                idml_text::shape::apply_tracking(&mut shaped, t, point_size);
+            }
+            for g in &shaped.glyphs {
+                glyphs.push(PathGlyph {
+                    glyph_id: g.glyph_id,
+                    x_advance_64: g.x_advance,
+                    y_offset_64: g.y_offset,
+                    x_offset_64: g.x_offset,
+                    face_idx,
+                    point_size,
+                    paint,
+                });
+            }
+        }
+    }
+    if glyphs.is_empty() {
+        return;
+    }
+
+    // Build outliners for every face we ended up using. Parallel to
+    // `face_bytes` / `face_font_ids` so per-glyph emit can index in
+    // O(1).
+    let mut outline_faces: Vec<Option<ttf_parser::Face>> = Vec::with_capacity(face_bytes.len());
+    for b in &face_bytes {
+        outline_faces.push(ttf_parser::Face::parse(b.as_ref(), 0).ok());
+    }
+
+    // Total text width in pt (advance precision is 1/64).
+    let total_advance_pt: f32 = glyphs
+        .iter()
+        .map(|g| g.x_advance_64 as f32 / idml_text::shape::ADVANCE_PRECISION)
+        .sum();
+
+    // Center the text along the path: matches IDML's default
+    // `CenterPathAlignment`. Other alignments fall back to centered
+    // for now.
+    let start_offset_pt = if total_advance_pt < total_len {
+        ((total_len - total_advance_pt) * 0.5).max(0.0)
+    } else {
+        0.0
+    };
+
+    // Outer transform: page origin · ItemTransform. Same composition
+    // as every other shape — keeps text-on-path inside the host
+    // shape's coordinate system without re-implementing the math.
+    let outer = frame_outer_transform(page, item_transform);
+
+    let mut cursor_pt = start_offset_pt;
+    for g in &glyphs {
+        let advance_pt = g.x_advance_64 as f32 / idml_text::shape::ADVANCE_PRECISION;
+        let x_off_pt = g.x_offset_64 as f32 / idml_text::shape::ADVANCE_PRECISION;
+        let y_off_pt = g.y_offset_64 as f32 / idml_text::shape::ADVANCE_PRECISION;
+        // Place the glyph's baseline-left at the cursor's current
+        // arc length (plus its shaping x_offset). The local tangent
+        // at that point gives the glyph's rotation. Each glyph
+        // advances the cursor by its own advance.
+        let s = cursor_pt + x_off_pt;
+        cursor_pt += advance_pt;
+        let Some((px, py, angle)) = sample_path_at(&samples, s) else {
+            continue;
+        };
+        let Some(outline) = outline_faces[g.face_idx].as_ref() else {
+            continue;
+        };
+        let outliner = TtfOutliner::new(outline);
+        let upem = outliner.units_per_em();
+        let scale = g.point_size / upem;
+        let Some(path_id) = list_get_or_intern_glyph_outline(
+            face_font_ids[g.face_idx],
+            g.glyph_id,
+            &outliner,
+            &mut page.list,
+        ) else {
+            continue;
+        };
+        // Final 2×3 transform = outer · T_path · R · T_local · S(scale,-scale)
+        // where:
+        //   S(scale, -scale) maps font-units → pt and flips y (font
+        //                    space is y-up, page space y-down).
+        //   T_local(0, y_off) carries the glyph's per-shape vertical
+        //                    offset.
+        //   R(angle)         rotates by the path tangent at `s`.
+        //   T_path(px, py)   places the rotated glyph at the path
+        //                    sample.
+        // Glyph (0, 0) (baseline-left in font space) lands at (px,py).
+        let cos_a = angle.cos();
+        let sin_a = angle.sin();
+        let r = [cos_a, sin_a, -sin_a, cos_a];
+        let s_diag = [scale, 0.0, 0.0, -scale];
+        // After R · T_local: matrix [r0 r2 r0*tx+r2*ty; r1 r3 r1*tx+r3*ty].
+        // local_tx/ty: x_offset already baked into `s` so only y_off
+        // applies here.
+        let local_tx = 0.0;
+        let local_ty = y_off_pt;
+        let rtl_tx = r[0] * local_tx + r[2] * local_ty;
+        let rtl_ty = r[1] * local_tx + r[3] * local_ty;
+        // (R · T_local) · S(scale, -scale): scales the columns.
+        let rs_a = r[0] * s_diag[0] + r[2] * s_diag[1];
+        let rs_b = r[1] * s_diag[0] + r[3] * s_diag[1];
+        let rs_c = r[0] * s_diag[2] + r[2] * s_diag[3];
+        let rs_d = r[1] * s_diag[2] + r[3] * s_diag[3];
+        let inner = Transform([rs_a, rs_b, rs_c, rs_d, rtl_tx + px, rtl_ty + py]);
+        let final_xf = outer.compose(&inner);
+        page.list.push(idml_compose::DisplayCommand::FillPath {
+            path_id,
+            paint: g.paint,
+            transform: final_xf,
+        });
+        page.stats.glyphs += 1;
+    }
+}
+
+/// Local mirror of `idml_compose::text::get_or_intern_glyph_outline`,
+/// which is private. Same caching key (font_id × glyph_id) so glyphs
+/// emitted via the body-text path and the text-on-path path share
+/// outlines.
+fn list_get_or_intern_glyph_outline<O: GlyphOutliner>(
+    font_id: u32,
+    glyph_id: u32,
+    outliner: &O,
+    list: &mut DisplayList,
+) -> Option<idml_compose::PathId> {
+    let key = GlyphCacheKey { font_id, glyph_id }.to_u64();
+    if let Some(existing) = list.paths.find_by_key(key) {
+        return Some(existing);
+    }
+    let outline = outliner.outline(glyph_id)?;
+    let (id, _) = list.paths.intern(key, outline);
+    Some(id)
 }
 
 /// Cheap content-derived cache key for polygons that don't carry a
@@ -3188,6 +3709,19 @@ pub(crate) fn rounded_rect_path(rect: Rect, radius: f32) -> idml_compose::PathDa
 /// silently if `assets` is unset, the resolver returns `None`, or
 /// decoding fails — IDMLs without their linked assets should still
 /// produce a usable render of the surrounding geometry.
+///
+/// Two placement paths:
+///   1. *Inner* `<Image ItemTransform="...">` present (the
+///      InDesign-export shape). The image's pixel rect (0..w, 0..h)
+///      maps through that transform into the frame's inner coord
+///      space, then through the frame's ItemTransform into spread
+///      coords. The image is then *clipped* to the frame's path so
+///      cropping / partial-frame placements (a thin slice, a square
+///      crop, etc.) match InDesign.
+///   2. No inner transform (synthetic IDMLs that omit it). Fall
+///      back to the legacy "stretch image to frame bounds — minus
+///      `<FrameFittingOption>` crops" path. No clip is needed
+///      because the image already covers exactly the frame's AABB.
 fn emit_rectangle_image(
     page: &mut BuiltPage,
     rect: &Rectangle,
@@ -3198,61 +3732,144 @@ fn emit_rectangle_image(
     let Some(uri) = rect.image_link.as_deref() else {
         return;
     };
-    // Default placement = the frame's inner-coord rect. FrameFitting
-    // crops grow / shrink the image bounds — negative crops typically
-    // come from `FillProportionally` (image overflows the frame). We
-    // emit the expanded rect; per-frame clipping will land when the
-    // display list grows a Clip primitive.
-    let frame_left = rect.bounds.left;
-    let frame_top = rect.bounds.top;
-    let frame_w = rect.bounds.width();
-    let frame_h = rect.bounds.height();
-    let (left_crop, top_crop, right_crop, bottom_crop) = rect
-        .frame_fitting
-        .as_ref()
-        .map(|f| {
-            (
-                f.left_crop.unwrap_or(0.0),
-                f.top_crop.unwrap_or(0.0),
-                f.right_crop.unwrap_or(0.0),
-                f.bottom_crop.unwrap_or(0.0),
-            )
-        })
-        .unwrap_or((0.0, 0.0, 0.0, 0.0));
-    let r = Rect {
-        x: frame_left + left_crop,
-        y: frame_top + top_crop,
-        w: (frame_w - left_crop - right_crop).max(0.0),
-        h: (frame_h - top_crop - bottom_crop).max(0.0),
+    // Decode (or fetch from cache) so we know the image's natural
+    // pixel dimensions. The display-list ImageId is cached per-page
+    // so multiple rectangles sharing the same URI share one buffer.
+    let id = match page_image_cache.get(uri).copied() {
+        Some(id) => id,
+        None => {
+            let decoded = if let Some(d) = decoded_cache.get(uri) {
+                d.clone()
+            } else {
+                let Some(resolver) = options.assets else {
+                    return;
+                };
+                let Some(bytes) = resolver.resolve_image(uri) else {
+                    tracing::warn!(uri, "image resolver returned no bytes; skipping");
+                    return;
+                };
+                let Some(d) = decode_image_bytes(bytes.as_ref()) else {
+                    tracing::warn!(uri, "image decode failed; skipping");
+                    return;
+                };
+                decoded_cache.insert(uri.to_string(), d.clone());
+                d
+            };
+            let id = page.list.push_image(decoded);
+            page_image_cache.insert(uri.to_string(), id);
+            id
+        }
     };
+    let (img_w, img_h) = match page.list.image(id) {
+        Some(d) => (d.width as f32, d.height as f32),
+        None => return,
+    };
+    if img_w <= 0.0 || img_h <= 0.0 {
+        return;
+    }
     let outer = frame_outer_transform(page, rect.item_transform);
-    let id = if let Some(cached) = page_image_cache.get(uri) {
-        *cached
-    } else {
-        // Cross-page decode cache hit: clone the cached RGBA into
-        // this page's image pool.
-        let decoded = if let Some(d) = decoded_cache.get(uri) {
-            d.clone()
-        } else {
-            let Some(resolver) = options.assets else {
-                return;
-            };
-            let Some(bytes) = resolver.resolve_image(uri) else {
-                tracing::warn!(uri, "image resolver returned no bytes; skipping");
-                return;
-            };
-            let Some(d) = decode_image_bytes(bytes.as_ref()) else {
-                tracing::warn!(uri, "image decode failed; skipping");
-                return;
-            };
-            decoded_cache.insert(uri.to_string(), d.clone());
-            d
+
+    if let Some(image_t) = rect.image_item_transform {
+        // Path 1: honour the inner Image[ItemTransform]. The image's
+        // natural pixel rect (0..w, 0..h) — IDML treats placed-image
+        // pixels as 1pt at 72ppi — maps through `image_t` into
+        // frame-inner coords, then through `outer` (= page_origin ·
+        // frame.ItemTransform) into spread → page coords.
+        //
+        // `Transform::for_rect_in(rect, t)` builds
+        //   t · scale(rect.w, rect.h) · translate(rect.x, rect.y)
+        // so passing rect=(0,0,w,h) plus a composed `outer ∘ image_t`
+        // gives us exactly the placement we need.
+        let composed = outer.compose(&Transform(image_t));
+        let img_rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: img_w,
+            h: img_h,
         };
-        let id = page.list.push_image(decoded);
-        page_image_cache.insert(uri.to_string(), id);
-        id
+        // Clip to the frame's rectangular path (in inner coords).
+        // We use the rectangle's `bounds` AABB: IDML rectangles are
+        // axis-aligned in inner space by definition, so the AABB
+        // equals the path. Any rotation/shear lives on `outer`,
+        // which we share with the image emission below. Polygon-
+        // hosted images (curved frames) aren't part of this slice.
+        let clip_rect = idml_compose::Rect {
+            x: rect.bounds.left,
+            y: rect.bounds.top,
+            w: rect.bounds.width(),
+            h: rect.bounds.height(),
+        };
+        emit_clipped_image(&mut page.list, clip_rect, outer, img_rect, composed, id);
+    } else {
+        // Path 2: legacy synthetic-IDML placement. No inner
+        // transform ⇒ fit the image to the frame's bounds (minus
+        // FrameFitting crops). No clip — the image already
+        // occupies exactly the rect.
+        let frame_left = rect.bounds.left;
+        let frame_top = rect.bounds.top;
+        let frame_w = rect.bounds.width();
+        let frame_h = rect.bounds.height();
+        let (left_crop, top_crop, right_crop, bottom_crop) = rect
+            .frame_fitting
+            .as_ref()
+            .map(|f| {
+                (
+                    f.left_crop.unwrap_or(0.0),
+                    f.top_crop.unwrap_or(0.0),
+                    f.right_crop.unwrap_or(0.0),
+                    f.bottom_crop.unwrap_or(0.0),
+                )
+            })
+            .unwrap_or((0.0, 0.0, 0.0, 0.0));
+        let r = Rect {
+            x: frame_left + left_crop,
+            y: frame_top + top_crop,
+            w: (frame_w - left_crop - right_crop).max(0.0),
+            h: (frame_h - top_crop - bottom_crop).max(0.0),
+        };
+        idml_compose::emit_image_at(r, outer, id, &mut page.list);
+    }
+}
+
+/// Push a rectangular clip path, emit an image, then pop the clip.
+/// `clip_rect` is the frame's inner-coord AABB; `clip_outer` is the
+/// frame's outer transform (page_origin · ItemTransform).
+/// `image_rect` is `(0, 0, img_w, img_h)` and `image_transform` is
+/// the composed `outer ∘ image_item_transform`. Sharing `outer` for
+/// both keeps clip and image in lockstep when the frame rotates.
+fn emit_clipped_image(
+    list: &mut idml_compose::DisplayList,
+    clip_rect: idml_compose::Rect,
+    clip_outer: Transform,
+    image_rect: idml_compose::Rect,
+    image_transform: Transform,
+    image_id: idml_compose::ImageId,
+) {
+    use idml_compose::{DisplayCommand, PathSegment};
+    // Unit-rect path interned under a stable key so multiple clipped-
+    // image emissions share the same entry in the path buffer.
+    const CLIP_UNIT_RECT_KEY: u64 = 0x1d_4c_69_70_5f_72_65_63; // "idClip_rec"
+    let path = idml_compose::PathData {
+        segments: vec![
+            PathSegment::MoveTo { x: 0.0, y: 0.0 },
+            PathSegment::LineTo { x: 1.0, y: 0.0 },
+            PathSegment::LineTo { x: 1.0, y: 1.0 },
+            PathSegment::LineTo { x: 0.0, y: 1.0 },
+            PathSegment::Close,
+        ],
     };
-    idml_compose::emit_image_at(r, outer, id, &mut page.list);
+    let (clip_path_id, _) = list.paths.intern(CLIP_UNIT_RECT_KEY, path);
+    let clip_transform = Transform::for_rect_in(clip_rect, clip_outer);
+    list.push(DisplayCommand::PushClip {
+        path_id: clip_path_id,
+        transform: clip_transform,
+    });
+    let img_transform = Transform::for_rect_in(image_rect, image_transform);
+    list.push(DisplayCommand::Image {
+        image_id,
+        transform: img_transform,
+    });
+    list.push(DisplayCommand::PopClip(Transform::IDENTITY));
 }
 
 /// Decode raw image bytes to RGBA8. Format detection is via magic
