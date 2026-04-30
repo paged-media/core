@@ -24,4 +24,4 @@ pub use primitives::{
     emit_stroke_ellipse, emit_stroke_ellipse_transformed, emit_stroke_rect,
     emit_stroke_rect_transformed, UNIT_ELLIPSE_KEY, UNIT_RECT_KEY,
 };
-pub use text::{emit_glyph_slice, emit_paragraph};
+pub use text::{emit_glyph_slice, emit_glyph_slice_blend, emit_paragraph, emit_paragraph_blend};

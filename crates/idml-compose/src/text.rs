@@ -48,8 +48,39 @@ pub fn emit_paragraph<O, F>(
     O: GlyphOutliner,
     F: Fn(u32) -> Paint,
 {
+    emit_paragraph_blend(
+        laid_out,
+        font_id,
+        point_size,
+        paint_for,
+        frame_origin_pt,
+        outliner,
+        list,
+        crate::display_list::BlendMode::Normal,
+    );
+}
+
+/// Like [`emit_paragraph`] but composites every glyph fill with
+/// `blend_mode`. Normal (the default in [`emit_paragraph`]) keeps the
+/// fast `FillPath` path; non-Normal modes route through
+/// `FillPathBlend` so the rasterizer stamps each glyph through an
+/// offscreen scratch and composites with the requested mode. Used to
+/// honour a TextFrame's `<BlendingSetting>` on its body text.
+pub fn emit_paragraph_blend<O, F>(
+    laid_out: &LaidOutParagraph,
+    font_id: u32,
+    point_size: f32,
+    paint_for: F,
+    frame_origin_pt: (f32, f32),
+    outliner: &O,
+    list: &mut DisplayList,
+    blend_mode: crate::display_list::BlendMode,
+) where
+    O: GlyphOutliner,
+    F: Fn(u32) -> Paint,
+{
     for line in &laid_out.lines {
-        emit_glyph_slice(
+        emit_glyph_slice_blend(
             &line.glyphs,
             font_id,
             point_size,
@@ -57,6 +88,7 @@ pub fn emit_paragraph<O, F>(
             frame_origin_pt,
             outliner,
             list,
+            blend_mode,
         );
     }
 }
@@ -76,9 +108,37 @@ pub fn emit_glyph_slice<O, F>(
     O: GlyphOutliner,
     F: Fn(u32) -> Paint,
 {
+    emit_glyph_slice_blend(
+        glyphs,
+        font_id,
+        point_size,
+        paint_for,
+        frame_origin_pt,
+        outliner,
+        list,
+        crate::display_list::BlendMode::Normal,
+    );
+}
+
+/// Like [`emit_glyph_slice`] but emits `FillPathBlend` for non-Normal
+/// blend modes.
+pub fn emit_glyph_slice_blend<O, F>(
+    glyphs: &[PositionedGlyph],
+    font_id: u32,
+    point_size: f32,
+    paint_for: F,
+    frame_origin_pt: (f32, f32),
+    outliner: &O,
+    list: &mut DisplayList,
+    blend_mode: crate::display_list::BlendMode,
+) where
+    O: GlyphOutliner,
+    F: Fn(u32) -> Paint,
+{
     let upem = outliner.units_per_em();
     let scale = point_size / upem;
     let (ox, oy) = frame_origin_pt;
+    let normal = matches!(blend_mode, crate::display_list::BlendMode::Normal);
     for g in glyphs {
         let Some(path_id) = get_or_intern_glyph_outline(font_id, g.glyph_id, outliner, list) else {
             continue;
@@ -90,11 +150,20 @@ pub fn emit_glyph_slice<O, F>(
         // scale) and flip y by negating the y-axis scale. Then
         // translate to (gx, gy).
         let transform = Transform([scale, 0.0, 0.0, -scale, gx, gy]);
-        list.push(DisplayCommand::FillPath {
-            path_id,
-            paint,
-            transform,
-        });
+        if normal {
+            list.push(DisplayCommand::FillPath {
+                path_id,
+                paint,
+                transform,
+            });
+        } else {
+            list.push(DisplayCommand::FillPathBlend {
+                path_id,
+                paint,
+                transform,
+                blend_mode,
+            });
+        }
     }
 }
 

@@ -159,6 +159,15 @@ pub struct TextFrame {
     /// is a queued follow-up; the flag exists so callers can skip
     /// these frames pending that work.
     pub is_anchored: bool,
+    /// Item-level opacity from `<TransparencySetting>` /
+    /// `<BlendingSetting Opacity="..." />`. Range `0.0..=100.0`. The
+    /// renderer scales every paint's alpha by `opacity / 100` at
+    /// emission time. `None` ⇒ fully opaque.
+    pub opacity: Option<f32>,
+    /// `<BlendingSetting BlendMode="..." />` (Normal | Multiply |
+    /// Screen | Overlay | …). The renderer composites both the frame
+    /// fill and the text glyphs using this mode.
+    pub blend_mode: Option<String>,
 }
 
 /// IDML `<TextFramePreference VerticalJustification="...">` values.
@@ -746,6 +755,8 @@ impl Spread {
                             text_wrap: None,
                             item_layer: attr(&e, b"ItemLayer"),
                             is_anchored: false,
+                            opacity: None,
+                            blend_mode: None,
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Text(out.text_frames.len() - 1),
@@ -941,6 +952,14 @@ impl Spread {
                                     }
                                     if mode.is_some() {
                                         out.rectangles[i].blend_mode = mode;
+                                    }
+                                }
+                                CurrentFrameKind::Text(i) => {
+                                    if opacity.is_some() {
+                                        out.text_frames[i].opacity = opacity;
+                                    }
+                                    if mode.is_some() {
+                                        out.text_frames[i].blend_mode = mode;
                                     }
                                 }
                                 _ => {

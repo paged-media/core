@@ -11,7 +11,8 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use idml_compose::{
-    emit_drop_shadow_rect_transformed, emit_ellipse_transformed, emit_glyph_slice, emit_line,
+    emit_drop_shadow_rect_transformed, emit_ellipse_transformed, emit_glyph_slice,
+    emit_glyph_slice_blend, emit_line,
     emit_paragraph, emit_rect, emit_rect_transformed, emit_stroke_ellipse_transformed,
     emit_stroke_rect, emit_stroke_rect_transformed, Color, DisplayCommand, DisplayList, DropShadow,
     Paint, PathData, PathSegment, Rect, Stroke, Transform, TtfOutliner,
@@ -1366,7 +1367,8 @@ fn emit_paragraph_into_chain(
                 continue;
             };
             let outliner = TtfOutliner::new(outline);
-            emit_glyph_slice(
+            let frame_blend = blend_mode_from_idml(frame.blend_mode.as_deref());
+            emit_glyph_slice_blend(
                 &line.glyphs[start..end],
                 fid,
                 line.glyphs[start].point_size,
@@ -1374,6 +1376,7 @@ fn emit_paragraph_into_chain(
                 text_origin_pt,
                 &outliner,
                 &mut pages[target_page].list,
+                frame_blend,
             );
             start = end;
         }
