@@ -72,18 +72,34 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
     let page_to_px = TsTransform::from_scale(scale, scale);
 
     // Clip stack. Each entry is the cumulative intersection of every
-    // pushed clip up to and including that level. `None` ⇒ no clipping
-    // (the common case). Push: clone the current top (or the first
-    // mask is built from a fresh white pixmap and intersected with the
-    // pushed path), then `intersect_path` it. Pop: pop the top.
+    // pushed clip up to and including that level, scoped to one
+    // render target — either the page or a specific group buffer.
+    // The stack's `scope` field threads each entry to its owning
+    // target so that clips pushed inside a `BeginBlendGroup` build
+    // masks sized to the group buffer (not the page-sized pixmap)
+    // and use buffer-local pixel coords. `EndBlendGroup` discards
+    // any clips that belong to the group it's closing.
     //
-    // tiny-skia masks live in pixel space; we transform paths through
-    // `page_to_px` when filling. For Push, intersect at pixel
-    // resolution to inherit anti-alias behaviour.
-    let mut clip_stack: Vec<TsMask> = Vec::new();
-    fn active_mask(stack: &[TsMask]) -> Option<&TsMask> {
-        stack.last()
+    // tiny-skia masks live in pixel space; for the page they're sized
+    // to `(px_w, px_h)` with `page_to_px` mapping pt→px directly. For
+    // a group, they're sized to the group buffer and the clip path's
+    // transform is pre-translated by the buffer's pixel offset so
+    // points land in the buffer's local pixel grid. For Push,
+    // intersect at pixel resolution to inherit anti-alias behaviour.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum ClipScope {
+        Page,
+        /// 1-based depth into `group_stack` — clips at scope `Group(d)`
+        /// belong to the group at index `d - 1`. Distinguishes nested
+        /// groups so a `PopClip` after `EndBlendGroup` doesn't leak
+        /// onto an outer group's stack.
+        Group(usize),
     }
+    struct ClipEntry {
+        mask: TsMask,
+        scope: ClipScope,
+    }
+    let mut clip_stack: Vec<ClipEntry> = Vec::new();
 
     // Transparency-group stack. When non-empty, every fill / stroke /
     // draw_pixmap targets the topmost group's pixmap instead of the
@@ -99,24 +115,32 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
     // page-to-px transform by the group's pixel offset so per-command
     // transforms map into the buffer's local coord grid.
     //
-    // Mask handling: clips inside a group are dropped today (the
-    // page-sized mask doesn't fit a smaller buffer, and the corpus
-    // doesn't exercise clip + group combinations). When the
-    // group_stack is empty, the page-sized mask from clip_stack
-    // still applies.
+    // Mask handling: returns the topmost clip entry whose scope
+    // matches the active target. Clips that belong to an outer
+    // (shadowed) target stay alive but don't apply here.
     fn resolve_target<'a>(
         page_pixmap: &'a mut Pixmap,
         group_stack: &'a mut Vec<GroupFrame>,
         page_to_px: TsTransform,
-        clip_stack: &'a [TsMask],
+        clip_stack: &'a [ClipEntry],
     ) -> (&'a mut Pixmap, TsTransform, Option<&'a TsMask>) {
+        let scope = if group_stack.is_empty() {
+            ClipScope::Page
+        } else {
+            ClipScope::Group(group_stack.len())
+        };
+        let mask = clip_stack
+            .iter()
+            .rev()
+            .find(|e| e.scope == scope)
+            .map(|e| &e.mask);
         if let Some(top) = group_stack.last_mut() {
             let off = top.offset;
             let xform = TsTransform::from_translate(-off.0 as f32, -off.1 as f32)
                 .pre_concat(page_to_px);
-            (&mut top.pixmap, xform, None)
+            (&mut top.pixmap, xform, mask)
         } else {
-            (page_pixmap, page_to_px, clip_stack.last())
+            (page_pixmap, page_to_px, mask)
         }
     }
 
@@ -422,49 +446,91 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 );
             }
             DisplayCommand::PushClip { path_id, transform } => {
-                // Build the clip path in page-space pt; the mask
-                // rasteriser then applies the same `page_to_px`
-                // scale used for fills/strokes so the clip lives in
-                // pixel space.
+                // Determine which target the clip applies to: the
+                // page or the topmost group buffer. The mask is
+                // sized to that target's pixmap, and the clip path is
+                // pre-translated by the group's `(off_x_px, off_y_px)`
+                // so it lands in the buffer's local pixel coords.
+                let (scope, mask_w, mask_h, target_off) =
+                    if let Some(top) = group_stack.last() {
+                        (
+                            ClipScope::Group(group_stack.len()),
+                            top.pixmap.width(),
+                            top.pixmap.height(),
+                            top.offset,
+                        )
+                    } else {
+                        (ClipScope::Page, px_w, px_h, (0, 0))
+                    };
+                // `to_pixel` maps page-space pt → active target's
+                // local pixel coords: scale by pt→px, then subtract
+                // the group buffer's pixel offset (zero for the page).
+                let to_pixel = TsTransform::from_translate(
+                    -target_off.0 as f32,
+                    -target_off.1 as f32,
+                )
+                .pre_concat(page_to_px);
                 let Some(path_data) = list.paths.get(*path_id) else {
-                    // Push an empty mask so the matching pop balances
-                    // the stack — then drawing is unaffected (an empty
-                    // clip would mean "draw nothing", but the missing
-                    // path is more likely a renderer bug than a real
-                    // empty clip; keep the un-clipped behaviour).
-                    if let Some(top) = clip_stack.last().cloned() {
-                        clip_stack.push(top);
-                    } else if let Some(m) = TsMask::new(px_w, px_h) {
-                        // Fresh white mask = no clipping.
-                        let mut m = m;
-                        // tiny_skia::Mask::new returns a black (zero)
-                        // mask; flip it via invert so "no clip"
-                        // semantics match (white = drawable).
+                    // Push a no-op (white) mask sized to the active
+                    // target so the matching pop balances the stack.
+                    if let Some(parent) =
+                        clip_stack.iter().rev().find(|e| e.scope == scope)
+                    {
+                        clip_stack.push(ClipEntry {
+                            mask: parent.mask.clone(),
+                            scope,
+                        });
+                    } else if let Some(mut m) = TsMask::new(mask_w, mask_h) {
+                        // tiny_skia::Mask::new is black/zero; invert
+                        // to white so "no clip" semantics hold.
                         m.invert();
-                        clip_stack.push(m);
+                        clip_stack.push(ClipEntry { mask: m, scope });
                     }
                     continue;
                 };
                 let Some(path) = build_path_transformed(path_data, transform) else {
-                    if let Some(top) = clip_stack.last().cloned() {
-                        clip_stack.push(top);
+                    if let Some(parent) =
+                        clip_stack.iter().rev().find(|e| e.scope == scope)
+                    {
+                        clip_stack.push(ClipEntry {
+                            mask: parent.mask.clone(),
+                            scope,
+                        });
                     }
                     continue;
                 };
-                if let Some(parent) = clip_stack.last() {
-                    let mut child = parent.clone();
-                    child.intersect_path(&path, FillRule::Winding, true, page_to_px);
-                    clip_stack.push(child);
-                } else if let Some(mut fresh) = TsMask::new(px_w, px_h) {
-                    // First clip on the stack: build from a fresh
-                    // (transparent) mask filled with the path. Any
-                    // subsequent push intersects against this base.
-                    fresh.fill_path(&path, FillRule::Winding, true, page_to_px);
-                    clip_stack.push(fresh);
+                if let Some(parent) =
+                    clip_stack.iter().rev().find(|e| e.scope == scope)
+                {
+                    let mut child = parent.mask.clone();
+                    child.intersect_path(&path, FillRule::Winding, true, to_pixel);
+                    clip_stack.push(ClipEntry {
+                        mask: child,
+                        scope,
+                    });
+                } else if let Some(mut fresh) = TsMask::new(mask_w, mask_h) {
+                    // First clip on the active target: build from a
+                    // fresh (transparent) mask filled with the path.
+                    fresh.fill_path(&path, FillRule::Winding, true, to_pixel);
+                    clip_stack.push(ClipEntry {
+                        mask: fresh,
+                        scope,
+                    });
                 }
             }
             DisplayCommand::PopClip(_) => {
-                clip_stack.pop();
+                let scope = if group_stack.is_empty() {
+                    ClipScope::Page
+                } else {
+                    ClipScope::Group(group_stack.len())
+                };
+                // Pop the topmost clip belonging to the active scope.
+                // Stray pops (mismatched pairs) tolerated as before.
+                if let Some(idx) =
+                    clip_stack.iter().rposition(|e| e.scope == scope)
+                {
+                    clip_stack.remove(idx);
+                }
             }
             DisplayCommand::BeginBlendGroup {
                 bounds,
@@ -519,6 +585,11 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 let Some(top) = group_stack.pop() else {
                     continue;
                 };
+                // Drop any clips pushed while this group was active —
+                // mismatched Push/Pop pairs inside a group can't
+                // outlive their owning buffer.
+                let group_scope = ClipScope::Group(group_stack.len() + 1);
+                clip_stack.retain(|e| e.scope != group_scope);
                 let GroupFrame {
                     pixmap: group_pix,
                     offset: (off_x_px, off_y_px),
@@ -529,10 +600,18 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 composite.blend_mode = blend_mode;
                 composite.opacity = opacity;
                 // Composite the group buffer onto the next-outer
-                // target (or the page). The mask still applies when
-                // we're emerging back to the page (clip_stack
-                // semantics) but is dropped when composing into a
-                // parent group buffer for the same reason as draws.
+                // target. The active clip stack now resolves to the
+                // parent target's scope (page or outer group).
+                let parent_scope = if group_stack.is_empty() {
+                    ClipScope::Page
+                } else {
+                    ClipScope::Group(group_stack.len())
+                };
+                let parent_mask = clip_stack
+                    .iter()
+                    .rev()
+                    .find(|e| e.scope == parent_scope)
+                    .map(|e| &e.mask);
                 if let Some(parent) = group_stack.last_mut() {
                     let parent_off = parent.offset;
                     let dst_x = off_x_px - parent_off.0;
@@ -543,7 +622,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                         group_pix.as_ref(),
                         &composite,
                         TsTransform::identity(),
-                        None,
+                        parent_mask,
                     );
                 } else {
                     pixmap.draw_pixmap(
@@ -552,7 +631,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                         group_pix.as_ref(),
                         &composite,
                         TsTransform::identity(),
-                        active_mask(&clip_stack),
+                        parent_mask,
                     );
                 }
             }
@@ -1034,6 +1113,128 @@ mod tests {
         // Outside the rects (2, 2): background white.
         let bg = at(&img, 2, 2);
         assert!(bg[0] > 240 && bg[1] > 240 && bg[2] > 240, "bg = {bg:?}");
+    }
+
+    #[test]
+    fn clip_inside_blend_group_masks_to_smaller_buffer() {
+        // Mirrors the Lighten test above but adds a Push/Pop clip
+        // pair *inside* the blend group: a clip rect that only
+        // covers the left half of the inner black rect. The right
+        // half should be unclipped (Lighten(black, yellow) = yellow);
+        // outside the clip and inside the inner rect should fall
+        // back to the yellow background (clip masks the inner fill,
+        // so the group buffer stays empty there and the lighten
+        // composite is a no-op against the page); outside the inner
+        // rect should still be background white.
+        //
+        // This exercises the clip stack inside a smaller-than-page
+        // group buffer: before the fix, tiny-skia panicked because
+        // a page-sized mask was being applied to a sub-pixmap.
+        let mut list = DisplayList::new();
+        let yellow = Paint::Solid(Color::rgba(1.0, 1.0, 0.0, 1.0));
+        let black = Paint::Solid(Color::rgba(0.0, 0.0, 0.0, 1.0));
+        // Yellow background rect covering the entire visible area
+        // so the page underneath the group is yellow, not white.
+        emit_rect(
+            Rect {
+                x: 5.0,
+                y: 5.0,
+                w: 30.0,
+                h: 30.0,
+            },
+            yellow,
+            &mut list,
+        );
+        // Begin a Lighten blend group sized to (10, 10, 20, 20).
+        list.commands
+            .push(idml_compose::DisplayCommand::BeginBlendGroup {
+                bounds: idml_compose::Rect {
+                    x: 10.0,
+                    y: 10.0,
+                    w: 20.0,
+                    h: 20.0,
+                },
+                blend_mode: idml_compose::BlendMode::Lighten,
+                opacity: 1.0,
+                transform: idml_compose::Transform::IDENTITY,
+            });
+        // Push a clip covering only the left half (x in 10..20) of
+        // the group buffer. The clip path is in page-space pt; the
+        // rasterizer is responsible for re-anchoring it to the
+        // group's local pixel grid.
+        let mut clip_path = idml_compose::PathData::default();
+        clip_path.segments.push(idml_compose::PathSegment::MoveTo {
+            x: 0.0,
+            y: 0.0,
+        });
+        clip_path.segments.push(idml_compose::PathSegment::LineTo {
+            x: 1.0,
+            y: 0.0,
+        });
+        clip_path.segments.push(idml_compose::PathSegment::LineTo {
+            x: 1.0,
+            y: 1.0,
+        });
+        clip_path.segments.push(idml_compose::PathSegment::LineTo {
+            x: 0.0,
+            y: 1.0,
+        });
+        clip_path.segments.push(idml_compose::PathSegment::Close);
+        let clip_id = list.paths.push_anon(clip_path);
+        // unit-rect [0,1]² → page rect [10,10..20,30] (left half of
+        // the inner rect, full vertical extent).
+        let clip_xform = idml_compose::Transform([10.0, 0.0, 0.0, 20.0, 10.0, 10.0]);
+        list.commands
+            .push(idml_compose::DisplayCommand::PushClip {
+                path_id: clip_id,
+                transform: clip_xform,
+            });
+        // Black rect at (10, 10, 20, 20) — wider than the clip.
+        emit_rect(
+            Rect {
+                x: 10.0,
+                y: 10.0,
+                w: 20.0,
+                h: 20.0,
+            },
+            black,
+            &mut list,
+        );
+        list.commands
+            .push(idml_compose::DisplayCommand::PopClip(
+                idml_compose::Transform::IDENTITY,
+            ));
+        list.commands
+            .push(idml_compose::DisplayCommand::EndBlendGroup(
+                idml_compose::Transform::IDENTITY,
+            ));
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        // (12, 15): inside clip + inside inner rect ⇒ Lighten(black,
+        // yellow) = yellow.
+        let inside_clip = at(&img, 12, 15);
+        assert!(
+            inside_clip[0] > 240
+                && inside_clip[1] > 240
+                && inside_clip[2] < 15,
+            "inside clip+inner: expected yellow, got {inside_clip:?}"
+        );
+        // (25, 15): outside clip but inside inner rect ⇒ group buffer
+        // empty there, Lighten composite no-op, page yellow shows.
+        let outside_clip = at(&img, 25, 15);
+        assert!(
+            outside_clip[0] > 240
+                && outside_clip[1] > 240
+                && outside_clip[2] < 15,
+            "outside clip+inner: expected yellow page, got {outside_clip:?}"
+        );
+        // (2, 2): outside the yellow background ⇒ canvas white.
+        let bg = at(&img, 2, 2);
+        assert!(
+            bg[0] > 240 && bg[1] > 240 && bg[2] > 240,
+            "page bg = white, got {bg:?}"
+        );
     }
 
     #[test]
