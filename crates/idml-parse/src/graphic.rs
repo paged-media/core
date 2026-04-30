@@ -34,6 +34,13 @@ pub struct ColorEntry {
     pub name: Option<String>,
     pub space: ColorSpace,
     pub value: Vec<f32>,
+    /// Optional alpha channel (0..=1, 1 = fully opaque) sourced from
+    /// the IDML `Alpha` / `AlphaPercentage` attribute on `<Color>`.
+    /// `None` means the swatch carries no alpha; the consumer should
+    /// treat the swatch as opaque. Used by the gradient-feather
+    /// renderer when a `<GradientStop>` in spec form references a
+    /// `<Color>` whose alpha defines the stop's opacity.
+    pub alpha: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -155,6 +162,18 @@ impl Graphic {
         let color_ref = swatch.color_ref.as_deref()?;
         self.colors.get(color_ref)
     }
+
+    /// Resolve a swatch's alpha channel (0..=1, 1 = fully opaque).
+    /// Used by the gradient-feather renderer when a `<GradientStop>`
+    /// in IDML spec form (`StopColor="Color/..."`) references a
+    /// `<Color>` swatch whose alpha defines the stop's opacity.
+    /// Returns `None` when the swatch carries no alpha (CMYK / RGB
+    /// without `AlphaPercentage`) — callers should treat that as
+    /// "opaque" and fall back to whatever inline alpha attribute the
+    /// stop carries (e.g. the IDML `Alpha` / `Opacity`).
+    pub fn resolve_alpha(&self, id: &str) -> Option<f32> {
+        self.resolve(id).and_then(|c| c.alpha)
+    }
 }
 
 fn parse_color(e: &quick_xml::events::BytesStart) -> Option<ColorEntry> {
@@ -170,11 +189,22 @@ fn parse_color(e: &quick_xml::events::BytesStart) -> Option<ColorEntry> {
                 .collect()
         })
         .unwrap_or_default();
+    // Alpha lives on `<Color>` in two competing serialisations.
+    // Adobe's reference uses `AlphaPercentage` (0..=100); some
+    // tooling emits a plain `Alpha` (0..=100 or 0..=1). Accept
+    // either; treat absent as `None`. Values > 1 are interpreted
+    // as the percentage form; values in `[0, 1]` are treated as a
+    // unit float.
+    let alpha = attr(e, b"AlphaPercentage")
+        .or_else(|| attr(e, b"Alpha"))
+        .and_then(|s| s.parse::<f32>().ok())
+        .map(|v| if v > 1.0 { (v / 100.0).clamp(0.0, 1.0) } else { v.clamp(0.0, 1.0) });
     Some(ColorEntry {
         self_id,
         name: attr(e, b"Name"),
         space,
         value,
+        alpha,
     })
 }
 
@@ -329,5 +359,44 @@ mod tests {
         assert_eq!(grad.stops[0].location_pct, 0.0);
         assert_eq!(grad.stops[1].stop_color, "Color/Sky");
         assert_eq!(grad.stops[1].location_pct, 100.0);
+    }
+
+    const ALPHA_SAMPLE: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic>
+    <Color Self="Color/Translucent" Name="T" Space="RGB" ColorValue="120 180 255" AlphaPercentage="40"/>
+    <Color Self="Color/HalfAlpha" Name="H" Space="RGB" ColorValue="0 0 0" Alpha="0.5"/>
+    <Color Self="Color/Opaque" Name="O" Space="RGB" ColorValue="0 0 0"/>
+  </Graphic>
+</idPkg:Graphic>"#;
+
+    #[test]
+    fn resolve_alpha_reads_alpha_percentage() {
+        // AlphaPercentage="40" → 0.40.
+        let g = Graphic::parse(ALPHA_SAMPLE).unwrap();
+        let alpha = g.resolve_alpha("Color/Translucent").expect("alpha set");
+        assert!((alpha - 0.40).abs() < 1e-4, "got {}", alpha);
+    }
+
+    #[test]
+    fn resolve_alpha_accepts_unit_float_form() {
+        // Some tooling serialises `Alpha="0.5"` as a unit float.
+        let g = Graphic::parse(ALPHA_SAMPLE).unwrap();
+        let alpha = g.resolve_alpha("Color/HalfAlpha").expect("alpha set");
+        assert!((alpha - 0.5).abs() < 1e-4, "got {}", alpha);
+    }
+
+    #[test]
+    fn resolve_alpha_returns_none_for_swatch_without_alpha() {
+        // Color without an Alpha attribute → None (caller treats as
+        // opaque and falls back to inline stop attributes).
+        let g = Graphic::parse(ALPHA_SAMPLE).unwrap();
+        assert!(g.resolve_alpha("Color/Opaque").is_none());
+    }
+
+    #[test]
+    fn resolve_alpha_unknown_id_returns_none() {
+        let g = Graphic::parse(ALPHA_SAMPLE).unwrap();
+        assert!(g.resolve_alpha("Color/NotThere").is_none());
     }
 }
