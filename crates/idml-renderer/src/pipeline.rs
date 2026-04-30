@@ -2291,29 +2291,68 @@ fn emit_anchored_frames_for_paragraph(
         let (offset_x, offset_y) = setting
             .map(|s| (s.anchor_x_offset, s.anchor_y_offset))
             .unwrap_or((0.0, 0.0));
-        // Frame height is needed up-front so InlinePosition can lift
-        // the frame's top so its bottom edge sits on the baseline.
-        // Width-based placement currently relies on the
-        // paragraph-origin x; future enhancements (BottomRightAnchor,
-        // CenterAnchor) would consult the width too.
+        let frame_w = af.bounds.map(|b| b.width()).unwrap_or(0.0);
         let frame_h = af.bounds.map(|b| b.height()).unwrap_or(0.0);
-        // Compute the frame's top-left in page-local pt. InlinePosition
-        // places the frame at the paragraph's start, raised so its
-        // bottom sits on the line baseline. AbovePosition places it
-        // directly above the paragraph. Custom uses the offsets
-        // verbatim from the paragraph's first baseline.
+        // Anchor reference point on the frame — the corner / edge the
+        // AnchoredObjectSetting offset attaches to (`TopLeftAnchor`,
+        // `TopRightAnchor`, `CenterAnchor`, …). For inline frames
+        // we resolve the *vertical* component of the anchor point
+        // strictly: a Top anchor sits the frame's top on the line
+        // baseline, a Bottom anchor sits the frame's bottom on the
+        // baseline (the legacy default), Center splits the diff.
+        // The horizontal component currently degenerates because we
+        // don't yet thread the per-anchor advance offset out of the
+        // composer — both `BottomLeftAnchor` and `BottomRightAnchor`
+        // place the frame at the column-left edge of the paragraph
+        // (real InDesign would shift `BottomRightAnchor` by the
+        // anchor character's full advance, which equals the frame's
+        // own width when the anchor is the lone character on the
+        // line). Once the composer surfaces the U+FFFC advance
+        // position the horizontal degenerates collapse — see the
+        // TODO below.
+        let anchor_point = setting
+            .and_then(|s| s.anchor_point.as_deref())
+            .unwrap_or("BottomLeftAnchor");
+        let vertical_corner_dy = anchor_vertical_corner_offset(anchor_point, frame_h);
+        // TODO(anchored-position): once paragraph_breaker exposes
+        // the anchor character's advance-from-line-start, replace
+        // `para_origin_x` with that advance so `InlinePosition` lands
+        // at the actual inline position. The horizontal anchor-corner
+        // offset (Left / Center / Right) then becomes meaningful too.
         let (place_x, place_y) = match position {
-            "InlinePosition" => (
+            "InlinePosition" => {
+                if frame_w > 0.0 && frame_h > 0.0 {
+                    tracing::debug!(
+                        target: "idml_renderer::pipeline",
+                        anchor_point,
+                        "InlinePosition: anchored at paragraph origin (per-anchor advance offset queued)"
+                    );
+                }
+                // Frame top-left placed so the named anchor corner
+                // sits at (paragraph origin x, baseline y) plus the
+                // anchor offsets. The horizontal anchor-corner
+                // component currently collapses to 0 until
+                // paragraph_breaker exposes the per-anchor advance
+                // position; the vertical component drives Top vs
+                // Bottom anchoring.
+                (
+                    para_origin_x + offset_x,
+                    baseline_y_pt + offset_y - vertical_corner_dy,
+                )
+            }
+            // Both `AbovePosition` and the (newer) `AboveLine` enum
+            // value place the frame above the host line; treat them
+            // identically until line-by-line vertical resolution lands.
+            "AbovePosition" | "AboveLine" => (
                 para_origin_x + offset_x,
-                baseline_y_pt - frame_h + offset_y,
+                para_origin_y + offset_y - vertical_corner_dy,
             ),
-            "AbovePosition" => (
+            // `Custom` / `Anchored` honour the offsets verbatim from
+            // the anchor character's baseline. IDML 14+ uses
+            // `Anchored` in place of `Custom`; treat them as synonyms.
+            "Custom" | "Anchored" => (
                 para_origin_x + offset_x,
-                para_origin_y - frame_h + offset_y,
-            ),
-            "Custom" => (
-                para_origin_x + offset_x,
-                baseline_y_pt + offset_y,
+                baseline_y_pt + offset_y - vertical_corner_dy,
             ),
             _ => {
                 tracing::debug!(
@@ -2321,10 +2360,29 @@ fn emit_anchored_frames_for_paragraph(
                     position = position,
                     "unrecognised anchored position; defaulting to InlinePosition"
                 );
-                (para_origin_x + offset_x, baseline_y_pt - frame_h + offset_y)
+                (
+                    para_origin_x + offset_x,
+                    baseline_y_pt + offset_y - vertical_corner_dy,
+                )
             }
         };
         emit_one_anchored_frame(em, af, target_page, place_x, place_y, pages);
+    }
+}
+
+/// Vertical offset from an anchored frame's top to the reference
+/// edge / center named by `anchor_point`. Returns `0` for any
+/// `Top*Anchor` (frame's top at the anchor's y), `h/2` for any
+/// `*CenterAnchor`, and `h` for any `Bottom*Anchor` / unknown values
+/// (frame's bottom at the anchor's y — the legacy default that
+/// matched the original anchored-frame placement).
+fn anchor_vertical_corner_offset(anchor_point: &str, h: f32) -> f32 {
+    match anchor_point {
+        "TopLeftAnchor" | "TopCenterAnchor" | "TopRightAnchor" => 0.0,
+        "LeftCenterAnchor" | "CenterAnchor" | "RightCenterAnchor" => h * 0.5,
+        // Bottom* and unknown values fall through to the legacy
+        // bottom-anchored placement (frame's bottom at the anchor y).
+        _ => h,
     }
 }
 
