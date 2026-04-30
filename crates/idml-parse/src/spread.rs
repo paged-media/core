@@ -438,11 +438,14 @@ pub struct FrameEffects {
     pub bevel: Option<BevelEmbossParams>,
     pub satin: Option<SatinParams>,
     pub feather: Option<FeatherParams>,
-    /// Directional / Gradient feather variants — parser captures the
-    /// `Applied` flag only for now; renderer treats them as plain
-    /// Feather. Per-edge widths and gradient stops are a follow-up.
-    pub directional_feather: Option<bool>,
-    pub gradient_feather: Option<bool>,
+    /// Directional feather — per-edge widths + rotation. Carries
+    /// the four IDML edge attributes (`LeftWidth`, `RightWidth`,
+    /// `TopWidth`, `BottomWidth`) plus optional `Angle` /
+    /// `NoiseAmount` / `ChokeAmount` / `CornerType`.
+    pub directional_feather: Option<DirectionalFeatherParams>,
+    /// Gradient feather — linear/radial alpha falloff defined by a
+    /// list of `<GradientStop>` children.
+    pub gradient_feather: Option<GradientFeatherParams>,
 }
 
 /// `<InnerShadowSetting>` parameters. Either `(XOffset, YOffset)` or
@@ -529,6 +532,60 @@ pub struct FeatherParams {
     pub corner_type: Option<String>,
     pub noise_pct: Option<f32>,
     pub choke_pct: Option<f32>,
+}
+
+/// `<DirectionalFeatherSetting>` parameters. Each edge carries an
+/// independent feather width in pt; `angle_deg` rotates the per-edge
+/// directions. The renderer currently approximates this with a
+/// uniform feather using the max of the four widths — angle is
+/// captured but unused.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct DirectionalFeatherParams {
+    pub left_width: Option<f32>,
+    pub right_width: Option<f32>,
+    pub top_width: Option<f32>,
+    pub bottom_width: Option<f32>,
+    pub angle_deg: Option<f32>,
+    pub noise_pct: Option<f32>,
+    pub choke_pct: Option<f32>,
+    pub corner_type: Option<String>,
+}
+
+/// `<GradientFeatherSetting>` parameters. The gradient direction is
+/// either an explicit `(start_point, end_point)` pair or
+/// `(angle_deg, …)` polar form (start/end are derived). `stops`
+/// captures the `<GradientStop>` children; each stop's alpha
+/// (extracted from the `<Color>` referenced by `StopColor`) is the
+/// feather opacity at that location.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct GradientFeatherParams {
+    /// `Type` attribute: `"Linear"` or `"Radial"`. Defaults to
+    /// `"Linear"` when absent or unrecognised at the renderer.
+    pub gradient_type: Option<String>,
+    pub start_point: Option<(f32, f32)>,
+    pub end_point: Option<(f32, f32)>,
+    pub angle_deg: Option<f32>,
+    pub stops: Vec<GradientFeatherStop>,
+}
+
+/// One `<GradientStop>` child of a `<GradientFeatherSetting>`. Each
+/// stop's `StopColor` references a `<Color>` swatch; the renderer
+/// resolves the swatch's alpha later. Until then `alpha_pct` is
+/// initialised to 100 and the stop color id is preserved for
+/// downstream resolution.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct GradientFeatherStop {
+    /// Color id referenced by `StopColor`. Resolved by the renderer
+    /// to extract the alpha component. Black + alpha = "opaque
+    /// feather" in InDesign's UI.
+    pub stop_color: Option<String>,
+    pub location_pct: f32,
+    /// 0..100 — opacity at this stop. Defaults to 100 (fully
+    /// opaque) when not surfaced by the parser.
+    pub alpha_pct: f32,
+    /// Transition midpoint (0..100) between this stop and the
+    /// next; mirrors IDML's `GradientStopMidpoint` if present.
+    pub midpoint_pct: f32,
 }
 
 /// Mirrors IDML's `<FrameFittingOption>` — an optional element nested
@@ -993,6 +1050,14 @@ impl Spread {
         // outer group's `members` can carry a `FrameRef::Group(idx)`.
         let mut group_builders: Vec<GroupBuilder> = Vec::new();
         let mut current_frame: Option<CurrentFrame> = None;
+        // Tracks the rectangle index whose `<GradientFeatherSetting>`
+        // is currently open, so nested `<GradientStop>` children can
+        // be appended to the right effects bag. Cleared on the
+        // matching close tag. `<GradientStop>` is also a child of
+        // `<Gradient>` swatches in graphic.rs — those live in a
+        // different parser entirely, so the state here can stay
+        // scoped to spread.rs.
+        let mut current_gradient_feather: Option<usize> = None;
         let mut buf = Vec::new();
 
         // Register a freshly-opened frame with the innermost
@@ -1441,12 +1506,67 @@ impl Spread {
                                     });
                                 }
                                 b"DirectionalFeatherSetting" => {
-                                    bag.directional_feather = Some(true);
+                                    bag.directional_feather = Some(DirectionalFeatherParams {
+                                        left_width: parse_f(&e, b"LeftWidth"),
+                                        right_width: parse_f(&e, b"RightWidth"),
+                                        top_width: parse_f(&e, b"TopWidth"),
+                                        bottom_width: parse_f(&e, b"BottomWidth"),
+                                        angle_deg: parse_f(&e, b"Angle"),
+                                        noise_pct: parse_f(&e, b"NoiseAmount"),
+                                        choke_pct: parse_f(&e, b"ChokeAmount"),
+                                        corner_type: attr(&e, b"CornerType"),
+                                    });
                                 }
                                 b"GradientFeatherSetting" => {
-                                    bag.gradient_feather = Some(true);
+                                    let start_point = attr(&e, b"GradientStart")
+                                        .as_deref()
+                                        .and_then(parse_xy_pair);
+                                    let end_point = attr(&e, b"GradientEnd")
+                                        .as_deref()
+                                        .and_then(parse_xy_pair);
+                                    bag.gradient_feather = Some(GradientFeatherParams {
+                                        gradient_type: attr(&e, b"Type"),
+                                        start_point,
+                                        end_point,
+                                        angle_deg: parse_f(&e, b"GradientAngle")
+                                            .or_else(|| parse_f(&e, b"Angle")),
+                                        stops: Vec::new(),
+                                    });
+                                    // Mark this rectangle's gradient
+                                    // feather as the open target so
+                                    // nested `<GradientStop>` children
+                                    // can append to it. Cleared on the
+                                    // close tag below.
+                                    current_gradient_feather = Some(i);
                                 }
                                 _ => {}
+                            }
+                        }
+                    }
+                    b"GradientStop" => {
+                        // `<GradientStop>` children of an open
+                        // `<GradientFeatherSetting>` define the
+                        // alpha falloff. The same element name is
+                        // also used for `<Gradient>` swatch entries
+                        // in graphic.rs — that's a separate parser
+                        // file, so the routing here only fires when
+                        // a gradient feather block is actually open.
+                        if let Some(rect_idx) = current_gradient_feather {
+                            if let Some(bag) = out.rectangles[rect_idx].effects.as_mut() {
+                                if let Some(gf) = bag.gradient_feather.as_mut() {
+                                    let location_pct = parse_f(&e, b"Location").unwrap_or(0.0);
+                                    let alpha_pct = parse_f(&e, b"Alpha").unwrap_or(100.0);
+                                    let midpoint_pct =
+                                        parse_f(&e, b"GradientStopMidpoint")
+                                            .or_else(|| parse_f(&e, b"Midpoint"))
+                                            .unwrap_or(50.0);
+                                    gf.stops.push(GradientFeatherStop {
+                                        stop_color: attr(&e, b"StopColor"),
+                                        location_pct,
+                                        alpha_pct,
+                                        midpoint_pct,
+                                    });
+                                }
                             }
                         }
                     }
@@ -1897,6 +2017,14 @@ impl Spread {
                                 b.content_transparency_depth -= 1;
                             }
                         }
+                    }
+                    b"GradientFeatherSetting" => {
+                        // Close the gradient-feather scope so any
+                        // later `<GradientStop>` (e.g. inside a
+                        // `<Gradient>` swatch parsed in graphic.rs
+                        // — different file, but defensive here)
+                        // doesn't accidentally route to this rect.
+                        current_gradient_feather = None;
                     }
                     _ => {}
                 },
@@ -2667,5 +2795,107 @@ mod tests {
             s.polygons[0].image_item_transform,
             Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
         );
+    }
+
+    #[test]
+    fn parses_directional_feather_setting() {
+        // Per-edge widths land in `directional_feather`; the bool
+        // sentinel from the previous parser is gone.
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Rectangle Self="r1" GeometricBounds="0 0 100 100">
+              <Properties>
+                <TransparencySetting>
+                  <DirectionalFeatherSetting Applied="true"
+                    LeftWidth="2" RightWidth="3" TopWidth="4" BottomWidth="5"
+                    Angle="90" NoiseAmount="10" ChokeAmount="20"
+                    CornerType="Rounded"/>
+                </TransparencySetting>
+              </Properties>
+            </Rectangle>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        let bag = s.rectangles[0].effects.as_ref().expect("effects bag");
+        let dir = bag
+            .directional_feather
+            .as_ref()
+            .expect("directional feather parsed");
+        assert_eq!(dir.left_width, Some(2.0));
+        assert_eq!(dir.right_width, Some(3.0));
+        assert_eq!(dir.top_width, Some(4.0));
+        assert_eq!(dir.bottom_width, Some(5.0));
+        assert_eq!(dir.angle_deg, Some(90.0));
+        assert_eq!(dir.noise_pct, Some(10.0));
+        assert_eq!(dir.choke_pct, Some(20.0));
+        assert_eq!(dir.corner_type.as_deref(), Some("Rounded"));
+    }
+
+    #[test]
+    fn directional_feather_disabled_when_applied_false() {
+        // `Applied="false"` short-circuits the whole block —
+        // directional_feather stays None.
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Rectangle Self="r1" GeometricBounds="0 0 100 100">
+              <Properties>
+                <TransparencySetting>
+                  <DirectionalFeatherSetting Applied="false"
+                    LeftWidth="2" RightWidth="3" TopWidth="4" BottomWidth="5"/>
+                </TransparencySetting>
+              </Properties>
+            </Rectangle>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        // The effects bag may be absent entirely or have no
+        // directional_feather; both are acceptable.
+        let dir_present = s.rectangles[0]
+            .effects
+            .as_ref()
+            .and_then(|e| e.directional_feather.as_ref())
+            .is_some();
+        assert!(!dir_present, "Applied=false should leave directional_feather=None");
+    }
+
+    #[test]
+    fn parses_gradient_feather_setting_with_stops() {
+        // Linear gradient feather with two stops; `<GradientStop>`
+        // children are nested inside `<GradientFeatherSetting>` and
+        // get appended to `gradient_feather.stops`.
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Rectangle Self="r1" GeometricBounds="0 0 100 100">
+              <Properties>
+                <TransparencySetting>
+                  <GradientFeatherSetting Applied="true" Type="Linear"
+                                          GradientAngle="45">
+                    <GradientStop StopColor="Color/Black" Location="0"
+                                  Alpha="100" GradientStopMidpoint="50"/>
+                    <GradientStop StopColor="Color/Black" Location="100"
+                                  Alpha="0" GradientStopMidpoint="50"/>
+                  </GradientFeatherSetting>
+                </TransparencySetting>
+              </Properties>
+            </Rectangle>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        let bag = s.rectangles[0].effects.as_ref().expect("effects bag");
+        let gf = bag
+            .gradient_feather
+            .as_ref()
+            .expect("gradient feather parsed");
+        assert_eq!(gf.gradient_type.as_deref(), Some("Linear"));
+        assert_eq!(gf.angle_deg, Some(45.0));
+        assert_eq!(gf.stops.len(), 2);
+        assert_eq!(gf.stops[0].location_pct, 0.0);
+        assert_eq!(gf.stops[0].alpha_pct, 100.0);
+        assert_eq!(gf.stops[0].stop_color.as_deref(), Some("Color/Black"));
+        assert_eq!(gf.stops[1].location_pct, 100.0);
+        assert_eq!(gf.stops[1].alpha_pct, 0.0);
     }
 }
