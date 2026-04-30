@@ -473,6 +473,15 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     let mut baseline = options.first_baseline;
     let last_break = breaks.len().saturating_sub(1);
     let bytes = paragraph_text.as_bytes();
+    // Per-line widths drive both Knuth-Plass and post-layout
+    // alignment: when an obstacle carves a line down to ~half-column
+    // width, the right/center/justify alignments should snap glyphs
+    // against THAT width, not the original scalar column. Defaults
+    // to the scalar width when no per-line override is configured.
+    let per_line_widths: Option<&[i32]> = opts
+        .column_widths
+        .as_deref()
+        .filter(|v| !v.is_empty());
     for (i, bp) in breaks.iter().enumerate() {
         let Some(&end) = byte_ends.get(bp.index) else {
             continue;
@@ -536,10 +545,19 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             }
         }
         let natural_width = pen_x;
+        // When `column_widths` is configured, use the matching slot
+        // for this line's alignment column (clamping at the slice
+        // tail mirrors paragraph-breaker's own fallback). Right /
+        // center / justify therefore align against the line's
+        // *available* width, which is what the wrap-around-objects
+        // pass needs.
+        let line_column = per_line_widths
+            .map(|w| w[i.min(w.len() - 1)])
+            .unwrap_or_else(|| options.column_width());
         apply_alignment(
             &mut glyphs,
             natural_width,
-            options.column_width(),
+            line_column,
             options.alignment,
             i == last_break,
             bytes,
