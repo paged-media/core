@@ -302,6 +302,12 @@ fn build_scene_with_transform(list: &DisplayList, page_to_px: kurbo::Affine) -> 
                 // blur path which only lands cleanly with the
                 // §10.4 effect plumbing.
             }
+            DisplayCommand::PathShadow { .. } => {
+                // Same stub story as DropShadow above — Vello will
+                // render the soft glyph shadow once the Gaussian
+                // blur path lands. The CPU rasterizer handles this
+                // variant today; the Vello backend simply skips it.
+            }
             DisplayCommand::PushClip { path_id, transform } => {
                 let Some(path_data) = list.paths.get(*path_id) else {
                     continue;
