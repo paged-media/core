@@ -121,6 +121,13 @@ pub struct TextFrame {
     /// `<DropShadowSetting>` parsed from `<Properties><TransparencySetting>`.
     /// `None` when absent or `Mode="None"`.
     pub drop_shadow: Option<DropShadowSetting>,
+    /// `<DropShadowSetting>` nested under `<StrokeTransparencySetting>`.
+    /// Renderer emits this only when the frame's stroke is actually
+    /// visible (non-`Swatch/None` colour AND `StrokeWeight > 0`).
+    /// Splitting the storage from `drop_shadow` is required because a
+    /// frame can carry both a fill-shadow (under `<TransparencySetting>`)
+    /// and a stroke-shadow (under `<StrokeTransparencySetting>`).
+    pub stroke_drop_shadow: Option<DropShadowSetting>,
     /// `NextTextFrame` attribute — the `Self` id of the frame that
     /// continues this story when its content overflows the current
     /// frame. `None` for end-of-chain or unthreaded frames.
@@ -258,6 +265,8 @@ pub struct Rectangle {
     pub stroke_color: Option<String>,
     pub stroke_weight: Option<f32>,
     pub drop_shadow: Option<DropShadowSetting>,
+    /// See [`TextFrame::stroke_drop_shadow`].
+    pub stroke_drop_shadow: Option<DropShadowSetting>,
     /// `LinkResourceURI` from a nested `<Image>` (or its `<Link>`
     /// child). The pipeline routes this through
     /// `AssetResolver::resolve_image`. `None` means the rectangle
@@ -401,6 +410,8 @@ pub struct Oval {
     pub stroke_color: Option<String>,
     pub stroke_weight: Option<f32>,
     pub drop_shadow: Option<DropShadowSetting>,
+    /// See [`TextFrame::stroke_drop_shadow`].
+    pub stroke_drop_shadow: Option<DropShadowSetting>,
     /// `AppliedObjectStyle` reference; see `TextFrame`.
     pub applied_object_style: Option<String>,
     /// `<TextWrapPreference>` parsed off the oval.
@@ -484,13 +495,17 @@ pub enum TextWrapMode {
 }
 
 impl TextWrapMode {
+    /// Map IDML attribute string. InDesign's exporter uses both the
+    /// `<Mode>TextWrap` long form and the bare-stem short form
+    /// depending on the property; we match either so wrap rectangles
+    /// from real-world exports route correctly.
     pub fn from_idml(s: &str) -> Self {
         match s {
             "None" => Self::None,
-            "BoundingBoxTextWrap" => Self::BoundingBoxTextWrap,
-            "ContourTextWrap" => Self::ContourTextWrap,
-            "JumpObjectTextWrap" => Self::JumpObjectTextWrap,
-            "NextColumnTextWrap" => Self::NextColumnTextWrap,
+            "BoundingBoxTextWrap" | "BoundingBox" => Self::BoundingBoxTextWrap,
+            "ContourTextWrap" | "Contour" => Self::ContourTextWrap,
+            "JumpObjectTextWrap" | "JumpObject" => Self::JumpObjectTextWrap,
+            "NextColumnTextWrap" | "NextColumn" => Self::NextColumnTextWrap,
             _ => Self::Other,
         }
     }
@@ -620,12 +635,17 @@ struct CurrentFrame {
     /// child `<TextWrapOffset>` knows to write back to the current
     /// shape.
     in_text_wrap: bool,
-    /// Counter for nested `<StrokeTransparencySetting>` /
-    /// `<ContentTransparencySetting>` containers. When > 0, child
-    /// `<DropShadowSetting>` blocks describe stroke-only or
-    /// content-only shadows that shouldn't paint a frame-fill
-    /// shadow. Incremented on Start, decremented on End.
-    non_fill_transparency_depth: u32,
+    /// Depth counter for nested `<StrokeTransparencySetting>`
+    /// containers. When > 0, child `<DropShadowSetting>` blocks
+    /// describe stroke-only shadows — captured into
+    /// `stroke_drop_shadow` on the shape so the renderer can emit
+    /// them only when the stroke is actually visible.
+    stroke_transparency_depth: u32,
+    /// Depth counter for nested `<ContentTransparencySetting>`
+    /// containers. When > 0, child `<DropShadowSetting>` blocks
+    /// describe content-only shadows that don't map onto our
+    /// single-shadow-per-frame model and are skipped.
+    content_transparency_depth: u32,
 }
 
 /// Read whatever `text_wrap.offsets` has already been recorded on the
@@ -874,6 +894,7 @@ impl Spread {
                             stroke_color: common.stroke_color,
                             stroke_weight: common.stroke_weight,
                             drop_shadow: None,
+                            stroke_drop_shadow: None,
                             next_text_frame: attr(&e, b"NextTextFrame"),
                             vertical_justification: None,
                             first_baseline_offset: None,
@@ -892,7 +913,8 @@ impl Spread {
                             anchors: Vec::new(),
                             keep_anchors: false,
                             in_text_wrap: false,
-                            non_fill_transparency_depth: 0,
+                            stroke_transparency_depth: 0,
+                            content_transparency_depth: 0,
                         });
                     }
                     b"Rectangle" => {
@@ -912,6 +934,7 @@ impl Spread {
                             stroke_color: common.stroke_color,
                             stroke_weight: common.stroke_weight,
                             drop_shadow: None,
+                            stroke_drop_shadow: None,
                             image_link: None,
                             image_item_transform: None,
                             applied_object_style: common.applied_object_style,
@@ -938,7 +961,8 @@ impl Spread {
                             anchors: Vec::new(),
                             keep_anchors: false,
                             in_text_wrap: false,
-                            non_fill_transparency_depth: 0,
+                            stroke_transparency_depth: 0,
+                            content_transparency_depth: 0,
                         });
                     }
                     b"Oval" => {
@@ -955,6 +979,7 @@ impl Spread {
                             stroke_color: common.stroke_color,
                             stroke_weight: common.stroke_weight,
                             drop_shadow: None,
+                            stroke_drop_shadow: None,
                             applied_object_style: common.applied_object_style,
                             text_wrap: None,
                             item_layer: common.item_layer,
@@ -968,47 +993,76 @@ impl Spread {
                             anchors: Vec::new(),
                             keep_anchors: false,
                             in_text_wrap: false,
-                            non_fill_transparency_depth: 0,
+                            stroke_transparency_depth: 0,
+                            content_transparency_depth: 0,
                         });
                     }
-                    b"StrokeTransparencySetting" | b"ContentTransparencySetting" => {
-                        // Drop shadows under these wrappers describe
-                        // stroke- or content-only shadows that don't
-                        // map onto our single-shadow-per-frame model.
-                        // Track the depth so the DropShadowSetting
-                        // arm can skip them.
+                    b"StrokeTransparencySetting" => {
+                        // Drop shadows under this wrapper describe a
+                        // shadow cast by the frame's stroke — captured
+                        // separately so the renderer can gate emission
+                        // on stroke visibility.
                         if let Some(cf) = current_frame.as_mut() {
-                            cf.non_fill_transparency_depth += 1;
+                            cf.stroke_transparency_depth += 1;
+                        }
+                    }
+                    b"ContentTransparencySetting" => {
+                        // Drop shadows under this wrapper describe
+                        // content-only shadows that don't map onto our
+                        // single-shadow-per-frame model; skipped.
+                        if let Some(cf) = current_frame.as_mut() {
+                            cf.content_transparency_depth += 1;
                         }
                     }
                     b"DropShadowSetting" => {
                         if let (Some(cf), Some(setting)) =
                             (current_frame.as_ref(), parse_drop_shadow(&e))
                         {
-                            // Skip stroke- / content-only drop shadows;
-                            // those don't paint a fill-shaped backdrop
-                            // and otherwise leak as opaque rectangles
-                            // when the frame's fill is transparent.
-                            if cf.non_fill_transparency_depth == 0
-                                // Only "Drop"/"Default" mode results in a
-                                // visible shadow. "None" means the shadow
-                                // is disabled even though the setting is
-                                // serialised.
-                                && setting.mode != "None" {
-                                match cf.kind {
-                                    CurrentFrameKind::Text(i) => {
-                                        out.text_frames[i].drop_shadow = Some(setting);
+                            // Only "Drop"/"Default" mode results in a
+                            // visible shadow. "None" means the shadow
+                            // is disabled even though the setting is
+                            // serialised.
+                            if setting.mode != "None" {
+                                if cf.content_transparency_depth > 0 {
+                                    // Content-only shadow — skip.
+                                } else if cf.stroke_transparency_depth > 0 {
+                                    // Stroke-only shadow — captured for
+                                    // conditional emission by the
+                                    // renderer.
+                                    match cf.kind {
+                                        CurrentFrameKind::Text(i) => {
+                                            out.text_frames[i].stroke_drop_shadow = Some(setting);
+                                        }
+                                        CurrentFrameKind::Rect(i) => {
+                                            out.rectangles[i].stroke_drop_shadow = Some(setting);
+                                        }
+                                        CurrentFrameKind::Oval(i) => {
+                                            out.ovals[i].stroke_drop_shadow = Some(setting);
+                                        }
+                                        CurrentFrameKind::Line(_)
+                                        | CurrentFrameKind::Polygon(_) => {
+                                            // GraphicLine + Polygon have
+                                            // no shadow fields today;
+                                            // ignore.
+                                        }
                                     }
-                                    CurrentFrameKind::Rect(i) => {
-                                        out.rectangles[i].drop_shadow = Some(setting);
-                                    }
-                                    CurrentFrameKind::Oval(i) => {
-                                        out.ovals[i].drop_shadow = Some(setting);
-                                    }
-                                    CurrentFrameKind::Line(_) | CurrentFrameKind::Polygon(_) => {
-                                        // GraphicLine + Polygon have
-                                        // no drop_shadow field today;
-                                        // ignore.
+                                } else {
+                                    match cf.kind {
+                                        CurrentFrameKind::Text(i) => {
+                                            out.text_frames[i].drop_shadow = Some(setting);
+                                        }
+                                        CurrentFrameKind::Rect(i) => {
+                                            out.rectangles[i].drop_shadow = Some(setting);
+                                        }
+                                        CurrentFrameKind::Oval(i) => {
+                                            out.ovals[i].drop_shadow = Some(setting);
+                                        }
+                                        CurrentFrameKind::Line(_)
+                                        | CurrentFrameKind::Polygon(_) => {
+                                            // GraphicLine + Polygon have
+                                            // no drop_shadow field today;
+                                            // ignore.
+                                        }
                                     }
                                 }
                             }
@@ -1329,7 +1383,8 @@ impl Spread {
                             // flow text along the actual stroke.
                             keep_anchors: true,
                             in_text_wrap: false,
-                            non_fill_transparency_depth: 0,
+                            stroke_transparency_depth: 0,
+                            content_transparency_depth: 0,
                         });
                     }
                     b"Polygon" => {
@@ -1363,7 +1418,8 @@ impl Spread {
                             // FillPath instead of a bbox FillRect.
                             keep_anchors: true,
                             in_text_wrap: false,
-                            non_fill_transparency_depth: 0,
+                            stroke_transparency_depth: 0,
+                            content_transparency_depth: 0,
                         });
                     }
                     _ => {}
@@ -1420,10 +1476,17 @@ impl Spread {
                             cf.in_text_wrap = false;
                         }
                     }
-                    b"StrokeTransparencySetting" | b"ContentTransparencySetting" => {
+                    b"StrokeTransparencySetting" => {
                         if let Some(cf) = current_frame.as_mut() {
-                            if cf.non_fill_transparency_depth > 0 {
-                                cf.non_fill_transparency_depth -= 1;
+                            if cf.stroke_transparency_depth > 0 {
+                                cf.stroke_transparency_depth -= 1;
+                            }
+                        }
+                    }
+                    b"ContentTransparencySetting" => {
+                        if let Some(cf) = current_frame.as_mut() {
+                            if cf.content_transparency_depth > 0 {
+                                cf.content_transparency_depth -= 1;
                             }
                         }
                     }
@@ -1742,6 +1805,54 @@ mod tests {
         // Plain rectangle without shadow stays None.
         assert_eq!(s.rectangles.len(), 1);
         assert!(s.rectangles[0].drop_shadow.is_none());
+    }
+
+    #[test]
+    fn drop_shadow_under_stroke_transparency_lands_in_stroke_field() {
+        // <StrokeTransparencySetting><DropShadowSetting/> → captured
+        // as `stroke_drop_shadow`, not `drop_shadow`. Renderer gates
+        // emission on stroke visibility downstream.
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <TextFrame Self="frame1" ParentStory="u1" GeometricBounds="0 0 100 200">
+              <Properties>
+                <StrokeTransparencySetting>
+                  <DropShadowSetting Mode="Drop" XOffset="3" YOffset="3" Size="6"
+                                     Opacity="50" EffectColor="Color/Black"/>
+                </StrokeTransparencySetting>
+              </Properties>
+            </TextFrame>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert!(s.text_frames[0].drop_shadow.is_none());
+        let shadow = s.text_frames[0]
+            .stroke_drop_shadow
+            .as_ref()
+            .expect("stroke drop shadow parsed");
+        assert_eq!(shadow.mode, "Drop");
+        assert_eq!(shadow.x_offset, 3.0);
+    }
+
+    #[test]
+    fn drop_shadow_under_content_transparency_is_skipped() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <TextFrame Self="frame1" ParentStory="u1" GeometricBounds="0 0 100 200">
+              <Properties>
+                <ContentTransparencySetting>
+                  <DropShadowSetting Mode="Drop" XOffset="3" YOffset="3" Size="6"
+                                     Opacity="50" EffectColor="Color/Black"/>
+                </ContentTransparencySetting>
+              </Properties>
+            </TextFrame>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert!(s.text_frames[0].drop_shadow.is_none());
+        assert!(s.text_frames[0].stroke_drop_shadow.is_none());
     }
 
     #[test]

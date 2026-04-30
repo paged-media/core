@@ -1755,6 +1755,7 @@ impl Project {
             stroke_color,
             stroke_weight,
             drop_shadow: None,
+            stroke_drop_shadow: None,
             image_link,
             image_item_transform: None,
             applied_object_style,
