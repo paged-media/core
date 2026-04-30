@@ -19,6 +19,7 @@ use idml_compose::{
 use idml_parse::{graphic, Graphic, GraphicLine, Oval, PathAnchor, Polygon, Rectangle, TextFrame};
 use idml_scene::Document;
 
+use crate::module::{Geometry, ResolvedFrame};
 use crate::AssetResolver;
 
 /// Knobs the caller tunes when driving the full pipeline.
@@ -1565,46 +1566,51 @@ fn emit_polygon_into(
     fallback: Paint,
     cmyk_xform: Option<&idml_color::IccTransform>,
 ) {
+    let resolved = ResolvedFrame::from_polygon(poly);
     page.stats.frames += 1;
-    let outer = frame_outer_transform(page, poly.item_transform);
-    let fill_transparent = frame_fill_is_transparent(poly.fill_color.as_deref());
-    let fill = poly
+    let outer = frame_outer_transform(page, resolved.item_transform);
+    let fill_transparent = frame_fill_is_transparent(resolved.fill_color);
+    let fill = resolved
         .fill_color
-        .as_deref()
         .and_then(|id| {
             color_id_to_paint_with_list_dir(
                 id,
                 palette,
                 cmyk_xform,
                 &mut page.list,
-                poly.gradient_fill_angle,
+                resolved.gradient_fill_angle,
             )
         })
         .unwrap_or(fallback);
 
-    if poly.anchors.is_empty() {
-        // No anchors: render the bbox.
-        let r = Rect {
-            x: poly.bounds.left,
-            y: poly.bounds.top,
-            w: poly.bounds.width(),
-            h: poly.bounds.height(),
-        };
-        if !fill_transparent {
-            emit_rect_transformed(r, outer, fill, &mut page.list);
-        }
-        if let Some(stroke) = poly
-            .stroke_color
-            .as_deref()
-            .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
-        {
-            let width = poly.stroke_weight.unwrap_or(1.0);
-            if width > 0.0 {
-                emit_stroke_rect_transformed(r, outer, Stroke::new(width), stroke, &mut page.list);
+    // The polygon adapter collapses an anchor-less Polygon into
+    // `Geometry::Rect { rect: bbox }`, so the rect-fallback branch
+    // is keyed off the geometry variant rather than the parser's
+    // anchor count.
+    let anchors: &[PathAnchor] = match &resolved.geometry {
+        Geometry::Rect { rect: r } => {
+            if !fill_transparent {
+                emit_rect_transformed(*r, outer, fill, &mut page.list);
             }
+            if let Some(stroke) = resolved
+                .stroke_color
+                .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
+            {
+                if resolved.stroke_weight > 0.0 {
+                    emit_stroke_rect_transformed(
+                        *r,
+                        outer,
+                        Stroke::new(resolved.stroke_weight),
+                        stroke,
+                        &mut page.list,
+                    );
+                }
+            }
+            return;
         }
-        return;
-    }
+        Geometry::Polygon { anchors, .. } => anchors,
+        _ => unreachable!("from_polygon produces Rect or Polygon"),
+    };
 
     // Curved path. Anchors are in inner coords; the outer transform
     // (page-origin × ItemTransform) maps inner → page-local pt at
@@ -1612,15 +1618,15 @@ fn emit_polygon_into(
     // coordinate system the parser produced. Cache key uses the
     // polygon's Self id where present so repeated draws of the
     // same shape share the interned path.
-    let path = polygon_path_from_anchors(&poly.anchors);
-    let cache_key = match &poly.self_id {
+    let path = polygon_path_from_anchors(anchors);
+    let cache_key = match resolved.self_id {
         Some(id) => fnv_1a_u64(id.as_bytes()),
-        None => path_signature(&poly.anchors),
+        None => path_signature(anchors),
     };
     let (path_id, _) = page.list.paths.intern(cache_key, path);
     if !fill_transparent {
-        let fill = apply_opacity(fill, poly.opacity);
-        let blend = blend_mode_from_idml(poly.blend_mode.as_deref());
+        let fill = apply_opacity(fill, resolved.opacity);
+        let blend = resolved.blend_mode;
         if matches!(blend, idml_compose::BlendMode::Normal) {
             page.list.commands.push(DisplayCommand::FillPath {
                 path_id,
@@ -1636,18 +1642,16 @@ fn emit_polygon_into(
             });
         }
     }
-    if let Some(stroke_paint) = poly
+    if let Some(stroke_paint) = resolved
         .stroke_color
-        .as_deref()
         .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
     {
-        let stroke_paint = apply_opacity(stroke_paint, poly.opacity);
-        let width = poly.stroke_weight.unwrap_or(1.0);
-        if width > 0.0 {
+        let stroke_paint = apply_opacity(stroke_paint, resolved.opacity);
+        if resolved.stroke_weight > 0.0 {
             page.list.commands.push(DisplayCommand::StrokePath {
                 path_id,
                 paint: stroke_paint,
-                stroke: Stroke::new(width),
+                stroke: Stroke::new(resolved.stroke_weight),
                 transform: outer,
             });
         }
@@ -2993,40 +2997,41 @@ fn emit_text_frame_into(
     cmyk_xform: Option<&idml_color::IccTransform>,
     drop_shadow: Option<DropShadow>,
 ) {
-    page.stats.frames += 1;
-    let r = Rect {
-        x: frame.bounds.left,
-        y: frame.bounds.top,
-        w: frame.bounds.width(),
-        h: frame.bounds.height(),
+    let resolved = ResolvedFrame::from_text_frame(frame);
+    let Geometry::TextFrameRect { rect: r } = resolved.geometry else {
+        unreachable!("from_text_frame produces Geometry::TextFrameRect");
     };
-    let outer = frame_outer_transform(page, frame.item_transform);
-    let fill_transparent = frame_fill_is_transparent(frame.fill_color.as_deref());
+    page.stats.frames += 1;
+    let outer = frame_outer_transform(page, resolved.item_transform);
+    let fill_transparent = frame_fill_is_transparent(resolved.fill_color);
     // Drop shadows fall off the fill shape. With a transparent fill
     // there's nothing to cast a shadow, so suppress the rect stamp —
     // matches InDesign, where a Swatch/None-filled frame with a
     // DropShadowSetting renders no visible shadow.
     if !fill_transparent {
         if let Some(shadow) =
-            resolve_frame_shadow(frame.drop_shadow.as_ref(), drop_shadow, palette, cmyk_xform)
+            resolve_frame_shadow(resolved.drop_shadow, drop_shadow, palette, cmyk_xform)
         {
             emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list);
         }
-        let fill = frame
+        let fill = resolved
             .fill_color
-            .as_deref()
             .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
             .unwrap_or(fallback);
         emit_rect_transformed(r, outer, fill, &mut page.list);
     }
-    if let Some(stroke) = frame
+    if let Some(stroke) = resolved
         .stroke_color
-        .as_deref()
         .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
     {
-        let width = frame.stroke_weight.unwrap_or(1.0);
-        if width > 0.0 {
-            emit_stroke_rect_transformed(r, outer, Stroke::new(width), stroke, &mut page.list);
+        if resolved.stroke_weight > 0.0 {
+            emit_stroke_rect_transformed(
+                r,
+                outer,
+                Stroke::new(resolved.stroke_weight),
+                stroke,
+                &mut page.list,
+            );
         }
     }
 }
@@ -3038,52 +3043,56 @@ fn emit_oval_into(
     fallback: Paint,
     cmyk_xform: Option<&idml_color::IccTransform>,
 ) {
-    page.stats.frames += 1;
-    let r = Rect {
-        x: oval.bounds.left,
-        y: oval.bounds.top,
-        w: oval.bounds.width(),
-        h: oval.bounds.height(),
+    let frame = ResolvedFrame::from_oval(oval);
+    let Geometry::Oval { rect: r } = frame.geometry else {
+        unreachable!("from_oval produces Geometry::Oval");
     };
-    let outer = frame_outer_transform(page, oval.item_transform);
-    let fill_transparent = frame_fill_is_transparent(oval.fill_color.as_deref());
+    page.stats.frames += 1;
+    let outer = frame_outer_transform(page, frame.item_transform);
+    let fill_transparent = frame_fill_is_transparent(frame.fill_color);
     // Ovals don't yet have a dedicated shadow primitive — use the
     // bounding-rect stamp as a stopgap. Replace once the rasterizer
     // grows shadowed-ellipse support. Skip the shadow when the fill
     // is transparent (nothing to cast off).
     if !fill_transparent {
-        if let Some(shadow) =
-            resolve_frame_shadow(oval.drop_shadow.as_ref(), None, palette, cmyk_xform)
-        {
+        if let Some(shadow) = resolve_frame_shadow(frame.drop_shadow, None, palette, cmyk_xform) {
             emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list);
         }
     }
     if !fill_transparent {
-        let fill = oval
+        let fill = frame
             .fill_color
-            .as_deref()
             .and_then(|id| {
                 color_id_to_paint_with_list_dir(
                     id,
                     palette,
                     cmyk_xform,
                     &mut page.list,
-                    oval.gradient_fill_angle,
+                    frame.gradient_fill_angle,
                 )
             })
             .unwrap_or(fallback);
-        let fill = apply_opacity(fill, oval.opacity);
-        let blend = blend_mode_from_idml(oval.blend_mode.as_deref());
-        idml_compose::emit_ellipse_transformed_blend(r, outer, fill, blend, &mut page.list);
+        let fill = apply_opacity(fill, frame.opacity);
+        idml_compose::emit_ellipse_transformed_blend(
+            r,
+            outer,
+            fill,
+            frame.blend_mode,
+            &mut page.list,
+        );
     }
-    if let Some(stroke) = oval
+    if let Some(stroke) = frame
         .stroke_color
-        .as_deref()
         .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
     {
-        let width = oval.stroke_weight.unwrap_or(1.0);
-        if width > 0.0 {
-            emit_stroke_ellipse_transformed(r, outer, Stroke::new(width), stroke, &mut page.list);
+        if frame.stroke_weight > 0.0 {
+            emit_stroke_ellipse_transformed(
+                r,
+                outer,
+                Stroke::new(frame.stroke_weight),
+                stroke,
+                &mut page.list,
+            );
         }
     }
 }
@@ -3094,33 +3103,34 @@ fn emit_line_into(
     palette: &Graphic,
     cmyk_xform: Option<&idml_color::IccTransform>,
 ) {
+    let resolved = ResolvedFrame::from_graphic_line(line);
     page.stats.frames += 1;
     // GraphicLines without an explicit StrokeColor inherit the
     // document cascade default (Color/Black). Falling back here
     // keeps real-InDesign exports rendering with visible lines —
     // those frequently leave StrokeColor implicit.
-    let stroke_paint = line
+    let stroke_paint = resolved
         .stroke_color
-        .as_deref()
         .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
         .or_else(|| color_id_to_paint("Color/Black", palette, cmyk_xform))
         .unwrap_or(Paint::Solid(Color::BLACK));
-    let width = line.stroke_weight.unwrap_or(1.0);
-    if width <= 0.0 {
+    if resolved.stroke_weight <= 0.0 {
         return;
     }
     // GraphicLine.bounds is in inner coords; ItemTransform maps it
     // to spread coords. Without the transform pass the line draws
     // at its untransformed inner-coord origin (typically (0, 0))
     // and disappears off-page when the spread has any origin offset.
-    let spread_bounds = transform_bounds(line.bounds, line.item_transform);
+    // The adapter packs endpoints into Geometry::Line in inner
+    // coords; we reapply the inner→spread→page math here.
+    let spread_bounds = transform_bounds(line.bounds, resolved.item_transform);
     let (ox, oy) = page.spread_origin;
     emit_line(
         spread_bounds.left - ox,
         spread_bounds.top - oy,
         spread_bounds.right - ox,
         spread_bounds.bottom - oy,
-        Stroke::new(width),
+        Stroke::new(resolved.stroke_weight),
         stroke_paint,
         &mut page.list,
     );
@@ -3134,55 +3144,50 @@ fn emit_rectangle_into(
     cmyk_xform: Option<&idml_color::IccTransform>,
     drop_shadow: Option<DropShadow>,
 ) {
-    page.stats.frames += 1;
-    let r = Rect {
-        x: rect.bounds.left,
-        y: rect.bounds.top,
-        w: rect.bounds.width(),
-        h: rect.bounds.height(),
+    let resolved = ResolvedFrame::from_rectangle(rect);
+    let Geometry::Rect { rect: r } = resolved.geometry else {
+        unreachable!("from_rectangle produces Geometry::Rect");
     };
-    let outer = frame_outer_transform(page, rect.item_transform);
-    let fill_transparent = frame_fill_is_transparent(rect.fill_color.as_deref());
+    page.stats.frames += 1;
+    let outer = frame_outer_transform(page, resolved.item_transform);
+    let fill_transparent = frame_fill_is_transparent(resolved.fill_color);
     // Drop shadows fall off the fill shape — see emit_text_frame_into.
     if !fill_transparent {
         if let Some(shadow) =
-            resolve_frame_shadow(rect.drop_shadow.as_ref(), drop_shadow, palette, cmyk_xform)
+            resolve_frame_shadow(resolved.drop_shadow, drop_shadow, palette, cmyk_xform)
         {
             emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list);
         }
     }
-    let fill = rect
+    let fill = resolved
         .fill_color
-        .as_deref()
         .and_then(|id| {
             color_id_to_paint_with_list_dir(
                 id,
                 palette,
                 cmyk_xform,
                 &mut page.list,
-                rect.gradient_fill_angle,
+                resolved.gradient_fill_angle,
             )
         })
         .unwrap_or(fallback);
-    let fill = apply_fill_tint(fill, rect.fill_tint);
-    let fill = apply_opacity(fill, rect.opacity);
-    let stroke_paint = rect
+    let fill = apply_fill_tint(fill, resolved.fill_tint);
+    let fill = apply_opacity(fill, resolved.opacity);
+    let stroke_paint = resolved
         .stroke_color
-        .as_deref()
         .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
-        .map(|p| apply_opacity(p, rect.opacity));
-    let stroke_width = rect.stroke_weight.unwrap_or(1.0);
-    let stroke_offset = stroke_alignment_offset(rect.stroke_alignment.as_deref(), stroke_width);
-    let blend_mode = blend_mode_from_idml(rect.blend_mode.as_deref());
+        .map(|p| apply_opacity(p, resolved.opacity));
+    let stroke_width = resolved.stroke_weight;
+    let stroke_offset = stroke_alignment_offset(resolved.stroke_alignment, stroke_width);
+    let blend_mode = resolved.blend_mode;
     let radius = corner_radius_for(rect);
     if let Some(radius) = radius {
         // Rounded path: build once, intern, fill + (optional) stroke.
         // Cache key includes the radius so different radii on the
         // same Self id get distinct interned paths.
         let path = rounded_rect_path(r, radius);
-        let key_bytes = rect
+        let key_bytes = resolved
             .self_id
-            .as_deref()
             .map(|s| s.as_bytes().to_vec())
             .unwrap_or_else(|| format!("{:?}", r).into_bytes());
         let key = fnv_1a_u64(&[key_bytes.as_slice(), &radius.to_bits().to_le_bytes()].concat());
@@ -3224,11 +3229,11 @@ fn emit_rectangle_into(
                 path_id: stroke_path_id,
                 paint: stroke,
                 stroke: stroke_for(
-                    rect.stroke_type.as_deref(),
+                    resolved.stroke_type,
                     stroke_width,
-                    rect.end_cap.as_deref(),
-                    rect.end_join.as_deref(),
-                    rect.miter_limit,
+                    resolved.end_cap,
+                    resolved.end_join,
+                    resolved.miter_limit,
                 ),
                 transform: outer,
             });
@@ -3243,11 +3248,11 @@ fn emit_rectangle_into(
             inset_rect(r, stroke_offset),
             outer,
             stroke_for(
-                rect.stroke_type.as_deref(),
+                resolved.stroke_type,
                 stroke_width,
-                rect.end_cap.as_deref(),
-                rect.end_join.as_deref(),
-                rect.miter_limit,
+                resolved.end_cap,
+                resolved.end_join,
+                resolved.miter_limit,
             ),
             stroke,
             &mut page.list,
@@ -3269,7 +3274,7 @@ fn stroke_alignment_offset(alignment: Option<&str>, stroke_width: f32) -> f32 {
 /// Map IDML's `<BlendingSetting BlendMode="...">` enum string to the
 /// compose-layer `BlendMode`. Unknown / absent values fall back to
 /// Normal. Names mirror Adobe's PDF blend-mode catalogue.
-fn blend_mode_from_idml(name: Option<&str>) -> idml_compose::BlendMode {
+pub(crate) fn blend_mode_from_idml(name: Option<&str>) -> idml_compose::BlendMode {
     use idml_compose::BlendMode;
     match name {
         Some("Multiply") => BlendMode::Multiply,

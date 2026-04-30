@@ -6,6 +6,8 @@
 pub mod asset;
 pub mod pipeline;
 
+mod module;
+
 pub use asset::{AssetResolver, BytesResolver};
 pub use pipeline::{
     build, build_document, build_run_paint_picker, resolve_fill, resolve_stroke, BuiltDocument,
