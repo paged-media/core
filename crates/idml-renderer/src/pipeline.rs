@@ -961,7 +961,19 @@ struct StoryEmitter<'a> {
     /// hang for glyphs smaller than this size; ignored when
     /// `optical_margin_alignment` is false.
     optical_margin_size_pt: f32,
+    /// How many anchored-frame story recursions deep this emitter is.
+    /// 0 for the top-level body / master pass; 1+ for an emitter
+    /// constructed by `emit_anchored_textframe_story`. Bounded at
+    /// `MAX_ANCHORED_STORY_RECURSION` so a malformed document with an
+    /// anchored TextFrame referencing its own host story can't blow
+    /// the stack.
+    anchored_recursion_depth: u32,
 }
+
+/// Hard cap on `anchored_recursion_depth`. Real-world IDMLs nest at
+/// most 1–2 deep (a sidebar with an inline figure containing a caption
+/// frame); 4 leaves headroom while still bounding pathological docs.
+const MAX_ANCHORED_STORY_RECURSION: u32 = 4;
 
 impl<'a> StoryEmitter<'a> {
     fn new(
@@ -1057,7 +1069,17 @@ impl<'a> StoryEmitter<'a> {
             numbered_counter: 0,
             optical_margin_alignment: false,
             optical_margin_size_pt: 0.0,
+            anchored_recursion_depth: 0,
         }
+    }
+
+    /// Mark this emitter as a `depth`-deep anchored-story sub-emitter.
+    /// The body/master pass leaves the default of 0; the anchored
+    /// recursion path bumps the value before constructing each nested
+    /// emitter so [`MAX_ANCHORED_STORY_RECURSION`] caps the depth.
+    fn with_anchored_recursion_depth(mut self, depth: u32) -> Self {
+        self.anchored_recursion_depth = depth;
+        self
     }
 
     /// Set the story's `<StoryPreference>` optical-margin flags so
@@ -2283,12 +2305,21 @@ fn emit_one_anchored_frame(
                 );
             }
             if matches!(af.frame_kind, idml_parse::AnchoredFrameKind::TextFrame) {
-                // Story content recursion is intentionally still a
-                // follow-up — the StoryEmitter would need to be
-                // re-entrant for nested chains. Anchored.idml's six
-                // candidates render the frame outline correctly via
-                // the rectangle pipeline above.
-                let _ = af.parent_story.as_deref();
+                if let Some(story_id) = af.parent_story.as_deref() {
+                    if frame_w > 0.0 && frame_h > 0.0 {
+                        emit_anchored_textframe_story(
+                            em,
+                            af,
+                            story_id,
+                            target_page,
+                            place_x,
+                            place_y,
+                            frame_w,
+                            frame_h,
+                            pages,
+                        );
+                    }
+                }
             }
         }
         idml_parse::AnchoredFrameKind::Group => {
@@ -2410,6 +2441,131 @@ fn emit_anchored_rect_via_pipeline(
         em.cmyk_xform,
         None,
     );
+}
+
+/// Flow the story referenced by an anchored TextFrame into the
+/// placed rectangle. Synthesises a single-frame chain whose `bounds`
+/// sit in spread coords (so `frame_outer_transform` produces a
+/// `-spread_origin` translate that lands the geometry on
+/// `(place_x, place_y)`), then runs the existing per-paragraph emit
+/// loop on a fresh sub-`StoryEmitter`. The sub-emitter inherits the
+/// parent's document / palette / font_table / cmyk / hyphenator
+/// borrows so no extra plumbing is needed.
+///
+/// Recursion is bounded by [`MAX_ANCHORED_STORY_RECURSION`]: an
+/// anchored TextFrame inside an anchored TextFrame is fine, but a
+/// pathological cycle (anchored TextFrame whose story re-references
+/// itself) is short-circuited with a `tracing::warn!`.
+///
+/// Inset spacing on the synthetic frame is `[0; 4]` because parsed
+/// `AnchoredFrame` records don't carry `<TextFramePreference
+/// InsetSpacing>` — anchored frames in real-world IDMLs typically
+/// rely on the ObjectStyle cascade for insets, which the renderer's
+/// `emit_text_frame_into` pre-pass already drew the box from. The
+/// inner story flows edge-to-edge inside the frame's bounds.
+fn emit_anchored_textframe_story<'a>(
+    em: &mut StoryEmitter<'a>,
+    af: &idml_parse::AnchoredFrame,
+    story_id: &str,
+    target_page: usize,
+    place_x: f32,
+    place_y: f32,
+    w: f32,
+    h: f32,
+    pages: &mut [BuiltPage],
+) {
+    if em.anchored_recursion_depth >= MAX_ANCHORED_STORY_RECURSION {
+        tracing::warn!(
+            target: "idml_renderer::pipeline",
+            depth = em.anchored_recursion_depth,
+            story_id = story_id,
+            "anchored TextFrame recursion depth cap hit; skipping inner story"
+        );
+        return;
+    }
+    let Some(parsed) = em
+        .document
+        .stories
+        .iter()
+        .find(|s| s.self_id == story_id)
+    else {
+        return;
+    };
+    // Build the synthetic TextFrame's bounds in spread coords. The
+    // sub-emitter's per-line walk transforms `bounds` through the
+    // (None) item_transform and subtracts the page's spread_origin —
+    // the shape of `emit_anchored_rect_via_pipeline` for fill /
+    // stroke, but here driving the StoryEmitter rather than
+    // `emit_rectangle_into`.
+    let (ox, oy) = pages[target_page].spread_origin;
+    let bounds = idml_parse::Bounds {
+        top: place_y + oy,
+        left: place_x + ox,
+        bottom: place_y + oy + h,
+        right: place_x + ox + w,
+    };
+    let synthetic = TextFrame {
+        self_id: af.self_id.clone(),
+        parent_story: Some(story_id.to_string()),
+        bounds,
+        item_transform: None,
+        fill_color: None,
+        stroke_color: None,
+        stroke_weight: None,
+        drop_shadow: None,
+        stroke_drop_shadow: None,
+        next_text_frame: None,
+        vertical_justification: None,
+        first_baseline_offset: None,
+        minimum_first_baseline_offset: None,
+        inset_spacing: None,
+        applied_object_style: af.applied_object_style.clone(),
+        text_wrap: None,
+        item_layer: None,
+        is_anchored: true,
+        opacity: None,
+        blend_mode: None,
+    };
+    // Sub-emitter borrows from the parent's `'a` so the document /
+    // palette / font_table refs share lifetimes with the body pass.
+    // The synthetic frame lives on this stack frame; the sub-emitter
+    // is dropped before this function returns, so the chain's
+    // `&TextFrame` borrow is sound.
+    let chain: Vec<&TextFrame> = vec![&synthetic];
+    let chain_pages: Vec<usize> = vec![target_page];
+    let head_wrap_rects: &[idml_parse::Bounds] = &[];
+    let chain_wrap_rects: Vec<&[idml_parse::Bounds]> = vec![&[]];
+    let mut sub = StoryEmitter::new(
+        em.document,
+        em.options,
+        em.palette,
+        em.cmyk_xform,
+        em.font_table,
+        chain,
+        chain_pages,
+        em.page_labels,
+        em.hyphenator,
+        head_wrap_rects,
+        chain_wrap_rects,
+    )
+    .with_optical_margin(
+        parsed.story.optical_margin_alignment,
+        parsed.story.optical_margin_size,
+    )
+    .with_anchored_recursion_depth(em.anchored_recursion_depth + 1);
+    // The story-pass entry point uses a fresh PipelineStats per call
+    // for stat aggregation; we accumulate into a discard local rather
+    // than the document-wide `total_stats` because anchored stories
+    // already counted into `frames` via the synthetic-rect emission.
+    // The user-visible counters that matter (paragraphs / runs /
+    // glyphs) get added to the page stats by the body emit functions
+    // directly.
+    let mut sub_stats = PipelineStats::default();
+    for paragraph in &parsed.story.paragraphs {
+        sub.emit_paragraph(paragraph, pages, &mut sub_stats);
+    }
+    sub.apply_vertical_justification(pages);
+    sub.apply_blend_groups(pages);
 }
 
 /// Wraps a page's bounds for centre-point routing + its master
