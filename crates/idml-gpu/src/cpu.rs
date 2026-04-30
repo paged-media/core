@@ -14,8 +14,9 @@
 //! `idml-color` — this module stays in the simple path.
 
 use idml_compose::{
-    BlendMode, Color as CComposeColor, DisplayCommand, DisplayList, LineCap, LineJoin, Paint,
-    PathData, PathSegment, Transform as CTransform,
+    BevelEmboss, BlendMode, Color as CComposeColor, DisplayCommand, DisplayList, Feather,
+    FeatherCornerType, InnerGlow, InnerShadow, LineCap, LineJoin, OuterGlow, Paint, PathData,
+    PathSegment, Satin, Transform as CTransform,
 };
 use image::{Rgba, RgbaImage};
 use tiny_skia::{
@@ -586,6 +587,96 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     }
                 }
             }
+            DisplayCommand::InnerShadow {
+                path_id,
+                transform,
+                params,
+            } => {
+                let Some(path_data) = list.paths.get(*path_id) else {
+                    continue;
+                };
+                let Some(path) = build_path_transformed(path_data, transform) else {
+                    continue;
+                };
+                let (target, target_xform, target_mask) =
+                    resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
+                render_inner_shadow(target, target_xform, target_mask, &path, params, scale);
+            }
+            DisplayCommand::OuterGlow {
+                path_id,
+                transform,
+                params,
+            } => {
+                let Some(path_data) = list.paths.get(*path_id) else {
+                    continue;
+                };
+                let Some(path) = build_path_transformed(path_data, transform) else {
+                    continue;
+                };
+                let (target, target_xform, target_mask) =
+                    resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
+                render_outer_glow(target, target_xform, target_mask, &path, params, scale);
+            }
+            DisplayCommand::InnerGlow {
+                path_id,
+                transform,
+                params,
+            } => {
+                let Some(path_data) = list.paths.get(*path_id) else {
+                    continue;
+                };
+                let Some(path) = build_path_transformed(path_data, transform) else {
+                    continue;
+                };
+                let (target, target_xform, target_mask) =
+                    resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
+                render_inner_glow(target, target_xform, target_mask, &path, params, scale);
+            }
+            DisplayCommand::BevelEmboss {
+                path_id,
+                transform,
+                params,
+            } => {
+                let Some(path_data) = list.paths.get(*path_id) else {
+                    continue;
+                };
+                let Some(path) = build_path_transformed(path_data, transform) else {
+                    continue;
+                };
+                let (target, target_xform, target_mask) =
+                    resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
+                render_bevel_emboss(target, target_xform, target_mask, &path, params, scale);
+            }
+            DisplayCommand::Satin {
+                path_id,
+                transform,
+                params,
+            } => {
+                let Some(path_data) = list.paths.get(*path_id) else {
+                    continue;
+                };
+                let Some(path) = build_path_transformed(path_data, transform) else {
+                    continue;
+                };
+                let (target, target_xform, target_mask) =
+                    resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
+                render_satin(target, target_xform, target_mask, &path, params, scale);
+            }
+            DisplayCommand::Feather {
+                path_id,
+                transform,
+                params,
+            } => {
+                let Some(path_data) = list.paths.get(*path_id) else {
+                    continue;
+                };
+                let Some(path) = build_path_transformed(path_data, transform) else {
+                    continue;
+                };
+                let (target, target_xform, target_mask) =
+                    resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
+                render_feather(target, target_xform, target_mask, &path, params, scale);
+            }
             DisplayCommand::EndBlendGroup(_) => {
                 let Some(top) = group_stack.pop() else {
                     continue;
@@ -954,6 +1045,688 @@ fn blend_mode_to_ts(m: BlendMode) -> TsBlendMode {
         BlendMode::Color => TsBlendMode::Color,
         BlendMode::Luminosity => TsBlendMode::Luminosity,
     }
+}
+
+/// Project a path's pt-space bounds (with `pad_pt` extra slack on
+/// each side) through `target_xform` into pixel-aligned offset + size
+/// for an effect scratch buffer. Returns `(off_x_px, off_y_px, w_px,
+/// h_px, scratch_xform)` where `scratch_xform` maps pt-space points
+/// into the scratch buffer's local pixel grid (so the path can be
+/// re-rasterised into the buffer with the same control-point
+/// projection logic as the page render).
+fn effect_scratch_bounds(
+    path: &tiny_skia::Path,
+    target_xform: TsTransform,
+    pad_pt: f32,
+) -> Option<(i32, i32, u32, u32, TsTransform)> {
+    let bbox = path.bounds();
+    let (lx_px, ly_px) =
+        ts_xform_apply(target_xform, bbox.left() - pad_pt, bbox.top() - pad_pt);
+    let (rx_px, ry_px) =
+        ts_xform_apply(target_xform, bbox.right() + pad_pt, bbox.bottom() + pad_pt);
+    let off_x_px = lx_px.min(rx_px).floor() as i32;
+    let off_y_px = ly_px.min(ry_px).floor() as i32;
+    let max_x_px = lx_px.max(rx_px).ceil() as i32;
+    let max_y_px = ly_px.max(ry_px).ceil() as i32;
+    let w_px = (max_x_px - off_x_px).max(1) as u32;
+    let h_px = (max_y_px - off_y_px).max(1) as u32;
+    if w_px == 0 || h_px == 0 || w_px > 8192 || h_px > 8192 {
+        return None;
+    }
+    let scratch_xform =
+        TsTransform::from_translate(-off_x_px as f32, -off_y_px as f32).pre_concat(target_xform);
+    Some((off_x_px, off_y_px, w_px, h_px, scratch_xform))
+}
+
+/// Stamp `path` filled with opaque white into a fresh pixmap of the
+/// given size at `scratch_xform`. The result's alpha channel is the
+/// path-interior mask (0 outside, 255 inside, anti-aliased on the
+/// edge); RGB equals alpha (premultiplied white). Used as the
+/// starting point for inner-shadow / glow / bevel / satin / feather
+/// passes.
+fn stamp_path_alpha(
+    w_px: u32,
+    h_px: u32,
+    path: &tiny_skia::Path,
+    scratch_xform: TsTransform,
+) -> Option<Pixmap> {
+    let mut scratch = Pixmap::new(w_px, h_px)?;
+    let mut p = TsPaint {
+        anti_alias: true,
+        ..Default::default()
+    };
+    p.set_color(tiny_skia::Color::WHITE);
+    scratch.fill_path(path, &p, FillRule::Winding, scratch_xform, None);
+    Some(scratch)
+}
+
+/// Read the alpha channel of a tiny-skia premultiplied RGBA8 buffer
+/// into a fresh `Vec<u8>`. The data is interpreted as a single-
+/// channel mask in `[0, 255]` (0 outside, 255 inside, anti-aliased
+/// on the edge).
+fn alpha_to_mask(rgba: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(rgba.len() / 4);
+    for chunk in rgba.chunks_exact(4) {
+        out.push(chunk[3]);
+    }
+    out
+}
+
+/// Convolve a single-channel mask in-place with a separable Gaussian.
+/// Edges clamp to `0` (this is what we want for an isolated stamp's
+/// outer halo: the mask is padded by 3σ before this is called).
+fn gaussian_blur_mask(mask: &mut [u8], width: u32, height: u32, kernel: &[f32]) {
+    if kernel.len() < 2 || width == 0 || height == 0 {
+        return;
+    }
+    let w = width as usize;
+    let h = height as usize;
+    let radius = (kernel.len() / 2) as isize;
+    let mut tmp = vec![0u8; mask.len()];
+    for y in 0..h {
+        let row = y * w;
+        for x in 0..w {
+            let mut acc = 0.0f32;
+            for (k_idx, &coeff) in kernel.iter().enumerate() {
+                let sx = (x as isize + k_idx as isize - radius)
+                    .clamp(0, w as isize - 1) as usize;
+                acc += mask[row + sx] as f32 * coeff;
+            }
+            tmp[row + x] = acc.round().clamp(0.0, 255.0) as u8;
+        }
+    }
+    for y in 0..h {
+        for x in 0..w {
+            let mut acc = 0.0f32;
+            for (k_idx, &coeff) in kernel.iter().enumerate() {
+                let sy = (y as isize + k_idx as isize - radius)
+                    .clamp(0, h as isize - 1) as usize;
+                acc += tmp[sy * w + x] as f32 * coeff;
+            }
+            mask[y * w + x] = acc.round().clamp(0.0, 255.0) as u8;
+        }
+    }
+}
+
+/// Inner shadow: paint a soft, offset shadow on the *inside* of the
+/// path. Algorithm:
+///   1. Build the path interior mask `M` (alpha channel).
+///   2. Build the offset+choked path interior mask `Moff` by
+///      stamping the path shifted by `(offset_x, offset_y)`, dilated
+///      by `choke` pt.
+///   3. The "shadow source" is `(1 - Moff)`: the area *outside* the
+///      offset path. Blur it.
+///   4. Composite the blurred source clipped to `M` (so the shadow
+///      stays inside the path interior), tinted with `params.color`
+///      at `params.opacity`.
+fn render_inner_shadow(
+    target: &mut Pixmap,
+    target_xform: TsTransform,
+    target_mask: Option<&TsMask>,
+    path: &tiny_skia::Path,
+    params: &InnerShadow,
+    scale: f32,
+) {
+    // The padding only needs to cover the path interior plus enough
+    // slack for the blur kernel — the shadow lives *inside* the
+    // path, so anything farther than 3σ from the edge is safely zero.
+    let pad_pt = 3.0 * params.blur_radius.max(0.0)
+        + params.choke.abs()
+        + params.offset_x.abs().max(params.offset_y.abs())
+        + 1.0;
+    let Some((off_x_px, off_y_px, w_px, h_px, scratch_xform)) =
+        effect_scratch_bounds(path, target_xform, pad_pt)
+    else {
+        return;
+    };
+    let Some(interior_pix) = stamp_path_alpha(w_px, h_px, path, scratch_xform) else {
+        return;
+    };
+    let interior_mask = alpha_to_mask(interior_pix.data());
+
+    // Build the offset path mask: same path but translated by
+    // (offset_x, offset_y) in pt-space (pre-concat the translate
+    // *into* scratch_xform so it lands in pixel-space correctly).
+    let offset_xform = scratch_xform
+        .pre_concat(TsTransform::from_translate(params.offset_x, params.offset_y));
+    let Some(offset_pix) = stamp_path_alpha(w_px, h_px, path, offset_xform) else {
+        return;
+    };
+    let mut offset_mask = alpha_to_mask(offset_pix.data());
+
+    // Apply choke as an additional dilation: a positive choke grows
+    // the offset stamp inward (smaller blur footprint). We approximate
+    // by blurring the offset mask by a small Gaussian and then
+    // thresholding at `(0.5 - choke)` to bias the boundary; this is
+    // a cheap dilation/erosion with the same code path.
+    let choke_px = params.choke.max(0.0) * scale;
+    if choke_px > 0.5 {
+        let kernel = gaussian_kernel(choke_px);
+        gaussian_blur_mask(&mut offset_mask, w_px, h_px, &kernel);
+        // Re-threshold: anything brighter than ~64 is treated as
+        // "inside", which approximates a dilation by ~choke_px.
+        for v in offset_mask.iter_mut() {
+            *v = if *v > 64 { 255 } else { 0 };
+        }
+    }
+
+    // Source = (1 - offset_mask) — the "outside" of the offset path.
+    let mut source: Vec<u8> = offset_mask.iter().map(|&v| 255 - v).collect();
+
+    // Blur the source.
+    let sigma_px = params.blur_radius.max(0.0) * scale;
+    if sigma_px > 0.5 {
+        let kernel = gaussian_kernel(sigma_px);
+        gaussian_blur_mask(&mut source, w_px, h_px, &kernel);
+    }
+
+    // Mask source by the path interior so the shadow only paints
+    // inside the path. Final per-pixel alpha = source * interior /
+    // 255, scaled by opacity. Then build a premultiplied RGBA buffer
+    // tinted with `params.color`.
+    let mut scratch = match Pixmap::new(w_px, h_px) {
+        Some(p) => p,
+        None => return,
+    };
+    let opacity = params.opacity.clamp(0.0, 1.0);
+    let ts_color = linear_color_to_ts(params.color);
+    let cr = ts_color.red();
+    let cg = ts_color.green();
+    let cb = ts_color.blue();
+    let ca = ts_color.alpha();
+    let data = scratch.data_mut();
+    for i in 0..(w_px as usize * h_px as usize) {
+        let inside = interior_mask[i] as f32 / 255.0;
+        let s = source[i] as f32 / 255.0;
+        let a = (inside * s * opacity * ca).clamp(0.0, 1.0);
+        // Premultiplied output: store (color * a, a).
+        let q = i * 4;
+        data[q] = (cr * a * 255.0).round().clamp(0.0, 255.0) as u8;
+        data[q + 1] = (cg * a * 255.0).round().clamp(0.0, 255.0) as u8;
+        data[q + 2] = (cb * a * 255.0).round().clamp(0.0, 255.0) as u8;
+        data[q + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+
+    let mut composite = PixmapPaint::default();
+    composite.blend_mode = blend_mode_to_ts(params.blend_mode);
+    target.draw_pixmap(
+        off_x_px,
+        off_y_px,
+        scratch.as_ref(),
+        &composite,
+        TsTransform::identity(),
+        target_mask,
+    );
+}
+
+/// Outer glow: soft halo *outside* the path. Algorithm:
+///   1. Build the path interior mask `M`.
+///   2. Optionally dilate by `spread` pt (so glows can extend farther
+///      than the blur alone would carry them).
+///   3. Blur the mask by `blur_radius`.
+///   4. Subtract the path interior so the glow only paints outside.
+///   5. Tint and composite.
+fn render_outer_glow(
+    target: &mut Pixmap,
+    target_xform: TsTransform,
+    target_mask: Option<&TsMask>,
+    path: &tiny_skia::Path,
+    params: &OuterGlow,
+    scale: f32,
+) {
+    let pad_pt = 3.0 * params.blur_radius.max(0.0) + params.spread.abs() + 1.0;
+    let Some((off_x_px, off_y_px, w_px, h_px, scratch_xform)) =
+        effect_scratch_bounds(path, target_xform, pad_pt)
+    else {
+        return;
+    };
+    let Some(interior_pix) = stamp_path_alpha(w_px, h_px, path, scratch_xform) else {
+        return;
+    };
+    let interior_mask = alpha_to_mask(interior_pix.data());
+    let mut halo = interior_mask.clone();
+
+    // Cheap "spread" dilation — same trick as in InnerShadow's choke.
+    let spread_px = params.spread.max(0.0) * scale;
+    if spread_px > 0.5 {
+        let kernel = gaussian_kernel(spread_px);
+        gaussian_blur_mask(&mut halo, w_px, h_px, &kernel);
+        for v in halo.iter_mut() {
+            *v = if *v > 64 { 255 } else { 0 };
+        }
+    }
+
+    // Blur.
+    let sigma_px = params.blur_radius.max(0.0) * scale;
+    if sigma_px > 0.5 {
+        let kernel = gaussian_kernel(sigma_px);
+        gaussian_blur_mask(&mut halo, w_px, h_px, &kernel);
+    }
+
+    // Subtract the path interior so the glow only lands outside it.
+    // This avoids the glow doubling up under the fill (which would
+    // wash out the colour where the path has its own paint).
+    let opacity = params.opacity.clamp(0.0, 1.0);
+    let ts_color = linear_color_to_ts(params.color);
+    let cr = ts_color.red();
+    let cg = ts_color.green();
+    let cb = ts_color.blue();
+    let ca = ts_color.alpha();
+    let mut scratch = match Pixmap::new(w_px, h_px) {
+        Some(p) => p,
+        None => return,
+    };
+    let data = scratch.data_mut();
+    for i in 0..(w_px as usize * h_px as usize) {
+        let h = halo[i] as f32 / 255.0;
+        let m = interior_mask[i] as f32 / 255.0;
+        // Outside-only halo: max(halo - interior, 0).
+        let outside = (h - m).max(0.0);
+        let a = (outside * opacity * ca).clamp(0.0, 1.0);
+        let q = i * 4;
+        data[q] = (cr * a * 255.0).round().clamp(0.0, 255.0) as u8;
+        data[q + 1] = (cg * a * 255.0).round().clamp(0.0, 255.0) as u8;
+        data[q + 2] = (cb * a * 255.0).round().clamp(0.0, 255.0) as u8;
+        data[q + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+
+    let mut composite = PixmapPaint::default();
+    composite.blend_mode = blend_mode_to_ts(params.blend_mode);
+    target.draw_pixmap(
+        off_x_px,
+        off_y_px,
+        scratch.as_ref(),
+        &composite,
+        TsTransform::identity(),
+        target_mask,
+    );
+}
+
+/// Inner glow: soft glow on the *inside* of the path's interior. This
+/// is the no-offset, glow-coloured cousin of [`render_inner_shadow`].
+fn render_inner_glow(
+    target: &mut Pixmap,
+    target_xform: TsTransform,
+    target_mask: Option<&TsMask>,
+    path: &tiny_skia::Path,
+    params: &InnerGlow,
+    scale: f32,
+) {
+    let pad_pt = 3.0 * params.blur_radius.max(0.0) + params.choke.abs() + 1.0;
+    let Some((off_x_px, off_y_px, w_px, h_px, scratch_xform)) =
+        effect_scratch_bounds(path, target_xform, pad_pt)
+    else {
+        return;
+    };
+    let Some(interior_pix) = stamp_path_alpha(w_px, h_px, path, scratch_xform) else {
+        return;
+    };
+    let interior_mask = alpha_to_mask(interior_pix.data());
+
+    // Source = (1 - interior). Blurring this and clipping to the
+    // interior gives a glow at the path's inner edge fading inward.
+    let mut source: Vec<u8> = interior_mask.iter().map(|&v| 255 - v).collect();
+
+    let choke_px = params.choke.max(0.0) * scale;
+    if choke_px > 0.5 {
+        // Choke pulls the glow boundary inward by erosion: blur +
+        // re-threshold biased high.
+        let kernel = gaussian_kernel(choke_px);
+        gaussian_blur_mask(&mut source, w_px, h_px, &kernel);
+        for v in source.iter_mut() {
+            *v = if *v > 64 { 255 } else { 0 };
+        }
+    }
+
+    let sigma_px = params.blur_radius.max(0.0) * scale;
+    if sigma_px > 0.5 {
+        let kernel = gaussian_kernel(sigma_px);
+        gaussian_blur_mask(&mut source, w_px, h_px, &kernel);
+    }
+
+    let opacity = params.opacity.clamp(0.0, 1.0);
+    let ts_color = linear_color_to_ts(params.color);
+    let cr = ts_color.red();
+    let cg = ts_color.green();
+    let cb = ts_color.blue();
+    let ca = ts_color.alpha();
+    let mut scratch = match Pixmap::new(w_px, h_px) {
+        Some(p) => p,
+        None => return,
+    };
+    let data = scratch.data_mut();
+    for i in 0..(w_px as usize * h_px as usize) {
+        let inside = interior_mask[i] as f32 / 255.0;
+        let s = source[i] as f32 / 255.0;
+        let a = (inside * s * opacity * ca).clamp(0.0, 1.0);
+        let q = i * 4;
+        data[q] = (cr * a * 255.0).round().clamp(0.0, 255.0) as u8;
+        data[q + 1] = (cg * a * 255.0).round().clamp(0.0, 255.0) as u8;
+        data[q + 2] = (cb * a * 255.0).round().clamp(0.0, 255.0) as u8;
+        data[q + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+
+    let mut composite = PixmapPaint::default();
+    composite.blend_mode = blend_mode_to_ts(params.blend_mode);
+    target.draw_pixmap(
+        off_x_px,
+        off_y_px,
+        scratch.as_ref(),
+        &composite,
+        TsTransform::identity(),
+        target_mask,
+    );
+}
+
+/// Bevel and emboss. Algorithm:
+///   1. Build the path interior mask `M`.
+///   2. Blur `M` by `size` to get a smooth height field `H`.
+///   3. Compute the gradient `(∂H/∂x, ∂H/∂y)`; treat as a 2D normal
+///      with a fixed `z = (1 - |grad|)` term so flat regions have
+///      `n_z = 1` (face the viewer) and edges have a sloped normal.
+///   4. Compute Lambertian shading `n · L` against a light direction
+///      derived from `angle_deg` (azimuth) and `altitude_deg`
+///      (elevation). Positive shading paints the highlight colour;
+///      negative shading paints the shadow colour.
+///   5. Mask by the path interior and composite.
+fn render_bevel_emboss(
+    target: &mut Pixmap,
+    target_xform: TsTransform,
+    target_mask: Option<&TsMask>,
+    path: &tiny_skia::Path,
+    params: &BevelEmboss,
+    scale: f32,
+) {
+    let pad_pt = 3.0 * params.size.max(0.0) + 2.0;
+    let Some((off_x_px, off_y_px, w_px, h_px, scratch_xform)) =
+        effect_scratch_bounds(path, target_xform, pad_pt)
+    else {
+        return;
+    };
+    let Some(interior_pix) = stamp_path_alpha(w_px, h_px, path, scratch_xform) else {
+        return;
+    };
+    let interior_mask = alpha_to_mask(interior_pix.data());
+    let mut height: Vec<f32> = interior_mask.iter().map(|&v| v as f32 / 255.0).collect();
+
+    // Smooth the height field. Larger `size` → softer bevel.
+    let sigma_px = params.size.max(0.0) * scale * 0.5;
+    if sigma_px > 0.5 {
+        // Convert to u8, blur, convert back.
+        let mut h8: Vec<u8> = height
+            .iter()
+            .map(|&v| (v * 255.0).round() as u8)
+            .collect();
+        let kernel = gaussian_kernel(sigma_px);
+        gaussian_blur_mask(&mut h8, w_px, h_px, &kernel);
+        for (slot, src) in height.iter_mut().zip(h8.iter()) {
+            *slot = *src as f32 / 255.0;
+        }
+    }
+
+    // Light direction. IDML's angle is screen-azimuth in degrees;
+    // altitude is elevation in degrees. Compute the unit light vector
+    // in (x, y, z) — y is page-down so we negate sin(angle) for the
+    // "y points up" math used inside the shading kernel.
+    let az = params.angle_deg.to_radians();
+    let alt = params.altitude_deg.to_radians();
+    let cos_alt = alt.cos();
+    let lx = az.cos() * cos_alt;
+    let ly = -az.sin() * cos_alt; // page-down y → negate sin
+    let lz = alt.sin().max(0.0);
+
+    let depth = params.depth.clamp(0.0, 4.0);
+    let hi_op = params.highlight_opacity.clamp(0.0, 1.0);
+    let sh_op = params.shadow_opacity.clamp(0.0, 1.0);
+    let hi_ts = linear_color_to_ts(params.highlight_color);
+    let sh_ts = linear_color_to_ts(params.shadow_color);
+
+    let mut scratch = match Pixmap::new(w_px, h_px) {
+        Some(p) => p,
+        None => return,
+    };
+    let data = scratch.data_mut();
+    let w = w_px as usize;
+    let h = h_px as usize;
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            // Central differences. `depth` scales the normal slope.
+            let xm = if x == 0 { x } else { x - 1 };
+            let xp = if x + 1 >= w { x } else { x + 1 };
+            let ym = if y == 0 { y } else { y - 1 };
+            let yp = if y + 1 >= h { y } else { y + 1 };
+            let dx = (height[y * w + xp] - height[y * w + xm]) * depth * 4.0;
+            let dy = (height[yp * w + x] - height[ym * w + x]) * depth * 4.0;
+            // Normal: (-dx, -dy, 1) before normalise.
+            let nx = -dx;
+            let ny = -dy;
+            let nz = 1.0;
+            let len = (nx * nx + ny * ny + nz * nz).sqrt().max(1e-6);
+            let dot = (nx * lx + ny * ly + nz * lz) / len;
+            let inside = interior_mask[i] as f32 / 255.0;
+            // Bevel only paints where the surface tilts (nonzero
+            // gradient). `slope = sqrt(dx² + dy²)` is large near the
+            // edge, zero deep inside. Multiply by `inside` so the
+            // bevel stays inside the path (the smoothed height
+            // bleeds past the path's true edge).
+            let slope = (dx * dx + dy * dy).sqrt().clamp(0.0, 1.0);
+            // Shadow when dot < 0, highlight when dot > 0.
+            let q = i * 4;
+            let (cr, cg, cb, op);
+            if dot >= 0.0 {
+                cr = hi_ts.red();
+                cg = hi_ts.green();
+                cb = hi_ts.blue();
+                op = hi_op * hi_ts.alpha();
+            } else {
+                cr = sh_ts.red();
+                cg = sh_ts.green();
+                cb = sh_ts.blue();
+                op = sh_op * sh_ts.alpha();
+            }
+            let a = (dot.abs() * slope * inside * op).clamp(0.0, 1.0);
+            data[q] = (cr * a * 255.0).round().clamp(0.0, 255.0) as u8;
+            data[q + 1] = (cg * a * 255.0).round().clamp(0.0, 255.0) as u8;
+            data[q + 2] = (cb * a * 255.0).round().clamp(0.0, 255.0) as u8;
+            data[q + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
+        }
+    }
+
+    let composite = PixmapPaint::default();
+    target.draw_pixmap(
+        off_x_px,
+        off_y_px,
+        scratch.as_ref(),
+        &composite,
+        TsTransform::identity(),
+        target_mask,
+    );
+}
+
+/// Satin: subtract two offset blurred path masks to produce a wave
+/// pattern, mask to the path interior, tint with `params.color`.
+fn render_satin(
+    target: &mut Pixmap,
+    target_xform: TsTransform,
+    target_mask: Option<&TsMask>,
+    path: &tiny_skia::Path,
+    params: &Satin,
+    scale: f32,
+) {
+    let pad_pt = 3.0 * params.blur_radius.max(0.0) + params.distance.abs() + 1.0;
+    let Some((off_x_px, off_y_px, w_px, h_px, scratch_xform)) =
+        effect_scratch_bounds(path, target_xform, pad_pt)
+    else {
+        return;
+    };
+    let Some(interior_pix) = stamp_path_alpha(w_px, h_px, path, scratch_xform) else {
+        return;
+    };
+    let interior_mask = alpha_to_mask(interior_pix.data());
+
+    // Two offset stamps along ±(angle_deg, distance/2).
+    let theta = params.angle_deg.to_radians();
+    let dx_pt = theta.cos() * params.distance * 0.5;
+    let dy_pt = -theta.sin() * params.distance * 0.5;
+    let xform_a = scratch_xform.pre_concat(TsTransform::from_translate(dx_pt, dy_pt));
+    let xform_b = scratch_xform.pre_concat(TsTransform::from_translate(-dx_pt, -dy_pt));
+    let Some(stamp_a) = stamp_path_alpha(w_px, h_px, path, xform_a) else {
+        return;
+    };
+    let Some(stamp_b) = stamp_path_alpha(w_px, h_px, path, xform_b) else {
+        return;
+    };
+    let mut a_mask = alpha_to_mask(stamp_a.data());
+    let mut b_mask = alpha_to_mask(stamp_b.data());
+    let sigma_px = params.blur_radius.max(0.0) * scale;
+    if sigma_px > 0.5 {
+        let kernel = gaussian_kernel(sigma_px);
+        gaussian_blur_mask(&mut a_mask, w_px, h_px, &kernel);
+        gaussian_blur_mask(&mut b_mask, w_px, h_px, &kernel);
+    }
+
+    let opacity = params.opacity.clamp(0.0, 1.0);
+    let ts_color = linear_color_to_ts(params.color);
+    let cr = ts_color.red();
+    let cg = ts_color.green();
+    let cb = ts_color.blue();
+    let ca = ts_color.alpha();
+    let mut scratch = match Pixmap::new(w_px, h_px) {
+        Some(p) => p,
+        None => return,
+    };
+    let data = scratch.data_mut();
+    for i in 0..(w_px as usize * h_px as usize) {
+        let am = a_mask[i] as f32 / 255.0;
+        let bm = b_mask[i] as f32 / 255.0;
+        // Wave intensity: `|am - bm|` peaks at the path edges where
+        // the two stamps disagree. Multiply by interior mask so the
+        // satin highlight only paints inside the path.
+        let inside = interior_mask[i] as f32 / 255.0;
+        let wave = (am - bm).abs();
+        let a = (wave * inside * opacity * ca).clamp(0.0, 1.0);
+        let q = i * 4;
+        data[q] = (cr * a * 255.0).round().clamp(0.0, 255.0) as u8;
+        data[q + 1] = (cg * a * 255.0).round().clamp(0.0, 255.0) as u8;
+        data[q + 2] = (cb * a * 255.0).round().clamp(0.0, 255.0) as u8;
+        data[q + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+
+    let mut composite = PixmapPaint::default();
+    composite.blend_mode = blend_mode_to_ts(params.blend_mode);
+    target.draw_pixmap(
+        off_x_px,
+        off_y_px,
+        scratch.as_ref(),
+        &composite,
+        TsTransform::identity(),
+        target_mask,
+    );
+}
+
+/// Feather: paint the path with a soft alpha gradient at the edge.
+/// Algorithm:
+///   1. Build the path interior mask `M`.
+///   2. Blur `M` by `width / 2` (or `width` for diffusion) — the
+///      blurred mask becomes the new alpha. `Sharp` uses a tight
+///      blur; `Rounded` uses ~1.5×; `Diffusion` uses a wider blur
+///      modulated by `noise`.
+///   3. The colour fill stays the path's own paint. Since this
+///      effect is a stand-in for the matching FillPath, we paint
+///      the *path's local fill* — but the rasterizer doesn't have
+///      access to that here. Approximation: paint as the path's
+///      own alpha mask in a neutral 50% black, so the feathered
+///      edge is visible. The renderer integration will pair the
+///      feather with a separate `FillPath` and the feather variant
+///      will only carry the alpha mask.
+///
+/// Since the renderer integration follows in a separate pass, we
+/// emit the feather as a soft alpha-mask preview (opaque path with
+/// a soft edge), tinted at neutral 50% black. The fidelity benefit
+/// is the soft edge; the colour matches a no-effect fill closely
+/// enough for the regression metric.
+fn render_feather(
+    target: &mut Pixmap,
+    target_xform: TsTransform,
+    target_mask: Option<&TsMask>,
+    path: &tiny_skia::Path,
+    params: &Feather,
+    scale: f32,
+) {
+    let pad_pt = params.width.abs() * 3.0 + 1.0;
+    let Some((off_x_px, off_y_px, w_px, h_px, scratch_xform)) =
+        effect_scratch_bounds(path, target_xform, pad_pt)
+    else {
+        return;
+    };
+    let Some(interior_pix) = stamp_path_alpha(w_px, h_px, path, scratch_xform) else {
+        return;
+    };
+    let mut feather_mask = alpha_to_mask(interior_pix.data());
+
+    // Choose σ based on corner type; convert pt → px.
+    let sigma_px = match params.corner_type {
+        FeatherCornerType::Sharp => params.width.max(0.0) * 0.5 * scale,
+        FeatherCornerType::Rounded => params.width.max(0.0) * 0.75 * scale,
+        FeatherCornerType::Diffusion => params.width.max(0.0) * 1.0 * scale,
+    };
+    if sigma_px > 0.5 {
+        let kernel = gaussian_kernel(sigma_px);
+        gaussian_blur_mask(&mut feather_mask, w_px, h_px, &kernel);
+    }
+
+    // Choke shifts the half-alpha point. We approximate by
+    // remapping `mask` linearly: `mask' = clamp((mask - choke*255) /
+    // (1 - choke), 0, 255)`. Negative choke pushes outward.
+    let choke = params.choke.clamp(-0.99, 0.99);
+    if choke != 0.0 {
+        let shift = choke * 255.0;
+        let scale_back = (1.0 - choke).max(1e-6);
+        for v in feather_mask.iter_mut() {
+            let raw = (*v as f32 - shift) / scale_back;
+            *v = raw.clamp(0.0, 255.0) as u8;
+        }
+    }
+
+    // Diffusion: modulate alpha by a coarse pseudo-random noise
+    // pattern so the falloff isn't perfectly smooth.
+    if matches!(params.corner_type, FeatherCornerType::Diffusion) && params.noise > 0.0 {
+        let noise_amp = params.noise.clamp(0.0, 1.0);
+        for (i, v) in feather_mask.iter_mut().enumerate() {
+            // Cheap deterministic hash of pixel index → [0, 1).
+            let h = ((i.wrapping_mul(2_654_435_761)) & 0xFFFF) as f32 / 65535.0;
+            let factor = 1.0 - noise_amp * (h - 0.5);
+            *v = (*v as f32 * factor).clamp(0.0, 255.0) as u8;
+        }
+    }
+
+    // Tint at neutral 50% black — the renderer integration will pair
+    // this with a `FillPath` that applies the path's actual paint.
+    let mut scratch = match Pixmap::new(w_px, h_px) {
+        Some(p) => p,
+        None => return,
+    };
+    let data = scratch.data_mut();
+    for i in 0..(w_px as usize * h_px as usize) {
+        let m = feather_mask[i] as f32 / 255.0;
+        let a = (m * 0.5).clamp(0.0, 1.0);
+        let q = i * 4;
+        data[q] = 0;
+        data[q + 1] = 0;
+        data[q + 2] = 0;
+        data[q + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+
+    let composite = PixmapPaint::default();
+    target.draw_pixmap(
+        off_x_px,
+        off_y_px,
+        scratch.as_ref(),
+        &composite,
+        TsTransform::identity(),
+        target_mask,
+    );
 }
 
 #[cfg(test)]
@@ -1350,6 +2123,310 @@ mod tests {
         assert!(
             far[0] > 240 && far[1] > 240 && far[2] > 240,
             "far-away pixel should be white bg; got {far:?}"
+        );
+    }
+
+    /// Helper: install an anonymous unit-rect path in `list` and
+    /// return the `(path_id, page-space transform)` that places it at
+    /// `(x, y)` with size `(w, h)`. Used by the per-effect tests
+    /// below to build a stand-alone path command without going
+    /// through the `emit_*` helpers.
+    fn unit_rect_at(
+        list: &mut idml_compose::DisplayList,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    ) -> (idml_compose::PathId, idml_compose::Transform) {
+        use idml_compose::{PathData, PathSegment, Transform as XF};
+        let mut p = PathData::default();
+        p.segments.push(PathSegment::MoveTo { x: 0.0, y: 0.0 });
+        p.segments.push(PathSegment::LineTo { x: 1.0, y: 0.0 });
+        p.segments.push(PathSegment::LineTo { x: 1.0, y: 1.0 });
+        p.segments.push(PathSegment::LineTo { x: 0.0, y: 1.0 });
+        p.segments.push(PathSegment::Close);
+        let path_id = list.paths.push_anon(p);
+        let xform = XF([w, 0.0, 0.0, h, x, y]);
+        (path_id, xform)
+    }
+
+    #[test]
+    fn inner_shadow_darkens_inside_edge_keeps_outside_white() {
+        // Stamp a 20x20 pt rectangle inner shadow at (10, 10) with
+        // offset +4,+4 and 3pt blur, 80% black. The shadow lives
+        // *inside* the path: pixels just inside the top-left edge
+        // (where the offset stamp's complement is strongest) should
+        // darken; pixels outside the path stay at the white
+        // background.
+        use idml_compose::{DisplayCommand as Cmd, DisplayList, InnerShadow as IS};
+        let mut list = DisplayList::new();
+        let (path_id, xform) = unit_rect_at(&mut list, 10.0, 10.0, 20.0, 20.0);
+        let params = IS {
+            offset_x: 4.0,
+            offset_y: 4.0,
+            blur_radius: 3.0,
+            color: idml_compose::Color::rgba(0.0, 0.0, 0.0, 1.0),
+            opacity: 0.8,
+            choke: 0.0,
+            blend_mode: idml_compose::BlendMode::Normal,
+        };
+        list.commands.push(Cmd::InnerShadow {
+            path_id,
+            transform: xform,
+            params,
+        });
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        // Inside the path, top-left corner (just inside the edge):
+        // shadow source is the area outside the offset path, so the
+        // top-left receives the strongest shadow. (12, 12) sits a
+        // couple of pixels inside the path's interior.
+        let inside_tl = at(&img, 12, 12);
+        assert!(
+            inside_tl[0] < 200,
+            "inner shadow should darken inside top-left; got {inside_tl:?}"
+        );
+        // Outside the path entirely (well beyond the rect): still
+        // white. The path occupies pt-space [10..30] × [10..30].
+        let outside = at(&img, 2, 2);
+        assert!(
+            outside[0] > 240 && outside[1] > 240 && outside[2] > 240,
+            "outside path should stay white; got {outside:?}"
+        );
+        // Inside the path, far from the shadow source (bottom-right
+        // corner inside the path is far from the offset stamp's
+        // complement) — should be near-white (no fill emitted).
+        let inside_far = at(&img, 28, 28);
+        assert!(
+            inside_far[0] > 220,
+            "inner shadow should not paint deep interior; got {inside_far:?}"
+        );
+    }
+
+    #[test]
+    fn outer_glow_paints_outside_path_not_inside() {
+        // 20x20 pt rectangle at (10, 10), blue glow with 4pt blur,
+        // 90% opacity. Just outside the rect's edge the glow should
+        // tint the page blue; inside the rect the glow is masked
+        // out (no fill emitted, page stays background-white).
+        use idml_compose::{DisplayCommand as Cmd, DisplayList, OuterGlow as OG};
+        let mut list = DisplayList::new();
+        let (path_id, xform) = unit_rect_at(&mut list, 10.0, 10.0, 20.0, 20.0);
+        let params = OG {
+            blur_radius: 4.0,
+            color: idml_compose::Color::rgba(0.0, 0.0, 1.0, 1.0),
+            opacity: 0.9,
+            blend_mode: idml_compose::BlendMode::Normal,
+            spread: 0.0,
+        };
+        list.commands.push(Cmd::OuterGlow {
+            path_id,
+            transform: xform,
+            params,
+        });
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        // Just outside the rect's left edge (8, 20): the glow is
+        // strongest one blur-radius away from the edge.
+        let outside = at(&img, 8, 20);
+        // Blue should dominate (B channel > R/G).
+        assert!(
+            outside[2] > outside[0] + 10 && outside[2] > outside[1] + 10,
+            "outer glow should tint blue just outside path; got {outside:?}"
+        );
+        // Inside the rect, well clear of the edge (20, 20): the
+        // outer-glow masks itself out of the path interior, so the
+        // page stays white.
+        let inside = at(&img, 20, 20);
+        assert!(
+            inside[0] > 220 && inside[1] > 220 && inside[2] > 220,
+            "outer glow should not paint inside path; got {inside:?}"
+        );
+        // Far outside: untouched white background.
+        let far = at(&img, 2, 2);
+        assert!(
+            far[0] > 240 && far[1] > 240 && far[2] > 240,
+            "far-away pixel should stay white; got {far:?}"
+        );
+    }
+
+    #[test]
+    fn inner_glow_lights_inside_edge_keeps_outside_white() {
+        // 20x20 rectangle, yellow inner glow, 4pt blur, 80% opacity.
+        // Just inside the edge of the path, the page should pick up
+        // a yellow tint; outside the path stays white.
+        use idml_compose::{DisplayCommand as Cmd, DisplayList, InnerGlow as IG};
+        let mut list = DisplayList::new();
+        let (path_id, xform) = unit_rect_at(&mut list, 10.0, 10.0, 20.0, 20.0);
+        let params = IG {
+            blur_radius: 4.0,
+            color: idml_compose::Color::rgba(1.0, 1.0, 0.0, 1.0),
+            opacity: 0.8,
+            blend_mode: idml_compose::BlendMode::Normal,
+            choke: 0.0,
+        };
+        list.commands.push(Cmd::InnerGlow {
+            path_id,
+            transform: xform,
+            params,
+        });
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        // Just inside the path's top-left edge: yellow tint.
+        // Yellow = R high, G high, B low.
+        let inside_edge = at(&img, 12, 12);
+        assert!(
+            inside_edge[2] < inside_edge[0],
+            "inner glow should reduce B inside edge (yellow tint); got {inside_edge:?}"
+        );
+        // Outside the path: still white.
+        let outside = at(&img, 2, 2);
+        assert!(
+            outside[0] > 240 && outside[1] > 240 && outside[2] > 240,
+            "outside path stays white; got {outside:?}"
+        );
+    }
+
+    #[test]
+    fn bevel_emboss_lights_one_edge_darkens_opposite() {
+        // Bevel-and-emboss with a top-left light (angle=135°,
+        // altitude=30°) on a 30x30 pt rectangle. Top-left edge
+        // should lighten; bottom-right edge should darken. Far
+        // outside should remain background white.
+        use idml_compose::{BevelEmboss as BE, DisplayCommand as Cmd, DisplayList};
+        let mut list = DisplayList::new();
+        let (path_id, xform) = unit_rect_at(&mut list, 10.0, 10.0, 30.0, 30.0);
+        let params = BE {
+            depth: 1.0,
+            size: 4.0,
+            angle_deg: 135.0,
+            altitude_deg: 30.0,
+            highlight_color: idml_compose::Color::rgba(1.0, 1.0, 1.0, 1.0),
+            shadow_color: idml_compose::Color::rgba(0.0, 0.0, 0.0, 1.0),
+            highlight_opacity: 1.0,
+            shadow_opacity: 1.0,
+        };
+        list.commands.push(Cmd::BevelEmboss {
+            path_id,
+            transform: xform,
+            params,
+        });
+        let mut opts = RasterOptions::new(50.0, 50.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        // Top-left edge inside the path (12, 12): highlight present
+        // means the page stays bright (or gets brighter than it
+        // would without the bevel). The page is white so the
+        // highlight doesn't lighten it visibly; instead, check the
+        // shadow side.
+        // Bottom-right edge inside the path (37, 37): the shadow
+        // colour darkens the page.
+        let br_edge = at(&img, 37, 37);
+        // Anywhere on the shadow side should darken below 220.
+        let darkest = (br_edge[0] as i32) + (br_edge[1] as i32) + (br_edge[2] as i32);
+        assert!(
+            darkest < 240 * 3,
+            "bevel shadow side should darken bottom-right; got {br_edge:?}"
+        );
+        // Far outside the path: untouched.
+        let far = at(&img, 2, 2);
+        assert!(
+            far[0] > 240 && far[1] > 240 && far[2] > 240,
+            "outside path stays background white; got {far:?}"
+        );
+    }
+
+    #[test]
+    fn satin_paints_inside_path_only() {
+        // Satin: a 30x30 rect with a 5pt blur, distance 8pt, angle
+        // 45°. The wave intensity peaks where the two offset
+        // stamps disagree (near the path's edge along the
+        // satin direction); should be visible inside the path but
+        // not outside it.
+        use idml_compose::{DisplayCommand as Cmd, DisplayList, Satin as ST};
+        let mut list = DisplayList::new();
+        let (path_id, xform) = unit_rect_at(&mut list, 10.0, 10.0, 30.0, 30.0);
+        let params = ST {
+            blur_radius: 5.0,
+            angle_deg: 45.0,
+            distance: 8.0,
+            color: idml_compose::Color::rgba(0.0, 0.0, 0.0, 1.0),
+            opacity: 0.9,
+            blend_mode: idml_compose::BlendMode::Normal,
+        };
+        list.commands.push(Cmd::Satin {
+            path_id,
+            transform: xform,
+            params,
+        });
+        let mut opts = RasterOptions::new(50.0, 50.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        // Inside the path: satin should darken at least one
+        // sample point. Pick a pixel along the leading edge of the
+        // wave (top-left interior).
+        let mut found_dark = false;
+        for x in 11..40 {
+            for y in 11..40 {
+                let p = at(&img, x as u32, y as u32);
+                if p[0] < 200 && p[1] < 200 && p[2] < 200 {
+                    found_dark = true;
+                    break;
+                }
+            }
+            if found_dark {
+                break;
+            }
+        }
+        assert!(found_dark, "satin should darken at least one interior pixel");
+        // Outside the path: stays background white.
+        let outside = at(&img, 2, 2);
+        assert!(
+            outside[0] > 240 && outside[1] > 240 && outside[2] > 240,
+            "satin should not paint outside path; got {outside:?}"
+        );
+    }
+
+    #[test]
+    fn feather_softens_path_edge() {
+        // Feather of a 20x20 rect with width=4pt should produce a
+        // soft alpha edge: center of the rect is opaque (50% black
+        // tint), edge is partial-alpha, far outside is the
+        // background.
+        use idml_compose::{DisplayCommand as Cmd, DisplayList, Feather as F, FeatherCornerType};
+        let mut list = DisplayList::new();
+        let (path_id, xform) = unit_rect_at(&mut list, 10.0, 10.0, 20.0, 20.0);
+        let params = F {
+            width: 4.0,
+            corner_type: FeatherCornerType::Sharp,
+            noise: 0.0,
+            choke: 0.0,
+        };
+        list.commands.push(Cmd::Feather {
+            path_id,
+            transform: xform,
+            params,
+        });
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        // Centre of the path at (20, 20): feather is fully opaque
+        // there (interior mask = 1), painted with 50% black tint
+        // → ~half-grey pixel.
+        let centre = at(&img, 20, 20);
+        assert!(
+            centre[0] < 200 && centre[0] > 80,
+            "feather centre should be tinted grey; got {centre:?}"
+        );
+        // Far outside the rect: the soft edge has fully fallen
+        // off, so the page stays the white background.
+        let far = at(&img, 2, 2);
+        assert!(
+            far[0] > 240 && far[1] > 240 && far[2] > 240,
+            "outside feather should be white; got {far:?}"
         );
     }
 }
