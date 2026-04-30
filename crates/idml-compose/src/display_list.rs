@@ -392,6 +392,29 @@ pub enum DisplayCommand {
     /// callers (vertical-justification etc.) walk command ranges
     /// that never include clip pairs.
     PopClip(Transform),
+    /// Begin a transparency group. Subsequent drawing commands emit
+    /// into an offscreen buffer sized to `bounds` (in page coords)
+    /// instead of the page; a matching `EndBlendGroup` composites the
+    /// buffer back onto the page (or the next-outer group) using
+    /// `blend_mode` and `opacity`. This is the structurally correct
+    /// PDF transparency-group semantic — non-Normal blend / partial
+    /// opacity gets applied at the group composite, not per fill.
+    ///
+    /// `transform` is a stub (mirrors `PopClip`'s scheme) so
+    /// [`DisplayCommand::transform_mut`] keeps returning a non-None
+    /// reference. The field is initialised to identity by emitters
+    /// and not consumed by the rasterizer.
+    BeginBlendGroup {
+        bounds: Rect,
+        blend_mode: BlendMode,
+        opacity: f32,
+        transform: Transform,
+    },
+    /// End the most-recently-pushed transparency group. Mismatched
+    /// pairs are tolerated — a stray `EndBlendGroup` is a no-op.
+    /// The contained transform is unused; same rationale as
+    /// [`DisplayCommand::PopClip`].
+    EndBlendGroup(Transform),
     // PushLayer, PopLayer land with §10.4.
 }
 
@@ -408,7 +431,9 @@ impl DisplayCommand {
             | DisplayCommand::DropShadow { transform, .. }
             | DisplayCommand::Image { transform, .. }
             | DisplayCommand::PushClip { transform, .. }
-            | DisplayCommand::PopClip(transform) => transform,
+            | DisplayCommand::PopClip(transform)
+            | DisplayCommand::BeginBlendGroup { transform, .. }
+            | DisplayCommand::EndBlendGroup(transform) => transform,
         }
     }
 }

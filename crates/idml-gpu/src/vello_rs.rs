@@ -226,6 +226,15 @@ fn build_scene_with_transform(list: &DisplayList, page_to_px: kurbo::Affine) -> 
                 // no-op" policy. The CPU rasterizer is the
                 // path-of-record for the fidelity harness.
             }
+            DisplayCommand::BeginBlendGroup { .. } | DisplayCommand::EndBlendGroup(_) => {
+                // Vello backend doesn't enforce transparency groups
+                // yet — same "log + skip" policy as PushClip /
+                // PopClip. Per-glyph / per-shape contents inside the
+                // group still render via FillPath etc.; only the
+                // group composite (blend mode + opacity) is dropped.
+                // The CPU rasterizer is the path-of-record for the
+                // fidelity harness.
+            }
         }
     }
     scene

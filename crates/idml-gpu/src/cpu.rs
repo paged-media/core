@@ -42,6 +42,22 @@ impl PathRasterizer for CpuRasterizer {
     }
 }
 
+/// One frame on the transparency-group stack. The `pixmap` is the
+/// offscreen buffer we render the group's contents into; `offset` is
+/// the top-left pixel of that buffer in the *page's* pixel-coord
+/// system, so we can subtract it from per-command transforms and have
+/// each fill/stroke/draw_pixmap land in the buffer's local pixel grid.
+/// On `EndBlendGroup`, the buffer is composited onto the next-outer
+/// target (the previous top of the stack, or the page if empty)
+/// using `blend_mode` + `opacity`.
+struct GroupFrame {
+    pixmap: Pixmap,
+    /// Buffer top-left in page-pixel coords.
+    offset: (i32, i32),
+    blend_mode: TsBlendMode,
+    opacity: f32,
+}
+
 /// Rasterise `list` to an 8-bit sRGB RGBA image at the configured DPI.
 /// Free-function form retained for callers that already use it (the
 /// `idml-renderer::pipeline::render_document` path).
@@ -69,6 +85,41 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
         stack.last()
     }
 
+    // Transparency-group stack. When non-empty, every fill / stroke /
+    // draw_pixmap targets the topmost group's pixmap instead of the
+    // page; the group's `offset` translates page-space pixel coords
+    // into the buffer's local origin so per-command transforms land
+    // in the right cell. `EndBlendGroup` pops the top, composites it
+    // onto the next-outer target.
+    let mut group_stack: Vec<GroupFrame> = Vec::new();
+
+    // Resolve the active render target for a draw command. When
+    // inside a transparency group, fills/strokes/images target the
+    // group's offscreen buffer instead of the page; we adjust the
+    // page-to-px transform by the group's pixel offset so per-command
+    // transforms map into the buffer's local coord grid.
+    //
+    // Mask handling: clips inside a group are dropped today (the
+    // page-sized mask doesn't fit a smaller buffer, and the corpus
+    // doesn't exercise clip + group combinations). When the
+    // group_stack is empty, the page-sized mask from clip_stack
+    // still applies.
+    fn resolve_target<'a>(
+        page_pixmap: &'a mut Pixmap,
+        group_stack: &'a mut Vec<GroupFrame>,
+        page_to_px: TsTransform,
+        clip_stack: &'a [TsMask],
+    ) -> (&'a mut Pixmap, TsTransform, Option<&'a TsMask>) {
+        if let Some(top) = group_stack.last_mut() {
+            let off = top.offset;
+            let xform = TsTransform::from_translate(-off.0 as f32, -off.1 as f32)
+                .pre_concat(page_to_px);
+            (&mut top.pixmap, xform, None)
+        } else {
+            (page_pixmap, page_to_px, clip_stack.last())
+        }
+    }
+
     for cmd in &list.commands {
         match cmd {
             DisplayCommand::FillPath {
@@ -82,14 +133,10 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 let Some(path) = build_path_transformed(path_data, transform) else {
                     continue;
                 };
-                let ts_paint = paint_to_ts(paint, list, transform, page_to_px);
-                pixmap.fill_path(
-                    &path,
-                    &ts_paint,
-                    FillRule::Winding,
-                    page_to_px,
-                    active_mask(&clip_stack),
-                );
+                let (target, target_xform, target_mask) =
+                    resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
+                let ts_paint = paint_to_ts(paint, list, transform, target_xform);
+                target.fill_path(&path, &ts_paint, FillRule::Winding, target_xform, target_mask);
             }
             DisplayCommand::FillPathBlend {
                 path_id,
@@ -103,16 +150,18 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 let Some(path) = build_path_transformed(path_data, transform) else {
                     continue;
                 };
-                let ts_paint = paint_to_ts(paint, list, transform, page_to_px);
+                let (target, target_xform, target_mask) =
+                    resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
+                let ts_paint = paint_to_ts(paint, list, transform, target_xform);
                 let ts_mode = blend_mode_to_ts(*blend_mode);
                 if matches!(ts_mode, TsBlendMode::SourceOver) {
                     // Normal blend ⇒ same fast path as FillPath.
-                    pixmap.fill_path(
+                    target.fill_path(
                         &path,
                         &ts_paint,
                         FillRule::Winding,
-                        page_to_px,
-                        active_mask(&clip_stack),
+                        target_xform,
+                        target_mask,
                     );
                 } else {
                     // Non-Normal: render the fill into a scratch
@@ -121,16 +170,28 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     // requested blend mode. Blend modes are
                     // pixel-local so the scratch only needs the path
                     // bbox + 1px anti-alias slack.
+                    //
+                    // This per-command approximation is retained for
+                    // back-compat callers; the orchestrator now
+                    // brackets non-Normal blends with
+                    // BeginBlendGroup/EndBlendGroup instead, so this
+                    // path is rarely hit at runtime.
                     let bbox = path.bounds();
                     let pad_pt = 1.0;
                     let min_x_pt = bbox.left() - pad_pt;
                     let min_y_pt = bbox.top() - pad_pt;
                     let max_x_pt = bbox.right() + pad_pt;
                     let max_y_pt = bbox.bottom() + pad_pt;
-                    let off_x_px = (min_x_pt * scale).floor() as i32;
-                    let off_y_px = (min_y_pt * scale).floor() as i32;
-                    let max_x_px = (max_x_pt * scale).ceil() as i32;
-                    let max_y_px = (max_y_pt * scale).ceil() as i32;
+                    // Group-relative pixel offset: project path bounds
+                    // through `target_xform` (page→pixel scale +
+                    // group-buffer translation) to get buffer-local
+                    // pixel coords.
+                    let (lx_px, ly_px) = ts_xform_apply(target_xform, min_x_pt, min_y_pt);
+                    let (rx_px, ry_px) = ts_xform_apply(target_xform, max_x_pt, max_y_pt);
+                    let off_x_px = lx_px.min(rx_px).floor() as i32;
+                    let off_y_px = ly_px.min(ry_px).floor() as i32;
+                    let max_x_px = lx_px.max(rx_px).ceil() as i32;
+                    let max_y_px = ly_px.max(ry_px).ceil() as i32;
                     let w_px = (max_x_px - off_x_px).max(1) as u32;
                     let h_px = (max_y_px - off_y_px).max(1) as u32;
                     if let Some(mut scratch) = Pixmap::new(w_px, h_px) {
@@ -138,7 +199,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                             -off_x_px as f32,
                             -off_y_px as f32,
                         )
-                        .pre_concat(TsTransform::from_scale(scale, scale));
+                        .pre_concat(target_xform);
                         let scratch_paint =
                             paint_to_ts(paint, list, transform, scratch_xform);
                         scratch.fill_path(
@@ -150,21 +211,21 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                         );
                         let mut composite = PixmapPaint::default();
                         composite.blend_mode = ts_mode;
-                        pixmap.draw_pixmap(
+                        target.draw_pixmap(
                             off_x_px,
                             off_y_px,
                             scratch.as_ref(),
                             &composite,
                             TsTransform::identity(),
-                            active_mask(&clip_stack),
+                            target_mask,
                         );
                     } else {
-                        pixmap.fill_path(
+                        target.fill_path(
                             &path,
                             &ts_paint,
                             FillRule::Winding,
-                            page_to_px,
-                            active_mask(&clip_stack),
+                            target_xform,
+                            target_mask,
                         );
                     }
                 }
@@ -181,7 +242,9 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 let Some(path) = build_path_transformed(path_data, transform) else {
                     continue;
                 };
-                let ts_paint = paint_to_ts(paint, list, transform, page_to_px);
+                let (target, target_xform, target_mask) =
+                    resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
+                let ts_paint = paint_to_ts(paint, list, transform, target_xform);
                 let ts_stroke = TsStroke {
                     width: stroke.width.max(0.0),
                     line_cap: map_cap(stroke.cap),
@@ -193,12 +256,12 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                         tiny_skia::StrokeDash::new(stroke.dash.as_slice().to_vec(), 0.0)
                     },
                 };
-                pixmap.stroke_path(
+                target.stroke_path(
                     &path,
                     &ts_paint,
                     &ts_stroke,
-                    page_to_px,
-                    active_mask(&clip_stack),
+                    target_xform,
+                    target_mask,
                 );
             }
             DisplayCommand::DropShadow {
@@ -217,6 +280,8 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 let Some(path) = build_path_transformed(path_data, &shifted) else {
                     continue;
                 };
+                let (target, target_xform, target_mask) =
+                    resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
                 let mut shadow_color = shadow.color;
                 shadow_color.a *= shadow.opacity.clamp(0.0, 1.0);
                 let mut p = TsPaint {
@@ -231,12 +296,12 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     // Fast path: blur is sub-pixel; the existing
                     // hard-edge fill is visually indistinguishable
                     // from a 0.5σ kernel, so skip the offscreen.
-                    pixmap.fill_path(
+                    target.fill_path(
                         &path,
                         &p,
                         FillRule::Winding,
-                        page_to_px,
-                        active_mask(&clip_stack),
+                        target_xform,
+                        target_mask,
                     );
                 } else {
                     // Offscreen path: rasterise the shadow stamp
@@ -247,17 +312,22 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     // inside the scratch buffer.
                     let bbox = path.bounds();
                     let pad_pt = 3.0 * shadow.blur_radius.max(0.0) + 1.0;
-                    let min_x_pt = bbox.left() - pad_pt;
-                    let min_y_pt = bbox.top() - pad_pt;
-                    let max_x_pt = bbox.right() + pad_pt;
-                    let max_y_pt = bbox.bottom() + pad_pt;
                     // Snap top-left to whole pixels so draw_pixmap
                     // (integer offsets) is pixel-aligned and the
-                    // composite isn't bilinearly resampled.
-                    let off_x_px = (min_x_pt * scale).floor() as i32;
-                    let off_y_px = (min_y_pt * scale).floor() as i32;
-                    let max_x_px = (max_x_pt * scale).ceil() as i32;
-                    let max_y_px = (max_y_pt * scale).ceil() as i32;
+                    // composite isn't bilinearly resampled. Project
+                    // through `target_xform` so group-buffer renders
+                    // place the stamp at buffer-local pixel coords.
+                    let (lx_px, ly_px) =
+                        ts_xform_apply(target_xform, bbox.left() - pad_pt, bbox.top() - pad_pt);
+                    let (rx_px, ry_px) = ts_xform_apply(
+                        target_xform,
+                        bbox.right() + pad_pt,
+                        bbox.bottom() + pad_pt,
+                    );
+                    let off_x_px = lx_px.min(rx_px).floor() as i32;
+                    let off_y_px = ly_px.min(ry_px).floor() as i32;
+                    let max_x_px = lx_px.max(rx_px).ceil() as i32;
+                    let max_y_px = ly_px.max(ry_px).ceil() as i32;
                     let w_px = (max_x_px - off_x_px).max(1) as u32;
                     let h_px = (max_y_px - off_y_px).max(1) as u32;
                     if let Some(mut scratch) = Pixmap::new(w_px, h_px) {
@@ -269,7 +339,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                             -off_x_px as f32,
                             -off_y_px as f32,
                         )
-                        .pre_concat(TsTransform::from_scale(scale, scale));
+                        .pre_concat(target_xform);
                         scratch.fill_path(&path, &p, FillRule::Winding, scratch_xform, None);
                         // tiny-skia stores RGBA8 premultiplied — the
                         // Gaussian blurs each channel independently
@@ -279,24 +349,24 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                         // edges into a halo).
                         let kernel = gaussian_kernel(sigma_px);
                         gaussian_blur_premul(scratch.data_mut(), w_px, h_px, &kernel);
-                        pixmap.draw_pixmap(
+                        target.draw_pixmap(
                             off_x_px,
                             off_y_px,
                             scratch.as_ref(),
                             &PixmapPaint::default(),
                             TsTransform::identity(),
-                            active_mask(&clip_stack),
+                            target_mask,
                         );
                     } else {
                         // Allocation failed (pathological size) —
                         // fall back to the hard-edge fill rather
                         // than skipping the shadow entirely.
-                        pixmap.fill_path(
+                        target.fill_path(
                             &path,
                             &p,
                             FillRule::Winding,
-                            page_to_px,
-                            active_mask(&clip_stack),
+                            target_xform,
+                            target_mask,
                         );
                     }
                 }
@@ -320,11 +390,14 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 // pipeline pushes into the list.
                 let mut src = Pixmap::new(img.width, img.height).expect("non-zero image pixmap");
                 src.data_mut().copy_from_slice(&img.rgba);
+                let (target, target_xform, target_mask) =
+                    resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
                 // Compose the placement transform: the display-list
                 // transform maps (0..1, 0..1) → page coords, and
-                // page_to_px scales those to device pixels. Source
-                // pixmap pixels live in (0..w, 0..h), so divide by
-                // (w, h) before the existing transform.
+                // target_xform scales those to device pixels (page or
+                // group-buffer). Source pixmap pixels live in (0..w,
+                // 0..h), so divide by (w, h) before the existing
+                // transform.
                 let inv_w = 1.0 / img.width as f32;
                 let inv_h = 1.0 / img.height as f32;
                 let unit_to_page = TsTransform::from_row(
@@ -336,16 +409,16 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     transform.0[5],
                 );
                 let pixel_to_unit = TsTransform::from_scale(inv_w, inv_h);
-                let pixel_to_px = page_to_px
+                let pixel_to_px = target_xform
                     .pre_concat(unit_to_page)
                     .pre_concat(pixel_to_unit);
-                pixmap.draw_pixmap(
+                target.draw_pixmap(
                     0,
                     0,
                     src.as_ref(),
                     &PixmapPaint::default(),
                     pixel_to_px,
-                    active_mask(&clip_stack),
+                    target_mask,
                 );
             }
             DisplayCommand::PushClip { path_id, transform } => {
@@ -393,12 +466,109 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
             DisplayCommand::PopClip(_) => {
                 clip_stack.pop();
             }
+            DisplayCommand::BeginBlendGroup {
+                bounds,
+                blend_mode,
+                opacity,
+                ..
+            } => {
+                // Allocate an offscreen pixmap sized to the bounds (in
+                // page coords) projected through page_to_px, with 1px
+                // slack on each side for AA. The buffer's top-left
+                // pixel in page-pixel coords is `(off_x_px, off_y_px)`
+                // — subsequent fills/strokes/draws targeting this
+                // group adjust their transform by that offset.
+                let scale_factor = scale;
+                let pad_pt = 1.0 / scale_factor.max(1e-6);
+                let min_x_pt = bounds.x - pad_pt;
+                let min_y_pt = bounds.y - pad_pt;
+                let max_x_pt = bounds.x + bounds.w + pad_pt;
+                let max_y_pt = bounds.y + bounds.h + pad_pt;
+                let off_x_px = (min_x_pt * scale_factor).floor() as i32;
+                let off_y_px = (min_y_pt * scale_factor).floor() as i32;
+                let max_x_px = (max_x_pt * scale_factor).ceil() as i32;
+                let max_y_px = (max_y_pt * scale_factor).ceil() as i32;
+                let w_px = (max_x_px - off_x_px).max(1) as u32;
+                let h_px = (max_y_px - off_y_px).max(1) as u32;
+                match Pixmap::new(w_px, h_px) {
+                    Some(buf) => {
+                        group_stack.push(GroupFrame {
+                            pixmap: buf,
+                            offset: (off_x_px, off_y_px),
+                            blend_mode: blend_mode_to_ts(*blend_mode),
+                            opacity: opacity.clamp(0.0, 1.0),
+                        });
+                    }
+                    None => {
+                        // Allocation failure (zero or pathological
+                        // size) — push a minimal 1×1 placeholder so
+                        // the matching End balances the stack and
+                        // drawing into the group is a no-op.
+                        if let Some(buf) = Pixmap::new(1, 1) {
+                            group_stack.push(GroupFrame {
+                                pixmap: buf,
+                                offset: (0, 0),
+                                blend_mode: TsBlendMode::SourceOver,
+                                opacity: 1.0,
+                            });
+                        }
+                    }
+                }
+            }
+            DisplayCommand::EndBlendGroup(_) => {
+                let Some(top) = group_stack.pop() else {
+                    continue;
+                };
+                let GroupFrame {
+                    pixmap: group_pix,
+                    offset: (off_x_px, off_y_px),
+                    blend_mode,
+                    opacity,
+                } = top;
+                let mut composite = PixmapPaint::default();
+                composite.blend_mode = blend_mode;
+                composite.opacity = opacity;
+                // Composite the group buffer onto the next-outer
+                // target (or the page). The mask still applies when
+                // we're emerging back to the page (clip_stack
+                // semantics) but is dropped when composing into a
+                // parent group buffer for the same reason as draws.
+                if let Some(parent) = group_stack.last_mut() {
+                    let parent_off = parent.offset;
+                    let dst_x = off_x_px - parent_off.0;
+                    let dst_y = off_y_px - parent_off.1;
+                    parent.pixmap.draw_pixmap(
+                        dst_x,
+                        dst_y,
+                        group_pix.as_ref(),
+                        &composite,
+                        TsTransform::identity(),
+                        None,
+                    );
+                } else {
+                    pixmap.draw_pixmap(
+                        off_x_px,
+                        off_y_px,
+                        group_pix.as_ref(),
+                        &composite,
+                        TsTransform::identity(),
+                        active_mask(&clip_stack),
+                    );
+                }
+            }
         }
     }
 
     let data = pixmap.take();
     RgbaImage::from_raw(px_w, px_h, data)
         .unwrap_or_else(|| RgbaImage::from_pixel(px_w, px_h, Rgba([0, 0, 0, 0])))
+}
+
+/// Apply a tiny-skia `Transform` (sx, ky, kx, sy, tx, ty form) to a
+/// point. tiny-skia 0.11 only exposes `map_point(&mut Point)` which
+/// requires a mutable reference; this helper sticks to plain f32 math.
+fn ts_xform_apply(t: TsTransform, x: f32, y: f32) -> (f32, f32) {
+    (t.sx * x + t.kx * y + t.tx, t.ky * x + t.sy * y + t.ty)
 }
 
 /// Build a tiny-skia path with `path_transform` applied to every

@@ -355,6 +355,8 @@ mod tests {
             DisplayCommand::Image { transform, .. } => *transform,
             DisplayCommand::PushClip { transform, .. } => *transform,
             DisplayCommand::PopClip(transform) => *transform,
+            DisplayCommand::BeginBlendGroup { transform, .. } => *transform,
+            DisplayCommand::EndBlendGroup(transform) => *transform,
         };
         // Unit rect corners: (0,0), (1,0), (1,1), (0,1).
         assert_eq!(t.apply(0.0, 0.0), (100.0, 200.0));
