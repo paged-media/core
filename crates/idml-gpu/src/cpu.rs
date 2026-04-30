@@ -292,6 +292,11 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 path_id,
                 transform,
                 shadow,
+            }
+            | DisplayCommand::PathShadow {
+                path_id,
+                transform,
+                shadow,
             } => {
                 let Some(path_data) = list.paths.get(*path_id) else {
                     continue;
@@ -1279,6 +1284,72 @@ mod tests {
         assert!(
             p[0] > 100 && p[0] < 180,
             "expected mid-gray, got {p:?}"
+        );
+    }
+
+    #[test]
+    fn path_shadow_paints_dark_pixels_at_offset() {
+        // Stamp a small unit-rect path as a `PathShadow` at a known
+        // page offset, with a non-zero shadow offset and visible
+        // blur radius. Inside the shadow's projected bounds the
+        // page should darken; far away from the path the page
+        // should remain near-white background. This mirrors the
+        // existing DropShadow code path; we render the new
+        // PathShadow variant so the shared lowering survives any
+        // future divergence.
+        use idml_compose::{
+            DisplayCommand as Cmd, DisplayList, DropShadow as DS, PathData, PathSegment,
+            Transform as XF,
+        };
+        let mut list = DisplayList::new();
+        // Anonymous unit-rect path (avoids the interned-key
+        // collision with later test isolation).
+        let mut p = PathData::default();
+        p.segments
+            .push(PathSegment::MoveTo { x: 0.0, y: 0.0 });
+        p.segments
+            .push(PathSegment::LineTo { x: 1.0, y: 0.0 });
+        p.segments
+            .push(PathSegment::LineTo { x: 1.0, y: 1.0 });
+        p.segments
+            .push(PathSegment::LineTo { x: 0.0, y: 1.0 });
+        p.segments.push(PathSegment::Close);
+        let path_id = list.paths.push_anon(p);
+        // Place the unit rect at (10, 10) with size 10×10, shadow
+        // offset (4, 4), blur 2pt, 60% black.
+        let xform = XF([10.0, 0.0, 0.0, 10.0, 10.0, 10.0]);
+        let shadow = DS {
+            offset_x: 4.0,
+            offset_y: 4.0,
+            blur_radius: 2.0,
+            color: idml_compose::Color::rgba(0.0, 0.0, 0.0, 1.0),
+            opacity: 0.6,
+        };
+        list.commands.push(Cmd::PathShadow {
+            path_id,
+            transform: xform,
+            shadow,
+        });
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        // The shadow centre lands around (10+4 + 5, 10+4 + 5) =
+        // (19, 19): rect spans x=10..20, y=10..20 in pt; shadow
+        // offsets +4 → x=14..24, y=14..24; centre at (19, 19).
+        let centre = at(&img, 19, 19);
+        // Shadow should darken the pixel meaningfully; ~0.6 alpha
+        // black on white → ~102 per channel mid-rect, and the
+        // Gaussian blur softens edges. Expect well under 220 in
+        // the rect interior.
+        assert!(
+            centre[0] < 220 && centre[1] < 220 && centre[2] < 220,
+            "shadow centre should darken page; got {centre:?}"
+        );
+        // Far outside the shadow footprint: still white background.
+        let far = at(&img, 2, 2);
+        assert!(
+            far[0] > 240 && far[1] > 240 && far[2] > 240,
+            "far-away pixel should be white bg; got {far:?}"
         );
     }
 }
