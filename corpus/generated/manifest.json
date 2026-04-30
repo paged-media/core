@@ -1,6 +1,15 @@
 {
   "samples": [
     {
+      "name": "anchored",
+      "idml": "anchored.idml",
+      "pdf": "anchored.pdf",
+      "pages": 6,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-diff",
+      "report": "/tmp/idml-diff/report.json"
+    },
+    {
       "name": "effects",
       "idml": "effects.idml",
       "pdf": "effects.pdf",

@@ -2075,12 +2075,30 @@ fn render_directional_feather(
     // `build_path_transformed`); the scratch pixel grid is the page
     // pixel grid translated by `off_*_px`. Reverse: for each scratch
     // pixel, derive its page-pt position via `(off + i + 0.5) / scale`.
+    //
+    // Rotation: when `angle_deg` is non-zero we treat the per-pixel
+    // distances in the *rotated* frame so "left" / "top" track the
+    // intrinsic edges of the rect rather than the AABB's min-x /
+    // min-y sides. We rotate each pixel by `-angle_deg` around the
+    // bbox centre; per-side distances are then computed against the
+    // bbox's half-extents (the bbox here is treated as the rotated
+    // rect's intrinsic bounds, matching how the parser surfaces a
+    // rotated frame's bounds when ItemTransform is folded into the
+    // path's coords). For an axis-aligned rect this is the original
+    // logic; for a rotated rect the per-side fades follow the
+    // rect's own edges.
     let bbox = path.bounds();
     let lw = params.left_width.max(0.0);
     let rw = params.right_width.max(0.0);
     let tw = params.top_width.max(0.0);
     let bw = params.bottom_width.max(0.0);
     let inv_scale = 1.0 / scale.max(1e-6);
+    let cx = (bbox.left() + bbox.right()) * 0.5;
+    let cy = (bbox.top() + bbox.bottom()) * 0.5;
+    let hw = (bbox.right() - bbox.left()) * 0.5;
+    let hh = (bbox.bottom() - bbox.top()) * 0.5;
+    let angle_rad = -params.angle_deg.to_radians();
+    let (sin_a, cos_a) = angle_rad.sin_cos();
     if lw + rw + tw + bw > 0.0 {
         for j in 0..h_px {
             for i in 0..w_px {
@@ -2091,10 +2109,15 @@ fn render_directional_feather(
                 }
                 let px_pt = (off_x_px as f32 + i as f32 + 0.5) * inv_scale;
                 let py_pt = (off_y_px as f32 + j as f32 + 0.5) * inv_scale;
-                let d_left = px_pt - bbox.left();
-                let d_right = bbox.right() - px_pt;
-                let d_top = py_pt - bbox.top();
-                let d_bot = bbox.bottom() - py_pt;
+                // Rotate the pixel into the rect's intrinsic frame.
+                let dx = px_pt - cx;
+                let dy = py_pt - cy;
+                let rx = dx * cos_a - dy * sin_a;
+                let ry = dx * sin_a + dy * cos_a;
+                let d_left = rx + hw;
+                let d_right = hw - rx;
+                let d_top = ry + hh;
+                let d_bot = hh - ry;
                 let a_left = if lw > 0.0 { (d_left / lw).clamp(0.0, 1.0) } else { 1.0 };
                 let a_right = if rw > 0.0 { (d_right / rw).clamp(0.0, 1.0) } else { 1.0 };
                 let a_top = if tw > 0.0 { (d_top / tw).clamp(0.0, 1.0) } else { 1.0 };
@@ -2141,9 +2164,10 @@ fn render_directional_feather(
     composite_alpha_mask(target, target_mask, off_x_px, off_y_px, w_px, h_px, &feather_mask);
 }
 
-/// Gradient feather: modulate the path's interior alpha by a 1-D
-/// gradient (linear or radial). For Linear, each pixel projects onto
-/// the `(start, end)` axis to get a `t` in `[0, 1]`; alpha is
+/// Gradient feather: alpha-modulate whatever's already been
+/// rasterized into the active target along a 1-D gradient (linear
+/// or radial). For Linear, each pixel projects onto the
+/// `(start, end)` axis to get a `t` in `[0, 1]`; alpha is
 /// interpolated from the stops at that `t`. For Radial,
 /// `t = distance(pixel, start) / |end - start|`.
 ///
@@ -2151,6 +2175,18 @@ fn render_directional_feather(
 /// the path's local space (same coords as the `Transform`). The
 /// helper transforms them to page-pt before the projection so the
 /// pixel-grid math is straight subtraction.
+///
+/// Compositing model: this is a path-shaped multiplicative alpha mask
+/// applied in-place to `target`. For each pixel `p`,
+///   factor(p) = (1 - aa(p)) + aa(p) * gradient_alpha(p)
+/// where `aa(p)` is the path's anti-aliased interior coverage at `p`
+/// (1 inside, 0 outside, fractional on the edge) and `gradient_alpha`
+/// is the sampled stop list at `p`'s position along the gradient
+/// axis. Then `target.rgba(p) *= factor(p)` in premultiplied space —
+/// outside the path stays unchanged (factor = 1), inside the path
+/// fades according to the gradient. Mirrors InDesign's "gradient
+/// feather" effect, which masks the underlying fill rather than
+/// stamping its own colour.
 fn render_gradient_feather(
     target: &mut Pixmap,
     target_xform: TsTransform,
@@ -2172,7 +2208,7 @@ fn render_gradient_feather(
     let Some(interior_pix) = stamp_path_alpha(w_px, h_px, path, scratch_xform) else {
         return;
     };
-    let mut feather_mask = alpha_to_mask(interior_pix.data());
+    let interior_mask = alpha_to_mask(interior_pix.data());
 
     // Map start / end from path-local to page-pt. The Transform's
     // `apply` mirrors how `build_path_transformed` transforms the
@@ -2183,14 +2219,6 @@ fn render_gradient_feather(
     let dx = ex_pt - sx_pt;
     let dy = ey_pt - sy_pt;
     let len_sq = dx * dx + dy * dy;
-    if len_sq < 1e-6 {
-        // Degenerate gradient (start == end) — composite the path's
-        // interior at full alpha. Keeps the `Some(GradientFeather)`
-        // path visually close to a plain `FillPath`.
-        composite_alpha_mask(target, target_mask, off_x_px, off_y_px, w_px, h_px, &feather_mask);
-        return;
-    }
-    let inv_len_sq = 1.0 / len_sq;
 
     // Pre-sort stops by location so the interpolation is monotonic.
     let mut stops: Vec<(f32, f32)> = params
@@ -2200,35 +2228,92 @@ fn render_gradient_feather(
         .collect();
     stops.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
+    // Build the per-pixel multiplicative factor (0..1) and apply it
+    // directly to the active target's RGBA pixels. The factor at
+    // pixel p is (1 - aa) + aa * gradient_alpha — a linear blend
+    // between "untouched" outside the path and "modulated by
+    // gradient" inside it.
     let inv_scale = 1.0 / scale.max(1e-6);
+    let radius = if len_sq > 1e-12 { len_sq.sqrt() } else { 0.0 };
+    let inv_len_sq = if len_sq > 1e-6 { 1.0 / len_sq } else { 0.0 };
+    let degenerate = len_sq < 1e-6;
+
+    let target_w = target.width() as i32;
+    let target_h = target.height() as i32;
+    let mask_dims = target_mask.map(|m| (m.width() as i32, m.height() as i32));
+    let mask_data = target_mask.map(|m| m.data().to_vec());
+    let target_data = target.data_mut();
     for j in 0..h_px {
+        let ty = off_y_px + j as i32;
+        if ty < 0 || ty >= target_h {
+            continue;
+        }
         for i in 0..w_px {
-            let idx = (j * w_px + i) as usize;
-            let m = feather_mask[idx];
-            if m == 0 {
+            let tx = off_x_px + i as i32;
+            if tx < 0 || tx >= target_w {
+                continue;
+            }
+            let aa = interior_mask[(j * w_px + i) as usize];
+            if aa == 0 {
                 continue;
             }
             let px_pt = (off_x_px as f32 + i as f32 + 0.5) * inv_scale;
             let py_pt = (off_y_px as f32 + j as f32 + 0.5) * inv_scale;
-            let t = match params.kind {
-                GradientFeatherKind::Linear => {
-                    let t = ((px_pt - sx_pt) * dx + (py_pt - sy_pt) * dy) * inv_len_sq;
-                    t.clamp(0.0, 1.0)
-                }
-                GradientFeatherKind::Radial => {
-                    let rx = px_pt - sx_pt;
-                    let ry = py_pt - sy_pt;
-                    let r = (rx * rx + ry * ry).sqrt();
-                    let radius = len_sq.sqrt();
-                    (r / radius).clamp(0.0, 1.0)
-                }
+            let gradient_alpha = if degenerate {
+                // Degenerate axis (start == end): treat as a uniform
+                // alpha equal to the first stop's value.
+                stops[0].1
+            } else {
+                let t = match params.kind {
+                    GradientFeatherKind::Linear => {
+                        let t = ((px_pt - sx_pt) * dx + (py_pt - sy_pt) * dy) * inv_len_sq;
+                        t.clamp(0.0, 1.0)
+                    }
+                    GradientFeatherKind::Radial => {
+                        let rx = px_pt - sx_pt;
+                        let ry = py_pt - sy_pt;
+                        let r = (rx * rx + ry * ry).sqrt();
+                        (r / radius).clamp(0.0, 1.0)
+                    }
+                };
+                sample_gradient_alpha(&stops, t)
             };
-            let alpha = sample_gradient_alpha(&stops, t);
-            feather_mask[idx] = (m as f32 * alpha).clamp(0.0, 255.0) as u8;
+            let aa_unit = aa as f32 / 255.0;
+            // factor = (1 - aa_unit) + aa_unit * gradient_alpha.
+            let mut factor = 1.0 - aa_unit * (1.0 - gradient_alpha);
+            // Honour the active rasterization clip mask: pixels with
+            // mask = 0 lie outside the clip and should be left
+            // alone; partial coverage proportionally weakens the
+            // effect.
+            if let (Some((mw, mh)), Some(md)) = (mask_dims, mask_data.as_ref()) {
+                if tx < mw && ty < mh {
+                    let mv = md[(ty * mw + tx) as usize];
+                    if mv == 0 {
+                        continue;
+                    }
+                    let mv_unit = mv as f32 / 255.0;
+                    factor = 1.0 + (factor - 1.0) * mv_unit;
+                }
+            }
+            apply_alpha_factor(target_data, tx, ty, target_w, factor);
         }
     }
+}
 
-    composite_alpha_mask(target, target_mask, off_x_px, off_y_px, w_px, h_px, &feather_mask);
+/// Multiply a single RGBA8 premultiplied pixel by `factor` in place.
+/// In premultiplied space all four channels scale together so the
+/// alpha-mask interpretation drops out: `result = pixel * factor`.
+#[inline]
+fn apply_alpha_factor(data: &mut [u8], x: i32, y: i32, target_w: i32, factor: f32) {
+    let f = factor.clamp(0.0, 1.0);
+    let idx = ((y * target_w + x) as usize) * 4;
+    if idx + 3 >= data.len() {
+        return;
+    }
+    data[idx] = (data[idx] as f32 * f) as u8;
+    data[idx + 1] = (data[idx + 1] as f32 * f) as u8;
+    data[idx + 2] = (data[idx + 2] as f32 * f) as u8;
+    data[idx + 3] = (data[idx + 3] as f32 * f) as u8;
 }
 
 /// Composite a single-channel alpha mask onto `target` at
@@ -3048,17 +3133,26 @@ mod tests {
 
     #[test]
     fn gradient_feather_linear_alpha_decreases_along_axis() {
-        // 20x20 rect at (10, 10) with a linear gradient feather along
-        // the horizontal axis: alpha=1.0 at x=0 (start), alpha=0.0 at
-        // x=1 (end) in unit-rect coords. Pixels near the left edge
-        // should be fully tinted; pixels near the right edge should
-        // be (nearly) transparent — and the page background shows
-        // through.
+        // Stack: a black-filled rect at (10, 10) covered by a
+        // horizontal gradient feather with α=1.0 at x=0 and α=0.0
+        // at x=1 (in unit-rect coords). The gradient feather alpha-
+        // modulates the underlying fill, so pixels near the left
+        // edge stay black (α≈1.0 → multiplier ≈1.0 → black through);
+        // pixels near the right edge fade toward the white page
+        // background (α≈0.1 → multiplier ≈0.1 → mostly background).
+        // Far outside the rect: untouched white background.
         use idml_compose::{
-            DisplayCommand as Cmd, GradientFeather, GradientFeatherKind, GradientFeatherStop,
+            Color, DisplayCommand as Cmd, GradientFeather, GradientFeatherKind,
+            GradientFeatherStop, Paint,
         };
         let mut list = DisplayList::new();
         let (path_id, xform) = unit_rect_at(&mut list, 10.0, 10.0, 20.0, 20.0);
+        // Underlying black fill the gradient will modulate.
+        list.commands.push(Cmd::FillPath {
+            path_id,
+            paint: Paint::Solid(Color::rgba(0.0, 0.0, 0.0, 1.0)),
+            transform: xform,
+        });
         let params = GradientFeather {
             kind: GradientFeatherKind::Linear,
             start_x: 0.0,
@@ -3078,26 +3172,35 @@ mod tests {
         let mut opts = RasterOptions::new(40.0, 40.0);
         opts.dpi = 72.0;
         let img = rasterize(&list, &opts);
-        // x=12, y=20: well inside the left side, gradient α ≈ 0.9 →
-        // tinted grey. x=28, y=20: near right side, α ≈ 0.1 → nearly
-        // background.
+        // x=12: near-start, gradient α ≈ 0.9, black fill stays
+        // mostly opaque → output alpha ≈ 230, R = 0.
+        // x=28: near-end, gradient α ≈ 0.1, black fill mostly
+        // dissolves → output alpha ≈ 25, R = 0.
+        // (The rasterizer's output is alpha-modulated in
+        // premultiplied space; un-premult-vs-bg compositing is the
+        // viewer's job. We assert on the alpha channel directly.)
         let near_start = at(&img, 12, 20);
         let near_end = at(&img, 28, 20);
-        // Near-start is more tinted (lower R) than near-end.
+        // Alpha decreases left→right (gradient stops 1.0→0.0).
         assert!(
-            near_start[0] < near_end[0],
+            near_start[3] > near_end[3],
             "linear gradient feather should fade left→right; near_start={near_start:?} near_end={near_end:?}"
         );
-        // Near-end is close to white background (alpha is small).
+        // Near-start retains most of the underlying fill's alpha.
         assert!(
-            near_end[0] > 200,
-            "near-end alpha should be small (close to background); got {near_end:?}"
+            near_start[3] > 150,
+            "near-start alpha should stay high; got {near_start:?}"
         );
-        // Far outside the rect: white background.
+        // Near-end alpha is much smaller (gradient α ≈ 0.1).
+        assert!(
+            near_end[3] < 80,
+            "near-end alpha should be small; got {near_end:?}"
+        );
+        // Far outside the rect: untouched white background.
         let far = at(&img, 2, 2);
         assert!(
-            far[0] > 240,
-            "outside gradient feather should be white; got {far:?}"
+            far[0] > 240 && far[3] > 240,
+            "outside gradient feather should be opaque white; got {far:?}"
         );
     }
 }
