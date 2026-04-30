@@ -433,6 +433,12 @@ impl Story {
         // the nearest enclosing frame.
         let mut anchored_depth: u32 = 0;
         let mut anchored_stack: Vec<AnchoredFrame> = Vec::new();
+        // Parallel to `anchored_stack`: tracks whether the top frame's
+        // `bounds` were derived from a `<PathPointType>` chain (`true`)
+        // or from a `GeometricBounds` attribute (`false`). The
+        // PathPointType handler only extends bounds when the flag is
+        // `true`, so an explicit `GeometricBounds="…"` always wins.
+        let mut bounds_from_path: Vec<bool> = Vec::new();
 
         // Helper: build an `AnchoredFrame` record from a frame
         // element's start tag. Mirrors `spread.rs::read_common_attrs`
@@ -482,11 +488,14 @@ impl Story {
         }
 
         // Helper: pop the top anchored frame and attach it to its
-        // parent (the new top of stack) or the host paragraph.
+        // parent (the new top of stack) or the host paragraph. Pops
+        // the parallel `bounds_from_path` flag at the same time.
         fn finalise_anchored_top(
             anchored_stack: &mut Vec<AnchoredFrame>,
+            bounds_from_path: &mut Vec<bool>,
             current_paragraph: &mut Option<Paragraph>,
         ) {
+            bounds_from_path.pop();
             if let Some(frame) = anchored_stack.pop() {
                 if let Some(parent) = anchored_stack.last_mut() {
                     parent.children.push(frame);
@@ -511,13 +520,21 @@ impl Story {
                         // the stack so its attributes / children
                         // capture independently of the parent.
                         if let Some(kind) = anchored_kind_from_name(name) {
-                            anchored_stack.push(make_anchored_frame(&e, kind));
+                            let frame = make_anchored_frame(&e, kind);
+                            bounds_from_path.push(frame.bounds.is_none());
+                            anchored_stack.push(frame);
                         } else if name == b"AnchoredObjectSetting" {
                             if let Some(p) = anchored_stack.last_mut() {
                                 p.setting = Some(parse_anchored_object_setting(&e));
                             }
                         } else if name == b"Image" || name == b"Link" {
                             anchored_capture_image_attrs(&e, &mut anchored_stack);
+                        } else if name == b"PathPointType" {
+                            anchored_extend_path_bounds(
+                                &e,
+                                &mut anchored_stack,
+                                &mut bounds_from_path,
+                            );
                         }
                         // Always bump depth on Start so we stay
                         // inside the anchored body until the
@@ -528,7 +545,13 @@ impl Story {
                     }
                     if current_run.is_some() {
                         if let Some(kind) = anchored_kind_from_name(name) {
-                            anchored_stack.push(make_anchored_frame(&e, kind));
+                            let frame = make_anchored_frame(&e, kind);
+                            // `false` ⇒ bounds came from
+                            // GeometricBounds attribute; `true` ⇒
+                            // bounds will be derived from
+                            // `<PathPointType>` anchor coordinates.
+                            bounds_from_path.push(frame.bounds.is_none());
+                            anchored_stack.push(frame);
                             anchored_depth = 1;
                             buf.clear();
                             continue;
@@ -738,6 +761,7 @@ impl Story {
                         if anchored_kind_from_name(name).is_some() {
                             finalise_anchored_top(
                                 &mut anchored_stack,
+                                &mut bounds_from_path,
                                 &mut current_paragraph,
                             );
                         }
@@ -848,9 +872,12 @@ impl Story {
                         if let Some(kind) = anchored_kind_from_name(name) {
                             // Self-closing nested frame: push, then
                             // finalise so the parent picks it up.
-                            anchored_stack.push(make_anchored_frame(&e, kind));
+                            let frame = make_anchored_frame(&e, kind);
+                            bounds_from_path.push(frame.bounds.is_none());
+                            anchored_stack.push(frame);
                             finalise_anchored_top(
                                 &mut anchored_stack,
+                                &mut bounds_from_path,
                                 &mut current_paragraph,
                             );
                         } else if name == b"AnchoredObjectSetting" {
@@ -859,6 +886,12 @@ impl Story {
                             }
                         } else if name == b"Image" || name == b"Link" {
                             anchored_capture_image_attrs(&e, &mut anchored_stack);
+                        } else if name == b"PathPointType" {
+                            anchored_extend_path_bounds(
+                                &e,
+                                &mut anchored_stack,
+                                &mut bounds_from_path,
+                            );
                         }
                         // No depth bump — Empty events have no
                         // matching End.
@@ -870,9 +903,12 @@ impl Story {
                             // Self-closing outermost anchored frame:
                             // push + finalise so it lands on the
                             // host paragraph immediately.
-                            anchored_stack.push(make_anchored_frame(&e, kind));
+                            let frame = make_anchored_frame(&e, kind);
+                            bounds_from_path.push(frame.bounds.is_none());
+                            anchored_stack.push(frame);
                             finalise_anchored_top(
                                 &mut anchored_stack,
+                                &mut bounds_from_path,
                                 &mut current_paragraph,
                             );
                             buf.clear();
@@ -1072,6 +1108,62 @@ fn anchored_capture_image_attrs(
             if top.image_item_transform.is_none() {
                 top.image_item_transform = Some(m);
             }
+        }
+    }
+}
+
+/// Capture a `<PathPointType Anchor="x y" .../>` event and union the
+/// anchor coordinate into the top frame's running min/max. Real-world
+/// InDesign exports skip the `GeometricBounds` attribute on
+/// TextFrames / Rectangles and serialise the geometry as a
+/// `<PathPointArray>` of four corner anchors instead — without this
+/// fallback, anchored frames in such IDMLs ship `bounds=None` and
+/// the renderer can't draw anything because frame_w/frame_h come
+/// out as 0. `bounds_from_path` is a parallel stack: `true` ⇒ the
+/// top frame's bounds were initialised from a `<PathPointType>` (so
+/// extend), `false` ⇒ bounds came from `GeometricBounds` and we
+/// leave them alone.
+fn anchored_extend_path_bounds(
+    e: &quick_xml::events::BytesStart,
+    anchored_stack: &mut [AnchoredFrame],
+    bounds_from_path: &mut [bool],
+) {
+    let Some(top) = anchored_stack.last_mut() else {
+        return;
+    };
+    let Some(from_path) = bounds_from_path.last_mut() else {
+        return;
+    };
+    let Some(s) = attr(e, b"Anchor") else {
+        return;
+    };
+    let parts: Vec<f32> = s
+        .split_whitespace()
+        .filter_map(|p| p.parse().ok())
+        .collect();
+    if parts.len() != 2 {
+        return;
+    }
+    let (x, y) = (parts[0], parts[1]);
+    match top.bounds.as_mut() {
+        Some(b) if *from_path => {
+            b.left = b.left.min(x);
+            b.right = b.right.max(x);
+            b.top = b.top.min(y);
+            b.bottom = b.bottom.max(y);
+        }
+        Some(_) => {
+            // GeometricBounds attribute already pinned the bounds;
+            // ignore the path geometry to avoid clobbering it.
+        }
+        None => {
+            top.bounds = Some(crate::Bounds {
+                top: y,
+                left: x,
+                bottom: y,
+                right: x,
+            });
+            *from_path = true;
         }
     }
 }
@@ -1347,6 +1439,88 @@ mod tests {
         );
         assert!(af.image_link.is_none());
         assert!(af.children.is_empty());
+    }
+
+    #[test]
+    fn anchored_text_frame_derives_bounds_from_path_point_array() {
+        // Real-world InDesign exports skip `GeometricBounds` and
+        // serialise the geometry via a `<PathPointArray>` of corner
+        // anchors. Without this fallback the renderer ships
+        // `bounds=None` and draws nothing.
+        let xml = br#"<Story>
+          <ParagraphStyleRange>
+            <CharacterStyleRange>
+              <TextFrame Self="anchor1" ParentStory="u99"
+                         FillColor="Color/Paper"
+                         StrokeColor="Color/Black"
+                         StrokeWeight="0.5">
+                <Properties>
+                  <PathGeometry>
+                    <GeometryPathType PathOpen="false">
+                      <PathPointArray>
+                        <PathPointType Anchor="0 0"
+                                       LeftDirection="0 0"
+                                       RightDirection="0 0"/>
+                        <PathPointType Anchor="0 36"
+                                       LeftDirection="0 36"
+                                       RightDirection="0 36"/>
+                        <PathPointType Anchor="60 36"
+                                       LeftDirection="60 36"
+                                       RightDirection="60 36"/>
+                        <PathPointType Anchor="60 0"
+                                       LeftDirection="60 0"
+                                       RightDirection="60 0"/>
+                      </PathPointArray>
+                    </GeometryPathType>
+                  </PathGeometry>
+                </Properties>
+                <AnchoredObjectSetting AnchoredPosition="InlinePosition"/>
+              </TextFrame>
+              <Content>x</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let af = &s.paragraphs[0].anchored_frames[0];
+        let b = af.bounds.expect("bounds derived from path");
+        assert_eq!(b.left, 0.0);
+        assert_eq!(b.top, 0.0);
+        assert_eq!(b.right, 60.0);
+        assert_eq!(b.bottom, 36.0);
+        // Cross-cutting attrs from Task-1 still populate.
+        assert_eq!(af.fill_color.as_deref(), Some("Color/Paper"));
+    }
+
+    #[test]
+    fn anchored_geometric_bounds_attribute_wins_over_path_points() {
+        // When both `GeometricBounds` and a `<PathPointArray>` are
+        // present, the explicit attribute wins. The parser must
+        // refuse to clobber it with the path's min/max.
+        let xml = br#"<Story>
+          <ParagraphStyleRange>
+            <CharacterStyleRange>
+              <TextFrame Self="a1" GeometricBounds="0 0 50 80">
+                <Properties>
+                  <PathGeometry>
+                    <GeometryPathType>
+                      <PathPointArray>
+                        <PathPointType Anchor="-100 -100"/>
+                        <PathPointType Anchor="999 999"/>
+                      </PathPointArray>
+                    </GeometryPathType>
+                  </PathGeometry>
+                </Properties>
+              </TextFrame>
+              <Content>x</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let b = s.paragraphs[0].anchored_frames[0]
+            .bounds
+            .expect("GeometricBounds attribute");
+        assert_eq!(b.right, 80.0, "GeometricBounds wins, not path -100..999");
+        assert_eq!(b.bottom, 50.0);
     }
 
     #[test]
