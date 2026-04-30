@@ -14,10 +14,11 @@
 //! is emitted by `fill_paint_module` between these two groups — the
 //! caller bookends the call accordingly.
 //!
-//! The parser surfaces `directional_feather` / `gradient_feather` as
-//! plain `bool` flags only — per-edge widths and gradient stops aren't
-//! captured yet, so this module skips both. Future parser work will
-//! grow them into proper params and the missing arms land here.
+//! `directional_feather` / `gradient_feather` go through their own
+//! parser-to-compose converters (`directional_feather_from_parser` /
+//! `gradient_feather_from_parser`) and emit dedicated
+//! `DisplayCommand::DirectionalFeather` / `GradientFeather` variants
+//! after the fill, alongside the plain `Feather` arm.
 //!
 //! Today only Rectangle's parser arm captures the effects bag; the
 //! pipeline calls this module from `emit_rectangle_into`. TextFrame /
@@ -25,14 +26,17 @@
 //! can wire them up.
 
 use idml_compose::{
-    BevelEmboss as ComposeBevelEmboss, BlendMode, Color, DisplayCommand, Feather as ComposeFeather,
-    FeatherCornerType, InnerGlow as ComposeInnerGlow, InnerShadow as ComposeInnerShadow,
-    OuterGlow as ComposeOuterGlow, Paint, PathId, Satin as ComposeSatin, Transform,
+    BevelEmboss as ComposeBevelEmboss, BlendMode, Color,
+    DirectionalFeather as ComposeDirectionalFeather, DisplayCommand, Feather as ComposeFeather,
+    FeatherCornerType, GradientFeather as ComposeGradientFeather, GradientFeatherKind,
+    GradientFeatherStop as ComposeGradientFeatherStop, InnerGlow as ComposeInnerGlow,
+    InnerShadow as ComposeInnerShadow, OuterGlow as ComposeOuterGlow, Paint, PathId,
+    Satin as ComposeSatin, Transform,
 };
 use idml_parse::{
     spread::{
-        BevelEmbossParams, FeatherParams, FrameEffects, InnerGlowParams, InnerShadowParams,
-        OuterGlowParams, SatinParams,
+        BevelEmbossParams, DirectionalFeatherParams, FeatherParams, FrameEffects,
+        GradientFeatherParams, InnerGlowParams, InnerShadowParams, OuterGlowParams, SatinParams,
     },
     Graphic,
 };
@@ -128,10 +132,22 @@ pub(crate) fn emit_effects_post_fill(
             params,
         });
     }
-    // `directional_feather` / `gradient_feather` only land as
-    // `Option<bool>` from the parser today; per-edge widths and
-    // gradient stops aren't captured yet so we skip both. They render
-    // as plain `Feather` once the parser surfaces the params.
+    if let Some(p) = effects.directional_feather.as_ref() {
+        let params = directional_feather_from_parser(p);
+        page.list.commands.push(DisplayCommand::DirectionalFeather {
+            path_id: fill_path_id,
+            transform,
+            params,
+        });
+    }
+    if let Some(p) = effects.gradient_feather.as_ref() {
+        let params = gradient_feather_from_parser(p);
+        page.list.commands.push(DisplayCommand::GradientFeather {
+            path_id: fill_path_id,
+            transform,
+            params,
+        });
+    }
 }
 
 /// Resolve a parser color id (e.g. `"Color/Black"`) into a compose
@@ -296,6 +312,85 @@ fn feather_from_parser(p: &FeatherParams) -> ComposeFeather {
         corner_type,
         noise: pct_to_unit(p.noise_pct, 0.0),
         choke: pct_to_unit(p.choke_pct, 0.0),
+    }
+}
+
+/// Convert a parser `DirectionalFeatherParams` into the compose
+/// layer's `DirectionalFeather`. Missing per-edge widths default to
+/// 0 (no feather on that side); other knobs follow the plain
+/// feather's defaults.
+fn directional_feather_from_parser(p: &DirectionalFeatherParams) -> ComposeDirectionalFeather {
+    let corner_type = match p.corner_type.as_deref() {
+        Some("Rounded") => FeatherCornerType::Rounded,
+        Some("Diffusion") => FeatherCornerType::Diffusion,
+        _ => FeatherCornerType::Sharp,
+    };
+    ComposeDirectionalFeather {
+        left_width: p.left_width.unwrap_or(0.0),
+        right_width: p.right_width.unwrap_or(0.0),
+        top_width: p.top_width.unwrap_or(0.0),
+        bottom_width: p.bottom_width.unwrap_or(0.0),
+        angle_deg: p.angle_deg.unwrap_or(0.0),
+        noise: pct_to_unit(p.noise_pct, 0.0),
+        choke: pct_to_unit(p.choke_pct, 0.0),
+        corner_type,
+    }
+}
+
+/// Convert a parser `GradientFeatherParams` into the compose layer's
+/// `GradientFeather`. Endpoints default to a horizontal axis across
+/// the unit rect (`(0, 0.5) → (1, 0.5)`) when the IDML omits both
+/// `GradientStart`/`GradientEnd` *and* angle. Stops collapse the
+/// parser's 0..100 location/alpha pair into 0..1 floats. The renderer
+/// doesn't yet resolve `stop_color` against the palette to extract a
+/// per-channel alpha; we use `alpha_pct` directly (matches the IDML
+/// convention where the gradient feather's `<GradientStop>` carries
+/// the alpha as a separate attribute).
+fn gradient_feather_from_parser(p: &GradientFeatherParams) -> ComposeGradientFeather {
+    let kind = match p.gradient_type.as_deref() {
+        Some("Radial") => GradientFeatherKind::Radial,
+        // "Linear" and any unrecognised value fall through to Linear.
+        _ => GradientFeatherKind::Linear,
+    };
+    // Pick the gradient axis. Prefer explicit start/end points; if
+    // only an angle is supplied, derive a unit-square axis through
+    // the centre at that angle. Otherwise fall back to a horizontal
+    // axis across the unit rect.
+    let (start, end) = match (p.start_point, p.end_point) {
+        (Some(s), Some(e)) => (s, e),
+        _ => match p.angle_deg {
+            Some(angle) => {
+                let rad = angle.to_radians();
+                let (sin, cos) = rad.sin_cos();
+                // Sweep from the unit-rect centre to the edge at
+                // (cos, -sin) (IDML's screen-down Y convention,
+                // matches `polar_to_offset`).
+                let cx = 0.5;
+                let cy = 0.5;
+                let half = 0.5_f32;
+                (
+                    (cx - half * cos, cy + half * sin),
+                    (cx + half * cos, cy - half * sin),
+                )
+            }
+            None => ((0.0, 0.5), (1.0, 0.5)),
+        },
+    };
+    let stops = p
+        .stops
+        .iter()
+        .map(|s| ComposeGradientFeatherStop {
+            location: (s.location_pct / 100.0).clamp(0.0, 1.0),
+            alpha: (s.alpha_pct / 100.0).clamp(0.0, 1.0),
+        })
+        .collect();
+    ComposeGradientFeather {
+        kind,
+        start_x: start.0,
+        start_y: start.1,
+        end_x: end.0,
+        end_y: end.1,
+        stops,
     }
 }
 
