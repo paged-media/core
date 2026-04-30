@@ -315,6 +315,13 @@ pub struct Rectangle {
     /// renderer treats the field as "no effect"; when set it's
     /// surfaced for downstream tooling but visibly emits nothing.
     pub effects: Option<FrameEffects>,
+    /// `GradientFillAngle` in degrees. IDML serialises a gradient
+    /// fill direction as an angle around the frame's centre — 0°
+    /// is horizontal (left → right), 90° is vertical (top → bottom).
+    /// `None` ⇒ keep the renderer's default top-to-bottom unit-rect
+    /// endpoints. Combined with `gradient_fill_length` the renderer
+    /// places the gradient line through the frame's center.
+    pub gradient_fill_angle: Option<f32>,
 }
 
 /// Mirror of IDML's optional `InnerShadow`, `OuterGlow`, `InnerGlow`,
@@ -772,6 +779,8 @@ impl Spread {
                             opacity: None,
                             blend_mode: None,
                             effects: None,
+                            gradient_fill_angle: attr(&e, b"GradientFillAngle")
+                                .and_then(|s| s.parse().ok()),
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Rect(out.rectangles.len() - 1),

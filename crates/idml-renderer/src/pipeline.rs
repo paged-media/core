@@ -3086,7 +3086,15 @@ fn emit_rectangle_into(
     let fill = rect
         .fill_color
         .as_deref()
-        .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
+        .and_then(|id| {
+            color_id_to_paint_with_list_dir(
+                id,
+                palette,
+                cmyk_xform,
+                &mut page.list,
+                rect.gradient_fill_angle,
+            )
+        })
         .unwrap_or(fallback);
     let fill = apply_fill_tint(fill, rect.fill_tint);
     let fill = apply_opacity(fill, rect.opacity);
@@ -3796,6 +3804,20 @@ pub fn color_id_to_paint_with_list(
     cmyk_xform: Option<&idml_color::IccTransform>,
     list: &mut DisplayList,
 ) -> Option<Paint> {
+    color_id_to_paint_with_list_dir(id, palette, cmyk_xform, list, None)
+}
+
+/// Like [`color_id_to_paint_with_list`] but takes an explicit
+/// `gradient_angle_deg` from the frame's `GradientFillAngle`
+/// attribute (0° horizontal-right; 90° vertical-down — IDML's
+/// convention). `None` keeps the existing top-to-bottom default.
+pub fn color_id_to_paint_with_list_dir(
+    id: &str,
+    palette: &Graphic,
+    cmyk_xform: Option<&idml_color::IccTransform>,
+    list: &mut DisplayList,
+    gradient_angle_deg: Option<f32>,
+) -> Option<Paint> {
     if let Some(grad) = palette.gradients.get(id) {
         let stops: Vec<idml_compose::GradientStop> = grad
             .stops
@@ -3812,13 +3834,29 @@ pub fn color_id_to_paint_with_list(
         if stops.len() < 2 {
             return None;
         }
-        // Default endpoints: top-to-bottom across the unit square.
-        // Frame-level GradientFillStart / Length / Angle attributes
-        // override these — that wiring lands when the spread parser
-        // captures those fields.
+        // Compute unit-rect endpoints (the renderer's gradient lives
+        // in the path's local 0..1 space). Default: top → bottom.
+        // GradientFillAngle rotates the line around the rect centre
+        // (0.5, 0.5); 0° is horizontal-right, 90° vertical-down.
+        // The endpoints are placed where a unit-vector at that angle
+        // crosses the unit-rect's edges — for an axis-aligned rect
+        // the simple formula below is exact for cardinal angles and
+        // a good approximation otherwise.
+        let (start, end) = match gradient_angle_deg {
+            None => ((0.0, 0.0), (0.0, 1.0)),
+            Some(deg) => {
+                let rad = deg.to_radians();
+                let (sin, cos) = rad.sin_cos();
+                // Unit-rect centre + half-vector along the angle.
+                let cx = 0.5_f32;
+                let cy = 0.5_f32;
+                let half = 0.5_f32;
+                ((cx - cos * half, cy - sin * half), (cx + cos * half, cy + sin * half))
+            }
+        };
         let id = list.push_linear_gradient(idml_compose::LinearGradient {
-            start: (0.0, 0.0),
-            end: (0.0, 1.0),
+            start,
+            end,
             stops,
         });
         return Some(Paint::LinearGradient(id));

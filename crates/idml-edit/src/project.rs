@@ -1771,6 +1771,7 @@ impl Project {
             opacity: None,
             blend_mode: None,
             effects: None,
+            gradient_fill_angle: None,
         };
         let position = self.doc.spreads[spread_idx].spread.rectangles.len();
         self.doc.spreads[spread_idx].spread.rectangles.push(rect);
