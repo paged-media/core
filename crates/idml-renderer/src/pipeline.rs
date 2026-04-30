@@ -4086,7 +4086,10 @@ fn emit_rectangle_image(
 /// frame's outer transform (page_origin · ItemTransform).
 /// `image_rect` is `(0, 0, img_w, img_h)` and `image_transform` is
 /// the composed `outer ∘ image_item_transform`. Sharing `outer` for
-/// both keeps clip and image in lockstep when the frame rotates.
+/// both keeps clip and image in lockstep when the frame rotates —
+/// the unit-rect clip turns into the host's rotated quad under
+/// `clip_outer`, which is the right behaviour for axis-aligned
+/// rectangles regardless of the host's rotation.
 fn emit_clipped_image(
     list: &mut idml_compose::DisplayList,
     clip_rect: idml_compose::Rect,
@@ -4095,7 +4098,7 @@ fn emit_clipped_image(
     image_transform: Transform,
     image_id: idml_compose::ImageId,
 ) {
-    use idml_compose::{DisplayCommand, PathSegment};
+    use idml_compose::PathSegment;
     // Unit-rect path interned under a stable key so multiple clipped-
     // image emissions share the same entry in the path buffer.
     const CLIP_UNIT_RECT_KEY: u64 = 0x1d_4c_69_70_5f_72_65_63; // "idClip_rec"
@@ -4110,6 +4113,29 @@ fn emit_clipped_image(
     };
     let (clip_path_id, _) = list.paths.intern(CLIP_UNIT_RECT_KEY, path);
     let clip_transform = Transform::for_rect_in(clip_rect, clip_outer);
+    emit_image_under_clip(
+        list,
+        clip_path_id,
+        clip_transform,
+        image_rect,
+        image_transform,
+        image_id,
+    );
+}
+
+/// Push an arbitrary clip path, emit an image, then pop. Splits the
+/// PushClip / Image / PopClip emission off `emit_clipped_image` so
+/// the polygon-hosted image variant (used when the host is a curved
+/// `<Polygon>` frame) can supply its own pre-interned path.
+fn emit_image_under_clip(
+    list: &mut idml_compose::DisplayList,
+    clip_path_id: idml_compose::PathId,
+    clip_transform: Transform,
+    image_rect: idml_compose::Rect,
+    image_transform: Transform,
+    image_id: idml_compose::ImageId,
+) {
+    use idml_compose::DisplayCommand;
     list.push(DisplayCommand::PushClip {
         path_id: clip_path_id,
         transform: clip_transform,
