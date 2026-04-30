@@ -292,6 +292,196 @@ impl DropShadow {
     }
 }
 
+/// Inner-shadow parameters. Same units as [`DropShadow`] (pt, linear
+/// RGB, 0..1 opacity), but the rasterizer paints the soft stamp on
+/// the *inside* of the path: the path's interior is darkened where
+/// the offset/blurred shadow stamp falls inside it. `choke` is in pt
+/// — it expands the shadow's hard edge before blurring (mapped to a
+/// dilation in the rasterizer's stamp pass; `0.0` is the common case).
+/// `blend_mode` is reserved for future fidelity work (most IDML inner
+/// shadows use `Multiply`); the rasterizer renders the stamp with
+/// straight alpha-over today.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InnerShadow {
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub blur_radius: f32,
+    pub color: Color,
+    pub opacity: f32,
+    pub choke: f32,
+    pub blend_mode: BlendMode,
+}
+
+impl InnerShadow {
+    /// Sensible default: 3 pt offset down-right, 6 pt blur, 50%
+    /// black, no choke, Multiply.
+    pub fn default_soft() -> Self {
+        Self {
+            offset_x: 3.0,
+            offset_y: 3.0,
+            blur_radius: 6.0,
+            color: Color::rgba(0.0, 0.0, 0.0, 1.0),
+            opacity: 0.5,
+            choke: 0.0,
+            blend_mode: BlendMode::Multiply,
+        }
+    }
+}
+
+/// Outer-glow parameters. The rasterizer paints a soft halo *outside*
+/// the path's interior: blur the filled stamp, then composite it
+/// behind / around the path. `spread` is in pt — it grows the hard
+/// stamp before blurring so glows can extend beyond a thin path.
+/// `blend_mode` is most commonly `Screen` for InDesign-style glows.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OuterGlow {
+    pub blur_radius: f32,
+    pub color: Color,
+    pub opacity: f32,
+    pub blend_mode: BlendMode,
+    pub spread: f32,
+}
+
+impl OuterGlow {
+    pub fn default_soft() -> Self {
+        Self {
+            blur_radius: 6.0,
+            color: Color::rgba(1.0, 1.0, 0.5, 1.0),
+            opacity: 0.75,
+            blend_mode: BlendMode::Screen,
+            spread: 0.0,
+        }
+    }
+}
+
+/// Inner-glow parameters. Same shape as [`InnerShadow`] without the
+/// directional offset: paint a soft glow on the *inside* of the
+/// path's interior. `choke` is in pt (same dilation knob as
+/// `InnerShadow::choke`). InDesign's default uses `Screen` blend.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InnerGlow {
+    pub blur_radius: f32,
+    pub color: Color,
+    pub opacity: f32,
+    pub blend_mode: BlendMode,
+    pub choke: f32,
+}
+
+impl InnerGlow {
+    pub fn default_soft() -> Self {
+        Self {
+            blur_radius: 6.0,
+            color: Color::rgba(1.0, 1.0, 0.5, 1.0),
+            opacity: 0.75,
+            blend_mode: BlendMode::Screen,
+            choke: 0.0,
+        }
+    }
+}
+
+/// Bevel-and-emboss parameters. `depth` is the relative bump
+/// strength (0..=1; 1.0 is "100% depth" in InDesign's slider);
+/// `size` is the bevel width in pt. `angle_deg` is the light's
+/// azimuth in screen space (0° = light from the right, 90° = light
+/// from below); `altitude_deg` is the light's elevation (0 =
+/// grazing, 90 = top-down). Highlight + shadow colour separately so
+/// a coloured bevel can be expressed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BevelEmboss {
+    pub depth: f32,
+    pub size: f32,
+    pub angle_deg: f32,
+    pub altitude_deg: f32,
+    pub highlight_color: Color,
+    pub shadow_color: Color,
+    pub highlight_opacity: f32,
+    pub shadow_opacity: f32,
+}
+
+impl BevelEmboss {
+    pub fn default_soft() -> Self {
+        Self {
+            depth: 1.0,
+            size: 5.0,
+            angle_deg: 120.0,
+            altitude_deg: 30.0,
+            highlight_color: Color::rgba(1.0, 1.0, 1.0, 1.0),
+            shadow_color: Color::rgba(0.0, 0.0, 0.0, 1.0),
+            highlight_opacity: 0.75,
+            shadow_opacity: 0.75,
+        }
+    }
+}
+
+/// Satin parameters. The rasterizer offsets two blurred path stamps
+/// in opposite directions (along `angle_deg`, separated by `distance`
+/// pt) and uses their difference as a "wave" mask painted onto the
+/// path's interior. `blend_mode` is most commonly `Multiply` for
+/// dark satin and `Screen` for bright satin.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Satin {
+    pub blur_radius: f32,
+    pub angle_deg: f32,
+    pub distance: f32,
+    pub color: Color,
+    pub opacity: f32,
+    pub blend_mode: BlendMode,
+}
+
+impl Satin {
+    pub fn default_soft() -> Self {
+        Self {
+            blur_radius: 7.0,
+            angle_deg: 19.0,
+            distance: 11.0,
+            color: Color::rgba(0.0, 0.0, 0.0, 1.0),
+            opacity: 0.5,
+            blend_mode: BlendMode::Multiply,
+        }
+    }
+}
+
+/// Feather corner shape. IDML's `<FeatherSetting CornerType="...">`
+/// selects between three options; the rasterizer uses this to pick a
+/// distance-field shape for the feather edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FeatherCornerType {
+    /// Sharp 90° corners — feather follows the path's outline
+    /// faithfully.
+    #[default]
+    Sharp,
+    /// Rounded corners — slight softening of sharp turns; default
+    /// in InDesign.
+    Rounded,
+    /// Diffusion (noise-modulated alpha falloff). The rasterizer
+    /// approximates this with a slightly randomised falloff weight.
+    Diffusion,
+}
+
+/// Feather parameters. `width` is the soft-edge width in pt; `noise`
+/// (0..=1) modulates the alpha falloff for the diffusion variant
+/// (and is roughly ignored for `Sharp` / `Rounded`). `choke`
+/// (0..=1) shifts the half-alpha point inward (0.0 centred on the
+/// path edge, positive choke pulls the feather inward).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Feather {
+    pub width: f32,
+    pub corner_type: FeatherCornerType,
+    pub noise: f32,
+    pub choke: f32,
+}
+
+impl Feather {
+    pub fn default_soft() -> Self {
+        Self {
+            width: 9.0,
+            corner_type: FeatherCornerType::Sharp,
+            noise: 0.0,
+            choke: 0.0,
+        }
+    }
+}
+
 /// IDML compositing blend mode. `Normal` (the default, source-over
 /// alpha composite) keeps the existing fast path; everything else
 /// requires the rasterizer to render the fill into an offscreen
@@ -429,6 +619,61 @@ pub enum DisplayCommand {
     /// The contained transform is unused; same rationale as
     /// [`DisplayCommand::PopClip`].
     EndBlendGroup(Transform),
+    /// Inner-shadow stamp. Paints a soft, offset shadow on the
+    /// *inside* of the path: blur the offset path's complement, mask
+    /// to the path interior, composite over the page. Conventionally
+    /// emitted *after* the matching FillPath so it sits on top of the
+    /// fill (mirrors Photoshop's layer-effect order).
+    InnerShadow {
+        path_id: PathId,
+        transform: Transform,
+        params: InnerShadow,
+    },
+    /// Outer-glow stamp. Like a centred [`DisplayCommand::DropShadow`]
+    /// (no offset) carved against the path's exterior. Conventionally
+    /// emitted *before* the matching FillPath so the halo lands behind
+    /// the fill.
+    OuterGlow {
+        path_id: PathId,
+        transform: Transform,
+        params: OuterGlow,
+    },
+    /// Inner-glow stamp. Same shape as [`DisplayCommand::InnerShadow`]
+    /// but with no offset and a glow colour. Conventionally emitted
+    /// *after* the matching FillPath.
+    InnerGlow {
+        path_id: PathId,
+        transform: Transform,
+        params: InnerGlow,
+    },
+    /// Bevel / emboss stamp. The rasterizer builds a height map from
+    /// the path's alpha mask, derives a normal field, and composites
+    /// per-pixel highlight + shadow tints onto the path's interior.
+    /// Conventionally emitted *after* the matching FillPath.
+    BevelEmboss {
+        path_id: PathId,
+        transform: Transform,
+        params: BevelEmboss,
+    },
+    /// Satin stamp. Two offset blurred path stamps subtracted to
+    /// produce a "wave" mask, tinted with `params.color` and
+    /// composited onto the path's interior. Conventionally emitted
+    /// *after* the matching FillPath.
+    Satin {
+        path_id: PathId,
+        transform: Transform,
+        params: Satin,
+    },
+    /// Feather stamp. Replaces the path's hard edge with a soft alpha
+    /// falloff `params.width` pt wide. Conventionally emitted *in
+    /// place of* the matching FillPath (the feather pass is the
+    /// fill); a dedicated variant lets the rasterizer skip the
+    /// expensive distance-field pass when no feathering is requested.
+    Feather {
+        path_id: PathId,
+        transform: Transform,
+        params: Feather,
+    },
     // PushLayer, PopLayer land with §10.4.
 }
 
@@ -448,7 +693,13 @@ impl DisplayCommand {
             | DisplayCommand::PushClip { transform, .. }
             | DisplayCommand::PopClip(transform)
             | DisplayCommand::BeginBlendGroup { transform, .. }
-            | DisplayCommand::EndBlendGroup(transform) => transform,
+            | DisplayCommand::EndBlendGroup(transform)
+            | DisplayCommand::InnerShadow { transform, .. }
+            | DisplayCommand::OuterGlow { transform, .. }
+            | DisplayCommand::InnerGlow { transform, .. }
+            | DisplayCommand::BevelEmboss { transform, .. }
+            | DisplayCommand::Satin { transform, .. }
+            | DisplayCommand::Feather { transform, .. } => transform,
         }
     }
 }

@@ -358,6 +358,12 @@ mod tests {
             DisplayCommand::PopClip(transform) => *transform,
             DisplayCommand::BeginBlendGroup { transform, .. } => *transform,
             DisplayCommand::EndBlendGroup(transform) => *transform,
+            DisplayCommand::InnerShadow { transform, .. } => *transform,
+            DisplayCommand::OuterGlow { transform, .. } => *transform,
+            DisplayCommand::InnerGlow { transform, .. } => *transform,
+            DisplayCommand::BevelEmboss { transform, .. } => *transform,
+            DisplayCommand::Satin { transform, .. } => *transform,
+            DisplayCommand::Feather { transform, .. } => *transform,
         };
         // Unit rect corners: (0,0), (1,0), (1,1), (0,1).
         assert_eq!(t.apply(0.0, 0.0), (100.0, 200.0));

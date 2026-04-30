@@ -12,9 +12,10 @@ pub mod primitives;
 pub mod text;
 
 pub use display_list::{
-    BlendMode, Color, DashPattern, DecodedImage, DisplayCommand, DisplayList, DropShadow,
-    GlyphCacheKey, GradientId, GradientStop, ImageId, LineCap, LineJoin, LinearGradient, Paint,
-    PathBuffer, PathData, PathId, PathSegment, RadialGradient, Rect, Stroke, Transform,
+    BevelEmboss, BlendMode, Color, DashPattern, DecodedImage, DisplayCommand, DisplayList,
+    DropShadow, Feather, FeatherCornerType, GlyphCacheKey, GradientId, GradientStop, ImageId,
+    InnerGlow, InnerShadow, LineCap, LineJoin, LinearGradient, OuterGlow, Paint, PathBuffer,
+    PathData, PathId, PathSegment, RadialGradient, Rect, Satin, Stroke, Transform,
 };
 pub use glyph::{GlyphOutliner, TtfOutliner, UnitSquareOutliner};
 pub use primitives::{
