@@ -23,8 +23,9 @@ use image::{Rgba, RgbaImage};
 use tiny_skia::{
     BlendMode as TsBlendMode, FillRule, GradientStop as TsGradientStop, LineCap as TsLineCap,
     LineJoin as TsLineJoin, LinearGradient as TsLinearGradient, Mask as TsMask, Paint as TsPaint,
-    PathBuilder, Pixmap, PixmapPaint, Point as TsPoint, RadialGradient as TsRadialGradient, Shader,
-    SpreadMode, Stroke as TsStroke, Transform as TsTransform,
+    PathBuilder, Pixmap, PixmapPaint, PixmapRef, Point as TsPoint, PremultipliedColorU8,
+    RadialGradient as TsRadialGradient, Shader, SpreadMode, Stroke as TsStroke,
+    Transform as TsTransform,
 };
 
 use crate::{PathRasterizer, RasterOptions};
@@ -52,12 +53,28 @@ impl PathRasterizer for CpuRasterizer {
 /// On `EndBlendGroup`, the buffer is composited onto the next-outer
 /// target (the previous top of the stack, or the page if empty)
 /// using `blend_mode` + `opacity`.
+///
+/// `backdrop_snapshot` mirrors the parent target's pixels at the
+/// buffer's bbox, captured at `BeginBlendGroup` time. It enables the
+/// PDF "paper is α=0 backdrop" semantic in the EndBlendGroup composite
+/// — at pixels where the backdrop was still the pristine
+/// page-background colour (i.e. paper, never drawn on), `Lighten` /
+/// `Multiply` / etc. should bypass the blend mode and fall through to
+/// a plain SourceOver, matching InDesign's non-isolated transparency
+/// group behaviour against the paper plate. We only allocate the
+/// snapshot when the blend mode is non-Normal — Normal (SourceOver)
+/// doesn't need the bypass since SrcOver against opaque paper already
+/// yields the source as-is.
 struct GroupFrame {
     pixmap: Pixmap,
     /// Buffer top-left in page-pixel coords.
     offset: (i32, i32),
     blend_mode: TsBlendMode,
     opacity: f32,
+    /// Snapshot of the parent target's pixels at the buffer's bbox
+    /// taken at BeginBlendGroup time. `None` for SourceOver groups
+    /// where no paper-bypass correction is needed.
+    backdrop_snapshot: Option<Pixmap>,
 }
 
 /// Rasterise `list` to an 8-bit sRGB RGBA image at the configured DPI.
@@ -587,11 +604,38 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 let h_px = (max_y_px - off_y_px).max(1) as u32;
                 match Pixmap::new(w_px, h_px) {
                     Some(buf) => {
+                        let ts_blend = blend_mode_to_ts(*blend_mode);
+                        // Snapshot the parent target's pixels at the
+                        // buffer's bbox so EndBlendGroup can apply
+                        // the paper-α=0 backdrop bypass. Only needed
+                        // for non-SourceOver blend modes — SourceOver
+                        // against opaque paper already produces the
+                        // right answer (no correction needed).
+                        let backdrop_snapshot = if matches!(ts_blend, TsBlendMode::SourceOver) {
+                            None
+                        } else if let Some(parent) = group_stack.last() {
+                            snapshot_parent_region(
+                                parent.pixmap.as_ref(),
+                                parent.offset,
+                                (off_x_px, off_y_px),
+                                w_px,
+                                h_px,
+                            )
+                        } else {
+                            snapshot_parent_region(
+                                pixmap.as_ref(),
+                                (0, 0),
+                                (off_x_px, off_y_px),
+                                w_px,
+                                h_px,
+                            )
+                        };
                         group_stack.push(GroupFrame {
                             pixmap: buf,
                             offset: (off_x_px, off_y_px),
-                            blend_mode: blend_mode_to_ts(*blend_mode),
+                            blend_mode: ts_blend,
                             opacity: opacity.clamp(0.0, 1.0),
+                            backdrop_snapshot,
                         });
                     }
                     None => {
@@ -605,6 +649,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                                 offset: (0, 0),
                                 blend_mode: TsBlendMode::SourceOver,
                                 opacity: 1.0,
+                                backdrop_snapshot: None,
                             });
                         }
                     }
@@ -759,6 +804,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     offset: (off_x_px, off_y_px),
                     blend_mode,
                     opacity,
+                    backdrop_snapshot,
                 } = top;
                 let mut composite = PixmapPaint::default();
                 composite.blend_mode = blend_mode;
@@ -771,11 +817,20 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 } else {
                     ClipScope::Group(group_stack.len())
                 };
-                let parent_mask = clip_stack
+                let parent_mask_idx = clip_stack
                     .iter()
-                    .rev()
-                    .find(|e| e.scope == parent_scope)
-                    .map(|e| &e.mask);
+                    .rposition(|e| e.scope == parent_scope);
+                let parent_mask = parent_mask_idx.map(|i| &clip_stack[i].mask);
+                // Paper-backdrop premultiplied colour. The second
+                // pass below uses this to detect "still paper"
+                // pixels (snapshot ≈ paper) and overwrite the blended
+                // result with a plain SrcOver(buffer*opacity, paper)
+                // — the PDF / InDesign interpretation of paper as
+                // α_b=0 backdrop for non-isolated transparency
+                // groups.
+                let paper_premul = linear_color_to_ts(options.background)
+                    .premultiply()
+                    .to_color_u8();
                 if let Some(parent) = group_stack.last_mut() {
                     let parent_off = parent.offset;
                     let dst_x = off_x_px - parent_off.0;
@@ -788,6 +843,17 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                         TsTransform::identity(),
                         parent_mask,
                     );
+                    if let Some(snapshot) = backdrop_snapshot.as_ref() {
+                        apply_paper_backdrop_bypass(
+                            &mut parent.pixmap,
+                            (dst_x, dst_y),
+                            group_pix.as_ref(),
+                            snapshot.as_ref(),
+                            opacity,
+                            paper_premul,
+                            parent_mask,
+                        );
+                    }
                 } else {
                     pixmap.draw_pixmap(
                         off_x_px,
@@ -797,6 +863,17 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                         TsTransform::identity(),
                         parent_mask,
                     );
+                    if let Some(snapshot) = backdrop_snapshot.as_ref() {
+                        apply_paper_backdrop_bypass(
+                            &mut pixmap,
+                            (off_x_px, off_y_px),
+                            group_pix.as_ref(),
+                            snapshot.as_ref(),
+                            opacity,
+                            paper_premul,
+                            parent_mask,
+                        );
+                    }
                 }
             }
         }
@@ -812,6 +889,160 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
 /// requires a mutable reference; this helper sticks to plain f32 math.
 fn ts_xform_apply(t: TsTransform, x: f32, y: f32) -> (f32, f32) {
     (t.sx * x + t.kx * y + t.tx, t.ky * x + t.sy * y + t.ty)
+}
+
+/// Snapshot a `w_px × h_px` region of `parent`'s pixels into a fresh
+/// pixmap. `parent_off` is the parent target's top-left in page-pixel
+/// coords (zero for the page, the group's offset for nested groups);
+/// `child_off` is the child buffer's top-left in the same space.
+/// Pixels outside the parent stay at the snapshot's default
+/// (transparent black) — that's fine for the paper-bypass path
+/// because the buffer is also empty there.
+///
+/// Used by `BeginBlendGroup` to capture the parent's content at the
+/// buffer's bbox so `EndBlendGroup` can detect "still paper" pixels
+/// (snapshot ≈ page background) and bypass the blend mode for the
+/// PDF-correct non-isolated-group composite (see
+/// `apply_paper_backdrop_bypass`).
+fn snapshot_parent_region(
+    parent: PixmapRef<'_>,
+    parent_off: (i32, i32),
+    child_off: (i32, i32),
+    w_px: u32,
+    h_px: u32,
+) -> Option<Pixmap> {
+    let mut snap = Pixmap::new(w_px, h_px)?;
+    let snap_pixels = snap.pixels_mut();
+    let parent_pixels = parent.pixels();
+    let parent_w = parent.width() as i32;
+    let parent_h = parent.height() as i32;
+    let dx = child_off.0 - parent_off.0;
+    let dy = child_off.1 - parent_off.1;
+    for j in 0..h_px as i32 {
+        let py = j + dy;
+        if py < 0 || py >= parent_h {
+            continue;
+        }
+        for i in 0..w_px as i32 {
+            let px = i + dx;
+            if px < 0 || px >= parent_w {
+                continue;
+            }
+            let p_idx = (py * parent_w + px) as usize;
+            let s_idx = (j * w_px as i32 + i) as usize;
+            snap_pixels[s_idx] = parent_pixels[p_idx];
+        }
+    }
+    Some(snap)
+}
+
+/// Second-pass paper-backdrop bypass for non-Normal blend groups.
+/// After the standard `draw_pixmap` composite has run, walk every
+/// non-transparent pixel of the group buffer; if the parent's
+/// snapshot at that pixel was still the page background colour
+/// (i.e. paper, never drawn on), overwrite the parent's pixel with a
+/// plain `SrcOver(buffer * opacity, paper)`. This matches InDesign /
+/// PDF's non-isolated transparency-group semantic where the paper
+/// plate has α_b=0, so blend modes like `Lighten` collapse to
+/// `SourceOver` against paper. Without this, Lighten of a black
+/// glyph on a white page wipes the glyph (max(black, white) = white)
+/// even though InDesign expects the glyph to show through opaque
+/// black against the paper.
+///
+/// `target_off` is the buffer's top-left in the parent target's
+/// pixel-coord system (already incorporates any group-stack offset).
+/// `parent_mask` mirrors the mask passed to `draw_pixmap` — pixels
+/// outside the mask stay untouched so the bypass can't paint over a
+/// clipped-out region.
+fn apply_paper_backdrop_bypass(
+    parent: &mut Pixmap,
+    target_off: (i32, i32),
+    buffer: PixmapRef<'_>,
+    snapshot: PixmapRef<'_>,
+    opacity: f32,
+    paper_premul: PremultipliedColorU8,
+    parent_mask: Option<&TsMask>,
+) {
+    let parent_w = parent.width() as i32;
+    let parent_h = parent.height() as i32;
+    let buf_w = buffer.width() as i32;
+    let buf_h = buffer.height() as i32;
+    let buf_pixels = buffer.pixels();
+    let snap_pixels = snapshot.pixels();
+    let parent_pixels = parent.pixels_mut();
+    let mask_data = parent_mask.map(|m| (m.data(), m.width() as i32, m.height() as i32));
+    // "Still paper" tolerance: tiny-skia's premultiplied 8-bit pixels
+    // round identically when fill()'d, so an exact match is the
+    // strictest test. Allow 1 channel-step of slack to absorb any
+    // single-step rounding from blend ops that happen to land exactly
+    // on the paper colour but went through a premultiply round-trip.
+    // Larger tolerances would risk classifying a hand-painted
+    // "exactly-paper-coloured" rect as paper and over-bypassing it.
+    let near_paper = |p: PremultipliedColorU8| -> bool {
+        let dr = p.red() as i32 - paper_premul.red() as i32;
+        let dg = p.green() as i32 - paper_premul.green() as i32;
+        let db = p.blue() as i32 - paper_premul.blue() as i32;
+        let da = p.alpha() as i32 - paper_premul.alpha() as i32;
+        dr.abs() <= 1 && dg.abs() <= 1 && db.abs() <= 1 && da.abs() <= 1
+    };
+    // Premultiply the buffer's source pixel by the group's opacity,
+    // then SrcOver onto paper. Both operands are premultiplied (the
+    // buffer's pixel and `paper_premul`). For paper at α=1 this
+    // reduces to (1 - sa) * paper + scaled_buffer.
+    let src_over_on_paper = |buf: PremultipliedColorU8| -> PremultipliedColorU8 {
+        let op = (opacity.clamp(0.0, 1.0) * 255.0).round() as i32;
+        let scale = |c: u8| -> u8 { ((c as i32 * op + 127) / 255).clamp(0, 255) as u8 };
+        let sr = scale(buf.red());
+        let sg = scale(buf.green());
+        let sb = scale(buf.blue());
+        let sa = scale(buf.alpha());
+        let inv = 255 - sa as i32;
+        let merge = |s: u8, d: u8| -> u8 {
+            ((s as i32 * 255 + inv * d as i32 + 127) / 255).clamp(0, 255) as u8
+        };
+        PremultipliedColorU8::from_rgba(
+            merge(sr, paper_premul.red()),
+            merge(sg, paper_premul.green()),
+            merge(sb, paper_premul.blue()),
+            merge(sa, paper_premul.alpha()),
+        )
+        .unwrap_or(paper_premul)
+    };
+    for j in 0..buf_h {
+        let py = j + target_off.1;
+        if py < 0 || py >= parent_h {
+            continue;
+        }
+        for i in 0..buf_w {
+            let px = i + target_off.0;
+            if px < 0 || px >= parent_w {
+                continue;
+            }
+            let buf_idx = (j * buf_w + i) as usize;
+            let buf_pixel = buf_pixels[buf_idx];
+            if buf_pixel.alpha() == 0 {
+                continue;
+            }
+            let snap_pixel = snap_pixels[buf_idx];
+            if !near_paper(snap_pixel) {
+                continue;
+            }
+            // Honour the parent mask: pixels outside the clip stay
+            // untouched (the standard draw_pixmap pass already
+            // skipped them, and we mustn't re-introduce coverage in
+            // the clipped-out region).
+            if let Some((md, mw, mh)) = mask_data {
+                if px >= 0 && py >= 0 && px < mw && py < mh {
+                    let m_idx = (py * mw + px) as usize;
+                    if md[m_idx] == 0 {
+                        continue;
+                    }
+                }
+            }
+            let par_idx = (py * parent_w + px) as usize;
+            parent_pixels[par_idx] = src_over_on_paper(buf_pixel);
+        }
+    }
 }
 
 /// Build a tiny-skia path with `path_transform` applied to every
