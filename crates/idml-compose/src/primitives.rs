@@ -352,6 +352,7 @@ mod tests {
             DisplayCommand::FillPathBlend { transform, .. } => *transform,
             DisplayCommand::StrokePath { transform, .. } => *transform,
             DisplayCommand::DropShadow { transform, .. } => *transform,
+            DisplayCommand::PathShadow { transform, .. } => *transform,
             DisplayCommand::Image { transform, .. } => *transform,
             DisplayCommand::PushClip { transform, .. } => *transform,
             DisplayCommand::PopClip(transform) => *transform,

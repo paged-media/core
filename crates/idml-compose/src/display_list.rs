@@ -359,6 +359,20 @@ pub enum DisplayCommand {
         transform: Transform,
         shadow: DropShadow,
     },
+    /// Glyph- / arbitrary-path shadow stamp. Identical render
+    /// semantics to [`DisplayCommand::DropShadow`] (fill `path_id`
+    /// at `(offset_x, offset_y)` with a soft Gaussian-blurred
+    /// stamp), separated as its own variant so the glyph-shadow
+    /// post-pass can splice these in front of glyph `FillPath`
+    /// commands without disturbing the rect-stamp variant emitted
+    /// at frame-body time. The `transform` is the glyph's natural
+    /// page-space transform — the rasterizer adds `shadow.offset_*`
+    /// internally.
+    PathShadow {
+        path_id: PathId,
+        transform: Transform,
+        shadow: DropShadow,
+    },
     /// Place a decoded RGBA8 image. The unit-rect at the source
     /// pixmap's pixel grid maps to page coordinates via `transform` —
     /// `(0, 0)` of the source pixmap lands at `transform.apply(0, 0)`,
@@ -429,6 +443,7 @@ impl DisplayCommand {
             | DisplayCommand::FillPathBlend { transform, .. }
             | DisplayCommand::StrokePath { transform, .. }
             | DisplayCommand::DropShadow { transform, .. }
+            | DisplayCommand::PathShadow { transform, .. }
             | DisplayCommand::Image { transform, .. }
             | DisplayCommand::PushClip { transform, .. }
             | DisplayCommand::PopClip(transform)
