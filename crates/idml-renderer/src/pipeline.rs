@@ -1017,31 +1017,47 @@ impl<'a> StoryEmitter<'a> {
     /// only when the body's painted pixels overlap the glyph pixels
     /// AND the blend is non-associative.
     fn apply_blend_groups(&self, pages: &mut [BuiltPage]) {
-        // Group entries by page so we can splice in reverse-index
-        // order on each page (later inserts don't shift earlier
-        // ones).
-        let mut per_page: HashMap<usize, Vec<(usize, usize, idml_compose::Rect, idml_compose::BlendMode, f32)>> =
-            HashMap::new();
+        // Per-frame post-emit work: optionally splice glyph-shaped
+        // drop shadows in front of the frame's glyph fills, then
+        // optionally bracket the (still-original) glyph range with
+        // a transparency group. Both run from the same per-page
+        // reverse-start-order pass so command-index bookkeeping
+        // stays straightforward.
+        //
+        // Entry shape: `(start, end, glyph_shadow, glyph_shadow_bounds,
+        // blend_group)`.
+        // - `glyph_shadow`: Some(DropShadow) if the frame has a
+        //   stroke-transparency drop shadow AND the visible
+        //   stroke + fill are both transparent (per InDesign
+        //   semantics for "shadow off the visible text outlines").
+        // - `glyph_shadow_bounds`: page-space rect to seed the
+        //   shadow wrapper's BlendGroup buffer; the helper pads
+        //   further by `|offset| + 3σ` to guarantee soft edges fit.
+        // - `blend_group`: Some(...) when the frame's blend mode is
+        //   non-Normal or opacity < 100%.
+        type Entry = (
+            usize,
+            usize,
+            Option<DropShadow>,
+            idml_compose::Rect,
+            Option<(idml_compose::Rect, idml_compose::BlendMode, f32)>,
+        );
+        let mut per_page: HashMap<usize, Vec<Entry>> = HashMap::new();
         for (i, frame) in self.chain.iter().enumerate() {
             let Some((start, end)) = self.frame_cmd_ranges[i] else {
                 continue;
             };
             if start == end {
                 // No glyphs were emitted into this frame — nothing
-                // to bracket, skip.
+                // to bracket or shadow, skip.
                 continue;
             }
+            let page_idx = self.chain_pages[i];
             let blend_mode = blend_mode_from_idml(frame.blend_mode.as_deref());
             let opacity = frame.opacity;
             let needs_group = !matches!(blend_mode, idml_compose::BlendMode::Normal)
                 || matches!(opacity, Some(o) if o < 100.0 - f32::EPSILON);
-            if !needs_group {
-                continue;
-            }
             let opacity_f = opacity.map(|p| (p / 100.0).clamp(0.0, 1.0)).unwrap_or(1.0);
-            let page_idx = self.chain_pages[i];
-            // Group bounds: the frame's bounding rect projected into
-            // page coords (frame_outer_transform for the page).
             let outer = frame_outer_transform(&pages[page_idx], frame.item_transform);
             let inner_rect = idml_compose::Rect {
                 x: frame.bounds.left,
@@ -1049,37 +1065,118 @@ impl<'a> StoryEmitter<'a> {
                 w: frame.bounds.width(),
                 h: frame.bounds.height(),
             };
-            let bounds = rect_bounds_in_page(inner_rect, outer);
-            let padded = idml_compose::Rect {
-                x: bounds.x - 0.5,
-                y: bounds.y - 0.5,
-                w: bounds.w + 1.0,
-                h: bounds.h + 1.0,
+            let frame_bounds_in_page = rect_bounds_in_page(inner_rect, outer);
+            let blend_group = if needs_group {
+                let padded = idml_compose::Rect {
+                    x: frame_bounds_in_page.x - 0.5,
+                    y: frame_bounds_in_page.y - 0.5,
+                    w: frame_bounds_in_page.w + 1.0,
+                    h: frame_bounds_in_page.h + 1.0,
+                };
+                Some((padded, blend_mode, opacity_f))
+            } else {
+                None
             };
-            per_page
-                .entry(page_idx)
-                .or_default()
-                .push((start, end, padded, blend_mode, opacity_f));
+            // Glyph-shaped shadow: emit when the frame carries a
+            // stroke-transparency drop shadow AND both fill and
+            // stroke are transparent (so the rect-shaped stamp from
+            // the body-time drop_shadow_module wouldn't fire). Real
+            // InDesign casts the shadow off the visible TEXT
+            // outlines in this case.
+            // Stroke weight defaults to 1.0pt when absent (InDesign
+            // default); the stroke-visibility check still gates on
+            // `Swatch/None` so absent-stroke-color frames register
+            // as invisible regardless.
+            let stroke_w = frame.stroke_weight.unwrap_or(1.0);
+            let stroke_visible =
+                frame_stroke_is_visible(frame.stroke_color.as_deref(), stroke_w);
+            let fill_transparent = frame_fill_is_transparent(frame.fill_color.as_deref());
+            let glyph_shadow = if !stroke_visible
+                && fill_transparent
+                && frame.stroke_drop_shadow.is_some()
+            {
+                resolve_frame_shadow(
+                    frame.stroke_drop_shadow.as_ref(),
+                    None,
+                    self.palette,
+                    self.cmyk_xform,
+                )
+            } else {
+                None
+            };
+            if glyph_shadow.is_none() && blend_group.is_none() {
+                continue;
+            }
+            per_page.entry(page_idx).or_default().push((
+                start,
+                end,
+                glyph_shadow,
+                frame_bounds_in_page,
+                blend_group,
+            ));
         }
         // Splice in reverse start-order per page so earlier ranges
         // stay valid.
         for (page_idx, mut entries) in per_page {
             entries.sort_by(|a, b| b.0.cmp(&a.0));
-            let cmds = &mut pages[page_idx].list.commands;
-            for (start, end, bounds, blend_mode, opacity) in entries {
-                cmds.insert(
-                    end,
-                    idml_compose::DisplayCommand::EndBlendGroup(Transform::IDENTITY),
-                );
-                cmds.insert(
-                    start,
-                    idml_compose::DisplayCommand::BeginBlendGroup {
-                        bounds,
-                        blend_mode,
-                        opacity,
-                        transform: Transform::IDENTITY,
-                    },
-                );
+            for (start, end, glyph_shadow, frame_bounds_in_page, blend_group) in entries {
+                let page = &mut pages[page_idx];
+                // Step 1: splice glyph-shaped shadows in front of
+                // the original glyph range. The shadow stamps land
+                // *before* any BeginBlendGroup we add in Step 2,
+                // so a Lighten-blend frame's glyphs still cast a
+                // dark shadow against the page below (Lighten of
+                // dark gray on white = white = invisible — the
+                // shadow has to be outside the group). Returns
+                // `inserted`, the number of commands added (one
+                // PathShadow per glyph fill plus the wrapper
+                // BeginBlendGroup / EndBlendGroup); every later
+                // index (incl. `end`) shifts forward by that count
+                // for Step 2.
+                let inserted = if let Some(shadow) = glyph_shadow {
+                    // Group-buffer bounds for the shadow wrapper:
+                    // the frame's bbox in page coords, padded by
+                    // `(|offset| + 3*blur)` on each side so soft
+                    // edges don't get clipped to the buffer. The
+                    // helper inserts the BeginBlendGroup itself.
+                    let pad = shadow.offset_x.abs().max(shadow.offset_y.abs())
+                        + 3.0 * shadow.blur_radius.abs()
+                        + 1.0;
+                    let bounds_in_page = idml_compose::Rect {
+                        x: frame_bounds_in_page.x - pad,
+                        y: frame_bounds_in_page.y - pad,
+                        w: frame_bounds_in_page.w + 2.0 * pad,
+                        h: frame_bounds_in_page.h + 2.0 * pad,
+                    };
+                    crate::module::emit_glyph_shadow_pass(
+                        page,
+                        start..end,
+                        shadow,
+                        bounds_in_page,
+                    )
+                } else {
+                    0
+                };
+                let glyphs_start = start + inserted;
+                let glyphs_end = end + inserted;
+                // Step 2: bracket glyph fills with BeginBlendGroup /
+                // EndBlendGroup (when needed). Insert end-then-start
+                // so the start-insert doesn't shift `glyphs_end`.
+                if let Some((bounds, blend_mode, opacity)) = blend_group {
+                    page.list.commands.insert(
+                        glyphs_end,
+                        idml_compose::DisplayCommand::EndBlendGroup(Transform::IDENTITY),
+                    );
+                    page.list.commands.insert(
+                        glyphs_start,
+                        idml_compose::DisplayCommand::BeginBlendGroup {
+                            bounds,
+                            blend_mode,
+                            opacity,
+                            transform: Transform::IDENTITY,
+                        },
+                    );
+                }
             }
         }
     }
