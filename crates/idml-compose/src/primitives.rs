@@ -117,6 +117,34 @@ pub fn emit_ellipse_transformed(
     });
 }
 
+/// Like [`emit_ellipse_transformed`] but composites with the given
+/// blend mode. `BlendMode::Normal` falls through to a regular
+/// `FillPath` so the fast path stays single-allocation.
+pub fn emit_ellipse_transformed_blend(
+    rect: Rect,
+    outer: Transform,
+    paint: Paint,
+    blend_mode: crate::display_list::BlendMode,
+    list: &mut DisplayList,
+) {
+    let (path_id, _) = list.paths.intern(UNIT_ELLIPSE_KEY, unit_ellipse());
+    let transform = Transform::for_rect_in(rect, outer);
+    if matches!(blend_mode, crate::display_list::BlendMode::Normal) {
+        list.push(DisplayCommand::FillPath {
+            path_id,
+            paint,
+            transform,
+        });
+    } else {
+        list.push(DisplayCommand::FillPathBlend {
+            path_id,
+            paint,
+            transform,
+            blend_mode,
+        });
+    }
+}
+
 /// Stroked variant of [`emit_ellipse`].
 pub fn emit_stroke_ellipse(rect: Rect, stroke: Stroke, paint: Paint, list: &mut DisplayList) {
     emit_stroke_ellipse_transformed(rect, Transform::IDENTITY, stroke, paint, list);

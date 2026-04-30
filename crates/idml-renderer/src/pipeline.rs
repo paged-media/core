@@ -11,8 +11,7 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use idml_compose::{
-    emit_drop_shadow_rect_transformed, emit_ellipse_transformed, emit_glyph_slice,
-    emit_glyph_slice_blend, emit_line,
+    emit_drop_shadow_rect_transformed, emit_glyph_slice, emit_glyph_slice_blend, emit_line,
     emit_paragraph, emit_rect, emit_rect_transformed, emit_stroke_ellipse_transformed,
     emit_stroke_rect, emit_stroke_rect_transformed, Color, DisplayCommand, DisplayList, DropShadow,
     Paint, PathData, PathSegment, Rect, Stroke, Transform, TtfOutliner,
@@ -1620,17 +1619,29 @@ fn emit_polygon_into(
     };
     let (path_id, _) = page.list.paths.intern(cache_key, path);
     if !fill_transparent {
-        page.list.commands.push(DisplayCommand::FillPath {
-            path_id,
-            paint: fill,
-            transform: outer,
-        });
+        let fill = apply_opacity(fill, poly.opacity);
+        let blend = blend_mode_from_idml(poly.blend_mode.as_deref());
+        if matches!(blend, idml_compose::BlendMode::Normal) {
+            page.list.commands.push(DisplayCommand::FillPath {
+                path_id,
+                paint: fill,
+                transform: outer,
+            });
+        } else {
+            page.list.commands.push(DisplayCommand::FillPathBlend {
+                path_id,
+                paint: fill,
+                transform: outer,
+                blend_mode: blend,
+            });
+        }
     }
     if let Some(stroke_paint) = poly
         .stroke_color
         .as_deref()
         .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
     {
+        let stroke_paint = apply_opacity(stroke_paint, poly.opacity);
         let width = poly.stroke_weight.unwrap_or(1.0);
         if width > 0.0 {
             page.list.commands.push(DisplayCommand::StrokePath {
@@ -3051,7 +3062,9 @@ fn emit_oval_into(
                 )
             })
             .unwrap_or(fallback);
-        emit_ellipse_transformed(r, outer, fill, &mut page.list);
+        let fill = apply_opacity(fill, oval.opacity);
+        let blend = blend_mode_from_idml(oval.blend_mode.as_deref());
+        idml_compose::emit_ellipse_transformed_blend(r, outer, fill, blend, &mut page.list);
     }
     if let Some(stroke) = oval
         .stroke_color

@@ -393,6 +393,10 @@ pub struct Oval {
     pub item_layer: Option<String>,
     /// See [`Rectangle::gradient_fill_angle`].
     pub gradient_fill_angle: Option<f32>,
+    /// See [`Rectangle::opacity`].
+    pub opacity: Option<f32>,
+    /// See [`Rectangle::blend_mode`].
+    pub blend_mode: Option<String>,
 }
 
 /// Straight line — `<GraphicLine>` in IDML. The endpoints are the
@@ -495,6 +499,10 @@ pub struct Polygon {
     pub item_layer: Option<String>,
     /// See [`Rectangle::gradient_fill_angle`].
     pub gradient_fill_angle: Option<f32>,
+    /// See [`Rectangle::opacity`].
+    pub opacity: Option<f32>,
+    /// See [`Rectangle::blend_mode`].
+    pub blend_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
@@ -834,6 +842,8 @@ impl Spread {
                             item_layer: attr(&e, b"ItemLayer"),
                             gradient_fill_angle: attr(&e, b"GradientFillAngle")
                                 .and_then(|s| s.parse().ok()),
+                            opacity: None,
+                            blend_mode: None,
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Oval(out.ovals.len() - 1),
@@ -962,9 +972,25 @@ impl Spread {
                                         out.text_frames[i].blend_mode = mode;
                                     }
                                 }
+                                CurrentFrameKind::Oval(i) => {
+                                    if opacity.is_some() {
+                                        out.ovals[i].opacity = opacity;
+                                    }
+                                    if mode.is_some() {
+                                        out.ovals[i].blend_mode = mode;
+                                    }
+                                }
+                                CurrentFrameKind::Polygon(i) => {
+                                    if opacity.is_some() {
+                                        out.polygons[i].opacity = opacity;
+                                    }
+                                    if mode.is_some() {
+                                        out.polygons[i].blend_mode = mode;
+                                    }
+                                }
                                 _ => {
-                                    // Other frame types don't yet
-                                    // surface opacity / blend_mode;
+                                    // GraphicLines don't yet surface
+                                    // opacity / blend_mode;
                                     // ignore until they do.
                                 }
                             }
@@ -1153,6 +1179,8 @@ impl Spread {
                             item_layer: attr(&e, b"ItemLayer"),
                             gradient_fill_angle: attr(&e, b"GradientFillAngle")
                                 .and_then(|s| s.parse().ok()),
+                            opacity: None,
+                            blend_mode: None,
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Polygon(out.polygons.len() - 1),
