@@ -38,7 +38,7 @@ use crate::builders::{
     story::{write_story, Paragraph, Story},
     xml_folder::{backing_story_xml, mapping_xml, tags_xml},
 };
-use crate::geometry::{compose, rotate_deg, translate, Matrix, IDENTITY};
+use crate::geometry::{compose, rotate_deg, scale, skew_x_deg, translate, Matrix, IDENTITY};
 use crate::ids::self_id;
 use crate::package::Sample;
 
@@ -73,6 +73,24 @@ struct Variant {
     /// Optional extra rotation/transform applied around the frame's
     /// top-left corner *after* the centring translate.
     extra_transform: Option<Matrix>,
+    /// Override LinkResourceURI for the variant. None ⇒ the default
+    /// checker-128 fixture. The transform-focused variants point at
+    /// `corpus/samples/media/photo.webp` via an absolute file URI so
+    /// the diff harness picks the asset up without an extra
+    /// `--links-dir` flag.
+    link_uri: Option<&'static str>,
+    /// Native pixel dimensions of the variant's image — used for the
+    /// inner `<Image>` PathGeometry. Defaults to `IMG_NATIVE_PX`
+    /// (128×128). photo.webp is 2000×1333 pt at native size; the
+    /// transform variants pass that.
+    image_native_pt: Option<(f32, f32)>,
+    /// Optional `<Image ItemTransform>` override. Used by the
+    /// transform-focused variants so the image's local transform
+    /// composes on top of the frame's. None ⇒ identity.
+    image_transform: Option<Matrix>,
+    /// Optional `EffectivePpi` x/y pair on the inner `<Image>`. Used
+    /// by the low-res variant to advertise a non-72 ppi.
+    effective_ppi: Option<(f32, f32)>,
 }
 
 fn variants() -> Vec<Variant> {
@@ -81,6 +99,18 @@ fn variants() -> Vec<Variant> {
     //                   w - left - right, h - top - bottom)
     // so positive crops shrink the displayed image and negative crops
     // grow it past the frame edge.
+
+    // Helpers for the transform-focused photo.webp variants. The
+    // photo's native size is 2000 × 1333 pt — so an Image at 1× would
+    // dwarf the 200 × 200 pt frame. The "1to1" baseline scales the
+    // image so a single point of frame maps to a single pixel of
+    // image (≈ 0.1 × scale). Subsequent variants compose extra
+    // scale / rotate / translate on top of that baseline so the
+    // *visible* effect is decoupled from the image's intrinsic size.
+    const PHOTO_W: f32 = 2000.0;
+    const PHOTO_H: f32 = 1333.0;
+    const FIT_S: f32 = FRAME_W_PT / PHOTO_W; // ≈ 0.1
+    let fit_to_frame = scale(FIT_S, FIT_S);
     vec![
         // None — image at native 128 pt anchored to the frame's
         // top-left. Right + bottom crops collapse the unused space
@@ -90,6 +120,10 @@ fn variants() -> Vec<Variant> {
             fitting: "None",
             crops: (0.0, 0.0, FRAME_W_PT - IMG_NATIVE_PX, FRAME_H_PT - IMG_NATIVE_PX),
             extra_transform: None,
+            link_uri: None,
+            image_native_pt: None,
+            image_transform: None,
+            effective_ppi: None,
         },
         // FitContentToFrame — image stretched to the entire frame.
         // Crops zero on every side ⇒ image bounds = frame bounds.
@@ -98,6 +132,10 @@ fn variants() -> Vec<Variant> {
             fitting: "FitContentToFrame",
             crops: (0.0, 0.0, 0.0, 0.0),
             extra_transform: None,
+            link_uri: None,
+            image_native_pt: None,
+            image_transform: None,
+            effective_ppi: None,
         },
         // FillProportionally — for a 1:1 image inside a 1:1 frame
         // this is identical to fit-to-frame. To keep the variant
@@ -109,6 +147,10 @@ fn variants() -> Vec<Variant> {
             fitting: "FillProportionally",
             crops: (-24.0, 0.0, -24.0, 0.0),
             extra_transform: None,
+            link_uri: None,
+            image_native_pt: None,
+            image_transform: None,
+            effective_ppi: None,
         },
         // CenterContent — image at native size, equal margins on all
         // sides ((200 − 128) / 2 = 36 pt).
@@ -122,6 +164,10 @@ fn variants() -> Vec<Variant> {
                 (FRAME_H_PT - IMG_NATIVE_PX) * 0.5,
             ),
             extra_transform: None,
+            link_uri: None,
+            image_native_pt: None,
+            image_transform: None,
+            effective_ppi: None,
         },
         // Rotated 30° with FitContentToFrame — the frame's
         // ItemTransform rotates around its own origin (top-left),
@@ -133,9 +179,145 @@ fn variants() -> Vec<Variant> {
             fitting: "FitContentToFrame",
             crops: (0.0, 0.0, 0.0, 0.0),
             extra_transform: Some(rotate_deg(30.0)),
+            link_uri: None,
+            image_native_pt: None,
+            image_transform: None,
+            effective_ppi: None,
+        },
+        // ── transform-on-Image variants (photo.webp) ────────────
+        // These exercise the *inner* `<Image ItemTransform>` knob
+        // rather than the frame's transform. Each one composes a
+        // different scale / translate / rotate / skew on top of the
+        // 1:1-fit baseline so the renderer's image-transform path is
+        // covered independently from frame placement.
+        Variant {
+            name: "images · 1to1 · photo-fit",
+            fitting: "FitContentToFrame",
+            crops: (0.0, 0.0, 0.0, 0.0),
+            extra_transform: None,
+            link_uri: Some(PHOTO_URI),
+            image_native_pt: Some((PHOTO_W, PHOTO_H)),
+            image_transform: Some(fit_to_frame),
+            effective_ppi: None,
+        },
+        // 50 % scale of the photo — image fills only the centre
+        // quarter of the frame. The composed inner transform is
+        // (fit · 0.5).
+        Variant {
+            name: "images · scale · 50pct",
+            fitting: "FitContentToFrame",
+            crops: (0.0, 0.0, 0.0, 0.0),
+            extra_transform: None,
+            link_uri: Some(PHOTO_URI),
+            image_native_pt: Some((PHOTO_W, PHOTO_H)),
+            image_transform: Some(scale(FIT_S * 0.5, FIT_S * 0.5)),
+            effective_ppi: None,
+        },
+        // 200 % scale — image overflows the frame by 100 % on every
+        // edge so the visible centre is the photo's middle quarter.
+        Variant {
+            name: "images · scale · 200pct",
+            fitting: "FitContentToFrame",
+            crops: (0.0, 0.0, 0.0, 0.0),
+            extra_transform: None,
+            link_uri: Some(PHOTO_URI),
+            image_native_pt: Some((PHOTO_W, PHOTO_H)),
+            image_transform: Some(scale(FIT_S * 2.0, FIT_S * 2.0)),
+            effective_ppi: None,
+        },
+        // Translate the image +50 pt on each axis inside the frame
+        // (after the 1:1 fit). The visible photo crops by 50 pt on
+        // the top-left and reveals 50 pt of empty frame on the
+        // bottom-right.
+        Variant {
+            name: "images · translate · offset-positive",
+            fitting: "FitContentToFrame",
+            crops: (0.0, 0.0, 0.0, 0.0),
+            extra_transform: None,
+            link_uri: Some(PHOTO_URI),
+            image_native_pt: Some((PHOTO_W, PHOTO_H)),
+            // compose(scale, translate) — translate then scale per
+            // our `compose(a, b) = b ∘ a` semantics; we want the
+            // image origin shifted *after* the scale, so the
+            // translate value is in frame pt.
+            image_transform: Some(compose(fit_to_frame, translate(50.0, 50.0))),
+            effective_ppi: None,
+        },
+        // Symmetric negative translate.
+        Variant {
+            name: "images · translate · offset-negative",
+            fitting: "FitContentToFrame",
+            crops: (0.0, 0.0, 0.0, 0.0),
+            extra_transform: None,
+            link_uri: Some(PHOTO_URI),
+            image_native_pt: Some((PHOTO_W, PHOTO_H)),
+            image_transform: Some(compose(fit_to_frame, translate(-50.0, -50.0))),
+            effective_ppi: None,
+        },
+        // 30° rotation on the *image* — distinct from the existing
+        // "rotated-30" variant which rotates the *frame*. Composes
+        // (fit · rotate) so the rotated photo is still scaled to the
+        // frame's pt extent.
+        Variant {
+            name: "images · rotate · img-30deg",
+            fitting: "FitContentToFrame",
+            crops: (0.0, 0.0, 0.0, 0.0),
+            extra_transform: None,
+            link_uri: Some(PHOTO_URI),
+            image_native_pt: Some((PHOTO_W, PHOTO_H)),
+            image_transform: Some(compose(fit_to_frame, rotate_deg(30.0))),
+            effective_ppi: None,
+        },
+        // Horizontal skew on the image — exercises a non-orthogonal
+        // image-local matrix. tan(15°) ≈ 0.268, so a 200-pt-wide
+        // photo slants ~54 pt at the top.
+        Variant {
+            name: "images · skew · x-15deg",
+            fitting: "FitContentToFrame",
+            crops: (0.0, 0.0, 0.0, 0.0),
+            extra_transform: None,
+            link_uri: Some(PHOTO_URI),
+            image_native_pt: Some((PHOTO_W, PHOTO_H)),
+            image_transform: Some(compose(fit_to_frame, skew_x_deg(15.0))),
+            effective_ppi: None,
+        },
+        // Combined scale × translate × rotate on the same image.
+        // Tests that the renderer composes the inner transform in
+        // the right order (the standard left-to-right our `compose`
+        // walks).
+        Variant {
+            name: "images · combo · scale-translate-rotate",
+            fitting: "FitContentToFrame",
+            crops: (0.0, 0.0, 0.0, 0.0),
+            extra_transform: None,
+            link_uri: Some(PHOTO_URI),
+            image_native_pt: Some((PHOTO_W, PHOTO_H)),
+            image_transform: Some(compose(
+                compose(scale(FIT_S * 0.75, FIT_S * 0.75), rotate_deg(15.0)),
+                translate(20.0, 20.0),
+            )),
+            effective_ppi: None,
+        },
+        // Low-resolution photo — claims EffectivePpi=144 even though
+        // the image data is the same. Renderers that use this hint
+        // for downsampling decisions will branch differently here.
+        Variant {
+            name: "images · effective-ppi · low-res-144",
+            fitting: "FitContentToFrame",
+            crops: (0.0, 0.0, 0.0, 0.0),
+            extra_transform: None,
+            link_uri: Some(PHOTO_URI),
+            image_native_pt: Some((PHOTO_W, PHOTO_H)),
+            image_transform: Some(fit_to_frame),
+            effective_ppi: Some((144.0, 144.0)),
         },
     ]
 }
+
+/// Absolute path so the renderer's resolver can find photo.webp
+/// without an explicit `--links-dir`. Real InDesign exports use
+/// `file:` URIs of this same shape.
+const PHOTO_URI: &str = "file:/Users/drietsch/idml/corpus/samples/media/photo.webp";
 
 pub fn build() -> Sample {
     let variants = variants();
@@ -192,6 +374,8 @@ pub fn build() -> Sample {
             blending: None,
             drop_shadow: None,
             placed_image: None,
+            text_wrap: None,
+            anchored_setting: None,
         };
 
         // Centre the 200×200 frame on the page, then apply the
@@ -235,16 +419,23 @@ pub fn build() -> Sample {
             blending: None,
             drop_shadow: None,
             placed_image: Some(PlacedImage {
-                link_resource_uri: LINK_URI.to_string(),
+                link_resource_uri: variant
+                    .link_uri
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| LINK_URI.to_string()),
                 fitting: variant.fitting,
                 left_crop: lc,
                 top_crop: tc,
                 right_crop: rc,
                 bottom_crop: bc,
                 image_self_id: image_id,
-                image_w_pt: IMG_NATIVE_PX,
-                image_h_pt: IMG_NATIVE_PX,
+                image_w_pt: variant.image_native_pt.map(|(w, _)| w).unwrap_or(IMG_NATIVE_PX),
+                image_h_pt: variant.image_native_pt.map(|(_, h)| h).unwrap_or(IMG_NATIVE_PX),
+                image_item_transform: variant.image_transform,
+                effective_ppi: variant.effective_ppi,
             }),
+            text_wrap: None,
+            anchored_setting: None,
         };
 
         spreads.push((
