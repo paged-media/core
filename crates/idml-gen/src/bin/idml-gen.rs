@@ -43,9 +43,10 @@ fn emit_sample(name: &str, out_dir: &std::path::Path) -> Result<()> {
         "gradients" => idml_gen::samples::gradients::build(),
         "tables" => idml_gen::samples::tables::build(),
         "images" => idml_gen::samples::images::build(),
+        "transparency" => idml_gen::samples::transparency::build(),
         other => {
             anyhow::bail!(
-                "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, effects, gradients, tables, images"
+                "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, effects, gradients, tables, images, transparency"
             )
         }
     };

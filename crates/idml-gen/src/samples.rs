@@ -10,3 +10,4 @@ pub mod strokes_fills;
 pub mod tables;
 pub mod text;
 pub mod text_advanced;
+pub mod transparency;

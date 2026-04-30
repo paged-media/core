@@ -202,6 +202,57 @@ fn geometry_groups_round_trips_through_parser() {
 }
 
 #[test]
+fn transparency_emit_is_byte_deterministic() {
+    let a = idml_gen::write_idml(&idml_gen::samples::transparency::build()).unwrap();
+    let b = idml_gen::write_idml(&idml_gen::samples::transparency::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+#[test]
+fn transparency_round_trips_through_parser() {
+    let sample = idml_gen::samples::transparency::build();
+    let bytes = idml_gen::write_idml(&sample).unwrap();
+    let container = idml_parse::Container::open(&bytes).expect("Container::open");
+    assert_eq!(container.designmap.spreads.len(), sample.spreads.len());
+    assert_eq!(container.designmap.stories.len(), sample.stories.len());
+    // Every page must round-trip its TransparencySetting payload —
+    // either a BlendingSetting (Opacity/BlendMode) or a
+    // DropShadowSetting must surface on at least one rectangle per
+    // spread, since that's the variant the page is testing.
+    let mut blends = 0;
+    let mut shadows = 0;
+    for entry_path in container.entries.keys() {
+        if !entry_path.starts_with("Spreads/") {
+            continue;
+        }
+        let xml = &container.entries[entry_path];
+        let spread = idml_parse::Spread::parse(xml).expect("Spread::parse");
+        for r in &spread.rectangles {
+            if r.drop_shadow.is_some() {
+                shadows += 1;
+            }
+        }
+        // BlendingSetting comes back via the parser's transparency
+        // hooks — surface it via the raw XML so the assertion is
+        // independent of which struct field exposes it. `entries`
+        // stores raw bytes; needle is a constant ASCII slice.
+        let needle = b"<BlendingSetting";
+        if xml.windows(needle.len()).any(|w| w == needle) {
+            blends += 1;
+        }
+    }
+    // 9 of the 12 variants set a BlendingSetting (every variant
+    // except the two pure drop-shadow pages and… wait, the pure
+    // drop-shadow pages omit blending, so 12 - 2 = 10). Re-counting
+    // against the variant table: 3 opacity + 5 blend + 2 combos =
+    // 10 pages with `<BlendingSetting>`.
+    assert_eq!(blends, 10, "expected 10 BlendingSetting blocks, got {blends}");
+    // 3 variants set a DropShadow (default, explicit, shadow+opacity
+    // combo).
+    assert_eq!(shadows, 3, "expected 3 DropShadow blocks, got {shadows}");
+}
+
+#[test]
 fn images_emit_is_byte_deterministic() {
     let a = idml_gen::write_idml(&idml_gen::samples::images::build()).unwrap();
     let b = idml_gen::write_idml(&idml_gen::samples::images::build()).unwrap();
