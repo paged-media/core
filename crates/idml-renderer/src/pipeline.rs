@@ -11,10 +11,10 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use idml_compose::{
-    emit_drop_shadow_rect_transformed, emit_glyph_slice, emit_glyph_slice_blend, emit_line,
-    emit_paragraph, emit_rect, emit_rect_transformed, emit_stroke_ellipse_transformed,
-    emit_stroke_rect, emit_stroke_rect_transformed, Color, DisplayCommand, DisplayList, DropShadow,
-    Paint, PathData, PathSegment, Rect, Stroke, Transform, TtfOutliner,
+    emit_glyph_slice, emit_glyph_slice_blend, emit_line, emit_paragraph, emit_rect,
+    emit_rect_transformed, emit_stroke_ellipse_transformed, emit_stroke_rect,
+    emit_stroke_rect_transformed, Color, DisplayCommand, DisplayList, DropShadow, Paint, PathData,
+    PathSegment, Rect, Stroke, Transform, TtfOutliner,
 };
 use idml_parse::{graphic, Graphic, GraphicLine, Oval, PathAnchor, Polygon, Rectangle, TextFrame};
 use idml_scene::Document;
@@ -2482,7 +2482,7 @@ fn is_none_swatch_id(id: &str) -> bool {
 /// attribute absent" and `FillColor="Swatch/None"`. Distinct from the
 /// "palette lookup miss" case — when an id is present but unresolved
 /// the renderer still falls back to the gray preview swatch.
-fn frame_fill_is_transparent(id: Option<&str>) -> bool {
+pub(crate) fn frame_fill_is_transparent(id: Option<&str>) -> bool {
     match id {
         None => true,
         Some(s) => is_none_swatch_id(s),
@@ -3004,16 +3004,8 @@ fn emit_text_frame_into(
     page.stats.frames += 1;
     let outer = frame_outer_transform(page, resolved.item_transform);
     let fill_transparent = frame_fill_is_transparent(resolved.fill_color);
-    // Drop shadows fall off the fill shape. With a transparent fill
-    // there's nothing to cast a shadow, so suppress the rect stamp —
-    // matches InDesign, where a Swatch/None-filled frame with a
-    // DropShadowSetting renders no visible shadow.
+    crate::module::drop_shadow_module(&resolved, page, palette, cmyk_xform, drop_shadow, outer);
     if !fill_transparent {
-        if let Some(shadow) =
-            resolve_frame_shadow(resolved.drop_shadow, drop_shadow, palette, cmyk_xform)
-        {
-            emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list);
-        }
         let fill = resolved
             .fill_color
             .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
@@ -3050,15 +3042,7 @@ fn emit_oval_into(
     page.stats.frames += 1;
     let outer = frame_outer_transform(page, frame.item_transform);
     let fill_transparent = frame_fill_is_transparent(frame.fill_color);
-    // Ovals don't yet have a dedicated shadow primitive — use the
-    // bounding-rect stamp as a stopgap. Replace once the rasterizer
-    // grows shadowed-ellipse support. Skip the shadow when the fill
-    // is transparent (nothing to cast off).
-    if !fill_transparent {
-        if let Some(shadow) = resolve_frame_shadow(frame.drop_shadow, None, palette, cmyk_xform) {
-            emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list);
-        }
-    }
+    crate::module::drop_shadow_module(&frame, page, palette, cmyk_xform, None, outer);
     if !fill_transparent {
         let fill = frame
             .fill_color
@@ -3151,14 +3135,7 @@ fn emit_rectangle_into(
     page.stats.frames += 1;
     let outer = frame_outer_transform(page, resolved.item_transform);
     let fill_transparent = frame_fill_is_transparent(resolved.fill_color);
-    // Drop shadows fall off the fill shape — see emit_text_frame_into.
-    if !fill_transparent {
-        if let Some(shadow) =
-            resolve_frame_shadow(resolved.drop_shadow, drop_shadow, palette, cmyk_xform)
-        {
-            emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list);
-        }
-    }
+    crate::module::drop_shadow_module(&resolved, page, palette, cmyk_xform, drop_shadow, outer);
     let fill = resolved
         .fill_color
         .and_then(|id| {
@@ -3595,7 +3572,7 @@ fn frame_outer_transform(page: &BuiltPage, item_transform: Option<[f32; 6]>) -> 
 /// wins; the synthetic `fallback` (from `PipelineOptions`) is used
 /// when the frame carries none. Returns `None` for fully-transparent
 /// shadows so callers don't emit a no-op.
-fn resolve_frame_shadow(
+pub(crate) fn resolve_frame_shadow(
     frame_shadow: Option<&idml_parse::DropShadowSetting>,
     fallback: Option<DropShadow>,
     palette: &Graphic,

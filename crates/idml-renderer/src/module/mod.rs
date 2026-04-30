@@ -18,7 +18,10 @@
 //! See `docs/idea.md` and `/Users/drietsch/.claude/plans/vectorized-humming-lobster.md`
 //! for the full design.
 
+pub(crate) mod drop_shadow;
 pub(crate) mod frame;
 
 #[allow(unused_imports)]
 pub(crate) use frame::{Geometry, RenderCtx, ResolvedFrame};
+
+pub(crate) use drop_shadow::drop_shadow_module;
