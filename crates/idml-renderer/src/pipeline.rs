@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use idml_compose::{
-    emit_glyph_slice, emit_glyph_slice_blend, emit_line, emit_paragraph, emit_rect,
+    emit_glyph_slice, emit_line, emit_paragraph, emit_rect,
     emit_stroke_rect, emit_stroke_rect_transformed, Color, DisplayList, DropShadow, GlyphCacheKey,
     GlyphOutliner, Paint, PathData, PathSegment, Rect, Stroke, Transform, TtfOutliner,
 };
@@ -590,6 +590,7 @@ pub fn build_document(
             emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
         }
         emitter.apply_vertical_justification(&mut pages);
+        emitter.apply_blend_groups(&mut pages);
     }
 
     // Text-on-path pass: walk every spread's shapes and emit any
@@ -776,6 +777,7 @@ pub fn build_document(
             emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
         }
         emitter.apply_vertical_justification(&mut pages);
+        emitter.apply_blend_groups(&mut pages);
     }
 
     Ok(BuiltDocument {
@@ -994,6 +996,90 @@ impl<'a> StoryEmitter<'a> {
             let dy_pt = dy_64 as f32 / idml_text::shape::ADVANCE_PRECISION;
             for cmd in &mut pages[self.chain_pages[i]].list.commands[start..end] {
                 cmd.transform_mut().0[5] += dy_pt;
+            }
+        }
+    }
+
+    /// Bracket each text frame's glyph range with `BeginBlendGroup`
+    /// / `EndBlendGroup` whenever the frame's blend mode is non-Normal
+    /// or opacity < 100%. Run after `apply_vertical_justification` so
+    /// the splice is over the final glyph positions; the inserted
+    /// stub commands carry no rendering side-effects beyond the group
+    /// composite at end-of-range.
+    ///
+    /// The frame body (fill / stroke / drop-shadow) is bracketed
+    /// separately at body emit time inside `emit_text_frame_into`. We
+    /// emit two groups per blended text frame — one for the body, one
+    /// for the glyphs — both using the same blend mode against the
+    /// page underneath. Visually equivalent to a single group when the
+    /// body and glyphs occupy disjoint pixel sets (text frames with
+    /// transparent fills, the manual-sample case); slightly different
+    /// only when the body's painted pixels overlap the glyph pixels
+    /// AND the blend is non-associative.
+    fn apply_blend_groups(&self, pages: &mut [BuiltPage]) {
+        // Group entries by page so we can splice in reverse-index
+        // order on each page (later inserts don't shift earlier
+        // ones).
+        let mut per_page: HashMap<usize, Vec<(usize, usize, idml_compose::Rect, idml_compose::BlendMode, f32)>> =
+            HashMap::new();
+        for (i, frame) in self.chain.iter().enumerate() {
+            let Some((start, end)) = self.frame_cmd_ranges[i] else {
+                continue;
+            };
+            if start == end {
+                // No glyphs were emitted into this frame — nothing
+                // to bracket, skip.
+                continue;
+            }
+            let blend_mode = blend_mode_from_idml(frame.blend_mode.as_deref());
+            let opacity = frame.opacity;
+            let needs_group = !matches!(blend_mode, idml_compose::BlendMode::Normal)
+                || matches!(opacity, Some(o) if o < 100.0 - f32::EPSILON);
+            if !needs_group {
+                continue;
+            }
+            let opacity_f = opacity.map(|p| (p / 100.0).clamp(0.0, 1.0)).unwrap_or(1.0);
+            let page_idx = self.chain_pages[i];
+            // Group bounds: the frame's bounding rect projected into
+            // page coords (frame_outer_transform for the page).
+            let outer = frame_outer_transform(&pages[page_idx], frame.item_transform);
+            let inner_rect = idml_compose::Rect {
+                x: frame.bounds.left,
+                y: frame.bounds.top,
+                w: frame.bounds.width(),
+                h: frame.bounds.height(),
+            };
+            let bounds = rect_bounds_in_page(inner_rect, outer);
+            let padded = idml_compose::Rect {
+                x: bounds.x - 0.5,
+                y: bounds.y - 0.5,
+                w: bounds.w + 1.0,
+                h: bounds.h + 1.0,
+            };
+            per_page
+                .entry(page_idx)
+                .or_default()
+                .push((start, end, padded, blend_mode, opacity_f));
+        }
+        // Splice in reverse start-order per page so earlier ranges
+        // stay valid.
+        for (page_idx, mut entries) in per_page {
+            entries.sort_by(|a, b| b.0.cmp(&a.0));
+            let cmds = &mut pages[page_idx].list.commands;
+            for (start, end, bounds, blend_mode, opacity) in entries {
+                cmds.insert(
+                    end,
+                    idml_compose::DisplayCommand::EndBlendGroup(Transform::IDENTITY),
+                );
+                cmds.insert(
+                    start,
+                    idml_compose::DisplayCommand::BeginBlendGroup {
+                        bounds,
+                        blend_mode,
+                        opacity,
+                        transform: Transform::IDENTITY,
+                    },
+                );
             }
         }
     }
@@ -1502,8 +1588,12 @@ fn emit_paragraph_into_chain(
                 continue;
             };
             let outliner = TtfOutliner::new(outline);
-            let frame_blend = blend_mode_from_idml(frame.blend_mode.as_deref());
-            emit_glyph_slice_blend(
+            // Frame blend mode is applied at the transparency-group
+            // level by `bracket_text_frame_glyph_ranges` after the
+            // story pass completes; the glyphs themselves emit at
+            // BlendMode::Normal so the group composite is the single
+            // place the IDML BlendingSetting takes effect.
+            emit_glyph_slice(
                 &line.glyphs[start..end],
                 fid,
                 line.glyphs[start].point_size,
@@ -1511,7 +1601,6 @@ fn emit_paragraph_into_chain(
                 text_origin_pt,
                 &outliner,
                 &mut pages[target_page].list,
-                frame_blend,
             );
             start = end;
         }
@@ -1625,6 +1714,26 @@ fn emit_polygon_into(
     }
     page.stats.frames += 1;
     let outer = frame_outer_transform(page, resolved.item_transform);
+    let needs_group = frame_needs_blend_group(&resolved);
+    if needs_group {
+        let bbox = match &resolved.geometry {
+            Geometry::Polygon { bbox, .. } => *bbox,
+            Geometry::Rect { rect } => *rect,
+            _ => idml_compose::Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 0.0,
+                h: 0.0,
+            },
+        };
+        push_blend_group(
+            page,
+            bbox,
+            outer,
+            resolved.blend_mode,
+            frame_group_opacity(&resolved),
+        );
+    }
     // Intern the polygon's path up-front so fill/stroke modules can
     // route through `FillPath{Blend}` / `StrokePath` rather than the
     // unit-rect/ellipse primitives. The adapter collapsed anchor-
@@ -1653,6 +1762,9 @@ fn emit_polygon_into(
         path_id,
         Stroke::new(resolved.effective_stroke_weight()),
     );
+    if needs_group {
+        pop_blend_group(page);
+    }
 }
 
 /// One sample of a host shape's path in inner coords. `cum` is the
@@ -3398,6 +3510,40 @@ fn emit_text_frame_into(
     }
     page.stats.frames += 1;
     let outer = frame_outer_transform(page, resolved.item_transform);
+    // Bracket fill / stroke / drop-shadow into a transparency group
+    // whenever the frame's blend mode is non-Normal or opacity < 100%.
+    // The group composite at EndBlendGroup applies the blend mode
+    // against the page underneath, which is the structurally correct
+    // PDF transparency-group semantic (replaces the per-glyph /
+    // per-shape FillPathBlend approximation).
+    //
+    // Text glyphs land in this same page list during the story pass —
+    // they're bracketed separately post-pass via
+    // `bracket_text_frame_glyph_ranges` so each text frame's glyphs
+    // composite with the same blend mode against the page below.
+    let needs_group = frame_needs_blend_group(&resolved);
+    let group_bounds = if needs_group {
+        let geom_bounds = match &resolved.geometry {
+            Geometry::TextFrameRect { rect } | Geometry::Rect { rect } => *rect,
+            Geometry::Oval { rect } => *rect,
+            Geometry::Polygon { bbox, .. } => *bbox,
+            Geometry::Line { p0, p1 } => idml_compose::Rect {
+                x: p0.0.min(p1.0),
+                y: p0.1.min(p1.1),
+                w: (p0.0 - p1.0).abs(),
+                h: (p0.1 - p1.1).abs(),
+            },
+        };
+        Some(push_blend_group(
+            page,
+            geom_bounds,
+            outer,
+            resolved.blend_mode,
+            frame_group_opacity(&resolved),
+        ))
+    } else {
+        None
+    };
     crate::module::drop_shadow_module(&resolved, page, palette, cmyk_xform, drop_shadow, outer);
     crate::module::fill_paint_module(
         &resolved, page, palette, cmyk_xform, fallback, outer, None,
@@ -3411,6 +3557,10 @@ fn emit_text_frame_into(
         None,
         Stroke::new(resolved.effective_stroke_weight()),
     );
+    if needs_group {
+        pop_blend_group(page);
+    }
+    let _ = group_bounds;
 }
 
 fn emit_oval_into(
@@ -3428,6 +3578,18 @@ fn emit_oval_into(
     }
     page.stats.frames += 1;
     let outer = frame_outer_transform(page, frame.item_transform);
+    let needs_group = frame_needs_blend_group(&frame);
+    if needs_group {
+        if let Geometry::Oval { rect } = &frame.geometry {
+            push_blend_group(
+                page,
+                *rect,
+                outer,
+                frame.blend_mode,
+                frame_group_opacity(&frame),
+            );
+        }
+    }
     crate::module::drop_shadow_module(&frame, page, palette, cmyk_xform, None, outer);
     crate::module::fill_paint_module(&frame, page, palette, cmyk_xform, fallback, outer, None);
     crate::module::stroke_paint_module(
@@ -3439,6 +3601,9 @@ fn emit_oval_into(
         None,
         Stroke::new(frame.effective_stroke_weight()),
     );
+    if needs_group {
+        pop_blend_group(page);
+    }
 }
 
 fn emit_line_into(
@@ -3505,6 +3670,16 @@ fn emit_rectangle_into(
     };
     page.stats.frames += 1;
     let outer = frame_outer_transform(page, resolved.item_transform);
+    let needs_group = frame_needs_blend_group(&resolved);
+    if needs_group {
+        push_blend_group(
+            page,
+            r,
+            outer,
+            resolved.blend_mode,
+            frame_group_opacity(&resolved),
+        );
+    }
     crate::module::drop_shadow_module(&resolved, page, palette, cmyk_xform, drop_shadow, outer);
 
     // Rounded-corner Rectangles route fill + stroke through interned
@@ -3540,6 +3715,9 @@ fn emit_rectangle_into(
             corner.stroke,
             stroke,
         );
+        if needs_group {
+            pop_blend_group(page);
+        }
         return;
     }
     // Flat rectangle — use the inset rect for stroke-alignment.
@@ -3549,7 +3727,9 @@ fn emit_rectangle_into(
             .stroke_color
             .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
         {
-            let paint = apply_opacity(paint, resolved.opacity);
+            // Frame opacity is applied at the transparency-group
+            // level by the orchestrator; per-paint scaling here
+            // would double-apply the alpha.
             emit_stroke_rect_transformed(
                 inset_rect(r, stroke_offset),
                 outer,
@@ -3558,6 +3738,9 @@ fn emit_rectangle_into(
                 &mut page.list,
             );
         }
+    }
+    if needs_group {
+        pop_blend_group(page);
     }
 }
 
@@ -3612,6 +3795,12 @@ pub(crate) fn inset_rect(r: Rect, delta: f32) -> Rect {
 /// unchanged. Only solid paints get scaled today; gradient stops
 /// would need a per-stop pass that we'll add when frame-level
 /// opacity meets a gradient fill in real samples.
+///
+/// Retained for back-compat but no longer called from the live emit
+/// path: frame-level opacity is now applied at the transparency-group
+/// composite (`BeginBlendGroup` / `EndBlendGroup`), so per-paint
+/// alpha scaling would double-apply the value.
+#[allow(dead_code)]
 pub(crate) fn apply_opacity(paint: Paint, opacity_pct: Option<f32>) -> Paint {
     let Some(o) = opacity_pct else {
         return paint;
@@ -3992,6 +4181,93 @@ fn frame_outer_transform(page: &BuiltPage, item_transform: Option<[f32; 6]>) -> 
         Some(m) => page_origin.compose(&Transform(m)),
         None => page_origin,
     }
+}
+
+/// Axis-aligned bounding box of `rect` after `outer` is applied to its
+/// four corners. The corners may rotate / shear under non-uniform
+/// transforms, so we union all four projections rather than just the
+/// top-left + bottom-right.
+fn rect_bounds_in_page(rect: idml_compose::Rect, outer: Transform) -> idml_compose::Rect {
+    let pts = [
+        outer.apply(rect.x, rect.y),
+        outer.apply(rect.x + rect.w, rect.y),
+        outer.apply(rect.x + rect.w, rect.y + rect.h),
+        outer.apply(rect.x, rect.y + rect.h),
+    ];
+    let mut minx = pts[0].0;
+    let mut miny = pts[0].1;
+    let mut maxx = minx;
+    let mut maxy = miny;
+    for &(x, y) in &pts[1..] {
+        minx = minx.min(x);
+        miny = miny.min(y);
+        maxx = maxx.max(x);
+        maxy = maxy.max(y);
+    }
+    idml_compose::Rect {
+        x: minx,
+        y: miny,
+        w: (maxx - minx).max(0.0),
+        h: (maxy - miny).max(0.0),
+    }
+}
+
+/// Decide whether `frame` needs a transparency-group bracket: any
+/// non-Normal blend mode, or any opacity strictly less than 100%.
+/// Normal + 100% opacity is the fast path that draws straight onto
+/// the page.
+pub(crate) fn frame_needs_blend_group(frame: &ResolvedFrame<'_>) -> bool {
+    if !matches!(frame.blend_mode, idml_compose::BlendMode::Normal) {
+        return true;
+    }
+    matches!(frame.opacity, Some(o) if o < 100.0 - f32::EPSILON)
+}
+
+/// Group opacity normalised to 0..=1. Defaults to 1.0 when no opacity
+/// override is present on the frame.
+fn frame_group_opacity(frame: &ResolvedFrame<'_>) -> f32 {
+    frame.opacity.map(|p| (p / 100.0).clamp(0.0, 1.0)).unwrap_or(1.0)
+}
+
+/// Push a `BeginBlendGroup` covering `geometry_bounds × outer` (axis-
+/// aligned in page coords, padded slightly so AA edges stay inside the
+/// buffer). Returns the bounds the matching `EndBlendGroup` will use,
+/// for callers that want to bracket multiple ranges of commands with
+/// the same group buffer.
+pub(crate) fn push_blend_group(
+    page: &mut BuiltPage,
+    bounds_in_inner: idml_compose::Rect,
+    outer: Transform,
+    blend_mode: idml_compose::BlendMode,
+    opacity: f32,
+) -> idml_compose::Rect {
+    let bounds = rect_bounds_in_page(bounds_in_inner, outer);
+    // Pad by 0.5pt so glyph anti-aliasing at the edges of the
+    // text-frame bbox still falls inside the buffer.
+    let padded = idml_compose::Rect {
+        x: bounds.x - 0.5,
+        y: bounds.y - 0.5,
+        w: bounds.w + 1.0,
+        h: bounds.h + 1.0,
+    };
+    page.list
+        .commands
+        .push(idml_compose::DisplayCommand::BeginBlendGroup {
+            bounds: padded,
+            blend_mode,
+            opacity,
+            transform: Transform::IDENTITY,
+        });
+    padded
+}
+
+/// Push the matching `EndBlendGroup` for [`push_blend_group`].
+pub(crate) fn pop_blend_group(page: &mut BuiltPage) {
+    page.list
+        .commands
+        .push(idml_compose::DisplayCommand::EndBlendGroup(
+            Transform::IDENTITY,
+        ));
 }
 
 /// Resolve the effective shadow for a frame. Per-frame IDML shadow

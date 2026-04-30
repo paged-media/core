@@ -5,19 +5,24 @@
 //! primitive through [`super::geometry::emit_filled`]. Skipped when
 //! the fill is transparent.
 
-use idml_compose::{Paint, PathId, Transform};
+use idml_compose::{BlendMode, Paint, PathId, Transform};
 use idml_parse::Graphic;
 
 use super::geometry::emit_filled;
 use super::ResolvedFrame;
 use crate::pipeline::{
-    apply_fill_tint, apply_opacity, color_id_to_paint_with_list_dir, frame_fill_is_transparent,
-    BuiltPage,
+    apply_fill_tint, color_id_to_paint_with_list_dir, frame_fill_is_transparent, BuiltPage,
 };
 
 /// Resolve and emit the frame fill. `fill_path`, when `Some`, routes
-/// the emit through `FillPath{Blend}` against the pre-interned path
-/// (rounded Rectangle / Polygon).
+/// the emit through `FillPath` against the pre-interned path (rounded
+/// Rectangle / Polygon).
+///
+/// The frame's blend mode and opacity are applied at the
+/// transparency-group level by the orchestrator (the body+glyphs are
+/// bracketed in `BeginBlendGroup` / `EndBlendGroup` when non-trivial).
+/// Fill emission therefore always uses `BlendMode::Normal` and skips
+/// per-paint opacity scaling — the group composite handles both.
 pub(crate) fn fill_paint_module(
     frame: &ResolvedFrame<'_>,
     page: &mut BuiltPage,
@@ -43,6 +48,5 @@ pub(crate) fn fill_paint_module(
         })
         .unwrap_or(fallback);
     let fill = apply_fill_tint(fill, frame.fill_tint);
-    let fill = apply_opacity(fill, frame.opacity);
-    emit_filled(&frame.geometry, page, fill, frame.blend_mode, outer, fill_path);
+    emit_filled(&frame.geometry, page, fill, BlendMode::Normal, outer, fill_path);
 }

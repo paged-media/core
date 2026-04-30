@@ -15,11 +15,17 @@ use idml_parse::Graphic;
 
 use super::geometry::emit_stroked;
 use super::ResolvedFrame;
-use crate::pipeline::{apply_opacity, color_id_to_paint_with_list, BuiltPage};
+use crate::pipeline::{color_id_to_paint_with_list, BuiltPage};
 
 /// Resolve and emit the frame stroke. `stroke_path`, when `Some`,
 /// routes through `StrokePath` against the pre-interned offset path
 /// (rounded Rectangle with stroke alignment) or the polygon path.
+///
+/// Frame opacity is applied at the transparency-group level by the
+/// orchestrator (the body+glyphs are bracketed in
+/// `BeginBlendGroup` / `EndBlendGroup` when non-trivial). Stroke
+/// emission therefore skips per-paint opacity scaling — the group
+/// composite handles it.
 pub(crate) fn stroke_paint_module(
     frame: &ResolvedFrame<'_>,
     page: &mut BuiltPage,
@@ -38,6 +44,5 @@ pub(crate) fn stroke_paint_module(
     else {
         return;
     };
-    let paint = apply_opacity(paint, frame.opacity);
     emit_stroked(&frame.geometry, page, paint, stroke, outer, stroke_path);
 }
