@@ -386,8 +386,12 @@ pub enum DisplayCommand {
     PushClip { path_id: PathId, transform: Transform },
     /// Pop the most-recently-pushed clip. Mismatched Push/Pop pairs
     /// are tolerated — a stray `PopClip` drops back to the base
-    /// (un-clipped) state.
-    PopClip,
+    /// (un-clipped) state. The contained transform is unused; it
+    /// only exists so [`DisplayCommand::transform_mut`] can keep
+    /// returning `&mut Transform` for every variant. Existing
+    /// callers (vertical-justification etc.) walk command ranges
+    /// that never include clip pairs.
+    PopClip(Transform),
     // PushLayer, PopLayer land with §10.4.
 }
 
@@ -395,19 +399,16 @@ impl DisplayCommand {
     /// Mutable accessor for the command's placement transform.
     /// Used by post-emit passes (vertical justification, future
     /// layered effects) that need to translate / re-anchor a range
-    /// of commands without inspecting variants individually. Returns
-    /// `None` for commands that have no per-command transform
-    /// (`PopClip`); callers walking command ranges must handle that
-    /// case explicitly.
-    pub fn transform_mut(&mut self) -> Option<&mut Transform> {
+    /// of commands without inspecting variants individually.
+    pub fn transform_mut(&mut self) -> &mut Transform {
         match self {
             DisplayCommand::FillPath { transform, .. }
             | DisplayCommand::FillPathBlend { transform, .. }
             | DisplayCommand::StrokePath { transform, .. }
             | DisplayCommand::DropShadow { transform, .. }
             | DisplayCommand::Image { transform, .. }
-            | DisplayCommand::PushClip { transform, .. } => Some(transform),
-            DisplayCommand::PopClip => None,
+            | DisplayCommand::PushClip { transform, .. }
+            | DisplayCommand::PopClip(transform) => transform,
         }
     }
 }

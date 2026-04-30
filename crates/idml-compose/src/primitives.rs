@@ -353,6 +353,8 @@ mod tests {
             DisplayCommand::StrokePath { transform, .. } => *transform,
             DisplayCommand::DropShadow { transform, .. } => *transform,
             DisplayCommand::Image { transform, .. } => *transform,
+            DisplayCommand::PushClip { transform, .. } => *transform,
+            DisplayCommand::PopClip(transform) => *transform,
         };
         // Unit rect corners: (0,0), (1,0), (1,1), (0,1).
         assert_eq!(t.apply(0.0, 0.0), (100.0, 200.0));
