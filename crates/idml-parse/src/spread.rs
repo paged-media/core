@@ -382,6 +382,8 @@ pub struct Oval {
     /// `<TextWrapPreference>` parsed off the oval.
     pub text_wrap: Option<TextWrap>,
     pub item_layer: Option<String>,
+    /// See [`Rectangle::gradient_fill_angle`].
+    pub gradient_fill_angle: Option<f32>,
 }
 
 /// Straight line — `<GraphicLine>` in IDML. The endpoints are the
@@ -482,6 +484,8 @@ pub struct Polygon {
     /// `None` ⇒ the polygon does not exclude text.
     pub text_wrap: Option<TextWrap>,
     pub item_layer: Option<String>,
+    /// See [`Rectangle::gradient_fill_angle`].
+    pub gradient_fill_angle: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
@@ -809,6 +813,8 @@ impl Spread {
                             applied_object_style: attr(&e, b"AppliedObjectStyle"),
                             text_wrap: None,
                             item_layer: attr(&e, b"ItemLayer"),
+                            gradient_fill_angle: attr(&e, b"GradientFillAngle")
+                                .and_then(|s| s.parse().ok()),
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Oval(out.ovals.len() - 1),
@@ -1101,6 +1107,8 @@ impl Spread {
                             text_wrap: None,
                             anchors: Vec::new(),
                             item_layer: attr(&e, b"ItemLayer"),
+                            gradient_fill_angle: attr(&e, b"GradientFillAngle")
+                                .and_then(|s| s.parse().ok()),
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Polygon(out.polygons.len() - 1),

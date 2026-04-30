@@ -1568,7 +1568,15 @@ fn emit_polygon_into(
     let fill = poly
         .fill_color
         .as_deref()
-        .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
+        .and_then(|id| {
+            color_id_to_paint_with_list_dir(
+                id,
+                palette,
+                cmyk_xform,
+                &mut page.list,
+                poly.gradient_fill_angle,
+            )
+        })
         .unwrap_or(fallback);
 
     if poly.anchors.is_empty() {
@@ -3009,7 +3017,15 @@ fn emit_oval_into(
     let fill = oval
         .fill_color
         .as_deref()
-        .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
+        .and_then(|id| {
+            color_id_to_paint_with_list_dir(
+                id,
+                palette,
+                cmyk_xform,
+                &mut page.list,
+                oval.gradient_fill_angle,
+            )
+        })
         .unwrap_or(fallback);
     emit_ellipse_transformed(r, outer, fill, &mut page.list);
     if let Some(stroke) = oval
