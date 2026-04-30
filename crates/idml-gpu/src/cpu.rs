@@ -1874,13 +1874,14 @@ fn render_directional_feather(
         }
     }
 
-    // Light blur to anti-alias the per-side boundary. Choose σ from
-    // corner_type at half the plain-feather scale (the per-edge
-    // ramp itself already provides the linear falloff).
+    // Optional Gaussian smoothing on top of the per-edge ramp.
+    // `Sharp` skips the blur (the per-edge ramp already gives a
+    // smooth linear falloff); `Rounded` / `Diffusion` add a light
+    // blur to round the corner where two ramps meet.
     let sigma_px = match params.corner_type {
-        FeatherCornerType::Sharp => max_w * 0.25 * scale,
-        FeatherCornerType::Rounded => max_w * 0.5 * scale,
-        FeatherCornerType::Diffusion => max_w * 0.75 * scale,
+        FeatherCornerType::Sharp => 0.0,
+        FeatherCornerType::Rounded => max_w * 0.25 * scale,
+        FeatherCornerType::Diffusion => max_w * 0.5 * scale,
     };
     if sigma_px > 0.5 {
         let kernel = gaussian_kernel(sigma_px);
@@ -2759,6 +2760,113 @@ mod tests {
         assert!(
             far[0] > 240 && far[1] > 240 && far[2] > 240,
             "outside feather should be white; got {far:?}"
+        );
+    }
+
+    #[test]
+    fn directional_feather_softens_left_edge_more_than_right() {
+        // 20x20 rect at (10, 10), feather 8pt on the left edge only.
+        // The interior next to the left edge should fade out (ramp);
+        // pixels near the right edge stay opaque (50% grey).
+        use idml_compose::{DirectionalFeather, DisplayCommand as Cmd, FeatherCornerType};
+        let mut list = DisplayList::new();
+        let (path_id, xform) = unit_rect_at(&mut list, 10.0, 10.0, 20.0, 20.0);
+        let params = DirectionalFeather {
+            left_width: 8.0,
+            right_width: 0.0,
+            top_width: 0.0,
+            bottom_width: 0.0,
+            angle_deg: 0.0,
+            noise: 0.0,
+            choke: 0.0,
+            corner_type: FeatherCornerType::Sharp,
+        };
+        list.commands.push(Cmd::DirectionalFeather {
+            path_id,
+            transform: xform,
+            params,
+        });
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        // Sample three points along y=20 (vertical centre):
+        //   x=11 → 1pt inside the left edge (heavy fade, near white)
+        //   x=20 → mid-rect (alpha rises toward 1; tinted grey)
+        //   x=28 → 2pt inside the right edge (full alpha; tinted)
+        let near_left = at(&img, 11, 20);
+        let mid = at(&img, 20, 20);
+        let near_right = at(&img, 28, 20);
+        // Near-left should be lighter (less tint) than mid.
+        assert!(
+            near_left[0] > mid[0],
+            "left edge should be less tinted than mid; near_left={near_left:?} mid={mid:?}"
+        );
+        // Near-right should be at least as tinted as mid (no fade
+        // there).
+        assert!(
+            near_right[0] <= mid[0] + 15,
+            "right edge shouldn't fade; near_right={near_right:?} mid={mid:?}"
+        );
+        // Far outside the rect: white background.
+        let far = at(&img, 2, 2);
+        assert!(
+            far[0] > 240,
+            "outside directional feather should be white; got {far:?}"
+        );
+    }
+
+    #[test]
+    fn gradient_feather_linear_alpha_decreases_along_axis() {
+        // 20x20 rect at (10, 10) with a linear gradient feather along
+        // the horizontal axis: alpha=1.0 at x=0 (start), alpha=0.0 at
+        // x=1 (end) in unit-rect coords. Pixels near the left edge
+        // should be fully tinted; pixels near the right edge should
+        // be (nearly) transparent — and the page background shows
+        // through.
+        use idml_compose::{
+            DisplayCommand as Cmd, GradientFeather, GradientFeatherKind, GradientFeatherStop,
+        };
+        let mut list = DisplayList::new();
+        let (path_id, xform) = unit_rect_at(&mut list, 10.0, 10.0, 20.0, 20.0);
+        let params = GradientFeather {
+            kind: GradientFeatherKind::Linear,
+            start_x: 0.0,
+            start_y: 0.5,
+            end_x: 1.0,
+            end_y: 0.5,
+            stops: vec![
+                GradientFeatherStop { location: 0.0, alpha: 1.0 },
+                GradientFeatherStop { location: 1.0, alpha: 0.0 },
+            ],
+        };
+        list.commands.push(Cmd::GradientFeather {
+            path_id,
+            transform: xform,
+            params,
+        });
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        // x=12, y=20: well inside the left side, gradient α ≈ 0.9 →
+        // tinted grey. x=28, y=20: near right side, α ≈ 0.1 → nearly
+        // background.
+        let near_start = at(&img, 12, 20);
+        let near_end = at(&img, 28, 20);
+        // Near-start is more tinted (lower R) than near-end.
+        assert!(
+            near_start[0] < near_end[0],
+            "linear gradient feather should fade left→right; near_start={near_start:?} near_end={near_end:?}"
+        );
+        // Near-end is close to white background (alpha is small).
+        assert!(
+            near_end[0] > 200,
+            "near-end alpha should be small (close to background); got {near_end:?}"
+        );
+        // Far outside the rect: white background.
+        let far = at(&img, 2, 2);
+        assert!(
+            far[0] > 240,
+            "outside gradient feather should be white; got {far:?}"
         );
     }
 }
