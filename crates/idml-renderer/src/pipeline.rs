@@ -1941,13 +1941,25 @@ fn emit_text_path_into(
         .map(|g| g.x_advance_64 as f32 / idml_text::shape::ADVANCE_PRECISION)
         .sum();
 
+    // IDML `StartBracket` / `EndBracket` define the arc-length range
+    // over which the text flows; outside this range the path is
+    // visible but the text doesn't draw. Clamp to the tessellated
+    // path so a bogus bracket doesn't shoot glyphs off the end.
+    let start_b = text_path.start_bracket.unwrap_or(0.0).clamp(0.0, total_len);
+    let end_b = text_path
+        .end_bracket
+        .unwrap_or(total_len)
+        .clamp(start_b, total_len);
+    let usable_len = (end_b - start_b).max(0.0);
+
     // Center the text along the path: matches IDML's default
     // `CenterPathAlignment`. Other alignments fall back to centered
-    // for now.
-    let start_offset_pt = if total_advance_pt < total_len {
-        ((total_len - total_advance_pt) * 0.5).max(0.0)
+    // for now. Overflowing text (advance > usable_len) starts at
+    // `start_b` and runs off the end.
+    let start_offset_pt = if total_advance_pt < usable_len {
+        start_b + ((usable_len - total_advance_pt) * 0.5)
     } else {
-        0.0
+        start_b
     };
 
     // Outer transform: page origin · ItemTransform. Same composition
