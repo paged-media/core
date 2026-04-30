@@ -41,6 +41,19 @@ pub const NEXT_PAGE_NUMBER_MARKER: char = '\u{E019}';
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct Story {
     pub paragraphs: Vec<Paragraph>,
+    /// `<StoryPreference OpticalMarginAlignment="true">` enables
+    /// "hanging punctuation" — quotes, commas, periods, hyphens at
+    /// the edge of a column hang slightly outside the text rectangle
+    /// for a tighter visual alignment. The text shaper already
+    /// implements the hang via `idml_text::shape::apply_optical_margin`;
+    /// this flag tells the renderer to call it. `false` is the IDML
+    /// default.
+    pub optical_margin_alignment: bool,
+    /// `<StoryPreference OpticalMarginSize="12">` — bounds the hang
+    /// magnitude for glyphs smaller than this point size. InDesign
+    /// typically writes 12 (the body-copy point size). 0.0 means the
+    /// attribute was absent.
+    pub optical_margin_size: f32,
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -303,6 +316,22 @@ impl Story {
         loop {
             match reader.read_event_into(&mut buf)? {
                 Event::Start(e) => match e.name().as_ref() {
+                    // <StoryPreference> may also appear with
+                    // children (e.g. nested <Properties>) instead of
+                    // self-closing. Read the attributes off the Start
+                    // event as well so the data lands either way.
+                    b"StoryPreference" => {
+                        if let Some(v) = attr(&e, b"OpticalMarginAlignment") {
+                            if let Ok(b) = v.parse::<bool>() {
+                                out.optical_margin_alignment = b;
+                            }
+                        }
+                        if let Some(v) = attr(&e, b"OpticalMarginSize") {
+                            if let Ok(f) = v.parse::<f32>() {
+                                out.optical_margin_size = f;
+                            }
+                        }
+                    }
                     b"ParagraphStyleRange" => {
                         current_paragraph = Some(Paragraph {
                             paragraph_style: attr(&e, b"AppliedParagraphStyle"),
@@ -560,6 +589,23 @@ impl Story {
                     _ => {}
                 },
                 Event::Empty(e) => match e.name().as_ref() {
+                    // <StoryPreference OpticalMarginAlignment="true"
+                    // OpticalMarginSize="12" .../> appears once per
+                    // story near the top. Drives hanging punctuation
+                    // (`apply_optical_margin` in idml-text) when the
+                    // renderer is wired up to call it.
+                    b"StoryPreference" => {
+                        if let Some(v) = attr(&e, b"OpticalMarginAlignment") {
+                            if let Ok(b) = v.parse::<bool>() {
+                                out.optical_margin_alignment = b;
+                            }
+                        }
+                        if let Some(v) = attr(&e, b"OpticalMarginSize") {
+                            if let Ok(f) = v.parse::<f32>() {
+                                out.optical_margin_size = f;
+                            }
+                        }
+                    }
                     // <BulletChar BulletCharacterType="UnicodeWithFont"
                     // BulletCharacterValue="187"/> appears inside
                     // <Properties> of an open <ParagraphStyleRange> as
@@ -869,5 +915,56 @@ mod tests {
         // Cell insets carried through.
         assert_eq!(table.cells[0].text_top_inset, 2.0);
         assert_eq!(table.cells[0].text_left_inset, 3.0);
+    }
+
+    #[test]
+    fn parses_story_preference_optical_margin() {
+        // <StoryPreference OpticalMarginAlignment="true"
+        //                  OpticalMarginSize="12"/> populates the
+        // story-level fields. Default values when the element is
+        // absent should remain false / 0.0.
+        let xml =
+            br#"<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Story Self="u1">
+            <StoryPreference OpticalMarginAlignment="true" OpticalMarginSize="12"/>
+            <ParagraphStyleRange>
+              <CharacterStyleRange><Content>Hello</Content></CharacterStyleRange>
+            </ParagraphStyleRange>
+          </Story>
+        </idPkg:Story>"#;
+        let s = Story::parse(xml).unwrap();
+        assert!(s.optical_margin_alignment);
+        assert_eq!(s.optical_margin_size, 12.0);
+        assert_eq!(s.paragraphs.len(), 1);
+    }
+
+    #[test]
+    fn story_preference_absent_keeps_defaults() {
+        let xml = br#"<Story>
+          <ParagraphStyleRange>
+            <CharacterStyleRange><Content>Hi</Content></CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        assert!(!s.optical_margin_alignment);
+        assert_eq!(s.optical_margin_size, 0.0);
+    }
+
+    #[test]
+    fn story_preference_with_children_still_reads_attributes() {
+        // Some IDMLs serialise <StoryPreference> with a `<Properties>`
+        // child rather than self-closing. Attributes on the Start
+        // event still need to be picked up.
+        let xml = br#"<Story>
+          <StoryPreference OpticalMarginAlignment="true" OpticalMarginSize="9">
+            <Properties/>
+          </StoryPreference>
+          <ParagraphStyleRange>
+            <CharacterStyleRange><Content>X</Content></CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        assert!(s.optical_margin_alignment);
+        assert_eq!(s.optical_margin_size, 9.0);
     }
 }
