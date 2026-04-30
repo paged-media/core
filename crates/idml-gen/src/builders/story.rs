@@ -124,6 +124,12 @@ pub struct Cell {
     pub row_span: u32,
     /// `ColumnSpan` attribute (default 1).
     pub column_span: u32,
+    /// `RotationAngle` attribute in degrees — non-zero rotates the
+    /// cell's text content (e.g. 90° vertical headers). Real
+    /// InDesign exports also emit `TableTextRotation="Rotate90Degrees"`
+    /// when the cell carries an explicit angle; we emit both so
+    /// strict readers see consistent settings.
+    pub rotation_angle: Option<f32>,
 }
 
 impl Cell {
@@ -143,12 +149,18 @@ impl Cell {
             right_edge_stroke_weight: None,
             row_span: 1,
             column_span: 1,
+            rotation_angle: None,
         }
     }
 
     pub fn with_span(mut self, row_span: u32, column_span: u32) -> Self {
         self.row_span = row_span;
         self.column_span = column_span;
+        self
+    }
+
+    pub fn with_rotation_angle(mut self, deg: f32) -> Self {
+        self.rotation_angle = Some(deg);
         self
     }
 }
@@ -170,6 +182,16 @@ pub struct Run {
     /// `AppliedFont` family name (for runs that pin to a different
     /// face from the paragraph default).
     pub applied_font: Option<&'static str>,
+    /// Optional anchored object — a `<TextFrame>` or `<Rectangle>`
+    /// emitted inside this run's CharacterStyleRange. Together with
+    /// the `text` body (typically a single non-breaking space placeholder)
+    /// this becomes IDML's anchored-object inline-position shape:
+    /// the host story sees a glyph slot the renderer can replace
+    /// with the rendered frame. The frame's
+    /// `Rect::anchored_setting` is what tells the parser this is an
+    /// anchored object — the storey emitter just provides the
+    /// nesting site.
+    pub anchored_frame: Option<crate::builders::page_item::Rect>,
 }
 
 impl Paragraph {
@@ -198,6 +220,7 @@ impl Paragraph {
                 baseline_shift: None,
                 underline: None,
                 applied_font: None,
+                anchored_frame: None,
             }],
             table: None,
         }
@@ -365,6 +388,15 @@ pub fn write_story(s: &Story) -> Vec<u8> {
                 }
                 b.end("Properties");
             }
+            // Anchored frame: emit before the textual content so the
+            // run's character index lines up with the anchor position
+            // the renderer places the frame at. The frame's own
+            // emitter writes `<TextFrame>...</TextFrame>` (or
+            // Rectangle) plus an `<AnchoredObjectSetting>` child if
+            // configured.
+            if let Some(frame) = &run.anchored_frame {
+                frame.write(&mut b);
+            }
             write_run_content(&mut b, &run.text);
             b.end("CharacterStyleRange");
         }
@@ -528,6 +560,22 @@ fn write_table(b: &mut XmlBuilder, t: &Table) {
             }
             if let Some(w) = cell.right_edge_stroke_weight {
                 a.push(("RightEdgeStrokeWeight", crate::xml::format_f32(w)));
+            }
+            if let Some(deg) = cell.rotation_angle {
+                a.push(("RotationAngle", crate::xml::format_f32(deg)));
+                // Real InDesign also writes the corresponding text-
+                // rotation enum string. The renderer's table path can
+                // branch on either; emitting both keeps strict
+                // readers happy.
+                let trot = match deg as i32 {
+                    90 => Some("Rotate90Degrees"),
+                    180 => Some("Rotate180Degrees"),
+                    270 => Some("Rotate270Degrees"),
+                    _ => None,
+                };
+                if let Some(t) = trot {
+                    a.push(("TableTextRotation", t.to_string()));
+                }
             }
             let attr_refs: Vec<(&str, &str)> =
                 a.iter().map(|(k, v)| (*k, v.as_str())).collect();

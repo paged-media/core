@@ -180,6 +180,86 @@ pub struct Rect {
     /// `LinkResourceURI`, and a sibling `<FrameFittingOption>` element
     /// describes how the image is cropped against the frame edges.
     pub placed_image: Option<PlacedImage>,
+    /// Optional `<TextWrapPreference>` payload. When set, the page
+    /// item carries a wrap-exclusion zone that other text frames on
+    /// the same page must flow around.
+    pub text_wrap: Option<TextWrap>,
+    /// Optional `<AnchoredObjectSetting>` payload. Marks this frame
+    /// as an anchored object — only meaningful when the frame is
+    /// nested inside a `<CharacterStyleRange>` of a flowing story
+    /// (the story emitter handles the nesting). Setting this on a
+    /// top-level frame still emits the element so a parser
+    /// round-trip records `is_anchored = true`.
+    pub anchored_setting: Option<AnchoredObjectSetting>,
+}
+
+/// `<TextWrapPreference>` payload emitted as a child of a page item.
+/// Mirrors `idml_parse::TextWrap` shape — mode + four offsets.
+#[derive(Clone)]
+pub struct TextWrap {
+    /// `TextWrapMode` enum string: `"None"`, `"BoundingBoxTextWrap"`,
+    /// `"ContourTextWrap"`, `"JumpObjectTextWrap"`,
+    /// `"NextColumnTextWrap"`.
+    pub mode: &'static str,
+    /// `[top, left, bottom, right]` offsets in pt — the wrap
+    /// rectangle is the page item's AABB inflated outwards by these.
+    pub offsets: [f32; 4],
+    /// `TextWrapSide` — `"BothSides"` (default), `"LeftSide"`,
+    /// `"RightSide"`, `"LargestArea"`, `"SideAwayFromSpine"`,
+    /// `"SideTowardsSpine"`. None ⇒ omit the attribute.
+    pub side: Option<&'static str>,
+}
+
+/// `<AnchoredObjectSetting>` payload — IDML's spec for how an
+/// anchored frame positions itself relative to its anchor in the host
+/// story. Every attribute is optional so callers can lean on the IDML
+/// defaults; the parser only inspects the *presence* of the element
+/// today (sets `is_anchored = true`), but the attributes round-trip
+/// through real InDesign readers.
+#[derive(Clone)]
+pub struct AnchoredObjectSetting {
+    /// `"InlinePosition"` (in-line with text), `"AboveLine"` (own
+    /// line above the host), or `"Anchored"` (custom positioned).
+    pub anchored_position: &'static str,
+    /// `SpineRelative="true"` mirrors the offsets on facing pages.
+    pub spine_relative: bool,
+    /// `LockPosition="true"` prevents manual positioning in InDesign.
+    pub lock_position: bool,
+    /// `PinPosition="true"` keeps the anchor's position unchanged
+    /// when the host text reflows. InDesign's default is `true`.
+    pub pin_position: bool,
+    /// `AnchorPoint` — `"BottomRightAnchor"`, `"TopLeftAnchor"`, etc.
+    pub anchor_point: Option<&'static str>,
+    /// `HorizontalReferencePoint` — `"TextFrame"`, `"PageEdge"`,
+    /// `"PageMargins"`, `"ColumnEdge"`, `"AnchorLocation"`.
+    pub horizontal_reference_point: Option<&'static str>,
+    pub vertical_reference_point: Option<&'static str>,
+    pub horizontal_alignment: Option<&'static str>,
+    pub vertical_alignment: Option<&'static str>,
+    /// `AnchorXoffset` / `AnchorYoffset` in pt — explicit numerical
+    /// offsets used when `anchored_position == "Anchored"`.
+    pub anchor_x_offset: Option<f32>,
+    pub anchor_y_offset: Option<f32>,
+}
+
+impl AnchoredObjectSetting {
+    /// Inline-position default — anchored as if the frame were a
+    /// glyph in the host text run.
+    pub fn inline() -> Self {
+        Self {
+            anchored_position: "InlinePosition",
+            spine_relative: false,
+            lock_position: false,
+            pin_position: true,
+            anchor_point: Some("BottomRightAnchor"),
+            horizontal_reference_point: Some("TextFrame"),
+            vertical_reference_point: Some("LineBaseline"),
+            horizontal_alignment: Some("LeftAlign"),
+            vertical_alignment: Some("TopAlign"),
+            anchor_x_offset: None,
+            anchor_y_offset: None,
+        }
+    }
 }
 
 /// IDML `<Image>` + `<FrameFittingOption>` payload nested inside a
@@ -215,6 +295,17 @@ pub struct PlacedImage {
     /// the renderer's placement uses the frame rect + crops.
     pub image_w_pt: f32,
     pub image_h_pt: f32,
+    /// Override for the inner `<Image ItemTransform>`. None ⇒
+    /// identity (`"1 0 0 1 0 0"`). Real InDesign exports often store
+    /// the actual scale-translate-rotate of the placed image here
+    /// while the `<Rectangle>` carries the frame's transform
+    /// separately. Tests of "image transform on top of frame
+    /// transform" need this knob.
+    pub image_item_transform: Option<Matrix>,
+    /// `EffectivePpi` attribute on `<Image>` — emitted as a
+    /// space-separated `"x y"` pair (e.g. `"144 144"`). When `None`,
+    /// the attribute is omitted (parser then defaults to 72 / 72).
+    pub effective_ppi: Option<(f32, f32)>,
 }
 
 /// IDML `<BlendingSetting>` — `Opacity` is 0..=100, `BlendMode` is
@@ -281,6 +372,8 @@ impl Rect {
             blending: None,
             drop_shadow: None,
             placed_image: None,
+            text_wrap: None,
+            anchored_setting: None,
         }
     }
 
@@ -439,14 +532,24 @@ impl Rect {
             // strict consumers see a complete object), plus a
             // `<Link>` child that mirrors the URI on the Image
             // element itself. The renderer reads either source.
-            b.start(
-                "Image",
-                &[
-                    ("Self", img.image_self_id.as_str()),
-                    ("ItemTransform", "1 0 0 1 0 0"),
-                    ("LinkResourceURI", img.link_resource_uri.as_str()),
-                ],
-            );
+            let img_xform = img
+                .image_item_transform
+                .as_ref()
+                .map(format_matrix)
+                .unwrap_or_else(|| "1 0 0 1 0 0".to_string());
+            let mut img_attrs: Vec<(&str, &str)> = vec![
+                ("Self", img.image_self_id.as_str()),
+                ("ItemTransform", img_xform.as_str()),
+                ("LinkResourceURI", img.link_resource_uri.as_str()),
+            ];
+            // EffectivePpi serialises as a space-separated pair,
+            // matching what real InDesign emits.
+            let ppi_str: String;
+            if let Some((px, py)) = img.effective_ppi {
+                ppi_str = format!("{} {}", format_f32(px), format_f32(py));
+                img_attrs.push(("EffectivePpi", ppi_str.as_str()));
+            }
+            b.start("Image", &img_attrs);
             b.start("Properties", &[]);
             write_path_geometry(b, img.image_w_pt, img.image_h_pt);
             b.end("Properties");
@@ -455,6 +558,86 @@ impl Rect {
                 &[("LinkResourceURI", img.link_resource_uri.as_str())],
             );
             b.end("Image");
+        }
+        // `<TextWrapPreference>` — sibling of Properties / Image. The
+        // parser inspects this on every shape kind (text frame,
+        // rectangle, oval, polygon, line); the renderer's wrap-rect
+        // collector pulls AABB + offsets from here per page.
+        if let Some(tw) = &self.text_wrap {
+            let top = format_f32(tw.offsets[0]);
+            let left = format_f32(tw.offsets[1]);
+            let bottom = format_f32(tw.offsets[2]);
+            let right = format_f32(tw.offsets[3]);
+            let mut twa: Vec<(&str, &str)> =
+                vec![("Inverse", "false"), ("ApplyToMasterPageOnly", "false")];
+            if let Some(side) = tw.side {
+                twa.push(("TextWrapSide", side));
+            }
+            twa.push(("TextWrapMode", tw.mode));
+            b.start("TextWrapPreference", &twa);
+            b.start("Properties", &[]);
+            b.empty(
+                "TextWrapOffset",
+                &[
+                    ("Top", top.as_str()),
+                    ("Left", left.as_str()),
+                    ("Bottom", bottom.as_str()),
+                    ("Right", right.as_str()),
+                ],
+            );
+            b.end("Properties");
+            b.end("TextWrapPreference");
+        }
+        // `<AnchoredObjectSetting>` — sibling of Properties. The
+        // parser sets `is_anchored = true` on whichever shape is
+        // currently open; the host story emitter is responsible for
+        // putting that shape inside a CharacterStyleRange so the
+        // renderer's text-flow integration sees it.
+        if let Some(a) = &self.anchored_setting {
+            let xo;
+            let yo;
+            let mut aa: Vec<(&str, &str)> = Vec::new();
+            aa.push(("AnchoredPosition", a.anchored_position));
+            aa.push((
+                "SpineRelative",
+                if a.spine_relative { "true" } else { "false" },
+            ));
+            aa.push((
+                "LockPosition",
+                if a.lock_position { "true" } else { "false" },
+            ));
+            aa.push((
+                "PinPosition",
+                if a.pin_position { "true" } else { "false" },
+            ));
+            if let Some(p) = a.anchor_point {
+                aa.push(("AnchorPoint", p));
+            }
+            if let Some(p) = a.horizontal_reference_point {
+                aa.push(("HorizontalReferencePoint", p));
+            }
+            if let Some(p) = a.vertical_reference_point {
+                aa.push(("VerticalReferencePoint", p));
+            }
+            if let Some(p) = a.horizontal_alignment {
+                aa.push(("HorizontalAlignment", p));
+            }
+            if let Some(p) = a.vertical_alignment {
+                aa.push(("VerticalAlignment", p));
+            }
+            if let Some(o) = a.anchor_x_offset {
+                xo = format_f32(o);
+                aa.push(("AnchorXoffset", xo.as_str()));
+            } else {
+                aa.push(("AnchorXoffset", "0"));
+            }
+            if let Some(o) = a.anchor_y_offset {
+                yo = format_f32(o);
+                aa.push(("AnchorYoffset", yo.as_str()));
+            } else {
+                aa.push(("AnchorYoffset", "0"));
+            }
+            b.empty("AnchoredObjectSetting", &aa);
         }
         b.end(kind);
     }

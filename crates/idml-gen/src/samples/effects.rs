@@ -263,6 +263,8 @@ pub fn build() -> Sample {
             blending: None,
             drop_shadow: None,
             placed_image: None,
+            text_wrap: None,
+            anchored_setting: None,
         };
 
         let demo_x = (PAGE_W_PT - DEMO_W_PT) * 0.5;
@@ -280,6 +282,8 @@ pub fn build() -> Sample {
             blending: variant.blending.clone(),
             drop_shadow: variant.drop_shadow.clone(),
             placed_image: None,
+            text_wrap: None,
+            anchored_setting: None,
         };
 
         let mut page_items = Vec::with_capacity(3);
@@ -300,6 +304,8 @@ pub fn build() -> Sample {
                     blending: None,
                     drop_shadow: None,
                     placed_image: None,
+                    text_wrap: None,
+                    anchored_setting: None,
                 }
                 .into(),
             );

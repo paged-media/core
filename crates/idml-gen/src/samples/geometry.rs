@@ -192,6 +192,8 @@ pub fn build() -> Sample {
             blending: None,
             drop_shadow: None,
             placed_image: None,
+            text_wrap: None,
+            anchored_setting: None,
         };
         let demo_rect = Rect {
             self_id: rect_id,
@@ -215,6 +217,8 @@ pub fn build() -> Sample {
             blending: None,
             drop_shadow: None,
             placed_image: None,
+            text_wrap: None,
+            anchored_setting: None,
         };
 
         spreads.push((

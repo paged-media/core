@@ -115,6 +115,7 @@ fn variants() -> Vec<Variant> {
                     baseline_shift: None,
                     underline: None,
                     applied_font: None,
+                    anchored_frame: None,
                 }],
             }],
         },
@@ -147,6 +148,7 @@ fn variants() -> Vec<Variant> {
                         baseline_shift: None,
                         underline: None,
                         applied_font: None,
+                        anchored_frame: None,
                     }],
                 })
                 .collect(),
@@ -180,6 +182,7 @@ fn variants() -> Vec<Variant> {
                         baseline_shift: None,
                         underline: None,
                         applied_font: None,
+                        anchored_frame: None,
                     },
                     Run {
                         text: "cyan ".to_string(),
@@ -190,6 +193,7 @@ fn variants() -> Vec<Variant> {
                         baseline_shift: None,
                         underline: None,
                         applied_font: None,
+                        anchored_frame: None,
                     },
                     Run {
                         text: "again black".to_string(),
@@ -200,6 +204,7 @@ fn variants() -> Vec<Variant> {
                         baseline_shift: None,
                         underline: None,
                         applied_font: None,
+                        anchored_frame: None,
                     },
                 ],
             }],
@@ -230,6 +235,7 @@ fn variants() -> Vec<Variant> {
                     baseline_shift: None,
                     underline: None,
                     applied_font: None,
+                    anchored_frame: None,
                 }],
             }],
         },
@@ -259,6 +265,7 @@ fn variants() -> Vec<Variant> {
                     baseline_shift: None,
                     underline: Some(true),
                     applied_font: None,
+                    anchored_frame: None,
                 }],
             }],
         },
@@ -289,6 +296,7 @@ fn variants() -> Vec<Variant> {
                         baseline_shift: None,
                         underline: None,
                         applied_font: None,
+                        anchored_frame: None,
                     },
                     Run {
                         text: "2".to_string(),
@@ -299,6 +307,7 @@ fn variants() -> Vec<Variant> {
                         baseline_shift: Some(6.0),
                         underline: None,
                         applied_font: None,
+                        anchored_frame: None,
                     },
                 ],
             }],
@@ -332,6 +341,7 @@ fn variants() -> Vec<Variant> {
                     baseline_shift: None,
                     underline: None,
                     applied_font: Some("Open Sans"),
+                    anchored_frame: None,
                 }],
             }],
         },
@@ -368,6 +378,7 @@ fn one_run(
             baseline_shift: None,
             underline: None,
             applied_font: None,
+            anchored_frame: None,
         }],
     }
 }
@@ -448,6 +459,7 @@ pub fn build() -> Sample {
                                 baseline_shift: r.baseline_shift,
                                 underline: r.underline,
                                 applied_font: r.applied_font,
+                                anchored_frame: None,
                             })
                             .collect(),
                     })
@@ -480,6 +492,8 @@ pub fn build() -> Sample {
             blending: None,
             drop_shadow: None,
             placed_image: None,
+            text_wrap: None,
+            anchored_setting: None,
         };
 
         spreads.push((
