@@ -1283,15 +1283,22 @@ fn parse_xy_pair(s: &str) -> Option<(f32, f32)> {
 }
 
 fn parse_drop_shadow(e: &quick_xml::events::BytesStart) -> Option<DropShadowSetting> {
+    // IDML defaults — see §IDML Defaults Table 84 in the spec:
+    // Mode=None, BlendMode=Multiply, Opacity=75, XOffset=7, YOffset=7,
+    // Size=5, EffectColor="n" (Black). When `Mode="Drop"` is the only
+    // attribute on the element, these are the values InDesign uses for
+    // the unspecified ones. Earlier behaviour treated missing offsets
+    // / size as zero, which produced a solid black stamp behind the
+    // frame instead of a real drop shadow.
     Some(DropShadowSetting {
         mode: attr(e, b"Mode").unwrap_or_else(|| "Drop".to_string()),
         x_offset: attr(e, b"XOffset")
             .and_then(|s| s.parse().ok())
-            .unwrap_or(0.0),
+            .unwrap_or(7.0),
         y_offset: attr(e, b"YOffset")
             .and_then(|s| s.parse().ok())
-            .unwrap_or(0.0),
-        size: attr(e, b"Size").and_then(|s| s.parse().ok()).unwrap_or(0.0),
+            .unwrap_or(7.0),
+        size: attr(e, b"Size").and_then(|s| s.parse().ok()).unwrap_or(5.0),
         opacity_pct: attr(e, b"Opacity")
             .and_then(|s| s.parse().ok())
             .unwrap_or(75.0),

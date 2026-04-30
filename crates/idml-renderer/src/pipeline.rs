@@ -3001,12 +3001,17 @@ fn emit_text_frame_into(
         h: frame.bounds.height(),
     };
     let outer = frame_outer_transform(page, frame.item_transform);
-    if let Some(shadow) =
-        resolve_frame_shadow(frame.drop_shadow.as_ref(), drop_shadow, palette, cmyk_xform)
-    {
-        emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list);
-    }
-    if !frame_fill_is_transparent(frame.fill_color.as_deref()) {
+    let fill_transparent = frame_fill_is_transparent(frame.fill_color.as_deref());
+    // Drop shadows fall off the fill shape. With a transparent fill
+    // there's nothing to cast a shadow, so suppress the rect stamp —
+    // matches InDesign, where a Swatch/None-filled frame with a
+    // DropShadowSetting renders no visible shadow.
+    if !fill_transparent {
+        if let Some(shadow) =
+            resolve_frame_shadow(frame.drop_shadow.as_ref(), drop_shadow, palette, cmyk_xform)
+        {
+            emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list);
+        }
         let fill = frame
             .fill_color
             .as_deref()
@@ -3041,14 +3046,19 @@ fn emit_oval_into(
         h: oval.bounds.height(),
     };
     let outer = frame_outer_transform(page, oval.item_transform);
+    let fill_transparent = frame_fill_is_transparent(oval.fill_color.as_deref());
     // Ovals don't yet have a dedicated shadow primitive — use the
     // bounding-rect stamp as a stopgap. Replace once the rasterizer
-    // grows shadowed-ellipse support.
-    if let Some(shadow) = resolve_frame_shadow(oval.drop_shadow.as_ref(), None, palette, cmyk_xform)
-    {
-        emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list);
+    // grows shadowed-ellipse support. Skip the shadow when the fill
+    // is transparent (nothing to cast off).
+    if !fill_transparent {
+        if let Some(shadow) =
+            resolve_frame_shadow(oval.drop_shadow.as_ref(), None, palette, cmyk_xform)
+        {
+            emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list);
+        }
     }
-    if !frame_fill_is_transparent(oval.fill_color.as_deref()) {
+    if !fill_transparent {
         let fill = oval
             .fill_color
             .as_deref()
@@ -3132,12 +3142,15 @@ fn emit_rectangle_into(
         h: rect.bounds.height(),
     };
     let outer = frame_outer_transform(page, rect.item_transform);
-    if let Some(shadow) =
-        resolve_frame_shadow(rect.drop_shadow.as_ref(), drop_shadow, palette, cmyk_xform)
-    {
-        emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list);
-    }
     let fill_transparent = frame_fill_is_transparent(rect.fill_color.as_deref());
+    // Drop shadows fall off the fill shape — see emit_text_frame_into.
+    if !fill_transparent {
+        if let Some(shadow) =
+            resolve_frame_shadow(rect.drop_shadow.as_ref(), drop_shadow, palette, cmyk_xform)
+        {
+            emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list);
+        }
+    }
     let fill = rect
         .fill_color
         .as_deref()
@@ -3598,14 +3611,6 @@ fn convert_setting_to_shadow(
 ) -> Option<DropShadow> {
     let opacity = (setting.opacity_pct / 100.0).clamp(0.0, 1.0);
     if opacity == 0.0 {
-        return None;
-    }
-    // A `<DropShadowSetting Mode="Drop"/>` with every offset/size
-    // attribute absent serialises as zeros. InDesign treats that as
-    // "no visible shadow" — there's nothing to offset and no blur,
-    // so the stamp would just be a solid black rect at 75% opacity
-    // directly behind the frame. Skip it.
-    if setting.x_offset == 0.0 && setting.y_offset == 0.0 && setting.size == 0.0 {
         return None;
     }
     let color = setting
