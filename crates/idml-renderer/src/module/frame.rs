@@ -27,10 +27,10 @@ pub(crate) struct ResolvedFrame<'a> {
     pub item_transform: Option<[f32; 6]>,
     pub fill_color: Option<&'a str>,
     pub stroke_color: Option<&'a str>,
-    /// Defaults to 1.0 when the parser struct has no `StrokeWeight` —
-    /// matches InDesign's per-frame default — so module code never
-    /// has to reapply `.unwrap_or(1.0)`.
-    pub stroke_weight: f32,
+    /// `None` when neither the frame nor (after cascade) the
+    /// applied object style carry a `StrokeWeight`. Modules apply
+    /// the per-frame default of 1.0 via [`Self::effective_stroke_weight`].
+    pub stroke_weight: Option<f32>,
     pub fill_tint: Option<f32>,
     pub opacity: Option<f32>,
     /// Already mapped through `blend_mode_from_idml` at adapter time.
@@ -99,13 +99,22 @@ fn rect_from_bounds(b: idml_parse::Bounds) -> Rect {
 }
 
 impl<'a> ResolvedFrame<'a> {
+    /// Stroke weight with InDesign's per-frame default applied
+    /// (`1.0` pt). Modules use this when emitting; the `Option`
+    /// shape on the field exists only so the object-style cascade
+    /// can distinguish "frame had no StrokeWeight" from "frame had
+    /// StrokeWeight=1.0".
+    pub(crate) fn effective_stroke_weight(&self) -> f32 {
+        self.stroke_weight.unwrap_or(1.0)
+    }
+
     pub(crate) fn from_text_frame(frame: &'a TextFrame) -> Self {
         Self {
             self_id: frame.self_id.as_deref(),
             item_transform: frame.item_transform,
             fill_color: frame.fill_color.as_deref(),
             stroke_color: frame.stroke_color.as_deref(),
-            stroke_weight: frame.stroke_weight.unwrap_or(1.0),
+            stroke_weight: frame.stroke_weight,
             fill_tint: None,
             opacity: frame.opacity,
             blend_mode: crate::pipeline::blend_mode_from_idml(frame.blend_mode.as_deref()),
@@ -131,7 +140,7 @@ impl<'a> ResolvedFrame<'a> {
             item_transform: rect.item_transform,
             fill_color: rect.fill_color.as_deref(),
             stroke_color: rect.stroke_color.as_deref(),
-            stroke_weight: rect.stroke_weight.unwrap_or(1.0),
+            stroke_weight: rect.stroke_weight,
             fill_tint: rect.fill_tint,
             opacity: rect.opacity,
             blend_mode: crate::pipeline::blend_mode_from_idml(rect.blend_mode.as_deref()),
@@ -157,7 +166,7 @@ impl<'a> ResolvedFrame<'a> {
             item_transform: oval.item_transform,
             fill_color: oval.fill_color.as_deref(),
             stroke_color: oval.stroke_color.as_deref(),
-            stroke_weight: oval.stroke_weight.unwrap_or(1.0),
+            stroke_weight: oval.stroke_weight,
             fill_tint: None,
             opacity: oval.opacity,
             blend_mode: crate::pipeline::blend_mode_from_idml(oval.blend_mode.as_deref()),
@@ -194,7 +203,7 @@ impl<'a> ResolvedFrame<'a> {
             item_transform: poly.item_transform,
             fill_color: poly.fill_color.as_deref(),
             stroke_color: poly.stroke_color.as_deref(),
-            stroke_weight: poly.stroke_weight.unwrap_or(1.0),
+            stroke_weight: poly.stroke_weight,
             fill_tint: None,
             opacity: poly.opacity,
             blend_mode: crate::pipeline::blend_mode_from_idml(poly.blend_mode.as_deref()),
@@ -228,7 +237,7 @@ impl<'a> ResolvedFrame<'a> {
             item_transform: line.item_transform,
             fill_color: None,
             stroke_color: line.stroke_color.as_deref(),
-            stroke_weight: line.stroke_weight.unwrap_or(1.0),
+            stroke_weight: line.stroke_weight,
             fill_tint: None,
             opacity: None,
             blend_mode: BlendMode::Normal,

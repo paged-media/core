@@ -29,7 +29,7 @@ pub(crate) fn stroke_paint_module(
     stroke_path: Option<PathId>,
     stroke: Stroke,
 ) {
-    if frame.stroke_weight <= 0.0 {
+    if frame.effective_stroke_weight() <= 0.0 {
         return;
     }
     let Some(paint) = frame

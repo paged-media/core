@@ -48,7 +48,8 @@ pub(crate) fn corner_path_module(frame: &ResolvedFrame<'_>, page: &mut BuiltPage
     // outward (Outside) by W/2 with the radius adjusted to keep the
     // corners tangent to the geometry — same math the legacy emit
     // ran inline.
-    let stroke_offset = stroke_alignment_offset(frame.stroke_alignment, frame.stroke_weight);
+    let stroke_offset =
+        stroke_alignment_offset(frame.stroke_alignment, frame.effective_stroke_weight());
     let stroke_rect = inset_rect(rect, stroke_offset);
     let stroke_radius = (radius - stroke_offset).max(0.0);
     let stroke_path = rounded_rect_path(stroke_rect, stroke_radius);

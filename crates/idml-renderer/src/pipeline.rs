@@ -331,10 +331,10 @@ pub fn build_document(
             // space.
             let mut copy = frame.clone();
             copy.item_transform = Some(compose_outer_translation(copy.item_transform, dx, dy));
-            let copy = text_frame_with_object_style(copy, document);
             emit_text_frame_into(
                 &mut pages[i],
                 &copy,
+                document,
                 palette,
                 options.fallback_frame_fill,
                 cmyk_xform.as_ref(),
@@ -364,10 +364,10 @@ pub fn build_document(
             total_stats.frames += 1;
             let mut copy = rect.clone();
             copy.item_transform = Some(compose_outer_translation(copy.item_transform, dx, dy));
-            let copy = rectangle_with_object_style(copy, document);
             emit_rectangle_into(
                 &mut pages[i],
                 &copy,
+                document,
                 palette,
                 options.fallback_frame_fill,
                 cmyk_xform.as_ref(),
@@ -430,10 +430,10 @@ pub fn build_document(
             if let Some(self_id) = frame.self_id.clone() {
                 frame_to_page.insert(self_id, page_idx);
             }
-            let frame = text_frame_with_object_style(frame.clone(), document);
             emit_text_frame_into(
                 &mut pages[page_idx],
-                &frame,
+                frame,
+                document,
                 palette,
                 options.fallback_frame_fill,
                 cmyk_xform.as_ref(),
@@ -448,10 +448,10 @@ pub fn build_document(
             let spread_bounds = transform_bounds(rect.bounds, rect.item_transform);
             let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
             let page_idx = range.start + local_idx;
-            let rect = rectangle_with_object_style(rect.clone(), document);
             emit_rectangle_into(
                 &mut pages[page_idx],
-                &rect,
+                rect,
+                document,
                 palette,
                 options.fallback_frame_fill,
                 cmyk_xform.as_ref(),
@@ -463,7 +463,7 @@ pub fn build_document(
             // shares the decoded RGBA across pages.
             emit_rectangle_image(
                 &mut pages[page_idx],
-                &rect,
+                rect,
                 options,
                 &mut page_image_caches[page_idx],
                 &mut decoded_image_cache,
@@ -477,10 +477,10 @@ pub fn build_document(
             let spread_bounds = transform_bounds(oval.bounds, oval.item_transform);
             let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
             let page_idx = range.start + local_idx;
-            let oval = oval_with_object_style(oval.clone(), document);
             emit_oval_into(
                 &mut pages[page_idx],
-                &oval,
+                oval,
+                document,
                 palette,
                 options.fallback_frame_fill,
                 cmyk_xform.as_ref(),
@@ -494,8 +494,7 @@ pub fn build_document(
             let spread_bounds = transform_bounds(line.bounds, line.item_transform);
             let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
             let page_idx = range.start + local_idx;
-            let line = line_with_object_style(line.clone(), document);
-            emit_line_into(&mut pages[page_idx], &line, palette, cmyk_xform.as_ref());
+            emit_line_into(&mut pages[page_idx], line, document, palette, cmyk_xform.as_ref());
         }
         for poly in &spread.polygons {
             if !layer_visible(poly.item_layer.as_deref()) {
@@ -505,10 +504,10 @@ pub fn build_document(
             let spread_bounds = transform_bounds(poly.bounds, poly.item_transform);
             let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
             let page_idx = range.start + local_idx;
-            let poly = polygon_with_object_style(poly.clone(), document);
             emit_polygon_into(
                 &mut pages[page_idx],
-                &poly,
+                poly,
+                document,
                 palette,
                 options.fallback_frame_fill,
                 cmyk_xform.as_ref(),
@@ -1427,90 +1426,6 @@ struct PageGeom {
     local_page_idx: usize,
 }
 
-/// Apply a frame's `AppliedObjectStyle` cascade (when present) so
-/// any unset fill/stroke/weight gets the value the style would
-/// have produced. Real-world IDMLs rely almost exclusively on
-/// AppliedObjectStyle for these — `FillColor=` attributes are
-/// rare on individual page items. Frames already carrying every
-/// override are returned unchanged.
-fn text_frame_with_object_style(frame: TextFrame, document: &Document) -> TextFrame {
-    if frame.fill_color.is_some() && frame.stroke_color.is_some() && frame.stroke_weight.is_some() {
-        return frame;
-    }
-    let Some(id) = frame.applied_object_style.as_deref() else {
-        return frame;
-    };
-    let resolved = document.styles.resolve_object(id);
-    TextFrame {
-        fill_color: frame.fill_color.or(resolved.fill_color),
-        stroke_color: frame.stroke_color.or(resolved.stroke_color),
-        stroke_weight: frame.stroke_weight.or(resolved.stroke_weight),
-        ..frame
-    }
-}
-
-fn rectangle_with_object_style(rect: Rectangle, document: &Document) -> Rectangle {
-    let Some(id) = rect.applied_object_style.as_deref() else {
-        return rect;
-    };
-    let resolved = document.styles.resolve_object(id);
-    Rectangle {
-        fill_color: rect.fill_color.or(resolved.fill_color),
-        stroke_color: rect.stroke_color.or(resolved.stroke_color),
-        stroke_weight: rect.stroke_weight.or(resolved.stroke_weight),
-        corner_radius: rect.corner_radius.or(resolved.corner_radius),
-        corner_option: rect.corner_option.or(resolved.corner_option),
-        ..rect
-    }
-}
-
-fn oval_with_object_style(oval: Oval, document: &Document) -> Oval {
-    if oval.fill_color.is_some() && oval.stroke_color.is_some() && oval.stroke_weight.is_some() {
-        return oval;
-    }
-    let Some(id) = oval.applied_object_style.as_deref() else {
-        return oval;
-    };
-    let resolved = document.styles.resolve_object(id);
-    Oval {
-        fill_color: oval.fill_color.or(resolved.fill_color),
-        stroke_color: oval.stroke_color.or(resolved.stroke_color),
-        stroke_weight: oval.stroke_weight.or(resolved.stroke_weight),
-        ..oval
-    }
-}
-
-fn line_with_object_style(line: GraphicLine, document: &Document) -> GraphicLine {
-    if line.stroke_color.is_some() && line.stroke_weight.is_some() {
-        return line;
-    }
-    let Some(id) = line.applied_object_style.as_deref() else {
-        return line;
-    };
-    let resolved = document.styles.resolve_object(id);
-    GraphicLine {
-        stroke_color: line.stroke_color.or(resolved.stroke_color),
-        stroke_weight: line.stroke_weight.or(resolved.stroke_weight),
-        ..line
-    }
-}
-
-fn polygon_with_object_style(poly: Polygon, document: &Document) -> Polygon {
-    if poly.fill_color.is_some() && poly.stroke_color.is_some() && poly.stroke_weight.is_some() {
-        return poly;
-    }
-    let Some(id) = poly.applied_object_style.as_deref() else {
-        return poly;
-    };
-    let resolved = document.styles.resolve_object(id);
-    Polygon {
-        fill_color: poly.fill_color.or(resolved.fill_color),
-        stroke_color: poly.stroke_color.or(resolved.stroke_color),
-        stroke_weight: poly.stroke_weight.or(resolved.stroke_weight),
-        ..poly
-    }
-}
-
 /// Build a [`PathData`] from a polygon's parsed Bezier anchors.
 /// Each consecutive pair becomes a cubic with the leading point's
 /// `right` and the trailing point's `left` as control points. When
@@ -1561,11 +1476,16 @@ fn polygon_path_from_anchors(anchors: &[PathAnchor]) -> PathData {
 fn emit_polygon_into(
     page: &mut BuiltPage,
     poly: &Polygon,
+    document: &Document,
     palette: &Graphic,
     fallback: Paint,
     cmyk_xform: Option<&idml_color::IccTransform>,
 ) {
-    let resolved = ResolvedFrame::from_polygon(poly);
+    let mut resolved = ResolvedFrame::from_polygon(poly);
+    let style = crate::module::resolve_applied_style(&resolved, document);
+    if let Some(s) = &style {
+        crate::module::object_style_cascade(&mut resolved, s);
+    }
     page.stats.frames += 1;
     let outer = frame_outer_transform(page, resolved.item_transform);
     // Intern the polygon's path up-front so fill/stroke modules can
@@ -1594,7 +1514,7 @@ fn emit_polygon_into(
         cmyk_xform,
         outer,
         path_id,
-        Stroke::new(resolved.stroke_weight),
+        Stroke::new(resolved.effective_stroke_weight()),
     );
 }
 
@@ -2932,12 +2852,17 @@ fn page_for_frame(frame: &idml_parse::Bounds, pages: &[PageGeom]) -> Option<usiz
 fn emit_text_frame_into(
     page: &mut BuiltPage,
     frame: &TextFrame,
+    document: &Document,
     palette: &Graphic,
     fallback: Paint,
     cmyk_xform: Option<&idml_color::IccTransform>,
     drop_shadow: Option<DropShadow>,
 ) {
-    let resolved = ResolvedFrame::from_text_frame(frame);
+    let mut resolved = ResolvedFrame::from_text_frame(frame);
+    let style = crate::module::resolve_applied_style(&resolved, document);
+    if let Some(s) = &style {
+        crate::module::object_style_cascade(&mut resolved, s);
+    }
     page.stats.frames += 1;
     let outer = frame_outer_transform(page, resolved.item_transform);
     crate::module::drop_shadow_module(&resolved, page, palette, cmyk_xform, drop_shadow, outer);
@@ -2951,18 +2876,23 @@ fn emit_text_frame_into(
         cmyk_xform,
         outer,
         None,
-        Stroke::new(resolved.stroke_weight),
+        Stroke::new(resolved.effective_stroke_weight()),
     );
 }
 
 fn emit_oval_into(
     page: &mut BuiltPage,
     oval: &Oval,
+    document: &Document,
     palette: &Graphic,
     fallback: Paint,
     cmyk_xform: Option<&idml_color::IccTransform>,
 ) {
-    let frame = ResolvedFrame::from_oval(oval);
+    let mut frame = ResolvedFrame::from_oval(oval);
+    let style = crate::module::resolve_applied_style(&frame, document);
+    if let Some(s) = &style {
+        crate::module::object_style_cascade(&mut frame, s);
+    }
     page.stats.frames += 1;
     let outer = frame_outer_transform(page, frame.item_transform);
     crate::module::drop_shadow_module(&frame, page, palette, cmyk_xform, None, outer);
@@ -2974,17 +2904,22 @@ fn emit_oval_into(
         cmyk_xform,
         outer,
         None,
-        Stroke::new(frame.stroke_weight),
+        Stroke::new(frame.effective_stroke_weight()),
     );
 }
 
 fn emit_line_into(
     page: &mut BuiltPage,
     line: &GraphicLine,
+    document: &Document,
     palette: &Graphic,
     cmyk_xform: Option<&idml_color::IccTransform>,
 ) {
-    let resolved = ResolvedFrame::from_graphic_line(line);
+    let mut resolved = ResolvedFrame::from_graphic_line(line);
+    let style = crate::module::resolve_applied_style(&resolved, document);
+    if let Some(s) = &style {
+        crate::module::object_style_cascade(&mut resolved, s);
+    }
     page.stats.frames += 1;
     // GraphicLines without an explicit StrokeColor inherit the
     // document cascade default (Color/Black). Falling back here
@@ -2995,7 +2930,8 @@ fn emit_line_into(
         .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
         .or_else(|| color_id_to_paint("Color/Black", palette, cmyk_xform))
         .unwrap_or(Paint::Solid(Color::BLACK));
-    if resolved.stroke_weight <= 0.0 {
+    let stroke_width = resolved.effective_stroke_weight();
+    if stroke_width <= 0.0 {
         return;
     }
     // GraphicLine.bounds is in inner coords; ItemTransform maps it
@@ -3011,7 +2947,7 @@ fn emit_line_into(
         spread_bounds.top - oy,
         spread_bounds.right - ox,
         spread_bounds.bottom - oy,
-        Stroke::new(resolved.stroke_weight),
+        Stroke::new(stroke_width),
         stroke_paint,
         &mut page.list,
     );
@@ -3020,12 +2956,17 @@ fn emit_line_into(
 fn emit_rectangle_into(
     page: &mut BuiltPage,
     rect: &Rectangle,
+    document: &Document,
     palette: &Graphic,
     fallback: Paint,
     cmyk_xform: Option<&idml_color::IccTransform>,
     drop_shadow: Option<DropShadow>,
 ) {
-    let resolved = ResolvedFrame::from_rectangle(rect);
+    let mut resolved = ResolvedFrame::from_rectangle(rect);
+    let style = crate::module::resolve_applied_style(&resolved, document);
+    if let Some(s) = &style {
+        crate::module::object_style_cascade(&mut resolved, s);
+    }
     let Geometry::Rect { rect: r } = resolved.geometry else {
         unreachable!("from_rectangle produces Geometry::Rect");
     };
@@ -3048,9 +2989,10 @@ fn emit_rectangle_into(
     // `StrokeAlignment` — which the geometry adapter doesn't know
     // about, so we compute it here and either pre-intern (rounded)
     // or hand a custom rect to the fallback emit (flat).
+    let stroke_width = resolved.effective_stroke_weight();
     let stroke = stroke_for(
         resolved.stroke_type,
-        resolved.stroke_weight,
+        stroke_width,
         resolved.end_cap,
         resolved.end_join,
         resolved.miter_limit,
@@ -3068,8 +3010,8 @@ fn emit_rectangle_into(
         return;
     }
     // Flat rectangle — use the inset rect for stroke-alignment.
-    let stroke_offset = stroke_alignment_offset(resolved.stroke_alignment, resolved.stroke_weight);
-    if resolved.stroke_weight > 0.0 {
+    let stroke_offset = stroke_alignment_offset(resolved.stroke_alignment, stroke_width);
+    if stroke_width > 0.0 {
         if let Some(paint) = resolved
             .stroke_color
             .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
