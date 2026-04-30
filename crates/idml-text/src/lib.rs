@@ -16,12 +16,16 @@ pub mod layout;
 pub mod shape;
 
 pub use compose::{
-    compose_paragraph, AdvanceMeasurer, ComposeOptions, ComposedLine, MonospaceMeasurer,
-    RustybuzzMeasurer, TextShaper,
+    compose_paragraph, compose_paragraph_with_drop_cap, drop_cap_column_widths,
+    drop_cap_point_size, AdvanceMeasurer, ComposeOptions, ComposedLine, DropCapComposition,
+    DropCapSpec, MonospaceMeasurer, RustybuzzMeasurer, TextShaper,
 };
 pub use hyphenate::{Hyphenator, Language};
 pub use layout::{
     layout_paragraph, layout_runs, position_line, Alignment, LaidOutLine, LaidOutParagraph,
     LayoutOptions, PositionedGlyph, StyledRun,
 };
-pub use shape::{apply_tracking, shape_run, ShapedGlyph, ShapedRun};
+pub use shape::{
+    apply_optical_margin, apply_tracking, optical_margin_offset, shape_run, MarginSide,
+    ShapedGlyph, ShapedRun,
+};
