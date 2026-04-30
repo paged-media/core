@@ -4419,9 +4419,49 @@ fn emit_rectangle_into(
     // The corner_path module returns `(None, None)` when there's no
     // corner radius, so the same module call covers both cases.
     let corner = crate::module::corner_path_module(&resolved, page);
+
+    // Frame effects (`<*Setting>` elements). Resolve the path id +
+    // transform that the rasterizer will stamp under: for rounded
+    // rects that's the corner-path interned in inner coords (so the
+    // path already carries the rect geometry and the transform is just
+    // `outer`); for flat rects we intern the unit rect and let
+    // `Transform::for_rect_in` handle the rect → page mapping. The
+    // `OuterGlow` fragment of the effect set is emitted *before* the
+    // fill so the halo lands behind it; the rest stamp *after* the
+    // fill so they composite onto the path's interior.
+    let (effects_path, effects_xform) = match corner.fill {
+        Some(id) => (id, outer),
+        None => {
+            let (id, _) = page
+                .list
+                .paths
+                .intern(idml_compose::UNIT_RECT_KEY, idml_compose::PathData {
+                    segments: vec![
+                        idml_compose::PathSegment::MoveTo { x: 0.0, y: 0.0 },
+                        idml_compose::PathSegment::LineTo { x: 1.0, y: 0.0 },
+                        idml_compose::PathSegment::LineTo { x: 1.0, y: 1.0 },
+                        idml_compose::PathSegment::LineTo { x: 0.0, y: 1.0 },
+                        idml_compose::PathSegment::Close,
+                    ],
+                });
+            (id, Transform::for_rect_in(r, outer))
+        }
+    };
+    if let Some(effects) = rect.effects.as_ref() {
+        crate::module::emit_effects_pre_fill(
+            page, effects, effects_path, effects_xform, palette, cmyk_xform,
+        );
+    }
+
     crate::module::fill_paint_module(
         &resolved, page, palette, cmyk_xform, fallback, outer, corner.fill,
     );
+
+    if let Some(effects) = rect.effects.as_ref() {
+        crate::module::emit_effects_post_fill(
+            page, effects, effects_path, effects_xform, palette, cmyk_xform,
+        );
+    }
 
     // Stroke needs the IDML stroke style (dash pattern, end-cap/join,
     // miter limit) folded into the `Stroke`. For non-rounded
