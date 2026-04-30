@@ -14,9 +14,10 @@
 //! `idml-color` — this module stays in the simple path.
 
 use idml_compose::{
-    BevelEmboss, BlendMode, Color as CComposeColor, DisplayCommand, DisplayList, Feather,
-    FeatherCornerType, InnerGlow, InnerShadow, LineCap, LineJoin, OuterGlow, Paint, PathData,
-    PathSegment, Satin, Transform as CTransform,
+    BevelEmboss, BlendMode, Color as CComposeColor, DirectionalFeather, DisplayCommand,
+    DisplayList, Feather, FeatherCornerType, GradientFeather, GradientFeatherKind, InnerGlow,
+    InnerShadow, LineCap, LineJoin, OuterGlow, Paint, PathData, PathSegment, Satin,
+    Transform as CTransform,
 };
 use image::{Rgba, RgbaImage};
 use tiny_skia::{
@@ -320,8 +321,30 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 };
                 p.set_color(linear_color_to_ts(shadow_color));
 
+                // PathShadow (used for stroke-only / glyph drop
+                // shadows lowered through the path-shadow pipeline)
+                // empirically wants a *wider* Gaussian than the
+                // rect-stamp DropShadow path: glyph shadows are
+                // emitted as one PathShadow per glyph at full alpha
+                // inside a Normal-blend transparency group (see
+                // `idml-renderer/.../glyph_shadow.rs`), so adjacent
+                // kernels overlap and SrcOver-saturate the buffer
+                // alpha. Wider blur tails reach into the gaps between
+                // glyph shadows and lift the buffer alpha closer to
+                // 1.0 there before the group composite fades the
+                // whole patch by the IDML opacity, which matches
+                // InDesign's reference (page 8 of the manual sample)
+                // far better than σ = Size. The rect-stamp DropShadow
+                // path is unchanged (σ_scale = 1.0) so other corpus
+                // pages that funnel through that arm stay
+                // byte-identical.
+                let sigma_scale: f32 = match cmd {
+                    DisplayCommand::PathShadow { .. } => 3.5,
+                    _ => 1.0,
+                };
+                let sigma_pt = shadow.blur_radius.max(0.0) * sigma_scale;
                 // σ in pt → σ in pixels via the renderer's pt→px scale.
-                let sigma_px = shadow.blur_radius.max(0.0) * scale;
+                let sigma_px = sigma_pt * scale;
                 if sigma_px <= 0.5 {
                     // Fast path: blur is sub-pixel; the existing
                     // hard-edge fill is visually indistinguishable
@@ -341,7 +364,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     // (kernel tail) to keep the whole soft edge
                     // inside the scratch buffer.
                     let bbox = path.bounds();
-                    let pad_pt = 3.0 * shadow.blur_radius.max(0.0) + 1.0;
+                    let pad_pt = 3.0 * sigma_pt + 1.0;
                     // Snap top-left to whole pixels so draw_pixmap
                     // (integer offsets) is pixel-aligned and the
                     // composite isn't bilinearly resampled. Project
@@ -676,6 +699,51 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 let (target, target_xform, target_mask) =
                     resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
                 render_feather(target, target_xform, target_mask, &path, params, scale);
+            }
+            DisplayCommand::DirectionalFeather {
+                path_id,
+                transform,
+                params,
+            } => {
+                let Some(path_data) = list.paths.get(*path_id) else {
+                    continue;
+                };
+                let Some(path) = build_path_transformed(path_data, transform) else {
+                    continue;
+                };
+                let (target, target_xform, target_mask) =
+                    resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
+                render_directional_feather(
+                    target,
+                    target_xform,
+                    target_mask,
+                    &path,
+                    params,
+                    scale,
+                );
+            }
+            DisplayCommand::GradientFeather {
+                path_id,
+                transform,
+                params,
+            } => {
+                let Some(path_data) = list.paths.get(*path_id) else {
+                    continue;
+                };
+                let Some(path) = build_path_transformed(path_data, transform) else {
+                    continue;
+                };
+                let (target, target_xform, target_mask) =
+                    resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
+                render_gradient_feather(
+                    target,
+                    target_xform,
+                    target_mask,
+                    &path,
+                    transform,
+                    params,
+                    scale,
+                );
             }
             DisplayCommand::EndBlendGroup(_) => {
                 let Some(top) = group_stack.pop() else {
@@ -1727,6 +1795,270 @@ fn render_feather(
         TsTransform::identity(),
         target_mask,
     );
+}
+
+/// Directional feather: same shape as [`render_feather`] but with
+/// per-edge widths instead of a single uniform width.
+///
+/// Algorithm: stamp the path's interior mask, then for each interior
+/// pixel compute a per-side alpha factor `clamp(d_side / width_side,
+/// 0, 1)` (where `d_side` is the pt-space distance from the pixel to
+/// the path's bbox side, in page-pt coords) and combine the four
+/// factors via product. Sides with `width <= 0` contribute alpha = 1
+/// so the corresponding edge stays opaque. Choke / noise / corner
+/// type follow the plain feather's logic.
+///
+/// Limitations:
+/// - The bbox is the page-pt bbox of the *transformed* path, so a
+///   rotated rectangle's "left" side is the page-pt minimum-X side,
+///   not the path's intrinsic left edge. The IDML `Angle` attribute
+///   is captured by the parser but not consumed here.
+fn render_directional_feather(
+    target: &mut Pixmap,
+    target_xform: TsTransform,
+    target_mask: Option<&TsMask>,
+    path: &tiny_skia::Path,
+    params: &DirectionalFeather,
+    scale: f32,
+) {
+    // Pad scratch by max edge width so the soft edge doesn't clip.
+    let max_w = params
+        .left_width
+        .max(params.right_width)
+        .max(params.top_width)
+        .max(params.bottom_width)
+        .max(0.0);
+    let pad_pt = max_w * 3.0 + 1.0;
+    let Some((off_x_px, off_y_px, w_px, h_px, scratch_xform)) =
+        effect_scratch_bounds(path, target_xform, pad_pt)
+    else {
+        return;
+    };
+    let Some(interior_pix) = stamp_path_alpha(w_px, h_px, path, scratch_xform) else {
+        return;
+    };
+    let mut feather_mask = alpha_to_mask(interior_pix.data());
+
+    // Per-edge alpha modulation. The bbox lives in the path's
+    // page-pt coords (the path was already transformed in
+    // `build_path_transformed`); the scratch pixel grid is the page
+    // pixel grid translated by `off_*_px`. Reverse: for each scratch
+    // pixel, derive its page-pt position via `(off + i + 0.5) / scale`.
+    let bbox = path.bounds();
+    let lw = params.left_width.max(0.0);
+    let rw = params.right_width.max(0.0);
+    let tw = params.top_width.max(0.0);
+    let bw = params.bottom_width.max(0.0);
+    let inv_scale = 1.0 / scale.max(1e-6);
+    if lw + rw + tw + bw > 0.0 {
+        for j in 0..h_px {
+            for i in 0..w_px {
+                let idx = (j * w_px + i) as usize;
+                let m = feather_mask[idx];
+                if m == 0 {
+                    continue;
+                }
+                let px_pt = (off_x_px as f32 + i as f32 + 0.5) * inv_scale;
+                let py_pt = (off_y_px as f32 + j as f32 + 0.5) * inv_scale;
+                let d_left = px_pt - bbox.left();
+                let d_right = bbox.right() - px_pt;
+                let d_top = py_pt - bbox.top();
+                let d_bot = bbox.bottom() - py_pt;
+                let a_left = if lw > 0.0 { (d_left / lw).clamp(0.0, 1.0) } else { 1.0 };
+                let a_right = if rw > 0.0 { (d_right / rw).clamp(0.0, 1.0) } else { 1.0 };
+                let a_top = if tw > 0.0 { (d_top / tw).clamp(0.0, 1.0) } else { 1.0 };
+                let a_bot = if bw > 0.0 { (d_bot / bw).clamp(0.0, 1.0) } else { 1.0 };
+                let combined = a_left * a_right * a_top * a_bot;
+                feather_mask[idx] = (m as f32 * combined).clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+
+    // Light blur to anti-alias the per-side boundary. Choose σ from
+    // corner_type at half the plain-feather scale (the per-edge
+    // ramp itself already provides the linear falloff).
+    let sigma_px = match params.corner_type {
+        FeatherCornerType::Sharp => max_w * 0.25 * scale,
+        FeatherCornerType::Rounded => max_w * 0.5 * scale,
+        FeatherCornerType::Diffusion => max_w * 0.75 * scale,
+    };
+    if sigma_px > 0.5 {
+        let kernel = gaussian_kernel(sigma_px);
+        gaussian_blur_mask(&mut feather_mask, w_px, h_px, &kernel);
+    }
+
+    let choke = params.choke.clamp(-0.99, 0.99);
+    if choke != 0.0 {
+        let shift = choke * 255.0;
+        let scale_back = (1.0 - choke).max(1e-6);
+        for v in feather_mask.iter_mut() {
+            let raw = (*v as f32 - shift) / scale_back;
+            *v = raw.clamp(0.0, 255.0) as u8;
+        }
+    }
+
+    if matches!(params.corner_type, FeatherCornerType::Diffusion) && params.noise > 0.0 {
+        let noise_amp = params.noise.clamp(0.0, 1.0);
+        for (i, v) in feather_mask.iter_mut().enumerate() {
+            let h = ((i.wrapping_mul(2_654_435_761)) & 0xFFFF) as f32 / 65535.0;
+            let factor = 1.0 - noise_amp * (h - 0.5);
+            *v = (*v as f32 * factor).clamp(0.0, 255.0) as u8;
+        }
+    }
+
+    composite_alpha_mask(target, target_mask, off_x_px, off_y_px, w_px, h_px, &feather_mask);
+}
+
+/// Gradient feather: modulate the path's interior alpha by a 1-D
+/// gradient (linear or radial). For Linear, each pixel projects onto
+/// the `(start, end)` axis to get a `t` in `[0, 1]`; alpha is
+/// interpolated from the stops at that `t`. For Radial,
+/// `t = distance(pixel, start) / |end - start|`.
+///
+/// Coordinate conventions: `params.start_*` / `params.end_*` are in
+/// the path's local space (same coords as the `Transform`). The
+/// helper transforms them to page-pt before the projection so the
+/// pixel-grid math is straight subtraction.
+fn render_gradient_feather(
+    target: &mut Pixmap,
+    target_xform: TsTransform,
+    target_mask: Option<&TsMask>,
+    path: &tiny_skia::Path,
+    transform: &CTransform,
+    params: &GradientFeather,
+    scale: f32,
+) {
+    if params.stops.is_empty() {
+        return;
+    }
+    let pad_pt = 1.0;
+    let Some((off_x_px, off_y_px, w_px, h_px, scratch_xform)) =
+        effect_scratch_bounds(path, target_xform, pad_pt)
+    else {
+        return;
+    };
+    let Some(interior_pix) = stamp_path_alpha(w_px, h_px, path, scratch_xform) else {
+        return;
+    };
+    let mut feather_mask = alpha_to_mask(interior_pix.data());
+
+    // Map start / end from path-local to page-pt. The Transform's
+    // `apply` mirrors how `build_path_transformed` transforms the
+    // path itself, so the gradient axis lines up with the visible
+    // path.
+    let (sx_pt, sy_pt) = transform.apply(params.start_x, params.start_y);
+    let (ex_pt, ey_pt) = transform.apply(params.end_x, params.end_y);
+    let dx = ex_pt - sx_pt;
+    let dy = ey_pt - sy_pt;
+    let len_sq = dx * dx + dy * dy;
+    if len_sq < 1e-6 {
+        // Degenerate gradient (start == end) — composite the path's
+        // interior at full alpha. Keeps the `Some(GradientFeather)`
+        // path visually close to a plain `FillPath`.
+        composite_alpha_mask(target, target_mask, off_x_px, off_y_px, w_px, h_px, &feather_mask);
+        return;
+    }
+    let inv_len_sq = 1.0 / len_sq;
+
+    // Pre-sort stops by location so the interpolation is monotonic.
+    let mut stops: Vec<(f32, f32)> = params
+        .stops
+        .iter()
+        .map(|s| (s.location.clamp(0.0, 1.0), s.alpha.clamp(0.0, 1.0)))
+        .collect();
+    stops.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let inv_scale = 1.0 / scale.max(1e-6);
+    for j in 0..h_px {
+        for i in 0..w_px {
+            let idx = (j * w_px + i) as usize;
+            let m = feather_mask[idx];
+            if m == 0 {
+                continue;
+            }
+            let px_pt = (off_x_px as f32 + i as f32 + 0.5) * inv_scale;
+            let py_pt = (off_y_px as f32 + j as f32 + 0.5) * inv_scale;
+            let t = match params.kind {
+                GradientFeatherKind::Linear => {
+                    let t = ((px_pt - sx_pt) * dx + (py_pt - sy_pt) * dy) * inv_len_sq;
+                    t.clamp(0.0, 1.0)
+                }
+                GradientFeatherKind::Radial => {
+                    let rx = px_pt - sx_pt;
+                    let ry = py_pt - sy_pt;
+                    let r = (rx * rx + ry * ry).sqrt();
+                    let radius = len_sq.sqrt();
+                    (r / radius).clamp(0.0, 1.0)
+                }
+            };
+            let alpha = sample_gradient_alpha(&stops, t);
+            feather_mask[idx] = (m as f32 * alpha).clamp(0.0, 255.0) as u8;
+        }
+    }
+
+    composite_alpha_mask(target, target_mask, off_x_px, off_y_px, w_px, h_px, &feather_mask);
+}
+
+/// Composite a single-channel alpha mask onto `target` at
+/// `(off_x_px, off_y_px)` as a 50%-black tinted stamp — same
+/// convention as `render_feather`. Extracted so the directional /
+/// gradient feather helpers don't duplicate the scratch-pixmap
+/// allocation + premultiplied tint loop.
+fn composite_alpha_mask(
+    target: &mut Pixmap,
+    target_mask: Option<&TsMask>,
+    off_x_px: i32,
+    off_y_px: i32,
+    w_px: u32,
+    h_px: u32,
+    mask: &[u8],
+) {
+    let mut scratch = match Pixmap::new(w_px, h_px) {
+        Some(p) => p,
+        None => return,
+    };
+    let data = scratch.data_mut();
+    for i in 0..(w_px as usize * h_px as usize) {
+        let m = mask[i] as f32 / 255.0;
+        let a = (m * 0.5).clamp(0.0, 1.0);
+        let q = i * 4;
+        data[q] = 0;
+        data[q + 1] = 0;
+        data[q + 2] = 0;
+        data[q + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+    let composite = PixmapPaint::default();
+    target.draw_pixmap(
+        off_x_px,
+        off_y_px,
+        scratch.as_ref(),
+        &composite,
+        TsTransform::identity(),
+        target_mask,
+    );
+}
+
+/// Linear-interpolate gradient alpha at parameter `t` across a
+/// sorted stop list `(location, alpha)`. `t` outside the stops'
+/// range snaps to the nearest endpoint's alpha.
+fn sample_gradient_alpha(stops: &[(f32, f32)], t: f32) -> f32 {
+    debug_assert!(!stops.is_empty());
+    if t <= stops[0].0 {
+        return stops[0].1;
+    }
+    if t >= stops[stops.len() - 1].0 {
+        return stops[stops.len() - 1].1;
+    }
+    for w in stops.windows(2) {
+        let (l_loc, l_alpha) = w[0];
+        let (r_loc, r_alpha) = w[1];
+        if t <= r_loc {
+            let span = (r_loc - l_loc).max(1e-6);
+            let f = (t - l_loc) / span;
+            return l_alpha + (r_alpha - l_alpha) * f;
+        }
+    }
+    stops[stops.len() - 1].1
 }
 
 #[cfg(test)]
