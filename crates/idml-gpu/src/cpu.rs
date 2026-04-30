@@ -973,4 +973,111 @@ mod tests {
         assert_eq!(buf.len(), 40 * 30 * 4);
         assert_eq!(r.name(), "cpu/tiny-skia");
     }
+
+    #[test]
+    fn blend_group_lighten_against_yellow_bg_keeps_yellow() {
+        // Lighten of a black rect on a yellow rect underneath should
+        // yield yellow where the black rect overlaps (max channel
+        // gives yellow), exercising the BeginBlendGroup /
+        // EndBlendGroup primitive end-to-end through the CPU
+        // rasterizer.
+        let mut list = DisplayList::new();
+        let yellow = Paint::Solid(Color::rgba(1.0, 1.0, 0.0, 1.0));
+        let black = Paint::Solid(Color::rgba(0.0, 0.0, 0.0, 1.0));
+        // Yellow background rect at (5, 5, 30, 30).
+        emit_rect(
+            Rect {
+                x: 5.0,
+                y: 5.0,
+                w: 30.0,
+                h: 30.0,
+            },
+            yellow,
+            &mut list,
+        );
+        // Black rect at (10, 10, 20, 20) wrapped in a Lighten group.
+        list.commands
+            .push(idml_compose::DisplayCommand::BeginBlendGroup {
+                bounds: idml_compose::Rect {
+                    x: 10.0,
+                    y: 10.0,
+                    w: 20.0,
+                    h: 20.0,
+                },
+                blend_mode: idml_compose::BlendMode::Lighten,
+                opacity: 1.0,
+                transform: idml_compose::Transform::IDENTITY,
+            });
+        emit_rect(
+            Rect {
+                x: 10.0,
+                y: 10.0,
+                w: 20.0,
+                h: 20.0,
+            },
+            black,
+            &mut list,
+        );
+        list.commands
+            .push(idml_compose::DisplayCommand::EndBlendGroup(
+                idml_compose::Transform::IDENTITY,
+            ));
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        // Inside the overlap (15, 15): Lighten(black, yellow) = yellow.
+        let p = at(&img, 15, 15);
+        assert!(
+            p[0] > 240 && p[1] > 240 && p[2] < 15,
+            "overlap should be yellow, got {p:?}"
+        );
+        // Outside the rects (2, 2): background white.
+        let bg = at(&img, 2, 2);
+        assert!(bg[0] > 240 && bg[1] > 240 && bg[2] > 240, "bg = {bg:?}");
+    }
+
+    #[test]
+    fn blend_group_opacity_50_halves_alpha_against_white() {
+        // A black rect inside a 50% opacity group composited onto
+        // white should yield mid-gray, exercising group-level alpha
+        // (PixmapPaint::opacity).
+        let mut list = DisplayList::new();
+        list.commands
+            .push(idml_compose::DisplayCommand::BeginBlendGroup {
+                bounds: idml_compose::Rect {
+                    x: 10.0,
+                    y: 10.0,
+                    w: 20.0,
+                    h: 20.0,
+                },
+                blend_mode: idml_compose::BlendMode::Normal,
+                opacity: 0.5,
+                transform: idml_compose::Transform::IDENTITY,
+            });
+        let black = Paint::Solid(Color::rgba(0.0, 0.0, 0.0, 1.0));
+        emit_rect(
+            Rect {
+                x: 10.0,
+                y: 10.0,
+                w: 20.0,
+                h: 20.0,
+            },
+            black,
+            &mut list,
+        );
+        list.commands
+            .push(idml_compose::DisplayCommand::EndBlendGroup(
+                idml_compose::Transform::IDENTITY,
+            ));
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        // 50% black on white = ~127 per channel. Allow some slack
+        // for sRGB gamma round-trip.
+        let p = at(&img, 15, 15);
+        assert!(
+            p[0] > 100 && p[0] < 180,
+            "expected mid-gray, got {p:?}"
+        );
+    }
 }
