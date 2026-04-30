@@ -131,6 +131,30 @@ pub struct AnchoredFrame {
     /// hold sub-items).
     pub parent_story: Option<String>,
     pub setting: Option<AnchoredObjectSetting>,
+    /// `FillColor` attribute on the frame's start tag. Mirrors the
+    /// spread-level Rectangle / TextFrame parsing in
+    /// `spread.rs::read_common_attrs`. `None` means inherit from the
+    /// applied object style cascade.
+    pub fill_color: Option<String>,
+    /// `StrokeColor` attribute on the frame's start tag.
+    pub stroke_color: Option<String>,
+    /// `StrokeWeight` attribute, in points.
+    pub stroke_weight: Option<f32>,
+    /// `FillTint` percentage (0..=100).
+    pub fill_tint: Option<f32>,
+    /// `GradientFillAngle` in degrees.
+    pub gradient_fill_angle: Option<f32>,
+    /// `AppliedObjectStyle` reference (e.g. `ObjectStyle/$ID/[None]`).
+    pub applied_object_style: Option<String>,
+    /// `LinkResourceURI` from a nested `<Image>` (or its `<Link>`
+    /// child) — non-empty when the anchored Rectangle hosts a placed
+    /// image.
+    pub image_link: Option<String>,
+    /// `ItemTransform` on the nested `<Image>` element.
+    pub image_item_transform: Option<[f32; 6]>,
+    /// Children of an anchored Group, in z-order. Empty for non-Group
+    /// anchored frames.
+    pub children: Vec<AnchoredFrame>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -390,42 +414,34 @@ impl Story {
         // Anchored-frame state. When a <TextFrame> / <Rectangle> /
         // <Group> opens as a child of a CharacterStyleRange, we
         // record it as an anchored object on the current paragraph
-        // and skip its body until the matching close — the renderer
-        // will revisit the frame's deep state via the parent_story
-        // reference (for TextFrames) or its own pass once anchored
-        // frame placement lands.
+        // and recurse through its body until the matching close.
+        //
+        // `anchored_depth` counts open XML elements currently inside
+        // the outermost anchored body (it bumps on every Start,
+        // decrements on every End). 0 ⇒ outside any anchored frame.
+        //
+        // `anchored_stack` holds the open frame records: the bottom
+        // is the outermost anchored frame, deeper entries are nested
+        // children inside Groups. When an End event for a frame
+        // element name (`TextFrame` / `Rectangle` / `Group`) fires
+        // we pop the top frame; if it leaves the stack non-empty we
+        // attach it as a child of the new top, otherwise we attach
+        // it to the host paragraph.
+        //
+        // The (Image / Link, AnchoredObjectSetting) attribute capture
+        // mutates the top of the stack so attributes always land on
+        // the nearest enclosing frame.
         let mut anchored_depth: u32 = 0;
-        let mut pending_anchored: Option<AnchoredFrame> = None;
+        let mut anchored_stack: Vec<AnchoredFrame> = Vec::new();
 
-        // Helper: try to detect an anchored-frame opening. Returns
-        // true when the element was consumed as the start of an
-        // anchored frame; the caller should NOT fall through to the
-        // normal element handling.
-        fn try_open_anchored(
+        // Helper: build an `AnchoredFrame` record from a frame
+        // element's start tag. Mirrors `spread.rs::read_common_attrs`
+        // for the cross-cutting attribute set so the renderer sees
+        // the full styling alongside geometry + setting.
+        fn make_anchored_frame(
             e: &quick_xml::events::BytesStart,
-            current_run: &Option<CharacterRun>,
-            anchored_depth: &mut u32,
-            pending_anchored: &mut Option<AnchoredFrame>,
-            empty: bool,
-        ) -> bool {
-            if current_run.is_none() {
-                return false;
-            }
-            // Only the *outermost* anchored frame (depth transition
-            // 0 → 1) is captured as a record. Inner nested frames
-            // would still bump the depth via the start handler.
-            if *anchored_depth > 0 {
-                if !empty {
-                    *anchored_depth += 1;
-                }
-                return true;
-            }
-            let kind = match e.name().as_ref() {
-                b"TextFrame" => AnchoredFrameKind::TextFrame,
-                b"Rectangle" => AnchoredFrameKind::Rectangle,
-                b"Group" => AnchoredFrameKind::Group,
-                _ => return false,
-            };
+            kind: AnchoredFrameKind,
+        ) -> AnchoredFrame {
             let bounds = attr(e, b"GeometricBounds").and_then(|s| parse_bounds_local(&s));
             let item_transform =
                 attr(e, b"ItemTransform").and_then(|s| parse_matrix_local(&s));
@@ -434,22 +450,50 @@ impl Story {
             } else {
                 None
             };
-            *pending_anchored = Some(AnchoredFrame {
+            AnchoredFrame {
                 frame_kind: kind,
                 self_id: attr(e, b"Self"),
                 bounds,
                 item_transform,
                 parent_story,
                 setting: None,
-            });
-            if !empty {
-                *anchored_depth = 1;
-            } else {
-                // Self-closing anchored frame — finalise immediately
-                // (no body, so AnchoredObjectSetting can't appear).
-                // The caller will pop it on the same event.
+                fill_color: attr(e, b"FillColor"),
+                stroke_color: attr(e, b"StrokeColor"),
+                stroke_weight: attr(e, b"StrokeWeight").and_then(|s| s.parse().ok()),
+                fill_tint: parse_tint_attr(e, b"FillTint"),
+                gradient_fill_angle: attr(e, b"GradientFillAngle")
+                    .and_then(|s| s.parse().ok()),
+                applied_object_style: attr(e, b"AppliedObjectStyle"),
+                image_link: None,
+                image_item_transform: None,
+                children: Vec::new(),
             }
-            true
+        }
+
+        // Helper: classify an element name as a frame element (i.e.
+        // one that opens an anchored sub-frame on the stack).
+        fn anchored_kind_from_name(name: &[u8]) -> Option<AnchoredFrameKind> {
+            match name {
+                b"TextFrame" => Some(AnchoredFrameKind::TextFrame),
+                b"Rectangle" => Some(AnchoredFrameKind::Rectangle),
+                b"Group" => Some(AnchoredFrameKind::Group),
+                _ => None,
+            }
+        }
+
+        // Helper: pop the top anchored frame and attach it to its
+        // parent (the new top of stack) or the host paragraph.
+        fn finalise_anchored_top(
+            anchored_stack: &mut Vec<AnchoredFrame>,
+            current_paragraph: &mut Option<Paragraph>,
+        ) {
+            if let Some(frame) = anchored_stack.pop() {
+                if let Some(parent) = anchored_stack.last_mut() {
+                    parent.children.push(frame);
+                } else if let Some(para) = current_paragraph.as_mut() {
+                    para.anchored_frames.push(frame);
+                }
+            }
         }
 
         loop {
@@ -461,12 +505,19 @@ impl Story {
                     // `<Rectangle>` / `<Group>` nested directly
                     // inside a `<CharacterStyleRange>` is an
                     // inline-anchored object — capture geometry +
-                    // <AnchoredObjectSetting> and skip the body.
+                    // attributes; recurse into Group children.
                     if anchored_depth > 0 {
-                        if name == b"AnchoredObjectSetting" {
-                            if let Some(p) = pending_anchored.as_mut() {
+                        // Nested frame element: open a new frame on
+                        // the stack so its attributes / children
+                        // capture independently of the parent.
+                        if let Some(kind) = anchored_kind_from_name(name) {
+                            anchored_stack.push(make_anchored_frame(&e, kind));
+                        } else if name == b"AnchoredObjectSetting" {
+                            if let Some(p) = anchored_stack.last_mut() {
                                 p.setting = Some(parse_anchored_object_setting(&e));
                             }
+                        } else if name == b"Image" || name == b"Link" {
+                            anchored_capture_image_attrs(&e, &mut anchored_stack);
                         }
                         // Always bump depth on Start so we stay
                         // inside the anchored body until the
@@ -475,20 +526,13 @@ impl Story {
                         buf.clear();
                         continue;
                     }
-                    if current_run.is_some()
-                        && (name == b"TextFrame"
-                            || name == b"Rectangle"
-                            || name == b"Group")
-                    {
-                        try_open_anchored(
-                            &e,
-                            &current_run,
-                            &mut anchored_depth,
-                            &mut pending_anchored,
-                            false,
-                        );
-                        buf.clear();
-                        continue;
+                    if current_run.is_some() {
+                        if let Some(kind) = anchored_kind_from_name(name) {
+                            anchored_stack.push(make_anchored_frame(&e, kind));
+                            anchored_depth = 1;
+                            buf.clear();
+                            continue;
+                        }
                     }
                     match name {
                     // <StoryPreference> may also appear with
@@ -685,18 +729,17 @@ impl Story {
                 Event::End(e) => {
                     let n = e.name();
                     let name = n.as_ref();
-                    // Anchored-frame close: pop depth; when we
-                    // return to depth 0 the frame body has fully
-                    // closed and the pending record gets attached
-                    // to the host paragraph.
+                    // Anchored-frame close: pop depth; when an End
+                    // for a frame element fires we pop the top of
+                    // the anchored stack and attach it to its parent
+                    // (Group child) or the host paragraph (outermost).
                     if anchored_depth > 0 {
                         anchored_depth -= 1;
-                        if anchored_depth == 0 {
-                            if let (Some(frame), Some(para)) =
-                                (pending_anchored.take(), current_paragraph.as_mut())
-                            {
-                                para.anchored_frames.push(frame);
-                            }
+                        if anchored_kind_from_name(name).is_some() {
+                            finalise_anchored_top(
+                                &mut anchored_stack,
+                                &mut current_paragraph,
+                            );
                         }
                         buf.clear();
                         continue;
@@ -797,45 +840,44 @@ impl Story {
                 Event::Empty(e) => {
                     let n = e.name();
                     let name = n.as_ref();
-                    // Anchored-frame self-closing forms. These
-                    // never visit the End arm so the pending record
-                    // must be flushed inline.
+                    // Anchored-frame self-closing forms. These never
+                    // visit the End arm so attribute capture must
+                    // happen inline; nested self-closing frames push
+                    // and immediately finalise.
                     if anchored_depth > 0 {
-                        // While inside an anchored body, capture
-                        // <AnchoredObjectSetting/> attributes;
-                        // ignore everything else. No depth bump
-                        // because Empty events have no matching
-                        // End.
-                        if name == b"AnchoredObjectSetting" {
-                            if let Some(p) = pending_anchored.as_mut() {
+                        if let Some(kind) = anchored_kind_from_name(name) {
+                            // Self-closing nested frame: push, then
+                            // finalise so the parent picks it up.
+                            anchored_stack.push(make_anchored_frame(&e, kind));
+                            finalise_anchored_top(
+                                &mut anchored_stack,
+                                &mut current_paragraph,
+                            );
+                        } else if name == b"AnchoredObjectSetting" {
+                            if let Some(p) = anchored_stack.last_mut() {
                                 p.setting = Some(parse_anchored_object_setting(&e));
                             }
+                        } else if name == b"Image" || name == b"Link" {
+                            anchored_capture_image_attrs(&e, &mut anchored_stack);
                         }
+                        // No depth bump — Empty events have no
+                        // matching End.
                         buf.clear();
                         continue;
                     }
-                    if current_run.is_some()
-                        && (name == b"TextFrame"
-                            || name == b"Rectangle"
-                            || name == b"Group")
-                    {
-                        // Self-closing anchored frame: capture
-                        // attributes, then immediately attach to
-                        // the host paragraph (no body to skip).
-                        try_open_anchored(
-                            &e,
-                            &current_run,
-                            &mut anchored_depth,
-                            &mut pending_anchored,
-                            true,
-                        );
-                        if let (Some(frame), Some(para)) =
-                            (pending_anchored.take(), current_paragraph.as_mut())
-                        {
-                            para.anchored_frames.push(frame);
+                    if current_run.is_some() {
+                        if let Some(kind) = anchored_kind_from_name(name) {
+                            // Self-closing outermost anchored frame:
+                            // push + finalise so it lands on the
+                            // host paragraph immediately.
+                            anchored_stack.push(make_anchored_frame(&e, kind));
+                            finalise_anchored_top(
+                                &mut anchored_stack,
+                                &mut current_paragraph,
+                            );
+                            buf.clear();
+                            continue;
                         }
-                        buf.clear();
-                        continue;
                     }
                     match name {
                     // <StoryPreference OpticalMarginAlignment="true"
@@ -1004,6 +1046,34 @@ fn parse_matrix_local(s: &str) -> Option<[f32; 6]> {
         return None;
     }
     Some([parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]])
+}
+
+/// Capture `<Image>` / `<Link>` attributes onto the top of the
+/// anchored stack. Mirrors the Rectangle / Polygon image-link
+/// plumbing in `spread.rs`: an `<Image>` element nested inside an
+/// anchored Rectangle (or its `<Link>` child) carries the
+/// `LinkResourceURI` (or `href`) and the image's pixel-to-frame
+/// `ItemTransform`. First-write-wins so the outer `<Image>` beats
+/// its nested `<Link>`.
+fn anchored_capture_image_attrs(
+    e: &quick_xml::events::BytesStart,
+    anchored_stack: &mut [AnchoredFrame],
+) {
+    let Some(top) = anchored_stack.last_mut() else {
+        return;
+    };
+    if let Some(uri) = attr(e, b"LinkResourceURI").or_else(|| attr(e, b"href")) {
+        if top.image_link.is_none() {
+            top.image_link = Some(uri);
+        }
+    }
+    if e.name().as_ref() == b"Image" {
+        if let Some(m) = attr(e, b"ItemTransform").and_then(|s| parse_matrix_local(&s)) {
+            if top.image_item_transform.is_none() {
+                top.image_item_transform = Some(m);
+            }
+        }
+    }
 }
 
 fn parse_anchored_object_setting(
@@ -1236,6 +1306,115 @@ mod tests {
         // No drop cap on the second paragraph — fields default to 0.
         assert_eq!(s.paragraphs[1].drop_cap_characters, 0);
         assert_eq!(s.paragraphs[1].drop_cap_lines, 0);
+    }
+
+    #[test]
+    fn anchored_text_frame_captures_full_attribute_set() {
+        // Mirror anchored.idml's `with-text-wrap` variant: the
+        // anchored TextFrame ships FillColor / StrokeColor /
+        // StrokeWeight / AppliedObjectStyle in addition to the
+        // geometry pair. The renderer paints these instead of the
+        // fallback frame fill once Task-1 lands.
+        let xml = br#"<Story>
+          <ParagraphStyleRange>
+            <CharacterStyleRange>
+              <Content>before</Content>
+              <TextFrame Self="anchor1" ParentStory="u99"
+                         GeometricBounds="0 0 36 60"
+                         ItemTransform="1 0 0 1 0 0"
+                         FillColor="Color/Paper"
+                         StrokeColor="Color/Black"
+                         StrokeWeight="0.5"
+                         FillTint="50"
+                         GradientFillAngle="45"
+                         AppliedObjectStyle="ObjectStyle/$ID/[None]">
+                <AnchoredObjectSetting AnchoredPosition="InlinePosition"/>
+              </TextFrame>
+              <Content>after</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let af = &s.paragraphs[0].anchored_frames[0];
+        assert_eq!(af.fill_color.as_deref(), Some("Color/Paper"));
+        assert_eq!(af.stroke_color.as_deref(), Some("Color/Black"));
+        assert_eq!(af.stroke_weight, Some(0.5));
+        assert_eq!(af.fill_tint, Some(50.0));
+        assert_eq!(af.gradient_fill_angle, Some(45.0));
+        assert_eq!(
+            af.applied_object_style.as_deref(),
+            Some("ObjectStyle/$ID/[None]")
+        );
+        assert!(af.image_link.is_none());
+        assert!(af.children.is_empty());
+    }
+
+    #[test]
+    fn anchored_rectangle_captures_image_link_and_item_transform() {
+        // An anchored Rectangle that hosts a placed image carries an
+        // `<Image>` + `<Link>` pair inside its body, just like a
+        // spread-level Rectangle. The parser must mirror that
+        // plumbing onto the anchored record.
+        let xml = br#"<Story>
+          <ParagraphStyleRange>
+            <CharacterStyleRange>
+              <Rectangle Self="r1" GeometricBounds="0 0 50 80"
+                         FillColor="Swatch/None">
+                <Image Self="img1" ItemTransform="0.5 0 0 0.5 10 20">
+                  <Link Self="link1" LinkResourceURI="file:///tmp/photo.jpg"/>
+                </Image>
+                <AnchoredObjectSetting AnchoredPosition="InlinePosition"/>
+              </Rectangle>
+              <Content>x</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let af = &s.paragraphs[0].anchored_frames[0];
+        assert_eq!(af.frame_kind, AnchoredFrameKind::Rectangle);
+        assert_eq!(af.image_link.as_deref(), Some("file:///tmp/photo.jpg"));
+        assert_eq!(
+            af.image_item_transform,
+            Some([0.5, 0.0, 0.0, 0.5, 10.0, 20.0])
+        );
+        assert_eq!(af.fill_color.as_deref(), Some("Swatch/None"));
+    }
+
+    #[test]
+    fn anchored_group_recurses_into_children() {
+        // An anchored `<Group>` wraps one or more page-items. The
+        // parser must surface each child as a fully populated
+        // `AnchoredFrame` so the renderer can walk the group's
+        // z-order and emit each item with its own attributes.
+        let xml = br#"<Story>
+          <ParagraphStyleRange>
+            <CharacterStyleRange>
+              <Group Self="g1" GeometricBounds="0 0 80 100"
+                     ItemTransform="1 0 0 1 5 7">
+                <Rectangle Self="rA" GeometricBounds="0 0 30 40"
+                           FillColor="Color/Red" StrokeWeight="1"/>
+                <TextFrame Self="tB" ParentStory="uABC"
+                           GeometricBounds="0 0 20 60"
+                           FillColor="Color/Paper"/>
+                <AnchoredObjectSetting AnchoredPosition="InlinePosition"/>
+              </Group>
+              <Content>x</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let g = &s.paragraphs[0].anchored_frames[0];
+        assert_eq!(g.frame_kind, AnchoredFrameKind::Group);
+        assert_eq!(g.children.len(), 2, "group exposes its child frames");
+        assert_eq!(g.children[0].frame_kind, AnchoredFrameKind::Rectangle);
+        assert_eq!(g.children[0].fill_color.as_deref(), Some("Color/Red"));
+        assert_eq!(g.children[0].stroke_weight, Some(1.0));
+        assert_eq!(g.children[1].frame_kind, AnchoredFrameKind::TextFrame);
+        assert_eq!(g.children[1].parent_story.as_deref(), Some("uABC"));
+        assert_eq!(g.children[1].fill_color.as_deref(), Some("Color/Paper"));
+        // The setting on the outer Group is captured (sits at the
+        // top of the stack while children are pushed and popped).
+        assert!(g.setting.is_some());
     }
 
     #[test]
