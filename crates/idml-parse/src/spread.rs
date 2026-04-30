@@ -1518,23 +1518,48 @@ impl Spread {
                                     });
                                 }
                                 b"GradientFeatherSetting" => {
+                                    // InDesign uses `GradientStart`
+                                    // (an "x y" pair) + `Length` +
+                                    // `HiliteAngle` to describe the
+                                    // gradient direction; the IDML
+                                    // spec also accepts an explicit
+                                    // `GradientEnd` pair. We accept
+                                    // both shapes — the parser
+                                    // computes the end point from
+                                    // start + (Length × Angle) when
+                                    // GradientEnd is missing so the
+                                    // renderer sees one canonical
+                                    // pair regardless of the source.
                                     let start_point = attr(&e, b"GradientStart")
                                         .as_deref()
                                         .and_then(parse_xy_pair);
                                     let end_point = attr(&e, b"GradientEnd")
                                         .as_deref()
-                                        .and_then(parse_xy_pair);
+                                        .and_then(parse_xy_pair)
+                                        .or_else(|| {
+                                            let s = start_point?;
+                                            let length = parse_f(&e, b"Length")?;
+                                            let angle = parse_f(&e, b"GradientAngle")
+                                                .or_else(|| parse_f(&e, b"HiliteAngle"))
+                                                .or_else(|| parse_f(&e, b"Angle"))
+                                                .unwrap_or(0.0);
+                                            let rad = angle.to_radians();
+                                            let (sin, cos) = rad.sin_cos();
+                                            Some((s.0 + length * cos, s.1 - length * sin))
+                                        });
                                     bag.gradient_feather = Some(GradientFeatherParams {
                                         gradient_type: attr(&e, b"Type"),
                                         start_point,
                                         end_point,
                                         angle_deg: parse_f(&e, b"GradientAngle")
+                                            .or_else(|| parse_f(&e, b"HiliteAngle"))
                                             .or_else(|| parse_f(&e, b"Angle")),
                                         stops: Vec::new(),
                                     });
                                     // Mark this rectangle's gradient
                                     // feather as the open target so
-                                    // nested `<GradientStop>` children
+                                    // nested `<GradientStop>` /
+                                    // `<OpacityGradientStop>` children
                                     // can append to it. Cleared on the
                                     // close tag below.
                                     current_gradient_feather = Some(i);
@@ -1543,19 +1568,35 @@ impl Spread {
                             }
                         }
                     }
-                    b"GradientStop" => {
-                        // `<GradientStop>` children of an open
-                        // `<GradientFeatherSetting>` define the
-                        // alpha falloff. The same element name is
-                        // also used for `<Gradient>` swatch entries
-                        // in graphic.rs — that's a separate parser
-                        // file, so the routing here only fires when
-                        // a gradient feather block is actually open.
+                    b"GradientStop" | b"OpacityGradientStop" => {
+                        // Children of an open `<GradientFeatherSetting>`
+                        // define the alpha falloff. InDesign serialises
+                        // them as `<OpacityGradientStop Opacity="..."
+                        // Location="..." Midpoint="...">`; the IDML
+                        // spec also documents a `<GradientStop StopColor
+                        // ="..." Alpha="..." Location="..."
+                        // GradientStopMidpoint="...">` form. Both are
+                        // accepted — the alpha lands in `alpha_pct`
+                        // regardless of which attribute the IDML
+                        // actually used.
+                        //
+                        // `<GradientStop>` is also a child of
+                        // `<Gradient>` swatches in graphic.rs; that's
+                        // a separate parser file, so the routing here
+                        // only fires when a gradient-feather block is
+                        // actually open in the spread parser.
                         if let Some(rect_idx) = current_gradient_feather {
                             if let Some(bag) = out.rectangles[rect_idx].effects.as_mut() {
                                 if let Some(gf) = bag.gradient_feather.as_mut() {
                                     let location_pct = parse_f(&e, b"Location").unwrap_or(0.0);
-                                    let alpha_pct = parse_f(&e, b"Alpha").unwrap_or(100.0);
+                                    // `Opacity` (OpacityGradientStop)
+                                    // takes precedence; `Alpha`
+                                    // (GradientStop spec form) falls
+                                    // back; default 100 (fully opaque)
+                                    // when neither is set.
+                                    let alpha_pct = parse_f(&e, b"Opacity")
+                                        .or_else(|| parse_f(&e, b"Alpha"))
+                                        .unwrap_or(100.0);
                                     let midpoint_pct =
                                         parse_f(&e, b"GradientStopMidpoint")
                                             .or_else(|| parse_f(&e, b"Midpoint"))
