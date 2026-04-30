@@ -14,6 +14,8 @@
 //! the shape of the calibration surface (tolerance, looseness, glue
 //! stretch/shrink ratios).
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use paragraph_breaker::{Breakpoint, Item};
 use rustybuzz::Face;
 
@@ -111,6 +113,247 @@ pub struct ComposedLine {
     pub ends_with_hyphen: bool,
 }
 
+/// Per-paragraph drop-cap configuration.
+///
+/// IDML expresses this as
+/// `<ParagraphStyleRange DropCapCharacters="1" DropCapLines="3" .../>`:
+/// the first `characters` glyphs of the paragraph render at a height
+/// equal to `lines` body lines, and the remainder of the paragraph
+/// wraps to the right of the dropped glyph(s) for that many lines.
+///
+/// We model the drop cap as a synthetic per-line column-width table
+/// (see [`drop_cap_column_widths`]), reusing the existing
+/// `column_widths` mechanism in [`ComposeOptions`]. The dropped
+/// glyph itself is shaped by a separate pass at the larger point
+/// size — see [`drop_cap_point_size`] for how to compute it.
+///
+/// `characters == 0` means "no drop cap" — the column-widths helper
+/// returns an empty vec and the caller should treat the paragraph
+/// as a regular flow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DropCapSpec {
+    /// Number of leading characters (Unicode scalars) to drop. IDML's
+    /// `DropCapCharacters`. Zero disables the drop cap.
+    pub characters: u32,
+    /// Number of body lines the dropped glyph spans. IDML's
+    /// `DropCapLines`. Typical value: 2 or 3.
+    pub lines: u32,
+    /// Advance width of the dropped run *at its enlarged point size*,
+    /// in 1/64 pt. The remainder paragraph indents by this much for
+    /// `lines` lines so body text doesn't collide with the drop cap.
+    /// The caller computes this by shaping the dropped characters
+    /// via [`TextShaper::shape`] at [`drop_cap_point_size`].
+    pub glyph_advance: i32,
+    /// Extra space between the drop-cap glyph and the body text, in
+    /// 1/64 pt. IDML's `DropCapDetail` is the side-bearing tweak —
+    /// we approximate as a flat gutter. A reasonable default is
+    /// `space_width / 2`.
+    pub gutter: i32,
+}
+
+impl DropCapSpec {
+    /// True when this spec asks for a real drop cap (non-zero
+    /// characters and lines). Helpers fall through to the no-op
+    /// behaviour when this is false.
+    pub fn is_active(&self) -> bool {
+        self.characters > 0 && self.lines > 0
+    }
+}
+
+/// Compute the enlarged point size for a drop-cap glyph.
+///
+/// IDML's drop cap height is "M body lines tall". We approximate as
+/// `body_line_height * drop_cap_lines` — the dropped glyph is shaped
+/// at this point size so its cap-height fills the spanned lines. In
+/// practice the shaped height is slightly smaller than the line
+/// height (cap-height vs em-square), which matches InDesign's visual
+/// (the drop cap doesn't quite touch the baseline of the M-th line).
+///
+/// `body_line_height_pt` is the body paragraph's line height in pt
+/// (i.e. `LayoutOptions::line_height` divided by `ADVANCE_PRECISION`).
+/// `drop_cap_lines` is `DropCapSpec::lines`. Returns the point size
+/// to pass to the shaper / measurer for the dropped run.
+pub fn drop_cap_point_size(body_line_height_pt: f32, drop_cap_lines: u32) -> f32 {
+    if drop_cap_lines == 0 {
+        return 0.0;
+    }
+    body_line_height_pt * drop_cap_lines as f32
+}
+
+/// Build a per-line `column_widths` vector that carves out a
+/// drop-cap shaped notch from the first `spec.lines` lines.
+///
+/// The first `spec.lines` entries equal `base_width - (glyph_advance
+/// + gutter)` — those lines are narrower because the drop-cap glyph
+/// occupies the leftmost column. Lines past `spec.lines` aren't
+/// included; the composer falls back to `column_width` for them
+/// (see [`ComposeOptions::column_widths`]).
+///
+/// If `spec` is inactive (no drop cap), returns an empty vec — the
+/// caller treats this the same as `None` and the column shape is
+/// unchanged.
+///
+/// All values in 1/64 pt.
+pub fn drop_cap_column_widths(spec: &DropCapSpec, base_width: i32) -> Vec<i32> {
+    if !spec.is_active() {
+        return Vec::new();
+    }
+    let indent = spec.glyph_advance.saturating_add(spec.gutter);
+    let narrow = (base_width - indent).max(0);
+    vec![narrow; spec.lines as usize]
+}
+
+/// Result of [`compose_paragraph_with_drop_cap`].
+///
+/// The composer splits the paragraph into:
+/// 1. The dropped run (first `spec.characters` glyphs) — shaped
+///    separately at the enlarged point size.
+/// 2. The remainder, composed with the carved-out column widths.
+///
+/// Callers position the drop-cap glyph at the paragraph origin
+/// (left edge, top of the first body line — InDesign aligns the
+/// drop cap's cap-height to the first line's cap-height). The
+/// remainder lines then layout as usual: the first `spec.lines`
+/// lines start at `glyph_advance + gutter`, subsequent lines at 0.
+///
+/// `dropped_byte_range` covers the source bytes consumed by the
+/// dropped run — the layout pass walks the source paragraph using
+/// `dropped_byte_range.end` as the start offset for the remainder
+/// lines (whose `byte_range` is paragraph-relative, not
+/// remainder-relative).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DropCapComposition {
+    /// The dropped run's source byte range (paragraph-relative). The
+    /// layout pass shapes `&text[dropped_byte_range]` at the enlarged
+    /// point size.
+    pub dropped_byte_range: std::ops::Range<usize>,
+    /// Composed lines for the remainder of the paragraph. Each
+    /// line's `byte_range` is paragraph-relative (not relative to
+    /// the remainder slice) — the composer translates internally.
+    pub lines: Vec<ComposedLine>,
+}
+
+/// Compose a paragraph with a drop cap.
+///
+/// `base_options.column_widths` is overlaid with a per-line widths
+/// table that narrows the first `spec.lines` lines by the drop-cap
+/// glyph's advance + gutter. The dropped glyph itself is *not*
+/// composed — the caller shapes it separately (at
+/// [`drop_cap_point_size`]) and positions it at the paragraph
+/// origin.
+///
+/// The first `spec.characters` Unicode scalars of `text` are skipped
+/// before the regular composition — they belong to the dropped run.
+/// If `text` has fewer scalars than `spec.characters`, every
+/// character drops and the result has zero remainder lines.
+///
+/// When `spec.is_active()` is false, this function is equivalent to
+/// `compose_paragraph(text, measurer, base_options)` wrapped in a
+/// `DropCapComposition` with an empty `dropped_byte_range`.
+///
+/// Note: this entry point does **not** mutate `base_options` — it
+/// builds a temporary copy internally. Callers can share a single
+/// `ComposeOptions` across paragraphs that may or may not have drop
+/// caps.
+pub fn compose_paragraph_with_drop_cap(
+    text: &str,
+    measurer: &dyn AdvanceMeasurer,
+    base_options: &ComposeOptions,
+    spec: &DropCapSpec,
+) -> DropCapComposition {
+    if !spec.is_active() {
+        return DropCapComposition {
+            dropped_byte_range: 0..0,
+            lines: compose_paragraph(text, measurer, base_options),
+        };
+    }
+    // Walk `spec.characters` Unicode scalars off the front to find
+    // the byte split. Char-counted, not byte-counted, because IDML's
+    // DropCapCharacters is a character count.
+    let mut split = 0usize;
+    let mut taken = 0u32;
+    for (i, _) in text.char_indices() {
+        if taken == spec.characters {
+            split = i;
+            break;
+        }
+        taken += 1;
+    }
+    if taken < spec.characters {
+        // Whole paragraph fit inside the drop-cap span — there are
+        // no remainder lines. (Edge case: a one-character paragraph
+        // with DropCapCharacters="3".)
+        return DropCapComposition {
+            dropped_byte_range: 0..text.len(),
+            lines: Vec::new(),
+        };
+    }
+    let dropped_byte_range = 0..split;
+    let remainder = &text[split..];
+
+    // Build the per-line widths table for the remainder. We start
+    // with the caller-supplied `column_widths` if any, then narrow
+    // the first `spec.lines` entries. If the caller already set
+    // `column_widths` (e.g. a text-wrap rectangle), we merge by
+    // taking the min width per line — drop cap and text wrap both
+    // *carve out* space from the column.
+    let mut widths = drop_cap_column_widths(spec, base_options.column_width);
+    if let Some(existing) = base_options.column_widths.as_deref() {
+        for (i, w) in widths.iter_mut().enumerate() {
+            if let Some(&e) = existing.get(i) {
+                *w = (*w).min(e);
+            }
+        }
+        // Append any tail lines from the caller's table that extend
+        // past the drop-cap span — those lines aren't narrowed by
+        // the drop cap but may still be narrowed by a wrap.
+        for &e in existing.iter().skip(widths.len()) {
+            widths.push(e);
+        }
+    }
+
+    let mut opts = base_options.clone();
+    opts.column_widths = Some(widths);
+
+    // Compose the remainder. ComposedLine::byte_range is relative to
+    // the remainder slice — translate back to paragraph coordinates
+    // so callers see paragraph-relative offsets consistent with
+    // `compose_paragraph` on the whole text.
+    let mut lines = compose_paragraph(remainder, measurer, &opts);
+    for line in &mut lines {
+        line.byte_range.start += split;
+        line.byte_range.end += split;
+    }
+
+    DropCapComposition {
+        dropped_byte_range,
+        lines,
+    }
+}
+
+/// One-shot guard for the hyphenation-parity advisory log. We emit
+/// the "TeX patterns; Proximity dictionary not licensed" trace once
+/// per process — enough for an operator scanning logs to notice the
+/// divergence without flooding traces with one entry per composed
+/// paragraph. See `docs/hyphenation-parity.md` for the full known
+/// divergence between our TeX-pattern hyphenator and InDesign's
+/// Proximity dictionaries.
+static HYPHENATION_DIVERGENCE_LOGGED: AtomicBool = AtomicBool::new(false);
+
+fn note_hyphenation_divergence_once() {
+    // Relaxed is fine: this is best-effort advisory; a benign
+    // duplicate log on a tight race is acceptable and we don't pair
+    // it with any other memory ordering.
+    if !HYPHENATION_DIVERGENCE_LOGGED.swap(true, Ordering::Relaxed) {
+        tracing::debug!(
+            target: "idml_text::compose",
+            "hyphenation: TeX patterns (hypher); Proximity dictionary not licensed — \
+             expect minor break-position divergence vs InDesign. \
+             See docs/hyphenation-parity.md."
+        );
+    }
+}
+
 /// Compose one paragraph.
 ///
 /// Splits `text` into words by ASCII whitespace, measures each with
@@ -128,6 +371,9 @@ pub fn compose_paragraph(
     let words = segment(text);
     if words.is_empty() {
         return Vec::new();
+    }
+    if options.hyphenator.is_some() {
+        note_hyphenation_divergence_once();
     }
     let space_width = measurer.space_width();
     let stretch = (space_width as f32 * options.stretch_ratio).round() as i32;
@@ -504,5 +750,204 @@ mod tests {
         for line in &out {
             assert!(line.width > 0, "width not set: {:?}", line);
         }
+    }
+
+    // ----- Drop cap -----
+
+    #[test]
+    fn drop_cap_inactive_returns_unchanged_composition() {
+        let m = MonospaceMeasurer::new(10, 10);
+        let opts = ComposeOptions {
+            column_width: 200,
+            ..ComposeOptions::new(0.0)
+        };
+        let spec = DropCapSpec {
+            characters: 0,
+            lines: 0,
+            glyph_advance: 0,
+            gutter: 0,
+        };
+        let composed = compose_paragraph_with_drop_cap("hello world", &m, &opts, &spec);
+        let baseline = compose_paragraph("hello world", &m, &opts);
+        assert_eq!(composed.lines, baseline);
+        assert_eq!(composed.dropped_byte_range, 0..0);
+    }
+
+    #[test]
+    fn drop_cap_carves_first_lines_narrower() {
+        // Synthetic monospace at 10 per char/space; full column =
+        // 400 (40 chars). Drop-cap glyph indent = 100, so first 3
+        // lines have width 300 (30 chars), lines 4+ have width 400.
+        let m = MonospaceMeasurer::new(10, 10);
+        let opts = ComposeOptions {
+            column_width: 400,
+            tolerance: 50.0,
+            ..ComposeOptions::new(0.0)
+        };
+        let spec = DropCapSpec {
+            characters: 1,
+            lines: 3,
+            glyph_advance: 90,
+            gutter: 10,
+        };
+        let widths = drop_cap_column_widths(&spec, opts.column_width);
+        assert_eq!(widths, vec![300, 300, 300]);
+
+        // Paragraph long enough to need > 3 lines.
+        let text = "Once upon a time in a far off land lived a wise old wizard \
+                    who knew the answer to every question but one and \
+                    he kept that final answer to himself for many many years";
+        let composed = compose_paragraph_with_drop_cap(text, &m, &opts, &spec);
+        assert_eq!(composed.dropped_byte_range, 0..1);
+        assert!(
+            composed.lines.len() >= 4,
+            "expected >=4 lines got {}: {:?}",
+            composed.lines.len(),
+            composed.lines.iter().map(|l| line_text(text, l)).collect::<Vec<_>>()
+        );
+        // First 3 lines fit inside the carved (300-unit) column.
+        for line in composed.lines.iter().take(3) {
+            assert!(
+                line.width <= 300,
+                "first-three line width {} exceeds carved 300 ({})",
+                line.width,
+                line_text(text, line)
+            );
+        }
+        // The carved-vs-full distinction shows up in what *fits*
+        // on each line: a long word that goes on line 4+ wouldn't
+        // have fit on line 1-3. Check by forcing a long word past
+        // the carve span: line 4 contains content that, if it had
+        // been on line 1, would have overflowed 300. We assert the
+        // first 3 lines used the narrow shape (already done) and
+        // assert separately that paragraph-breaker honoured the
+        // narrowing — by composing the *same* text without a drop
+        // cap and confirming line 1 there is wider than line 1
+        // here.
+        let baseline = compose_paragraph(text, &m, &opts);
+        assert!(
+            baseline[0].width > composed.lines[0].width,
+            "without drop cap, line 1 should be wider (baseline={}, \
+             with-drop-cap={})",
+            baseline[0].width,
+            composed.lines[0].width,
+        );
+    }
+
+    #[test]
+    fn drop_cap_remainder_byte_ranges_are_paragraph_relative() {
+        let m = MonospaceMeasurer::new(10, 10);
+        let opts = ComposeOptions {
+            column_width: 1500,
+            ..ComposeOptions::new(0.0)
+        };
+        let spec = DropCapSpec {
+            characters: 1,
+            lines: 2,
+            glyph_advance: 200,
+            gutter: 20,
+        };
+        let text = "Once upon a time";
+        let composed = compose_paragraph_with_drop_cap(text, &m, &opts, &spec);
+        // First remainder line begins at byte 1 (after the dropped
+        // 'O') and the source text at that byte range is part of
+        // the original paragraph.
+        let first = &composed.lines[0];
+        assert!(first.byte_range.start >= 1);
+        assert!(first.byte_range.end <= text.len());
+        let snippet = &text[first.byte_range.clone()];
+        // Either skips leading whitespace (none here at byte 1) or
+        // begins with the post-O character. Confirm round-trip
+        // doesn't panic on UTF-8 boundaries.
+        assert!(!snippet.is_empty());
+    }
+
+    #[test]
+    fn drop_cap_short_paragraph_consumes_all_text() {
+        // Drop cap requests 5 chars, but the paragraph is only 2.
+        let m = MonospaceMeasurer::new(10, 10);
+        let opts = ComposeOptions {
+            column_width: 200,
+            ..ComposeOptions::new(0.0)
+        };
+        let spec = DropCapSpec {
+            characters: 5,
+            lines: 3,
+            glyph_advance: 100,
+            gutter: 10,
+        };
+        let composed = compose_paragraph_with_drop_cap("ok", &m, &opts, &spec);
+        assert_eq!(composed.dropped_byte_range, 0..2);
+        assert!(composed.lines.is_empty());
+    }
+
+    #[test]
+    fn drop_cap_point_size_scales_with_lines() {
+        // 12pt body × 3 drop-cap lines = 36pt drop cap.
+        assert_eq!(drop_cap_point_size(12.0, 3), 36.0);
+        // No drop cap = zero point size.
+        assert_eq!(drop_cap_point_size(12.0, 0), 0.0);
+    }
+
+    #[test]
+    fn drop_cap_existing_column_widths_are_merged() {
+        // If the caller already set column_widths (e.g. text-wrap),
+        // the drop cap takes the min per line so both carvings are
+        // honoured.
+        let m = MonospaceMeasurer::new(10, 10);
+        let opts = ComposeOptions {
+            column_width: 1500,
+            // First line is *already* very narrow (a wrap rectangle).
+            column_widths: Some(vec![400, 1500, 1500, 1500]),
+            ..ComposeOptions::new(0.0)
+        };
+        let spec = DropCapSpec {
+            characters: 1,
+            lines: 3,
+            glyph_advance: 600,
+            gutter: 50,
+        };
+        // Drop cap would carve to 850 on each of the first 3, but
+        // the wrap on line 1 is even narrower (400) — keep 400.
+        let widths = drop_cap_column_widths(&spec, opts.column_width);
+        assert_eq!(widths, vec![850, 850, 850]);
+
+        let composed = compose_paragraph_with_drop_cap(
+            "Once upon a time in a faraway land lived a lonely old wizard \
+             with a long white beard and a tall pointed hat",
+            &m,
+            &opts,
+            &spec,
+        );
+        // First line uses min(850, 400) = 400.
+        let first = &composed.lines[0];
+        assert!(first.width <= 400, "first line should be wrap-narrow: {:?}", first);
+    }
+
+    #[test]
+    fn default_compose_paragraph_matches_drop_cap_inactive() {
+        // Corpus-protection guard: with `DropCapSpec` inactive,
+        // compose_paragraph_with_drop_cap must produce *exactly* the
+        // same line stream as compose_paragraph for arbitrary input.
+        let m = MonospaceMeasurer::new(10, 10);
+        let opts = ComposeOptions {
+            column_width: 90,
+            tolerance: 10.0,
+            ..ComposeOptions::new(0.0)
+        };
+        let text = "the quick brown fox jumps over the lazy dog";
+        let baseline = compose_paragraph(text, &m, &opts);
+        let inactive = DropCapSpec {
+            characters: 0,
+            lines: 0,
+            glyph_advance: 9999,
+            gutter: 9999,
+        };
+        let with_cap = compose_paragraph_with_drop_cap(text, &m, &opts, &inactive);
+        assert_eq!(with_cap.lines, baseline);
+    }
+
+    fn line_text<'a>(text: &'a str, line: &ComposedLine) -> &'a str {
+        &text[line.byte_range.clone()]
     }
 }
