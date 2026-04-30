@@ -228,16 +228,40 @@ pub struct Blending {
 
 /// IDML `<DropShadowSetting>` — distances in pt, `opacity_pct` is
 /// 0..=100, `effect_color` references a Color self id.
+///
+/// Every attribute except `mode` is optional: when `None`, it is
+/// omitted from the emitted XML so downstream consumers (the parser
+/// and InDesign itself) fall back to the IDML defaults documented in
+/// §IDML Defaults Table 84 (`XOffset=7`, `YOffset=7`, `Size=5`,
+/// `Opacity=75`, `EffectColor=Black`). Use the `default_drop()` helper
+/// to construct a "use IDML defaults for everything" shadow.
 #[derive(Clone)]
 pub struct DropShadow {
     /// `Mode` — typically `"Drop"` for an enabled shadow,
     /// `"None"` to serialise but disable.
     pub mode: &'static str,
-    pub x_offset: f32,
-    pub y_offset: f32,
-    pub size: f32,
-    pub opacity_pct: f32,
-    pub effect_color: String,
+    pub x_offset: Option<f32>,
+    pub y_offset: Option<f32>,
+    pub size: Option<f32>,
+    pub opacity_pct: Option<f32>,
+    pub effect_color: Option<String>,
+}
+
+impl DropShadow {
+    /// `<DropShadowSetting Mode="Drop"/>` — a shadow that emits no
+    /// attributes other than `Mode`, so every other parameter falls
+    /// through to the IDML default. Lets samples exercise the
+    /// parser's default-fill-in path (vs. an explicit-value shadow).
+    pub fn default_drop() -> Self {
+        Self {
+            mode: "Drop",
+            x_offset: None,
+            y_offset: None,
+            size: None,
+            opacity_pct: None,
+            effect_color: None,
+        }
+    }
 }
 
 impl Rect {
@@ -361,21 +385,33 @@ impl Rect {
                 b.empty("BlendingSetting", &a);
             }
             if let Some(ds) = &self.drop_shadow {
-                let xo = format_f32(ds.x_offset);
-                let yo = format_f32(ds.y_offset);
-                let sz = format_f32(ds.size);
-                let op = format_f32(ds.opacity_pct);
-                b.empty(
-                    "DropShadowSetting",
-                    &[
-                        ("Mode", ds.mode),
-                        ("XOffset", xo.as_str()),
-                        ("YOffset", yo.as_str()),
-                        ("Size", sz.as_str()),
-                        ("Opacity", op.as_str()),
-                        ("EffectColor", ds.effect_color.as_str()),
-                    ],
-                );
+                // Optional attributes are emitted only when set so a
+                // `<DropShadowSetting Mode="Drop"/>` round-trips
+                // through the parser into the IDML defaults (§IDML
+                // Defaults Table 84) rather than being pinned to
+                // zeroes.
+                let xo = ds.x_offset.map(format_f32);
+                let yo = ds.y_offset.map(format_f32);
+                let sz = ds.size.map(format_f32);
+                let op = ds.opacity_pct.map(format_f32);
+                let mut a: Vec<(&str, &str)> = Vec::with_capacity(6);
+                a.push(("Mode", ds.mode));
+                if let Some(xo) = &xo {
+                    a.push(("XOffset", xo.as_str()));
+                }
+                if let Some(yo) = &yo {
+                    a.push(("YOffset", yo.as_str()));
+                }
+                if let Some(sz) = &sz {
+                    a.push(("Size", sz.as_str()));
+                }
+                if let Some(op) = &op {
+                    a.push(("Opacity", op.as_str()));
+                }
+                if let Some(ec) = &ds.effect_color {
+                    a.push(("EffectColor", ec.as_str()));
+                }
+                b.empty("DropShadowSetting", &a);
             }
             b.end("TransparencySetting");
         }
