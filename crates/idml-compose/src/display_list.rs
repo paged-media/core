@@ -369,21 +369,45 @@ pub enum DisplayCommand {
         image_id: ImageId,
         transform: Transform,
     },
-    // PushLayer, PopLayer, PushClip, PopClip land with §10.4.
+    /// Push a clip path onto the rasterizer's clip stack. Subsequent
+    /// drawing commands are masked to the *intersection* of every
+    /// pushed clip until a matching `PopClip` lands. Paths are filled
+    /// with `FillRule::NonZero` (matching IDML's path-geometry
+    /// convention); the clip is anti-aliased.
+    ///
+    /// The transform maps `path_id` from its local space into page
+    /// coordinates, exactly like `FillPath::transform`. The
+    /// rasterizer multiplies in its page-to-pixel scale on top.
+    ///
+    /// Today only the CPU rasterizer enforces clips; the Vello
+    /// backend currently no-ops them (matching its existing
+    /// "unsupported feature ⇒ skip" behaviour for `Image` and
+    /// `DropShadow`).
+    PushClip { path_id: PathId, transform: Transform },
+    /// Pop the most-recently-pushed clip. Mismatched Push/Pop pairs
+    /// are tolerated — a stray `PopClip` drops back to the base
+    /// (un-clipped) state.
+    PopClip,
+    // PushLayer, PopLayer land with §10.4.
 }
 
 impl DisplayCommand {
     /// Mutable accessor for the command's placement transform.
     /// Used by post-emit passes (vertical justification, future
     /// layered effects) that need to translate / re-anchor a range
-    /// of commands without inspecting variants individually.
-    pub fn transform_mut(&mut self) -> &mut Transform {
+    /// of commands without inspecting variants individually. Returns
+    /// `None` for commands that have no per-command transform
+    /// (`PopClip`); callers walking command ranges must handle that
+    /// case explicitly.
+    pub fn transform_mut(&mut self) -> Option<&mut Transform> {
         match self {
             DisplayCommand::FillPath { transform, .. }
             | DisplayCommand::FillPathBlend { transform, .. }
             | DisplayCommand::StrokePath { transform, .. }
             | DisplayCommand::DropShadow { transform, .. }
-            | DisplayCommand::Image { transform, .. } => transform,
+            | DisplayCommand::Image { transform, .. }
+            | DisplayCommand::PushClip { transform, .. } => Some(transform),
+            DisplayCommand::PopClip => None,
         }
     }
 }

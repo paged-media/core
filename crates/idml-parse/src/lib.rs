@@ -27,8 +27,8 @@ pub use graphic::{
 };
 pub use spread::{
     Bounds, DropShadowSetting, FirstBaselineOffset, FrameEffects, FrameFittingOption, GraphicLine,
-    Oval, Page, PathAnchor, Polygon, Rectangle, Spread, TextFrame, TextWrap, TextWrapMode,
-    VerticalJustification,
+    Oval, Page, PathAnchor, Polygon, Rectangle, Spread, TextFrame, TextPath, TextWrap,
+    TextWrapMode, VerticalJustification,
 };
 pub use story::{
     CellDiagonal, CharacterRun, Paragraph, Story, TabStop, Table, TableCell, TableColumn, TableRow,

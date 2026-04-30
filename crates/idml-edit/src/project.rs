@@ -1756,6 +1756,7 @@ impl Project {
             stroke_weight,
             drop_shadow: None,
             image_link,
+            image_item_transform: None,
             applied_object_style,
             text_wrap: None,
             frame_fitting: None,
@@ -1772,6 +1773,7 @@ impl Project {
             blend_mode: None,
             effects: None,
             gradient_fill_angle: None,
+            text_paths: Vec::new(),
         };
         let position = self.doc.spreads[spread_idx].spread.rectangles.len();
         self.doc.spreads[spread_idx].spread.rectangles.push(rect);

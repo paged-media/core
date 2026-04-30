@@ -263,6 +263,18 @@ pub struct Rectangle {
     /// `AssetResolver::resolve_image`. `None` means the rectangle
     /// is a plain colour swatch.
     pub image_link: Option<String>,
+    /// `ItemTransform` attribute on the nested `<Image>` element.
+    /// Maps the image's natural-pixel coordinate space (origin at the
+    /// top-left of the source pixmap, with 1px ≈ 1pt at 72 ppi) into
+    /// the *frame's inner* coordinate system — the same space the
+    /// rectangle's `<PathGeometry>` lives in. When present, the
+    /// renderer composes
+    ///    `frame_outer ∘ image_item_transform ∘ pixel_to_pt`
+    /// to position the image; the rectangle's path then clips it.
+    /// `None` falls back to the legacy "stretch image to frame
+    /// bounds" behaviour for synthetic IDMLs that omit the inner
+    /// transform.
+    pub image_item_transform: Option<[f32; 6]>,
     /// `AppliedObjectStyle` reference; see `TextFrame`.
     pub applied_object_style: Option<String>,
     /// `<TextWrapPreference>` parsed off the rectangle.
@@ -331,6 +343,9 @@ pub struct Rectangle {
     /// endpoints. Combined with `gradient_fill_length` the renderer
     /// places the gradient line through the frame's center.
     pub gradient_fill_angle: Option<f32>,
+    /// `<TextPath>` children attached to this rectangle. See
+    /// [`Polygon::text_paths`].
+    pub text_paths: Vec<TextPath>,
 }
 
 /// Mirror of IDML's optional `InnerShadow`, `OuterGlow`, `InnerGlow`,
@@ -414,6 +429,15 @@ pub struct GraphicLine {
     /// `<TextWrapPreference>` parsed off the line.
     pub text_wrap: Option<TextWrap>,
     pub item_layer: Option<String>,
+    /// Path-point anchors for lines that carry a curved or
+    /// multi-segment `<PathGeometry>` (so a `<TextPath>` child can
+    /// flow text along the actual stroke). Empty for synthetic
+    /// `GeometricBounds`-only lines, which the renderer continues to
+    /// rasterise as the corner-to-corner diagonal.
+    pub anchors: Vec<PathAnchor>,
+    /// `<TextPath>` children attached to this line. See
+    /// [`Polygon::text_paths`].
+    pub text_paths: Vec<TextPath>,
 }
 
 /// One point on an IDML `<PathGeometry>` path. `anchor` is the
@@ -475,6 +499,36 @@ impl TextWrapMode {
     }
 }
 
+/// `<TextPath>` child element. Attaches a story to a host shape's
+/// path so the text flows along the curve rather than filling a
+/// rectangular column. Attribute coverage is intentionally minimal —
+/// the renderer needs only the story reference today; richer
+/// alignment / spacing / effect attributes can land later without
+/// a struct breaking change.
+#[derive(Debug, Clone, Serialize)]
+pub struct TextPath {
+    pub self_id: Option<String>,
+    /// Story reference (e.g. `u3ae`). Same shape as
+    /// `TextFrame::parent_story`.
+    pub parent_story: String,
+    /// `PathAlignment` — `CenterPathAlignment` (default), `TopPathAlignment`,
+    /// `BottomPathAlignment`. Captured for future fidelity work; the
+    /// current renderer assumes the glyphs sit on the host path.
+    pub path_alignment: Option<String>,
+    /// `PathEffect` — `RainbowPathEffect`, `SkewPathEffect`,
+    /// `Path3DRibbonEffect`, `StairStepPathEffect`,
+    /// `GravityPathEffect`. Currently informational.
+    pub path_effect: Option<String>,
+    /// `FlipPathEffect` — `Flipped` flips the text to the path's
+    /// other side. `NotFlipped` is the IDML default.
+    pub flip_path_effect: Option<String>,
+    /// `StartBracket` / `EndBracket` — IDML's per-path range over
+    /// which the text flows, in path-local arc-length units. Captured
+    /// for future fidelity; the current renderer flows from t=0.
+    pub start_bracket: Option<f32>,
+    pub end_bracket: Option<f32>,
+}
+
 /// `<Polygon>`. Same paint/stroke story as `Rectangle`. `anchors`
 /// retains the parsed `<PathPointType>` data so the renderer can
 /// rasterise the actual curved path; `bounds` is still the AABB so
@@ -503,6 +557,10 @@ pub struct Polygon {
     pub opacity: Option<f32>,
     /// See [`Rectangle::blend_mode`].
     pub blend_mode: Option<String>,
+    /// `<TextPath>` children attached to this polygon. IDML allows a
+    /// page item to host more than one text-on-path entry (one per
+    /// "slot" in the path effect); typical files carry exactly one.
+    pub text_paths: Vec<TextPath>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
@@ -855,6 +913,7 @@ impl Spread {
                             stroke_weight: common.stroke_weight,
                             drop_shadow: None,
                             image_link: None,
+                            image_item_transform: None,
                             applied_object_style: common.applied_object_style,
                             text_wrap: None,
                             frame_fitting: None,
@@ -871,6 +930,7 @@ impl Spread {
                             blend_mode: None,
                             effects: None,
                             gradient_fill_angle: common.gradient_fill_angle,
+                            text_paths: Vec::new(),
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Rect(out.rectangles.len() - 1),
@@ -1160,14 +1220,31 @@ impl Spread {
                         // Either source attaches to the current
                         // Rectangle (the only frame type that hosts
                         // images in this slice).
-                        if let (Some(CurrentFrameKind::Rect(i)), Some(uri)) = (
-                            current_frame.as_ref().map(|cf| cf.kind),
-                            attr(&e, b"LinkResourceURI").or_else(|| attr(&e, b"href")),
-                        ) {
-                            // First-write-wins so the outer <Image>
-                            // attribute beats the inner <Link>'s.
-                            if out.rectangles[i].image_link.is_none() {
-                                out.rectangles[i].image_link = Some(uri);
+                        if let Some(CurrentFrameKind::Rect(i)) =
+                            current_frame.as_ref().map(|cf| cf.kind)
+                        {
+                            if let Some(uri) =
+                                attr(&e, b"LinkResourceURI").or_else(|| attr(&e, b"href"))
+                            {
+                                // First-write-wins so the outer <Image>
+                                // attribute beats the inner <Link>'s.
+                                if out.rectangles[i].image_link.is_none() {
+                                    out.rectangles[i].image_link = Some(uri);
+                                }
+                            }
+                            // The <Image> element carries its own
+                            // ItemTransform mapping the source
+                            // pixmap's pixel grid into the
+                            // rectangle's inner coords. <Link>
+                            // children don't, so guard the read.
+                            if e.name().as_ref() == b"Image" {
+                                if let Some(m) = attr(&e, b"ItemTransform")
+                                    .and_then(|s| parse_matrix(&s))
+                                {
+                                    if out.rectangles[i].image_item_transform.is_none() {
+                                        out.rectangles[i].image_item_transform = Some(m);
+                                    }
+                                }
                             }
                         }
                     }
@@ -1188,6 +1265,43 @@ impl Spread {
                             });
                         }
                     }
+                    b"TextPath" => {
+                        // `<TextPath>` attaches a story to the current
+                        // shape's path (Polygon / Rectangle /
+                        // GraphicLine). The shape's own
+                        // `<PathGeometry>` provides the curve geometry;
+                        // we only record the story reference plus a
+                        // few alignment knobs here.
+                        if let (Some(cf), Some(parent_story)) =
+                            (current_frame.as_ref(), attr(&e, b"ParentStory"))
+                        {
+                            let tp = TextPath {
+                                self_id: attr(&e, b"Self"),
+                                parent_story,
+                                path_alignment: attr(&e, b"PathAlignment"),
+                                path_effect: attr(&e, b"PathEffect"),
+                                flip_path_effect: attr(&e, b"FlipPathEffect"),
+                                start_bracket: attr(&e, b"StartBracket")
+                                    .and_then(|s| s.parse().ok()),
+                                end_bracket: attr(&e, b"EndBracket")
+                                    .and_then(|s| s.parse().ok()),
+                            };
+                            match cf.kind {
+                                CurrentFrameKind::Polygon(i) => {
+                                    out.polygons[i].text_paths.push(tp);
+                                }
+                                CurrentFrameKind::Rect(i) => {
+                                    out.rectangles[i].text_paths.push(tp);
+                                }
+                                CurrentFrameKind::Line(i) => {
+                                    out.graphic_lines[i].text_paths.push(tp);
+                                }
+                                // Oval / TextFrame don't host TextPath
+                                // in the IDML schema; ignore if seen.
+                                _ => {}
+                            }
+                        }
+                    }
                     b"GraphicLine" => {
                         let bounds_attr =
                             attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
@@ -1203,12 +1317,17 @@ impl Spread {
                             applied_object_style: common.applied_object_style,
                             text_wrap: None,
                             item_layer: common.item_layer,
+                            anchors: Vec::new(),
+                            text_paths: Vec::new(),
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Line(out.graphic_lines.len() - 1),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
-                            keep_anchors: false,
+                            // Always retain Bezier path anchors for
+                            // graphic lines so a child <TextPath> can
+                            // flow text along the actual stroke.
+                            keep_anchors: true,
                             in_text_wrap: false,
                             non_fill_transparency_depth: 0,
                         });
@@ -1233,6 +1352,7 @@ impl Spread {
                             gradient_fill_angle: common.gradient_fill_angle,
                             opacity: None,
                             blend_mode: None,
+                            text_paths: Vec::new(),
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Polygon(out.polygons.len() - 1),
@@ -1275,12 +1395,22 @@ impl Spread {
                             // Polygons keep the curved-path data
                             // even when GeometricBounds was set, so
                             // the renderer can rasterise the actual
-                            // outline.
+                            // outline. GraphicLines keep them too so a
+                            // child <TextPath> can flow text along the
+                            // actual stroke (curved or multi-segment).
                             if cf.keep_anchors && !cf.anchors.is_empty() {
-                                if let CurrentFrameKind::Polygon(i) = cf.kind {
-                                    if i < out.polygons.len() {
+                                match cf.kind {
+                                    CurrentFrameKind::Polygon(i)
+                                        if i < out.polygons.len() =>
+                                    {
                                         out.polygons[i].anchors = cf.anchors;
                                     }
+                                    CurrentFrameKind::Line(i)
+                                        if i < out.graphic_lines.len() =>
+                                    {
+                                        out.graphic_lines[i].anchors = cf.anchors;
+                                    }
+                                    _ => {}
                                 }
                             }
                         }
@@ -1815,5 +1945,42 @@ mod tests {
         let s = Spread::parse(xml).unwrap();
         assert_eq!(s.text_frames[0].bounds.right, 200.0);
         assert_eq!(s.text_frames[0].bounds.bottom, 100.0);
+    }
+
+    #[test]
+    fn polygon_text_path_attaches_to_parent_polygon() {
+        // Real-world IDML serialises text-on-path as a `<TextPath>`
+        // child of the host shape, referencing a story via
+        // `ParentStory`. The host's own `<PathGeometry>` provides the
+        // curve geometry — we just need the story link plus a few
+        // alignment knobs.
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Polygon Self="poly1">
+              <Properties>
+                <PathGeometry><GeometryPathType><PathPointArray>
+                  <PathPointType Anchor="0 0"/>
+                  <PathPointType Anchor="100 0"/>
+                </PathPointArray></GeometryPathType></PathGeometry>
+              </Properties>
+              <TextPath Self="tp1" ParentStory="story_u1"
+                        PathAlignment="CenterPathAlignment"
+                        PathEffect="RainbowPathEffect"
+                        FlipPathEffect="NotFlipped"
+                        StartBracket="0" EndBracket="100"/>
+            </Polygon>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.polygons.len(), 1);
+        assert_eq!(s.polygons[0].text_paths.len(), 1);
+        let tp = &s.polygons[0].text_paths[0];
+        assert_eq!(tp.parent_story, "story_u1");
+        assert_eq!(tp.self_id.as_deref(), Some("tp1"));
+        assert_eq!(tp.path_alignment.as_deref(), Some("CenterPathAlignment"));
+        assert_eq!(tp.path_effect.as_deref(), Some("RainbowPathEffect"));
+        assert_eq!(tp.start_bracket, Some(0.0));
+        assert_eq!(tp.end_bracket, Some(100.0));
     }
 }
