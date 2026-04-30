@@ -17,8 +17,12 @@
 //!    final page-space coordinates and stroke widths come out right
 //!
 //! Stubbed (logged-and-skipped):
-//!  - DropShadow — needs Vello's offscreen-layer + Gaussian blur path
-//!    which only lands cleanly with the §10.4 effect plumbing.
+//!  - DropShadow / PathShadow — need Vello's offscreen-layer +
+//!    Gaussian blur path which only lands cleanly with the §10.4
+//!    effect plumbing.
+//!  - InnerShadow / OuterGlow / InnerGlow / BevelEmboss / Satin /
+//!    Feather — same story; the CPU rasterizer renders these and
+//!    is the path of record for fidelity.
 //!
 //! The CPU rasterizer (`cpu.rs`) remains the path of record for the
 //! fidelity harness; the Vello backend's job is to keep the
@@ -307,6 +311,30 @@ fn build_scene_with_transform(list: &DisplayList, page_to_px: kurbo::Affine) -> 
                 // render the soft glyph shadow once the Gaussian
                 // blur path lands. The CPU rasterizer handles this
                 // variant today; the Vello backend simply skips it.
+            }
+            DisplayCommand::InnerShadow { .. } => {
+                // Stub — needs Vello's offscreen-layer + Gaussian
+                // blur path. CPU rasterizer is the path of record;
+                // Vello renders the rest of the page without this
+                // effect for the wasm/native preview.
+            }
+            DisplayCommand::OuterGlow { .. } => {
+                // Stub — see InnerShadow above.
+            }
+            DisplayCommand::InnerGlow { .. } => {
+                // Stub — see InnerShadow above.
+            }
+            DisplayCommand::BevelEmboss { .. } => {
+                // Stub — needs the Gaussian blur path + per-pixel
+                // shading kernel. CPU rasterizer renders this; Vello
+                // skips for now.
+            }
+            DisplayCommand::Satin { .. } => {
+                // Stub — see InnerShadow above.
+            }
+            DisplayCommand::Feather { .. } => {
+                // Stub — needs the Gaussian blur path. CPU
+                // rasterizer renders this; Vello skips for now.
             }
             DisplayCommand::PushClip { path_id, transform } => {
                 let Some(path_data) = list.paths.get(*path_id) else {
