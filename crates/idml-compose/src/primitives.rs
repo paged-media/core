@@ -364,6 +364,8 @@ mod tests {
             DisplayCommand::BevelEmboss { transform, .. } => *transform,
             DisplayCommand::Satin { transform, .. } => *transform,
             DisplayCommand::Feather { transform, .. } => *transform,
+            DisplayCommand::DirectionalFeather { transform, .. } => *transform,
+            DisplayCommand::GradientFeather { transform, .. } => *transform,
         };
         // Unit rect corners: (0,0), (1,0), (1,1), (0,1).
         assert_eq!(t.apply(0.0, 0.0), (100.0, 200.0));

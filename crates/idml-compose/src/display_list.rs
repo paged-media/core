@@ -482,6 +482,65 @@ impl Feather {
     }
 }
 
+/// Directional feather parameters. Mirrors IDML's
+/// `<DirectionalFeatherSetting>` — each side of the path gets its
+/// own soft-edge width in pt; `angle_deg` rotates the per-edge
+/// directions. `noise` / `choke` and `corner_type` mirror the plain
+/// [`Feather`] semantics.
+///
+/// The CPU rasterizer modulates alpha per side (left / right / top /
+/// bottom) using the path's page-pt bounding box. The IDML `Angle`
+/// attribute is captured so the rasterizer can lift to the rotated
+/// per-side path later without a parser/compose round-trip; today
+/// it's unused.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DirectionalFeather {
+    pub left_width: f32,
+    pub right_width: f32,
+    pub top_width: f32,
+    pub bottom_width: f32,
+    pub angle_deg: f32,
+    pub noise: f32,
+    pub choke: f32,
+    pub corner_type: FeatherCornerType,
+}
+
+/// Gradient feather kind — mirrors IDML's `Type` attribute. `Linear`
+/// projects each pixel onto the `(start, end)` axis to derive the
+/// alpha; `Radial` uses `distance / radius` from the start point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GradientFeatherKind {
+    #[default]
+    Linear,
+    Radial,
+}
+
+/// One stop of a [`GradientFeather`]'s alpha gradient. `location`
+/// is in `[0, 1]` (0 = start, 1 = end); `alpha` is the opacity at
+/// that location, also `[0, 1]`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GradientFeatherStop {
+    pub location: f32,
+    pub alpha: f32,
+}
+
+/// Gradient feather parameters. The path's interior alpha is
+/// modulated by a 1-D gradient defined by `stops` (sorted by
+/// location); the gradient runs along
+/// `(start_x, start_y) → (end_x, end_y)` for `Linear` and radially
+/// out from `start` for `Radial` (`end` defines the radius). All
+/// coords are in the path's local space — same coords as the
+/// `Transform` that places the path.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GradientFeather {
+    pub kind: GradientFeatherKind,
+    pub start_x: f32,
+    pub start_y: f32,
+    pub end_x: f32,
+    pub end_y: f32,
+    pub stops: Vec<GradientFeatherStop>,
+}
+
 /// IDML compositing blend mode. `Normal` (the default, source-over
 /// alpha composite) keeps the existing fast path; everything else
 /// requires the rasterizer to render the fill into an offscreen
@@ -674,6 +733,24 @@ pub enum DisplayCommand {
         transform: Transform,
         params: Feather,
     },
+    /// Directional feather stamp. Same render contract as
+    /// [`DisplayCommand::Feather`] but with per-edge widths instead
+    /// of a uniform width — the rasterizer modulates alpha by the
+    /// distance to each side independently.
+    DirectionalFeather {
+        path_id: PathId,
+        transform: Transform,
+        params: DirectionalFeather,
+    },
+    /// Gradient feather stamp. Same render contract as
+    /// [`DisplayCommand::Feather`] but the alpha falloff comes from
+    /// a 1-D gradient (`Linear` or `Radial`) sampled along
+    /// `(start, end)` in the path's local space.
+    GradientFeather {
+        path_id: PathId,
+        transform: Transform,
+        params: GradientFeather,
+    },
     // PushLayer, PopLayer land with §10.4.
 }
 
@@ -699,7 +776,9 @@ impl DisplayCommand {
             | DisplayCommand::InnerGlow { transform, .. }
             | DisplayCommand::BevelEmboss { transform, .. }
             | DisplayCommand::Satin { transform, .. }
-            | DisplayCommand::Feather { transform, .. } => transform,
+            | DisplayCommand::Feather { transform, .. }
+            | DisplayCommand::DirectionalFeather { transform, .. }
+            | DisplayCommand::GradientFeather { transform, .. } => transform,
         }
     }
 }
