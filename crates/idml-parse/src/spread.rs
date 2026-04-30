@@ -576,6 +576,15 @@ pub struct Polygon {
     /// page item to host more than one text-on-path entry (one per
     /// "slot" in the path effect); typical files carry exactly one.
     pub text_paths: Vec<TextPath>,
+    /// `LinkResourceURI` from a nested `<Image>` (or its `<Link>`
+    /// child). Mirrors [`Rectangle::image_link`]: a polygon may host
+    /// a placed image just like a rectangle, in which case the
+    /// polygon's path becomes the image's clip mask. `None` means the
+    /// polygon is a plain colour swatch.
+    pub image_link: Option<String>,
+    /// `ItemTransform` attribute on the nested `<Image>` element.
+    /// See [`Rectangle::image_item_transform`].
+    pub image_item_transform: Option<[f32; 6]>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
@@ -1268,38 +1277,52 @@ impl Spread {
                         }
                     }
                     b"Image" | b"Link" => {
-                        // IDML's image-bearing rectangle nests an
+                        // IDML's image-bearing frame nests an
                         // <Image> with a LinkResourceURI on the
                         // element itself or on its <Link> child.
-                        // Either source attaches to the current
-                        // Rectangle (the only frame type that hosts
-                        // images in this slice).
-                        if let Some(CurrentFrameKind::Rect(i)) =
-                            current_frame.as_ref().map(|cf| cf.kind)
-                        {
-                            if let Some(uri) =
-                                attr(&e, b"LinkResourceURI").or_else(|| attr(&e, b"href"))
-                            {
-                                // First-write-wins so the outer <Image>
-                                // attribute beats the inner <Link>'s.
-                                if out.rectangles[i].image_link.is_none() {
-                                    out.rectangles[i].image_link = Some(uri);
-                                }
-                            }
-                            // The <Image> element carries its own
-                            // ItemTransform mapping the source
-                            // pixmap's pixel grid into the
-                            // rectangle's inner coords. <Link>
-                            // children don't, so guard the read.
-                            if e.name().as_ref() == b"Image" {
-                                if let Some(m) = attr(&e, b"ItemTransform")
-                                    .and_then(|s| parse_matrix(&s))
+                        // Both Rectangle and Polygon may host placed
+                        // images; routing here dispatches on the
+                        // open frame's kind.
+                        match current_frame.as_ref().map(|cf| cf.kind) {
+                            Some(CurrentFrameKind::Rect(i)) => {
+                                if let Some(uri) =
+                                    attr(&e, b"LinkResourceURI").or_else(|| attr(&e, b"href"))
                                 {
-                                    if out.rectangles[i].image_item_transform.is_none() {
-                                        out.rectangles[i].image_item_transform = Some(m);
+                                    // First-write-wins so the outer <Image>
+                                    // attribute beats the inner <Link>'s.
+                                    if out.rectangles[i].image_link.is_none() {
+                                        out.rectangles[i].image_link = Some(uri);
+                                    }
+                                }
+                                if e.name().as_ref() == b"Image" {
+                                    if let Some(m) = attr(&e, b"ItemTransform")
+                                        .and_then(|s| parse_matrix(&s))
+                                    {
+                                        if out.rectangles[i].image_item_transform.is_none() {
+                                            out.rectangles[i].image_item_transform = Some(m);
+                                        }
                                     }
                                 }
                             }
+                            Some(CurrentFrameKind::Polygon(i)) => {
+                                if let Some(uri) =
+                                    attr(&e, b"LinkResourceURI").or_else(|| attr(&e, b"href"))
+                                {
+                                    if out.polygons[i].image_link.is_none() {
+                                        out.polygons[i].image_link = Some(uri);
+                                    }
+                                }
+                                if e.name().as_ref() == b"Image" {
+                                    if let Some(m) = attr(&e, b"ItemTransform")
+                                        .and_then(|s| parse_matrix(&s))
+                                    {
+                                        if out.polygons[i].image_item_transform.is_none() {
+                                            out.polygons[i].image_item_transform = Some(m);
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     b"FrameFittingOption" => {
@@ -1408,6 +1431,8 @@ impl Spread {
                             opacity: None,
                             blend_mode: None,
                             text_paths: Vec::new(),
+                            image_link: None,
+                            image_item_transform: None,
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Polygon(out.polygons.len() - 1),
@@ -2093,5 +2118,57 @@ mod tests {
         assert_eq!(tp.path_effect.as_deref(), Some("RainbowPathEffect"));
         assert_eq!(tp.start_bracket, Some(0.0));
         assert_eq!(tp.end_bracket, Some(100.0));
+    }
+
+    #[test]
+    fn polygon_hosts_image_link_and_item_transform() {
+        // A `<Polygon>` may host a placed image just like a Rectangle.
+        // The nested `<Image>`'s `LinkResourceURI` (or its `<Link>`
+        // child's `LinkResourceURI`) populates `image_link`; the
+        // `<Image>`'s `ItemTransform` populates `image_item_transform`.
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Polygon Self="poly1" GeometricBounds="0 0 100 100">
+              <Properties/>
+              <Image Self="img1" ItemTransform="0.5 0 0 0.5 10 20">
+                <Link Self="link1" LinkResourceURI="file:///tmp/photo.jpg"/>
+              </Image>
+            </Polygon>
+            <Polygon Self="poly2" GeometricBounds="0 0 50 50"/>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.polygons.len(), 2);
+        let p = &s.polygons[0];
+        assert_eq!(p.image_link.as_deref(), Some("file:///tmp/photo.jpg"));
+        assert_eq!(p.image_item_transform, Some([0.5, 0.0, 0.0, 0.5, 10.0, 20.0]));
+        // Plain polygon without image stays None.
+        assert!(s.polygons[1].image_link.is_none());
+        assert!(s.polygons[1].image_item_transform.is_none());
+        // Rectangles in the same spread keep working.
+        assert_eq!(s.rectangles.len(), 0);
+    }
+
+    #[test]
+    fn polygon_image_link_falls_through_to_outer_image_attribute() {
+        // When the `<Image>` element itself carries a
+        // `LinkResourceURI` (no nested `<Link>`), the polygon still
+        // picks it up. Mirrors the Rectangle behaviour.
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Polygon Self="poly1" GeometricBounds="0 0 100 100">
+              <Image Self="img1" LinkResourceURI="file:///tmp/cat.png"
+                     ItemTransform="1 0 0 1 0 0"/>
+            </Polygon>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.polygons[0].image_link.as_deref(), Some("file:///tmp/cat.png"));
+        assert_eq!(
+            s.polygons[0].image_item_transform,
+            Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+        );
     }
 }
