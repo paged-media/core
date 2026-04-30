@@ -413,11 +413,23 @@ pub fn build_document(
     };
 
     let mut decoded_image_cache: HashMap<String, idml_compose::DecodedImage> = HashMap::new();
+    // Per-spread per-frame-kind command spans, captured in document
+    // order so the post-pass `group_pass` can translate each
+    // group's `Vec<FrameRef>` into the page-space command ranges
+    // it brackets with `BeginBlendGroup` / `EndBlendGroup`.
+    let mut spread_frame_spans: Vec<crate::module::SpreadFrameSpans> =
+        Vec::with_capacity(document.spreads.len());
     for (spread_idx, parsed) in document.spreads.iter().enumerate() {
         let spread = &parsed.spread;
         let range = spread_page_ranges[spread_idx].clone();
         let local_geoms = &page_geometries[range.clone()];
-        for frame in &spread.text_frames {
+        let mut frame_spans = crate::module::SpreadFrameSpans::default();
+        frame_spans.text_frames = vec![None; spread.text_frames.len()];
+        frame_spans.rectangles = vec![None; spread.rectangles.len()];
+        frame_spans.ovals = vec![None; spread.ovals.len()];
+        frame_spans.graphic_lines = vec![None; spread.graphic_lines.len()];
+        frame_spans.polygons = vec![None; spread.polygons.len()];
+        for (idx, frame) in spread.text_frames.iter().enumerate() {
             if !layer_visible(frame.item_layer.as_deref()) {
                 continue;
             }
@@ -432,6 +444,7 @@ pub fn build_document(
             if let Some(self_id) = frame.self_id.clone() {
                 frame_to_page.insert(self_id, page_idx);
             }
+            let before = pages[page_idx].list.commands.len();
             emit_text_frame_into(
                 &mut pages[page_idx],
                 frame,
@@ -441,8 +454,16 @@ pub fn build_document(
                 cmyk_xform.as_ref(),
                 options.frame_drop_shadow,
             );
+            let after = pages[page_idx].list.commands.len();
+            if after > before {
+                frame_spans.text_frames[idx] = Some(crate::module::FrameCmdSpan {
+                    page_idx,
+                    start: before,
+                    end: after,
+                });
+            }
         }
-        for rect in &spread.rectangles {
+        for (idx, rect) in spread.rectangles.iter().enumerate() {
             if !layer_visible(rect.item_layer.as_deref()) {
                 continue;
             }
@@ -450,6 +471,7 @@ pub fn build_document(
             let spread_bounds = transform_bounds(rect.bounds, rect.item_transform);
             let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
             let page_idx = range.start + local_idx;
+            let before = pages[page_idx].list.commands.len();
             emit_rectangle_into(
                 &mut pages[page_idx],
                 rect,
@@ -470,8 +492,16 @@ pub fn build_document(
                 &mut page_image_caches[page_idx],
                 &mut decoded_image_cache,
             );
+            let after = pages[page_idx].list.commands.len();
+            if after > before {
+                frame_spans.rectangles[idx] = Some(crate::module::FrameCmdSpan {
+                    page_idx,
+                    start: before,
+                    end: after,
+                });
+            }
         }
-        for oval in &spread.ovals {
+        for (idx, oval) in spread.ovals.iter().enumerate() {
             if !layer_visible(oval.item_layer.as_deref()) {
                 continue;
             }
@@ -479,6 +509,7 @@ pub fn build_document(
             let spread_bounds = transform_bounds(oval.bounds, oval.item_transform);
             let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
             let page_idx = range.start + local_idx;
+            let before = pages[page_idx].list.commands.len();
             emit_oval_into(
                 &mut pages[page_idx],
                 oval,
@@ -487,8 +518,16 @@ pub fn build_document(
                 options.fallback_frame_fill,
                 cmyk_xform.as_ref(),
             );
+            let after = pages[page_idx].list.commands.len();
+            if after > before {
+                frame_spans.ovals[idx] = Some(crate::module::FrameCmdSpan {
+                    page_idx,
+                    start: before,
+                    end: after,
+                });
+            }
         }
-        for line in &spread.graphic_lines {
+        for (idx, line) in spread.graphic_lines.iter().enumerate() {
             if !layer_visible(line.item_layer.as_deref()) {
                 continue;
             }
@@ -496,9 +535,18 @@ pub fn build_document(
             let spread_bounds = transform_bounds(line.bounds, line.item_transform);
             let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
             let page_idx = range.start + local_idx;
+            let before = pages[page_idx].list.commands.len();
             emit_line_into(&mut pages[page_idx], line, document, palette, cmyk_xform.as_ref());
+            let after = pages[page_idx].list.commands.len();
+            if after > before {
+                frame_spans.graphic_lines[idx] = Some(crate::module::FrameCmdSpan {
+                    page_idx,
+                    start: before,
+                    end: after,
+                });
+            }
         }
-        for poly in &spread.polygons {
+        for (idx, poly) in spread.polygons.iter().enumerate() {
             if !layer_visible(poly.item_layer.as_deref()) {
                 continue;
             }
@@ -506,6 +554,7 @@ pub fn build_document(
             let spread_bounds = transform_bounds(poly.bounds, poly.item_transform);
             let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
             let page_idx = range.start + local_idx;
+            let before = pages[page_idx].list.commands.len();
             emit_polygon_into(
                 &mut pages[page_idx],
                 poly,
@@ -514,7 +563,27 @@ pub fn build_document(
                 options.fallback_frame_fill,
                 cmyk_xform.as_ref(),
             );
+            // Polygon-hosted images: clip the placed image to the
+            // polygon's curved path (mirrors emit_rectangle_image but
+            // with the polygon's PathPointType anchors as the clip
+            // shape rather than the AABB).
+            emit_polygon_image(
+                &mut pages[page_idx],
+                poly,
+                options,
+                &mut page_image_caches[page_idx],
+                &mut decoded_image_cache,
+            );
+            let after = pages[page_idx].list.commands.len();
+            if after > before {
+                frame_spans.polygons[idx] = Some(crate::module::FrameCmdSpan {
+                    page_idx,
+                    start: before,
+                    end: after,
+                });
+            }
         }
+        spread_frame_spans.push(frame_spans);
     }
 
     // Story pass: layout text into its hosting frame's page.
@@ -524,6 +593,20 @@ pub fn build_document(
     // the right TTF without re-querying the resolver. Per paragraph
     // we still build `Face`s on demand — `rustybuzz::Face::from_slice`
     // is cheap (parses font tables, no allocation churn).
+    // Group transparency pass: bracket every group's emitted frame
+    // range with `BeginBlendGroup` / `EndBlendGroup` whenever the
+    // group's `<TransparencySetting>` has non-default values. Runs
+    // *before* the story pass so text glyphs added later don't fall
+    // inside the wrong bracket (per-text-frame brackets land later
+    // via `apply_blend_groups`). Each spread's groups are resolved
+    // against the per-frame command spans recorded above.
+    for (spread_idx, parsed) in document.spreads.iter().enumerate() {
+        let Some(spans) = spread_frame_spans.get(spread_idx) else {
+            continue;
+        };
+        crate::module::group_pass(&parsed.spread, spans, &mut pages);
+    }
+
     let font_table = FontTable::build(document, options);
     // One hyphenator per render. We currently only build English-US;
     // the document's `AppliedLanguage` is honoured via the cascade,
@@ -585,6 +668,10 @@ pub fn build_document(
             Some(&hyphenator),
             head_wrap_rects,
             chain_wrap_rects,
+        )
+        .with_optical_margin(
+            parsed.story.optical_margin_alignment,
+            parsed.story.optical_margin_size,
         );
         for paragraph in &parsed.story.paragraphs {
             emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
@@ -772,6 +859,10 @@ pub fn build_document(
             Some(&hyphenator),
             head_wrap_rects,
             chain_wrap_rects,
+        )
+        .with_optical_margin(
+            parsed.story.optical_margin_alignment,
+            parsed.story.optical_margin_size,
         );
         for paragraph in &parsed.story.paragraphs {
             emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
@@ -862,6 +953,14 @@ struct StoryEmitter<'a> {
     /// matches IDML's `NumberingContinue=true` default behaviour
     /// for adjacent paragraphs.
     numbered_counter: u32,
+    /// `<StoryPreference OpticalMarginAlignment>` flag. When true,
+    /// the per-line emit pass nudges the leftmost / rightmost glyph
+    /// of each line outward per `idml_text::optical_margin_offset`.
+    optical_margin_alignment: bool,
+    /// `<StoryPreference OpticalMarginSize>` (point size). Bounds the
+    /// hang for glyphs smaller than this size; ignored when
+    /// `optical_margin_alignment` is false.
+    optical_margin_size_pt: f32,
 }
 
 impl<'a> StoryEmitter<'a> {
@@ -956,7 +1055,19 @@ impl<'a> StoryEmitter<'a> {
             frame_cmd_ranges: vec![None; len],
             frame_max_baseline_64: vec![0; len],
             numbered_counter: 0,
+            optical_margin_alignment: false,
+            optical_margin_size_pt: 0.0,
         }
+    }
+
+    /// Set the story's `<StoryPreference>` optical-margin flags so
+    /// the per-paragraph emit pass can nudge the leftmost / rightmost
+    /// glyph of every line. `size_pt = 0.0` disables the feature even
+    /// if the flag is true (matches `apply_optical_margin`'s noop).
+    fn with_optical_margin(mut self, alignment: bool, size_pt: f32) -> Self {
+        self.optical_margin_alignment = alignment;
+        self.optical_margin_size_pt = size_pt;
+        self
     }
 
     fn emit_paragraph(
@@ -1493,6 +1604,143 @@ fn emit_paragraph_into_chain(
     }
     lopts.first_baseline = em.y_cursor;
 
+    // Drop cap: when the paragraph carries
+    // `<ParagraphStyleRange DropCapCharacters="N" DropCapLines="M">`,
+    // the first N characters render at an enlarged size for M body
+    // lines. We carve the first M lines narrower in `column_widths`
+    // and shape the dropped run separately at
+    // `drop_cap_point_size(line_height_pt, M)` for emission below.
+    //
+    // The implementation:
+    //   1. Decide the byte split inside the first styled run (the
+    //      first `DropCapCharacters` Unicode scalars).
+    //   2. Shape the dropped slice at the enlarged point size to
+    //      measure `glyph_advance` for the column carve.
+    //   3. Build a `DropCapSpec` and ask
+    //      `idml_text::drop_cap_column_widths` for the carved widths.
+    //   4. Replace the first styled run's text with the slice past
+    //      the drop cap, then run `layout_runs` as normal.
+    //   5. After layout, splice the dropped glyphs in at the
+    //      paragraph origin.
+    let drop_cap_spec_emit: Option<(usize, idml_text::DropCapSpec, idml_text::ShapedRun, f32, u32, ttf_parser::Face<'_>, idml_compose::Paint)> = if paragraph.drop_cap_characters > 0
+        && paragraph.drop_cap_lines > 0
+        && !styled_runs.is_empty()
+        && !styled_runs[0].text.is_empty()
+    {
+        let body_line_height_pt =
+            lopts.line_height as f32 / idml_text::shape::ADVANCE_PRECISION;
+        let cap_point_size =
+            idml_text::drop_cap_point_size(body_line_height_pt, paragraph.drop_cap_lines);
+        // Byte split: take `drop_cap_characters` Unicode scalars
+        // off the front of run 0's text. Whitespace counts as a
+        // character; IDML's serialisation matches char count not
+        // grapheme count.
+        let head = styled_runs[0].text;
+        let mut split = head.len();
+        let mut taken = 0u32;
+        for (i, _c) in head.char_indices() {
+            if taken == paragraph.drop_cap_characters {
+                split = i;
+                break;
+            }
+            taken += 1;
+        }
+        if split > 0 {
+            let dropped_slice = &head[..split];
+            let cap_face_idx = unique_idx[0];
+            let cap_face_ref = shaping_faces[cap_face_idx].as_ref().unwrap();
+            let cap_shaped = idml_text::shape_run(cap_face_ref, dropped_slice, cap_point_size);
+            // Gutter: half the body's space-glyph advance — a small
+            // proxy for InDesign's `DropCapDetail` side-bearing.
+            let space_shaped =
+                idml_text::shape_run(cap_face_ref, " ", styled_runs[0].point_size);
+            let gutter_64 = space_shaped.total_advance / 2;
+            let spec = idml_text::DropCapSpec {
+                characters: paragraph.drop_cap_characters,
+                lines: paragraph.drop_cap_lines,
+                glyph_advance: cap_shaped.total_advance,
+                gutter: gutter_64,
+            };
+            // Outline face for the dropped glyphs. Shares bytes with
+            // the body run's face but parses fresh because the
+            // existing `outline_faces[cap_face_idx]` instance lives
+            // borrowed by the body emit loop below.
+            let bytes_ref = bytes_pool[cap_face_idx].as_ref();
+            let outline = ttf_parser::Face::parse(bytes_ref, 0).ok();
+            // Drop-cap paint: pick from the first run's resolved
+            // fill (same as the body's run-0 paint).
+            let fallback_paint = em.options.fallback_text_paint;
+            let cap_paint = resolved_runs
+                .first()
+                .and_then(|r| r.fill_color.as_deref())
+                .and_then(|id| color_id_to_paint(id, em.palette, em.cmyk_xform))
+                .unwrap_or(fallback_paint);
+            // Now overlay the carved widths onto lopts so the
+            // remainder body wraps narrower for the first M lines.
+            // If a wrap pass set widths already, take min per line.
+            let scalar_width_64 = lopts.compose.column_width;
+            let carved = idml_text::drop_cap_column_widths(&spec, scalar_width_64);
+            if let Some(existing) = lopts.compose.column_widths.as_deref() {
+                let mut merged: Vec<i32> = carved.clone();
+                for (i, w) in merged.iter_mut().enumerate() {
+                    if let Some(&e) = existing.get(i) {
+                        *w = (*w).min(e);
+                    }
+                }
+                for &e in existing.iter().skip(merged.len()) {
+                    merged.push(e);
+                }
+                lopts.compose.column_widths = Some(merged);
+            } else {
+                lopts.compose.column_widths = Some(carved);
+            }
+            outline.map(|o| {
+                (
+                    split,
+                    spec,
+                    cap_shaped,
+                    cap_point_size,
+                    font_ids[0] ^ 0xD0DC_AAA0u32,
+                    o,
+                    cap_paint,
+                )
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // If we have a drop cap, splice the body-run text past the
+    // dropped slice. We can't mutate `styled_runs` in place because
+    // its `text` field borrows the source string; build a fresh
+    // styled_runs vec borrowing from the same source at the new
+    // offset.
+    let styled_runs_storage: Vec<idml_text::StyledRun>;
+    let styled_runs_ref: &[idml_text::StyledRun] = if let Some((split, _, _, _, _, _, _)) =
+        &drop_cap_spec_emit
+    {
+        let mut adjusted: Vec<idml_text::StyledRun> = Vec::with_capacity(styled_runs.len());
+        for (i, r) in styled_runs.iter().enumerate() {
+            let new_text = if i == 0 { &r.text[*split..] } else { r.text };
+            adjusted.push(idml_text::StyledRun {
+                text: new_text,
+                face: r.face,
+                point_size: r.point_size,
+                tracking: r.tracking,
+                font_id: r.font_id,
+                underline: r.underline,
+                strikethru: r.strikethru,
+                baseline_shift_pt: r.baseline_shift_pt,
+            });
+        }
+        styled_runs_storage = adjusted;
+        &styled_runs_storage
+    } else {
+        &styled_runs
+    };
+
     // Per-line wrap: build a `column_widths` slice + per-line
     // x-shifts + twin-pair markers based on which wrap rectangles
     // each predicted line intersects. Shifts are stored in 1/64 pt
@@ -1502,9 +1750,89 @@ fn emit_paragraph_into_chain(
     let WrapPlan {
         line_x_shifts_64,
         twin_after,
-    } = build_perline_wrap_widths(em, &styled_runs, &mut lopts);
+    } = build_perline_wrap_widths(em, styled_runs_ref, &mut lopts);
 
-    let mut laid_out = idml_text::layout_runs(&styled_runs, &lopts);
+    let mut laid_out = idml_text::layout_runs(styled_runs_ref, &lopts);
+
+    // Optical margin alignment: when the story carries
+    // `<StoryPreference OpticalMarginAlignment="true" />`, nudge the
+    // leftmost / rightmost glyph of each line outward per
+    // `idml_text::optical_margin_offset`. Operates directly on the
+    // positioned glyphs (not the shaped run, since layout_runs has
+    // already converted advances to absolute x). The leftmost glyph
+    // shifts negative (hangs outward); the rightmost glyph shifts
+    // positive when right/centre-aligned, no-op for left-aligned
+    // lines (the trim leaves trailing whitespace inside the column
+    // — which is what hanging punctuation visually achieves).
+    if em.optical_margin_alignment && em.optical_margin_size_pt > 0.0 {
+        // Build the concatenated paragraph text the way layout_runs
+        // saw it — clusters point into this string.
+        let mut paragraph_concat = String::new();
+        for r in &styled_runs {
+            paragraph_concat.push_str(r.text);
+        }
+        let bytes = paragraph_concat.as_bytes();
+        let margin_size_pt = em.optical_margin_size_pt;
+        for line in laid_out.lines.iter_mut() {
+            if line.glyphs.is_empty() {
+                continue;
+            }
+            let first_idx = 0usize;
+            let last_idx = line.glyphs.len() - 1;
+            let first_cluster = line.glyphs[first_idx].cluster as usize;
+            let last_cluster = line.glyphs[last_idx].cluster as usize;
+            let first_pt_size = line.glyphs[first_idx].point_size.max(1e-3);
+            let last_pt_size = line.glyphs[last_idx].point_size.max(1e-3);
+            let first_char = char_at_byte(bytes, first_cluster);
+            let last_char = char_at_byte(bytes, last_cluster);
+            // Left-side trim: shift leftmost glyph negative by
+            // factor*pt, scaled by min(point_size,
+            // margin_size_pt)/point_size so smaller glyphs hang less.
+            if let Some(c) = first_char {
+                let scale = if first_pt_size >= margin_size_pt {
+                    1.0
+                } else {
+                    first_pt_size / margin_size_pt
+                };
+                let off_pt = idml_text::optical_margin_offset(
+                    c,
+                    idml_text::MarginSide::Left,
+                    first_pt_size,
+                ) * scale;
+                if off_pt != 0.0 {
+                    let off_64 =
+                        (off_pt * idml_text::shape::ADVANCE_PRECISION).round() as i32;
+                    line.glyphs[first_idx].x -= off_64;
+                }
+            }
+            // Right-side trim: shrink the rightmost glyph's advance
+            // (so the line's natural width drops by `off_64`) — the
+            // alignment pass already ran inside layout_runs, so the
+            // pixel-level effect lands on the right edge of the
+            // line. We mutate `x_advance` to keep the line width
+            // bookkeeping consistent if any later pass reads it.
+            if let Some(c) = last_char {
+                let scale = if last_pt_size >= margin_size_pt {
+                    1.0
+                } else {
+                    last_pt_size / margin_size_pt
+                };
+                let off_pt = idml_text::optical_margin_offset(
+                    c,
+                    idml_text::MarginSide::Right,
+                    last_pt_size,
+                ) * scale;
+                if off_pt != 0.0 {
+                    let off_64 =
+                        (off_pt * idml_text::shape::ADVANCE_PRECISION).round() as i32;
+                    let g = &mut line.glyphs[last_idx];
+                    let trim = off_64.min(g.x_advance);
+                    g.x_advance -= trim;
+                    line.width -= trim;
+                }
+            }
+        }
+    }
 
     // Apply per-line x-shifts (text wrap around objects).
     if !line_x_shifts_64.is_empty() {
@@ -1559,6 +1887,24 @@ fn emit_paragraph_into_chain(
                 for g in &mut line.glyphs {
                     g.x += indent_64;
                 }
+            }
+        }
+    }
+
+    // Drop cap indent: when a drop cap is active, the body text on
+    // the first M=drop_cap_lines lines must start to the right of
+    // the dropped glyph + gutter. The carved column widths got
+    // layout_runs to break tighter; this shift moves the laid-out
+    // glyphs from x=0 to x=glyph_advance + gutter so the body
+    // doesn't overstrike the drop cap. Lines past M are unindented.
+    if let Some((_, spec, _, _, _, _, _)) = &drop_cap_spec_emit {
+        let indent_64 = spec.glyph_advance.saturating_add(spec.gutter);
+        for (i, line) in laid_out.lines.iter_mut().enumerate() {
+            if (i as u32) >= spec.lines {
+                break;
+            }
+            for g in &mut line.glyphs {
+                g.x += indent_64;
             }
         }
     }
@@ -1735,7 +2081,200 @@ fn emit_paragraph_into_chain(
 
         em.y_cursor = line.baseline_y + line_h;
     }
+    // Drop-cap glyph emission: now that the body lines have landed,
+    // position the dropped run at the paragraph's origin (left edge,
+    // first baseline). The dropped glyphs share the head frame's
+    // page; we use the first laid-out line's baseline_y as the
+    // y reference (already adjusted for text_origin_pt). Cluster=0
+    // routes the paint picker to run 0 — same fill as the body's
+    // first character.
+    if let Some((_, _spec, cap_shaped, cap_point_size, cap_font_id, cap_outline, cap_paint)) =
+        drop_cap_spec_emit
+    {
+        let target_page = em.chain_pages[em.frame_idx];
+        let frame = em.chain[em.frame_idx];
+        let (ox, oy) = pages[target_page].spread_origin;
+        let frame_insets = frame.inset_spacing.unwrap_or([0.0; 4]);
+        let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
+        let text_origin_pt = (sx - ox + frame_insets[1] + em.column_x_shift_pt, sy - oy);
+        // Drop-cap baseline aligns with the first body line's
+        // baseline (InDesign aligns the cap-height of the drop cap
+        // to the cap-height of the first line). Falls back to the
+        // emitter's y_cursor when no body line was emitted (drop
+        // cap consumed the entire paragraph).
+        let baseline_64 = if em.y_cursor < 0 {
+            (cap_point_size * 0.8 * idml_text::shape::ADVANCE_PRECISION).round() as i32
+        } else {
+            em.y_cursor - lopts.line_height
+        };
+        let mut positioned: Vec<idml_text::PositionedGlyph> = Vec::with_capacity(cap_shaped.glyphs.len());
+        let mut pen_x = 0i32;
+        for g in &cap_shaped.glyphs {
+            positioned.push(idml_text::PositionedGlyph {
+                glyph_id: g.glyph_id,
+                cluster: 0, // route paint to run 0
+                x: pen_x + g.x_offset,
+                y: baseline_64 + g.y_offset,
+                x_advance: g.x_advance,
+                font_id: cap_font_id,
+                point_size: cap_point_size,
+                underline: false,
+                strikethru: false,
+            });
+            pen_x += g.x_advance;
+        }
+        let outliner = TtfOutliner::new(&cap_outline);
+        let before_cap_cmds = pages[target_page].list.commands.len();
+        emit_glyph_slice(
+            &positioned,
+            cap_font_id,
+            cap_point_size,
+            |_cluster| cap_paint,
+            text_origin_pt,
+            &outliner,
+            &mut pages[target_page].list,
+        );
+        let after_cap_cmds = pages[target_page].list.commands.len();
+        // Track the drop-cap glyphs against the same frame range so
+        // any later transparency / vertical-justification pass
+        // covers them.
+        let frame_idx = em.frame_idx;
+        match &mut em.frame_cmd_ranges[frame_idx] {
+            Some((_, e)) => *e = after_cap_cmds,
+            None => em.frame_cmd_ranges[frame_idx] = Some((before_cap_cmds, after_cap_cmds)),
+        }
+    }
     em.y_cursor += space_after_64.round() as i32;
+
+    // Anchored object pass: walk the paragraph's `anchored_frames`
+    // list and emit each one. We support InlinePosition (the most
+    // common case) plus a best-effort AbovePosition / Custom that
+    // applies anchor_x / anchor_y offsets relative to the
+    // paragraph's baseline. Frame content recursion is intentionally
+    // shallow — the parser provides bounds + setting + a story ref
+    // for TextFrames; richer recursion (nested transparency, full
+    // fill cascade) lands when the corpus needs it.
+    if !paragraph.anchored_frames.is_empty() {
+        emit_anchored_frames_for_paragraph(em, paragraph, pages, total_stats);
+    }
+}
+
+/// Best-effort emission of the paragraph's anchored frames. Supports
+/// `InlinePosition` (default) by placing the frame at the
+/// paragraph's first-baseline anchor offset by `anchor_x_offset` /
+/// `anchor_y_offset`. `AbovePosition` puts it above the paragraph's
+/// origin; `Custom` honours the offsets verbatim. Unrecognised
+/// positions log a TODO and fall through to InlinePosition placement.
+///
+/// Anchored TextFrames recurse into their story via the document's
+/// frame_chain lookup; anchored Rectangles emit through
+/// `emit_rectangle_into` if the parser surfaced bounds for them. We
+/// don't yet thread images on anchored rectangles; those land when
+/// the parser surfaces image_link on AnchoredFrame.
+fn emit_anchored_frames_for_paragraph(
+    em: &mut StoryEmitter,
+    paragraph: &idml_parse::Paragraph,
+    pages: &mut [BuiltPage],
+    _total_stats: &mut PipelineStats,
+) {
+    let target_page = em.chain_pages[em.frame_idx];
+    let frame = em.chain[em.frame_idx];
+    let (ox, oy) = pages[target_page].spread_origin;
+    let frame_insets = frame.inset_spacing.unwrap_or([0.0; 4]);
+    let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
+    let para_origin_x = sx - ox + frame_insets[1] + em.column_x_shift_pt;
+    let para_origin_y = sy - oy;
+    // Paragraph baseline (page-local pt). y_cursor is in 1/64 pt
+    // relative to the host frame's inner origin, so convert + add
+    // the frame's spread top-left to get a page-local baseline.
+    let baseline_y_pt = if em.y_cursor >= 0 {
+        para_origin_y + em.y_cursor as f32 / idml_text::shape::ADVANCE_PRECISION
+    } else {
+        para_origin_y
+    };
+
+    for af in &paragraph.anchored_frames {
+        let setting = af.setting.as_ref();
+        let position = setting
+            .and_then(|s| s.anchored_position.as_deref())
+            .unwrap_or("InlinePosition");
+        let (offset_x, offset_y) = setting
+            .map(|s| (s.anchor_x_offset, s.anchor_y_offset))
+            .unwrap_or((0.0, 0.0));
+        let frame_w = af.bounds.map(|b| b.width()).unwrap_or(0.0);
+        let frame_h = af.bounds.map(|b| b.height()).unwrap_or(0.0);
+        // Compute the frame's top-left in page-local pt. InlinePosition
+        // places the frame at the paragraph's start, raised so its
+        // bottom sits on the line baseline. AbovePosition places it
+        // directly above the paragraph. Custom uses the offsets
+        // verbatim from the paragraph's first baseline.
+        let (place_x, place_y) = match position {
+            "InlinePosition" => (
+                para_origin_x + offset_x,
+                baseline_y_pt - frame_h + offset_y,
+            ),
+            "AbovePosition" => (
+                para_origin_x + offset_x,
+                para_origin_y - frame_h + offset_y,
+            ),
+            "Custom" => (
+                para_origin_x + offset_x,
+                baseline_y_pt + offset_y,
+            ),
+            _ => {
+                tracing::debug!(
+                    target: "idml_renderer::pipeline",
+                    position = position,
+                    "unrecognised anchored position; defaulting to InlinePosition"
+                );
+                (para_origin_x + offset_x, baseline_y_pt - frame_h + offset_y)
+            }
+        };
+        match af.frame_kind {
+            idml_parse::AnchoredFrameKind::Rectangle => {
+                // Emit a placeholder rectangle outline at the
+                // anchor position. We don't yet have access to the
+                // anchored rect's full attribute set (fill, stroke,
+                // image_link) — the parser carries only bounds +
+                // transform — so we paint the bounds with the
+                // fallback frame fill so at least the layout slot
+                // is visible. Future: thread the parsed Rectangle
+                // through AnchoredFrame.
+                if frame_w > 0.0 && frame_h > 0.0 {
+                    let rect = Rect {
+                        x: place_x,
+                        y: place_y,
+                        w: frame_w,
+                        h: frame_h,
+                    };
+                    emit_rect(rect, em.options.fallback_frame_fill, &mut pages[target_page].list);
+                }
+            }
+            idml_parse::AnchoredFrameKind::TextFrame => {
+                // Anchored TextFrames flow their parent_story
+                // content into the placed rectangle. Without a full
+                // recursion through StoryEmitter, we draw a
+                // placeholder fill for now and log a TODO.
+                if frame_w > 0.0 && frame_h > 0.0 {
+                    let rect = Rect {
+                        x: place_x,
+                        y: place_y,
+                        w: frame_w,
+                        h: frame_h,
+                    };
+                    emit_rect(rect, em.options.fallback_frame_fill, &mut pages[target_page].list);
+                }
+                let _ = af.parent_story.as_deref();
+            }
+            idml_parse::AnchoredFrameKind::Group => {
+                // Group recursion is even more invasive — log + skip.
+                tracing::debug!(
+                    target: "idml_renderer::pipeline",
+                    "anchored Group frame skipped; recursion lands in a follow-up"
+                );
+            }
+        }
+    }
 }
 
 /// Wraps a page's bounds for centre-point routing + its master
@@ -2285,6 +2824,33 @@ pub(crate) fn fnv_1a_u64(bytes: &[u8]) -> u64 {
         h = h.wrapping_mul(0x100000001b3);
     }
     h
+}
+
+/// Decode the UTF-8 character starting at byte offset `i` in `bytes`.
+/// Returns `None` when `i` is past the end or doesn't sit on a UTF-8
+/// boundary. Used by the optical-margin pass to look up the
+/// leftmost / rightmost glyph's source codepoint by cluster, since
+/// `PositionedGlyph::cluster` is a byte offset into the paragraph's
+/// concatenated source text.
+fn char_at_byte(bytes: &[u8], i: usize) -> Option<char> {
+    if i >= bytes.len() {
+        return None;
+    }
+    // Walk forward up to 4 bytes — the maximum UTF-8 sequence
+    // length — and decode lazily via std::str::from_utf8.
+    let end = (i + 4).min(bytes.len());
+    let slice = &bytes[i..end];
+    std::str::from_utf8(slice)
+        .ok()
+        .and_then(|s| s.chars().next())
+        .or_else(|| {
+            // If the 4-byte window straddled an invalid boundary
+            // (rare — clusters can land on byte-start of any
+            // codepoint), fall back to a slower scan from byte 0.
+            std::str::from_utf8(&bytes[..end])
+                .ok()
+                .and_then(|s| s[i..].chars().next())
+        })
 }
 
 /// Apply a 6-element IDML affine `[a b c d e f]` to `(x, y)`.
@@ -4195,6 +4761,152 @@ fn emit_rectangle_image(
             h: (frame_h - top_crop - bottom_crop).max(0.0),
         };
         idml_compose::emit_image_at(r, outer, id, &mut page.list);
+    }
+}
+
+/// Polygon-hosted placed image. Mirrors [`emit_rectangle_image`] but
+/// uses the polygon's curved `PathPointType` anchors as the clip
+/// shape so the image hugs the polygon's outline rather than its
+/// bounding rectangle. When the polygon has no anchors (synthetic
+/// IDMLs declaring a polygon via `GeometricBounds` only), the
+/// rectangle path falls through to a flat AABB clip — visually
+/// identical to the rectangle case.
+fn emit_polygon_image(
+    page: &mut BuiltPage,
+    poly: &Polygon,
+    options: &PipelineOptions,
+    page_image_cache: &mut HashMap<String, idml_compose::ImageId>,
+    decoded_cache: &mut HashMap<String, idml_compose::DecodedImage>,
+) {
+    let Some(uri) = poly.image_link.as_deref() else {
+        return;
+    };
+    let id = match page_image_cache.get(uri).copied() {
+        Some(id) => id,
+        None => {
+            let decoded = if let Some(d) = decoded_cache.get(uri) {
+                d.clone()
+            } else {
+                let Some(resolver) = options.assets else {
+                    return;
+                };
+                let Some(bytes) = resolver.resolve_image(uri) else {
+                    tracing::warn!(uri, "image resolver returned no bytes; skipping");
+                    return;
+                };
+                let Some(d) = decode_image_bytes(bytes.as_ref()) else {
+                    tracing::warn!(uri, "image decode failed; skipping");
+                    return;
+                };
+                decoded_cache.insert(uri.to_string(), d.clone());
+                d
+            };
+            let id = page.list.push_image(decoded);
+            page_image_cache.insert(uri.to_string(), id);
+            id
+        }
+    };
+    let (img_w, img_h) = match page.list.image(id) {
+        Some(d) => (d.width as f32, d.height as f32),
+        None => return,
+    };
+    if img_w <= 0.0 || img_h <= 0.0 {
+        return;
+    }
+    let outer = frame_outer_transform(page, poly.item_transform);
+
+    // Build (or reuse) the polygon's clip path. Falls back to the
+    // bounds AABB when the polygon carries no Bezier anchors.
+    let clip_path_id = if !poly.anchors.is_empty() {
+        let path = polygon_path_from_anchors(&poly.anchors);
+        let cache_key = match poly.self_id.as_deref() {
+            Some(sid) => fnv_1a_u64(sid.as_bytes()),
+            None => path_signature(&poly.anchors),
+        };
+        let (id, _) = page.list.paths.intern(cache_key, path);
+        id
+    } else {
+        // Anchor-less polygon: synthesise the AABB unit rect path
+        // (same key as rectangles use, so both share one entry).
+        const CLIP_UNIT_RECT_KEY: u64 = 0x1d_4c_69_70_5f_72_65_63;
+        let path = idml_compose::PathData {
+            segments: vec![
+                idml_compose::PathSegment::MoveTo { x: 0.0, y: 0.0 },
+                idml_compose::PathSegment::LineTo { x: 1.0, y: 0.0 },
+                idml_compose::PathSegment::LineTo { x: 1.0, y: 1.0 },
+                idml_compose::PathSegment::LineTo { x: 0.0, y: 1.0 },
+                idml_compose::PathSegment::Close,
+            ],
+        };
+        let (id, _) = page.list.paths.intern(CLIP_UNIT_RECT_KEY, path);
+        id
+    };
+
+    // Pick a clip transform: anchor-bearing polygons keep their path
+    // in inner coords (already in the right space) so `outer` maps
+    // directly. Anchor-less polygons need the unit-rect-to-bounds
+    // scale baked in — same shape as `emit_clipped_image`.
+    let clip_transform = if !poly.anchors.is_empty() {
+        outer
+    } else {
+        let clip_rect = idml_compose::Rect {
+            x: poly.bounds.left,
+            y: poly.bounds.top,
+            w: poly.bounds.width(),
+            h: poly.bounds.height(),
+        };
+        Transform::for_rect_in(clip_rect, outer)
+    };
+
+    let img_rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        w: img_w,
+        h: img_h,
+    };
+    let image_transform = if let Some(image_t) = poly.image_item_transform {
+        outer.compose(&Transform(image_t))
+    } else {
+        // Stretch the image across the polygon's bounds (same fallback
+        // as the synthetic rectangle case).
+        let frame_rect = Rect {
+            x: poly.bounds.left,
+            y: poly.bounds.top,
+            w: poly.bounds.width(),
+            h: poly.bounds.height(),
+        };
+        // Compose the bounds-scale into outer so emit_image_under_clip
+        // ends up with `outer ∘ scale(w,h) ∘ translate(left,top)`.
+        Transform::for_rect_in(frame_rect, outer)
+    };
+    // When no inner image transform is present, `image_transform`
+    // already encodes the for_rect_in math; for_rect_in below would
+    // double-scale. Branch: pass a unit rect so emit_image_under_clip
+    // doesn't multiply by img_w/img_h again.
+    if poly.image_item_transform.is_some() {
+        emit_image_under_clip(
+            &mut page.list,
+            clip_path_id,
+            clip_transform,
+            img_rect,
+            image_transform,
+            id,
+        );
+    } else {
+        let unit = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+        };
+        emit_image_under_clip(
+            &mut page.list,
+            clip_path_id,
+            clip_transform,
+            unit,
+            image_transform,
+            id,
+        );
     }
 }
 
