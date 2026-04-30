@@ -18,7 +18,7 @@
 use quick_xml::events::Event;
 use serde::Serialize;
 
-use crate::util::{attr, parse_tint_attr};
+use crate::util::{attr, parse_f, parse_tint_attr};
 use crate::ParseError;
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -425,20 +425,110 @@ pub struct Rectangle {
 
 /// Mirror of IDML's optional `InnerShadow`, `OuterGlow`, `InnerGlow`,
 /// `Bevel`, `Satin`, and `FeatherSetting` blocks on a page item. Each
-/// inner field is itself optional; a field of `Some(true)` means the
-/// effect is enabled. We capture it as a flag for now and let the
-/// future effects pipeline interpret per-effect parameters when it
-/// lands.
+/// inner field is `Some(EffectParams)` when the IDML's `Applied="true"`
+/// attribute is present; `None` (the default) when the effect is
+/// absent or explicitly disabled. The renderer's compose-layer
+/// equivalents (`idml_compose::InnerShadow`, etc.) consume these
+/// parameters directly.
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct FrameEffects {
-    pub inner_shadow: Option<bool>,
-    pub outer_glow: Option<bool>,
-    pub inner_glow: Option<bool>,
-    pub bevel: Option<bool>,
-    pub satin: Option<bool>,
-    pub feather: Option<bool>,
+    pub inner_shadow: Option<InnerShadowParams>,
+    pub outer_glow: Option<OuterGlowParams>,
+    pub inner_glow: Option<InnerGlowParams>,
+    pub bevel: Option<BevelEmbossParams>,
+    pub satin: Option<SatinParams>,
+    pub feather: Option<FeatherParams>,
+    /// Directional / Gradient feather variants — parser captures the
+    /// `Applied` flag only for now; renderer treats them as plain
+    /// Feather. Per-edge widths and gradient stops are a follow-up.
     pub directional_feather: Option<bool>,
     pub gradient_feather: Option<bool>,
+}
+
+/// `<InnerShadowSetting>` parameters. Either `(XOffset, YOffset)` or
+/// `(Angle, Distance)` may be set; the renderer uses XOffset/YOffset
+/// directly when present, otherwise computes them from the polar
+/// pair: `XOffset = Distance * cos(Angle)`, `YOffset = -Distance * sin(Angle)`.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct InnerShadowParams {
+    pub x_offset: Option<f32>,
+    pub y_offset: Option<f32>,
+    pub size: Option<f32>,
+    pub opacity_pct: Option<f32>,
+    pub effect_color: Option<String>,
+    pub angle_deg: Option<f32>,
+    pub distance: Option<f32>,
+    pub choke_pct: Option<f32>,
+    pub blend_mode: Option<String>,
+    pub noise_pct: Option<f32>,
+}
+
+/// `<OuterGlowSetting>` parameters.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct OuterGlowParams {
+    pub size: Option<f32>,
+    pub opacity_pct: Option<f32>,
+    pub effect_color: Option<String>,
+    pub spread_pct: Option<f32>,
+    pub blend_mode: Option<String>,
+    pub noise_pct: Option<f32>,
+}
+
+/// `<InnerGlowSetting>` parameters. `source` selects center-out vs
+/// edge-in glow (IDML's `Source="EdgeGlow"`/`"CenterGlow"`); the
+/// renderer assumes edge-in when absent.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct InnerGlowParams {
+    pub size: Option<f32>,
+    pub opacity_pct: Option<f32>,
+    pub effect_color: Option<String>,
+    pub choke_pct: Option<f32>,
+    pub blend_mode: Option<String>,
+    pub source: Option<String>,
+    pub noise_pct: Option<f32>,
+}
+
+/// `<BevelAndEmbossSetting>` parameters. `style` and `direction` steer
+/// between bevel / emboss / pillow variants; the rasterizer uses the
+/// Lambertian light at `(angle_deg, altitude_deg)` regardless.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct BevelEmbossParams {
+    pub depth_pct: Option<f32>,
+    pub size: Option<f32>,
+    pub angle_deg: Option<f32>,
+    pub altitude_deg: Option<f32>,
+    pub highlight_color: Option<String>,
+    pub shadow_color: Option<String>,
+    pub highlight_opacity_pct: Option<f32>,
+    pub shadow_opacity_pct: Option<f32>,
+    pub style: Option<String>,
+    pub direction: Option<String>,
+    pub technique: Option<String>,
+    pub soften: Option<f32>,
+}
+
+/// `<SatinSetting>` parameters. `Distance` + `Angle` set the wave
+/// direction and spacing.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct SatinParams {
+    pub size: Option<f32>,
+    pub angle_deg: Option<f32>,
+    pub distance: Option<f32>,
+    pub effect_color: Option<String>,
+    pub opacity_pct: Option<f32>,
+    pub blend_mode: Option<String>,
+    pub invert: Option<bool>,
+}
+
+/// `<FeatherSetting>` parameters. `corner_type` is `Sharp`/`Rounded`/
+/// `Diffusion`; the rasterizer only branches on Diffusion (which adds
+/// noise) at the moment.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct FeatherParams {
+    pub width: Option<f32>,
+    pub corner_type: Option<String>,
+    pub noise_pct: Option<f32>,
+    pub choke_pct: Option<f32>,
 }
 
 /// Mirrors IDML's `<FrameFittingOption>` — an optional element nested
@@ -1257,27 +1347,105 @@ impl Spread {
                     | b"FeatherSetting"
                     | b"DirectionalFeatherSetting"
                     | b"GradientFeatherSetting" => {
-                        // Surface the effect's enable flag (Applied="true")
-                        // onto the current Rectangle's effects bag. The
-                        // rasterizer doesn't render these yet; the data
-                        // lets future tooling and the eventual effect
-                        // pipeline branch on presence.
+                        // Surface each effect's parameters onto the
+                        // current Rectangle's effects bag, gated on
+                        // the `Applied="true"` flag — `Applied="false"`
+                        // (or absent) means the user disabled the
+                        // effect even though IDML still serialises the
+                        // settings for round-trip preservation.
                         if let Some(CurrentFrameKind::Rect(i)) =
                             current_frame.as_ref().map(|cf| cf.kind)
                         {
-                            let applied = attr(&e, b"Applied").and_then(|s| s.parse::<bool>().ok());
+                            let applied = attr(&e, b"Applied")
+                                .and_then(|s| s.parse::<bool>().ok())
+                                .unwrap_or(false);
+                            if !applied {
+                                // Effect is present but disabled; skip
+                                // the parameter capture entirely so the
+                                // renderer doesn't accidentally emit it.
+                                continue;
+                            }
                             let bag = out.rectangles[i]
                                 .effects
                                 .get_or_insert_with(Default::default);
                             match e.name().as_ref() {
-                                b"InnerShadowSetting" => bag.inner_shadow = applied,
-                                b"OuterGlowSetting" => bag.outer_glow = applied,
-                                b"InnerGlowSetting" => bag.inner_glow = applied,
-                                b"BevelAndEmbossSetting" => bag.bevel = applied,
-                                b"SatinSetting" => bag.satin = applied,
-                                b"FeatherSetting" => bag.feather = applied,
-                                b"DirectionalFeatherSetting" => bag.directional_feather = applied,
-                                b"GradientFeatherSetting" => bag.gradient_feather = applied,
+                                b"InnerShadowSetting" => {
+                                    bag.inner_shadow = Some(InnerShadowParams {
+                                        x_offset: parse_f(&e, b"XOffset"),
+                                        y_offset: parse_f(&e, b"YOffset"),
+                                        size: parse_f(&e, b"Size"),
+                                        opacity_pct: parse_f(&e, b"Opacity"),
+                                        effect_color: attr(&e, b"EffectColor"),
+                                        angle_deg: parse_f(&e, b"Angle"),
+                                        distance: parse_f(&e, b"Distance"),
+                                        choke_pct: parse_f(&e, b"ChokeAmount"),
+                                        blend_mode: attr(&e, b"BlendMode"),
+                                        noise_pct: parse_f(&e, b"Noise"),
+                                    });
+                                }
+                                b"OuterGlowSetting" => {
+                                    bag.outer_glow = Some(OuterGlowParams {
+                                        size: parse_f(&e, b"Size"),
+                                        opacity_pct: parse_f(&e, b"Opacity"),
+                                        effect_color: attr(&e, b"EffectColor"),
+                                        spread_pct: parse_f(&e, b"Spread"),
+                                        blend_mode: attr(&e, b"BlendMode"),
+                                        noise_pct: parse_f(&e, b"Noise"),
+                                    });
+                                }
+                                b"InnerGlowSetting" => {
+                                    bag.inner_glow = Some(InnerGlowParams {
+                                        size: parse_f(&e, b"Size"),
+                                        opacity_pct: parse_f(&e, b"Opacity"),
+                                        effect_color: attr(&e, b"EffectColor"),
+                                        choke_pct: parse_f(&e, b"ChokeAmount"),
+                                        blend_mode: attr(&e, b"BlendMode"),
+                                        source: attr(&e, b"Source"),
+                                        noise_pct: parse_f(&e, b"Noise"),
+                                    });
+                                }
+                                b"BevelAndEmbossSetting" => {
+                                    bag.bevel = Some(BevelEmbossParams {
+                                        depth_pct: parse_f(&e, b"Depth"),
+                                        size: parse_f(&e, b"Size"),
+                                        angle_deg: parse_f(&e, b"Angle"),
+                                        altitude_deg: parse_f(&e, b"Altitude"),
+                                        highlight_color: attr(&e, b"HighlightColor"),
+                                        shadow_color: attr(&e, b"ShadowColor"),
+                                        highlight_opacity_pct: parse_f(&e, b"HighlightOpacity"),
+                                        shadow_opacity_pct: parse_f(&e, b"ShadowOpacity"),
+                                        style: attr(&e, b"Style"),
+                                        direction: attr(&e, b"Direction"),
+                                        technique: attr(&e, b"Technique"),
+                                        soften: parse_f(&e, b"Soften"),
+                                    });
+                                }
+                                b"SatinSetting" => {
+                                    bag.satin = Some(SatinParams {
+                                        size: parse_f(&e, b"Size"),
+                                        angle_deg: parse_f(&e, b"Angle"),
+                                        distance: parse_f(&e, b"Distance"),
+                                        effect_color: attr(&e, b"EffectColor"),
+                                        opacity_pct: parse_f(&e, b"Opacity"),
+                                        blend_mode: attr(&e, b"BlendMode"),
+                                        invert: attr(&e, b"Invert")
+                                            .and_then(|s| s.parse::<bool>().ok()),
+                                    });
+                                }
+                                b"FeatherSetting" => {
+                                    bag.feather = Some(FeatherParams {
+                                        width: parse_f(&e, b"Width"),
+                                        corner_type: attr(&e, b"CornerType"),
+                                        noise_pct: parse_f(&e, b"Noise"),
+                                        choke_pct: parse_f(&e, b"ChokeAmount"),
+                                    });
+                                }
+                                b"DirectionalFeatherSetting" => {
+                                    bag.directional_feather = Some(true);
+                                }
+                                b"GradientFeatherSetting" => {
+                                    bag.gradient_feather = Some(true);
+                                }
                                 _ => {}
                             }
                         }
