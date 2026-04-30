@@ -322,12 +322,20 @@ impl StoryRope {
                     tab_list: p.attrs.tab_list.clone(),
                     bullets_list_type: None,
                     bullet_character: None,
+                    drop_cap_characters: 0,
+                    drop_cap_lines: 0,
+                    drop_cap_detail: 0,
                     runs,
+                    anchored_frames: Vec::new(),
                     table: p.table.clone(),
                 }
             })
             .collect();
-        ParsedStory { paragraphs }
+        ParsedStory {
+            paragraphs,
+            optical_margin_alignment: false,
+            optical_margin_size: 0.0,
+        }
     }
 
     pub fn paragraph(&self, idx: usize) -> Option<&ParagraphRope> {
@@ -420,6 +428,8 @@ mod tests {
     #[test]
     fn round_trip_through_story() {
         let original = ParsedStory {
+            optical_margin_alignment: false,
+            optical_margin_size: 0.0,
             paragraphs: vec![ParsedParagraph {
                 paragraph_style: Some("ParagraphStyle/Body".into()),
                 justification: Some("LeftAlign".into()),
@@ -429,6 +439,10 @@ mod tests {
                 tab_list: vec![],
                 bullets_list_type: None,
                 bullet_character: None,
+                drop_cap_characters: 0,
+                drop_cap_lines: 0,
+                drop_cap_detail: 0,
+                anchored_frames: vec![],
                 runs: vec![
                     CharacterRun {
                         character_style: None,

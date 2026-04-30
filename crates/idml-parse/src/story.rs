@@ -82,13 +82,88 @@ pub struct Paragraph {
     /// Acts as a local override of the cascaded paragraph style's
     /// bullet character.
     pub bullet_character: Option<u32>,
+    /// `DropCapCharacters` count from `<ParagraphStyleRange>`. 0 ⇒ no
+    /// drop cap (the IDML default). Local override of the cascaded
+    /// paragraph style's drop-cap settings.
+    pub drop_cap_characters: u32,
+    /// `DropCapLines` — vertical extent of the drop cap in lines.
+    /// 0 ⇒ no drop cap.
+    pub drop_cap_lines: u32,
+    /// `DropCapDetail` — InDesign's per-paragraph side-bearing tweak
+    /// for drop caps. `0` is the default. Stored signed because the
+    /// IDML serialisation allows negative values.
+    pub drop_cap_detail: i32,
     pub runs: Vec<CharacterRun>,
+    /// Anchored frames declared as a child of any
+    /// `<CharacterStyleRange>` inside this paragraph (a `<TextFrame>`,
+    /// `<Rectangle>`, or `<Group>` nested directly under a
+    /// `<CharacterStyleRange>` is an inline-anchored object). The
+    /// renderer's text-flow integration is queued; today these
+    /// records carry the bounds + setting + a reference back to the
+    /// hosted story (for anchored TextFrames) so the renderer can
+    /// draw the frame at the anchor's baseline once the placement
+    /// pass lands. The frame's full transparency / fill / stroke is
+    /// intentionally NOT recursed into here — the parser punts on
+    /// nested transparency / image links inside an anchored frame
+    /// (trivial follow-up once the renderer needs it).
+    pub anchored_frames: Vec<AnchoredFrame>,
     /// `<Table>` nested inside the paragraph's CharacterStyleRange.
     /// When present, the paragraph is rendered as a table at the
     /// current y_cursor; `runs` is typically empty for these.
     /// Tables can't currently nest inside tables — only one per
     /// paragraph.
     pub table: Option<Table>,
+}
+
+/// One anchored frame declared inside a `<CharacterStyleRange>`. The
+/// frame carries its own geometry / transform and an
+/// `<AnchoredObjectSetting>` describing where it should land relative
+/// to the anchor character.
+#[derive(Debug, Clone, Serialize)]
+pub struct AnchoredFrame {
+    pub frame_kind: AnchoredFrameKind,
+    pub self_id: Option<String>,
+    pub bounds: Option<crate::Bounds>,
+    pub item_transform: Option<[f32; 6]>,
+    /// For anchored TextFrames: the `ParentStory` reference, so the
+    /// renderer can chase the story content. `None` for Rectangles
+    /// (which would carry an image link instead) and Groups (which
+    /// hold sub-items).
+    pub parent_story: Option<String>,
+    pub setting: Option<AnchoredObjectSetting>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum AnchoredFrameKind {
+    TextFrame,
+    Rectangle,
+    Group,
+}
+
+/// Mirrors IDML's `<AnchoredObjectSetting>` block. The renderer needs
+/// only the position + offset attributes to place the anchored frame;
+/// fancier kerning / spine-relative behaviour can land in follow-ups.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct AnchoredObjectSetting {
+    /// `AnchoredPosition` — `InlinePosition`, `AbovePosition`, or
+    /// `Custom`. `None` ⇒ use the cascaded default (`InlinePosition`).
+    pub anchored_position: Option<String>,
+    /// `SpineRelative="true"` flips the offset direction on facing
+    /// pages. False is the IDML default.
+    pub spine_relative: bool,
+    /// `AnchorXoffset` in pt — horizontal nudge from the anchor
+    /// point. 0.0 when absent.
+    pub anchor_x_offset: f32,
+    /// `AnchorYoffset` in pt.
+    pub anchor_y_offset: f32,
+    /// `AnchorPoint` — `TopLeftAnchor`, `TopCenterAnchor`,
+    /// `TopRightAnchor`, `LeftCenterAnchor`, `CenterAnchor`,
+    /// `RightCenterAnchor`, `BottomLeftAnchor`, `BottomCenterAnchor`,
+    /// `BottomRightAnchor`. `None` ⇒ inherit from the cascade.
+    pub anchor_point: Option<String>,
+    /// `LockPosition="true"` pins the anchored frame to its current
+    /// page position; the user can't drag it.
+    pub lock_position: bool,
 }
 
 /// `<Table>` element parsed from a Story. Cells reference rows /
@@ -312,10 +387,110 @@ impl Story {
         let mut properties_kind: u8 = 0;
         let mut properties_field: Option<Vec<u8>> = None;
         let mut properties_text = String::new();
+        // Anchored-frame state. When a <TextFrame> / <Rectangle> /
+        // <Group> opens as a child of a CharacterStyleRange, we
+        // record it as an anchored object on the current paragraph
+        // and skip its body until the matching close — the renderer
+        // will revisit the frame's deep state via the parent_story
+        // reference (for TextFrames) or its own pass once anchored
+        // frame placement lands.
+        let mut anchored_depth: u32 = 0;
+        let mut pending_anchored: Option<AnchoredFrame> = None;
+
+        // Helper: try to detect an anchored-frame opening. Returns
+        // true when the element was consumed as the start of an
+        // anchored frame; the caller should NOT fall through to the
+        // normal element handling.
+        fn try_open_anchored(
+            e: &quick_xml::events::BytesStart,
+            current_run: &Option<CharacterRun>,
+            anchored_depth: &mut u32,
+            pending_anchored: &mut Option<AnchoredFrame>,
+            empty: bool,
+        ) -> bool {
+            if current_run.is_none() {
+                return false;
+            }
+            // Only the *outermost* anchored frame (depth transition
+            // 0 → 1) is captured as a record. Inner nested frames
+            // would still bump the depth via the start handler.
+            if *anchored_depth > 0 {
+                if !empty {
+                    *anchored_depth += 1;
+                }
+                return true;
+            }
+            let kind = match e.name().as_ref() {
+                b"TextFrame" => AnchoredFrameKind::TextFrame,
+                b"Rectangle" => AnchoredFrameKind::Rectangle,
+                b"Group" => AnchoredFrameKind::Group,
+                _ => return false,
+            };
+            let bounds = attr(e, b"GeometricBounds").and_then(|s| parse_bounds_local(&s));
+            let item_transform =
+                attr(e, b"ItemTransform").and_then(|s| parse_matrix_local(&s));
+            let parent_story = if matches!(kind, AnchoredFrameKind::TextFrame) {
+                attr(e, b"ParentStory")
+            } else {
+                None
+            };
+            *pending_anchored = Some(AnchoredFrame {
+                frame_kind: kind,
+                self_id: attr(e, b"Self"),
+                bounds,
+                item_transform,
+                parent_story,
+                setting: None,
+            });
+            if !empty {
+                *anchored_depth = 1;
+            } else {
+                // Self-closing anchored frame — finalise immediately
+                // (no body, so AnchoredObjectSetting can't appear).
+                // The caller will pop it on the same event.
+            }
+            true
+        }
 
         loop {
             match reader.read_event_into(&mut buf)? {
-                Event::Start(e) => match e.name().as_ref() {
+                Event::Start(e) => {
+                    let n = e.name();
+                    let name = n.as_ref();
+                    // Anchored-frame handling. A `<TextFrame>` /
+                    // `<Rectangle>` / `<Group>` nested directly
+                    // inside a `<CharacterStyleRange>` is an
+                    // inline-anchored object — capture geometry +
+                    // <AnchoredObjectSetting> and skip the body.
+                    if anchored_depth > 0 {
+                        if name == b"AnchoredObjectSetting" {
+                            if let Some(p) = pending_anchored.as_mut() {
+                                p.setting = Some(parse_anchored_object_setting(&e));
+                            }
+                        }
+                        // Always bump depth on Start so we stay
+                        // inside the anchored body until the
+                        // matching End fires.
+                        anchored_depth += 1;
+                        buf.clear();
+                        continue;
+                    }
+                    if current_run.is_some()
+                        && (name == b"TextFrame"
+                            || name == b"Rectangle"
+                            || name == b"Group")
+                    {
+                        try_open_anchored(
+                            &e,
+                            &current_run,
+                            &mut anchored_depth,
+                            &mut pending_anchored,
+                            false,
+                        );
+                        buf.clear();
+                        continue;
+                    }
+                    match name {
                     // <StoryPreference> may also appear with
                     // children (e.g. nested <Properties>) instead of
                     // self-closing. Read the attributes off the Start
@@ -343,7 +518,17 @@ impl Story {
                             tab_list: Vec::new(),
                             bullets_list_type: attr(&e, b"BulletsAndNumberingListType"),
                             bullet_character: None,
+                            drop_cap_characters: attr(&e, b"DropCapCharacters")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0),
+                            drop_cap_lines: attr(&e, b"DropCapLines")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0),
+                            drop_cap_detail: attr(&e, b"DropCapDetail")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0),
                             runs: Vec::new(),
+                            anchored_frames: Vec::new(),
                             table: None,
                         });
                     }
@@ -495,8 +680,28 @@ impl Story {
                         properties_text.clear();
                     }
                     _ => {}
-                },
-                Event::End(e) => match e.name().as_ref() {
+                    } // close inner `match name { ... }`
+                }
+                Event::End(e) => {
+                    let n = e.name();
+                    let name = n.as_ref();
+                    // Anchored-frame close: pop depth; when we
+                    // return to depth 0 the frame body has fully
+                    // closed and the pending record gets attached
+                    // to the host paragraph.
+                    if anchored_depth > 0 {
+                        anchored_depth -= 1;
+                        if anchored_depth == 0 {
+                            if let (Some(frame), Some(para)) =
+                                (pending_anchored.take(), current_paragraph.as_mut())
+                            {
+                                para.anchored_frames.push(frame);
+                            }
+                        }
+                        buf.clear();
+                        continue;
+                    }
+                    match name {
                     b"Content" => {
                         in_content = false;
                     }
@@ -587,8 +792,52 @@ impl Story {
                         }
                     }
                     _ => {}
-                },
-                Event::Empty(e) => match e.name().as_ref() {
+                    } // close inner `match name { ... }`
+                }
+                Event::Empty(e) => {
+                    let n = e.name();
+                    let name = n.as_ref();
+                    // Anchored-frame self-closing forms. These
+                    // never visit the End arm so the pending record
+                    // must be flushed inline.
+                    if anchored_depth > 0 {
+                        // While inside an anchored body, capture
+                        // <AnchoredObjectSetting/> attributes;
+                        // ignore everything else. No depth bump
+                        // because Empty events have no matching
+                        // End.
+                        if name == b"AnchoredObjectSetting" {
+                            if let Some(p) = pending_anchored.as_mut() {
+                                p.setting = Some(parse_anchored_object_setting(&e));
+                            }
+                        }
+                        buf.clear();
+                        continue;
+                    }
+                    if current_run.is_some()
+                        && (name == b"TextFrame"
+                            || name == b"Rectangle"
+                            || name == b"Group")
+                    {
+                        // Self-closing anchored frame: capture
+                        // attributes, then immediately attach to
+                        // the host paragraph (no body to skip).
+                        try_open_anchored(
+                            &e,
+                            &current_run,
+                            &mut anchored_depth,
+                            &mut pending_anchored,
+                            true,
+                        );
+                        if let (Some(frame), Some(para)) =
+                            (pending_anchored.take(), current_paragraph.as_mut())
+                        {
+                            para.anchored_frames.push(frame);
+                        }
+                        buf.clear();
+                        continue;
+                    }
+                    match name {
                     // <StoryPreference OpticalMarginAlignment="true"
                     // OpticalMarginSize="12" .../> appears once per
                     // story near the top. Drives hanging punctuation
@@ -687,7 +936,8 @@ impl Story {
                         }
                     }
                     _ => {}
-                },
+                    } // close inner `match name { ... }`
+                }
                 Event::Text(t) => {
                     if in_content {
                         if let Some(run) = current_run.as_mut() {
@@ -723,6 +973,57 @@ impl Story {
             buf.clear();
         }
         Ok(out)
+    }
+}
+
+/// Parse a "y1 x1 y2 x2" `GeometricBounds` attribute. Local copy
+/// (the spread parser owns the public version) so the story parser
+/// stays self-contained.
+fn parse_bounds_local(s: &str) -> Option<crate::Bounds> {
+    let parts: Vec<f32> = s
+        .split_whitespace()
+        .filter_map(|p| p.parse().ok())
+        .collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    Some(crate::Bounds {
+        top: parts[0],
+        left: parts[1],
+        bottom: parts[2],
+        right: parts[3],
+    })
+}
+
+fn parse_matrix_local(s: &str) -> Option<[f32; 6]> {
+    let parts: Vec<f32> = s
+        .split_whitespace()
+        .filter_map(|p| p.parse().ok())
+        .collect();
+    if parts.len() != 6 {
+        return None;
+    }
+    Some([parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]])
+}
+
+fn parse_anchored_object_setting(
+    e: &quick_xml::events::BytesStart,
+) -> AnchoredObjectSetting {
+    AnchoredObjectSetting {
+        anchored_position: attr(e, b"AnchoredPosition"),
+        spine_relative: attr(e, b"SpineRelative")
+            .and_then(|s| s.parse::<bool>().ok())
+            .unwrap_or(false),
+        anchor_x_offset: attr(e, b"AnchorXoffset")
+            .and_then(|s| s.parse::<f32>().ok())
+            .unwrap_or(0.0),
+        anchor_y_offset: attr(e, b"AnchorYoffset")
+            .and_then(|s| s.parse::<f32>().ok())
+            .unwrap_or(0.0),
+        anchor_point: attr(e, b"AnchorPoint"),
+        lock_position: attr(e, b"LockPosition")
+            .and_then(|s| s.parse::<bool>().ok())
+            .unwrap_or(false),
     }
 }
 
@@ -915,6 +1216,95 @@ mod tests {
         // Cell insets carried through.
         assert_eq!(table.cells[0].text_top_inset, 2.0);
         assert_eq!(table.cells[0].text_left_inset, 3.0);
+    }
+
+    #[test]
+    fn parses_drop_cap_attributes_on_paragraph_style_range() {
+        let xml = br#"<Story>
+          <ParagraphStyleRange DropCapCharacters="1" DropCapLines="3" DropCapDetail="0">
+            <CharacterStyleRange><Content>The quick brown fox</Content></CharacterStyleRange>
+          </ParagraphStyleRange>
+          <ParagraphStyleRange>
+            <CharacterStyleRange><Content>No drop cap here.</Content></CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        assert_eq!(s.paragraphs.len(), 2);
+        assert_eq!(s.paragraphs[0].drop_cap_characters, 1);
+        assert_eq!(s.paragraphs[0].drop_cap_lines, 3);
+        assert_eq!(s.paragraphs[0].drop_cap_detail, 0);
+        // No drop cap on the second paragraph — fields default to 0.
+        assert_eq!(s.paragraphs[1].drop_cap_characters, 0);
+        assert_eq!(s.paragraphs[1].drop_cap_lines, 0);
+    }
+
+    #[test]
+    fn anchored_text_frame_inside_character_style_range_is_captured() {
+        // A `<TextFrame>` nested under a `<CharacterStyleRange>` is
+        // an inline-anchored object. It should NOT be parsed as
+        // story content (no nested <Content> picked up); the
+        // pending record should land on the host paragraph's
+        // `anchored_frames` with the parent_story reference and
+        // the AnchoredObjectSetting block.
+        let xml = br#"<Story Self="u1">
+          <ParagraphStyleRange>
+            <CharacterStyleRange>
+              <Content>Before the marker</Content>
+              <TextFrame Self="anchor1" ParentStory="u99"
+                         GeometricBounds="0 0 50 80"
+                         ItemTransform="1 0 0 1 5 7">
+                <Properties/>
+                <AnchoredObjectSetting AnchoredPosition="InlinePosition"
+                                       SpineRelative="false"
+                                       AnchorXoffset="0"
+                                       AnchorYoffset="-2"
+                                       AnchorPoint="TopLeftAnchor"
+                                       LockPosition="false"/>
+              </TextFrame>
+              <Content>After the marker</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        assert_eq!(s.paragraphs.len(), 1);
+        let p = &s.paragraphs[0];
+        assert_eq!(p.runs.len(), 1, "the two Content blocks merged");
+        assert_eq!(p.runs[0].text, "Before the markerAfter the marker");
+        assert_eq!(p.anchored_frames.len(), 1);
+        let af = &p.anchored_frames[0];
+        assert_eq!(af.frame_kind, AnchoredFrameKind::TextFrame);
+        assert_eq!(af.self_id.as_deref(), Some("anchor1"));
+        assert_eq!(af.parent_story.as_deref(), Some("u99"));
+        let bounds = af.bounds.expect("bounds parsed");
+        assert_eq!(bounds.top, 0.0);
+        assert_eq!(bounds.right, 80.0);
+        assert_eq!(af.item_transform, Some([1.0, 0.0, 0.0, 1.0, 5.0, 7.0]));
+        let setting = af.setting.as_ref().expect("anchored object setting");
+        assert_eq!(setting.anchored_position.as_deref(), Some("InlinePosition"));
+        assert_eq!(setting.anchor_y_offset, -2.0);
+        assert_eq!(setting.anchor_point.as_deref(), Some("TopLeftAnchor"));
+        assert!(!setting.lock_position);
+    }
+
+    #[test]
+    fn anchored_rectangle_inside_csr_records_kind_rectangle() {
+        let xml = br#"<Story>
+          <ParagraphStyleRange>
+            <CharacterStyleRange>
+              <Rectangle Self="r1" GeometricBounds="0 0 30 30"/>
+              <Content>x</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let p = &s.paragraphs[0];
+        assert_eq!(p.anchored_frames.len(), 1);
+        assert_eq!(
+            p.anchored_frames[0].frame_kind,
+            AnchoredFrameKind::Rectangle
+        );
+        // Rectangles never carry a parent_story.
+        assert!(p.anchored_frames[0].parent_story.is_none());
     }
 
     #[test]

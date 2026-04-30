@@ -31,7 +31,8 @@ pub use spread::{
     TextFrame, TextPath, TextWrap, TextWrapMode, VerticalJustification,
 };
 pub use story::{
-    CellDiagonal, CharacterRun, Paragraph, Story, TabStop, Table, TableCell, TableColumn, TableRow,
+    AnchoredFrame, AnchoredFrameKind, AnchoredObjectSetting, CellDiagonal, CharacterRun,
+    Paragraph, Story, TabStop, Table, TableCell, TableColumn, TableRow,
     AUTO_PAGE_NUMBER_MARKER, NEXT_PAGE_NUMBER_MARKER,
 };
 pub use styles::{
