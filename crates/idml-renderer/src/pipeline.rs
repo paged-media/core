@@ -413,6 +413,14 @@ pub fn build_document(
     };
 
     let mut decoded_image_cache: HashMap<String, idml_compose::DecodedImage> = HashMap::new();
+    // Aggregated queue of image-bearing anchored Rectangles captured
+    // during the master + body story passes. Drained after both
+    // passes complete so `emit_rectangle_image` can route the
+    // already-resolved placements through the per-page + decoded
+    // image caches that live in this scope. Order is preserved so
+    // multiple anchored images on the same page composite in
+    // story-pass order.
+    let mut anchored_image_queue: Vec<AnchoredImageEmit> = Vec::new();
     // Per-spread per-frame-kind command spans, captured in document
     // order so the post-pass `group_pass` can translate each
     // group's `Vec<FrameRef>` into the page-space command ranges
@@ -678,6 +686,7 @@ pub fn build_document(
         }
         emitter.apply_vertical_justification(&mut pages);
         emitter.apply_blend_groups(&mut pages);
+        anchored_image_queue.extend(emitter.take_anchored_image_queue());
     }
 
     // Text-on-path pass: walk every spread's shapes and emit any
@@ -869,6 +878,28 @@ pub fn build_document(
         }
         emitter.apply_vertical_justification(&mut pages);
         emitter.apply_blend_groups(&mut pages);
+        anchored_image_queue.extend(emitter.take_anchored_image_queue());
+    }
+
+    // Anchored-rectangle image post-pass. Each entry was captured
+    // during the story pass after placement resolution; replay
+    // through `emit_rectangle_image` so anchored images share the
+    // same per-page ImageId cache + renderer-scoped decoded-image
+    // cache as spread-level Rectangles. Drains both master + body
+    // captures (master frames currently never carry anchored
+    // images, but the queue is unified for symmetry).
+    for entry in anchored_image_queue {
+        emit_anchored_rect_image(
+            &mut pages[entry.target_page],
+            &entry.af,
+            entry.place_x,
+            entry.place_y,
+            entry.width,
+            entry.height,
+            options,
+            &mut page_image_caches[entry.target_page],
+            &mut decoded_image_cache,
+        );
     }
 
     Ok(BuiltDocument {
@@ -968,6 +999,33 @@ struct StoryEmitter<'a> {
     /// anchored TextFrame referencing its own host story can't blow
     /// the stack.
     anchored_recursion_depth: u32,
+    /// Image-bearing anchored frames captured during emission so the
+    /// caller can replay them through `emit_rectangle_image` once the
+    /// story pass completes. Image emission needs the per-page
+    /// `ImageId` cache + decoded-image cache that live in
+    /// `build_document`'s scope, outside StoryEmitter — collecting the
+    /// already-resolved (target_page, place_x, place_y, AnchoredFrame
+    /// clone) tuples here lets the post-pass run with the caches in
+    /// hand without re-doing placement.
+    anchored_image_queue: Vec<AnchoredImageEmit>,
+}
+
+/// One image-bearing anchored Rectangle captured during the body /
+/// master story pass. The post-pass in `build_document` drains
+/// these and routes each through `emit_rectangle_image` with the
+/// per-page + decoded caches already in scope.
+#[derive(Debug, Clone)]
+struct AnchoredImageEmit {
+    target_page: usize,
+    place_x: f32,
+    place_y: f32,
+    width: f32,
+    height: f32,
+    /// Cloned so the post-pass doesn't borrow the source
+    /// `AnchoredFrame` (which lives inside the parsed Story tree). We
+    /// only need image_link / image_item_transform / self_id for the
+    /// rectangle synthesis below, so the clone is cheap.
+    af: idml_parse::AnchoredFrame,
 }
 
 /// Hard cap on `anchored_recursion_depth`. Real-world IDMLs nest at
@@ -1070,6 +1128,7 @@ impl<'a> StoryEmitter<'a> {
             optical_margin_alignment: false,
             optical_margin_size_pt: 0.0,
             anchored_recursion_depth: 0,
+            anchored_image_queue: Vec::new(),
         }
     }
 
@@ -1080,6 +1139,15 @@ impl<'a> StoryEmitter<'a> {
     fn with_anchored_recursion_depth(mut self, depth: u32) -> Self {
         self.anchored_recursion_depth = depth;
         self
+    }
+
+    /// Hand off any image-bearing anchored frames captured during the
+    /// story pass. The body / master pass calls this after
+    /// `apply_blend_groups` so the post-pass below can reuse the
+    /// already-resolved per-page + decoded caches without
+    /// re-traversing the story tree.
+    fn take_anchored_image_queue(&mut self) -> Vec<AnchoredImageEmit> {
+        std::mem::take(&mut self.anchored_image_queue)
     }
 
     /// Set the story's `<StoryPreference>` optical-margin flags so
@@ -2304,6 +2372,23 @@ fn emit_one_anchored_frame(
                     pages,
                 );
             }
+            // Capture image-bearing anchored Rectangles (incl. Group
+            // children). Rendering routes through the per-page +
+            // decoded-image caches owned by `build_document`, so
+            // we record placement here and the post-pass replays via
+            // `emit_rectangle_image`. Anchored TextFrames don't carry
+            // an `image_link` (the parser only sets it for Rectangles
+            // / Groups), but the guard is symmetric for safety.
+            if af.image_link.is_some() && frame_w > 0.0 && frame_h > 0.0 {
+                em.anchored_image_queue.push(AnchoredImageEmit {
+                    target_page,
+                    place_x,
+                    place_y,
+                    width: frame_w,
+                    height: frame_h,
+                    af: af.clone(),
+                });
+            }
             if matches!(af.frame_kind, idml_parse::AnchoredFrameKind::TextFrame) {
                 if let Some(story_id) = af.parent_story.as_deref() {
                     if frame_w > 0.0 && frame_h > 0.0 {
@@ -2441,6 +2526,68 @@ fn emit_anchored_rect_via_pipeline(
         em.cmyk_xform,
         None,
     );
+}
+
+/// Image-emit pass for an anchored Rectangle whose `image_link` is
+/// populated. Synthesises a Rectangle in spread coords (mirroring
+/// `emit_anchored_rect_via_pipeline`'s placement math, plus the
+/// image fields the parent helper drops) and hands it to
+/// `emit_rectangle_image` so the per-page + decoded-image caches in
+/// `build_document`'s scope are reused.
+///
+/// The image stamps *on top* of the rectangle's own fill / stroke
+/// emitted earlier by the body / master story pass — same z-order
+/// as a spread-level Rectangle whose `<Image>` child overlays the
+/// rectangle's solid fill.
+fn emit_anchored_rect_image(
+    page: &mut BuiltPage,
+    af: &idml_parse::AnchoredFrame,
+    place_x: f32,
+    place_y: f32,
+    w: f32,
+    h: f32,
+    options: &PipelineOptions,
+    page_image_cache: &mut HashMap<String, idml_compose::ImageId>,
+    decoded_cache: &mut HashMap<String, idml_compose::DecodedImage>,
+) {
+    let (ox, oy) = page.spread_origin;
+    let bounds = idml_parse::Bounds {
+        top: place_y + oy,
+        left: place_x + ox,
+        bottom: place_y + oy + h,
+        right: place_x + ox + w,
+    };
+    let synthetic = Rectangle {
+        self_id: af.self_id.clone(),
+        bounds,
+        item_transform: None,
+        fill_color: af.fill_color.clone(),
+        fill_tint: af.fill_tint,
+        stroke_color: af.stroke_color.clone(),
+        stroke_weight: af.stroke_weight,
+        drop_shadow: None,
+        stroke_drop_shadow: None,
+        image_link: af.image_link.clone(),
+        image_item_transform: af.image_item_transform,
+        applied_object_style: af.applied_object_style.clone(),
+        text_wrap: None,
+        frame_fitting: None,
+        stroke_type: None,
+        stroke_alignment: None,
+        end_cap: None,
+        end_join: None,
+        miter_limit: None,
+        item_layer: None,
+        corner_radius: None,
+        corner_option: None,
+        is_anchored: true,
+        opacity: None,
+        blend_mode: None,
+        effects: None,
+        gradient_fill_angle: af.gradient_fill_angle,
+        text_paths: Vec::new(),
+    };
+    emit_rectangle_image(page, &synthetic, options, page_image_cache, decoded_cache);
 }
 
 /// Flow the story referenced by an anchored TextFrame into the
