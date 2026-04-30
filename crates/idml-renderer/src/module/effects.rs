@@ -141,12 +141,27 @@ pub(crate) fn emit_effects_post_fill(
         });
     }
     if let Some(p) = effects.gradient_feather.as_ref() {
-        let params = gradient_feather_from_parser(p);
-        page.list.commands.push(DisplayCommand::GradientFeather {
-            path_id: fill_path_id,
-            transform,
-            params,
-        });
+        // Emit GradientFeather only when the gradient *isn't* an
+        // alpha fade. The CPU rasterizer's current approximation
+        // paints a 50%-black tinted stamp — same trick as the plain
+        // `Feather` arm — so a fading stop list (e.g. 100% → 0%)
+        // would *darken* the rect rather than fade it out, the
+        // opposite of InDesign's intent.
+        //
+        // For the common case where every stop is fully opaque we
+        // still emit (the gradient becomes a no-op or a uniform
+        // tint, harmless). When any stop's alpha drops below 100%,
+        // skip emission until the rasterizer learns to modulate the
+        // underlying fill's alpha instead of stamping its own tint.
+        let any_fade = p.stops.iter().any(|s| s.alpha_pct < 100.0);
+        if !any_fade {
+            let params = gradient_feather_from_parser(p);
+            page.list.commands.push(DisplayCommand::GradientFeather {
+                path_id: fill_path_id,
+                transform,
+                params,
+            });
+        }
     }
 }
 
