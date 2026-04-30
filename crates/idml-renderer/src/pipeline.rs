@@ -12,9 +12,8 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use idml_compose::{
     emit_glyph_slice, emit_glyph_slice_blend, emit_line, emit_paragraph, emit_rect,
-    emit_rect_transformed, emit_stroke_ellipse_transformed, emit_stroke_rect,
-    emit_stroke_rect_transformed, Color, DisplayCommand, DisplayList, DropShadow, Paint, PathData,
-    PathSegment, Rect, Stroke, Transform, TtfOutliner,
+    emit_stroke_rect, emit_stroke_rect_transformed, Color, DisplayList, DropShadow, Paint,
+    PathData, PathSegment, Rect, Stroke, Transform, TtfOutliner,
 };
 use idml_parse::{graphic, Graphic, GraphicLine, Oval, PathAnchor, Polygon, Rectangle, TextFrame};
 use idml_scene::Document;
@@ -1569,93 +1568,34 @@ fn emit_polygon_into(
     let resolved = ResolvedFrame::from_polygon(poly);
     page.stats.frames += 1;
     let outer = frame_outer_transform(page, resolved.item_transform);
-    let fill_transparent = frame_fill_is_transparent(resolved.fill_color);
-    let fill = resolved
-        .fill_color
-        .and_then(|id| {
-            color_id_to_paint_with_list_dir(
-                id,
-                palette,
-                cmyk_xform,
-                &mut page.list,
-                resolved.gradient_fill_angle,
-            )
-        })
-        .unwrap_or(fallback);
-
-    // The polygon adapter collapses an anchor-less Polygon into
-    // `Geometry::Rect { rect: bbox }`, so the rect-fallback branch
-    // is keyed off the geometry variant rather than the parser's
-    // anchor count.
-    let anchors: &[PathAnchor] = match &resolved.geometry {
-        Geometry::Rect { rect: r } => {
-            if !fill_transparent {
-                emit_rect_transformed(*r, outer, fill, &mut page.list);
-            }
-            if let Some(stroke) = resolved
-                .stroke_color
-                .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
-            {
-                if resolved.stroke_weight > 0.0 {
-                    emit_stroke_rect_transformed(
-                        *r,
-                        outer,
-                        Stroke::new(resolved.stroke_weight),
-                        stroke,
-                        &mut page.list,
-                    );
-                }
-            }
-            return;
-        }
-        Geometry::Polygon { anchors, .. } => anchors,
-        _ => unreachable!("from_polygon produces Rect or Polygon"),
+    // Intern the polygon's path up-front so fill/stroke modules can
+    // route through `FillPath{Blend}` / `StrokePath` rather than the
+    // unit-rect/ellipse primitives. The adapter collapsed anchor-
+    // less polygons into `Geometry::Rect` already, so this only fires
+    // for the curved-path case.
+    let path_id = if let Geometry::Polygon { anchors, .. } = &resolved.geometry {
+        let path = polygon_path_from_anchors(anchors);
+        let cache_key = match resolved.self_id {
+            Some(id) => fnv_1a_u64(id.as_bytes()),
+            None => path_signature(anchors),
+        };
+        let (id, _) = page.list.paths.intern(cache_key, path);
+        Some(id)
+    } else {
+        None
     };
-
-    // Curved path. Anchors are in inner coords; the outer transform
-    // (page-origin × ItemTransform) maps inner → page-local pt at
-    // emit time, so the path data we intern stays in the same
-    // coordinate system the parser produced. Cache key uses the
-    // polygon's Self id where present so repeated draws of the
-    // same shape share the interned path.
-    let path = polygon_path_from_anchors(anchors);
-    let cache_key = match resolved.self_id {
-        Some(id) => fnv_1a_u64(id.as_bytes()),
-        None => path_signature(anchors),
-    };
-    let (path_id, _) = page.list.paths.intern(cache_key, path);
-    if !fill_transparent {
-        let fill = apply_opacity(fill, resolved.opacity);
-        let blend = resolved.blend_mode;
-        if matches!(blend, idml_compose::BlendMode::Normal) {
-            page.list.commands.push(DisplayCommand::FillPath {
-                path_id,
-                paint: fill,
-                transform: outer,
-            });
-        } else {
-            page.list.commands.push(DisplayCommand::FillPathBlend {
-                path_id,
-                paint: fill,
-                transform: outer,
-                blend_mode: blend,
-            });
-        }
-    }
-    if let Some(stroke_paint) = resolved
-        .stroke_color
-        .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
-    {
-        let stroke_paint = apply_opacity(stroke_paint, resolved.opacity);
-        if resolved.stroke_weight > 0.0 {
-            page.list.commands.push(DisplayCommand::StrokePath {
-                path_id,
-                paint: stroke_paint,
-                stroke: Stroke::new(resolved.stroke_weight),
-                transform: outer,
-            });
-        }
-    }
+    crate::module::fill_paint_module(
+        &resolved, page, palette, cmyk_xform, fallback, outer, path_id,
+    );
+    crate::module::stroke_paint_module(
+        &resolved,
+        page,
+        palette,
+        cmyk_xform,
+        outer,
+        path_id,
+        Stroke::new(resolved.stroke_weight),
+    );
 }
 
 /// Cheap content-derived cache key for polygons that don't carry a
@@ -1676,7 +1616,7 @@ fn path_signature(anchors: &[PathAnchor]) -> u64 {
     h
 }
 
-fn fnv_1a_u64(bytes: &[u8]) -> u64 {
+pub(crate) fn fnv_1a_u64(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
     for &b in bytes {
         h ^= b as u64;
@@ -2998,34 +2938,21 @@ fn emit_text_frame_into(
     drop_shadow: Option<DropShadow>,
 ) {
     let resolved = ResolvedFrame::from_text_frame(frame);
-    let Geometry::TextFrameRect { rect: r } = resolved.geometry else {
-        unreachable!("from_text_frame produces Geometry::TextFrameRect");
-    };
     page.stats.frames += 1;
     let outer = frame_outer_transform(page, resolved.item_transform);
-    let fill_transparent = frame_fill_is_transparent(resolved.fill_color);
     crate::module::drop_shadow_module(&resolved, page, palette, cmyk_xform, drop_shadow, outer);
-    if !fill_transparent {
-        let fill = resolved
-            .fill_color
-            .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
-            .unwrap_or(fallback);
-        emit_rect_transformed(r, outer, fill, &mut page.list);
-    }
-    if let Some(stroke) = resolved
-        .stroke_color
-        .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
-    {
-        if resolved.stroke_weight > 0.0 {
-            emit_stroke_rect_transformed(
-                r,
-                outer,
-                Stroke::new(resolved.stroke_weight),
-                stroke,
-                &mut page.list,
-            );
-        }
-    }
+    crate::module::fill_paint_module(
+        &resolved, page, palette, cmyk_xform, fallback, outer, None,
+    );
+    crate::module::stroke_paint_module(
+        &resolved,
+        page,
+        palette,
+        cmyk_xform,
+        outer,
+        None,
+        Stroke::new(resolved.stroke_weight),
+    );
 }
 
 fn emit_oval_into(
@@ -3036,49 +2963,19 @@ fn emit_oval_into(
     cmyk_xform: Option<&idml_color::IccTransform>,
 ) {
     let frame = ResolvedFrame::from_oval(oval);
-    let Geometry::Oval { rect: r } = frame.geometry else {
-        unreachable!("from_oval produces Geometry::Oval");
-    };
     page.stats.frames += 1;
     let outer = frame_outer_transform(page, frame.item_transform);
-    let fill_transparent = frame_fill_is_transparent(frame.fill_color);
     crate::module::drop_shadow_module(&frame, page, palette, cmyk_xform, None, outer);
-    if !fill_transparent {
-        let fill = frame
-            .fill_color
-            .and_then(|id| {
-                color_id_to_paint_with_list_dir(
-                    id,
-                    palette,
-                    cmyk_xform,
-                    &mut page.list,
-                    frame.gradient_fill_angle,
-                )
-            })
-            .unwrap_or(fallback);
-        let fill = apply_opacity(fill, frame.opacity);
-        idml_compose::emit_ellipse_transformed_blend(
-            r,
-            outer,
-            fill,
-            frame.blend_mode,
-            &mut page.list,
-        );
-    }
-    if let Some(stroke) = frame
-        .stroke_color
-        .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
-    {
-        if frame.stroke_weight > 0.0 {
-            emit_stroke_ellipse_transformed(
-                r,
-                outer,
-                Stroke::new(frame.stroke_weight),
-                stroke,
-                &mut page.list,
-            );
-        }
-    }
+    crate::module::fill_paint_module(&frame, page, palette, cmyk_xform, fallback, outer, None);
+    crate::module::stroke_paint_module(
+        &frame,
+        page,
+        palette,
+        cmyk_xform,
+        outer,
+        None,
+        Stroke::new(frame.stroke_weight),
+    );
 }
 
 fn emit_line_into(
@@ -3134,113 +3031,65 @@ fn emit_rectangle_into(
     };
     page.stats.frames += 1;
     let outer = frame_outer_transform(page, resolved.item_transform);
-    let fill_transparent = frame_fill_is_transparent(resolved.fill_color);
     crate::module::drop_shadow_module(&resolved, page, palette, cmyk_xform, drop_shadow, outer);
-    let fill = resolved
-        .fill_color
-        .and_then(|id| {
-            color_id_to_paint_with_list_dir(
-                id,
-                palette,
-                cmyk_xform,
-                &mut page.list,
-                resolved.gradient_fill_angle,
-            )
-        })
-        .unwrap_or(fallback);
-    let fill = apply_fill_tint(fill, resolved.fill_tint);
-    let fill = apply_opacity(fill, resolved.opacity);
-    let stroke_paint = resolved
-        .stroke_color
-        .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
-        .map(|p| apply_opacity(p, resolved.opacity));
-    let stroke_width = resolved.stroke_weight;
-    let stroke_offset = stroke_alignment_offset(resolved.stroke_alignment, stroke_width);
-    let blend_mode = resolved.blend_mode;
-    let radius = corner_radius_for(rect);
-    if let Some(radius) = radius {
-        // Rounded path: build once, intern, fill + (optional) stroke.
-        // Cache key includes the radius so different radii on the
-        // same Self id get distinct interned paths.
-        let path = rounded_rect_path(r, radius);
-        let key_bytes = resolved
-            .self_id
-            .map(|s| s.as_bytes().to_vec())
-            .unwrap_or_else(|| format!("{:?}", r).into_bytes());
-        let key = fnv_1a_u64(&[key_bytes.as_slice(), &radius.to_bits().to_le_bytes()].concat());
-        let (path_id, _) = page.list.paths.intern(key, path);
-        if !fill_transparent {
-            if matches!(blend_mode, idml_compose::BlendMode::Normal) {
-                page.list.commands.push(DisplayCommand::FillPath {
-                    path_id,
-                    paint: fill,
-                    transform: outer,
-                });
-            } else {
-                page.list.commands.push(DisplayCommand::FillPathBlend {
-                    path_id,
-                    paint: fill,
-                    transform: outer,
-                    blend_mode,
-                });
-            }
-        }
-        if let (Some(stroke), true) = (stroke_paint, stroke_width > 0.0) {
-            // Inside/Outside alignment shifts the stroke path inward
-            // or outward by W/2, with matching radius adjustment so
-            // the corners stay tangent to the geometry.
-            let stroke_rect = inset_rect(r, stroke_offset);
-            let stroke_radius = (radius - stroke_offset).max(0.0);
-            let stroke_path = rounded_rect_path(stroke_rect, stroke_radius);
-            let stroke_key = fnv_1a_u64(
-                &[
-                    key_bytes.as_slice(),
-                    &stroke_radius.to_bits().to_le_bytes(),
-                    &stroke_offset.to_bits().to_le_bytes(),
-                    b"sa",
-                ]
-                .concat(),
-            );
-            let (stroke_path_id, _) = page.list.paths.intern(stroke_key, stroke_path);
-            page.list.commands.push(DisplayCommand::StrokePath {
-                path_id: stroke_path_id,
-                paint: stroke,
-                stroke: stroke_for(
-                    resolved.stroke_type,
-                    stroke_width,
-                    resolved.end_cap,
-                    resolved.end_join,
-                    resolved.miter_limit,
-                ),
-                transform: outer,
-            });
-        }
+
+    // Rounded-corner Rectangles route fill + stroke through interned
+    // paths; non-rounded ones use the geometry's natural primitives.
+    // The corner_path module returns `(None, None)` when there's no
+    // corner radius, so the same module call covers both cases.
+    let corner = crate::module::corner_path_module(&resolved, page);
+    crate::module::fill_paint_module(
+        &resolved, page, palette, cmyk_xform, fallback, outer, corner.fill,
+    );
+
+    // Stroke needs the IDML stroke style (dash pattern, end-cap/join,
+    // miter limit) folded into the `Stroke`. For non-rounded
+    // rectangles the stroke also rides an `inset_rect` to honour
+    // `StrokeAlignment` — which the geometry adapter doesn't know
+    // about, so we compute it here and either pre-intern (rounded)
+    // or hand a custom rect to the fallback emit (flat).
+    let stroke = stroke_for(
+        resolved.stroke_type,
+        resolved.stroke_weight,
+        resolved.end_cap,
+        resolved.end_join,
+        resolved.miter_limit,
+    );
+    if corner.stroke.is_some() {
+        crate::module::stroke_paint_module(
+            &resolved,
+            page,
+            palette,
+            cmyk_xform,
+            outer,
+            corner.stroke,
+            stroke,
+        );
         return;
     }
-    if !fill_transparent {
-        idml_compose::emit_rect_transformed_blend(r, outer, fill, blend_mode, &mut page.list);
-    }
-    if let (Some(stroke), true) = (stroke_paint, stroke_width > 0.0) {
-        emit_stroke_rect_transformed(
-            inset_rect(r, stroke_offset),
-            outer,
-            stroke_for(
-                resolved.stroke_type,
-                stroke_width,
-                resolved.end_cap,
-                resolved.end_join,
-                resolved.miter_limit,
-            ),
-            stroke,
-            &mut page.list,
-        );
+    // Flat rectangle — use the inset rect for stroke-alignment.
+    let stroke_offset = stroke_alignment_offset(resolved.stroke_alignment, resolved.stroke_weight);
+    if resolved.stroke_weight > 0.0 {
+        if let Some(paint) = resolved
+            .stroke_color
+            .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
+        {
+            let paint = apply_opacity(paint, resolved.opacity);
+            emit_stroke_rect_transformed(
+                inset_rect(r, stroke_offset),
+                outer,
+                stroke,
+                paint,
+                &mut page.list,
+            );
+        }
     }
 }
 
 /// Half the stroke width to shift the stroke path by, signed so that
 /// positive shrinks inward (Inside alignment) and negative grows
 /// outward (Outside alignment). `CenterAlignment` and `None` return 0.
-fn stroke_alignment_offset(alignment: Option<&str>, stroke_width: f32) -> f32 {
+pub(crate) fn stroke_alignment_offset(alignment: Option<&str>, stroke_width: f32) -> f32 {
     match alignment {
         Some("InsideAlignment") => stroke_width * 0.5,
         Some("OutsideAlignment") => -stroke_width * 0.5,
@@ -3275,7 +3124,7 @@ pub(crate) fn blend_mode_from_idml(name: Option<&str>) -> idml_compose::BlendMod
 
 /// Inset (positive) or outset (negative) all four edges of a rect by
 /// `delta`. Used for stroke-alignment shifts on rectangles.
-fn inset_rect(r: Rect, delta: f32) -> Rect {
+pub(crate) fn inset_rect(r: Rect, delta: f32) -> Rect {
     Rect {
         x: r.x + delta,
         y: r.y + delta,
@@ -3288,7 +3137,7 @@ fn inset_rect(r: Rect, delta: f32) -> Rect {
 /// unchanged. Only solid paints get scaled today; gradient stops
 /// would need a per-stop pass that we'll add when frame-level
 /// opacity meets a gradient fill in real samples.
-fn apply_opacity(paint: Paint, opacity_pct: Option<f32>) -> Paint {
+pub(crate) fn apply_opacity(paint: Paint, opacity_pct: Option<f32>) -> Paint {
     let Some(o) = opacity_pct else {
         return paint;
     };
@@ -3306,12 +3155,18 @@ fn apply_opacity(paint: Paint, opacity_pct: Option<f32>) -> Paint {
 /// Returns `Some(radius)` only when the corner-option string names a
 /// rounding variant and the radius is positive; otherwise `None` so
 /// the renderer takes the cheap unit-rect path.
-fn corner_radius_for(rect: &Rectangle) -> Option<f32> {
-    let radius = rect.corner_radius?;
-    if radius <= 0.0 {
+/// Effective corner radius for a Rectangle, considering CornerOption.
+/// Reads the already-resolved fields off `ResolvedFrame` so the
+/// corner-path module never imports `Rectangle`. Returns
+/// `Some(radius)` only when the option names a rounding variant and
+/// the radius is positive; otherwise `None` so the renderer takes
+/// the cheap unit-rect path.
+pub(crate) fn corner_radius_from(radius: Option<f32>, option: Option<&str>) -> Option<f32> {
+    let r = radius?;
+    if r <= 0.0 {
         return None;
     }
-    match rect.corner_option.as_deref() {
+    match option {
         // The decorative variants (Inverse-Rounded, Inset, Bevel, Fancy)
         // currently fall back to plain Rounded. Replace per-corner-option
         // path emission lands later.
@@ -3319,7 +3174,7 @@ fn corner_radius_for(rect: &Rectangle) -> Option<f32> {
         | Some("InverseRounded")
         | Some("Inset")
         | Some("Bevel")
-        | Some("Fancy") => Some(radius),
+        | Some("Fancy") => Some(r),
         _ => None,
     }
 }
@@ -3330,7 +3185,7 @@ fn corner_radius_for(rect: &Rectangle) -> Option<f32> {
 /// `rect.y`); the renderer's `outer` transform handles spread-origin
 /// and ItemTransform composition the same way it does for polygons.
 /// Walks clockwise from the top edge.
-fn rounded_rect_path(rect: Rect, radius: f32) -> idml_compose::PathData {
+pub(crate) fn rounded_rect_path(rect: Rect, radius: f32) -> idml_compose::PathData {
     use idml_compose::PathSegment::*;
     let r = radius.min(rect.w * 0.5).min(rect.h * 0.5).max(0.0);
     let l = rect.x;
@@ -4060,7 +3915,7 @@ fn apply_paragraph_compose_options<'a>(
 /// looks proportionally heavier — that mirrors InDesign's behaviour
 /// where the named built-ins describe a multiple of the line weight,
 /// not absolute pt distances.
-fn stroke_for(
+pub(crate) fn stroke_for(
     stroke_type: Option<&str>,
     width: f32,
     end_cap: Option<&str>,
@@ -4147,7 +4002,7 @@ fn end_join_from(name: Option<&str>) -> Option<idml_compose::LineJoin> {
 /// `None` returns the input unchanged. Only applied to solid paints
 /// today — gradient stops are left as-is until the gradient
 /// resolution itself learns about per-stop tints.
-fn apply_fill_tint(paint: Paint, tint_pct: Option<f32>) -> Paint {
+pub(crate) fn apply_fill_tint(paint: Paint, tint_pct: Option<f32>) -> Paint {
     let Some(t) = tint_pct else {
         return paint;
     };
