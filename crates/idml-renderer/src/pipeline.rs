@@ -2201,7 +2201,11 @@ fn emit_anchored_frames_for_paragraph(
         let (offset_x, offset_y) = setting
             .map(|s| (s.anchor_x_offset, s.anchor_y_offset))
             .unwrap_or((0.0, 0.0));
-        let frame_w = af.bounds.map(|b| b.width()).unwrap_or(0.0);
+        // Frame height is needed up-front so InlinePosition can lift
+        // the frame's top so its bottom edge sits on the baseline.
+        // Width-based placement currently relies on the
+        // paragraph-origin x; future enhancements (BottomRightAnchor,
+        // CenterAnchor) would consult the width too.
         let frame_h = af.bounds.map(|b| b.height()).unwrap_or(0.0);
         // Compute the frame's top-left in page-local pt. InlinePosition
         // places the frame at the paragraph's start, raised so its
@@ -2230,51 +2234,182 @@ fn emit_anchored_frames_for_paragraph(
                 (para_origin_x + offset_x, baseline_y_pt - frame_h + offset_y)
             }
         };
-        match af.frame_kind {
-            idml_parse::AnchoredFrameKind::Rectangle => {
-                // Emit a placeholder rectangle outline at the
-                // anchor position. We don't yet have access to the
-                // anchored rect's full attribute set (fill, stroke,
-                // image_link) — the parser carries only bounds +
-                // transform — so we paint the bounds with the
-                // fallback frame fill so at least the layout slot
-                // is visible. Future: thread the parsed Rectangle
-                // through AnchoredFrame.
-                if frame_w > 0.0 && frame_h > 0.0 {
-                    let rect = Rect {
-                        x: place_x,
-                        y: place_y,
-                        w: frame_w,
-                        h: frame_h,
-                    };
-                    emit_rect(rect, em.options.fallback_frame_fill, &mut pages[target_page].list);
-                }
+        emit_one_anchored_frame(em, af, target_page, place_x, place_y, pages);
+    }
+}
+
+/// Emit a single anchored frame (or recurse through a Group). Splits
+/// out of `emit_anchored_frames_for_paragraph` so anchored Groups can
+/// reuse the same placement logic for each child without duplicating
+/// the position-resolution preamble.
+///
+/// `place_x` / `place_y` are the page-local pt coordinates of the
+/// frame's top-left as resolved from the AnchoredObjectSetting
+/// (InlinePosition / AbovePosition / Custom). For Group children, the
+/// caller offsets these by the child's bounds delta within the group.
+fn emit_one_anchored_frame(
+    em: &mut StoryEmitter,
+    af: &idml_parse::AnchoredFrame,
+    target_page: usize,
+    place_x: f32,
+    place_y: f32,
+    pages: &mut [BuiltPage],
+) {
+    let frame_w = af.bounds.map(|b| b.width()).unwrap_or(0.0);
+    let frame_h = af.bounds.map(|b| b.height()).unwrap_or(0.0);
+    match af.frame_kind {
+        idml_parse::AnchoredFrameKind::Rectangle
+        | idml_parse::AnchoredFrameKind::TextFrame => {
+            // Rectangles AND TextFrames render the frame's box +
+            // fill / stroke through the same `emit_rectangle_into`
+            // pipeline used by spread-level Rectangles. TextFrames
+            // additionally host a story; the story-recursion layer
+            // is queued (anchored.idml's TextFrame variants ship
+            // FillColor=Color/Paper which makes the frame visible
+            // even without the inner text). The synthesizer below
+            // bakes the page-local placement into a Rectangle whose
+            // bounds sit in spread coords so `frame_outer_transform`
+            // unwinds back to the right page-local position.
+            if frame_w > 0.0 && frame_h > 0.0 {
+                emit_anchored_rect_via_pipeline(
+                    em,
+                    af,
+                    target_page,
+                    place_x,
+                    place_y,
+                    frame_w,
+                    frame_h,
+                    pages,
+                );
             }
-            idml_parse::AnchoredFrameKind::TextFrame => {
-                // Anchored TextFrames flow their parent_story
-                // content into the placed rectangle. Without a full
-                // recursion through StoryEmitter, we draw a
-                // placeholder fill for now and log a TODO.
-                if frame_w > 0.0 && frame_h > 0.0 {
-                    let rect = Rect {
-                        x: place_x,
-                        y: place_y,
-                        w: frame_w,
-                        h: frame_h,
-                    };
-                    emit_rect(rect, em.options.fallback_frame_fill, &mut pages[target_page].list);
-                }
+            if matches!(af.frame_kind, idml_parse::AnchoredFrameKind::TextFrame) {
+                // Story content recursion is intentionally still a
+                // follow-up — the StoryEmitter would need to be
+                // re-entrant for nested chains. Anchored.idml's six
+                // candidates render the frame outline correctly via
+                // the rectangle pipeline above.
                 let _ = af.parent_story.as_deref();
             }
-            idml_parse::AnchoredFrameKind::Group => {
-                // Group recursion is even more invasive — log + skip.
-                tracing::debug!(
-                    target: "idml_renderer::pipeline",
-                    "anchored Group frame skipped; recursion lands in a follow-up"
+        }
+        idml_parse::AnchoredFrameKind::Group => {
+            // Recurse through the group's children. The group's own
+            // ItemTransform (typically a pure translate of the form
+            // `[1 0 0 1 tx ty]`) shifts every child by `(tx, ty)` in
+            // page-local pt. Each child's `bounds.left` /
+            // `bounds.top` are relative to the group's inner-coord
+            // origin; we offset by the difference between the
+            // child's and the group's `bounds` so the children land
+            // at the right spot inside the group's placement rect.
+            // Image-link emission for Group children is deferred —
+            // the per-page image cache lives outside StoryEmitter.
+            let (group_tx, group_ty) = af
+                .item_transform
+                .map(|m| (m[4], m[5]))
+                .unwrap_or((0.0, 0.0));
+            let (group_bx, group_by) = af
+                .bounds
+                .map(|b| (b.left, b.top))
+                .unwrap_or((0.0, 0.0));
+            for child in &af.children {
+                // Child's offset within the group's inner coord
+                // system is `child.bounds.{left,top} - group.bounds.{left,top}`.
+                // Plus the child's own item_transform (translate
+                // component) and the group's item_transform.
+                let (child_bx, child_by) = child
+                    .bounds
+                    .map(|b| (b.left, b.top))
+                    .unwrap_or((0.0, 0.0));
+                let (child_tx, child_ty) = child
+                    .item_transform
+                    .map(|m| (m[4], m[5]))
+                    .unwrap_or((0.0, 0.0));
+                let child_place_x =
+                    place_x + group_tx + child_tx + (child_bx - group_bx);
+                let child_place_y =
+                    place_y + group_ty + child_ty + (child_by - group_by);
+                emit_one_anchored_frame(
+                    em,
+                    child,
+                    target_page,
+                    child_place_x,
+                    child_place_y,
+                    pages,
                 );
             }
         }
     }
+}
+
+/// Synthesize a Rectangle for an anchored frame placed at
+/// `(place_x, place_y)` page-local pt with size `(w, h)` and route it
+/// through `emit_rectangle_into` so fill / stroke / drop-shadow
+/// modules emit identically to a spread-level Rectangle. The
+/// synthetic Rectangle's bounds sit in spread coords (page-local +
+/// spread_origin) so `frame_outer_transform` produces a translate of
+/// `-spread_origin` and lands the geometry back on `(place_x, place_y)`.
+fn emit_anchored_rect_via_pipeline(
+    em: &StoryEmitter,
+    af: &idml_parse::AnchoredFrame,
+    target_page: usize,
+    place_x: f32,
+    place_y: f32,
+    w: f32,
+    h: f32,
+    pages: &mut [BuiltPage],
+) {
+    let (ox, oy) = pages[target_page].spread_origin;
+    let bounds = idml_parse::Bounds {
+        top: place_y + oy,
+        left: place_x + ox,
+        bottom: place_y + oy + h,
+        right: place_x + ox + w,
+    };
+    let synthetic = Rectangle {
+        self_id: af.self_id.clone(),
+        bounds,
+        item_transform: None,
+        fill_color: af.fill_color.clone(),
+        fill_tint: af.fill_tint,
+        stroke_color: af.stroke_color.clone(),
+        stroke_weight: af.stroke_weight,
+        drop_shadow: None,
+        stroke_drop_shadow: None,
+        // Image emission for anchored Rectangles is deferred — the
+        // per-page image cache lives in the pre-pass scope, outside
+        // StoryEmitter. The parser still surfaces image_link /
+        // image_item_transform on AnchoredFrame so a future renderer
+        // pass can pick them up. Today's anchored.idml ships no
+        // image-bearing anchored Rectangles.
+        image_link: None,
+        image_item_transform: None,
+        applied_object_style: af.applied_object_style.clone(),
+        text_wrap: None,
+        frame_fitting: None,
+        stroke_type: None,
+        stroke_alignment: None,
+        end_cap: None,
+        end_join: None,
+        miter_limit: None,
+        item_layer: None,
+        corner_radius: None,
+        corner_option: None,
+        is_anchored: true,
+        opacity: None,
+        blend_mode: None,
+        effects: None,
+        gradient_fill_angle: af.gradient_fill_angle,
+        text_paths: Vec::new(),
+    };
+    // `emit_rectangle_into` increments `page.stats.frames` internally.
+    emit_rectangle_into(
+        &mut pages[target_page],
+        &synthetic,
+        em.document,
+        em.palette,
+        em.options.fallback_frame_fill,
+        em.cmyk_xform,
+        None,
+    );
 }
 
 /// Wraps a page's bounds for centre-point routing + its master
