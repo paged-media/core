@@ -613,6 +613,74 @@ fn set_text_wrap_offsets(out: &mut Spread, kind: CurrentFrameKind, offsets: [f32
     }
 }
 
+/// Cross-cutting attributes shared by every shape element
+/// (`<TextFrame>`, `<Rectangle>`, `<Oval>`, `<Polygon>`,
+/// `<GraphicLine>`). Read once via [`read_common_attrs`] so each
+/// per-shape arm doesn't repeat the same `attr(&e, b"...")` block.
+///
+/// `item_transform` is the *raw* parsed `[a b c d tx ty]` matrix —
+/// callers compose it with the surrounding `group_transforms` via
+/// [`effective_item_transform`] exactly like before.
+struct CommonAttrs {
+    self_id: Option<String>,
+    item_transform: Option<[f32; 6]>,
+    fill_color: Option<String>,
+    fill_tint: Option<f32>,
+    gradient_fill_angle: Option<f32>,
+    stroke_color: Option<String>,
+    stroke_weight: Option<f32>,
+    applied_object_style: Option<String>,
+    item_layer: Option<String>,
+}
+
+fn read_common_attrs(e: &quick_xml::events::BytesStart) -> CommonAttrs {
+    CommonAttrs {
+        self_id: attr(e, b"Self"),
+        item_transform: attr(e, b"ItemTransform").and_then(|s| parse_matrix(&s)),
+        fill_color: attr(e, b"FillColor"),
+        fill_tint: parse_tint_attr(e, b"FillTint"),
+        gradient_fill_angle: attr(e, b"GradientFillAngle").and_then(|s| s.parse().ok()),
+        stroke_color: attr(e, b"StrokeColor"),
+        stroke_weight: attr(e, b"StrokeWeight").and_then(|s| s.parse().ok()),
+        applied_object_style: attr(e, b"AppliedObjectStyle"),
+        item_layer: attr(e, b"ItemLayer"),
+    }
+}
+
+/// Rectangle-only stroke style attributes (`StrokeAlignment`,
+/// `StrokeType`, `EndCap`, `EndJoin`, `MiterLimit`). Kept separate
+/// from [`CommonAttrs`] because no other shape carries these.
+struct StrokeStyleAttrs {
+    stroke_alignment: Option<String>,
+    stroke_type: Option<String>,
+    end_cap: Option<String>,
+    end_join: Option<String>,
+    miter_limit: Option<f32>,
+}
+
+fn read_stroke_style_attrs(e: &quick_xml::events::BytesStart) -> StrokeStyleAttrs {
+    StrokeStyleAttrs {
+        stroke_alignment: attr(e, b"StrokeAlignment"),
+        stroke_type: attr(e, b"StrokeType"),
+        end_cap: attr(e, b"EndCap"),
+        end_join: attr(e, b"EndJoin"),
+        miter_limit: attr(e, b"MiterLimit").and_then(|s| s.parse().ok()),
+    }
+}
+
+/// Rectangle-only corner attributes (`CornerRadius`, `CornerOption`).
+struct CornerAttrs {
+    corner_radius: Option<f32>,
+    corner_option: Option<String>,
+}
+
+fn read_corner_attrs(e: &quick_xml::events::BytesStart) -> CornerAttrs {
+    CornerAttrs {
+        corner_radius: attr(e, b"CornerRadius").and_then(|s| s.parse().ok()),
+        corner_option: attr(e, b"CornerOption"),
+    }
+}
+
 /// Compute the axis-aligned bounding box of a non-empty point set,
 /// using only the anchors (control points pull beyond the visible
 /// curve and would inflate the bbox).
@@ -736,32 +804,26 @@ impl Spread {
                     b"TextFrame" => {
                         let bounds_attr =
                             attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
-                        let parent_story = attr(&e, b"ParentStory");
-                        let item_transform = effective_item_transform(
-                            &group_transforms,
-                            attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s)),
-                        );
-                        let fill_color = attr(&e, b"FillColor");
-                        let stroke_color = attr(&e, b"StrokeColor");
-                        let stroke_weight =
-                            attr(&e, b"StrokeWeight").and_then(|s| s.parse::<f32>().ok());
+                        let common = read_common_attrs(&e);
+                        let item_transform =
+                            effective_item_transform(&group_transforms, common.item_transform);
                         out.text_frames.push(TextFrame {
-                            self_id: attr(&e, b"Self"),
-                            parent_story,
+                            self_id: common.self_id,
+                            parent_story: attr(&e, b"ParentStory"),
                             bounds: bounds_attr.unwrap_or(Bounds::ZERO),
                             item_transform,
-                            fill_color,
-                            stroke_color,
-                            stroke_weight,
+                            fill_color: common.fill_color,
+                            stroke_color: common.stroke_color,
+                            stroke_weight: common.stroke_weight,
                             drop_shadow: None,
                             next_text_frame: attr(&e, b"NextTextFrame"),
                             vertical_justification: None,
                             first_baseline_offset: None,
                             minimum_first_baseline_offset: None,
                             inset_spacing: None,
-                            applied_object_style: attr(&e, b"AppliedObjectStyle"),
+                            applied_object_style: common.applied_object_style,
                             text_wrap: None,
-                            item_layer: attr(&e, b"ItemLayer"),
+                            item_layer: common.item_layer,
                             is_anchored: false,
                             opacity: None,
                             blend_mode: None,
@@ -778,39 +840,37 @@ impl Spread {
                     b"Rectangle" => {
                         let bounds_attr =
                             attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
-                        let item_transform = effective_item_transform(
-                            &group_transforms,
-                            attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s)),
-                        );
+                        let common = read_common_attrs(&e);
+                        let stroke = read_stroke_style_attrs(&e);
+                        let corner = read_corner_attrs(&e);
+                        let item_transform =
+                            effective_item_transform(&group_transforms, common.item_transform);
                         out.rectangles.push(Rectangle {
-                            self_id: attr(&e, b"Self"),
+                            self_id: common.self_id,
                             bounds: bounds_attr.unwrap_or(Bounds::ZERO),
                             item_transform,
-                            fill_color: attr(&e, b"FillColor"),
-                            fill_tint: parse_tint_attr(&e, b"FillTint"),
-                            stroke_color: attr(&e, b"StrokeColor"),
-                            stroke_weight: attr(&e, b"StrokeWeight")
-                                .and_then(|s| s.parse::<f32>().ok()),
+                            fill_color: common.fill_color,
+                            fill_tint: common.fill_tint,
+                            stroke_color: common.stroke_color,
+                            stroke_weight: common.stroke_weight,
                             drop_shadow: None,
                             image_link: None,
-                            applied_object_style: attr(&e, b"AppliedObjectStyle"),
+                            applied_object_style: common.applied_object_style,
                             text_wrap: None,
                             frame_fitting: None,
-                            stroke_type: attr(&e, b"StrokeType"),
-                            stroke_alignment: attr(&e, b"StrokeAlignment"),
-                            end_cap: attr(&e, b"EndCap"),
-                            end_join: attr(&e, b"EndJoin"),
-                            miter_limit: attr(&e, b"MiterLimit")
-                                .and_then(|s| s.parse::<f32>().ok()),
-                            item_layer: attr(&e, b"ItemLayer"),
-                            corner_radius: attr(&e, b"CornerRadius").and_then(|s| s.parse().ok()),
-                            corner_option: attr(&e, b"CornerOption"),
+                            stroke_type: stroke.stroke_type,
+                            stroke_alignment: stroke.stroke_alignment,
+                            end_cap: stroke.end_cap,
+                            end_join: stroke.end_join,
+                            miter_limit: stroke.miter_limit,
+                            item_layer: common.item_layer,
+                            corner_radius: corner.corner_radius,
+                            corner_option: corner.corner_option,
                             is_anchored: false,
                             opacity: None,
                             blend_mode: None,
                             effects: None,
-                            gradient_fill_angle: attr(&e, b"GradientFillAngle")
-                                .and_then(|s| s.parse().ok()),
+                            gradient_fill_angle: common.gradient_fill_angle,
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Rect(out.rectangles.len() - 1),
@@ -824,24 +884,21 @@ impl Spread {
                     b"Oval" => {
                         let bounds_attr =
                             attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
-                        let item_transform = effective_item_transform(
-                            &group_transforms,
-                            attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s)),
-                        );
+                        let common = read_common_attrs(&e);
+                        let item_transform =
+                            effective_item_transform(&group_transforms, common.item_transform);
                         out.ovals.push(Oval {
-                            self_id: attr(&e, b"Self"),
+                            self_id: common.self_id,
                             bounds: bounds_attr.unwrap_or(Bounds::ZERO),
                             item_transform,
-                            fill_color: attr(&e, b"FillColor"),
-                            stroke_color: attr(&e, b"StrokeColor"),
-                            stroke_weight: attr(&e, b"StrokeWeight")
-                                .and_then(|s| s.parse::<f32>().ok()),
+                            fill_color: common.fill_color,
+                            stroke_color: common.stroke_color,
+                            stroke_weight: common.stroke_weight,
                             drop_shadow: None,
-                            applied_object_style: attr(&e, b"AppliedObjectStyle"),
+                            applied_object_style: common.applied_object_style,
                             text_wrap: None,
-                            item_layer: attr(&e, b"ItemLayer"),
-                            gradient_fill_angle: attr(&e, b"GradientFillAngle")
-                                .and_then(|s| s.parse().ok()),
+                            item_layer: common.item_layer,
+                            gradient_fill_angle: common.gradient_fill_angle,
                             opacity: None,
                             blend_mode: None,
                         });
@@ -1134,20 +1191,18 @@ impl Spread {
                     b"GraphicLine" => {
                         let bounds_attr =
                             attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
-                        let item_transform = effective_item_transform(
-                            &group_transforms,
-                            attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s)),
-                        );
+                        let common = read_common_attrs(&e);
+                        let item_transform =
+                            effective_item_transform(&group_transforms, common.item_transform);
                         out.graphic_lines.push(GraphicLine {
-                            self_id: attr(&e, b"Self"),
+                            self_id: common.self_id,
                             bounds: bounds_attr.unwrap_or(Bounds::ZERO),
                             item_transform,
-                            stroke_color: attr(&e, b"StrokeColor"),
-                            stroke_weight: attr(&e, b"StrokeWeight")
-                                .and_then(|s| s.parse::<f32>().ok()),
-                            applied_object_style: attr(&e, b"AppliedObjectStyle"),
+                            stroke_color: common.stroke_color,
+                            stroke_weight: common.stroke_weight,
+                            applied_object_style: common.applied_object_style,
                             text_wrap: None,
-                            item_layer: attr(&e, b"ItemLayer"),
+                            item_layer: common.item_layer,
                         });
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Line(out.graphic_lines.len() - 1),
@@ -1161,24 +1216,21 @@ impl Spread {
                     b"Polygon" => {
                         let bounds_attr =
                             attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
-                        let item_transform = effective_item_transform(
-                            &group_transforms,
-                            attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s)),
-                        );
+                        let common = read_common_attrs(&e);
+                        let item_transform =
+                            effective_item_transform(&group_transforms, common.item_transform);
                         out.polygons.push(Polygon {
-                            self_id: attr(&e, b"Self"),
+                            self_id: common.self_id,
                             bounds: bounds_attr.unwrap_or(Bounds::ZERO),
                             item_transform,
-                            fill_color: attr(&e, b"FillColor"),
-                            stroke_color: attr(&e, b"StrokeColor"),
-                            stroke_weight: attr(&e, b"StrokeWeight")
-                                .and_then(|s| s.parse::<f32>().ok()),
-                            applied_object_style: attr(&e, b"AppliedObjectStyle"),
+                            fill_color: common.fill_color,
+                            stroke_color: common.stroke_color,
+                            stroke_weight: common.stroke_weight,
+                            applied_object_style: common.applied_object_style,
                             text_wrap: None,
                             anchors: Vec::new(),
-                            item_layer: attr(&e, b"ItemLayer"),
-                            gradient_fill_angle: attr(&e, b"GradientFillAngle")
-                                .and_then(|s| s.parse().ok()),
+                            item_layer: common.item_layer,
+                            gradient_fill_angle: common.gradient_fill_angle,
                             opacity: None,
                             blend_mode: None,
                         });
