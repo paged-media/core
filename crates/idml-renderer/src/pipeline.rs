@@ -2290,11 +2290,20 @@ fn collect_wrap_rects_per_page(
             if !wrap.mode.is_active() {
                 return;
             }
-            // Side-shrink heuristic only handles BoundingBoxTextWrap.
-            // Other modes (Contour / Jump / NextColumn) need richer
-            // per-line geometry; we ignore them to avoid corrupting
-            // layouts that the side-shrink can't represent.
-            if !matches!(wrap.mode, idml_parse::TextWrapMode::BoundingBoxTextWrap) {
+            // Treat BoundingBoxTextWrap and ContourTextWrap as
+            // bounding-box exclusions. ContourTextWrap with
+            // `ContourType=BoundingBox` (the default that InDesign
+            // emits for plain rectangle hosts) is identical; richer
+            // contour types degrade to their AABB which is still a
+            // useful first-cut. JumpObject / NextColumn keep being
+            // skipped — they need column-level layout we don't yet
+            // model, and approximating them as side-shrink makes
+            // matters worse.
+            if !matches!(
+                wrap.mode,
+                idml_parse::TextWrapMode::BoundingBoxTextWrap
+                    | idml_parse::TextWrapMode::ContourTextWrap
+            ) {
                 return;
             }
             let inflated = idml_parse::Bounds {
@@ -2994,6 +3003,22 @@ pub(crate) fn frame_fill_is_transparent(id: Option<&str>) -> bool {
     }
 }
 
+/// True when the frame's stroke would actually paint pixels — i.e.
+/// `StrokeColor` resolves to a non-`Swatch/None` paint AND
+/// `StrokeWeight > 0`. The drop-shadow module uses this to gate
+/// stroke shadows: a stroke shadow without a visible stroke would
+/// otherwise leak as a stamped rectangle behind an outline that
+/// isn't drawn.
+pub(crate) fn frame_stroke_is_visible(stroke_color: Option<&str>, stroke_weight: f32) -> bool {
+    if stroke_weight <= 0.0 {
+        return false;
+    }
+    match stroke_color {
+        None => false,
+        Some(s) => !is_none_swatch_id(s),
+    }
+}
+
 /// Map an IDML `FontStyle` attribute string to a numeric wght axis
 /// value (CSS / fvar convention: 100=Thin, 400=Regular, 700=Bold,
 /// 900=Black). Unknown values fall through to 400. Italic / Bold
@@ -3544,7 +3569,15 @@ fn emit_text_frame_into(
     } else {
         None
     };
-    crate::module::drop_shadow_module(&resolved, page, palette, cmyk_xform, drop_shadow, outer);
+    crate::module::drop_shadow_module(
+        &resolved,
+        page,
+        palette,
+        cmyk_xform,
+        drop_shadow,
+        outer,
+        frame.stroke_drop_shadow.as_ref(),
+    );
     crate::module::fill_paint_module(
         &resolved, page, palette, cmyk_xform, fallback, outer, None,
     );
@@ -3590,7 +3623,15 @@ fn emit_oval_into(
             );
         }
     }
-    crate::module::drop_shadow_module(&frame, page, palette, cmyk_xform, None, outer);
+    crate::module::drop_shadow_module(
+        &frame,
+        page,
+        palette,
+        cmyk_xform,
+        None,
+        outer,
+        oval.stroke_drop_shadow.as_ref(),
+    );
     crate::module::fill_paint_module(&frame, page, palette, cmyk_xform, fallback, outer, None);
     crate::module::stroke_paint_module(
         &frame,
@@ -3680,7 +3721,15 @@ fn emit_rectangle_into(
             frame_group_opacity(&resolved),
         );
     }
-    crate::module::drop_shadow_module(&resolved, page, palette, cmyk_xform, drop_shadow, outer);
+    crate::module::drop_shadow_module(
+        &resolved,
+        page,
+        palette,
+        cmyk_xform,
+        drop_shadow,
+        outer,
+        rect.stroke_drop_shadow.as_ref(),
+    );
 
     // Rounded-corner Rectangles route fill + stroke through interned
     // paths; non-rounded ones use the geometry's natural primitives.
