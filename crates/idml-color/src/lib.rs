@@ -66,6 +66,20 @@ impl IccTransform {
         use lcms2::{Flags, Intent, PixelFormat, Profile};
         let src = Profile::new_icc(cmyk_profile).map_err(|_| IccError::Invalid)?;
         let dst = build_linear_srgb_profile()?;
+        // Relative Colorimetric + Black-Point Compensation, per
+        // idea.md §9.2 default. This is the closest of the lcms2
+        // intent/flag combinations to InDesign's PDF-export pipeline,
+        // though a small residual remains: Color/Black (CMYK K=100)
+        // through this path produces sRGB ≈(29,29,27) while pdftoppm's
+        // rasterization of the InDesign-exported PDF produces
+        // ≈(35,31,32). The ~3-4 ΔE2000 gap is a real calibration
+        // delta between two different CMYK→sRGB software stacks and
+        // dominates p99 ΔE on solid-CMYK-fill samples
+        // (corpus/generated/geometry.idml). Perceptual + BPC
+        // produces the same numeric result; no-BPC is worse
+        // (~(43,43,42)). Closing the residual would need either
+        // poppler-equivalent CMYK→sRGB processing or a calibration
+        // LUT derived empirically.
         let transform = lcms2::Transform::new_flags(
             &src,
             PixelFormat::CMYK_FLT,
