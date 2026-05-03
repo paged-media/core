@@ -6015,21 +6015,89 @@ pub fn color_id_to_paint_with_list_dir(
     gradient_angle_deg: Option<f32>,
 ) -> Option<Paint> {
     if let Some(grad) = palette.gradients.get(id) {
-        let stops: Vec<idml_compose::GradientStop> = grad
+        // Resolve raw stop colors. For CMYK swatches, also keep the
+        // raw CMYK percentages so we can interpolate in CMYK space
+        // (pdftoppm's behaviour) — interpolating stops in linear-sRGB
+        // produces over-saturated mid-tones because CMYK→sRGB is
+        // non-linear (e.g. 50% C + 50% M is a duller violet than the
+        // average of pure-C-sRGB and pure-M-sRGB).
+        struct StopRef<'a> {
+            offset: f32,
+            color: idml_compose::Color,
+            cmyk: Option<&'a [f32]>,
+        }
+        let raw_stops: Vec<StopRef> = grad
             .stops
             .iter()
             .filter_map(|s| {
                 let color = color_id_to_paint(&s.stop_color, palette, cmyk_xform)
                     .and_then(paint_as_solid)?;
-                Some(idml_compose::GradientStop {
+                let entry = palette.resolve(&s.stop_color);
+                let cmyk = entry.and_then(|e| {
+                    if matches!(e.space, idml_parse::ColorSpace::Cmyk) && e.value.len() == 4 {
+                        Some(e.value.as_slice())
+                    } else {
+                        None
+                    }
+                });
+                Some(StopRef {
                     offset: (s.location_pct / 100.0).clamp(0.0, 1.0),
                     color,
+                    cmyk,
                 })
             })
             .collect();
-        if stops.len() < 2 {
+        if raw_stops.len() < 2 {
             return None;
         }
+        let stops: Vec<idml_compose::GradientStop> = if cmyk_xform.is_some()
+            && raw_stops.iter().all(|s| s.cmyk.is_some())
+        {
+            // All stops are CMYK swatches — tessellate the gradient in
+            // CMYK space and convert each tessellated point through
+            // the ICC transform. 16 sub-stops per inter-stop segment is
+            // enough to make even cyan↔yellow mid-tones (the most
+            // visibly non-linear pair) match pdftoppm within ~1 ΔE.
+            const SUB_STOPS: usize = 16;
+            let mut out: Vec<idml_compose::GradientStop> = Vec::new();
+            let xform = cmyk_xform.unwrap();
+            for win in raw_stops.windows(2) {
+                let a = &win[0];
+                let b = &win[1];
+                let cmyk_a = a.cmyk.unwrap();
+                let cmyk_b = b.cmyk.unwrap();
+                for i in 0..SUB_STOPS {
+                    let t = i as f32 / SUB_STOPS as f32;
+                    let interp = idml_color::Cmyk {
+                        c: cmyk_a[0] * (1.0 - t) + cmyk_b[0] * t,
+                        m: cmyk_a[1] * (1.0 - t) + cmyk_b[1] * t,
+                        y: cmyk_a[2] * (1.0 - t) + cmyk_b[2] * t,
+                        k: cmyk_a[3] * (1.0 - t) + cmyk_b[3] * t,
+                    };
+                    let idml_color::LinearRgb([r, g, b_]) =
+                        xform.cmyk_percent_to_linear_rgb(interp);
+                    out.push(idml_compose::GradientStop {
+                        offset: a.offset * (1.0 - t) + b.offset * t,
+                        color: idml_compose::Color::rgba(r, g, b_, 1.0),
+                    });
+                }
+            }
+            // Always include the final stop exactly.
+            let last = raw_stops.last().unwrap();
+            out.push(idml_compose::GradientStop {
+                offset: last.offset,
+                color: last.color,
+            });
+            out
+        } else {
+            raw_stops
+                .iter()
+                .map(|s| idml_compose::GradientStop {
+                    offset: s.offset,
+                    color: s.color,
+                })
+                .collect()
+        };
         // Radial gradients fill from the unit-rect centre outwards
         // to its corners — that matches IDML's convention of placing
         // the radial gradient at the frame's centre with the radius
