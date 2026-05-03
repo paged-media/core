@@ -39,6 +39,20 @@ pub fn write_designmap(dm: &DesignMap) -> Vec<u8> {
             ("Self", dm.self_id.as_str()),
             ("StoryList", &dm.stories.join(" ")),
             ("Name", "generated.indd"),
+            // ColorSettings — match InDesign's default ICC profiles so
+            // the inspect binary picks up the host's installed Adobe
+            // ICC profiles (FOGRA39 / sRGB) and routes CMYK swatches
+            // through lcms2. Without these attributes the renderer
+            // falls back to naive `(1-cv)*(1-kv)` math which produces
+            // pure black for `Color/Black` (CMYK K=100) instead of the
+            // ~(35,31,32) sRGB warm dark gray that real K=100 ink
+            // prints to. The 0/20 → high-pass-rate jump on
+            // `geometry.idml` traces directly to this declaration.
+            ("CMYKProfile", "Coated FOGRA39 (ISO 12647-2:2004)"),
+            ("RGBProfile", "sRGB IEC61966-2.1"),
+            ("SolidColorIntent", "UseColorSettings"),
+            ("AfterBlendingIntent", "UseColorSettings"),
+            ("DefaultImageIntent", "UseColorSettings"),
         ],
     );
     b.empty("idPkg:Graphic", &[("src", "Resources/Graphic.xml")]);

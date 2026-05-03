@@ -14,7 +14,7 @@
       "idml": "effects.idml",
       "pdf": "effects.pdf",
       "pages": 12,
-      "passing": 1,
+      "passing": 2,
       "diff_dir": "/tmp/idml-diff",
       "report": "/tmp/idml-diff/report.json"
     },
@@ -24,8 +24,8 @@
       "pdf": "geometry.pdf",
       "pages": 20,
       "passing": 0,
-      "diff_dir": "/tmp/idml-diff-geometry",
-      "report": "/tmp/idml-diff-geometry/report.json"
+      "diff_dir": "/tmp/idml-diff",
+      "report": "/tmp/idml-diff/report.json"
     },
     {
       "name": "geometry-groups",
@@ -33,8 +33,8 @@
       "pdf": "geometry-groups.pdf",
       "pages": 6,
       "passing": 4,
-      "diff_dir": "/tmp/idml-diff-geometry-groups",
-      "report": "/tmp/idml-diff-geometry-groups/report.json"
+      "diff_dir": "/tmp/idml-diff",
+      "report": "/tmp/idml-diff/report.json"
     },
     {
       "name": "gradients",
@@ -42,8 +42,8 @@
       "pdf": "gradients.pdf",
       "pages": 5,
       "passing": 0,
-      "diff_dir": "/tmp/idml-diff-gradients",
-      "report": "/tmp/idml-diff-gradients/report.json"
+      "diff_dir": "/tmp/idml-diff",
+      "report": "/tmp/idml-diff/report.json"
     },
     {
       "name": "images",
@@ -51,17 +51,17 @@
       "pdf": "images.pdf",
       "pages": 5,
       "passing": 5,
-      "diff_dir": "/tmp/idml-diff-images",
-      "report": "/tmp/idml-diff-images/report.json"
+      "diff_dir": "/tmp/idml-diff",
+      "report": "/tmp/idml-diff/report.json"
     },
     {
       "name": "strokes-fills",
       "idml": "strokes-fills.idml",
       "pdf": "strokes-fills.pdf",
       "pages": 19,
-      "passing": 11,
-      "diff_dir": "/tmp/idml-diff-strokes-fills",
-      "report": "/tmp/idml-diff-strokes-fills/report.json"
+      "passing": 12,
+      "diff_dir": "/tmp/idml-diff",
+      "report": "/tmp/idml-diff/report.json"
     },
     {
       "name": "tables",
@@ -69,26 +69,35 @@
       "pdf": "tables.pdf",
       "pages": 7,
       "passing": 0,
-      "diff_dir": "/tmp/idml-diff-tables",
-      "report": "/tmp/idml-diff-tables/report.json"
+      "diff_dir": "/tmp/idml-diff",
+      "report": "/tmp/idml-diff/report.json"
     },
     {
       "name": "text",
       "idml": "text.idml",
       "pdf": "text.pdf",
       "pages": 13,
-      "passing": 5,
-      "diff_dir": "/tmp/idml-diff-text",
-      "report": "/tmp/idml-diff-text/report.json"
+      "passing": 8,
+      "diff_dir": "/tmp/idml-diff",
+      "report": "/tmp/idml-diff/report.json"
     },
     {
       "name": "text-advanced",
       "idml": "text-advanced.idml",
       "pdf": "text-advanced.pdf",
       "pages": 9,
+      "passing": 2,
+      "diff_dir": "/tmp/idml-diff",
+      "report": "/tmp/idml-diff/report.json"
+    },
+    {
+      "name": "text-wrap",
+      "idml": "text-wrap.idml",
+      "pdf": "text-wrap.pdf",
+      "pages": 6,
       "passing": 0,
-      "diff_dir": "/tmp/idml-diff-text-advanced",
-      "report": "/tmp/idml-diff-text-advanced/report.json"
+      "diff_dir": "/tmp/idml-diff",
+      "report": "/tmp/idml-diff/report.json"
     },
     {
       "name": "transparency",
