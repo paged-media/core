@@ -41,7 +41,7 @@
       "idml": "gradients.idml",
       "pdf": "gradients.pdf",
       "pages": 5,
-      "passing": 4,
+      "passing": 5,
       "diff_dir": "/tmp/idml-diff",
       "report": "/tmp/idml-diff/report.json"
     },
@@ -86,7 +86,7 @@
       "idml": "text-advanced.idml",
       "pdf": "text-advanced.pdf",
       "pages": 9,
-      "passing": 2,
+      "passing": 3,
       "diff_dir": "/tmp/idml-diff",
       "report": "/tmp/idml-diff/report.json"
     },

@@ -2187,15 +2187,20 @@ fn emit_paragraph_into_chain(
         let frame_insets = frame.inset_spacing.unwrap_or([0.0; 4]);
         let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
         let text_origin_pt = (sx - ox + frame_insets[1] + em.column_x_shift_pt, sy - oy);
-        // Drop-cap baseline aligns with the first body line's
-        // baseline (InDesign aligns the cap-height of the drop cap
-        // to the cap-height of the first line). Falls back to the
-        // emitter's y_cursor when no body line was emitted (drop
-        // cap consumed the entire paragraph).
+        // Drop-cap baseline = M-th body line's baseline, where
+        // M = `paragraph.drop_cap_lines`. InDesign aligns the cap-
+        // height of the dropped glyph with the first body line's
+        // cap-height; the glyph then descends to the M-th body
+        // line's baseline. We compute that as
+        // `first_baseline + (M - 1) * line_height` (M >= 1 always
+        // when the spec is active). Falls back to the emitter's
+        // y_cursor when no body line was emitted (drop cap consumed
+        // the entire paragraph).
         let baseline_64 = if em.y_cursor < 0 {
             (cap_point_size * 0.8 * idml_text::shape::ADVANCE_PRECISION).round() as i32
         } else {
-            em.y_cursor - lopts.line_height
+            let m = paragraph.drop_cap_lines.saturating_sub(1) as i32;
+            lopts.first_baseline + m * lopts.line_height
         };
         let mut positioned: Vec<idml_text::PositionedGlyph> = Vec::with_capacity(cap_shaped.glyphs.len());
         let mut pen_x = 0i32;
@@ -6000,19 +6005,26 @@ pub fn color_id_to_paint_with_list(
     cmyk_xform: Option<&idml_color::IccTransform>,
     list: &mut DisplayList,
 ) -> Option<Paint> {
-    color_id_to_paint_with_list_dir(id, palette, cmyk_xform, list, None)
+    color_id_to_paint_with_list_dir(id, palette, cmyk_xform, list, None, None)
 }
 
 /// Like [`color_id_to_paint_with_list`] but takes an explicit
 /// `gradient_angle_deg` from the frame's `GradientFillAngle`
 /// attribute (0° horizontal-right; 90° vertical-down — IDML's
-/// convention). `None` keeps the existing top-to-bottom default.
+/// convention) plus the path's local bbox `(width, height)` in pt.
+/// The bbox lets the radial-gradient default place its centre at the
+/// path's bottom-left corner with radius equal to the diagonal —
+/// matching what InDesign emits when `GradientFillStart` /
+/// `GradientFillLength` are absent. Without the bbox we fall back to
+/// the legacy unit-rect centred default (still serviceable for callers
+/// that don't have geometry, e.g. text-frame strokes).
 pub fn color_id_to_paint_with_list_dir(
     id: &str,
     palette: &Graphic,
     cmyk_xform: Option<&idml_color::IccTransform>,
     list: &mut DisplayList,
     gradient_angle_deg: Option<f32>,
+    path_dims_pt: Option<(f32, f32)>,
 ) -> Option<Paint> {
     if let Some(grad) = palette.gradients.get(id) {
         // Resolve raw stop colors. For CMYK swatches, also keep the
@@ -6098,17 +6110,45 @@ pub fn color_id_to_paint_with_list_dir(
                 })
                 .collect()
         };
-        // Radial gradients fill from the unit-rect centre outwards
-        // to its corners — that matches IDML's convention of placing
-        // the radial gradient at the frame's centre with the radius
-        // touching the bounding-rect corners (Pythagorean half-
-        // diagonal of a unit square = √0.5 ≈ 0.7071). For Ovals the
-        // path itself clips the gradient to the ellipse; for
-        // Rectangles the corners get hit too. Both match InDesign.
+        // Radial gradients without an explicit `GradientFillStart` /
+        // `GradientFillLength` use InDesign's auto-default: centre at
+        // the path's BOTTOM-LEFT corner with radius equal to the
+        // path's diagonal (verified empirically against an InDesign-
+        // exported PDF — see corpus/generated/gradients.pdf p. 3).
+        // The renderer's gradient lives in the path's local 0..1
+        // unit-rect; the rasterizer derives the actual circle radius
+        // by averaging `width * R_unit` and `height * R_unit` (see
+        // `idml_gpu::cpu::build_radial_gradient_shader`), so to
+        // produce a circle of pt-radius √(w² + h²) we set
+        // `R_unit = 2·√(w² + h²) / (w + h)`. When the caller can't
+        // supply the bbox (text-frame strokes etc.) we fall back to
+        // the legacy centred-on-(0.5, 0.5) / √½ unit-rect default.
         if matches!(grad.kind, idml_parse::GradientKind::Radial) {
+            // Centre at (0, 1) of the unit-rect (= bottom-left of
+            // the path in InDesign coords) with radius equal to the
+            // longer bbox dimension. Empirically matches what
+            // pdftoppm renders from an InDesign-exported PDF for a
+            // gradient applied via the Swatches panel without manual
+            // gradient-tool placement (corpus/generated/gradients
+            // page 3): gradient hits pure black at distance ≈ width
+            // for a 360×200 rect, *not* at the diagonal.
+            let (center, radius) = match path_dims_pt {
+                Some((w, h)) if (w + h) > 0.0 => {
+                    let r_actual = w.max(h);
+                    // Rasterizer averages (a·R, b·R)·hypot and (c·R,
+                    // d·R)·hypot to reduce a unit-rect circle to a
+                    // single page-space radius (see
+                    // `idml_gpu::cpu::build_radial_gradient_shader`).
+                    // Compensate so the page-space circle has the
+                    // pt-radius we computed above.
+                    let r_unit = 2.0 * r_actual / (w + h);
+                    ((0.0, 1.0), r_unit)
+                }
+                _ => ((0.5, 0.5), std::f32::consts::FRAC_1_SQRT_2),
+            };
             let id = list.push_radial_gradient(idml_compose::RadialGradient {
-                center: (0.5, 0.5),
-                radius: std::f32::consts::FRAC_1_SQRT_2,
+                center,
+                radius,
                 stops,
             });
             return Some(Paint::RadialGradient(id));

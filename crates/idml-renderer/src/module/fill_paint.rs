@@ -9,7 +9,7 @@ use idml_compose::{BlendMode, Paint, PathId, Transform};
 use idml_parse::Graphic;
 
 use super::geometry::emit_filled;
-use super::ResolvedFrame;
+use super::{Geometry, ResolvedFrame};
 use crate::pipeline::{
     apply_fill_tint, color_id_to_paint_with_list_dir, frame_fill_is_transparent, BuiltPage,
 };
@@ -35,6 +35,17 @@ pub(crate) fn fill_paint_module(
     if frame_fill_is_transparent(frame.fill_color) {
         return;
     }
+    // Bbox dims for gradient defaults: pulled from the same Rect the
+    // geometry adapter writes (Rectangle/TextFrame/Oval/Polygon all
+    // carry one). Lines have no fill so the fall-through `None` is
+    // unreachable for them.
+    let path_dims = match frame.geometry {
+        Geometry::Rect { rect }
+        | Geometry::TextFrameRect { rect }
+        | Geometry::Oval { rect }
+        | Geometry::Polygon { bbox: rect, .. } => Some((rect.w, rect.h)),
+        Geometry::Line { .. } => None,
+    };
     let fill = frame
         .fill_color
         .and_then(|id| {
@@ -44,6 +55,7 @@ pub(crate) fn fill_paint_module(
                 cmyk_xform,
                 &mut page.list,
                 frame.gradient_fill_angle,
+                path_dims,
             )
         })
         .unwrap_or(fallback);
