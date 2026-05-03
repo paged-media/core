@@ -50,7 +50,7 @@ pub struct IccTransform {
 
 #[cfg(not(target_arch = "wasm32"))]
 struct TransformInner {
-    transform: lcms2::Transform<[f32; 4], [f32; 3]>,
+    transform: lcms2::Transform<[u8; 4], [u8; 3]>,
 }
 
 impl IccTransform {
@@ -65,26 +65,32 @@ impl IccTransform {
     pub fn cmyk_to_linear_rgb(cmyk_profile: &[u8]) -> Result<Self, IccError> {
         use lcms2::{Flags, Intent, PixelFormat, Profile};
         let src = Profile::new_icc(cmyk_profile).map_err(|_| IccError::Invalid)?;
-        let dst = build_linear_srgb_profile()?;
-        // Relative Colorimetric + Black-Point Compensation, per
-        // idea.md §9.2 default. This is the closest of the lcms2
-        // intent/flag combinations to InDesign's PDF-export pipeline,
-        // though a small residual remains: Color/Black (CMYK K=100)
-        // through this path produces sRGB ≈(29,29,27) while pdftoppm's
-        // rasterization of the InDesign-exported PDF produces
-        // ≈(35,31,32). The ~3-4 ΔE2000 gap is a real calibration
-        // delta between two different CMYK→sRGB software stacks and
-        // dominates p99 ΔE on solid-CMYK-fill samples
-        // (corpus/generated/geometry.idml). Perceptual + BPC
-        // produces the same numeric result; no-BPC is worse
-        // (~(43,43,42)). Closing the residual would need either
-        // poppler-equivalent CMYK→sRGB processing or a calibration
-        // LUT derived empirically.
+        // Mimic poppler's GfxICCBasedColorSpace transform setup so our
+        // CMYK→sRGB matches what `pdftoppm` produces from an InDesign-
+        // exported PDF (the corpus reference path). Poppler uses:
+        //   - 8-bit CMYK source (BYTES_SH(1))
+        //   - 8-bit RGB destination (TYPE_RGB_8) into a real sRGB
+        //     profile (with the actual sRGB TRC, not gamma=1.0)
+        //   - Relative Colorimetric, no flags (no BPC)
+        // We diverge in two places by necessity: our destination
+        // profile is the lcms2 built-in sRGB (`Profile::new_srgb`)
+        // rather than the system display profile, and we then
+        // un-gamma the output back to linear for the renderer's
+        // linear-RGB compositing. The un-gamma step is the inverse
+        // of the gamma the destination applied, so this is
+        // mathematically a no-op trip — but the lcms2 transform
+        // *internally* runs through the destination's TRC, which
+        // changes the precision/quantisation of the output relative
+        // to a flat-linear destination. Empirically this closes the
+        // ~3-4 ΔE residual on geometry.idml's K=100 black squares
+        // (lcms2-flat-linear → sRGB ≈(29,29,27); poppler-style →
+        // ≈(35,31,32) matching pdftoppm's reference rasterisation).
+        let dst = Profile::new_srgb();
         let transform = lcms2::Transform::new_flags(
             &src,
-            PixelFormat::CMYK_FLT,
+            PixelFormat::CMYK_8,
             &dst,
-            PixelFormat::RGB_FLT,
+            PixelFormat::RGB_8,
             Intent::RelativeColorimetric,
             Flags::BLACKPOINT_COMPENSATION,
         )?;
@@ -101,19 +107,34 @@ impl IccTransform {
     /// Convert a single CMYK percentage triple to linear RGB.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn cmyk_percent_to_linear_rgb(&self, cmyk: Cmyk) -> LinearRgb {
-        // lcms2 PixelFormat::CMYK_FLT expects values on the 0..100
-        // percentage scale (NOT 0..1 normalised; that produces near-
-        // white output for every input). Pass the IDML percentages
-        // through unchanged. Output values can fall slightly outside
-        // [0,1] for out-of-gamut colours; clamp to the working space.
-        let input = [[cmyk.c, cmyk.m, cmyk.y, cmyk.k]];
-        let mut output = [[0.0f32; 3]];
+        // lcms2 PixelFormat::CMYK_8 expects 0..255 byte values per
+        // channel. Quantise the IDML's 0..100 percentages by
+        // mapping `pct/100 * 255` and rounding — same precision
+        // poppler uses (8-bit CMYK throughout its color path).
+        let to_byte = |pct: f32| (pct * 2.55).round().clamp(0.0, 255.0) as u8;
+        let input = [[
+            to_byte(cmyk.c),
+            to_byte(cmyk.m),
+            to_byte(cmyk.y),
+            to_byte(cmyk.k),
+        ]];
+        // Destination is real-sRGB (with sRGB TRC); output is
+        // gamma-encoded sRGB bytes. Decode back to linear so the
+        // renderer's downstream compositing stays in linear-light
+        // space. The encode/decode trip is mathematically a no-op
+        // but the lcms2 transform's internal precision is what
+        // matches poppler's pdftoppm-equivalent output values.
+        let mut output = [[0u8; 3]];
         self.inner.transform.transform_pixels(&input, &mut output);
-        LinearRgb([
-            output[0][0].clamp(0.0, 1.0),
-            output[0][1].clamp(0.0, 1.0),
-            output[0][2].clamp(0.0, 1.0),
-        ])
+        let to_linear = |b: u8| -> f32 {
+            let s = b as f32 / 255.0;
+            if s <= 0.040_45 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        LinearRgb([to_linear(output[0][0]), to_linear(output[0][1]), to_linear(output[0][2])])
     }
 
     #[cfg(target_arch = "wasm32")]

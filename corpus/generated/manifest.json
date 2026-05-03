@@ -14,7 +14,7 @@
       "idml": "effects.idml",
       "pdf": "effects.pdf",
       "pages": 12,
-      "passing": 2,
+      "passing": 9,
       "diff_dir": "/tmp/idml-diff",
       "report": "/tmp/idml-diff/report.json"
     },
@@ -23,7 +23,7 @@
       "idml": "geometry.idml",
       "pdf": "geometry.pdf",
       "pages": 20,
-      "passing": 0,
+      "passing": 20,
       "diff_dir": "/tmp/idml-diff",
       "report": "/tmp/idml-diff/report.json"
     },
@@ -59,7 +59,7 @@
       "idml": "strokes-fills.idml",
       "pdf": "strokes-fills.pdf",
       "pages": 19,
-      "passing": 12,
+      "passing": 14,
       "diff_dir": "/tmp/idml-diff",
       "report": "/tmp/idml-diff/report.json"
     },
