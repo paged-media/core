@@ -6046,25 +6046,24 @@ pub fn color_id_to_paint_with_list_dir(
             return Some(Paint::RadialGradient(id));
         }
         // Compute unit-rect endpoints (the renderer's gradient lives
-        // in the path's local 0..1 space). Default: top → bottom.
-        // GradientFillAngle rotates the line around the rect centre
-        // (0.5, 0.5); 0° is horizontal-right, 90° vertical-down.
-        // The endpoints are placed where a unit-vector at that angle
-        // crosses the unit-rect's edges — for an axis-aligned rect
-        // the simple formula below is exact for cardinal angles and
-        // a good approximation otherwise.
-        let (start, end) = match gradient_angle_deg {
-            None => ((0.0, 0.0), (0.0, 1.0)),
-            Some(deg) => {
-                let rad = deg.to_radians();
-                let (sin, cos) = rad.sin_cos();
-                // Unit-rect centre + half-vector along the angle.
-                let cx = 0.5_f32;
-                let cy = 0.5_f32;
-                let half = 0.5_f32;
-                ((cx - cos * half, cy - sin * half), (cx + cos * half, cy + sin * half))
-            }
-        };
+        // in the path's local 0..1 space). GradientFillAngle rotates
+        // the line around the rect centre (0.5, 0.5); IDML's
+        // convention is 0° horizontal-right, 90° vertical-down. When
+        // the attribute is absent, IDML's spec default is 0° — so
+        // both the None and Some(0.0) branches must produce
+        // left→right, NOT top→bottom. The endpoints are placed where
+        // a unit-vector at the angle crosses the unit-rect's edges —
+        // exact for cardinal angles, close approximation otherwise.
+        let deg = gradient_angle_deg.unwrap_or(0.0);
+        let rad = deg.to_radians();
+        let (sin, cos) = rad.sin_cos();
+        let cx = 0.5_f32;
+        let cy = 0.5_f32;
+        let half = 0.5_f32;
+        let (start, end) = (
+            (cx - cos * half, cy - sin * half),
+            (cx + cos * half, cy + sin * half),
+        );
         let id = list.push_linear_gradient(idml_compose::LinearGradient {
             start,
             end,

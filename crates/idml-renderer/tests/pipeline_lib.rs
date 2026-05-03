@@ -189,7 +189,11 @@ fn build_gradient_idml() -> Vec<u8> {
 }
 
 #[test]
-fn linear_gradient_fills_top_to_bottom() {
+fn linear_gradient_fills_left_to_right_by_default() {
+    // IDML's GradientFillAngle defaults to 0° = horizontal-right
+    // (left = first stop, right = last). This test pins the default
+    // direction; gradient_fill_angle != 0 rotates the line through
+    // the rect centre per `color_id_to_paint_with_list_dir`.
     let bytes = build_gradient_idml();
     let document = Document::open(&bytes).unwrap();
     let opts = PipelineOptions::default();
@@ -198,20 +202,20 @@ fn linear_gradient_fills_top_to_bottom() {
     assert_eq!(images.len(), 1);
     let img = &images[0];
 
-    // The gradient runs (0,0) → (0,1) in unit coords, so the top of
-    // the 200 × 200 page should look like Color/Sun (warm yellow) and
-    // the bottom should look like Color/Sky (cool blue).
-    let top = *img.get_pixel(100, 5);
-    let bottom = *img.get_pixel(100, 195);
+    // The gradient defaults to (0,0.5) → (1,0.5) in unit coords, so
+    // the left of the 200 × 200 page should look like Color/Sun (warm
+    // yellow) and the right should look like Color/Sky (cool blue).
+    let left = *img.get_pixel(5, 100);
+    let right = *img.get_pixel(195, 100);
     assert!(
-        top.0[0] > top.0[2] + 50,
-        "expected warm top pixel, got {:?}",
-        top
+        left.0[0] > left.0[2] + 50,
+        "expected warm left pixel, got {:?}",
+        left
     );
     assert!(
-        bottom.0[2] > bottom.0[0] + 50,
-        "expected cool bottom pixel, got {:?}",
-        bottom
+        right.0[2] > right.0[0] + 50,
+        "expected cool right pixel, got {:?}",
+        right
     );
     // The display list carries one gradient definition.
     assert_eq!(built.pages[0].list.gradients.len(), 1);
