@@ -208,6 +208,71 @@ pub struct Table {
     pub rows: Vec<TableRow>,
     pub columns: Vec<TableColumn>,
     pub cells: Vec<TableCell>,
+    /// Direct outer-border attributes serialised on the `<Table>`
+    /// element itself. InDesign emits these on the Table when the
+    /// user customises borders without creating a TableStyle. They
+    /// take precedence over the `AppliedTableStyle`'s border
+    /// declarations.
+    pub border: TableBorder,
+    /// `StartRowStroke*` / `EndRowStroke*` describe the alternating
+    /// dividers between rows. Captured here for the renderer.
+    pub row_strokes: TableLineStrokes,
+    /// `StartColumnStroke*` / `EndColumnStroke*` analogue for column
+    /// dividers. Currently captured but not rendered.
+    pub column_strokes: TableLineStrokes,
+}
+
+/// Outer-table border attributes serialised directly on `<Table>`
+/// (vs. via an `AppliedTableStyle`). All fields optional — `None`
+/// means "fall through to the TableStyle cascade / default".
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct TableBorder {
+    pub top_color: Option<String>,
+    pub top_type: Option<String>,
+    pub top_weight: Option<f32>,
+    pub top_tint: Option<f32>,
+    pub top_gap_color: Option<String>,
+    pub top_gap_tint: Option<f32>,
+    pub bottom_color: Option<String>,
+    pub bottom_type: Option<String>,
+    pub bottom_weight: Option<f32>,
+    pub bottom_tint: Option<f32>,
+    pub bottom_gap_color: Option<String>,
+    pub bottom_gap_tint: Option<f32>,
+    pub left_color: Option<String>,
+    pub left_type: Option<String>,
+    pub left_weight: Option<f32>,
+    pub left_tint: Option<f32>,
+    pub left_gap_color: Option<String>,
+    pub left_gap_tint: Option<f32>,
+    pub right_color: Option<String>,
+    pub right_type: Option<String>,
+    pub right_weight: Option<f32>,
+    pub right_tint: Option<f32>,
+    pub right_gap_color: Option<String>,
+    pub right_gap_tint: Option<f32>,
+}
+
+/// Bag of `Start*Stroke*` / `End*Stroke*` attributes for either the
+/// row or column dimension. The "start" set kicks in for the first
+/// `start_count` lines, then "end" for `end_count`, alternating.
+/// Used for IDML's row / column dividers. All fields optional.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct TableLineStrokes {
+    pub start_count: Option<u32>,
+    pub start_color: Option<String>,
+    pub start_type: Option<String>,
+    pub start_weight: Option<f32>,
+    pub start_tint: Option<f32>,
+    pub start_gap_color: Option<String>,
+    pub start_gap_tint: Option<f32>,
+    pub end_count: Option<u32>,
+    pub end_color: Option<String>,
+    pub end_type: Option<String>,
+    pub end_weight: Option<f32>,
+    pub end_tint: Option<f32>,
+    pub end_gap_color: Option<String>,
+    pub end_gap_tint: Option<f32>,
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -621,6 +686,82 @@ impl Story {
                             rows: Vec::new(),
                             columns: Vec::new(),
                             cells: Vec::new(),
+                            border: TableBorder {
+                                top_color: attr(&e, b"TopBorderStrokeColor"),
+                                top_type: attr(&e, b"TopBorderStrokeType"),
+                                top_weight: attr(&e, b"TopBorderStrokeWeight")
+                                    .and_then(|s| s.parse().ok()),
+                                top_tint: parse_tint_attr(&e, b"TopBorderStrokeTint"),
+                                top_gap_color: attr(&e, b"TopBorderStrokeGapColor"),
+                                top_gap_tint: parse_tint_attr(&e, b"TopBorderStrokeGapTint"),
+                                bottom_color: attr(&e, b"BottomBorderStrokeColor"),
+                                bottom_type: attr(&e, b"BottomBorderStrokeType"),
+                                bottom_weight: attr(&e, b"BottomBorderStrokeWeight")
+                                    .and_then(|s| s.parse().ok()),
+                                bottom_tint: parse_tint_attr(&e, b"BottomBorderStrokeTint"),
+                                bottom_gap_color: attr(&e, b"BottomBorderStrokeGapColor"),
+                                bottom_gap_tint: parse_tint_attr(
+                                    &e,
+                                    b"BottomBorderStrokeGapTint",
+                                ),
+                                left_color: attr(&e, b"LeftBorderStrokeColor"),
+                                left_type: attr(&e, b"LeftBorderStrokeType"),
+                                left_weight: attr(&e, b"LeftBorderStrokeWeight")
+                                    .and_then(|s| s.parse().ok()),
+                                left_tint: parse_tint_attr(&e, b"LeftBorderStrokeTint"),
+                                left_gap_color: attr(&e, b"LeftBorderStrokeGapColor"),
+                                left_gap_tint: parse_tint_attr(&e, b"LeftBorderStrokeGapTint"),
+                                right_color: attr(&e, b"RightBorderStrokeColor"),
+                                right_type: attr(&e, b"RightBorderStrokeType"),
+                                right_weight: attr(&e, b"RightBorderStrokeWeight")
+                                    .and_then(|s| s.parse().ok()),
+                                right_tint: parse_tint_attr(&e, b"RightBorderStrokeTint"),
+                                right_gap_color: attr(&e, b"RightBorderStrokeGapColor"),
+                                right_gap_tint: parse_tint_attr(&e, b"RightBorderStrokeGapTint"),
+                            },
+                            row_strokes: TableLineStrokes {
+                                start_count: attr(&e, b"StartRowStrokeCount")
+                                    .and_then(|s| s.parse().ok()),
+                                start_color: attr(&e, b"StartRowStrokeColor"),
+                                start_type: attr(&e, b"StartRowStrokeType"),
+                                start_weight: attr(&e, b"StartRowStrokeWeight")
+                                    .and_then(|s| s.parse().ok()),
+                                start_tint: parse_tint_attr(&e, b"StartRowStrokeTint"),
+                                start_gap_color: attr(&e, b"StartRowStrokeGapColor"),
+                                start_gap_tint: parse_tint_attr(&e, b"StartRowStrokeGapTint"),
+                                end_count: attr(&e, b"EndRowStrokeCount")
+                                    .and_then(|s| s.parse().ok()),
+                                end_color: attr(&e, b"EndRowStrokeColor"),
+                                end_type: attr(&e, b"EndRowStrokeType"),
+                                end_weight: attr(&e, b"EndRowStrokeWeight")
+                                    .and_then(|s| s.parse().ok()),
+                                end_tint: parse_tint_attr(&e, b"EndRowStrokeTint"),
+                                end_gap_color: attr(&e, b"EndRowStrokeGapColor"),
+                                end_gap_tint: parse_tint_attr(&e, b"EndRowStrokeGapTint"),
+                            },
+                            column_strokes: TableLineStrokes {
+                                start_count: attr(&e, b"StartColumnStrokeCount")
+                                    .and_then(|s| s.parse().ok()),
+                                start_color: attr(&e, b"StartColumnStrokeColor"),
+                                start_type: attr(&e, b"StartColumnStrokeType"),
+                                start_weight: attr(&e, b"StartColumnStrokeWeight")
+                                    .and_then(|s| s.parse().ok()),
+                                start_tint: parse_tint_attr(&e, b"StartColumnStrokeTint"),
+                                start_gap_color: attr(&e, b"StartColumnStrokeGapColor"),
+                                start_gap_tint: parse_tint_attr(
+                                    &e,
+                                    b"StartColumnStrokeGapTint",
+                                ),
+                                end_count: attr(&e, b"EndColumnStrokeCount")
+                                    .and_then(|s| s.parse().ok()),
+                                end_color: attr(&e, b"EndColumnStrokeColor"),
+                                end_type: attr(&e, b"EndColumnStrokeType"),
+                                end_weight: attr(&e, b"EndColumnStrokeWeight")
+                                    .and_then(|s| s.parse().ok()),
+                                end_tint: parse_tint_attr(&e, b"EndColumnStrokeTint"),
+                                end_gap_color: attr(&e, b"EndColumnStrokeGapColor"),
+                                end_gap_tint: parse_tint_attr(&e, b"EndColumnStrokeGapTint"),
+                            },
                         });
                     }
                     b"Cell" => {
@@ -1019,7 +1160,26 @@ impl Story {
                 Event::Text(t) => {
                     if in_content {
                         if let Some(run) = current_run.as_mut() {
-                            run.text.push_str(&t.unescape().unwrap_or_default());
+                            // Normalise Unicode line/paragraph
+                            // separators (U+2028, U+2029) emitted by
+                            // InDesign for "Forced Line Break"
+                            // (Shift+Enter) into `\n`. The downstream
+                            // composer splits paragraphs on `\n` and
+                            // treats consecutive newlines as empty
+                            // sub-paragraphs that advance y_cursor by
+                            // one line — which is how InDesign visibly
+                            // spaces blocks separated by Shift+Enter.
+                            // Without this normalisation the shaper
+                            // filters `\u{2028}` as a control glyph
+                            // and the visual gap collapses.
+                            let raw = t.unescape().unwrap_or_default();
+                            for ch in raw.chars() {
+                                if matches!(ch, '\u{2028}' | '\u{2029}') {
+                                    run.text.push('\n');
+                                } else {
+                                    run.text.push(ch);
+                                }
+                            }
                         }
                     } else if properties_field.is_some() {
                         properties_text.push_str(&t.unescape().unwrap_or_default());

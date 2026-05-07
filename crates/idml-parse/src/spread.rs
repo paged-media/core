@@ -241,6 +241,15 @@ pub struct TextFrame {
     /// Screen | Overlay | …). The renderer composites both the frame
     /// fill and the text glyphs using this mode.
     pub blend_mode: Option<String>,
+    /// Path-point anchors with their Bezier control points, in the
+    /// frame's inner coords. Real-world InDesign exports always
+    /// serialise the path here even for plain rectangles (4 corner
+    /// anchors). Empty when no `<PathGeometry>` was parsed (synthetic
+    /// IDMLs that only carry `GeometricBounds`). The renderer treats
+    /// non-rectangular paths as a clip mask for text layout so glyphs
+    /// stay inside the actual triangle / pentagon / Bezier outline
+    /// rather than the AABB.
+    pub anchors: Vec<PathAnchor>,
 }
 
 /// IDML `<TextFramePreference VerticalJustification="...">` values.
@@ -1195,6 +1204,7 @@ impl Spread {
                             is_anchored: false,
                             opacity: None,
                             blend_mode: None,
+                            anchors: Vec::new(),
                         });
                         let idx = out.text_frames.len() - 1;
                         register_with_group(
@@ -1205,7 +1215,12 @@ impl Spread {
                             kind: CurrentFrameKind::Text(idx),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
-                            keep_anchors: false,
+                            // Always retain Bezier path anchors so the
+                            // renderer can detect non-rectangular text
+                            // frame outlines (triangle, pentagon, …)
+                            // and clip layout to the actual polygon
+                            // interior rather than the AABB.
+                            keep_anchors: true,
                             in_text_wrap: false,
                             stroke_transparency_depth: 0,
                             content_transparency_depth: 0,
@@ -1537,10 +1552,23 @@ impl Spread {
                                         .as_deref()
                                         .and_then(parse_xy_pair)
                                         .or_else(|| {
+                                            // `HiliteAngle` is the *highlight*
+                                            // ramp orientation, not the
+                                            // gradient axis direction —
+                                            // InDesign uses it for the
+                                            // radial-feather hilite preview
+                                            // and leaves the gradient axis
+                                            // horizontal (0°) when no
+                                            // dedicated angle attribute is
+                                            // serialised. Tied to the visible
+                                            // page-5 yellow→white feather in
+                                            // `manual-sample.idml`, where
+                                            // `HiliteAngle="-62.2"` paints a
+                                            // diagonal smudge instead of the
+                                            // expected left→right fade.
                                             let s = start_point?;
                                             let length = parse_f(&e, b"Length")?;
                                             let angle = parse_f(&e, b"GradientAngle")
-                                                .or_else(|| parse_f(&e, b"HiliteAngle"))
                                                 .or_else(|| parse_f(&e, b"Angle"))
                                                 .unwrap_or(0.0);
                                             let rad = angle.to_radians();
@@ -1552,7 +1580,6 @@ impl Spread {
                                         start_point,
                                         end_point,
                                         angle_deg: parse_f(&e, b"GradientAngle")
-                                            .or_else(|| parse_f(&e, b"HiliteAngle"))
                                             .or_else(|| parse_f(&e, b"Angle")),
                                         stops: Vec::new(),
                                     });
@@ -2026,6 +2053,11 @@ impl Spread {
                                         if i < out.graphic_lines.len() =>
                                     {
                                         out.graphic_lines[i].anchors = cf.anchors;
+                                    }
+                                    CurrentFrameKind::Text(i)
+                                        if i < out.text_frames.len() =>
+                                    {
+                                        out.text_frames[i].anchors = cf.anchors;
                                     }
                                     _ => {}
                                 }

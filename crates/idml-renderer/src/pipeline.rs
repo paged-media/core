@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use idml_compose::{
-    emit_glyph_slice, emit_line, emit_paragraph, emit_rect,
+    emit_ellipse, emit_glyph_slice, emit_line, emit_paragraph, emit_rect,
     emit_stroke_rect, emit_stroke_rect_transformed, Color, DisplayList, DropShadow, GlyphCacheKey,
     GlyphOutliner, Paint, PathData, PathSegment, Rect, Stroke, Transform, TtfOutliner,
 };
@@ -662,8 +662,8 @@ pub fn build_document(
         };
         let chain: Vec<&TextFrame> = vec![master_frame];
         let chain_pages: Vec<usize> = vec![*page_idx];
-        let head_wrap_rects: &[idml_parse::Bounds] = &[];
-        let chain_wrap_rects: Vec<&[idml_parse::Bounds]> = vec![&[]];
+        let head_wrap_rects: &[WrapShape] = &[];
+        let chain_wrap_rects: Vec<&[WrapShape]> = vec![&[]];
         let mut emitter = StoryEmitter::new(
             document,
             options,
@@ -840,14 +840,14 @@ pub fn build_document(
             })
             .collect();
         let head_page_idx = chain_pages[0];
-        let head_wrap_rects: &[idml_parse::Bounds] = wrap_rects_per_page
+        let head_wrap_rects: &[WrapShape] = wrap_rects_per_page
             .get(head_page_idx)
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
         // Per-chain wrap rects so threaded frames inherit per-line
         // wrap. Each chain index maps to its frame's page's
         // exclusion list.
-        let chain_wrap_rects: Vec<&[idml_parse::Bounds]> = chain_pages
+        let chain_wrap_rects: Vec<&[WrapShape]> = chain_pages
             .iter()
             .map(|&p| {
                 wrap_rects_per_page
@@ -954,7 +954,7 @@ struct StoryEmitter<'a> {
     /// retained alongside `head_frame_spread` for callers that
     /// want the head's wraps without indexing.
     #[allow(dead_code)]
-    head_wrap_rects: Vec<idml_parse::Bounds>,
+    head_wrap_rects: Vec<WrapShape>,
     /// Spread-coord bounds of the head frame, cached so the
     /// per-paragraph wrap pass doesn't recompute per paragraph.
     /// Currently superseded by `chain_spread_bounds[0]` for the
@@ -968,7 +968,7 @@ struct StoryEmitter<'a> {
     /// Used by `build_perline_wrap_widths` so overflow lines that
     /// land in chain[1+] get the right exclusions for that frame's
     /// page.
-    chain_wrap_rects: Vec<Vec<idml_parse::Bounds>>,
+    chain_wrap_rects: Vec<Vec<WrapShape>>,
     /// Spread-coord bounds for every frame in the chain. Same
     /// motivation as `chain_wrap_rects`: per-frame per-line wrap
     /// needs each frame's spread rect.
@@ -1044,8 +1044,8 @@ impl<'a> StoryEmitter<'a> {
         chain_pages: Vec<usize>,
         page_labels: &'a [String],
         hyphenator: Option<&'a idml_text::Hyphenator>,
-        head_wrap_rects: &[idml_parse::Bounds],
-        chain_wrap_rects: Vec<&[idml_parse::Bounds]>,
+        head_wrap_rects: &[WrapShape],
+        chain_wrap_rects: Vec<&[WrapShape]>,
     ) -> Self {
         // Head frame's L+R insets shrink the column width. Threaded
         // frames usually share the same insets; honouring per-frame
@@ -1063,7 +1063,8 @@ impl<'a> StoryEmitter<'a> {
         // per-line island wrap needs column-segment support in
         // compose_paragraph and is queued.
         let frame_height = head_frame_spread.height();
-        for w in head_wrap_rects {
+        for shape in head_wrap_rects {
+            let w = shape.bounds;
             // Vertical overlap check.
             let v_overlap =
                 w.bottom.min(head_frame_spread.bottom) - w.top.max(head_frame_spread.top);
@@ -1102,7 +1103,7 @@ impl<'a> StoryEmitter<'a> {
             .iter()
             .map(|f| transform_bounds(f.bounds, f.item_transform))
             .collect();
-        let chain_wrap_rects_owned: Vec<Vec<idml_parse::Bounds>> =
+        let chain_wrap_rects_owned: Vec<Vec<WrapShape>> =
             chain_wrap_rects.iter().map(|s| s.to_vec()).collect();
         Self {
             document,
@@ -1939,30 +1940,41 @@ fn emit_paragraph_into_chain(
 
     // BothSides flow: collapse twin lines onto the previous line's
     // baseline so the two segments render side by side at the same
-    // y. Subsequent lines absorb the saved row height by shifting
-    // up cumulatively. Without this pass twins would render as
+    // y. Subsequent non-twin lines step down by the original
+    // composer leading from the most recent unique-baseline row,
+    // not by their composer-assigned baseline (which counted twins
+    // as separate rows). Without this pass twins would render as
     // sequential rows, which Knuth-Plass produced naively.
     if !twin_after.is_empty() {
-        let mut accumulated_shift = 0i32;
-        let mut prev_baseline = 0i32;
+        let line_height_64 = lopts.line_height.max(1);
+        let mut prev_unique_baseline: Option<i32> = None;
         for (i, line) in laid_out.lines.iter_mut().enumerate() {
             let is_twin = twin_after.get(i).copied().unwrap_or(false) && i > 0;
             if is_twin {
-                let target = prev_baseline;
-                let diff = line.baseline_y - target;
-                line.baseline_y = target;
-                for g in &mut line.glyphs {
-                    g.y -= diff;
+                if let Some(target) = prev_unique_baseline {
+                    let diff = line.baseline_y - target;
+                    if diff != 0 {
+                        line.baseline_y = target;
+                        for g in &mut line.glyphs {
+                            g.y -= diff;
+                        }
+                    }
                 }
-                accumulated_shift += diff;
-            } else if accumulated_shift > 0 {
-                line.baseline_y -= accumulated_shift;
-                for g in &mut line.glyphs {
-                    g.y -= accumulated_shift;
-                }
-                prev_baseline = line.baseline_y;
+                // Twin partner — stays on previous unique row, doesn't
+                // advance prev_unique_baseline.
             } else {
-                prev_baseline = line.baseline_y;
+                let new_baseline = match prev_unique_baseline {
+                    Some(prev) => prev + line_height_64,
+                    None => line.baseline_y,
+                };
+                let diff = line.baseline_y - new_baseline;
+                if diff != 0 {
+                    line.baseline_y = new_baseline;
+                    for g in &mut line.glyphs {
+                        g.y -= diff;
+                    }
+                }
+                prev_unique_baseline = Some(new_baseline);
             }
         }
     }
@@ -2735,6 +2747,7 @@ fn emit_anchored_textframe_story<'a>(
         is_anchored: true,
         opacity: None,
         blend_mode: None,
+        anchors: Vec::new(),
     };
     // Sub-emitter borrows from the parent's `'a` so the document /
     // palette / font_table refs share lifetimes with the body pass.
@@ -2743,8 +2756,8 @@ fn emit_anchored_textframe_story<'a>(
     // `&TextFrame` borrow is sound.
     let chain: Vec<&TextFrame> = vec![&synthetic];
     let chain_pages: Vec<usize> = vec![target_page];
-    let head_wrap_rects: &[idml_parse::Bounds] = &[];
-    let chain_wrap_rects: Vec<&[idml_parse::Bounds]> = vec![&[]];
+    let head_wrap_rects: &[WrapShape] = &[];
+    let chain_wrap_rects: Vec<&[WrapShape]> = vec![&[]];
     let mut sub = StoryEmitter::new(
         em.document,
         em.options,
@@ -3404,6 +3417,129 @@ fn transform_bounds(b: idml_parse::Bounds, m: Option<[f32; 6]>) -> idml_parse::B
     }
 }
 
+/// A text-wrap obstacle: AABB bounds plus the four corner points of
+/// the (possibly rotated) source rectangle in spread coords. The
+/// AABB drives fast vertical/horizontal rejection and the simple
+/// side-shrink heuristic; the polygon corners drive per-line carve
+/// against rotated obstacles so a rotated rect's wrap follows its
+/// actual angled edges instead of its much wider unrotated AABB.
+#[derive(Debug, Clone, Copy)]
+struct WrapShape {
+    bounds: idml_parse::Bounds,
+    corners: [(f32, f32); 4],
+}
+
+impl WrapShape {
+    /// Build from an inner-coord `Bounds`, an optional ItemTransform,
+    /// and per-side wrap offsets `[top, left, bottom, right]`. The
+    /// offsets inflate the unrotated source rect *before* the
+    /// transform applies so the polygon stays aligned with the host's
+    /// rotation (offset is in inner-coord points, same as InDesign).
+    fn from_inner(
+        b: idml_parse::Bounds,
+        m: Option<[f32; 6]>,
+        offsets: [f32; 4],
+    ) -> Self {
+        let inner = idml_parse::Bounds {
+            top: b.top - offsets[0],
+            left: b.left - offsets[1],
+            bottom: b.bottom + offsets[2],
+            right: b.right + offsets[3],
+        };
+        let corners = match m {
+            Some(m) => [
+                apply_matrix(&m, inner.left, inner.top),
+                apply_matrix(&m, inner.right, inner.top),
+                apply_matrix(&m, inner.right, inner.bottom),
+                apply_matrix(&m, inner.left, inner.bottom),
+            ],
+            None => [
+                (inner.left, inner.top),
+                (inner.right, inner.top),
+                (inner.right, inner.bottom),
+                (inner.left, inner.bottom),
+            ],
+        };
+        let (mut min_x, mut max_x, mut min_y, mut max_y) = (
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        );
+        for (x, y) in corners {
+            if x < min_x {
+                min_x = x;
+            }
+            if x > max_x {
+                max_x = x;
+            }
+            if y < min_y {
+                min_y = y;
+            }
+            if y > max_y {
+                max_y = y;
+            }
+        }
+        let bounds = idml_parse::Bounds {
+            top: min_y,
+            left: min_x,
+            bottom: max_y,
+            right: max_x,
+        };
+        Self { bounds, corners }
+    }
+
+    /// Return the polygon's projected x-extent within the horizontal
+    /// strip `[band_top, band_bottom]` (spread y). Returns `None` if
+    /// the polygon doesn't intersect the strip vertically. The result
+    /// is the (min_x, max_x) range over all polygon points whose y
+    /// lies inside the strip plus all polygon-edge crossings of the
+    /// strip's top and bottom horizontal lines. This handles both
+    /// upright AABBs (where corners themselves bound the answer) and
+    /// rotated parallelograms (where edges crossing the strip yield
+    /// the carve.
+    fn x_extent_in_band(&self, band_top: f32, band_bottom: f32) -> Option<(f32, f32)> {
+        if self.bounds.bottom <= band_top || self.bounds.top >= band_bottom {
+            return None;
+        }
+        let mut min_x = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut visit = |x: f32| {
+            if x < min_x {
+                min_x = x;
+            }
+            if x > max_x {
+                max_x = x;
+            }
+        };
+        // Corners that lie inside the strip.
+        for (x, y) in self.corners {
+            if y >= band_top && y <= band_bottom {
+                visit(x);
+            }
+        }
+        // Edge crossings against the two horizontal strip lines.
+        for i in 0..4 {
+            let (x0, y0) = self.corners[i];
+            let (x1, y1) = self.corners[(i + 1) % 4];
+            for &y_line in &[band_top, band_bottom] {
+                let crosses = (y0 - y_line) * (y1 - y_line) <= 0.0 && (y0 - y1).abs() > 1e-6;
+                if crosses {
+                    let t = (y_line - y0) / (y1 - y0);
+                    if (0.0..=1.0).contains(&t) {
+                        visit(x0 + t * (x1 - x0));
+                    }
+                }
+            }
+        }
+        if min_x.is_finite() && max_x.is_finite() && min_x < max_x {
+            Some((min_x, max_x))
+        } else {
+            None
+        }
+    }
+}
+
 /// Compose `translate(dx, dy)` *after* an existing IDML affine.
 /// `translate ∘ inner` applied to a point: first inner maps the
 /// point, then translate shifts it by (dx, dy). Used by the master-
@@ -3426,9 +3562,9 @@ fn compose_outer_translation(inner: Option<[f32; 6]>, dx: f32, dy: f32) -> [f32;
 fn collect_wrap_rects_per_page(
     document: &Document,
     spread_page_ranges: &[std::ops::Range<usize>],
-) -> Vec<Vec<idml_parse::Bounds>> {
+) -> Vec<Vec<WrapShape>> {
     let total_pages: usize = spread_page_ranges.last().map(|r| r.end).unwrap_or(0);
-    let mut out: Vec<Vec<idml_parse::Bounds>> = (0..total_pages).map(|_| Vec::new()).collect();
+    let mut out: Vec<Vec<WrapShape>> = (0..total_pages).map(|_| Vec::new()).collect();
     for (spread_idx, parsed) in document.spreads.iter().enumerate() {
         let range = spread_page_ranges[spread_idx].clone();
         if range.is_empty() {
@@ -3441,15 +3577,16 @@ fn collect_wrap_rects_per_page(
             .iter()
             .map(|p| transform_bounds(p.bounds, p.item_transform))
             .collect();
-        let route = |spread_b: idml_parse::Bounds| -> Option<usize> {
-            let cx = (spread_b.left + spread_b.right) * 0.5;
-            let cy = (spread_b.top + spread_b.bottom) * 0.5;
+        let route = |aabb: idml_parse::Bounds| -> Option<usize> {
+            let cx = (aabb.left + aabb.right) * 0.5;
+            let cy = (aabb.top + aabb.bottom) * 0.5;
             page_bounds
                 .iter()
                 .position(|b| cx >= b.left && cx <= b.right && cy >= b.top && cy <= b.bottom)
         };
-        let push = |out: &mut Vec<Vec<idml_parse::Bounds>>,
-                    spread_b: idml_parse::Bounds,
+        let push = |out: &mut Vec<Vec<WrapShape>>,
+                    inner_bounds: idml_parse::Bounds,
+                    item_transform: Option<[f32; 6]>,
                     wrap: idml_parse::TextWrap| {
             if !wrap.mode.is_active() {
                 return;
@@ -3470,42 +3607,37 @@ fn collect_wrap_rects_per_page(
             ) {
                 return;
             }
-            let inflated = idml_parse::Bounds {
-                top: spread_b.top - wrap.offsets[0],
-                left: spread_b.left - wrap.offsets[1],
-                bottom: spread_b.bottom + wrap.offsets[2],
-                right: spread_b.right + wrap.offsets[3],
-            };
-            if let Some(local_idx) = route(spread_b) {
+            let shape = WrapShape::from_inner(inner_bounds, item_transform, wrap.offsets);
+            if let Some(local_idx) = route(shape.bounds) {
                 let page_idx = range.start + local_idx;
                 if page_idx < out.len() {
-                    out[page_idx].push(inflated);
+                    out[page_idx].push(shape);
                 }
             }
         };
         for f in &parsed.spread.text_frames {
             if let Some(w) = f.text_wrap {
-                push(&mut out, transform_bounds(f.bounds, f.item_transform), w);
+                push(&mut out, f.bounds, f.item_transform, w);
             }
         }
         for r in &parsed.spread.rectangles {
             if let Some(w) = r.text_wrap {
-                push(&mut out, transform_bounds(r.bounds, r.item_transform), w);
+                push(&mut out, r.bounds, r.item_transform, w);
             }
         }
         for o in &parsed.spread.ovals {
             if let Some(w) = o.text_wrap {
-                push(&mut out, transform_bounds(o.bounds, o.item_transform), w);
+                push(&mut out, o.bounds, o.item_transform, w);
             }
         }
         for p in &parsed.spread.polygons {
             if let Some(w) = p.text_wrap {
-                push(&mut out, transform_bounds(p.bounds, p.item_transform), w);
+                push(&mut out, p.bounds, p.item_transform, w);
             }
         }
         for l in &parsed.spread.graphic_lines {
             if let Some(w) = l.text_wrap {
-                push(&mut out, transform_bounds(l.bounds, l.item_transform), w);
+                push(&mut out, l.bounds, l.item_transform, w);
             }
         }
     }
@@ -4032,12 +4164,161 @@ fn emit_table_into_chain(
         }
     }
 
+    // Resolve effective outer-border attributes. Direct `<Table>`
+    // attributes (e.g. `LeftBorderStrokeColor` on the `<Table>`
+    // element itself) win over the AppliedTableStyle's cascaded
+    // values; weight defaults to 1pt when both are absent and a
+    // colour is present.
+    let direct = &table.border;
+    let effective_color = |direct: Option<&str>, style: Option<&str>| -> Option<String> {
+        match direct {
+            Some(s) if !is_none_swatch_id(s) => Some(s.to_string()),
+            _ => style.map(|s| s.to_string()),
+        }
+    };
+    let effective_weight = |direct_w: Option<f32>, style_w: Option<f32>, has_color: bool| -> f32 {
+        if let Some(w) = direct_w {
+            return w;
+        }
+        if let Some(w) = style_w {
+            return w;
+        }
+        if has_color {
+            1.0
+        } else {
+            0.0
+        }
+    };
+    let top_color = effective_color(
+        direct.top_color.as_deref(),
+        resolved_table.top_border_stroke_color.as_deref(),
+    );
+    let top_weight = effective_weight(
+        direct.top_weight,
+        resolved_table.top_border_stroke_weight,
+        top_color.is_some(),
+    );
+    let top_type = direct.top_type.clone();
+    let bot_color = effective_color(
+        direct.bottom_color.as_deref(),
+        resolved_table.bottom_border_stroke_color.as_deref(),
+    );
+    let bot_weight = effective_weight(
+        direct.bottom_weight,
+        resolved_table.bottom_border_stroke_weight,
+        bot_color.is_some(),
+    );
+    let bot_type = direct.bottom_type.clone();
+    let left_color = effective_color(
+        direct.left_color.as_deref(),
+        resolved_table.left_border_stroke_color.as_deref(),
+    );
+    let left_weight = effective_weight(
+        direct.left_weight,
+        resolved_table.left_border_stroke_weight,
+        left_color.is_some(),
+    );
+    let left_type = direct.left_type.clone();
+    let right_color = effective_color(
+        direct.right_color.as_deref(),
+        resolved_table.right_border_stroke_color.as_deref(),
+    );
+    let right_weight = effective_weight(
+        direct.right_weight,
+        resolved_table.right_border_stroke_weight,
+        right_color.is_some(),
+    );
+    let right_type = direct.right_type.clone();
+
+    // Row separators between rows. IDML serialises divider styles
+    // via `StartRowStrokeType` / `EndRowStrokeType` on the `<Table>`.
+    // The first `start_count` row separators use the start-stroke
+    // style; subsequent dividers fall through to the end-stroke
+    // style (alternating). When `start_color` is absent but a type
+    // is declared we fall back to black — IDML's documented default.
+    let row_decl = &table.row_strokes;
+    let row_start_type = row_decl.start_type.clone();
+    let row_start_color_raw = row_decl.start_color.clone();
+    let has_row_decl = row_start_type.is_some()
+        || row_start_color_raw.is_some()
+        || row_decl.end_type.is_some()
+        || row_decl.end_color.is_some();
+    let row_start_color = if has_row_decl && row_start_color_raw.is_none() {
+        Some("Color/Black".to_string())
+    } else {
+        row_start_color_raw
+    };
+    let row_start_weight = row_decl
+        .start_weight
+        .unwrap_or(if has_row_decl { 1.0 } else { 0.0 });
+    let row_end_type = row_decl
+        .end_type
+        .clone()
+        .or_else(|| row_start_type.clone());
+    let row_end_color = row_decl
+        .end_color
+        .clone()
+        .or_else(|| row_start_color.clone());
+    let row_end_weight = row_decl.end_weight.unwrap_or(row_start_weight);
+    let row_start_count = row_decl.start_count.unwrap_or(0) as usize;
+    let row_end_count = row_decl.end_count.unwrap_or(0) as usize;
+    let row_cycle = row_start_count + row_end_count;
+    let pick_row_stroke = |i: usize| -> (Option<&str>, Option<&str>, f32) {
+        if row_cycle == 0 {
+            return (
+                row_start_type.as_deref(),
+                row_start_color.as_deref(),
+                row_start_weight,
+            );
+        }
+        let pos = i % row_cycle;
+        if pos < row_start_count {
+            (
+                row_start_type.as_deref(),
+                row_start_color.as_deref(),
+                row_start_weight,
+            )
+        } else {
+            (
+                row_end_type.as_deref(),
+                row_end_color.as_deref(),
+                row_end_weight,
+            )
+        }
+    };
+
+    // Emit row dividers. A divider sits at the bottom edge of row
+    // `r` (= top edge of row `r+1`). Skip dividers that would
+    // straddle a frame boundary.
+    for r in 0..total_rows.saturating_sub(1) {
+        if row_bases[r].chain_idx != row_bases[r + 1].chain_idx {
+            continue;
+        }
+        let (stype, scolor, sweight) = pick_row_stroke(r);
+        let Some(color_id) = scolor else { continue };
+        if sweight <= 0.0 {
+            continue;
+        }
+        let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) else {
+            continue;
+        };
+        let basis = row_bases[r];
+        let y = basis.row_top_in_page + row_heights[r];
+        emit_table_horizontal_edge(
+            basis.table_left_pt,
+            y,
+            total_w,
+            stype,
+            sweight,
+            paint,
+            &mut pages[basis.target_page].list,
+        );
+    }
+
     // Table-level borders, drawn per-frame so a threaded table
     // gets a top border at the start of the first frame, a bottom
     // border at the end of the last frame, and full left/right
-    // borders inside every frame the table touches. Each border
-    // segment uses the same filled-rect snap-to-boundary trick as
-    // the per-cell edge strokes.
+    // borders inside every frame the table touches.
     for (i, (_chain_idx, fp_target_page, frame_table_left, top_y, bottom_y)) in
         frame_extents.iter().enumerate()
     {
@@ -4045,19 +4326,15 @@ fn emit_table_into_chain(
         let is_last = i == frame_extents.len() - 1;
         let target = *fp_target_page;
         if is_first {
-            if let (Some(color_id), Some(w)) = (
-                resolved_table.top_border_stroke_color.as_deref(),
-                resolved_table.top_border_stroke_weight,
-            ) {
-                if w > 0.0 {
+            if let Some(color_id) = top_color.as_deref() {
+                if top_weight > 0.0 {
                     if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) {
-                        emit_rect(
-                            Rect {
-                                x: *frame_table_left,
-                                y: *top_y - w * 0.5,
-                                w: total_w,
-                                h: w,
-                            },
+                        emit_table_horizontal_edge(
+                            *frame_table_left,
+                            *top_y,
+                            total_w,
+                            top_type.as_deref(),
+                            top_weight,
                             paint,
                             &mut pages[target].list,
                         );
@@ -4066,19 +4343,15 @@ fn emit_table_into_chain(
             }
         }
         if is_last {
-            if let (Some(color_id), Some(w)) = (
-                resolved_table.bottom_border_stroke_color.as_deref(),
-                resolved_table.bottom_border_stroke_weight,
-            ) {
-                if w > 0.0 {
+            if let Some(color_id) = bot_color.as_deref() {
+                if bot_weight > 0.0 {
                     if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) {
-                        emit_rect(
-                            Rect {
-                                x: *frame_table_left,
-                                y: *bottom_y - w * 0.5,
-                                w: total_w,
-                                h: w,
-                            },
+                        emit_table_horizontal_edge(
+                            *frame_table_left,
+                            *bottom_y,
+                            total_w,
+                            bot_type.as_deref(),
+                            bot_weight,
                             paint,
                             &mut pages[target].list,
                         );
@@ -4088,38 +4361,30 @@ fn emit_table_into_chain(
         }
         // Left/right borders span this frame's portion of the table.
         let segment_h = bottom_y - top_y;
-        if let (Some(color_id), Some(w)) = (
-            resolved_table.left_border_stroke_color.as_deref(),
-            resolved_table.left_border_stroke_weight,
-        ) {
-            if w > 0.0 {
+        if let Some(color_id) = left_color.as_deref() {
+            if left_weight > 0.0 {
                 if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) {
-                    emit_rect(
-                        Rect {
-                            x: *frame_table_left - w * 0.5,
-                            y: *top_y,
-                            w,
-                            h: segment_h,
-                        },
+                    emit_table_vertical_edge(
+                        *frame_table_left,
+                        *top_y,
+                        segment_h,
+                        left_type.as_deref(),
+                        left_weight,
                         paint,
                         &mut pages[target].list,
                     );
                 }
             }
         }
-        if let (Some(color_id), Some(w)) = (
-            resolved_table.right_border_stroke_color.as_deref(),
-            resolved_table.right_border_stroke_weight,
-        ) {
-            if w > 0.0 {
+        if let Some(color_id) = right_color.as_deref() {
+            if right_weight > 0.0 {
                 if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) {
-                    emit_rect(
-                        Rect {
-                            x: *frame_table_left + total_w - w * 0.5,
-                            y: *top_y,
-                            w,
-                            h: segment_h,
-                        },
+                    emit_table_vertical_edge(
+                        *frame_table_left + total_w,
+                        *top_y,
+                        segment_h,
+                        right_type.as_deref(),
+                        right_weight,
                         paint,
                         &mut pages[target].list,
                     );
@@ -4139,6 +4404,181 @@ fn emit_table_into_chain(
     total_stats.paragraphs += 1;
     let stat_page = em.chain_pages[em.frame_idx];
     pages[stat_page].stats.paragraphs += 1;
+}
+
+/// Strip `StrokeStyle/$ID/` and an optional leading `Canned ` so the
+/// remaining suffix matches the canonical stroke-style name table.
+/// Mirrors `stroke_for`'s normalisation for the table-edge emitter.
+fn normalise_stroke_type(name: Option<&str>) -> &str {
+    let Some(name) = name else { return "Solid" };
+    let suffix = name.strip_prefix("StrokeStyle/$ID/").unwrap_or(name);
+    suffix.strip_prefix("Canned ").unwrap_or(suffix)
+}
+
+/// Emit a horizontal table-edge segment of length `length` starting
+/// at `(x, y)` (the centre of the edge, snapped to the cell boundary).
+/// Honours a small set of stroke types:
+///
+/// * `Solid` / unknown → single filled rect of height `weight`.
+/// * `ThickThick` → two parallel rects each of height `weight/3`,
+///   separated by a `weight/3` gap; the trio spans `weight` total
+///   (matches InDesign's preset).
+/// * `Dotted` / `Dotted2..8` / `Japanese Dots` → a series of small
+///   filled circles of diameter `weight` stamped along the edge.
+fn emit_table_horizontal_edge(
+    x: f32,
+    y: f32,
+    length: f32,
+    stroke_type: Option<&str>,
+    weight: f32,
+    paint: Paint,
+    list: &mut DisplayList,
+) {
+    if weight <= 0.0 || length <= 0.0 {
+        return;
+    }
+    let kind = normalise_stroke_type(stroke_type);
+    match kind {
+        "ThickThick" => {
+            let line_w = weight / 3.0;
+            let upper_centre = y - weight / 3.0;
+            let lower_centre = y + weight / 3.0;
+            emit_rect(
+                Rect {
+                    x,
+                    y: upper_centre - line_w * 0.5,
+                    w: length,
+                    h: line_w,
+                },
+                paint,
+                list,
+            );
+            emit_rect(
+                Rect {
+                    x,
+                    y: lower_centre - line_w * 0.5,
+                    w: length,
+                    h: line_w,
+                },
+                paint,
+                list,
+            );
+        }
+        "Dotted" | "Dotted2" | "Dotted4" | "Dotted8" | "Japanese Dots" => {
+            let step = match kind {
+                "Dotted2" | "Dotted" => 2.0,
+                "Dotted4" => 4.0,
+                "Dotted8" => 8.0,
+                _ => 1.5,
+            } * weight.max(0.1);
+            let diameter = weight;
+            let mut cx = x;
+            while cx <= x + length + 0.001 {
+                emit_ellipse(
+                    Rect {
+                        x: cx - diameter * 0.5,
+                        y: y - diameter * 0.5,
+                        w: diameter,
+                        h: diameter,
+                    },
+                    paint,
+                    list,
+                );
+                cx += step;
+            }
+        }
+        _ => {
+            emit_rect(
+                Rect {
+                    x,
+                    y: y - weight * 0.5,
+                    w: length,
+                    h: weight,
+                },
+                paint,
+                list,
+            );
+        }
+    }
+}
+
+/// Vertical analogue of [`emit_table_horizontal_edge`]. `x` is the
+/// horizontal centre of the edge; the segment spans `(y, y + length)`.
+fn emit_table_vertical_edge(
+    x: f32,
+    y: f32,
+    length: f32,
+    stroke_type: Option<&str>,
+    weight: f32,
+    paint: Paint,
+    list: &mut DisplayList,
+) {
+    if weight <= 0.0 || length <= 0.0 {
+        return;
+    }
+    let kind = normalise_stroke_type(stroke_type);
+    match kind {
+        "ThickThick" => {
+            let line_w = weight / 3.0;
+            let left_centre = x - weight / 3.0;
+            let right_centre = x + weight / 3.0;
+            emit_rect(
+                Rect {
+                    x: left_centre - line_w * 0.5,
+                    y,
+                    w: line_w,
+                    h: length,
+                },
+                paint,
+                list,
+            );
+            emit_rect(
+                Rect {
+                    x: right_centre - line_w * 0.5,
+                    y,
+                    w: line_w,
+                    h: length,
+                },
+                paint,
+                list,
+            );
+        }
+        "Dotted" | "Dotted2" | "Dotted4" | "Dotted8" | "Japanese Dots" => {
+            let step = match kind {
+                "Dotted2" | "Dotted" => 2.0,
+                "Dotted4" => 4.0,
+                "Dotted8" => 8.0,
+                _ => 1.5,
+            } * weight.max(0.1);
+            let diameter = weight;
+            let mut cy = y;
+            while cy <= y + length + 0.001 {
+                emit_ellipse(
+                    Rect {
+                        x: x - diameter * 0.5,
+                        y: cy - diameter * 0.5,
+                        w: diameter,
+                        h: diameter,
+                    },
+                    paint,
+                    list,
+                );
+                cy += step;
+            }
+        }
+        _ => {
+            emit_rect(
+                Rect {
+                    x: x - weight * 0.5,
+                    y,
+                    w: weight,
+                    h: length,
+                },
+                paint,
+                list,
+            );
+        }
+    }
 }
 
 /// `CellStyle/$ID/[None]` is IDML's "no style" sentinel. Treat it
@@ -4530,6 +4970,129 @@ struct WrapPlan {
     twin_after: Vec<bool>,
 }
 
+/// Polygon vertices for a chain frame, expressed in *spread coords*.
+/// Returned only when:
+///   - the frame's anchors form a non-rectangular polygon (so AABB
+///     layout would place text outside the actual outline);
+///   - the frame's `ItemTransform` is upright (identity rotation/scale,
+///     translation only). Rotated polygon frames fall back to the
+///     AABB path because per-line shifts in spread coords would not
+///     compose cleanly with the frame's post-emit rotation.
+///
+/// `None` means "treat the frame as its AABB" (the legacy behaviour).
+fn frame_polygon_spread(frame: &TextFrame) -> Option<Vec<(f32, f32)>> {
+    if frame.anchors.len() < 3 {
+        return None;
+    }
+    // Inner-coord rectangularity test: 2 unique x values + 2 unique y
+    // values => axis-aligned rect (the common case, every plain text
+    // frame). Polygon clipping would be a no-op here; skip.
+    let mut xs: Vec<f32> = frame.anchors.iter().map(|a| a.anchor.0).collect();
+    let mut ys: Vec<f32> = frame.anchors.iter().map(|a| a.anchor.1).collect();
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    ys.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let eq = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    if frame.anchors.len() == 4
+        && eq(xs[0], xs[1])
+        && eq(xs[2], xs[3])
+        && eq(ys[0], ys[1])
+        && eq(ys[2], ys[3])
+    {
+        return None;
+    }
+    // Only handle upright frames. The renderer rotates rotated text
+    // frames post-emit; per-line shifts pre-rotation would interact
+    // badly with a non-AABB clip.
+    let m = frame.item_transform.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let upright = (m[1].abs() < 1e-5)
+        && (m[2].abs() < 1e-5)
+        && ((m[0] - 1.0).abs() < 1e-5)
+        && ((m[3] - 1.0).abs() < 1e-5);
+    if !upright {
+        return None;
+    }
+    // Each anchor's straight-segment chain — Bezier control points
+    // are approximated by the polyline through `anchor` only, per the
+    // implementation plan (curve-flattening can land later without
+    // affecting the boundary test above).
+    Some(
+        frame
+            .anchors
+            .iter()
+            .map(|a| apply_matrix(&m, a.anchor.0, a.anchor.1))
+            .collect(),
+    )
+}
+
+/// Scanline x-intersections of a closed polygon at horizontal line
+/// `y`. Edges connect consecutive `verts` plus the wrap-around closing
+/// segment. Edges parallel to `y` are skipped (their endpoints are
+/// already covered by the neighbouring edges). Returned x values are
+/// sorted ascending; pairing them up `[(x0,x1), (x2,x3), …]` yields
+/// the inside intervals at this y by the even-odd rule.
+fn polygon_x_at_y(verts: &[(f32, f32)], y: f32) -> Vec<f32> {
+    let n = verts.len();
+    let mut xs: Vec<f32> = Vec::new();
+    for i in 0..n {
+        let (x0, y0) = verts[i];
+        let (x1, y1) = verts[(i + 1) % n];
+        // Half-open at the upper endpoint to avoid double-counting
+        // shared anchor y values.
+        let (lo_y, hi_y, lo_x, hi_x) = if y0 <= y1 {
+            (y0, y1, x0, x1)
+        } else {
+            (y1, y0, x1, x0)
+        };
+        if (lo_y - hi_y).abs() < 1e-6 {
+            continue; // horizontal edge
+        }
+        if y < lo_y || y >= hi_y {
+            continue;
+        }
+        let t = (y - lo_y) / (hi_y - lo_y);
+        xs.push(lo_x + t * (hi_x - lo_x));
+    }
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    xs
+}
+
+/// Pair the sorted x intersections into inside intervals `[(x0,x1),
+/// (x2,x3), …]`. Odd counts (numerical edge-grazing) drop the last x.
+fn pairs_from_xs(xs: &[f32]) -> Vec<(f32, f32)> {
+    let mut out: Vec<(f32, f32)> = Vec::with_capacity(xs.len() / 2);
+    let mut i = 0;
+    while i + 1 < xs.len() {
+        out.push((xs[i], xs[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+/// Subtract the union of `holes` from each `(left, right)` segment.
+/// Both inputs are in spread-coord pt; output preserves left-to-right
+/// order. Mirrors the wrap-rect carve loop in
+/// `build_perline_wrap_widths` but expressed as a free fn so the
+/// polygon path can reuse it.
+fn carve_holes(mut segments: Vec<(f32, f32)>, holes: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    for (hl, hr) in holes {
+        let mut next: Vec<(f32, f32)> = Vec::with_capacity(segments.len() + 1);
+        for (a, b) in &segments {
+            if *hr <= *a || *hl >= *b {
+                next.push((*a, *b));
+                continue;
+            }
+            if hl > a {
+                next.push((*a, *hl));
+            }
+            if hr < b {
+                next.push((*hr, *b));
+            }
+        }
+        segments = next;
+    }
+    segments
+}
+
 fn build_perline_wrap_widths(
     em: &StoryEmitter,
     styled_runs: &[idml_text::StyledRun],
@@ -4539,12 +5102,20 @@ fn build_perline_wrap_widths(
         line_x_shifts_64: Vec::new(),
         twin_after: Vec::new(),
     };
-    if em.frame_idx != 0 {
+    // Polygon clip per chain frame — enabled when the frame's
+    // <PathGeometry> is non-rectangular (e.g. triangle, pentagon).
+    // Indexed by frame_idx; `None` means treat the frame as its AABB.
+    let chain_polygons: Vec<Option<Vec<(f32, f32)>>> =
+        em.chain.iter().map(|f| frame_polygon_spread(f)).collect();
+    let any_polygon_clip = chain_polygons.iter().any(|p| p.is_some());
+    if em.frame_idx != 0 && !any_polygon_clip {
         // After the head frame fills, the existing emit loop
         // advances to chain[1+] using a fixed first-baseline
         // reset; per-line wrap inside overflow frames is layered
         // on by the chain walk below — handled when the head
-        // frame's paragraph composes.
+        // frame's paragraph composes. We still need to engage when
+        // a downstream frame is polygon-clipped so paragraphs that
+        // start *inside* the polygon get the per-line carve.
         return empty;
     }
     let any_chain_overlap = em
@@ -4552,11 +5123,12 @@ fn build_perline_wrap_widths(
         .iter()
         .zip(em.chain_wrap_rects.iter())
         .any(|(b, ws)| {
-            ws.iter().any(|w| {
+            ws.iter().any(|s| {
+                let w = s.bounds;
                 w.bottom > b.top && w.top < b.bottom && w.right > b.left && w.left < b.right
             })
         });
-    if !any_chain_overlap {
+    if !any_chain_overlap && !any_polygon_clip {
         return empty;
     }
     // Estimate leading from the first run's point size × 1.2.
@@ -4578,13 +5150,19 @@ fn build_perline_wrap_widths(
     // its own widths to the combined slice; once layout produces
     // lines the existing emit pass discovers per-line frame
     // assignment and reads x-shifts by absolute line index.
+    // Paragraphs that start mid-chain skip the preceding frames so
+    // the widths slice starts at the *current* frame.
+    let start_frame = em.frame_idx;
     for (frame_idx, frame_bounds) in em.chain_spread_bounds.iter().enumerate() {
+        if frame_idx < start_frame {
+            continue;
+        }
         let frame_left_pt = frame_bounds.left;
         let frame_right_pt = frame_bounds.right;
         let frame = em.chain[frame_idx];
         let insets = frame.inset_spacing.unwrap_or([0.0; 4]);
         let frame_height_pt = frame_bounds.height();
-        let frame_first_baseline_64 = if frame_idx == 0 {
+        let frame_first_baseline_64 = if frame_idx == start_frame {
             em.y_cursor.max(0)
         } else {
             (head_size_pt * 0.8 * idml_text::shape::ADVANCE_PRECISION).round() as i32
@@ -4598,7 +5176,29 @@ fn build_perline_wrap_widths(
             continue;
         }
         let wraps = &em.chain_wrap_rects[frame_idx];
+        let poly = chain_polygons[frame_idx].as_deref();
+        // Frames without polygon clip and without any wrap overlap
+        // emit scalar-width entries — preserves the legacy "no
+        // per-line carve" behaviour for plain rectangle frames in a
+        // chain whose polygon-clipped frame appears later. Without
+        // this guard, the AABB-based width for a slightly rotated
+        // sibling differs enough from `column_width_pt` to derail
+        // Knuth-Plass for the entire story.
+        let frame_has_wraps = wraps.iter().any(|s| {
+            let w = s.bounds;
+            w.bottom > frame_bounds.top
+                && w.top < frame_bounds.bottom
+                && w.right > frame_bounds.left
+                && w.left < frame_bounds.right
+        });
+        let frame_legacy = poly.is_none() && !frame_has_wraps;
         for i in 0..n_lines {
+            if frame_legacy {
+                widths_64.push(scalar_width_64);
+                shifts_64.push(0);
+                twin_after.push(false);
+                continue;
+            }
             let baseline_pt = (frame_first_baseline_64 + (i as i32) * leading_64) as f32
                 / idml_text::shape::ADVANCE_PRECISION;
             // Line's vertical band in spread coords.
@@ -4608,27 +5208,54 @@ fn build_perline_wrap_widths(
             let frame_inner_left = frame_left_pt + insets[1];
             let frame_inner_right = frame_right_pt - insets[3];
             // Build the *gap list* of open horizontal segments on
-            // this line by subtracting each intruding wrap rect
-            // from the [frame_inner_left, frame_inner_right] range.
-            let mut segments: Vec<(f32, f32)> = vec![(frame_inner_left, frame_inner_right)];
-            for w in wraps {
-                if w.bottom <= line_top || w.top >= line_bottom {
+            // this line. For polygon-shaped frames (triangles,
+            // pentagons), seed segments from the polygon's interior
+            // x-intervals at the baseline so glyph advance never
+            // crosses the actual outline. Plain rectangle frames
+            // start from the AABB inner range.
+            let mut segments: Vec<(f32, f32)> = if let Some(verts) = poly {
+                let baseline_y = frame_bounds.top + baseline_pt;
+                pairs_from_xs(&polygon_x_at_y(verts, baseline_y))
+                    .into_iter()
+                    .map(|(a, b)| {
+                        (
+                            (a + insets[1]).max(frame_inner_left),
+                            (b - insets[3]).min(frame_inner_right),
+                        )
+                    })
+                    .filter(|(a, b)| b > a)
+                    .collect()
+            } else {
+                vec![(frame_inner_left, frame_inner_right)]
+            };
+            // Then subtract each intruding wrap shape's x-extent
+            // within the line's vertical band. For upright AABBs the
+            // extent is the AABB's left/right; for rotated
+            // parallelograms the extent is the actual polygon span at
+            // this y, which is much narrower than the AABB at the
+            // rotated rect's vertical extremes.
+            for shape in wraps {
+                let aabb = shape.bounds;
+                if aabb.bottom <= line_top || aabb.top >= line_bottom {
                     continue;
                 }
-                if w.left <= frame_inner_left && w.right >= frame_inner_right {
+                let Some((wl, wr)) = shape.x_extent_in_band(line_top, line_bottom) else {
+                    continue;
+                };
+                if wl <= frame_inner_left && wr >= frame_inner_right {
                     continue;
                 }
                 let mut next: Vec<(f32, f32)> = Vec::with_capacity(segments.len() + 1);
                 for (a, b) in &segments {
-                    if w.right <= *a || w.left >= *b {
+                    if wr <= *a || wl >= *b {
                         next.push((*a, *b));
                         continue;
                     }
-                    if w.left > *a {
-                        next.push((*a, w.left));
+                    if wl > *a {
+                        next.push((*a, wl));
                     }
-                    if w.right < *b {
-                        next.push((w.right, *b));
+                    if wr < *b {
+                        next.push((wr, *b));
                     }
                 }
                 segments = next;
@@ -4643,8 +5270,18 @@ fn build_perline_wrap_widths(
                 })
                 .collect();
             if usable.is_empty() {
-                // Nothing usable: fall back to scalar width with no
-                // shift so this line at least renders something.
+                // Polygon-clipped frames: emit a 1pt width that
+                // Knuth-Plass treats as infeasible so the line at the
+                // apex (or beyond the polygon's vertical extent)
+                // drops cleanly rather than re-flooding the AABB.
+                // Plain rectangle / wrap-rect lines still fall back
+                // to scalar so a hostile carve at least renders text.
+                if poly.is_some() {
+                    widths_64.push(64);
+                    shifts_64.push(0);
+                    twin_after.push(false);
+                    continue;
+                }
                 widths_64.push(scalar_width_64);
                 shifts_64.push(0);
                 twin_after.push(false);
@@ -4930,8 +5567,13 @@ fn emit_rectangle_into(
     // `OuterGlow` fragment of the effect set is emitted *before* the
     // fill so the halo lands behind it; the rest stamp *after* the
     // fill so they composite onto the path's interior.
-    let (effects_path, effects_xform) = match corner.fill {
-        Some(id) => (id, outer),
+    // `effects_unit_normalize` flags the unit-rect path so effect
+    // helpers know to convert IDML path-local coordinates (e.g. a
+    // `<GradientFeatherSetting>`'s `GradientStart`) into unit-rect
+    // space. The corner-rounded path is already in path-local coords,
+    // so it skips the conversion.
+    let (effects_path, effects_xform, effects_unit_normalize) = match corner.fill {
+        Some(id) => (id, outer, None),
         None => {
             let (id, _) = page
                 .list
@@ -4945,7 +5587,7 @@ fn emit_rectangle_into(
                         idml_compose::PathSegment::Close,
                     ],
                 });
-            (id, Transform::for_rect_in(r, outer))
+            (id, Transform::for_rect_in(r, outer), Some(r))
         }
     };
     if let Some(effects) = rect.effects.as_ref() {
@@ -4960,7 +5602,13 @@ fn emit_rectangle_into(
 
     if let Some(effects) = rect.effects.as_ref() {
         crate::module::emit_effects_post_fill(
-            page, effects, effects_path, effects_xform, palette, cmyk_xform,
+            page,
+            effects,
+            effects_path,
+            effects_xform,
+            palette,
+            cmyk_xform,
+            effects_unit_normalize,
         );
     }
 

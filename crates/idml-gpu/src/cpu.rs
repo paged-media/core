@@ -778,6 +778,9 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 let Some(path) = build_path_transformed(path_data, transform) else {
                     continue;
                 };
+                let paper_premul = linear_color_to_ts(options.background)
+                    .premultiply()
+                    .to_color_u8();
                 let (target, target_xform, target_mask) =
                     resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
                 render_gradient_feather(
@@ -788,6 +791,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     transform,
                     params,
                     scale,
+                    paper_premul,
                 );
             }
             DisplayCommand::EndBlendGroup(_) => {
@@ -2195,6 +2199,7 @@ fn render_gradient_feather(
     transform: &CTransform,
     params: &GradientFeather,
     scale: f32,
+    paper_premul: PremultipliedColorU8,
 ) {
     if params.stops.is_empty() {
         return;
@@ -2295,25 +2300,46 @@ fn render_gradient_feather(
                     factor = 1.0 + (factor - 1.0) * mv_unit;
                 }
             }
-            apply_alpha_factor(target_data, tx, ty, target_w, factor);
+            apply_alpha_factor(target_data, tx, ty, target_w, factor, paper_premul);
         }
     }
 }
 
-/// Multiply a single RGBA8 premultiplied pixel by `factor` in place.
-/// In premultiplied space all four channels scale together so the
-/// alpha-mask interpretation drops out: `result = pixel * factor`.
+/// Blend a single RGBA8 premultiplied pixel toward `paper` (the page
+/// background) by `1 - factor`. With `factor = 1` the pixel is left
+/// untouched; with `factor = 0` it becomes the paper colour. Used by
+/// gradient-feather rasterisation so the rect's existing colour fades
+/// to paper rather than to transparent black — the latter is what a
+/// straight `pixel *= factor` produces and looks olive/grey when the
+/// PNG is interpreted as straight RGBA by the consumer (image::PNG
+/// encoder, browsers, etc.).
 #[inline]
-fn apply_alpha_factor(data: &mut [u8], x: i32, y: i32, target_w: i32, factor: f32) {
+fn apply_alpha_factor(
+    data: &mut [u8],
+    x: i32,
+    y: i32,
+    target_w: i32,
+    factor: f32,
+    paper: PremultipliedColorU8,
+) {
     let f = factor.clamp(0.0, 1.0);
     let idx = ((y * target_w + x) as usize) * 4;
     if idx + 3 >= data.len() {
         return;
     }
-    data[idx] = (data[idx] as f32 * f) as u8;
-    data[idx + 1] = (data[idx + 1] as f32 * f) as u8;
-    data[idx + 2] = (data[idx + 2] as f32 * f) as u8;
-    data[idx + 3] = (data[idx + 3] as f32 * f) as u8;
+    let pr = data[idx] as f32;
+    let pg = data[idx + 1] as f32;
+    let pb = data[idx + 2] as f32;
+    let pa = data[idx + 3] as f32;
+    let qr = paper.red() as f32;
+    let qg = paper.green() as f32;
+    let qb = paper.blue() as f32;
+    let qa = paper.alpha() as f32;
+    let inv_f = 1.0 - f;
+    data[idx] = (pr * f + qr * inv_f).clamp(0.0, 255.0) as u8;
+    data[idx + 1] = (pg * f + qg * inv_f).clamp(0.0, 255.0) as u8;
+    data[idx + 2] = (pb * f + qb * inv_f).clamp(0.0, 255.0) as u8;
+    data[idx + 3] = (pa * f + qa * inv_f).clamp(0.0, 255.0) as u8;
 }
 
 /// Composite a single-channel alpha mask onto `target` at
@@ -3173,28 +3199,39 @@ mod tests {
         opts.dpi = 72.0;
         let img = rasterize(&list, &opts);
         // x=12: near-start, gradient α ≈ 0.9, black fill stays
-        // mostly opaque → output alpha ≈ 230, R = 0.
+        // mostly opaque → output R ≈ 0.1*0 + 0.9*255 ≈ 25 (mostly
+        // black still, blended toward paper-white).
         // x=28: near-end, gradient α ≈ 0.1, black fill mostly
-        // dissolves → output alpha ≈ 25, R = 0.
-        // (The rasterizer's output is alpha-modulated in
-        // premultiplied space; un-premult-vs-bg compositing is the
-        // viewer's job. We assert on the alpha channel directly.)
+        // faded to paper → output R ≈ 0.9*0 + 0.1*255 ≈ 230
+        // (mostly paper-white).
+        // The rasterizer blends each interior pixel toward
+        // `paper_premul` (page background = white) by `1 - α`, so
+        // the output is fully opaque (alpha = 255) and the RGB
+        // channels carry the fade. Asserting on R captures the
+        // gradient direction without assuming anything about the
+        // viewer's compositing.
         let near_start = at(&img, 12, 20);
         let near_end = at(&img, 28, 20);
-        // Alpha decreases left→right (gradient stops 1.0→0.0).
+        // R increases left→right as black fades toward paper-white.
         assert!(
-            near_start[3] > near_end[3],
+            near_start[0] < near_end[0],
             "linear gradient feather should fade left→right; near_start={near_start:?} near_end={near_end:?}"
         );
-        // Near-start retains most of the underlying fill's alpha.
+        // Near-start stays mostly black (R close to 0).
         assert!(
-            near_start[3] > 150,
-            "near-start alpha should stay high; got {near_start:?}"
+            near_start[0] < 80,
+            "near-start should stay mostly black; got {near_start:?}"
         );
-        // Near-end alpha is much smaller (gradient α ≈ 0.1).
+        // Near-end is mostly paper (R close to 255).
         assert!(
-            near_end[3] < 80,
-            "near-end alpha should be small; got {near_end:?}"
+            near_end[0] > 180,
+            "near-end should be mostly paper; got {near_end:?}"
+        );
+        // Output remains opaque after the fade — gradient feather
+        // blends toward paper, not toward transparent.
+        assert!(
+            near_start[3] > 240 && near_end[3] > 240,
+            "gradient feather should keep pixels opaque; near_start={near_start:?} near_end={near_end:?}"
         );
         // Far outside the rect: untouched white background.
         let far = at(&img, 2, 2);

@@ -30,7 +30,7 @@ use idml_compose::{
     DirectionalFeather as ComposeDirectionalFeather, DisplayCommand, Feather as ComposeFeather,
     FeatherCornerType, GradientFeather as ComposeGradientFeather, GradientFeatherKind,
     GradientFeatherStop as ComposeGradientFeatherStop, InnerGlow as ComposeInnerGlow,
-    InnerShadow as ComposeInnerShadow, OuterGlow as ComposeOuterGlow, Paint, PathId,
+    InnerShadow as ComposeInnerShadow, OuterGlow as ComposeOuterGlow, Paint, PathId, Rect,
     Satin as ComposeSatin, Transform,
 };
 use idml_parse::{
@@ -84,6 +84,13 @@ pub(crate) fn emit_effects_pre_fill(
 /// See [`emit_effects_pre_fill`]. Emits the effects that composite
 /// *after* the fill: InnerShadow, InnerGlow, BevelEmboss, Satin,
 /// Feather. Order mirrors Photoshop's layer-effect stack.
+/// `unit_normalize` carries the path-local rect for the frame when
+/// `transform` is the "unit-rect → page" composition
+/// (`Transform::for_rect_in`). The path under it is the unit rect at
+/// `[0,0,1,1]`, so IDML effect coordinates (which live in path-local
+/// coords) need to be normalised by this rect before being passed to
+/// the rasterizer. Pass `None` when the path is already in path-local
+/// coords (rounded-corner path) — coordinates flow through unmodified.
 pub(crate) fn emit_effects_post_fill(
     page: &mut BuiltPage,
     effects: &FrameEffects,
@@ -91,6 +98,7 @@ pub(crate) fn emit_effects_post_fill(
     transform: Transform,
     palette: &Graphic,
     cmyk_xform: Option<&idml_color::IccTransform>,
+    unit_normalize: Option<Rect>,
 ) {
     if let Some(p) = effects.inner_shadow.as_ref() {
         let params = inner_shadow_from_parser(p, palette, cmyk_xform, &mut page.list);
@@ -141,27 +149,18 @@ pub(crate) fn emit_effects_post_fill(
         });
     }
     if let Some(p) = effects.gradient_feather.as_ref() {
-        // Emit GradientFeather only when the gradient *isn't* an
-        // alpha fade. The CPU rasterizer's current approximation
-        // paints a 50%-black tinted stamp — same trick as the plain
-        // `Feather` arm — so a fading stop list (e.g. 100% → 0%)
-        // would *darken* the rect rather than fade it out, the
-        // opposite of InDesign's intent.
-        //
-        // For the common case where every stop is fully opaque we
-        // still emit (the gradient becomes a no-op or a uniform
-        // tint, harmless). When any stop's alpha drops below 100%,
-        // skip emission until the rasterizer learns to modulate the
-        // underlying fill's alpha instead of stamping its own tint.
-        let any_fade = p.stops.iter().any(|s| s.alpha_pct < 100.0);
-        if !any_fade {
-            let params = gradient_feather_from_parser(p);
-            page.list.commands.push(DisplayCommand::GradientFeather {
-                path_id: fill_path_id,
-                transform,
-                params,
-            });
-        }
+        // The CPU rasterizer blends the underlying fill toward the
+        // page background (see `render_gradient_feather`), so a
+        // fading stop list (e.g. 100% → 0%) correctly fades the rect
+        // out toward paper rather than to a dark tint. Emit
+        // unconditionally — non-fading stop lists become a no-op
+        // (factor = 1 leaves pixels untouched).
+        let params = gradient_feather_from_parser(p, unit_normalize);
+        page.list.commands.push(DisplayCommand::GradientFeather {
+            path_id: fill_path_id,
+            transform,
+            params,
+        });
     }
 }
 
@@ -361,7 +360,16 @@ fn directional_feather_from_parser(p: &DirectionalFeatherParams) -> ComposeDirec
 /// per-channel alpha; we use `alpha_pct` directly (matches the IDML
 /// convention where the gradient feather's `<GradientStop>` carries
 /// the alpha as a separate attribute).
-fn gradient_feather_from_parser(p: &GradientFeatherParams) -> ComposeGradientFeather {
+///
+/// `unit_normalize` selects the output coordinate space: `Some(rect)`
+/// converts the IDML's path-local axis points into the unit rect
+/// (`[0,0,1,1]`) — the path the rasterizer stamps when the caller is
+/// the unit-rect path; `None` leaves them in path-local coords (the
+/// rounded-corner path).
+fn gradient_feather_from_parser(
+    p: &GradientFeatherParams,
+    unit_normalize: Option<Rect>,
+) -> ComposeGradientFeather {
     let kind = match p.gradient_type.as_deref() {
         Some("Radial") => GradientFeatherKind::Radial,
         // "Linear" and any unrecognised value fall through to Linear.
@@ -371,8 +379,11 @@ fn gradient_feather_from_parser(p: &GradientFeatherParams) -> ComposeGradientFea
     // only an angle is supplied, derive a unit-square axis through
     // the centre at that angle. Otherwise fall back to a horizontal
     // axis across the unit rect.
-    let (start, end) = match (p.start_point, p.end_point) {
-        (Some(s), Some(e)) => (s, e),
+    //
+    // The fallback (angle / no-axis) cases produce coordinates already
+    // in unit-rect space, so they bypass `unit_normalize` below.
+    let (start, end, already_unit) = match (p.start_point, p.end_point) {
+        (Some(s), Some(e)) => (s, e, false),
         _ => match p.angle_deg {
             Some(angle) => {
                 let rad = angle.to_radians();
@@ -386,10 +397,26 @@ fn gradient_feather_from_parser(p: &GradientFeatherParams) -> ComposeGradientFea
                 (
                     (cx - half * cos, cy + half * sin),
                     (cx + half * cos, cy - half * sin),
+                    true,
                 )
             }
-            None => ((0.0, 0.5), (1.0, 0.5)),
+            None => ((0.0, 0.5), (1.0, 0.5), true),
         },
+    };
+    // If the caller's path is the unit rect, normalise IDML path-local
+    // coordinates by the rect's bounds so the rasterizer's
+    // `transform.apply` maps them to the right page-pt position. The
+    // angle / fallback cases are already in unit space — skip them.
+    let (start, end) = match (unit_normalize, already_unit) {
+        (Some(r), false) => {
+            let inv_w = if r.w.abs() > 1e-6 { 1.0 / r.w } else { 0.0 };
+            let inv_h = if r.h.abs() > 1e-6 { 1.0 / r.h } else { 0.0 };
+            (
+                ((start.0 - r.x) * inv_w, (start.1 - r.y) * inv_h),
+                ((end.0 - r.x) * inv_w, (end.1 - r.y) * inv_h),
+            )
+        }
+        _ => (start, end),
     };
     let stops = p
         .stops
