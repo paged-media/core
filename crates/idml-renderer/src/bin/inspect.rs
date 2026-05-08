@@ -483,17 +483,36 @@ fn build_json_report(
 /// host's per-platform install location. We deliberately avoid bundling
 /// these — they're large and individually licensed by their issuers.
 fn resolve_cmyk_profile_by_name(name: &str) -> Option<Vec<u8>> {
-    // Strip parenthetical suffix and trim — IDML serialises the full
-    // human description, but the Adobe filename only encodes the
-    // profile family.
-    let head = name
+    let trimmed = name.trim();
+    // "$ID/" is InDesign's sentinel for "use the application default"
+    // — no profile was declared in the document. The corpus diff
+    // harness forces pdftoppm to FOGRA39 for the reference PDF, so
+    // matching that here keeps the candidate render and the reference
+    // rasterisation in the same colour space.
+    if trimmed == "$ID/" || trimmed.is_empty() {
+        return load_profile_bytes("CoatedFOGRA39.icc");
+    }
+    // Try the full declared name first (handles mid-name parentheticals
+    // like `"U.S. Web Coated (SWOP) v2"`), then retry with a trailing
+    // parenthetical stripped (handles version-note suffixes like
+    // `"Coated FOGRA39 (ISO 12647-2:2004)"`).
+    if let Some(bytes) = lookup_cmyk_profile_filename(trimmed).and_then(load_profile_bytes) {
+        return Some(bytes);
+    }
+    if let Some(head) = trimmed
         .split_once('(')
         .map(|(h, _)| h.trim())
-        .unwrap_or(name)
-        .trim();
-    // Map common names → Adobe Recommended/ filename. The list is
-    // hand-curated; unknown names fall through to None.
-    let filename = match head {
+        .filter(|h| !h.is_empty())
+    {
+        if let Some(bytes) = lookup_cmyk_profile_filename(head).and_then(load_profile_bytes) {
+            return Some(bytes);
+        }
+    }
+    None
+}
+
+fn lookup_cmyk_profile_filename(name: &str) -> Option<&'static str> {
+    Some(match name {
         "Coated FOGRA39" | "Coated Fogra39" => "CoatedFOGRA39.icc",
         "Coated FOGRA27" => "CoatedFOGRA27.icc",
         "Uncoated FOGRA29" => "UncoatedFOGRA29.icc",
@@ -512,7 +531,10 @@ fn resolve_cmyk_profile_by_name(name: &str) -> Option<Vec<u8>> {
         "Japan Web Coated (Ad)" | "Japan Web Coated" => "JapanWebCoated.icc",
         "US Newsprint (SNAP 2007)" => "USNewsprintSNAP2007.icc",
         _ => return None,
-    };
+    })
+}
+
+fn load_profile_bytes(filename: &str) -> Option<Vec<u8>> {
     // Per-platform Adobe Recommended dirs (Adobe Creative Cloud and
     // legacy Adobe Color package both install here). The user can
     // always override via --cmyk-profile when these miss.
@@ -581,5 +603,37 @@ fn first_line(s: &str) -> String {
         format!("{}…", line.chars().take(MAX).collect::<String>())
     } else {
         line.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lookup_cmyk_profile_filename;
+
+    #[test]
+    fn resolves_mid_name_parenthetical() {
+        // InDesign emits "U.S. Web Coated (SWOP) v2" with the
+        // parenthetical mid-name. The resolver must look up the full
+        // string verbatim, not a parenthetical-stripped head.
+        assert_eq!(
+            lookup_cmyk_profile_filename("U.S. Web Coated (SWOP) v2"),
+            Some("USWebCoatedSWOP.icc")
+        );
+    }
+
+    #[test]
+    fn resolves_trailing_parenthetical_via_head() {
+        // For `"Coated FOGRA39 (ISO 12647-2:2004)"` the resolver in
+        // resolve_cmyk_profile_by_name strips the trailing version
+        // note and falls back to the bare family name.
+        assert_eq!(
+            lookup_cmyk_profile_filename("Coated FOGRA39"),
+            Some("CoatedFOGRA39.icc")
+        );
+    }
+
+    #[test]
+    fn unknown_name_returns_none() {
+        assert!(lookup_cmyk_profile_filename("Some Made Up Profile").is_none());
     }
 }
