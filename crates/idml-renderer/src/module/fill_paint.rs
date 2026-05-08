@@ -55,6 +55,7 @@ pub(crate) fn fill_paint_module(
                 cmyk_xform,
                 &mut page.list,
                 frame.gradient_fill_angle,
+                frame.gradient_fill_length,
                 path_dims,
             )
         })

@@ -2780,6 +2780,9 @@ fn emit_anchored_rect_via_pipeline(
         blend_mode: None,
         effects: None,
         gradient_fill_angle: af.gradient_fill_angle,
+        gradient_fill_length: None,
+        gradient_stroke_angle: None,
+        gradient_stroke_length: None,
         text_paths: Vec::new(),
     };
     // `emit_rectangle_into` increments `page.stats.frames` internally.
@@ -2851,6 +2854,9 @@ fn emit_anchored_rect_image(
         blend_mode: None,
         effects: None,
         gradient_fill_angle: af.gradient_fill_angle,
+        gradient_fill_length: None,
+        gradient_stroke_angle: None,
+        gradient_stroke_length: None,
         text_paths: Vec::new(),
     };
     emit_rectangle_image(page, &synthetic, options, page_image_cache, decoded_cache);
@@ -2939,6 +2945,10 @@ fn emit_anchored_textframe_story<'a>(
         opacity: None,
         blend_mode: None,
         anchors: Vec::new(),
+        gradient_fill_angle: None,
+        gradient_fill_length: None,
+        gradient_stroke_angle: None,
+        gradient_stroke_length: None,
     };
     // Sub-emitter borrows from the parent's `'a` so the document /
     // palette / font_table refs share lifetimes with the body pass.
@@ -5835,10 +5845,17 @@ fn emit_rectangle_into(
     // Flat rectangle — use the inset rect for stroke-alignment.
     let stroke_offset = stroke_alignment_offset(resolved.stroke_alignment, stroke_width);
     if stroke_width > 0.0 {
-        if let Some(paint) = resolved
-            .stroke_color
-            .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
-        {
+        if let Some(paint) = resolved.stroke_color.and_then(|id| {
+            color_id_to_paint_with_list_dir(
+                id,
+                palette,
+                cmyk_xform,
+                &mut page.list,
+                resolved.gradient_stroke_angle,
+                resolved.gradient_stroke_length,
+                Some((r.w, r.h)),
+            )
+        }) {
             // Frame opacity is applied at the transparency-group
             // level by the orchestrator; per-paint scaling here
             // would double-apply the alpha.
@@ -6832,6 +6849,43 @@ pub fn color_id_to_paint(
     Some(Paint::Solid(Color::rgba(r, g, b, 1.0)))
 }
 
+/// Project an IDML gradient angle / length onto the path's
+/// local 0..1 unit rect. Endpoints lie at `(0.5 ± h_x, 0.5 ± h_y)`
+/// where the half-vector `(h_x, h_y)` is derived from the angle and
+/// length:
+///
+/// * `angle_deg` — degrees CCW around the rect centre. IDML's
+///   convention is 0° horizontal-right, 90° vertical-down (the page
+///   y-axis points down, so a CCW rotation in screen-up coords reads
+///   as CW on the page). Defaults to 0° when absent.
+/// * `length_pt` — page-space length of the gradient line through the
+///   centre. When `Some(L)` and a bbox is supplied, the half-vector is
+///   `(cos θ · L / (2·w), sin θ · L / (2·h))` so the page-space line
+///   length is exactly `L` regardless of the rect's aspect ratio.
+///   When `None`, half-vector magnitude in unit-rect coords is `0.5`
+///   along the angle direction — gradient runs edge-to-edge along the
+///   cardinal axis (matches InDesign's swatch-panel default).
+fn linear_gradient_endpoints(
+    angle_deg: Option<f32>,
+    length_pt: Option<f32>,
+    dims_pt: Option<(f32, f32)>,
+) -> ((f32, f32), (f32, f32)) {
+    let deg = angle_deg.unwrap_or(0.0);
+    let rad = deg.to_radians();
+    let (sin, cos) = rad.sin_cos();
+    let (cx, cy) = (0.5_f32, 0.5_f32);
+    let (hx, hy) = match (length_pt, dims_pt) {
+        (Some(l), Some((w, h))) if w > 0.0 && h > 0.0 => {
+            (cos * l / (2.0 * w), sin * l / (2.0 * h))
+        }
+        _ => {
+            let half = 0.5_f32;
+            (cos * half, sin * half)
+        }
+    };
+    ((cx - hx, cy - hy), (cx + hx, cy + hy))
+}
+
 /// Resolver that also handles gradient swatches.
 ///
 /// Gradient ids resolve to a `Paint::LinearGradient` whose stops live
@@ -6844,25 +6898,36 @@ pub fn color_id_to_paint_with_list(
     cmyk_xform: Option<&idml_color::IccTransform>,
     list: &mut DisplayList,
 ) -> Option<Paint> {
-    color_id_to_paint_with_list_dir(id, palette, cmyk_xform, list, None, None)
+    color_id_to_paint_with_list_dir(id, palette, cmyk_xform, list, None, None, None)
 }
 
 /// Like [`color_id_to_paint_with_list`] but takes an explicit
-/// `gradient_angle_deg` from the frame's `GradientFillAngle`
-/// attribute (0° horizontal-right; 90° vertical-down — IDML's
-/// convention) plus the path's local bbox `(width, height)` in pt.
+/// `gradient_angle_deg` from the frame's `GradientFillAngle` /
+/// `GradientStrokeAngle` attribute (0° horizontal-right; 90°
+/// vertical-down — IDML's convention), an explicit
+/// `gradient_length_pt` from the matching `GradientFillLength` /
+/// `GradientStrokeLength` attribute, and the path's local bbox
+/// `(width, height)` in pt.
+///
 /// The bbox lets the radial-gradient default place its centre at the
 /// path's bottom-left corner with radius equal to the diagonal —
 /// matching what InDesign emits when `GradientFillStart` /
-/// `GradientFillLength` are absent. Without the bbox we fall back to
-/// the legacy unit-rect centred default (still serviceable for callers
-/// that don't have geometry, e.g. text-frame strokes).
+/// `GradientFillLength` are absent. For linear gradients it converts
+/// the page-pt length into unit-rect endpoints (so the same
+/// `LinearGradient` reused on rectangles of different sizes still
+/// honours the user-specified length).
+///
+/// Without the bbox or length we fall back to the unit-rect centred
+/// default — gradient line through `(0.5, 0.5)` along the angle, with
+/// half-vector magnitude `0.5` in unit-rect coords (still serviceable
+/// for callers that don't have geometry, e.g. text-frame strokes).
 pub fn color_id_to_paint_with_list_dir(
     id: &str,
     palette: &Graphic,
     cmyk_xform: Option<&idml_color::IccTransform>,
     list: &mut DisplayList,
     gradient_angle_deg: Option<f32>,
+    gradient_length_pt: Option<f32>,
     path_dims_pt: Option<(f32, f32)>,
 ) -> Option<Paint> {
     if let Some(grad) = palette.gradients.get(id) {
@@ -6992,25 +7057,8 @@ pub fn color_id_to_paint_with_list_dir(
             });
             return Some(Paint::RadialGradient(id));
         }
-        // Compute unit-rect endpoints (the renderer's gradient lives
-        // in the path's local 0..1 space). GradientFillAngle rotates
-        // the line around the rect centre (0.5, 0.5); IDML's
-        // convention is 0° horizontal-right, 90° vertical-down. When
-        // the attribute is absent, IDML's spec default is 0° — so
-        // both the None and Some(0.0) branches must produce
-        // left→right, NOT top→bottom. The endpoints are placed where
-        // a unit-vector at the angle crosses the unit-rect's edges —
-        // exact for cardinal angles, close approximation otherwise.
-        let deg = gradient_angle_deg.unwrap_or(0.0);
-        let rad = deg.to_radians();
-        let (sin, cos) = rad.sin_cos();
-        let cx = 0.5_f32;
-        let cy = 0.5_f32;
-        let half = 0.5_f32;
-        let (start, end) = (
-            (cx - cos * half, cy - sin * half),
-            (cx + cos * half, cy + sin * half),
-        );
+        let (start, end) =
+            linear_gradient_endpoints(gradient_angle_deg, gradient_length_pt, path_dims_pt);
         let id = list.push_linear_gradient(idml_compose::LinearGradient {
             start,
             end,
@@ -7802,5 +7850,88 @@ mod tests {
         assert_eq!(list_prefix(&a, &mut counter).as_deref(), Some("I.  "));
         assert_eq!(list_prefix(&a, &mut counter).as_deref(), Some("II.  "));
         assert_eq!(list_prefix(&a, &mut counter).as_deref(), Some("III.  "));
+    }
+
+    fn approx(a: (f32, f32), b: (f32, f32)) {
+        let eps = 1e-5;
+        assert!(
+            (a.0 - b.0).abs() < eps && (a.1 - b.1).abs() < eps,
+            "expected {b:?}, got {a:?}",
+        );
+    }
+
+    #[test]
+    fn gradient_endpoints_zero_degrees_horizontal() {
+        // 0° = horizontal left → right (IDML's default direction).
+        let (s, e) = linear_gradient_endpoints(None, None, None);
+        approx(s, (0.0, 0.5));
+        approx(e, (1.0, 0.5));
+        // Some(0.0) must match None — both are the spec default.
+        let (s, e) = linear_gradient_endpoints(Some(0.0), None, None);
+        approx(s, (0.0, 0.5));
+        approx(e, (1.0, 0.5));
+    }
+
+    #[test]
+    fn gradient_endpoints_ninety_degrees_vertical() {
+        // Regression for the fill-side default that used to be
+        // hardcoded `(0,0)→(0,1)` (top→bottom). 90° must keep that
+        // orientation: in IDML's y-down convention the +y axis points
+        // down the page, so 90° rotates the gradient line vertically.
+        let (s, e) = linear_gradient_endpoints(Some(90.0), None, None);
+        approx(s, (0.5, 0.0));
+        approx(e, (0.5, 1.0));
+    }
+
+    #[test]
+    fn gradient_endpoints_forty_five_degrees() {
+        // 45° at default length: half-vector magnitude = 0.5 along the
+        // unit vector `(cos 45°, sin 45°)`. Endpoints sit inside the
+        // unit rect (the half-distance projects shorter than the
+        // diagonal); that matches the existing fill-default behaviour.
+        let (s, e) = linear_gradient_endpoints(Some(45.0), None, None);
+        let r = std::f32::consts::FRAC_1_SQRT_2 * 0.5;
+        approx(s, (0.5 - r, 0.5 - r));
+        approx(e, (0.5 + r, 0.5 + r));
+    }
+
+    #[test]
+    fn gradient_endpoints_negative_angle_matches_supplement() {
+        // -45° (= 315°) reflects the 45° endpoints across the
+        // horizontal axis. cos is symmetric, sin flips sign.
+        let (s_neg, e_neg) = linear_gradient_endpoints(Some(-45.0), None, None);
+        let (s_pos, e_pos) = linear_gradient_endpoints(Some(315.0), None, None);
+        approx(s_neg, s_pos);
+        approx(e_neg, e_pos);
+        let r = std::f32::consts::FRAC_1_SQRT_2 * 0.5;
+        approx(s_neg, (0.5 - r, 0.5 + r));
+        approx(e_neg, (0.5 + r, 0.5 - r));
+    }
+
+    #[test]
+    fn gradient_endpoints_explicit_length_compresses_line() {
+        // GradientFillLength in pt converts to unit-rect half-vector
+        // `(cos θ · L / (2·w), sin θ · L / (2·h))`. For a 200×100 rect
+        // at 0° with L = 100pt the half-vec is `(0.25, 0)` so endpoints
+        // hug the rect centre instead of running edge-to-edge.
+        let (s, e) = linear_gradient_endpoints(Some(0.0), Some(100.0), Some((200.0, 100.0)));
+        approx(s, (0.25, 0.5));
+        approx(e, (0.75, 0.5));
+        // 90° on the same rect with L=100 → half-vec `(0, 0.5)` so the
+        // gradient line still spans edge-to-edge along the short axis.
+        let (s, e) = linear_gradient_endpoints(Some(90.0), Some(100.0), Some((200.0, 100.0)));
+        approx(s, (0.5, 0.0));
+        approx(e, (0.5, 1.0));
+    }
+
+    #[test]
+    fn gradient_endpoints_length_without_dims_falls_through_to_default() {
+        // Without bbox dimensions we can't convert pt to unit-rect
+        // coords; helper falls back to the unit-vector default so
+        // callers that lack geometry (e.g. legacy text-frame strokes
+        // that don't track a bbox) still produce a sensible line.
+        let (s, e) = linear_gradient_endpoints(Some(0.0), Some(100.0), None);
+        approx(s, (0.0, 0.5));
+        approx(e, (1.0, 0.5));
     }
 }
