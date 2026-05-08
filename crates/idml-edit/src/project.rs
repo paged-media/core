@@ -1774,6 +1774,9 @@ impl Project {
             blend_mode: None,
             effects: None,
             gradient_fill_angle: None,
+            gradient_fill_length: None,
+            gradient_stroke_angle: None,
+            gradient_stroke_length: None,
             text_paths: Vec::new(),
         };
         let position = self.doc.spreads[spread_idx].spread.rectangles.len();

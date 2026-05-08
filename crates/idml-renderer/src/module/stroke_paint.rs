@@ -14,8 +14,8 @@ use idml_compose::{PathId, Stroke, Transform};
 use idml_parse::Graphic;
 
 use super::geometry::emit_stroked;
-use super::ResolvedFrame;
-use crate::pipeline::{color_id_to_paint_with_list, BuiltPage};
+use super::{Geometry, ResolvedFrame};
+use crate::pipeline::{color_id_to_paint_with_list_dir, BuiltPage};
 
 /// Resolve and emit the frame stroke. `stroke_path`, when `Some`,
 /// routes through `StrokePath` against the pre-interned offset path
@@ -38,10 +38,27 @@ pub(crate) fn stroke_paint_module(
     if frame.effective_stroke_weight() <= 0.0 {
         return;
     }
-    let Some(paint) = frame
-        .stroke_color
-        .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
-    else {
+    // Bbox dims for gradient defaults; mirrors `fill_paint_module`.
+    // Lines have no rect bbox so the dims fall through to `None` —
+    // the stroke gradient's unit-rect default still serviceable.
+    let path_dims = match frame.geometry {
+        Geometry::Rect { rect }
+        | Geometry::TextFrameRect { rect }
+        | Geometry::Oval { rect }
+        | Geometry::Polygon { bbox: rect, .. } => Some((rect.w, rect.h)),
+        Geometry::Line { .. } => None,
+    };
+    let Some(paint) = frame.stroke_color.and_then(|id| {
+        color_id_to_paint_with_list_dir(
+            id,
+            palette,
+            cmyk_xform,
+            &mut page.list,
+            frame.gradient_stroke_angle,
+            frame.gradient_stroke_length,
+            path_dims,
+        )
+    }) else {
         return;
     };
     emit_stroked(&frame.geometry, page, paint, stroke, outer, stroke_path);

@@ -250,6 +250,14 @@ pub struct TextFrame {
     /// stay inside the actual triangle / pentagon / Bezier outline
     /// rather than the AABB.
     pub anchors: Vec<PathAnchor>,
+    /// See [`Rectangle::gradient_fill_angle`].
+    pub gradient_fill_angle: Option<f32>,
+    /// See [`Rectangle::gradient_fill_length`].
+    pub gradient_fill_length: Option<f32>,
+    /// See [`Rectangle::gradient_stroke_angle`].
+    pub gradient_stroke_angle: Option<f32>,
+    /// See [`Rectangle::gradient_stroke_length`].
+    pub gradient_stroke_length: Option<f32>,
 }
 
 /// IDML `<TextFramePreference VerticalJustification="...">` values.
@@ -427,6 +435,18 @@ pub struct Rectangle {
     /// endpoints. Combined with `gradient_fill_length` the renderer
     /// places the gradient line through the frame's center.
     pub gradient_fill_angle: Option<f32>,
+    /// `GradientFillLength` in points — the page-space length of the
+    /// gradient line through the frame's centre. `None` falls back to
+    /// the bbox diagonal (covers the rect end-to-end). Values smaller
+    /// than the diagonal compress the gradient (extreme stops paint
+    /// flat regions outside the line); values larger expand it.
+    pub gradient_fill_length: Option<f32>,
+    /// `GradientStrokeAngle` in degrees — same convention as
+    /// `gradient_fill_angle` but applied to the stroke gradient.
+    pub gradient_stroke_angle: Option<f32>,
+    /// `GradientStrokeLength` in points — same role as
+    /// `gradient_fill_length` for the stroke gradient.
+    pub gradient_stroke_length: Option<f32>,
     /// `<TextPath>` children attached to this rectangle. See
     /// [`Polygon::text_paths`].
     pub text_paths: Vec<TextPath>,
@@ -641,6 +661,12 @@ pub struct Oval {
     pub item_layer: Option<String>,
     /// See [`Rectangle::gradient_fill_angle`].
     pub gradient_fill_angle: Option<f32>,
+    /// See [`Rectangle::gradient_fill_length`].
+    pub gradient_fill_length: Option<f32>,
+    /// See [`Rectangle::gradient_stroke_angle`].
+    pub gradient_stroke_angle: Option<f32>,
+    /// See [`Rectangle::gradient_stroke_length`].
+    pub gradient_stroke_length: Option<f32>,
     /// See [`Rectangle::opacity`].
     pub opacity: Option<f32>,
     /// See [`Rectangle::blend_mode`].
@@ -790,6 +816,12 @@ pub struct Polygon {
     pub item_layer: Option<String>,
     /// See [`Rectangle::gradient_fill_angle`].
     pub gradient_fill_angle: Option<f32>,
+    /// See [`Rectangle::gradient_fill_length`].
+    pub gradient_fill_length: Option<f32>,
+    /// See [`Rectangle::gradient_stroke_angle`].
+    pub gradient_stroke_angle: Option<f32>,
+    /// See [`Rectangle::gradient_stroke_length`].
+    pub gradient_stroke_length: Option<f32>,
     /// See [`Rectangle::opacity`].
     pub opacity: Option<f32>,
     /// See [`Rectangle::blend_mode`].
@@ -953,6 +985,9 @@ struct CommonAttrs {
     fill_color: Option<String>,
     fill_tint: Option<f32>,
     gradient_fill_angle: Option<f32>,
+    gradient_fill_length: Option<f32>,
+    gradient_stroke_angle: Option<f32>,
+    gradient_stroke_length: Option<f32>,
     stroke_color: Option<String>,
     stroke_weight: Option<f32>,
     applied_object_style: Option<String>,
@@ -966,6 +1001,9 @@ fn read_common_attrs(e: &quick_xml::events::BytesStart) -> CommonAttrs {
         fill_color: attr(e, b"FillColor"),
         fill_tint: parse_tint_attr(e, b"FillTint"),
         gradient_fill_angle: attr(e, b"GradientFillAngle").and_then(|s| s.parse().ok()),
+        gradient_fill_length: attr(e, b"GradientFillLength").and_then(|s| s.parse().ok()),
+        gradient_stroke_angle: attr(e, b"GradientStrokeAngle").and_then(|s| s.parse().ok()),
+        gradient_stroke_length: attr(e, b"GradientStrokeLength").and_then(|s| s.parse().ok()),
         stroke_color: attr(e, b"StrokeColor"),
         stroke_weight: attr(e, b"StrokeWeight").and_then(|s| s.parse().ok()),
         applied_object_style: attr(e, b"AppliedObjectStyle"),
@@ -1205,6 +1243,10 @@ impl Spread {
                             opacity: None,
                             blend_mode: None,
                             anchors: Vec::new(),
+                            gradient_fill_angle: common.gradient_fill_angle,
+                            gradient_fill_length: common.gradient_fill_length,
+                            gradient_stroke_angle: common.gradient_stroke_angle,
+                            gradient_stroke_length: common.gradient_stroke_length,
                         });
                         let idx = out.text_frames.len() - 1;
                         register_with_group(
@@ -1262,6 +1304,9 @@ impl Spread {
                             blend_mode: None,
                             effects: None,
                             gradient_fill_angle: common.gradient_fill_angle,
+                            gradient_fill_length: common.gradient_fill_length,
+                            gradient_stroke_angle: common.gradient_stroke_angle,
+                            gradient_stroke_length: common.gradient_stroke_length,
                             text_paths: Vec::new(),
                         });
                         let idx = out.rectangles.len() - 1;
@@ -1298,6 +1343,9 @@ impl Spread {
                             text_wrap: None,
                             item_layer: common.item_layer,
                             gradient_fill_angle: common.gradient_fill_angle,
+                            gradient_fill_length: common.gradient_fill_length,
+                            gradient_stroke_angle: common.gradient_stroke_angle,
+                            gradient_stroke_length: common.gradient_stroke_length,
                             opacity: None,
                             blend_mode: None,
                         });
@@ -1958,6 +2006,9 @@ impl Spread {
                             anchors: Vec::new(),
                             item_layer: common.item_layer,
                             gradient_fill_angle: common.gradient_fill_angle,
+                            gradient_fill_length: common.gradient_fill_length,
+                            gradient_stroke_angle: common.gradient_stroke_angle,
+                            gradient_stroke_length: common.gradient_stroke_length,
                             opacity: None,
                             blend_mode: None,
                             text_paths: Vec::new(),
@@ -2381,6 +2432,25 @@ mod tests {
         assert_eq!(s.rectangles[0].fill_color.as_deref(), Some("Color/Blue"));
         assert_eq!(s.rectangles[0].stroke_weight, Some(1.5));
         assert_eq!(s.rectangles[1].fill_color, None);
+    }
+
+    #[test]
+    fn parses_gradient_fill_and_stroke_angle_length() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Rectangle Self="r1" GeometricBounds="0 0 100 200"
+                       FillColor="Gradient/Sky" StrokeColor="Gradient/Sun"
+                       GradientFillAngle="45" GradientFillLength="120"
+                       GradientStrokeAngle="-30" GradientStrokeLength="80"/>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        let r = &s.rectangles[0];
+        assert_eq!(r.gradient_fill_angle, Some(45.0));
+        assert_eq!(r.gradient_fill_length, Some(120.0));
+        assert_eq!(r.gradient_stroke_angle, Some(-30.0));
+        assert_eq!(r.gradient_stroke_length, Some(80.0));
     }
 
     #[test]

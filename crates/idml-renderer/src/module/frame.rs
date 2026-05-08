@@ -36,6 +36,15 @@ pub(crate) struct ResolvedFrame<'a> {
     /// Already mapped through `blend_mode_from_idml` at adapter time.
     pub blend_mode: BlendMode,
     pub gradient_fill_angle: Option<f32>,
+    /// `GradientFillLength` in pt — page-space length of the gradient
+    /// line through the frame centre. `None` ⇒ bbox diagonal.
+    pub gradient_fill_length: Option<f32>,
+    /// `GradientStrokeAngle` in degrees — same convention as
+    /// `gradient_fill_angle`, applied to the stroke gradient.
+    pub gradient_stroke_angle: Option<f32>,
+    /// `GradientStrokeLength` in pt — counterpart to
+    /// `gradient_fill_length` for the stroke.
+    pub gradient_stroke_length: Option<f32>,
     pub drop_shadow: Option<&'a DropShadowSetting>,
     pub stroke_alignment: Option<&'a str>,
     pub stroke_type: Option<&'a str>,
@@ -118,7 +127,10 @@ impl<'a> ResolvedFrame<'a> {
             fill_tint: None,
             opacity: frame.opacity,
             blend_mode: crate::pipeline::blend_mode_from_idml(frame.blend_mode.as_deref()),
-            gradient_fill_angle: None,
+            gradient_fill_angle: frame.gradient_fill_angle,
+            gradient_fill_length: frame.gradient_fill_length,
+            gradient_stroke_angle: frame.gradient_stroke_angle,
+            gradient_stroke_length: frame.gradient_stroke_length,
             drop_shadow: frame.drop_shadow.as_ref(),
             stroke_alignment: None,
             stroke_type: None,
@@ -145,6 +157,9 @@ impl<'a> ResolvedFrame<'a> {
             opacity: rect.opacity,
             blend_mode: crate::pipeline::blend_mode_from_idml(rect.blend_mode.as_deref()),
             gradient_fill_angle: rect.gradient_fill_angle,
+            gradient_fill_length: rect.gradient_fill_length,
+            gradient_stroke_angle: rect.gradient_stroke_angle,
+            gradient_stroke_length: rect.gradient_stroke_length,
             drop_shadow: rect.drop_shadow.as_ref(),
             stroke_alignment: rect.stroke_alignment.as_deref(),
             stroke_type: rect.stroke_type.as_deref(),
@@ -171,6 +186,9 @@ impl<'a> ResolvedFrame<'a> {
             opacity: oval.opacity,
             blend_mode: crate::pipeline::blend_mode_from_idml(oval.blend_mode.as_deref()),
             gradient_fill_angle: oval.gradient_fill_angle,
+            gradient_fill_length: oval.gradient_fill_length,
+            gradient_stroke_angle: oval.gradient_stroke_angle,
+            gradient_stroke_length: oval.gradient_stroke_length,
             drop_shadow: oval.drop_shadow.as_ref(),
             stroke_alignment: None,
             stroke_type: None,
@@ -208,6 +226,9 @@ impl<'a> ResolvedFrame<'a> {
             opacity: poly.opacity,
             blend_mode: crate::pipeline::blend_mode_from_idml(poly.blend_mode.as_deref()),
             gradient_fill_angle: poly.gradient_fill_angle,
+            gradient_fill_length: poly.gradient_fill_length,
+            gradient_stroke_angle: poly.gradient_stroke_angle,
+            gradient_stroke_length: poly.gradient_stroke_length,
             drop_shadow: None,
             stroke_alignment: None,
             stroke_type: None,
@@ -242,6 +263,9 @@ impl<'a> ResolvedFrame<'a> {
             opacity: None,
             blend_mode: BlendMode::Normal,
             gradient_fill_angle: None,
+            gradient_fill_length: None,
+            gradient_stroke_angle: None,
+            gradient_stroke_length: None,
             drop_shadow: None,
             stroke_alignment: None,
             stroke_type: None,
