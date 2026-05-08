@@ -34,6 +34,15 @@ struct Args {
     /// `--font-family "Open Sans/Italic=corpus/fonts/OpenSans-Italic.ttf"`.
     #[arg(long, value_name = "NAME[/STYLE]=PATH")]
     font_family: Vec<String>,
+    /// Override the metrics the renderer uses for first-baseline math
+    /// for a specific IDML family. Useful when you've substituted a
+    /// font (e.g. Arial → Roboto) and the substitute's ascender shifts
+    /// every first baseline against the reference. Format:
+    /// `"Arial=ASCENDER[,CAP_HEIGHT[,X_HEIGHT]]"` — em-fractions.
+    /// Glyph rendering still uses the substitute font's outlines;
+    /// only baseline placement reads these values. Repeatable.
+    #[arg(long, value_name = "FAMILY=ASCENDER[,CAP_HEIGHT[,X_HEIGHT]]")]
+    font_metrics: Vec<String>,
     /// Directory to search for linked images. The IDML stores URIs
     /// like `file:///.../Links/Photo.jpg`; the resolver looks up the
     /// basename in each registered dir. Repeatable.
@@ -184,6 +193,37 @@ fn main() -> Result<()> {
             std::fs::read(path).with_context(|| format!("read font for {family}: {path}"))?;
         family_registrations.push((family, style, bytes));
     }
+    // --font-metrics "Family=ASCENDER[,CAP_HEIGHT[,X_HEIGHT]]" — em
+    // fractions. Used to pin baseline math when the substitute font's
+    // metrics differ from the IDML-named font's. Repeatable.
+    let mut metric_overrides: Vec<(String, idml_renderer::FontMetricsOverride)> = Vec::new();
+    for spec in &args.font_metrics {
+        let (family, rhs) = spec
+            .split_once('=')
+            .with_context(|| format!("--font-metrics expects FAMILY=ASCENDER[,...], got {spec}"))?;
+        let mut parts = rhs.split(',');
+        let ascender: f32 = parts
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("missing ascender in {spec}"))?
+            .parse()
+            .with_context(|| format!("parse ascender in {spec}"))?;
+        let cap_height = match parts.next() {
+            Some(s) if !s.is_empty() => Some(s.parse::<f32>().with_context(|| format!("parse cap_height in {spec}"))?),
+            _ => None,
+        };
+        let x_height = match parts.next() {
+            Some(s) if !s.is_empty() => Some(s.parse::<f32>().with_context(|| format!("parse x_height in {spec}"))?),
+            _ => None,
+        };
+        metric_overrides.push((
+            family.to_string(),
+            idml_renderer::FontMetricsOverride {
+                ascender,
+                cap_height,
+                x_height,
+            },
+        ));
+    }
     // Pre-load every image-shaped entry from the IDML container so the
     // resolver can serve URIs that point inside the package (Resources/
     // *.png, embedded JPEGs, etc.). Indexes by full archive path AND
@@ -258,6 +298,7 @@ fn main() -> Result<()> {
         cmyk_icc_profile: cmyk_profile_bytes.as_deref(),
         default_point_size: args.default_size,
         fallback_column_width_pt: args.column_width_pt,
+        font_metrics_overrides: &metric_overrides,
         ..PipelineOptions::default()
     };
     // Explicit for clarity; default already matches.

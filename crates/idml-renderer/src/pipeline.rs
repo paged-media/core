@@ -23,6 +23,28 @@ use idml_scene::Document;
 use crate::module::{Geometry, ResolvedFrame};
 use crate::AssetResolver;
 
+/// Per-family override of the metrics the renderer uses for
+/// baseline-placement math. Glyph outlines still come from whichever
+/// font the asset resolver returned for that family; only the values
+/// `first_baseline_for_frame` reads (ascender, optional cap-height /
+/// x-height) are sourced here.
+///
+/// Use case: an IDML names "Arial" but you've substituted Roboto via
+/// `--font-family Arial=Roboto-Regular.ttf`. Roboto's ascender (~0.928)
+/// differs from Arial's (~0.905) and the per-frame baseline drift
+/// dominates the per-pixel ΔE against an Arial-rendered reference PDF.
+/// Registering Arial's metrics here pins the baseline math without
+/// touching glyph rendering.
+///
+/// Values are em-fractions (parsed-from-font fields are scaled by
+/// `units_per_em`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FontMetricsOverride {
+    pub ascender: f32,
+    pub cap_height: Option<f32>,
+    pub x_height: Option<f32>,
+}
+
 /// Knobs the caller tunes when driving the full pipeline.
 #[derive(Clone)]
 pub struct PipelineOptions<'a> {
@@ -53,6 +75,11 @@ pub struct PipelineOptions<'a> {
     /// `<TransparencySetting>` parsing lands and per-frame effects
     /// flow from the IDML itself.
     pub frame_drop_shadow: Option<DropShadow>,
+    /// Per-family metric overrides keyed by IDML `AppliedFont` name.
+    /// When `first_baseline_for_frame` resolves a run's family that
+    /// matches an entry here, the override wins over the metrics
+    /// parsed from the substitute font's bytes. Empty by default.
+    pub font_metrics_overrides: &'a [(String, FontMetricsOverride)],
 }
 
 impl std::fmt::Debug for PipelineOptions<'_> {
@@ -79,6 +106,7 @@ impl Default for PipelineOptions<'_> {
             fallback_text_paint: Paint::Solid(Color::BLACK),
             cmyk_icc_profile: None,
             frame_drop_shadow: None,
+            font_metrics_overrides: &[],
         }
     }
 }
@@ -685,6 +713,7 @@ pub fn build_document(
             emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
         }
         emitter.apply_vertical_justification(&mut pages);
+        emitter.apply_polygon_clip(&mut pages);
         emitter.apply_blend_groups(&mut pages);
         anchored_image_queue.extend(emitter.take_anchored_image_queue());
     }
@@ -877,6 +906,7 @@ pub fn build_document(
             emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
         }
         emitter.apply_vertical_justification(&mut pages);
+        emitter.apply_polygon_clip(&mut pages);
         emitter.apply_blend_groups(&mut pages);
         anchored_image_queue.extend(emitter.take_anchored_image_queue());
     }
@@ -1209,6 +1239,89 @@ impl<'a> StoryEmitter<'a> {
     /// stub commands carry no rendering side-effects beyond the group
     /// composite at end-of-range.
     ///
+    /// Splice `PushClip` / `PopClip` around the glyph range of any
+    /// chain frame whose `<PathGeometry>` is non-rectangular (a
+    /// triangle, pentagon, …). The clip path is the frame's polygon
+    /// outline in spread coords (already post-`item_transform`); the
+    /// clip transform is the per-page origin shift. Run BEFORE
+    /// `apply_blend_groups` so blend / shadow brackets nest inside
+    /// the clip and `frame_cmd_ranges` can be updated once.
+    ///
+    /// Layout still happens at the frame's AABB width — paragraph_breaker
+    /// doesn't strictly enforce the per-line widths the polygon-clip
+    /// path produces (`build_perline_wrap_widths`) when the carved
+    /// segment is below the widest word. The clip is the structural
+    /// guarantee that pixels outside the polygon never paint glyphs,
+    /// even when the layout overflows visually. Background outside
+    /// the polygon shows through as page paper.
+    ///
+    /// Skip list (mirrors `frame_polygon_spread`): rectangles, frames
+    /// with <3 anchors, and rotated/sheared frames (where the polygon
+    /// would need to be transformed *with* the frame at emit time —
+    /// out of scope today).
+    fn apply_polygon_clip(&mut self, pages: &mut [BuiltPage]) {
+        // Collect (frame_idx, page_idx, start, end, verts) tuples,
+        // grouped by page so we can splice in reverse start-order.
+        let mut per_page: HashMap<usize, Vec<(usize, usize, usize, Vec<(f32, f32)>)>> =
+            HashMap::new();
+        for (i, frame) in self.chain.iter().enumerate() {
+            let Some((start, end)) = self.frame_cmd_ranges[i] else {
+                continue;
+            };
+            if start == end {
+                continue;
+            }
+            let Some(verts) = frame_polygon_spread(frame) else {
+                continue;
+            };
+            let page_idx = self.chain_pages[i];
+            per_page
+                .entry(page_idx)
+                .or_default()
+                .push((i, start, end, verts));
+        }
+        for (page_idx, mut entries) in per_page {
+            entries.sort_by(|a, b| b.1.cmp(&a.1));
+            for (frame_idx, start, end, verts) in entries {
+                let page = &mut pages[page_idx];
+                // Build a closed polygon path from the polyline
+                // through the anchors. Coordinates are in spread
+                // coords; the clip transform below maps to page
+                // coords.
+                let mut path = PathData::default();
+                if let Some(&(x, y)) = verts.first() {
+                    path.segments.push(PathSegment::MoveTo { x, y });
+                    for &(x, y) in &verts[1..] {
+                        path.segments.push(PathSegment::LineTo { x, y });
+                    }
+                    path.segments.push(PathSegment::Close);
+                }
+                let path_id = page.list.paths.push_anon(path);
+                let (ox, oy) = page.spread_origin;
+                let clip_transform = Transform::translate(-ox, -oy);
+                // Splice in end-then-start order so the start-insert
+                // doesn't shift `end`.
+                page.list.commands.insert(
+                    end,
+                    idml_compose::DisplayCommand::PopClip(Transform::IDENTITY),
+                );
+                page.list.commands.insert(
+                    start,
+                    idml_compose::DisplayCommand::PushClip {
+                        path_id,
+                        transform: clip_transform,
+                    },
+                );
+                // Range expanded by 2 commands (PushClip + PopClip).
+                // `apply_blend_groups` reads this updated range so
+                // its BeginBlendGroup / EndBlendGroup wraps OUTSIDE
+                // the clip — clip nests inside the blend group,
+                // matching PDF state-vs-buffer semantics.
+                self.frame_cmd_ranges[frame_idx] = Some((start, end + 2));
+            }
+        }
+    }
+
     /// The frame body (fill / stroke / drop-shadow) is bracketed
     /// separately at body emit time inside `emit_text_frame_into`. We
     /// emit two groups per blended text frame — one for the body, one
@@ -1679,9 +1792,18 @@ fn emit_paragraph_into_chain(
     }
 
     if em.y_cursor < 0 {
-        let head_font_metrics = font_ids
-            .first()
-            .and_then(|id| em.font_table.metrics_for(*id));
+        // Family-keyed override wins over the byte-hash lookup so a
+        // documented Arial → Roboto substitution can pin Arial's
+        // ascender (0.905) instead of letting Roboto's (0.928)
+        // shift every first baseline by ~0.023 × point_size.
+        let head_family = resolved_runs.first().and_then(|r| r.font.as_deref());
+        let head_font_metrics = head_family
+            .and_then(|f| em.font_table.metrics_for_family(f))
+            .or_else(|| {
+                font_ids
+                    .first()
+                    .and_then(|id| em.font_table.metrics_for(*id))
+            });
         em.y_cursor = first_baseline_for_frame(
             em.chain[0],
             paragraph_size,
@@ -7292,6 +7414,12 @@ struct FontTable {
     /// Metrics keyed by `fnv_1a_u32(bytes)` (same id the rest of
     /// the pipeline uses for glyph-cache routing).
     metrics: HashMap<u32, FontMetrics>,
+    /// Per-IDML-family metric override. Populated from
+    /// `PipelineOptions::font_metrics_overrides` and consulted FIRST
+    /// by `metrics_for_family` so a substitute font doesn't force its
+    /// own ascender / cap-height onto baseline math when the IDML
+    /// names a different family. Empty when no overrides were set.
+    family_metrics: HashMap<String, FontMetrics>,
 }
 
 /// Per-font metrics the renderer reads at baseline-placement time.
@@ -7360,10 +7488,48 @@ impl FontTable {
         if let Some(b) = fallback.as_ref() {
             record(b.as_ref());
         }
+        // Family-keyed override map. The override carries an
+        // ascender (mandatory) plus optional cap-height / x-height —
+        // missing optional values fall back to whichever metrics
+        // `parse_font_metrics` extracted from the substitute font
+        // (looked up by lifting them out of `metrics` via the cache's
+        // bytes hash for the same family). This lets a caller pin
+        // only the ascender (the dominant axis for first-baseline
+        // drift) while leaving the rest at the substitute's natural
+        // values.
+        let mut family_metrics: HashMap<String, FontMetrics> = HashMap::new();
+        for (family, ov) in options.font_metrics_overrides {
+            // Find the substitute's parsed metrics for sensible
+            // defaults on missing optional fields.
+            let substitute = cache
+                .get(&(family.clone(), None))
+                .or_else(|| {
+                    cache
+                        .iter()
+                        .find_map(|((f, _), b)| if f == family { Some(b) } else { None })
+                })
+                .map(|b| fnv_1a_u32(b.as_ref()))
+                .and_then(|id| metrics.get(&id))
+                .copied()
+                .unwrap_or(FontMetrics {
+                    cap_height: None,
+                    x_height: None,
+                    ascender: ov.ascender,
+                });
+            family_metrics.insert(
+                family.clone(),
+                FontMetrics {
+                    ascender: ov.ascender,
+                    cap_height: ov.cap_height.or(substitute.cap_height),
+                    x_height: ov.x_height.or(substitute.x_height),
+                },
+            );
+        }
         Self {
             cache,
             fallback,
             metrics,
+            family_metrics,
         }
     }
 
@@ -7390,6 +7556,13 @@ impl FontTable {
 
     fn metrics_for(&self, font_id: u32) -> Option<&FontMetrics> {
         self.metrics.get(&font_id)
+    }
+
+    /// Override-aware metrics lookup keyed by IDML family name.
+    /// Returns the per-family override when present, otherwise falls
+    /// through so the caller can try the byte-hash path.
+    fn metrics_for_family(&self, family: &str) -> Option<&FontMetrics> {
+        self.family_metrics.get(family)
     }
 }
 
