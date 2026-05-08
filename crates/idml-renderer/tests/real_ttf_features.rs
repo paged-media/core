@@ -440,6 +440,240 @@ fn vertical_justify_top_center_bottom_lands_in_distinct_bands() {
     );
 }
 
+/// Find the topmost / bottommost inked rows. Used to bracket the
+/// vertical extent of inked content rather than the centroid.
+fn ink_extent_y(img: &image::RgbaImage, threshold: u8) -> Option<(u32, u32)> {
+    let mut top = None;
+    let mut bot = None;
+    for y in 0..img.height() {
+        let mut row_inked = false;
+        for x in 0..img.width() {
+            let p = img.get_pixel(x, y);
+            if p.0[0] < threshold && p.0[1] < threshold && p.0[2] < threshold {
+                row_inked = true;
+                break;
+            }
+        }
+        if row_inked {
+            if top.is_none() {
+                top = Some(y);
+            }
+            bot = Some(y);
+        }
+    }
+    top.zip(bot)
+}
+
+fn build_vj_three_paragraph_idml(vj: &str) -> Vec<u8> {
+    let frame = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 600 612"/>
+    <TextFrame Self="frameA" ParentStory="u10" GeometricBounds="40 40 560 572" StrokeWeight="0">
+      <TextFramePreference VerticalJustification="{vj}"/>
+    </TextFrame>
+  </Spread>
+</idPkg:Spread>"#
+    );
+    write_zip(|zip| {
+        put(
+            zip,
+            "designmap.xml",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_u10.xml"/>
+</Document>"#,
+        );
+        put(
+            zip,
+            "Resources/Graphic.xml",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic/>
+</idPkg:Graphic>"#,
+        );
+        put(zip, "Spreads/Spread_sp1.xml", frame.as_bytes());
+        put(
+            zip,
+            "Stories/Story_u10.xml",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+        <Content>Alpha</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+        <Content>Beta</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+        <Content>Gamma</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+        );
+    })
+}
+
+#[test]
+fn vertical_justify_distribute_spans_top_to_bottom() {
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+
+    let render = |vj: &str| -> (u32, u32) {
+        let bytes = build_vj_three_paragraph_idml(vj);
+        let doc = Document::open(&bytes).unwrap();
+        let (_, imgs) = pipeline::render_document(&doc, &opts, 144.0, Color::WHITE).unwrap();
+        ink_extent_y(&imgs[0], 80).expect("VJ render must produce ink")
+    };
+
+    let (top_first, top_last) = render("TopAlign");
+    let (justify_first, justify_last) = render("JustifyAlign");
+    let (_bottom_first, bottom_last) = render("BottomAlign");
+
+    // Justify must keep the first paragraph at the top (same row band
+    // as TopAlign) and push the last paragraph to the bottom (same
+    // row band as BottomAlign). Allow a small tolerance for AA / row
+    // rounding.
+    let tol = 6i32;
+    assert!(
+        (justify_first as i32 - top_first as i32).abs() <= tol,
+        "Justify first paragraph should track Top: justify_first={justify_first}, top_first={top_first}",
+    );
+    assert!(
+        (justify_last as i32 - bottom_last as i32).abs() <= tol,
+        "Justify last paragraph should track Bottom: justify_last={justify_last}, bottom_last={bottom_last}",
+    );
+    // And Justify must span more rows than TopAlign — the slack is
+    // distributed, not parked at the top.
+    assert!(
+        (justify_last - justify_first) > (top_last - top_first) + 100,
+        "Justify spread should exceed Top spread: justify=({justify_first}..{justify_last}), top=({top_first}..{top_last})",
+    );
+}
+
+#[test]
+fn vertical_justify_distribute_single_paragraph_matches_top() {
+    // Single-paragraph stories have no inter-paragraph gap to grow,
+    // so JustifyAlign must behave identically to TopAlign.
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+
+    let render = |vj: &str| -> f32 {
+        let bytes = build_vj_idml(vj);
+        let doc = Document::open(&bytes).unwrap();
+        let (_, imgs) = pipeline::render_document(&doc, &opts, 144.0, Color::WHITE).unwrap();
+        ink_centroid_y(&imgs[0], 80).expect("VJ render must produce ink")
+    };
+
+    let top = render("TopAlign");
+    let justify = render("JustifyAlign");
+    assert!(
+        (top - justify).abs() < 1.0,
+        "JustifyAlign with a single paragraph must match TopAlign: top={top}, justify={justify}",
+    );
+}
+
+fn build_vj_overflow_idml(vj: &str) -> Vec<u8> {
+    // Frame is intentionally tiny (40 pt tall) — the three 24-pt
+    // paragraphs cannot fit, so JustifyAlign has no slack to
+    // distribute and must fall back to TopAlign.
+    let frame = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 600 612"/>
+    <TextFrame Self="frameA" ParentStory="u10" GeometricBounds="40 40 80 572" StrokeWeight="0">
+      <TextFramePreference VerticalJustification="{vj}"/>
+    </TextFrame>
+  </Spread>
+</idPkg:Spread>"#
+    );
+    write_zip(|zip| {
+        put(
+            zip,
+            "designmap.xml",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_u10.xml"/>
+</Document>"#,
+        );
+        put(
+            zip,
+            "Resources/Graphic.xml",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic/>
+</idPkg:Graphic>"#,
+        );
+        put(zip, "Spreads/Spread_sp1.xml", frame.as_bytes());
+        put(
+            zip,
+            "Stories/Story_u10.xml",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+        <Content>Alpha</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+        <Content>Beta</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+        <Content>Gamma</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+        );
+    })
+}
+
+#[test]
+fn vertical_justify_distribute_overflow_matches_top() {
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+
+    let render = |vj: &str| -> f32 {
+        let bytes = build_vj_overflow_idml(vj);
+        let doc = Document::open(&bytes).unwrap();
+        let (_, imgs) = pipeline::render_document(&doc, &opts, 144.0, Color::WHITE).unwrap();
+        ink_centroid_y(&imgs[0], 80).expect("VJ render must produce ink")
+    };
+
+    let top = render("TopAlign");
+    let justify = render("JustifyAlign");
+    assert!(
+        (top - justify).abs() < 1.0,
+        "JustifyAlign with overflow must match TopAlign: top={top}, justify={justify}",
+    );
+}
+
 // ─────────────────────────── bullet list ────────────────────────────────
 
 fn build_bullet_idml() -> Vec<u8> {
