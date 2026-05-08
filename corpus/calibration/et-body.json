@@ -1,0 +1,18 @@
+{
+  "name": "et-body",
+  "comment": "BODY:Body Text paragraph from sample.idml page 5 (Et ut volor...). Open Sans 8pt, ~270pt column. Six-line paragraph; tests longer flow.",
+  "spec": {
+    "font": "corpus/fonts/OpenSans.ttf",
+    "point_size": 8.0,
+    "column_width_pt": 270,
+    "text": "Et ut volor reicide rumquiametur molupit pedicatem volor as comni omnis verum quatur sitemposae delles reria aut aliquid mo con erum eaque ni sus pe pe plabo. Itaspidusdae offic totas qui blab inis est alitate volupta spellaut velesequi quae ped quia que non nonecerit venitiorent ut aciis senias coribus sit ratibusam, sinctibus dellabo. Em qui ommolo consedit, sintur alit pra saecea quam rem ditiatibus."
+  },
+  "expected_lines": [
+    "Et ut volor reicide rumquiametur molupit pedicatem volor as comni",
+    "omnis verum quatur sitemposae delles reria aut aliquid mo con erum",
+    "eaque ni sus pe pe plabo. Itaspidusdae offic totas qui blab inis est alitate",
+    "volupta spellaut velesequi quae ped quia que non nonecerit venitiorent",
+    "ut aciis senias coribus sit ratibusam, sinctibus dellabo. Em qui ommolo",
+    "consedit, sintur alit pra saecea quam rem ditiatibus."
+  ]
+}

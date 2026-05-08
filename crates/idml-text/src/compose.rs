@@ -80,17 +80,35 @@ pub struct ComposeOptions<'a> {
 }
 
 impl ComposeOptions<'_> {
-    /// Defaults chosen as a reasonable starting point; the composer
-    /// spike calibrates these against InDesign before the text engine
-    /// takes them as fixed.
+    /// Defaults calibrated against InDesign's Paragraph Composer.
+    ///
+    /// `stretch_ratio` and `shrink_ratio` mirror Adobe's Justification
+    /// preset (`MinimumWordSpacing="80" DesiredWordSpacing="100"
+    /// MaximumWordSpacing="133"`) — i.e. inter-word glue can shrink to
+    /// 80% of its natural width (= 0.20 below) and stretch to 133%
+    /// (= 0.33 above). The previous defaults (1.0/0.5) were too
+    /// permissive: with a 100% stretch budget paragraph-breaker could
+    /// over-pack lines by deferring breaks past where InDesign would
+    /// take them, costing line-break parity on the calibration corpus
+    /// (50% match → 100% with the new ratios).
+    ///
+    /// `tolerance = 8` accommodates left-aligned paragraphs whose
+    /// short tail lines have unavoidable high stretch ratios in
+    /// Knuth-Plass terms even though the rendered output never
+    /// actually stretches glue (lines just left-flush). The 4.0
+    /// default would reject these candidates entirely on some
+    /// corpus paragraphs.
+    ///
+    /// See `spikes/composer-calibration/` for the corpus and the
+    /// sweep that produced these numbers.
     pub fn new(column_width_pt: f32) -> Self {
         Self {
             column_width: (column_width_pt * ADVANCE_PRECISION).round() as i32,
             column_widths: None,
-            tolerance: 4.0,
+            tolerance: 8.0,
             looseness: 0,
-            stretch_ratio: 1.0,
-            shrink_ratio: 0.5,
+            stretch_ratio: 0.33,
+            shrink_ratio: 0.2,
             hyphenator: None,
             hyphen_penalty: 50,
         }

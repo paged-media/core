@@ -1,0 +1,16 @@
+{
+  "name": "essus-body",
+  "comment": "BODY:Body Text paragraph from sample.idml page 5 (Essus as delibusdae...). Open Sans 8pt, ~270pt column. Four-line paragraph.",
+  "spec": {
+    "font": "corpus/fonts/OpenSans.ttf",
+    "point_size": 8.0,
+    "column_width_pt": 270,
+    "text": "Essus as delibusdae delenis re numque magnamus evelign ihiciis et volorias eos sit pero blande volupti atisitae nonsernatus eic tem corpor reperuptate prorepe riores alique min rem rem eum seratem dolorer itatur offic totas qui blab inis est alitate volupta ut hil id quis."
+  },
+  "expected_lines": [
+    "Essus as delibusdae delenis re numque magnamus evelign ihiciis et",
+    "volorias eos sit pero blande volupti atisitae nonsernatus eic tem corpor",
+    "reperuptate prorepe riores alique min rem rem eum seratem dolorer",
+    "itatur offic totas qui blab inis est alitate volupta ut hil id quis."
+  ]
+}

@@ -39,9 +39,9 @@ best_score=0
 best_combo=""
 header_printed=0
 
-for tol in 1 2 4 8 16; do
-    for stretch in 0.5 1.0 1.5 2.0; do
-        for shrink in 0.3 0.5 0.7; do
+for tol in 4 6 8 10 16; do
+    for stretch in 0.20 0.25 0.33 0.40 0.50 1.00; do
+        for shrink in 0.10 0.15 0.20 0.30 0.50; do
             jq --arg t "$tol" --arg s "$stretch" --arg k "$shrink" \
                 '{font: .spec.font, point_size: .spec.point_size,
                   column_width_pt: .spec.column_width_pt, text: .spec.text,
