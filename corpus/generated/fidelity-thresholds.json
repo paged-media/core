@@ -1,0 +1,97 @@
+{
+  "_comment": [
+    "Per-fixture worst-page tolerances for the generated IDML/PDF corpus.",
+    "Each fixture's renderer-vs-pdftoppm output is gated on these numbers in",
+    "CI (.github/workflows/fidelity.yml -> corpus/generated/diff.sh).",
+    "",
+    "Semantics: a fixture passes iff *every* page that has a matching",
+    "reference PDF page (cand-NNN.png + ref-NNN.png) satisfies",
+    "  mean_de <= max_mean_de AND p99_de <= max_p99_de AND ssim >= min_ssim.",
+    "Pages without a matching reference are skipped (max_pages_with_pdf bounds",
+    "this — IDMLs that grew past their last InDesign-export are still allowed",
+    "to run; only the first N pages are gated).",
+    "",
+    "Calibration: thresholds were chosen by running the harness once",
+    "against the renderer at commit ade9b0b (first commit on this branch)",
+    "and adding ~15-25% headroom over the worst observed page so noise",
+    "does not flap. Treat these as 'the gate that passes today' — the",
+    "real long-term goal is the idea.md §13.2 budgets:",
+    "  mean ΔE <= 1.0, p99 ΔE <= 2.5, SSIM >= 0.99 (every page).",
+    "Tighten these whenever the renderer beats them by a comfortable",
+    "margin; loosening them needs a written rationale in the commit msg."
+  ],
+  "fixtures": [
+    {
+      "name": "geometry",
+      "max_pages_with_pdf": 20,
+      "max_mean_de": 0.15,
+      "max_p99_de": 0.5,
+      "min_ssim": 0.99,
+      "rationale": "worst page meanΔE 0.108, p99 0.000, SSIM 0.994 → headroom ~40% on mean to absorb pdftoppm/lcms2 jitter; pages are mostly white so p99 is structurally ~0."
+    },
+    {
+      "name": "geometry-groups",
+      "max_pages_with_pdf": 6,
+      "max_mean_de": 1.2,
+      "max_p99_de": 50.0,
+      "min_ssim": 0.97,
+      "rationale": "page 6 nested-group case is the outlier (mean 0.97 / p99 47.3 / SSIM 0.982). Threshold sized to it + ~20%; tighten after Tier 3 #15 (overprint) lands."
+    },
+    {
+      "name": "strokes-fills",
+      "max_pages_with_pdf": 19,
+      "max_mean_de": 0.55,
+      "max_p99_de": 11.0,
+      "min_ssim": 0.98,
+      "rationale": "worst page meanΔE 0.440 (p12), p99 9.381 (p18), SSIM 0.987 (p13) → +15-25% headroom. Stroke gradient endpoint regressions tend to spike p99 first; budget catches >20% drift."
+    },
+    {
+      "name": "text",
+      "max_pages_with_pdf": 13,
+      "max_mean_de": 0.65,
+      "max_p99_de": 10.5,
+      "min_ssim": 0.97,
+      "rationale": "worst page meanΔE 0.534 (p6), p99 8.771 (p6), SSIM 0.973 → +20% mean / +20% p99 / -0.3 SSIM headroom. Body text drift is usually metric/leading; this catches a per-line shift > ~1px."
+    },
+    {
+      "name": "text-advanced",
+      "max_pages_with_pdf": 9,
+      "max_mean_de": 0.70,
+      "max_p99_de": 19.0,
+      "min_ssim": 0.96,
+      "rationale": "worst page meanΔE 0.562 / p99 15.963 / SSIM 0.968 (p1, drop-cap + tabs). +20% headroom. Drop-cap glyph-clip and tab decimal alignment are the touchy paths here."
+    },
+    {
+      "name": "effects",
+      "max_pages_with_pdf": 12,
+      "max_mean_de": 0.42,
+      "max_p99_de": 6.5,
+      "min_ssim": 0.99,
+      "rationale": "worst page meanΔE 0.334 / p99 5.349 / SSIM 0.993 (p12, feathers). +25% mean / +20% p99 headroom. Feather + drop-shadow pages dominate; SSIM stays high because pixels are spread across a smooth gradient."
+    },
+    {
+      "name": "gradients",
+      "max_pages_with_pdf": 5,
+      "max_mean_de": 0.20,
+      "max_p99_de": 1.30,
+      "min_ssim": 0.99,
+      "rationale": "fully passing today (worst meanΔE 0.158 / p99 1.027 / SSIM 0.994). Tightest of the corpus — keeps CMYK gradient tessellation fidelity (commit 86b5bdf) honest."
+    },
+    {
+      "name": "tables",
+      "max_pages_with_pdf": 7,
+      "max_mean_de": 1.10,
+      "max_p99_de": 13.0,
+      "min_ssim": 0.96,
+      "rationale": "worst page meanΔE 0.886 / p99 10.827 / SSIM 0.967 (p3). Tables are the loosest fixture — IDML ships 8 pages but the reference PDF has 7, so we cap at 7 pages and skip the trailing one."
+    },
+    {
+      "name": "images",
+      "max_pages_with_pdf": 5,
+      "max_mean_de": 0.15,
+      "max_p99_de": 0.5,
+      "min_ssim": 0.99,
+      "rationale": "IDML ships 14 pages but reference PDF only covers the first 5 (the IDML has grown past its last InDesign export). The 5 gated pages have meanΔE ≤ 0.104 / p99 0 / SSIM ≥ 0.995; tight bounds reflect that."
+    }
+  ]
+}
