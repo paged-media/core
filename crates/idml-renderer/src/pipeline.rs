@@ -1007,6 +1007,14 @@ struct StoryEmitter<'a> {
     y_cursor: i32,
     frame_cmd_ranges: Vec<Option<(usize, usize)>>,
     frame_max_baseline_64: Vec<i32>,
+    /// Per-frame list of `(cmd_start, cmd_end)` slices, one entry
+    /// per paragraph that contributed glyph commands to the frame,
+    /// in emission order. A paragraph that flows across N frames
+    /// contributes one entry to each of those frames'
+    /// `paragraph_cmd_ranges` lists. Drives `JustifyAlign` vertical
+    /// justification, which distributes the per-frame slack as
+    /// extra inter-paragraph space.
+    paragraph_cmd_ranges: Vec<Vec<(usize, usize)>>,
     /// Counter for `NumberedList` paragraphs in this story.
     /// 0 means "not currently inside a numbered list" — incremented
     /// to 1 on the first numbered paragraph and reset back to 0 the
@@ -1155,6 +1163,7 @@ impl<'a> StoryEmitter<'a> {
             y_cursor: -1,
             frame_cmd_ranges: vec![None; len],
             frame_max_baseline_64: vec![0; len],
+            paragraph_cmd_ranges: vec![Vec::new(); len],
             numbered_counter: 0,
             optical_margin_alignment: false,
             optical_margin_size_pt: 0.0,
@@ -1215,11 +1224,37 @@ impl<'a> StoryEmitter<'a> {
                 (frame.bounds.height() * idml_text::shape::ADVANCE_PRECISION).round() as i32;
             let used_64 = self.frame_max_baseline_64[i];
             let slack_64 = (frame_height_64 - used_64).max(0);
+            if vj == idml_parse::VerticalJustification::Justify {
+                // JustifyAlign distributes the frame's slack as extra
+                // space between paragraphs (NOT inside a paragraph —
+                // that would distort leading). With < 2 paragraphs in
+                // the frame or non-positive slack (overflow), the
+                // result is identical to Top: nothing to shift.
+                let segments = &self.paragraph_cmd_ranges[i];
+                if slack_64 <= 0 || segments.len() < 2 {
+                    continue;
+                }
+                let gaps = (segments.len() as i32 - 1).max(1);
+                let gap_64 = slack_64 / gaps;
+                if gap_64 == 0 {
+                    continue;
+                }
+                let cmds = &mut pages[self.chain_pages[i]].list.commands;
+                for (idx, &(seg_start, seg_end)) in segments.iter().enumerate() {
+                    let dy_64 = gap_64 * idx as i32;
+                    if dy_64 == 0 {
+                        continue;
+                    }
+                    let dy_pt = dy_64 as f32 / idml_text::shape::ADVANCE_PRECISION;
+                    for cmd in &mut cmds[seg_start..seg_end] {
+                        cmd.transform_mut().0[5] += dy_pt;
+                    }
+                }
+                continue;
+            }
             let dy_64 = match vj {
                 idml_parse::VerticalJustification::Center => slack_64 / 2,
                 idml_parse::VerticalJustification::Bottom => slack_64,
-                // Justify falls through to Top (per-paragraph
-                // distribution lands later); Top handled above.
                 _ => 0,
             };
             if dy_64 == 0 {
@@ -2185,6 +2220,11 @@ fn emit_paragraph_into_chain(
 
     let space_after_64 =
         resolved_paragraph.space_after.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION;
+    // Per-frame segment tracker for the JustifyAlign vertical-justify
+    // mode: each line's commands extend the active segment for its
+    // host frame, and a frame switch closes the prior segment so the
+    // pass can shift each paragraph independently.
+    let mut active_seg: Option<(usize, usize, usize)> = None; // (frame_idx, cmd_start, cmd_end)
     for mut line in laid_out.lines.into_iter() {
         let line_h = idml_text::layout::max_line_height_for_glyphs(&line.glyphs)
             .unwrap_or(lopts.line_height);
@@ -2299,6 +2339,18 @@ fn emit_paragraph_into_chain(
             Some((_, e)) => *e = after_cmds,
             None => em.frame_cmd_ranges[frame_idx] = Some((before_cmds, after_cmds)),
         }
+        match active_seg {
+            Some((f, _, _)) if f != frame_idx => {
+                if let Some((prev_f, s, e)) = active_seg.take() {
+                    if s != e {
+                        em.paragraph_cmd_ranges[prev_f].push((s, e));
+                    }
+                }
+                active_seg = Some((frame_idx, before_cmds, after_cmds));
+            }
+            Some((f, s, _)) => active_seg = Some((f, s, after_cmds)),
+            None => active_seg = Some((frame_idx, before_cmds, after_cmds)),
+        }
         if line.baseline_y > em.frame_max_baseline_64[frame_idx] {
             em.frame_max_baseline_64[frame_idx] = line.baseline_y;
         }
@@ -2371,6 +2423,23 @@ fn emit_paragraph_into_chain(
         match &mut em.frame_cmd_ranges[frame_idx] {
             Some((_, e)) => *e = after_cap_cmds,
             None => em.frame_cmd_ranges[frame_idx] = Some((before_cap_cmds, after_cap_cmds)),
+        }
+        match active_seg {
+            Some((f, _, _)) if f != frame_idx => {
+                if let Some((prev_f, s, e)) = active_seg.take() {
+                    if s != e {
+                        em.paragraph_cmd_ranges[prev_f].push((s, e));
+                    }
+                }
+                active_seg = Some((frame_idx, before_cap_cmds, after_cap_cmds));
+            }
+            Some((f, s, _)) => active_seg = Some((f, s, after_cap_cmds)),
+            None => active_seg = Some((frame_idx, before_cap_cmds, after_cap_cmds)),
+        }
+    }
+    if let Some((f, s, e)) = active_seg {
+        if s != e {
+            em.paragraph_cmd_ranges[f].push((s, e));
         }
     }
     em.y_cursor += space_after_64.round() as i32;
