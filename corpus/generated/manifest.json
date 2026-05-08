@@ -32,7 +32,7 @@
       "idml": "geometry-groups.idml",
       "pdf": "geometry-groups.pdf",
       "pages": 6,
-      "passing": 4,
+      "passing": 5,
       "diff_dir": "/tmp/idml-diff",
       "report": "/tmp/idml-diff/report.json"
     },

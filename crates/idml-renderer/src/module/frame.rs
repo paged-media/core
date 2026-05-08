@@ -65,7 +65,16 @@ pub(crate) enum Geometry<'a> {
     Rect { rect: Rect },
     Oval { rect: Rect },
     Line { p0: (f32, f32), p1: (f32, f32) },
-    Polygon { anchors: &'a [PathAnchor], bbox: Rect },
+    Polygon {
+        anchors: &'a [PathAnchor],
+        /// Start indices of `<GeometryPathType>` contours within
+        /// `anchors`. Empty slice means "one contour" (the legacy
+        /// serialisation); multiple entries mark compound paths so
+        /// the renderer emits one MoveTo/Close per subpath rather
+        /// than joining them.
+        subpath_starts: &'a [usize],
+        bbox: Rect,
+    },
     /// TextFrames render as rectangles today; carrying a distinct
     /// variant lets the geometry adapter add path-shaped clipping
     /// later without touching modules.
@@ -213,6 +222,7 @@ impl<'a> ResolvedFrame<'a> {
         } else {
             Geometry::Polygon {
                 anchors: &poly.anchors,
+                subpath_starts: &poly.subpath_starts,
                 bbox,
             }
         };

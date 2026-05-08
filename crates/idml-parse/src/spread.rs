@@ -250,6 +250,14 @@ pub struct TextFrame {
     /// stay inside the actual triangle / pentagon / Bezier outline
     /// rather than the AABB.
     pub anchors: Vec<PathAnchor>,
+    /// Subpath start offsets into `anchors`. Each entry is the index
+    /// of the first anchor of one `<GeometryPathType>` contour. IDML
+    /// `<PathGeometry>` may contain multiple `<GeometryPathType>`
+    /// children (compound paths — e.g. a square with a hole); without
+    /// these boundaries the renderer would join the contours into a
+    /// single broken polyline. Empty for the common single-contour
+    /// case (so existing callers can keep using the slice as-is).
+    pub subpath_starts: Vec<usize>,
     /// See [`Rectangle::gradient_fill_angle`].
     pub gradient_fill_angle: Option<f32>,
     /// See [`Rectangle::gradient_fill_length`].
@@ -694,6 +702,11 @@ pub struct GraphicLine {
     /// `GeometricBounds`-only lines, which the renderer continues to
     /// rasterise as the corner-to-corner diagonal.
     pub anchors: Vec<PathAnchor>,
+    /// Subpath start offsets into `anchors`. See
+    /// [`TextFrame::subpath_starts`]. Lines almost always carry a
+    /// single contour, but the field is parsed uniformly for symmetry
+    /// with the other path-bearing shapes.
+    pub subpath_starts: Vec<usize>,
     /// `<TextPath>` children attached to this line. See
     /// [`Polygon::text_paths`].
     pub text_paths: Vec<TextPath>,
@@ -810,6 +823,13 @@ pub struct Polygon {
     /// polygon's inner coords. Empty for synthetic IDMLs that
     /// declared the polygon via `GeometricBounds` only.
     pub anchors: Vec<PathAnchor>,
+    /// Subpath start offsets into `anchors` — one per
+    /// `<GeometryPathType>` contour. See
+    /// [`TextFrame::subpath_starts`]. Compound polygons (e.g. a
+    /// square with a hole) ship multiple contours; rendering them as
+    /// a single connected polyline would silently merge the inner
+    /// loop into the outer outline.
+    pub subpath_starts: Vec<usize>,
     /// `<TextWrapPreference>` parsed off the polygon, if any.
     /// `None` ⇒ the polygon does not exclude text.
     pub text_wrap: Option<TextWrap>,
@@ -908,6 +928,12 @@ struct CurrentFrame {
     /// the curved path); collected for the other shapes only when
     /// `needs_bounds` is true so we can derive an AABB on close.
     anchors: Vec<PathAnchor>,
+    /// Subpath start offsets into `anchors` — one per
+    /// `<GeometryPathType>` opening tag while the shape is open.
+    /// Allows the renderer to lift compound paths (square-with-hole
+    /// etc.) into multiple `MoveTo`/`Close` segments rather than
+    /// joining them into one broken polyline.
+    subpath_starts: Vec<usize>,
     /// True for Polygons even when `needs_bounds` is false, so the
     /// emitter still gets the curved-path data.
     keep_anchors: bool,
@@ -1243,6 +1269,7 @@ impl Spread {
                             opacity: None,
                             blend_mode: None,
                             anchors: Vec::new(),
+                            subpath_starts: Vec::new(),
                             gradient_fill_angle: common.gradient_fill_angle,
                             gradient_fill_length: common.gradient_fill_length,
                             gradient_stroke_angle: common.gradient_stroke_angle,
@@ -1257,6 +1284,7 @@ impl Spread {
                             kind: CurrentFrameKind::Text(idx),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
+                            subpath_starts: Vec::new(),
                             // Always retain Bezier path anchors so the
                             // renderer can detect non-rectangular text
                             // frame outlines (triangle, pentagon, …)
@@ -1318,6 +1346,7 @@ impl Spread {
                             kind: CurrentFrameKind::Rect(idx),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
+                            subpath_starts: Vec::new(),
                             keep_anchors: false,
                             in_text_wrap: false,
                             stroke_transparency_depth: 0,
@@ -1355,6 +1384,7 @@ impl Spread {
                             kind: CurrentFrameKind::Oval(idx),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
+                            subpath_starts: Vec::new(),
                             keep_anchors: false,
                             in_text_wrap: false,
                             stroke_transparency_depth: 0,
@@ -1749,6 +1779,24 @@ impl Spread {
                             }
                         }
                     }
+                    b"GeometryPathType" => {
+                        // Record the start of a new subpath. IDML's
+                        // `<PathGeometry>` may host multiple
+                        // `<GeometryPathType>` children to form a
+                        // compound path (e.g. a square with a hole);
+                        // capturing the boundary lets the renderer
+                        // emit one MoveTo/Close per contour rather
+                        // than joining them with a straight segment.
+                        // We only track this for shapes that retain
+                        // anchors (text frames / graphic lines /
+                        // polygons); for the others the field is
+                        // unused.
+                        if let Some(cf) = current_frame.as_mut() {
+                            if cf.keep_anchors {
+                                cf.subpath_starts.push(cf.anchors.len());
+                            }
+                        }
+                    }
                     b"PathPointType" => {
                         // Accumulate path-anchor points so the close
                         // tag can derive bounds when no
@@ -1968,6 +2016,7 @@ impl Spread {
                             text_wrap: None,
                             item_layer: common.item_layer,
                             anchors: Vec::new(),
+                            subpath_starts: Vec::new(),
                             text_paths: Vec::new(),
                         });
                         let idx = out.graphic_lines.len() - 1;
@@ -1979,6 +2028,7 @@ impl Spread {
                             kind: CurrentFrameKind::Line(idx),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
+                            subpath_starts: Vec::new(),
                             // Always retain Bezier path anchors for
                             // graphic lines so a child <TextPath> can
                             // flow text along the actual stroke.
@@ -2004,6 +2054,7 @@ impl Spread {
                             applied_object_style: common.applied_object_style,
                             text_wrap: None,
                             anchors: Vec::new(),
+                            subpath_starts: Vec::new(),
                             item_layer: common.item_layer,
                             gradient_fill_angle: common.gradient_fill_angle,
                             gradient_fill_length: common.gradient_fill_length,
@@ -2021,6 +2072,7 @@ impl Spread {
                             kind: CurrentFrameKind::Polygon(idx),
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
+                            subpath_starts: Vec::new(),
                             // Always retain Bezier path anchors for
                             // polygons so the renderer can emit a
                             // FillPath instead of a bbox FillRect.
@@ -2094,21 +2146,35 @@ impl Spread {
                             // child <TextPath> can flow text along the
                             // actual stroke (curved or multi-segment).
                             if cf.keep_anchors && !cf.anchors.is_empty() {
+                                // Drop spurious subpath markers — a
+                                // subpath start at the very end of
+                                // the anchor list points to nothing,
+                                // and the canonical single-contour
+                                // case is encoded as `[]` (so callers
+                                // can keep using the slice as-is).
+                                let mut subpath_starts = cf.subpath_starts;
+                                subpath_starts.retain(|&i| i < cf.anchors.len());
+                                if subpath_starts.len() <= 1 {
+                                    subpath_starts.clear();
+                                }
                                 match cf.kind {
                                     CurrentFrameKind::Polygon(i)
                                         if i < out.polygons.len() =>
                                     {
                                         out.polygons[i].anchors = cf.anchors;
+                                        out.polygons[i].subpath_starts = subpath_starts;
                                     }
                                     CurrentFrameKind::Line(i)
                                         if i < out.graphic_lines.len() =>
                                     {
                                         out.graphic_lines[i].anchors = cf.anchors;
+                                        out.graphic_lines[i].subpath_starts = subpath_starts;
                                     }
                                     CurrentFrameKind::Text(i)
                                         if i < out.text_frames.len() =>
                                     {
                                         out.text_frames[i].anchors = cf.anchors;
+                                        out.text_frames[i].subpath_starts = subpath_starts;
                                     }
                                     _ => {}
                                 }
@@ -3040,5 +3106,83 @@ mod tests {
         assert_eq!(gf.stops[0].stop_color.as_deref(), Some("Color/Black"));
         assert_eq!(gf.stops[1].location_pct, 100.0);
         assert_eq!(gf.stops[1].alpha_pct, 0.0);
+    }
+
+    /// IDML compound paths (e.g. `<Polygon>` with two
+    /// `<GeometryPathType>` children — square + hole) must surface
+    /// the contour boundaries via `subpath_starts` so the renderer
+    /// can lift them into separate MoveTo/Close subpaths. Without
+    /// this, the renderer silently joins the two contours into one
+    /// broken polyline (the geometry-groups page-6 visual regression).
+    #[test]
+    fn polygon_compound_path_records_subpath_starts() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+              <Spread Self="s">
+                <Polygon Self="p1" FillColor="Color/Black">
+                  <Properties>
+                    <PathGeometry>
+                      <GeometryPathType PathOpen="false">
+                        <PathPointArray>
+                          <PathPointType Anchor="0 0"/>
+                          <PathPointType Anchor="200 0"/>
+                          <PathPointType Anchor="200 200"/>
+                          <PathPointType Anchor="0 200"/>
+                        </PathPointArray>
+                      </GeometryPathType>
+                      <GeometryPathType PathOpen="false">
+                        <PathPointArray>
+                          <PathPointType Anchor="60 60"/>
+                          <PathPointType Anchor="60 140"/>
+                          <PathPointType Anchor="140 140"/>
+                          <PathPointType Anchor="140 60"/>
+                        </PathPointArray>
+                      </GeometryPathType>
+                    </PathGeometry>
+                  </Properties>
+                </Polygon>
+              </Spread>
+            </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.polygons.len(), 1);
+        let p = &s.polygons[0];
+        assert_eq!(p.anchors.len(), 8, "both contours' anchors are stored");
+        assert_eq!(
+            p.subpath_starts,
+            vec![0, 4],
+            "compound path → two contour starts at indices 0 and 4"
+        );
+    }
+
+    /// Single-contour polygons (the InDesign-export shape every plain
+    /// rectangle / polygon uses) leave `subpath_starts` empty so the
+    /// renderer's legacy single-MoveTo path keeps firing.
+    #[test]
+    fn polygon_single_contour_leaves_subpath_starts_empty() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+              <Spread Self="s">
+                <Polygon Self="p1" FillColor="Color/Black">
+                  <Properties>
+                    <PathGeometry>
+                      <GeometryPathType PathOpen="false">
+                        <PathPointArray>
+                          <PathPointType Anchor="0 0"/>
+                          <PathPointType Anchor="100 0"/>
+                          <PathPointType Anchor="100 100"/>
+                          <PathPointType Anchor="0 100"/>
+                        </PathPointArray>
+                      </GeometryPathType>
+                    </PathGeometry>
+                  </Properties>
+                </Polygon>
+              </Spread>
+            </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.polygons.len(), 1);
+        assert!(
+            s.polygons[0].subpath_starts.is_empty(),
+            "single contour → no markers (legacy path stays hot)"
+        );
     }
 }

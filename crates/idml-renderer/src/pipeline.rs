@@ -2945,6 +2945,7 @@ fn emit_anchored_textframe_story<'a>(
         opacity: None,
         blend_mode: None,
         anchors: Vec::new(),
+        subpath_starts: Vec::new(),
         gradient_fill_angle: None,
         gradient_fill_length: None,
         gradient_stroke_angle: None,
@@ -3009,40 +3010,84 @@ struct PageGeom {
 /// `right == anchor` and `left == anchor` (the IDML serialisation
 /// for straight-line corners), the cubic degenerates and tiny-skia
 /// reduces it to a line internally.
-fn polygon_path_from_anchors(anchors: &[PathAnchor]) -> PathData {
-    let mut segs = Vec::with_capacity(anchors.len() * 2);
-    if let Some(first) = anchors.first() {
-        let (mx, my) = first.anchor;
+///
+/// `subpath_starts` carries one entry per `<GeometryPathType>` in
+/// the source IDML so compound paths (square-with-hole etc.) emit
+/// distinct `MoveTo`/`Close` sequences rather than connecting the
+/// inner contour to the outer one with a stray segment. An empty
+/// or single-entry slice means "single contour" — the legacy path.
+fn polygon_path_from_anchors(anchors: &[PathAnchor], subpath_starts: &[usize]) -> PathData {
+    if anchors.is_empty() {
+        return PathData {
+            segments: Vec::new(),
+        };
+    }
+    // Materialise subpath ranges. Default ([] or [0]) = one contour
+    // covering the whole anchor list. Otherwise each entry begins a
+    // new contour at that index, ending where the next one starts
+    // (or at `anchors.len()` for the last entry). Out-of-range and
+    // duplicate offsets are filtered defensively — every contour
+    // gets at least one anchor or is dropped.
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    if subpath_starts.len() <= 1 {
+        ranges.push((0, anchors.len()));
+    } else {
+        let mut starts: Vec<usize> = subpath_starts
+            .iter()
+            .copied()
+            .filter(|&s| s < anchors.len())
+            .collect();
+        starts.sort_unstable();
+        starts.dedup();
+        if starts.first() != Some(&0) {
+            starts.insert(0, 0);
+        }
+        for i in 0..starts.len() {
+            let lo = starts[i];
+            let hi = starts.get(i + 1).copied().unwrap_or(anchors.len());
+            if hi > lo {
+                ranges.push((lo, hi));
+            }
+        }
+    }
+    let mut segs = Vec::with_capacity(anchors.len() * 2 + ranges.len() * 2);
+    for (lo, hi) in ranges {
+        let sub = &anchors[lo..hi];
+        if sub.is_empty() {
+            continue;
+        }
+        let (mx, my) = sub[0].anchor;
         segs.push(PathSegment::MoveTo { x: mx, y: my });
+        for window in sub.windows(2) {
+            let from = &window[0];
+            let to = &window[1];
+            segs.push(PathSegment::CubicTo {
+                cx1: from.right.0,
+                cy1: from.right.1,
+                cx2: to.left.0,
+                cy2: to.left.1,
+                x: to.anchor.0,
+                y: to.anchor.1,
+            });
+        }
+        // Close the path back to the first anchor through the curve
+        // implied by the last point's `right` and the first point's
+        // `left` — IDML polygons are otherwise always closed. Single-
+        // anchor contours degenerate to a point and skip the closer.
+        if sub.len() >= 2 {
+            let last = sub.last().unwrap();
+            let first = &sub[0];
+            segs.push(PathSegment::CubicTo {
+                cx1: last.right.0,
+                cy1: last.right.1,
+                cx2: first.left.0,
+                cy2: first.left.1,
+                x: first.anchor.0,
+                y: first.anchor.1,
+            });
+        }
+        segs.push(PathSegment::Close);
     }
-    for window in anchors.windows(2) {
-        let from = &window[0];
-        let to = &window[1];
-        segs.push(PathSegment::CubicTo {
-            cx1: from.right.0,
-            cy1: from.right.1,
-            cx2: to.left.0,
-            cy2: to.left.1,
-            x: to.anchor.0,
-            y: to.anchor.1,
-        });
-    }
-    // Close the path back to the first anchor through the curve
-    // implied by the last point's `right` and the first point's
-    // `left` — IDML polygons are otherwise always closed.
-    if anchors.len() >= 2 {
-        let last = anchors.last().unwrap();
-        let first = anchors.first().unwrap();
-        segs.push(PathSegment::CubicTo {
-            cx1: last.right.0,
-            cy1: last.right.1,
-            cx2: first.left.0,
-            cy2: first.left.1,
-            x: first.anchor.0,
-            y: first.anchor.1,
-        });
-    }
-    segs.push(PathSegment::Close);
     PathData { segments: segs }
 }
 
@@ -3090,8 +3135,13 @@ fn emit_polygon_into(
     // unit-rect/ellipse primitives. The adapter collapsed anchor-
     // less polygons into `Geometry::Rect` already, so this only fires
     // for the curved-path case.
-    let path_id = if let Geometry::Polygon { anchors, .. } = &resolved.geometry {
-        let path = polygon_path_from_anchors(anchors);
+    let path_id = if let Geometry::Polygon {
+        anchors,
+        subpath_starts,
+        ..
+    } = &resolved.geometry
+    {
+        let path = polygon_path_from_anchors(anchors, subpath_starts);
         let cache_key = match resolved.self_id {
             Some(id) => fnv_1a_u64(id.as_bytes()),
             None => path_signature(anchors),
@@ -6215,7 +6265,7 @@ fn emit_polygon_image(
     // Build (or reuse) the polygon's clip path. Falls back to the
     // bounds AABB when the polygon carries no Bezier anchors.
     let clip_path_id = if !poly.anchors.is_empty() {
-        let path = polygon_path_from_anchors(&poly.anchors);
+        let path = polygon_path_from_anchors(&poly.anchors, &poly.subpath_starts);
         let cache_key = match poly.self_id.as_deref() {
             Some(sid) => fnv_1a_u64(sid.as_bytes()),
             None => path_signature(&poly.anchors),
@@ -7933,5 +7983,119 @@ mod tests {
         let (s, e) = linear_gradient_endpoints(Some(0.0), Some(100.0), None);
         approx(s, (0.0, 0.5));
         approx(e, (1.0, 0.5));
+    }
+
+    fn anchor_at(x: f32, y: f32) -> idml_parse::PathAnchor {
+        idml_parse::PathAnchor {
+            anchor: (x, y),
+            left: (x, y),
+            right: (x, y),
+        }
+    }
+
+    /// `polygon_path_from_anchors` collapses to a single MoveTo/Close
+    /// when given no subpath markers — the legacy serialisation that
+    /// every InDesign-export polygon uses.
+    #[test]
+    fn polygon_path_from_anchors_single_contour_emits_one_subpath() {
+        let anchors = vec![
+            anchor_at(0.0, 0.0),
+            anchor_at(10.0, 0.0),
+            anchor_at(10.0, 10.0),
+            anchor_at(0.0, 10.0),
+        ];
+        let path = polygon_path_from_anchors(&anchors, &[]);
+        let move_count = path
+            .segments
+            .iter()
+            .filter(|s| matches!(s, PathSegment::MoveTo { .. }))
+            .count();
+        let close_count = path
+            .segments
+            .iter()
+            .filter(|s| matches!(s, PathSegment::Close))
+            .count();
+        assert_eq!(move_count, 1, "legacy single-contour input → one MoveTo");
+        assert_eq!(close_count, 1, "legacy single-contour input → one Close");
+    }
+
+    /// Compound-path input (square with hole — two `<GeometryPathType>`
+    /// contours in the source IDML) emits one MoveTo/Close per
+    /// contour. Without this, the renderer would draw a stray segment
+    /// from the outer contour's last anchor to the inner contour's
+    /// first anchor and silently mis-render the hole as a triangle
+    /// notch in the outer outline.
+    #[test]
+    fn polygon_path_from_anchors_compound_emits_one_subpath_per_contour() {
+        let anchors = vec![
+            // outer
+            anchor_at(0.0, 0.0),
+            anchor_at(200.0, 0.0),
+            anchor_at(200.0, 200.0),
+            anchor_at(0.0, 200.0),
+            // inner
+            anchor_at(60.0, 60.0),
+            anchor_at(60.0, 140.0),
+            anchor_at(140.0, 140.0),
+            anchor_at(140.0, 60.0),
+        ];
+        let subpath_starts = vec![0, 4];
+        let path = polygon_path_from_anchors(&anchors, &subpath_starts);
+        let moves: Vec<&PathSegment> = path
+            .segments
+            .iter()
+            .filter(|s| matches!(s, PathSegment::MoveTo { .. }))
+            .collect();
+        let closes = path
+            .segments
+            .iter()
+            .filter(|s| matches!(s, PathSegment::Close))
+            .count();
+        assert_eq!(moves.len(), 2, "two contours → two MoveTo segments");
+        assert_eq!(closes, 2, "two contours → two Close segments");
+        // The two MoveTos should land on the first anchor of each
+        // contour — guards against a silent off-by-one in the range
+        // construction that would otherwise still emit two contours
+        // but join them at the wrong points.
+        match moves[0] {
+            PathSegment::MoveTo { x, y } => {
+                assert!((*x - 0.0).abs() < 1e-6 && (*y - 0.0).abs() < 1e-6)
+            }
+            _ => unreachable!(),
+        }
+        match moves[1] {
+            PathSegment::MoveTo { x, y } => {
+                assert!((*x - 60.0).abs() < 1e-6 && (*y - 60.0).abs() < 1e-6)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Defensive: subpath markers that point past the end of the
+    /// anchor list, or that duplicate the implicit "starts at 0"
+    /// boundary, must not produce empty contours or panic.
+    #[test]
+    fn polygon_path_from_anchors_filters_bogus_markers() {
+        let anchors = vec![
+            anchor_at(0.0, 0.0),
+            anchor_at(10.0, 0.0),
+            anchor_at(10.0, 10.0),
+        ];
+        let path = polygon_path_from_anchors(&anchors, &[0, 99, 0]);
+        let moves = path
+            .segments
+            .iter()
+            .filter(|s| matches!(s, PathSegment::MoveTo { .. }))
+            .count();
+        let closes = path
+            .segments
+            .iter()
+            .filter(|s| matches!(s, PathSegment::Close))
+            .count();
+        assert_eq!(
+            moves, 1,
+            "out-of-range / duplicate markers collapse to one contour"
+        );
+        assert_eq!(closes, 1);
     }
 }
