@@ -25,14 +25,45 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: build idml-diff
-        run: cargo build --release -p idml-fidelity --bin idml-diff
+      - name: install poppler-utils (pdftoppm) — Ubuntu
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
+
+      - name: install poppler (pdftoppm) — macOS
+        if: runner.os == 'macOS'
+        run: brew list poppler >/dev/null 2>&1 || brew install poppler
+
+      - name: build idml-diff + idml-inspect + idml-gen
+        run: cargo build --release
+             -p idml-fidelity --bin idml-diff
+             -p idml-renderer --bin idml-inspect
+             -p idml-gen --bin idml-gen
 
       - name: golden-snapshot regression gate
         # Renders the seed_hello fixture and ΔE-diffs every page
         # against the pinned PNGs in corpus/seeds/hello/golden/.
         # Drift past the test's epsilon fails the run.
         run: cargo test -p idml-renderer --test seed_hello seed_hello_matches_golden_snapshot
+
+      - name: generated-corpus fidelity gate (hard)
+        # Hard regression gate over corpus/generated/*.idml + *.pdf.
+        # diff.sh regenerates each IDML, renders it, rasterises the
+        # paired InDesign PDF via pdftoppm, runs idml-diff, and
+        # asserts every gated page stays under the per-fixture
+        # tolerances in corpus/generated/fidelity-thresholds.json.
+        # Failure here blocks the merge.
+        run: ./corpus/generated/diff.sh
+
+      - name: upload generated-corpus heatmaps on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-corpus-diff-${{ matrix.os }}
+          # cand-NNN.png + ref-NNN.png + heat-NNN.png + report.json +
+          # gate.json per fixture — enough to triage any regression.
+          path: /tmp/idml-generated-diff
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: third-party sample diff (advisory)
         # Runs ./corpus/samples/diff.sh against any third-party
