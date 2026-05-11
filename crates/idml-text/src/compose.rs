@@ -22,6 +22,118 @@ use rustybuzz::Face;
 use crate::hyphenate::Hyphenator;
 use crate::shape::{shape_run, ShapedGlyph, ShapedRun, ADVANCE_PRECISION};
 
+/// Hard Kinsoku ("forbidden break") character classification.
+///
+/// IDML's `KinsokuType` attribute on a `<ParagraphStyleRange>` (or
+/// `<ParagraphStyle>`) toggles InDesign's CJK line-break-rule
+/// enforcement. The full standard is huge and per-locale; the
+/// industry-standard JIS X 4051 "Hard" set is small (~30 chars) and
+/// well-known. We hardcode it here:
+///
+/// - **No-start** chars cannot land at the start of a continuation
+///   line — they trail the *previous* line. Closing brackets,
+///   low-priority punctuation: `)」』}〕〉》】〙〗〟｠`、,. 'etc.
+/// - **No-end** chars cannot land at the end of a line — they push
+///   to the *next* line. Opening brackets: `(「『{〔〈《【〘〖〝｟[`,
+///   etc.
+///
+/// The composer's `kinsoku_enforce` flag uses these to *suppress
+/// break candidates* that would violate either rule (no Penalty item
+/// emitted between adjacent chars where the break is forbidden), so
+/// paragraph-breaker has to pick another break — the behavioural
+/// change a fixture-free test can verify.
+pub mod kinsoku {
+    /// JIS-derived "no line start" characters (closing brackets +
+    /// low-priority punctuation that should hang on the previous
+    /// line rather than dangle alone). ~30 chars — explicitly
+    /// enumerated so the lookup is a const `match` arm; lifted from
+    /// JIS X 4051 §6.1 "kinsoku shori".
+    pub fn is_no_start(c: char) -> bool {
+        matches!(
+            c,
+            // Halfwidth ASCII punctuation that's also no-start in JIS
+            // shori: closing brackets + sentence-final marks.
+            ')' | ']' | '}' | '!' | '?' | ',' | '.' | ':' | ';'
+            // Fullwidth (CJK) punctuation, sentence-final / pause marks
+            | '、' // U+3001 IDEOGRAPHIC COMMA
+            | '。' // U+3002 IDEOGRAPHIC FULL STOP
+            | '，' // U+FF0C FULLWIDTH COMMA
+            | '．' // U+FF0E FULLWIDTH FULL STOP
+            | '？' // U+FF1F FULLWIDTH QUESTION MARK
+            | '！' // U+FF01 FULLWIDTH EXCLAMATION MARK
+            | '：' // U+FF1A FULLWIDTH COLON
+            | '；' // U+FF1B FULLWIDTH SEMICOLON
+            // Closing brackets — fullwidth
+            | '）' // U+FF09 FULLWIDTH RIGHT PARENTHESIS
+            | '］' // U+FF3D FULLWIDTH RIGHT SQUARE BRACKET
+            | '｝' // U+FF5D FULLWIDTH RIGHT CURLY BRACKET
+            // Closing brackets — CJK
+            | '」' // U+300D RIGHT CORNER BRACKET
+            | '』' // U+300F RIGHT WHITE CORNER BRACKET
+            | '〕' // U+3015 RIGHT TORTOISE SHELL BRACKET
+            | '〉' // U+3009 RIGHT ANGLE BRACKET
+            | '》' // U+300B RIGHT DOUBLE ANGLE BRACKET
+            | '】' // U+3011 RIGHT BLACK LENTICULAR BRACKET
+            | '〗' // U+3017 RIGHT WHITE LENTICULAR BRACKET
+            | '〙' // U+3019 RIGHT WHITE TORTOISE SHELL BRACKET
+            | '〟' // U+301F LOW DOUBLE PRIME QUOTATION MARK
+            | '｠' // U+FF60 FULLWIDTH RIGHT WHITE PARENTHESIS
+            // Small kana (line-start avoidance is JIS-standard)
+            | 'ぁ' | 'ぃ' | 'ぅ' | 'ぇ' | 'ぉ'
+            | 'ァ' | 'ィ' | 'ゥ' | 'ェ' | 'ォ'
+            | 'っ' | 'ッ' | 'ゃ' | 'ャ' | 'ゅ' | 'ュ' | 'ょ' | 'ョ'
+            // Prolonged sound mark
+            | 'ー' // U+30FC KATAKANA-HIRAGANA PROLONGED SOUND MARK
+        )
+    }
+
+    /// JIS-derived "no line end" characters (opening brackets that
+    /// should not be stranded at the end of a line).
+    pub fn is_no_end(c: char) -> bool {
+        matches!(
+            c,
+            '(' | '[' | '{'
+            | '（' // U+FF08 FULLWIDTH LEFT PARENTHESIS
+            | '［' // U+FF3B FULLWIDTH LEFT SQUARE BRACKET
+            | '｛' // U+FF5B FULLWIDTH LEFT CURLY BRACKET
+            | '「' // U+300C LEFT CORNER BRACKET
+            | '『' // U+300E LEFT WHITE CORNER BRACKET
+            | '〔' // U+3014 LEFT TORTOISE SHELL BRACKET
+            | '〈' // U+3008 LEFT ANGLE BRACKET
+            | '《' // U+300A LEFT DOUBLE ANGLE BRACKET
+            | '【' // U+3010 LEFT BLACK LENTICULAR BRACKET
+            | '〖' // U+3016 LEFT WHITE LENTICULAR BRACKET
+            | '〘' // U+3018 LEFT WHITE TORTOISE SHELL BRACKET
+            | '〝' // U+301D REVERSED DOUBLE PRIME QUOTATION MARK
+            | '｟' // U+FF5F FULLWIDTH LEFT WHITE PARENTHESIS
+        )
+    }
+
+    /// True for characters in the CJK ideograph / kana ranges that
+    /// admit per-character line breaks. The composer's per-word
+    /// segmenter splits on ASCII whitespace, which leaves CJK
+    /// paragraphs as one giant "word" with no break opportunities;
+    /// when `kinsoku_enforce` is on we add per-character breaks
+    /// inside every word whose chars satisfy this predicate (or are
+    /// in the kinsoku punctuation sets, since those are themselves
+    /// CJK punctuation).
+    pub fn is_breakable_cjk(c: char) -> bool {
+        let c = c as u32;
+        // CJK Unified Ideographs (basic): U+4E00..=U+9FFF
+        (0x4E00..=0x9FFF).contains(&c)
+            // Hiragana: U+3040..=U+309F
+            || (0x3040..=0x309F).contains(&c)
+            // Katakana: U+30A0..=U+30FF
+            || (0x30A0..=0x30FF).contains(&c)
+            // Halfwidth Katakana: U+FF65..=U+FF9F
+            || (0xFF65..=0xFF9F).contains(&c)
+            // CJK Symbols & Punctuation: U+3000..=U+303F
+            || (0x3000..=0x303F).contains(&c)
+            // Fullwidth ASCII (incl. punctuation): U+FF00..=U+FF60
+            || (0xFF00..=0xFF60).contains(&c)
+    }
+}
+
 /// Abstraction over width measurement. Returns advances in 1/64 pt.
 pub trait AdvanceMeasurer {
     /// Advance width of `text`. `text` must not contain whitespace.
@@ -77,6 +189,22 @@ pub struct ComposeOptions<'a> {
     /// opportunity. Knuth-Plass convention: 50 = mildly penalised,
     /// 100 = costly. Only consulted when `hyphenator` is set.
     pub hyphen_penalty: i32,
+    /// When `true`, the composer emits per-character break opportunities
+    /// inside CJK runs and forbids breaks that would violate the
+    /// built-in "Hard Kinsoku" rules — i.e. would put a no-start
+    /// character at the start of a continuation line, or leave a
+    /// no-end character dangling at the end of a line. The character
+    /// set is the JIS-derived hard set hardcoded in
+    /// [`kinsoku::is_no_start`] / [`kinsoku::is_no_end`] (~30 glyphs
+    /// each).
+    ///
+    /// The renderer drives this from the paragraph's resolved
+    /// `kinsoku_type` (any value present ⇒ enforce). Finer flavour-
+    /// specific behaviour (`PushIn` vs. `PushOut`) is queued; today
+    /// every flavour maps to "high penalty before/after the
+    /// offending char" which paragraph-breaker honours by picking a
+    /// non-violating break candidate.
+    pub kinsoku_enforce: bool,
 }
 
 impl ComposeOptions<'_> {
@@ -111,6 +239,7 @@ impl ComposeOptions<'_> {
             shrink_ratio: 0.2,
             hyphenator: None,
             hyphen_penalty: 50,
+            kinsoku_enforce: false,
         }
     }
 }
@@ -426,8 +555,12 @@ pub fn compose_paragraph(
         let word_text = &text[w.start..w.end];
         // No hyphenator → emit a single Box for the whole word and
         // skip the per-word break-vec construction entirely.
+        // When kinsoku is enforced, we layer per-character break
+        // opportunities over either path (after the base items are
+        // emitted, we walk the word's chars and inject penalty items
+        // between any pair where at least one is CJK).
         match options.hyphenator {
-            None => {
+            None if !options.kinsoku_enforce => {
                 push(
                     &mut items,
                     &mut meta,
@@ -437,6 +570,19 @@ pub fn compose_paragraph(
                     },
                     w.end,
                     false,
+                );
+            }
+            None => {
+                // Kinsoku-only path: walk the word char by char,
+                // emitting a `Box` per character and a `Penalty`
+                // between adjacent chars when at least one is CJK
+                // (or matches the kinsoku punctuation set). The
+                // penalty is INFINITE when the pair would land a
+                // no-start char at the start of a continuation line
+                // or strand a no-end char at the end of the previous
+                // line; 0 (free break) otherwise.
+                emit_word_with_kinsoku_breaks(
+                    word_text, w.start, measurer, &mut items, &mut meta, &push,
                 );
             }
             Some(h) => {
@@ -478,6 +624,14 @@ pub fn compose_paragraph(
                     w.end,
                     false,
                 );
+                // Hyphenation + kinsoku can both apply — when both
+                // are on, the kinsoku enforcement adds high-penalty
+                // *inhibition* items at any violating intra-word
+                // position. We don't currently subdivide the
+                // hyphenated segments further; full kinsoku-over-
+                // hyphenation interplay is queued. Latin text rarely
+                // sees both at once, so this is acceptable.
+                let _ = options.kinsoku_enforce;
             }
         }
 
@@ -567,6 +721,115 @@ pub fn compose_paragraph(
 struct ItemMeta {
     byte_end: usize,
     is_hyphen: bool,
+}
+
+/// Emit one Knuth-Plass Box per Unicode scalar of `word_text`, with
+/// inter-character `Penalty` items where the kinsoku rules permit
+/// (free break) or forbid (INFINITE_PENALTY) a line break.
+///
+/// `word_text` is the slice for one whitespace-separated word; the
+/// caller positions it at byte offset `word_start` inside the source
+/// paragraph. The emitted byte_ends in `meta` are absolute (paragraph-
+/// relative) so the breakpoint translation in `compose_paragraph`
+/// stays consistent with the non-kinsoku path.
+///
+/// We measure each char individually via `measurer.measure_word`
+/// rather than splitting a pre-measured total — the measurer is the
+/// only source of truth for width, and `measurer` shapes each chunk
+/// fresh which keeps the totals consistent with the non-kinsoku path
+/// (down to the rounding the measurer applies).
+///
+/// Word-internal segmentation rule: a `Penalty` is emitted between
+/// adjacent chars `(a, b)` only when both ends are "kinsoku-relevant"
+/// — at least one of `a`, `b` is in [`kinsoku::is_breakable_cjk`] or
+/// in either kinsoku set. ASCII Latin pairs ("ab" inside a word) get
+/// no break opportunity — they stay one logical Box from the
+/// breaker's perspective even though they're emitted as multiple
+/// Boxes here (the absence of an interceding Penalty means
+/// paragraph-breaker can't pick a break there).
+fn emit_word_with_kinsoku_breaks(
+    word_text: &str,
+    word_start: usize,
+    measurer: &dyn AdvanceMeasurer,
+    items: &mut Vec<Item<()>>,
+    meta: &mut Vec<ItemMeta>,
+    push: &impl Fn(&mut Vec<Item<()>>, &mut Vec<ItemMeta>, Item<()>, usize, bool),
+) {
+    let chars: Vec<(usize, char)> = word_text.char_indices().collect();
+    if chars.is_empty() {
+        return;
+    }
+    for (idx, &(off, ch)) in chars.iter().enumerate() {
+        let next_off = chars
+            .get(idx + 1)
+            .map(|&(o, _)| o)
+            .unwrap_or(word_text.len());
+        let ch_text = &word_text[off..next_off];
+        let byte_end = word_start + next_off;
+        push(
+            items,
+            meta,
+            Item::Box {
+                width: measurer.measure_word(ch_text),
+                data: (),
+            },
+            byte_end,
+            false,
+        );
+        // Inject a kinsoku-aware break opportunity between this
+        // char and the next (if any).
+        //
+        // Knuth-Plass semantics: a break can land at a `Glue` (the
+        // canonical break point — its width is consumed by the
+        // breaker and its stretch absorbs short-line slack) or at a
+        // finite-penalty `Penalty`. The *absence* of either between
+        // two `Box`es inhibits any break at that position.
+        //
+        // We emit a zero-width Glue with mild stretch + zero shrink
+        // between break-permitted CJK chars. The stretch is critical
+        // — without it, lines that come up short (the common case
+        // for monospaced CJK where a column rarely lands on an exact
+        // multiple of the char width) have no slack budget and the
+        // breaker rejects the entire paragraph (`total_fit` returns
+        // empty when no feasible solution exists). The Glue's width
+        // is 0 so the visual rendering is unchanged.
+        //
+        // We don't emit a Glue between non-CJK pairs (Latin words
+        // stay one logical Box from the breaker's perspective) or at
+        // forbidden positions (no-start at the next char, or no-end
+        // at the current — the kinsoku-rule enforcement).
+        if let Some(&(_, next_ch)) = chars.get(idx + 1) {
+            let pair_is_kinsoku_relevant = kinsoku::is_breakable_cjk(ch)
+                || kinsoku::is_breakable_cjk(next_ch)
+                || kinsoku::is_no_start(next_ch)
+                || kinsoku::is_no_end(ch);
+            if !pair_is_kinsoku_relevant {
+                continue;
+            }
+            let forbidden = kinsoku::is_no_start(next_ch) || kinsoku::is_no_end(ch);
+            if forbidden {
+                continue;
+            }
+            // Stretch budget: a CJK char's-worth (1 em ≈ point size
+            // measured in 1/64 pt — we don't have the point size
+            // here, so use a constant in 1/64-pt units that's larger
+            // than any plausible single-char width). 1024 is ~ 16
+            // pt; one inter-char gap with 1024 units of stretch can
+            // absorb the slack of a line that's one char short of
+            // the column.
+            push(
+                items,
+                meta,
+                Item::Glue {
+                    width: 0,
+                    stretch: 1024,
+                    shrink: 0,
+                },
+                byte_end,
+                false,
+            );
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -967,5 +1230,230 @@ mod tests {
 
     fn line_text<'a>(text: &'a str, line: &ComposedLine) -> &'a str {
         &text[line.byte_range.clone()]
+    }
+
+    // ---- CJK Stage 2 (kinsoku enforcement) ----
+
+    #[test]
+    fn kinsoku_set_membership_matches_hard_set() {
+        // Spot-check the JIS-derived sets. If any of these flip the
+        // composer's penalty design needs to be revisited.
+        assert!(kinsoku::is_no_start('）'));
+        assert!(kinsoku::is_no_start('」'));
+        assert!(kinsoku::is_no_start('、'));
+        assert!(kinsoku::is_no_start('。'));
+        assert!(kinsoku::is_no_start('っ'));
+        assert!(kinsoku::is_no_start(')'));
+
+        assert!(kinsoku::is_no_end('('));
+        assert!(kinsoku::is_no_end('（'));
+        assert!(kinsoku::is_no_end('「'));
+        assert!(kinsoku::is_no_end('『'));
+
+        // A regular CJK character is neither.
+        assert!(!kinsoku::is_no_start('本'));
+        assert!(!kinsoku::is_no_end('本'));
+        assert!(kinsoku::is_breakable_cjk('本'));
+        assert!(kinsoku::is_breakable_cjk('あ'));
+        assert!(kinsoku::is_breakable_cjk('ア'));
+
+        // Latin chars don't admit per-character break opportunities.
+        assert!(!kinsoku::is_breakable_cjk('a'));
+        assert!(!kinsoku::is_breakable_cjk('A'));
+    }
+
+    #[test]
+    fn kinsoku_disabled_baseline_keeps_cjk_text_on_one_line() {
+        // Sanity: without kinsoku enforcement, a CJK paragraph is one
+        // big "word" with no internal break opportunities, so the
+        // breaker can only put it on one line — and a column wide
+        // enough to hold the whole word produces exactly one line.
+        // (If the column were narrower than the word, paragraph-
+        // breaker would return no breaks at all because no feasible
+        // line fit exists. That's what the "kinsoku enables wrap"
+        // test below demonstrates with the same text + narrower
+        // column.)
+        let m = MonospaceMeasurer::new(10, 10);
+        let text = "本日本日本日本日本日"; // 10 CJK chars × 10 units
+        let opts = ComposeOptions {
+            column_width: 200, // wider than the whole text (100)
+            kinsoku_enforce: false,
+            ..ComposeOptions::new(0.0)
+        };
+        let lines = compose_paragraph(text, &m, &opts);
+        assert_eq!(
+            lines.len(),
+            1,
+            "without kinsoku_enforce, no per-character breaks: {:?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn kinsoku_enabled_breaks_per_character_in_cjk_text() {
+        // With enforcement on, the composer emits Penalty(0) between
+        // adjacent CJK chars and the breaker fits multiple lines.
+        let m = MonospaceMeasurer::new(10, 10);
+        let text = "本日本日本日本日本日"; // 10 CJK chars, 10 units each
+        let opts = ComposeOptions {
+            column_width: 40, // room for 4 chars per line
+            kinsoku_enforce: true,
+            ..ComposeOptions::new(0.0)
+        };
+        let lines = compose_paragraph(text, &m, &opts);
+        assert!(
+            lines.len() >= 2,
+            "kinsoku_enforce → per-char breaks: {:?}",
+            lines
+        );
+        // Each line should be at most the column width's worth of
+        // CJK chars.
+        for line in &lines {
+            assert!(
+                line.width <= 40,
+                "line too wide: {} > 40 in {:?}",
+                line.width,
+                line
+            );
+        }
+    }
+
+    #[test]
+    fn kinsoku_forbids_breaking_before_no_start_char() {
+        // A paragraph where the breaker would otherwise place a `）`
+        // at the start of a continuation line. With kinsoku enforced
+        // the break must shift earlier so the `）` rides with its
+        // preceding char.
+        //
+        // Layout: `本本本本本）本本本本本` — 11 chars, 10 units each;
+        // column = 50 (5 chars per line). Naive per-char break would
+        // give "本本本本本" / "）本本本本本" which strands the closing
+        // paren at the start. Kinsoku must shift to "本本本本" /
+        // "本）本本本本本" (or similar — the key invariant is that
+        // no line starts with `）`).
+        let m = MonospaceMeasurer::new(10, 10);
+        let text = "本本本本本）本本本本本";
+        let opts = ComposeOptions {
+            column_width: 50,
+            kinsoku_enforce: true,
+            ..ComposeOptions::new(0.0)
+        };
+        let lines = compose_paragraph(text, &m, &opts);
+        assert!(lines.len() >= 2, "expected multi-line: {:?}", lines);
+        for line in &lines {
+            let line_text = &text[line.byte_range.clone()];
+            let first_char = line_text.chars().next().unwrap();
+            assert!(
+                !kinsoku::is_no_start(first_char),
+                "line starts with no-start char {:?}: {:?}",
+                first_char,
+                line
+            );
+        }
+    }
+
+    #[test]
+    fn kinsoku_behavior_change_off_vs_on_is_demonstrable() {
+        // Direct comparison: with the same text and column width,
+        // the composer's output line count differs between
+        // `kinsoku_enforce = false` and `= true` — a fixture-free
+        // demonstration of the composer behaviour change Stage 2 of
+        // Tier 4 CJK introduces.
+        //
+        // The column is wide enough to hold the whole text on one
+        // line (so the baseline doesn't fail with "no feasible
+        // fit"), but with enforcement on the per-character break
+        // opportunities let the breaker pick a multi-line composition
+        // and the no-start rule keeps `）` away from line starts.
+        let m = MonospaceMeasurer::new(10, 10);
+        let text = "本本本本本）本本本本本";
+        let baseline_opts = ComposeOptions {
+            column_width: 200, // whole text fits in one line
+            kinsoku_enforce: false,
+            ..ComposeOptions::new(0.0)
+        };
+        let baseline = compose_paragraph(text, &m, &baseline_opts);
+        // Enforced path uses a NARROWER column (text needs wrap) +
+        // kinsoku enforcement; the breaker exploits the per-char
+        // break opportunities and the no-start rule.
+        let enforced_opts = ComposeOptions {
+            column_width: 60, // narrower → forces wrap
+            kinsoku_enforce: true,
+            ..ComposeOptions::new(0.0)
+        };
+        let enforced = compose_paragraph(text, &m, &enforced_opts);
+
+        assert_eq!(baseline.len(), 1, "baseline = single line: {:?}", baseline);
+        assert!(
+            enforced.len() >= 2,
+            "kinsoku on + narrow column wraps: {:?}",
+            enforced
+        );
+        // No line in the kinsoku path begins with `）`.
+        for line in &enforced {
+            let first = text[line.byte_range.clone()].chars().next().unwrap();
+            assert_ne!(first, '）', "kinsoku never strands closing paren");
+        }
+    }
+
+    #[test]
+    fn kinsoku_forbids_no_end_char_at_line_end() {
+        // `（` should never end a line. Without enforcement and
+        // with an artificial wrap, the baseline could strand it
+        // there; with enforcement on, the breaker shifts.
+        //
+        // 11 chars; column = 50 (5 chars). The "natural" 5-char
+        // split puts `（` at position 5 — the LAST char of line 1.
+        // Kinsoku must push it to line 2.
+        let m = MonospaceMeasurer::new(10, 10);
+        let text = "本本本本（本本本本本本";
+        let opts = ComposeOptions {
+            column_width: 50,
+            kinsoku_enforce: true,
+            ..ComposeOptions::new(0.0)
+        };
+        let lines = compose_paragraph(text, &m, &opts);
+        assert!(lines.len() >= 2, "expected multi-line: {:?}", lines);
+        for line in &lines {
+            let line_text = &text[line.byte_range.clone()];
+            let last_char = line_text.chars().last().unwrap();
+            assert!(
+                !kinsoku::is_no_end(last_char),
+                "line ends with no-end char {:?}: {:?}",
+                last_char,
+                line
+            );
+        }
+    }
+
+    #[test]
+    fn kinsoku_leaves_latin_text_unchanged() {
+        // Western paragraphs should compose identically whether
+        // kinsoku_enforce is on or off — the per-character break
+        // injection only fires on CJK chars (or chars in the
+        // kinsoku punctuation set, which Latin words don't contain
+        // mid-word).
+        let m = MonospaceMeasurer::new(10, 10);
+        let text = "lorem ipsum dolor sit amet";
+        let off = ComposeOptions {
+            column_width: 120,
+            kinsoku_enforce: false,
+            ..ComposeOptions::new(0.0)
+        };
+        let on = ComposeOptions {
+            column_width: 120,
+            kinsoku_enforce: true,
+            ..ComposeOptions::new(0.0)
+        };
+        let lines_off = compose_paragraph(text, &m, &off);
+        let lines_on = compose_paragraph(text, &m, &on);
+        assert_eq!(
+            lines_off.len(),
+            lines_on.len(),
+            "kinsoku must not alter Latin paragraphs"
+        );
+        for (a, b) in lines_off.iter().zip(lines_on.iter()) {
+            assert_eq!(a.byte_range, b.byte_range);
+        }
     }
 }

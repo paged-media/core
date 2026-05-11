@@ -500,6 +500,12 @@ impl ResolvedRunAttrs {
             underline: run.underline,
             strikethru: run.strikethru,
             leading: run.leading,
+            ruby_flag: run.ruby_flag,
+            ruby_type: run.ruby_type.clone(),
+            ruby_string: run.ruby_string.clone(),
+            kenten_kind: run.kenten_kind.clone(),
+            kenten_character: run.kenten_character.clone(),
+            kenten_font_size: run.kenten_font_size,
         }
     }
 
@@ -528,6 +534,20 @@ impl ResolvedRunAttrs {
         self.tracking = self.tracking.or(c.tracking);
         self.underline = self.underline.or(c.underline);
         self.strikethru = self.strikethru.or(c.strikethru);
+        self.ruby_flag = self.ruby_flag.or(c.ruby_flag);
+        if self.ruby_type.is_none() {
+            self.ruby_type = c.ruby_type.clone();
+        }
+        if self.ruby_string.is_none() {
+            self.ruby_string = c.ruby_string.clone();
+        }
+        if self.kenten_kind.is_none() {
+            self.kenten_kind = c.kenten_kind.clone();
+        }
+        if self.kenten_character.is_none() {
+            self.kenten_character = c.kenten_character.clone();
+        }
+        self.kenten_font_size = self.kenten_font_size.or(c.kenten_font_size);
     }
 
     /// Fill any unset field from a resolved paragraph style.
@@ -589,6 +609,10 @@ impl ResolvedParagraphAttrs {
             drop_cap_characters: None,
             drop_cap_lines: None,
             drop_cap_detail: None,
+            kinsoku_set: paragraph.kinsoku_set.clone(),
+            kinsoku_type: paragraph.kinsoku_type.clone(),
+            mojikumi_table: paragraph.mojikumi_table.clone(),
+            mojikumi_set: paragraph.mojikumi_set.clone(),
         }
     }
 
@@ -633,6 +657,18 @@ impl ResolvedParagraphAttrs {
         self.drop_cap_characters = self.drop_cap_characters.or(p.drop_cap_characters);
         self.drop_cap_lines = self.drop_cap_lines.or(p.drop_cap_lines);
         self.drop_cap_detail = self.drop_cap_detail.or(p.drop_cap_detail);
+        if self.kinsoku_set.is_none() {
+            self.kinsoku_set = p.kinsoku_set.clone();
+        }
+        if self.kinsoku_type.is_none() {
+            self.kinsoku_type = p.kinsoku_type.clone();
+        }
+        if self.mojikumi_table.is_none() {
+            self.mojikumi_table = p.mojikumi_table.clone();
+        }
+        if self.mojikumi_set.is_none() {
+            self.mojikumi_set = p.mojikumi_set.clone();
+        }
     }
 }
 
@@ -692,6 +728,21 @@ pub struct ResolvedRunAttrs {
     /// Explicit `Leading` in pt. `None` ⇒ Auto leading
     /// (`point_size × 1.2`).
     pub leading: Option<f32>,
+    /// Cascaded `RubyFlag` — true when this run carries ruby
+    /// annotation. Parser/scene-only today; renderer integration
+    /// queued under Tier 4 — CJK Stage 4.
+    pub ruby_flag: Option<bool>,
+    /// Cascaded `RubyType` — `PerCharacter` / `GroupRuby`.
+    pub ruby_type: Option<String>,
+    /// Cascaded `RubyString` — the annotation text.
+    pub ruby_string: Option<String>,
+    /// Cascaded `KentenKind` — emphasis-mark glyph kind.
+    pub kenten_kind: Option<String>,
+    /// Cascaded `KentenCharacter` — custom emphasis mark codepoint
+    /// when `kenten_kind == "Custom"`.
+    pub kenten_character: Option<String>,
+    /// Cascaded `KentenFontSize` — % of base size.
+    pub kenten_font_size: Option<f32>,
 }
 
 /// Effective paragraph-level attributes after walking the cascade
@@ -761,6 +812,23 @@ pub struct ResolvedParagraphAttrs {
     pub drop_cap_lines: Option<u32>,
     /// `DropCapDetail` — InDesign's scaling integer.
     pub drop_cap_detail: Option<i32>,
+    /// Cascaded `KinsokuSet` ref. Identifies the CJK line-break
+    /// character set this paragraph follows. Parser/scene captures
+    /// the ref; the composer uses a built-in "Hard Kinsoku" set when
+    /// `kinsoku_type` triggers enforcement. See docs/plan.md Tier 4
+    /// — CJK Stage 2.
+    pub kinsoku_set: Option<String>,
+    /// Cascaded `KinsokuType` flavour
+    /// (`WordbreakWithJustification` / `PushIn` / `PushOut`). The
+    /// composer keys "any value present" → "apply hard-kinsoku
+    /// penalty" today.
+    pub kinsoku_type: Option<String>,
+    /// Cascaded `MojikumiTable` ref. Parser/scene-only; the
+    /// renderer does not yet implement Mojikumi spacing
+    /// adjustments. See docs/plan.md Tier 4 — CJK Stage 4.
+    pub mojikumi_table: Option<String>,
+    /// Cascaded `MojikumiSet` ref (older IDML attribute name).
+    pub mojikumi_set: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
