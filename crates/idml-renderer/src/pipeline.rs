@@ -20,6 +20,7 @@ use idml_parse::{
 };
 use idml_scene::Document;
 
+use crate::module::geometry::rewrite_tail_for_overprint;
 use crate::module::{Geometry, ResolvedFrame};
 use crate::AssetResolver;
 
@@ -2514,6 +2515,25 @@ fn emit_paragraph_into_chain(
         }
 
         let after_cmds = pages[target_page].list.commands.len();
+        // Glyph-level overprint: when the paragraph cascade sets
+        // `OverprintFill="true"` (or stroke) on a `<ParagraphStyleRange>`
+        // or its applied paragraph style, rewrite this line's freshly
+        // emitted `FillPath` / `StrokePath` (including decoration
+        // strokes) to their `*Overprint` variants. Per-run mixing within
+        // a paragraph (some runs overprint, others knockout) is not yet
+        // honoured — the slice loop already groups glyphs by (font,
+        // paint), so a future batch can extend the picker to include
+        // the flag in the band identity.
+        let op_fill = resolved_paragraph.overprint_fill.unwrap_or(false);
+        let op_stroke = resolved_paragraph.overprint_stroke.unwrap_or(false);
+        if op_fill || op_stroke {
+            rewrite_tail_for_overprint(
+                &mut pages[target_page],
+                before_cmds,
+                op_fill,
+                op_stroke,
+            );
+        }
         let frame_idx = em.frame_idx;
         match &mut em.frame_cmd_ranges[frame_idx] {
             Some((_, e)) => *e = after_cmds,
@@ -7911,6 +7931,11 @@ fn apply_paragraph_compose_options<'a>(
     if let Some(min) = resolved.minimum_word_spacing {
         lopts.compose.shrink_ratio = ((desired - min) / desired).clamp(0.0, 1.0);
     }
+    // CJK Stage 2: enable hard-kinsoku enforcement whenever the cascade
+    // carries any `KinsokuType` ("WordbreakWithJustification" / "PushIn"
+    // / "PushOut" / etc). The composer currently keys on presence only;
+    // flavour-specific behaviour is queued under CJK Stage 4.
+    lopts.compose.kinsoku_enforce = resolved.kinsoku_type.is_some();
 }
 
 /// Map an IDML `StrokeType` reference to a [`Stroke`] of the given
