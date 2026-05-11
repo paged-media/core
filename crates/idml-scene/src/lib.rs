@@ -389,6 +389,9 @@ impl ResolvedParagraphAttrs {
             bullet_character: paragraph.bullet_character,
             bullets_text_after: None,
             numbering_format: None,
+            numbering_expression: None,
+            numbering_start_at: None,
+            numbering_continue: None,
             hyphenation: None,
             applied_language: None,
             minimum_word_spacing: None,
@@ -421,6 +424,11 @@ impl ResolvedParagraphAttrs {
         if self.numbering_format.is_none() {
             self.numbering_format = p.numbering_format.clone();
         }
+        if self.numbering_expression.is_none() {
+            self.numbering_expression = p.numbering_expression.clone();
+        }
+        self.numbering_start_at = self.numbering_start_at.or(p.numbering_start_at);
+        self.numbering_continue = self.numbering_continue.or(p.numbering_continue);
         self.hyphenation = self.hyphenation.or(p.hyphenation);
         if self.applied_language.is_none() {
             self.applied_language = p.applied_language.clone();
@@ -515,6 +523,19 @@ pub struct ResolvedParagraphAttrs {
     /// Arabic / Roman / alpha / zero-padded formatting for
     /// `NumberedList` paragraphs.
     pub numbering_format: Option<String>,
+    /// `NumberingExpression` template (`^#`, `^.`, `^t` tokens plus
+    /// literal characters). `None` ⇒ renderer applies the IDML
+    /// default `^#.^t`.
+    pub numbering_expression: Option<String>,
+    /// `NumberingStartAt` explicit integer override; the renderer
+    /// resets the story-level counter to this value on paragraph
+    /// entry. `None` ⇒ inherit (auto-increment off prior state).
+    pub numbering_start_at: Option<i32>,
+    /// `NumberingContinue` flag. `Some(true)` suppresses the
+    /// auto-reset that fires when the bulleting kind changes
+    /// across paragraphs; `Some(false)` forces a reset on entry.
+    /// `None` ⇒ renderer default (continue).
+    pub numbering_continue: Option<bool>,
     /// `Hyphenation` boolean from the cascaded paragraph style.
     /// Drives whether the composer wires up a hyphenator.
     pub hyphenation: Option<bool>,

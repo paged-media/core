@@ -848,3 +848,262 @@ fn numbered_list_emits_three_distinct_counter_prefixes() {
         "numbering markers should start in the same column; got x={x1}, {x2}, {x3}",
     );
 }
+
+// ─────────────────────────── 7. numbering polish ─────────────────────
+// NumberingExpression substitution + NumberingStartAt + NumberingContinue.
+
+/// Build an IDML whose story holds the supplied paragraph snippets in
+/// order. Each snippet is a complete `<ParagraphStyleRange>` element
+/// referencing one of the styles built into `numbering_styles_xml`.
+/// The story uses `Inter` at 24 pt so digit glyphs come out at a
+/// reliable size.
+fn build_numbering_idml(paragraphs: &str) -> Vec<u8> {
+    let styles = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <RootParagraphStyleGroup>
+    <!-- "Step ^# of 5\t" substitution exercise. -->
+    <ParagraphStyle Self="ParagraphStyle/CustomExpr"
+                    Name="CustomExpr"
+                    BulletsAndNumberingListType="NumberedList"
+                    NumberingFormat="1, 2, 3, 4..."
+                    NumberingExpression="Step ^# of 5^t"/>
+    <!-- StartAt = 5; first paragraph emits "5.\t". -->
+    <ParagraphStyle Self="ParagraphStyle/StartAt5"
+                    Name="StartAt5"
+                    BulletsAndNumberingListType="NumberedList"
+                    NumberingFormat="1, 2, 3, 4..."
+                    NumberingStartAt="5"/>
+    <!-- Plain numbered (default "^#.^t"). -->
+    <ParagraphStyle Self="ParagraphStyle/Plain"
+                    Name="Plain"
+                    BulletsAndNumberingListType="NumberedList"
+                    NumberingFormat="1, 2, 3, 4..."/>
+    <!-- Continue across style boundaries; resumes the counter
+         instead of restarting at 1. -->
+    <ParagraphStyle Self="ParagraphStyle/Continue"
+                    Name="Continue"
+                    BulletsAndNumberingListType="NumberedList"
+                    NumberingFormat="1, 2, 3, 4..."
+                    NumberingContinue="true"/>
+    <!-- NoList plain body paragraph (interrupts the numbered run). -->
+    <ParagraphStyle Self="ParagraphStyle/Body"
+                    Name="Body"
+                    BulletsAndNumberingListType="NoList"/>
+  </RootParagraphStyleGroup>
+</idPkg:Styles>"#;
+    let spread = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 600 612"/>
+    <TextFrame Self="frameA" ParentStory="u10" GeometricBounds="40 40 560 572" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#;
+    let story = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">
+{paragraphs}
+  </Story>
+</idPkg:Story>"#
+    );
+    write_zip(|zip| {
+        put(zip, "designmap.xml", DESIGNMAP_STYLED);
+        put(zip, "Resources/Graphic.xml", GRAPHIC_XML);
+        put(zip, "Resources/Styles.xml", styles);
+        put(zip, "Spreads/Spread_sp1.xml", spread);
+        put(zip, "Stories/Story_u10.xml", story.as_bytes());
+    })
+}
+
+/// Group emitted glyph `(x, path_id)` pairs by their baseline
+/// (rounded to int pt). One bucket per paragraph; entries within a
+/// bucket are sorted left-to-right. Mirrors the glyph filter from
+/// `glyph_xys` (uniform scale, no shear) so non-text fills (frame
+/// rectangles, etc.) are dropped.
+fn glyphs_by_baseline(cmds: &[DisplayCommand]) -> Vec<Vec<(f32, u32)>> {
+    let mut groups: std::collections::BTreeMap<i32, Vec<(f32, u32)>> =
+        std::collections::BTreeMap::new();
+    for (path_id, transform) in fill_paths(cmds) {
+        let [a, b, c, d, tx, ty] = transform.0;
+        // Glyph emit always uses a uniform-scale-with-y-flip matrix.
+        if !(b.abs() < 1e-5 && c.abs() < 1e-5 && a > 0.0 && d < 0.0 && (a + d).abs() < 1e-4) {
+            continue;
+        }
+        groups
+            .entry(ty.round() as i32)
+            .or_default()
+            .push((tx, path_id.0));
+    }
+    let mut out: Vec<Vec<(f32, u32)>> = groups.into_values().collect();
+    for row in out.iter_mut() {
+        row.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    }
+    out
+}
+
+#[test]
+fn numbering_expression_substitution_produces_more_glyphs_per_paragraph() {
+    // Two paragraphs, one with the default expression `^#.^t` and one
+    // with `Step ^# of 5^t`. The custom-expression paragraph emits
+    // strictly more glyphs on its first line because "Step  of 5"
+    // contributes additional letters/digits ahead of the body.
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+
+    let paragraphs = r#"
+        <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Plain">
+          <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+            <Content>X</Content>
+          </CharacterStyleRange>
+        </ParagraphStyleRange>
+        <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/CustomExpr">
+          <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+            <Content>X</Content>
+          </CharacterStyleRange>
+        </ParagraphStyleRange>"#;
+    let doc = Document::open(&build_numbering_idml(paragraphs)).unwrap();
+    let built = pipeline::build_document(&doc, &opts).unwrap();
+    let rows = glyphs_by_baseline(&built.pages[0].list.commands);
+    assert!(
+        rows.len() >= 2,
+        "expected ≥2 baselines (one per paragraph), got {} rows",
+        rows.len(),
+    );
+    // "1." + "X"  ⇒ 3 visible glyphs. "Step 1 of 5" + "X" ⇒ 12
+    // glyphs (S t e p [space] 1 [space] o f [space] 5 X --exact
+    // count depends on which space characters shape). Demand
+    // strictly more glyphs in the custom-expression row.
+    let plain = &rows[0];
+    let custom = &rows[1];
+    assert!(
+        custom.len() > plain.len() + 3,
+        "custom expression should emit substantially more glyphs than `^#.^t`; plain={}, custom={}",
+        plain.len(),
+        custom.len(),
+    );
+}
+
+#[test]
+fn numbering_start_at_5_emits_5_glyph_not_1_glyph() {
+    // Two stories, one with a Plain "^#.^t" and one with StartAt=5.
+    // Plain leads with the "1" glyph; StartAt=5 leads with the "5"
+    // glyph. Different glyph outlines ⇒ different path_ids.
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+
+    // Render both paragraphs in the same story so they share the
+    // page's path-intern table — path_id then maps 1:1 to glyph
+    // outline and is comparable across paragraphs.
+    let paragraphs = r#"
+        <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Plain">
+          <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+            <Content>X</Content>
+          </CharacterStyleRange>
+        </ParagraphStyleRange>
+        <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/StartAt5">
+          <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+            <Content>X</Content>
+          </CharacterStyleRange>
+        </ParagraphStyleRange>"#;
+    let doc = Document::open(&build_numbering_idml(paragraphs)).unwrap();
+    let built = pipeline::build_document(&doc, &opts).unwrap();
+    let rows = glyphs_by_baseline(&built.pages[0].list.commands);
+    assert!(rows.len() >= 2, "expected 2 paragraphs, got {} rows", rows.len());
+    // Plain leads with "1"; StartAt=5 with "5". Different glyph
+    // outlines ⇒ different path_ids.
+    let plain_id = rows[0][0].1;
+    let start5_id = rows[1][0].1;
+    // StartAt=5 isn't following the prior numbered paragraph because
+    // the cascade lifts NumberingStartAt on entry — even though the
+    // implicit "continue" semantics also apply, the explicit
+    // start-override wins.
+    assert_ne!(
+        plain_id, start5_id,
+        "StartAt=5 must lead with a different digit glyph than the default StartAt=1",
+    );
+}
+
+#[test]
+fn numbering_continue_resumes_count_across_non_numbered_paragraph() {
+    // 3 paragraphs:
+    //   1. Plain  → "1.\tA"
+    //   2. Body   → "B" (no marker)
+    //   3. Continue → "2.\tC"  (with NumberingContinue → resumes)
+    //
+    // The leading digit-glyph in paragraph 3 must match paragraph 2's
+    // would-have-been-"2" --i.e. it must NOT equal paragraph 1's
+    // leading "1" glyph.
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+
+    let paragraphs = r#"
+        <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Plain">
+          <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+            <Content>A</Content>
+          </CharacterStyleRange>
+        </ParagraphStyleRange>
+        <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Body">
+          <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+            <Content>B</Content>
+          </CharacterStyleRange>
+        </ParagraphStyleRange>
+        <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Continue">
+          <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+            <Content>C</Content>
+          </CharacterStyleRange>
+        </ParagraphStyleRange>"#;
+    let doc = Document::open(&build_numbering_idml(paragraphs)).unwrap();
+    let built = pipeline::build_document(&doc, &opts).unwrap();
+    let rows = glyphs_by_baseline(&built.pages[0].list.commands);
+    assert!(
+        rows.len() >= 3,
+        "expected 3 baselines (3 paragraphs), got {}",
+        rows.len(),
+    );
+
+    let leading_1 = rows[0][0].1; // "1" glyph from paragraph 1
+    let leading_3 = rows[2][0].1; // first glyph of paragraph 3
+    assert_ne!(
+        leading_1, leading_3,
+        "NumberingContinue must resume past paragraph 1's '1' --got identical glyphs",
+    );
+
+    // Cross-check: same scenario without NumberingContinue must
+    // reset to "1" (identical to paragraph 1's leading glyph).
+    let reset_paragraphs = r#"
+        <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Plain">
+          <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+            <Content>A</Content>
+          </CharacterStyleRange>
+        </ParagraphStyleRange>
+        <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Body">
+          <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+            <Content>B</Content>
+          </CharacterStyleRange>
+        </ParagraphStyleRange>
+        <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Plain">
+          <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+            <Content>C</Content>
+          </CharacterStyleRange>
+        </ParagraphStyleRange>"#;
+    let doc = Document::open(&build_numbering_idml(reset_paragraphs)).unwrap();
+    let built = pipeline::build_document(&doc, &opts).unwrap();
+    let rows = glyphs_by_baseline(&built.pages[0].list.commands);
+    let reset_leading = rows[2][0].1;
+    assert_eq!(
+        leading_1, reset_leading,
+        "without NumberingContinue, paragraph 3 must lead with the same '1' glyph as paragraph 1",
+    );
+}

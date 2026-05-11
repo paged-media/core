@@ -1023,13 +1023,22 @@ struct StoryEmitter<'a> {
     /// justification, which distributes the per-frame slack as
     /// extra inter-paragraph space.
     paragraph_cmd_ranges: Vec<Vec<(usize, usize)>>,
-    /// Counter for `NumberedList` paragraphs in this story.
-    /// 0 means "not currently inside a numbered list" — incremented
-    /// to 1 on the first numbered paragraph and reset back to 0 the
-    /// first time a non-numbered paragraph is emitted. The reset
-    /// matches IDML's `NumberingContinue=true` default behaviour
-    /// for adjacent paragraphs.
+    /// Counter for `NumberedList` paragraphs in this story. The
+    /// renderer treats the count as a sticky story-level value
+    /// across paragraphs of different kinds; the implicit-reset
+    /// fires only when entering a `NumberedList` paragraph whose
+    /// prior neighbour wasn't also numbered (and the paragraph
+    /// hasn't explicitly opted into `NumberingContinue`). 0 is the
+    /// initial value; the first numbered paragraph either lifts it
+    /// to its `NumberingStartAt` or to 1.
     numbered_counter: u32,
+    /// Tracks whether the previous paragraph was a `NumberedList`.
+    /// Drives the implicit-reset decision for the next paragraph:
+    /// a `NumberedList` paragraph that follows a non-numbered one
+    /// resets the counter to 0 (so the first increment lands at 1)
+    /// unless the paragraph carries `NumberingContinue="true"` or
+    /// `NumberingStartAt`.
+    prev_was_numbered: bool,
     /// `<StoryPreference OpticalMarginAlignment>` flag. When true,
     /// the per-line emit pass nudges the leftmost / rightmost glyph
     /// of each line outward per `idml_text::optical_margin_offset`.
@@ -1173,6 +1182,7 @@ impl<'a> StoryEmitter<'a> {
             frame_max_baseline_64: vec![0; len],
             paragraph_cmd_ranges: vec![Vec::new(); len],
             numbered_counter: 0,
+            prev_was_numbered: false,
             optical_margin_alignment: false,
             optical_margin_size_pt: 0.0,
             anchored_recursion_depth: 0,
@@ -1703,13 +1713,17 @@ fn emit_paragraph_into_chain(
     // style's character formatting instead. IDML serialises tabs
     // in BulletsTextAfter as the literal `^t` two-byte sequence —
     // expand to a real `\t` so apply_tab_stops snaps it.
-    let list_first_text: Option<String> =
-        list_prefix(&resolved_paragraph, &mut em.numbered_counter).and_then(|prefix| {
-            paragraph
-                .runs
-                .first()
-                .map(|r| format!("{prefix}{}", r.text))
-        });
+    let list_first_text: Option<String> = list_prefix(
+        &resolved_paragraph,
+        &mut em.numbered_counter,
+        &mut em.prev_was_numbered,
+    )
+    .and_then(|prefix| {
+        paragraph
+            .runs
+            .first()
+            .map(|r| format!("{prefix}{}", r.text))
+    });
 
     // Substitute IDML auto-page-number markers with the current
     // page number. The parser leaves a private-use sentinel in
@@ -7437,24 +7451,31 @@ pub fn map_justification(j: Option<&str>) -> idml_text::Alignment {
 /// Map IDML `<TabStop Alignment="...">` values to the layout
 /// crate's `TabAlignment`.
 /// Build the list-marker prefix for a paragraph, or `None` when no
-/// list applies. Mutates `counter` per IDML's
-/// `NumberingContinue=true` default:
+/// list applies. Mutates `counter` based on the paragraph's
+/// numbering attributes:
 ///  - BulletList: counter resets to 0 (bullets don't number);
 ///    returns `<bullet><separator>`.
-///  - NumberedList: counter increments and the marker is
-///    `<n>.<tab>` using Arabic numerals.
+///  - NumberedList: applies `NumberingStartAt` / `NumberingContinue`
+///    overrides to `counter`, then increments and substitutes
+///    `NumberingExpression` (default `^#.^t`). Tokens: `^#` → the
+///    formatted counter (per `numbering_format`), `^.` → a literal
+///    period, `^t` → a literal tab. Literal characters pass through.
 ///  - NoList / absent: counter resets to 0; returns `None`.
 ///
-/// The `\t` after a numbered marker is handled by the existing
-/// tab-stop pass — the renderer's default 36 pt grid gives a
+/// `^t` substitutions are snapped to the next tab stop by the
+/// existing `apply_tab_stops` pass; the default 36 pt grid gives a
 /// reasonable hanging indent without explicit `<TabList>`.
-///
-/// Other NumberingFormat variants (Roman, alpha, zero-padded)
-/// fall through to Arabic for now; lands as a follow-up.
-fn list_prefix(p: &idml_scene::ResolvedParagraphAttrs, counter: &mut u32) -> Option<String> {
+fn list_prefix(
+    p: &idml_scene::ResolvedParagraphAttrs,
+    counter: &mut u32,
+    prev_was_numbered: &mut bool,
+) -> Option<String> {
     match p.bullets_list_type.as_deref() {
         Some("BulletList") => {
-            *counter = 0;
+            // Don't touch the counter here — a later NumberedList
+            // paragraph with `NumberingContinue` may want to resume
+            // off the prior count across an intervening bullet.
+            *prev_was_numbered = false;
             // InDesign's default bullet glyph when none is declared
             // is U+2022 (•). Real IDML usually carries an explicit
             // BulletChar, but real-world exports sometimes leave it
@@ -7471,20 +7492,80 @@ fn list_prefix(p: &idml_scene::ResolvedParagraphAttrs, counter: &mut u32) -> Opt
             Some(format!("{ch}{after}"))
         }
         Some("NumberedList") => {
+            // Decide whether to reset the counter on entry:
+            //   1. Explicit `NumberingStartAt` always wins — the
+            //      counter jumps to (start - 1) so the increment
+            //      below lands on `start`.
+            //   2. Otherwise, if the previous paragraph wasn't
+            //      numbered AND this paragraph isn't carrying
+            //      `NumberingContinue="true"`, reset to 0 so the
+            //      increment lands at 1 (a fresh sequence).
+            //   3. Otherwise carry the count forward.
+            if let Some(start) = p.numbering_start_at {
+                // Negative IDML values clamp to 0 (renders as "0" /
+                // whatever the format yields for n=0; matches
+                // InDesign's UI which disallows entries < 1 but the
+                // schema permits them).
+                *counter = (start - 1).max(0) as u32;
+            } else if !*prev_was_numbered && p.numbering_continue != Some(true) {
+                *counter = 0;
+            }
             *counter = counter.checked_add(1).unwrap_or(1);
+            *prev_was_numbered = true;
             let formatted = format_number(*counter, p.numbering_format.as_deref());
-            // Two regular spaces after the period — a literal tab
-            // would shape via the font's .notdef glyph (tofu) when
-            // the run's font lacks a tab mapping. The original
-            // intent is "advance past the marker"; two spaces gives
-            // a similar visual gap without a missing-glyph rectangle.
-            Some(format!("{formatted}.  "))
+            // IDML default expression is `^#.^t` — `<n>` + period +
+            // tab. The tab snaps to a tab stop via `apply_tab_stops`
+            // (default 36 pt grid if no <TabList>), giving a
+            // hanging indent without explicit setup.
+            let expr = p.numbering_expression.as_deref().unwrap_or("^#.^t");
+            Some(substitute_numbering_expression(expr, &formatted))
         }
         _ => {
-            *counter = 0;
+            // NoList / absent. Like BulletList, don't reset the
+            // counter — a later NumberedList paragraph with
+            // `NumberingContinue` may want to resume.
+            *prev_was_numbered = false;
             None
         }
     }
+}
+
+/// Substitute `^#`, `^.`, `^t` tokens in a NumberingExpression
+/// template. Anything else (including unknown `^x` sequences) passes
+/// through unchanged.
+///
+/// IDML escapes a literal caret as `^^` (a doubled caret); decode
+/// that so styles that want a literal `^` in their template don't
+/// accidentally trigger token replacement.
+fn substitute_numbering_expression(expr: &str, formatted_counter: &str) -> String {
+    let mut out = String::with_capacity(expr.len() + formatted_counter.len());
+    let mut chars = expr.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '^' {
+            match chars.peek().copied() {
+                Some('#') => {
+                    chars.next();
+                    out.push_str(formatted_counter);
+                }
+                Some('.') => {
+                    chars.next();
+                    out.push('.');
+                }
+                Some('t') => {
+                    chars.next();
+                    out.push('\t');
+                }
+                Some('^') => {
+                    chars.next();
+                    out.push('^');
+                }
+                _ => out.push(c),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Format a 1-based list counter per IDML's `NumberingFormat`
@@ -7787,67 +7868,103 @@ mod tests {
     #[test]
     fn list_prefix_builds_bullet_plus_separator() {
         let mut counter = 0;
+        let mut prev_numbered = false;
         let p = list_prefix(
             &attrs(Some("BulletList"), Some(0x2022), Some(" ")),
             &mut counter,
+            &mut prev_numbered,
         )
         .unwrap();
         assert_eq!(p, "\u{2022} ");
-        assert_eq!(counter, 0, "BulletList resets counter");
+        assert!(!prev_numbered, "BulletList clears prev_numbered");
     }
 
     #[test]
     fn list_prefix_expands_caret_t_to_tab() {
         let mut counter = 0;
+        let mut prev_numbered = false;
         let p = list_prefix(
             &attrs(Some("BulletList"), Some(0x2022), Some("^t")),
             &mut counter,
+            &mut prev_numbered,
         )
         .unwrap();
         assert_eq!(p, "\u{2022}\t");
     }
 
     #[test]
-    fn list_prefix_none_for_nolist_resets_counter() {
+    fn list_prefix_none_for_nolist_clears_prev_numbered() {
         let mut counter = 5;
-        assert!(list_prefix(&attrs(Some("NoList"), None, None), &mut counter).is_none());
-        assert_eq!(counter, 0);
+        let mut prev_numbered = true;
+        assert!(list_prefix(
+            &attrs(Some("NoList"), None, None),
+            &mut counter,
+            &mut prev_numbered
+        )
+        .is_none());
+        // NoList shouldn't damage a sticky counter — a follow-on
+        // NumberedList with `NumberingContinue` may resume.
+        assert_eq!(counter, 5);
+        assert!(!prev_numbered);
     }
 
     #[test]
     fn list_prefix_numbered_increments_across_paragraphs() {
         let mut counter = 0;
+        let mut prev_numbered = false;
         let attrs = attrs(Some("NumberedList"), None, None);
-        assert_eq!(list_prefix(&attrs, &mut counter).as_deref(), Some("1.  "));
-        assert_eq!(list_prefix(&attrs, &mut counter).as_deref(), Some("2.  "));
-        assert_eq!(list_prefix(&attrs, &mut counter).as_deref(), Some("3.  "));
+        // Default expression `^#.^t` ⇒ "<n>.\t".
+        assert_eq!(
+            list_prefix(&attrs, &mut counter, &mut prev_numbered).as_deref(),
+            Some("1.\t")
+        );
+        assert_eq!(
+            list_prefix(&attrs, &mut counter, &mut prev_numbered).as_deref(),
+            Some("2.\t")
+        );
+        assert_eq!(
+            list_prefix(&attrs, &mut counter, &mut prev_numbered).as_deref(),
+            Some("3.\t")
+        );
         assert_eq!(counter, 3);
+        assert!(prev_numbered);
     }
 
     #[test]
     fn list_prefix_numbered_resets_after_non_numbered() {
         let mut counter = 0;
+        let mut prev_numbered = false;
         let n = attrs(Some("NumberedList"), None, None);
         let none = attrs(None, None, None);
-        list_prefix(&n, &mut counter); // 1.
-        list_prefix(&n, &mut counter); // 2.
-        list_prefix(&none, &mut counter); // resets
-        assert_eq!(counter, 0);
-        assert_eq!(list_prefix(&n, &mut counter).as_deref(), Some("1.  "));
+        list_prefix(&n, &mut counter, &mut prev_numbered); // 1.
+        list_prefix(&n, &mut counter, &mut prev_numbered); // 2.
+        list_prefix(&none, &mut counter, &mut prev_numbered); // clears prev_numbered, counter sticky
+        assert!(!prev_numbered);
+        assert_eq!(
+            list_prefix(&n, &mut counter, &mut prev_numbered).as_deref(),
+            Some("1.\t"),
+            "default behaviour: counter resets when prev wasn't numbered"
+        );
     }
 
     #[test]
     fn list_prefix_bullet_to_numbered_resets() {
-        // Mixing list types in a row also resets — each list_type
-        // change starts a fresh sequence.
+        // Mixing list types in a row resets by default — each
+        // list_type change starts a fresh sequence unless
+        // NumberingContinue is set.
         let mut counter = 0;
+        let mut prev_numbered = false;
         list_prefix(
             &attrs(Some("BulletList"), Some(0x2022), Some(" ")),
             &mut counter,
+            &mut prev_numbered,
         );
-        assert_eq!(counter, 0);
+        assert!(!prev_numbered);
         let n = attrs(Some("NumberedList"), None, None);
-        assert_eq!(list_prefix(&n, &mut counter).as_deref(), Some("1.  "));
+        assert_eq!(
+            list_prefix(&n, &mut counter, &mut prev_numbered).as_deref(),
+            Some("1.\t")
+        );
     }
 
     #[test]
@@ -7856,8 +7973,127 @@ mod tests {
         // U+2022 default — matches InDesign's behaviour and lets
         // real-export IDMLs render visible bullets.
         let mut counter = 0;
-        let prefix = list_prefix(&attrs(Some("BulletList"), None, Some(" ")), &mut counter);
+        let mut prev_numbered = false;
+        let prefix = list_prefix(
+            &attrs(Some("BulletList"), None, Some(" ")),
+            &mut counter,
+            &mut prev_numbered,
+        );
         assert_eq!(prefix.as_deref(), Some("\u{2022} "));
+    }
+
+    #[test]
+    fn list_prefix_numbering_start_at_jumps_counter() {
+        // StartAt = 5 ⇒ first emission is "5.\t", then 6, 7, ...
+        let mut counter = 0;
+        let mut prev_numbered = false;
+        let mut a = attrs(Some("NumberedList"), None, None);
+        a.numbering_start_at = Some(5);
+        assert_eq!(
+            list_prefix(&a, &mut counter, &mut prev_numbered).as_deref(),
+            Some("5.\t")
+        );
+        // StartAt only fires on paragraph entry; once it's been
+        // applied, drop it for the next paragraph.
+        a.numbering_start_at = None;
+        assert_eq!(
+            list_prefix(&a, &mut counter, &mut prev_numbered).as_deref(),
+            Some("6.\t")
+        );
+        assert_eq!(
+            list_prefix(&a, &mut counter, &mut prev_numbered).as_deref(),
+            Some("7.\t")
+        );
+    }
+
+    #[test]
+    fn list_prefix_numbering_start_at_mid_list_resets() {
+        // After a few numbered paragraphs, a paragraph with
+        // NumberingStartAt = 10 forces the counter to that value.
+        let mut counter = 0;
+        let mut prev_numbered = false;
+        let plain = attrs(Some("NumberedList"), None, None);
+        list_prefix(&plain, &mut counter, &mut prev_numbered); // 1.
+        list_prefix(&plain, &mut counter, &mut prev_numbered); // 2.
+        let mut jumped = attrs(Some("NumberedList"), None, None);
+        jumped.numbering_start_at = Some(10);
+        assert_eq!(
+            list_prefix(&jumped, &mut counter, &mut prev_numbered).as_deref(),
+            Some("10.\t")
+        );
+        // Subsequent plain paragraphs continue off the jump.
+        assert_eq!(
+            list_prefix(&plain, &mut counter, &mut prev_numbered).as_deref(),
+            Some("11.\t")
+        );
+    }
+
+    #[test]
+    fn list_prefix_numbering_continue_persists_across_style_boundary() {
+        // Numbered → BulletList → Numbered with `NumberingContinue`
+        // resumes the count off the prior numbered run instead of
+        // resetting to 1.
+        let mut counter = 0;
+        let mut prev_numbered = false;
+        let plain = attrs(Some("NumberedList"), None, None);
+        list_prefix(&plain, &mut counter, &mut prev_numbered); // 1.
+        list_prefix(&plain, &mut counter, &mut prev_numbered); // 2.
+        list_prefix(
+            &attrs(Some("BulletList"), Some(0x2022), Some(" ")),
+            &mut counter,
+            &mut prev_numbered,
+        );
+        let mut cont = attrs(Some("NumberedList"), None, None);
+        cont.numbering_continue = Some(true);
+        assert_eq!(
+            list_prefix(&cont, &mut counter, &mut prev_numbered).as_deref(),
+            Some("3.\t"),
+            "NumberingContinue suppresses the implicit reset"
+        );
+        // Compare against the default-reset path: without Continue,
+        // the same scenario would have restarted at 1.
+        let mut counter2 = 0;
+        let mut prev2 = false;
+        list_prefix(&plain, &mut counter2, &mut prev2); // 1.
+        list_prefix(&plain, &mut counter2, &mut prev2); // 2.
+        list_prefix(
+            &attrs(Some("BulletList"), Some(0x2022), Some(" ")),
+            &mut counter2,
+            &mut prev2,
+        );
+        assert_eq!(
+            list_prefix(&plain, &mut counter2, &mut prev2).as_deref(),
+            Some("1.\t"),
+            "without NumberingContinue the count resets"
+        );
+    }
+
+    #[test]
+    fn list_prefix_uses_custom_numbering_expression() {
+        // `Step ^# of 5^t` ⇒ "Step 1 of 5\t", "Step 2 of 5\t", ...
+        let mut counter = 0;
+        let mut prev_numbered = false;
+        let mut a = attrs(Some("NumberedList"), None, None);
+        a.numbering_expression = Some("Step ^# of 5^t".to_string());
+        assert_eq!(
+            list_prefix(&a, &mut counter, &mut prev_numbered).as_deref(),
+            Some("Step 1 of 5\t")
+        );
+        assert_eq!(
+            list_prefix(&a, &mut counter, &mut prev_numbered).as_deref(),
+            Some("Step 2 of 5\t")
+        );
+    }
+
+    #[test]
+    fn substitute_numbering_expression_passes_literals_and_decodes_caret_escape() {
+        // `^^` decodes to a literal caret; unknown `^x` sequences
+        // pass through verbatim (no surprise glyph loss).
+        assert_eq!(substitute_numbering_expression("^^#^t", "1"), "^#\t");
+        assert_eq!(substitute_numbering_expression("(^#)^t", "42"), "(42)\t");
+        assert_eq!(substitute_numbering_expression("^?", "1"), "^?");
+        // Trailing lone caret passes through.
+        assert_eq!(substitute_numbering_expression("^# ^", "5"), "5 ^");
     }
 
     #[test]
@@ -7903,11 +8139,21 @@ mod tests {
     #[test]
     fn list_prefix_uses_numbering_format() {
         let mut counter = 0;
+        let mut prev_numbered = false;
         let mut a = attrs(Some("NumberedList"), None, None);
         a.numbering_format = Some("I, II, III, IV...".to_string());
-        assert_eq!(list_prefix(&a, &mut counter).as_deref(), Some("I.  "));
-        assert_eq!(list_prefix(&a, &mut counter).as_deref(), Some("II.  "));
-        assert_eq!(list_prefix(&a, &mut counter).as_deref(), Some("III.  "));
+        assert_eq!(
+            list_prefix(&a, &mut counter, &mut prev_numbered).as_deref(),
+            Some("I.\t")
+        );
+        assert_eq!(
+            list_prefix(&a, &mut counter, &mut prev_numbered).as_deref(),
+            Some("II.\t")
+        );
+        assert_eq!(
+            list_prefix(&a, &mut counter, &mut prev_numbered).as_deref(),
+            Some("III.\t")
+        );
     }
 
     fn approx(a: (f32, f32), b: (f32, f32)) {
