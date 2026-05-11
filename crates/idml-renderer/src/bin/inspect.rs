@@ -470,6 +470,7 @@ fn build_json_report(
             "runs": built.stats.runs,
             "glyphs": built.stats.glyphs,
             "lines": built.stats.lines,
+            "decoded_images": built.stats.decoded_images,
             "commands": total_cmds,
             "unique_paths": total_paths,
         },

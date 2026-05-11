@@ -144,6 +144,12 @@ pub struct PipelineStats {
     pub runs: usize,
     pub glyphs: usize,
     pub lines: usize,
+    /// Number of distinct URIs decoded into the renderer-scoped
+    /// `DecodedImage` cache. Stays 0 when no image-bearing frames
+    /// were encountered; otherwise lets callers observe cross-page
+    /// image sharing (one decode per URI, regardless of how many
+    /// rectangles or pages reference it).
+    pub decoded_images: usize,
 }
 
 /// Build one `BuiltPage` per `<Page>` in the document. Each page's
@@ -931,6 +937,8 @@ pub fn build_document(
             &mut decoded_image_cache,
         );
     }
+
+    total_stats.decoded_images = decoded_image_cache.len();
 
     Ok(BuiltDocument {
         pages,
