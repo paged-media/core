@@ -275,9 +275,10 @@ pub enum VerticalJustification {
     Top,
     Center,
     Bottom,
-    /// "JustifyAlign" — distributes paragraph spacing to fill the
-    /// frame vertically. Renderer falls through to Top until the
-    /// per-paragraph distribution pass lands.
+    /// "JustifyAlign" — distributes the per-frame slack as extra
+    /// space between paragraphs so the last paragraph's baseline
+    /// reaches the frame's effective bottom. Line spacing within
+    /// each paragraph is preserved; only inter-paragraph gaps grow.
     Justify,
 }
 

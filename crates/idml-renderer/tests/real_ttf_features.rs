@@ -674,6 +674,177 @@ fn vertical_justify_distribute_overflow_matches_top() {
     );
 }
 
+fn build_vj_threaded_idml(vj: &str) -> Vec<u8> {
+    // Two threaded frames side by side on one page. Frame A is short
+    // (~80 pt tall) so it can hold only two of the four 24-pt
+    // paragraphs; the remainder spills into the taller frame B.
+    // After threading, each frame ends up with two paragraphs and
+    // its own positive slack to distribute.
+    let frame = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 600 612"/>
+    <TextFrame Self="frameA" ParentStory="u10"
+               GeometricBounds="40 40 100 280"
+               NextTextFrame="frameB" StrokeWeight="0">
+      <TextFramePreference VerticalJustification="{vj}"/>
+    </TextFrame>
+    <TextFrame Self="frameB" ParentStory="u10"
+               GeometricBounds="40 320 280 560" StrokeWeight="0">
+      <TextFramePreference VerticalJustification="{vj}"/>
+    </TextFrame>
+  </Spread>
+</idPkg:Spread>"#
+    );
+    write_zip(|zip| {
+        put(
+            zip,
+            "designmap.xml",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_u10.xml"/>
+</Document>"#,
+        );
+        put(
+            zip,
+            "Resources/Graphic.xml",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic/>
+</idPkg:Graphic>"#,
+        );
+        put(zip, "Spreads/Spread_sp1.xml", frame.as_bytes());
+        put(
+            zip,
+            "Stories/Story_u10.xml",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+        <Content>Alpha</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+        <Content>Beta</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+        <Content>Gamma</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+        <Content>Delta</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+        );
+    })
+}
+
+fn ink_extent_y_in_band_x(
+    img: &image::RgbaImage,
+    x0: u32,
+    x1: u32,
+    threshold: u8,
+) -> Option<(u32, u32)> {
+    let x1 = x1.min(img.width());
+    let mut top: Option<u32> = None;
+    let mut bot: Option<u32> = None;
+    for y in 0..img.height() {
+        let mut row_inked = false;
+        for x in x0..x1 {
+            let p = img.get_pixel(x, y);
+            if p.0[0] < threshold && p.0[1] < threshold && p.0[2] < threshold {
+                row_inked = true;
+                break;
+            }
+        }
+        if row_inked {
+            if top.is_none() {
+                top = Some(y);
+            }
+            bot = Some(y);
+        }
+    }
+    top.zip(bot)
+}
+
+#[test]
+fn vertical_justify_distribute_threaded_per_frame() {
+    // Threaded frames each get an independent distribute pass: their
+    // paragraphs spread top-to-bottom within their own frame, not
+    // across the chain as a whole. The probe: under JustifyAlign,
+    // every frame's last paragraph must drop toward its own frame's
+    // bottom (= TopAlign's bottom + that frame's local slack), while
+    // the first paragraph in each frame stays anchored at the top.
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+
+    // Frame A occupies x = 40..280 pt = 80..560 px at 144 dpi.
+    // Frame B occupies x = 320..560 pt = 640..1120 px at 144 dpi.
+    let render = |vj: &str| -> ((u32, u32), (u32, u32)) {
+        let bytes = build_vj_threaded_idml(vj);
+        let doc = Document::open(&bytes).unwrap();
+        let (_, imgs) = pipeline::render_document(&doc, &opts, 144.0, Color::WHITE).unwrap();
+        let a = ink_extent_y_in_band_x(&imgs[0], 80, 560, 80)
+            .expect("frame A must carry ink");
+        let b = ink_extent_y_in_band_x(&imgs[0], 640, 1120, 80)
+            .expect("frame B must carry overflow ink");
+        (a, b)
+    };
+
+    let ((top_a_top, top_a_bot), (top_b_top, top_b_bot)) = render("TopAlign");
+    let ((just_a_top, just_a_bot), (just_b_top, just_b_bot)) = render("JustifyAlign");
+
+    // The first paragraph in each frame must stay near the top of
+    // that frame (matches TopAlign within a small tolerance) —
+    // distribute only grows the inter-paragraph gaps, it doesn't
+    // shift the head baseline.
+    let tol = 6i32;
+    assert!(
+        (just_a_top as i32 - top_a_top as i32).abs() <= tol,
+        "frame A: first paragraph should stay at top: top={top_a_top}, just={just_a_top}",
+    );
+    assert!(
+        (just_b_top as i32 - top_b_top as i32).abs() <= tol,
+        "frame B: first paragraph should stay at top: top={top_b_top}, just={just_b_top}",
+    );
+    // Per-frame distribute must push the last paragraph of EACH
+    // frame strictly below where TopAlign left it. Without per-frame
+    // bookkeeping (e.g. if distribute treated the chain as a single
+    // span), one frame would receive all the slack and the other
+    // would still look like TopAlign.
+    assert!(
+        just_a_bot > top_a_bot,
+        "frame A: distribute should push last paragraph down: top_bot={top_a_bot}, just_bot={just_a_bot}",
+    );
+    assert!(
+        just_b_bot > top_b_bot,
+        "frame B: distribute should push last paragraph down: top_bot={top_b_bot}, just_bot={just_b_bot}",
+    );
+    // Frame B has much more slack than frame A (it's a much taller
+    // frame holding the same number of paragraphs), so the drop in
+    // frame B must dwarf the drop in frame A — that's the signature
+    // of an independent per-frame pass.
+    let drop_a = just_a_bot.saturating_sub(top_a_bot);
+    let drop_b = just_b_bot.saturating_sub(top_b_bot);
+    assert!(
+        drop_b > drop_a + 50,
+        "frame B's local slack should produce a much bigger drop than frame A's: drop_a={drop_a} px, drop_b={drop_b} px",
+    );
+}
+
 // ─────────────────────────── bullet list ────────────────────────────────
 
 fn build_bullet_idml() -> Vec<u8> {
