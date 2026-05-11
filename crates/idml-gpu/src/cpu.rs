@@ -2203,7 +2203,7 @@ fn compose_cmyk_overprint_at(
 /// `(C, M, Y, K)` that was itself produced by that forward map (the
 /// common "this destination pixel was painted by a CMYK swatch" case
 /// the Stage A path is designed to handle correctly).
-fn rgb_to_naive_cmyk_8bit(r: u8, g: u8, b: u8) -> (u8, u8, u8, u8) {
+pub(crate) fn rgb_to_naive_cmyk_8bit(r: u8, g: u8, b: u8) -> (u8, u8, u8, u8) {
     let max_rgb = r.max(g).max(b);
     let k = 255u8.saturating_sub(max_rgb);
     if k == 255 {
@@ -2220,7 +2220,7 @@ fn rgb_to_naive_cmyk_8bit(r: u8, g: u8, b: u8) -> (u8, u8, u8, u8) {
 /// Forward naive CMYK→RGB in 8-bit space. R = (255-C) * (255-K) / 255
 /// etc. The integer math matches `cmyk_unit_to_linear_rgb`'s float
 /// version to within rounding at 8-bit precision.
-fn naive_cmyk_to_rgb_8bit(c: u8, m: u8, y: u8, k: u8) -> (u8, u8, u8) {
+pub(crate) fn naive_cmyk_to_rgb_8bit(c: u8, m: u8, y: u8, k: u8) -> (u8, u8, u8) {
     let kp = 255u16 - k as u16;
     let chan = |v: u8| -> u8 {
         let prod = (255u16 - v as u16) * kp;

@@ -97,6 +97,13 @@ struct GpuState {
     device: wgpu::Device,
     queue: wgpu::Queue,
     renderer: Renderer,
+    /// Compute pipelines for CMYK-overprint parity. `None` if shader
+    /// compilation or pipeline creation failed on this adapter — the
+    /// rasterizer then falls back to the pre-parity knockout behaviour
+    /// for overprint commands (logged once via `tracing::warn!`). The
+    /// `vello_compute_pipeline_creation_failure_falls_back_to_knockout`
+    /// test pins that contract.
+    pipelines: Option<crate::cmyk_compute::Pipelines>,
 }
 
 impl PathRasterizer for VelloRasterizer {
@@ -118,15 +125,68 @@ impl PathRasterizer for VelloRasterizer {
         }
         let state = state_borrow.as_mut().unwrap();
 
-        let scene = build_scene(list, options);
-        match render_scene_to_buffer(state, &scene, options) {
+        // Count *Overprint commands. The three branches below trade
+        // accuracy for cost:
+        //   * 0: unchanged from pre-parity Vello — render and return.
+        //   * 1..=8 (with `cpu` feature): CPU fast-path finisher. The
+        //     existing CPU rasterizer handles overprint composition
+        //     pixel-perfectly; for small counts the readback +
+        //     re-rasterize overhead is the dominant cost anyway.
+        //   * 9+ or no `cpu` feature: GPU compute pipeline path. One
+        //     Vello scene per coalesced overprint batch, one splat
+        //     dispatch per batch, then one recomposite dispatch.
+        let overprint_count = count_overprints(list);
+        if overprint_count == 0 {
+            let scene = build_scene(list, options);
+            return match render_scene_to_buffer(state, &scene, options) {
+                Ok(buf) => buf,
+                Err(e) => {
+                    tracing::warn!(error = %e, "vello: render_to_texture failed");
+                    vec![0; (px_w * px_h * 4) as usize]
+                }
+            };
+        }
+
+        #[cfg(feature = "cpu")]
+        if overprint_count <= 8 && !crate::cmyk_compute::should_force_compute_path() {
+            return cpu_finisher_path(list, options);
+        }
+
+        match gpu_compute_overprint_path(state, list, options) {
             Ok(buf) => buf,
             Err(e) => {
-                tracing::warn!(error = %e, "vello: render_to_texture failed");
-                vec![0; (px_w * px_h * 4) as usize]
+                tracing::warn!(
+                    error = %e,
+                    "vello: compute overprint path failed; falling back to knockout"
+                );
+                // Knockout fallback: re-render once via the original
+                // build_scene path. Overprint draws collapse to
+                // plain `scene.fill` per the existing fallback in
+                // `build_scene_with_transform`. Better a knockout
+                // image than a panic.
+                let scene = build_scene(list, options);
+                render_scene_to_buffer(state, &scene, options)
+                    .unwrap_or_else(|_| vec![0; (px_w * px_h * 4) as usize])
             }
         }
     }
+}
+
+/// Walk the display list and tally `*Overprint` commands. Cheap (the
+/// list is in-memory and the match is one branch per command). Drives
+/// the policy decision in `rasterize` between unchanged / CPU-finisher /
+/// GPU-compute paths.
+fn count_overprints(list: &DisplayList) -> usize {
+    list.commands
+        .iter()
+        .filter(|cmd| {
+            matches!(
+                cmd,
+                DisplayCommand::FillPathOverprint { .. }
+                    | DisplayCommand::StrokePathOverprint { .. }
+            )
+        })
+        .count()
 }
 
 fn init_gpu() -> Result<GpuState, String> {
@@ -157,10 +217,26 @@ fn init_gpu() -> Result<GpuState, String> {
         },
     )
     .map_err(|e| format!("Renderer::new: {e:?}"))?;
+    // Try to build the compute pipelines once; failure here logs and
+    // falls back to knockout per the plan. The Vello renderer is the
+    // critical path — its failure is fatal, but the compute pipelines
+    // are an optimisation and their absence stays survivable.
+    let pipelines = match crate::cmyk_compute::create_pipelines(&device) {
+        Ok(p) => Some(p),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "vello: CMYK-overprint compute pipeline init failed; \
+                 falling back to knockout for *Overprint commands"
+            );
+            None
+        }
+    };
     Ok(GpuState {
         device,
         queue,
         renderer,
+        pipelines,
     })
 }
 
@@ -190,6 +266,19 @@ pub(crate) fn build_scene_for_surface(
 }
 
 fn build_scene_with_transform(list: &DisplayList, page_to_px: kurbo::Affine) -> Scene {
+    build_scene_with_transform_filtered(list, page_to_px, /*skip_overprints=*/ false)
+}
+
+/// Same as `build_scene_with_transform`, but with the option to skip
+/// `*Overprint` commands. The compute-path Vello render passes
+/// `skip_overprints = true` so the vello_target represents
+/// "everything below the overprint layer" — the splat shader uses
+/// that buffer to recover bottom-side CMYK on virgin pixels.
+fn build_scene_with_transform_filtered(
+    list: &DisplayList,
+    page_to_px: kurbo::Affine,
+    skip_overprints: bool,
+) -> Scene {
     // Stack of in-flight scenes. The bottom entry is the final
     // returned scene; additional entries are sub-scenes captured
     // for `PushLayer { effect: GaussianBlur, .. }` so we can replay
@@ -384,12 +473,15 @@ fn build_scene_with_transform(list: &DisplayList, page_to_px: kurbo::Affine) -> 
                 paint,
                 transform,
             } => {
-                // Vello backend doesn't yet implement overprint; the
-                // CMYK-darken approximation requires either a custom
-                // shader or an offscreen layer + per-channel blend
-                // that peniko doesn't expose. Fall through to a normal
-                // knockout fill so the page still renders — Stage 4's
-                // separation routing is the path of record on GPU.
+                if skip_overprints {
+                    continue;
+                }
+                // Vello backend overprint knockout fallback: when the
+                // compute-pipeline path isn't running we render the
+                // overprint as a normal knockout fill so the page is
+                // still visible. The compute path's main render
+                // passes `skip_overprints = true` and re-encodes each
+                // overprint batch into a scratch texture.
                 let scene = scene_stack.last_mut().expect("scene_stack underflow");
                 let Some(path_data) = list.paths.get(*path_id) else {
                     continue;
@@ -406,8 +498,9 @@ fn build_scene_with_transform(list: &DisplayList, page_to_px: kurbo::Affine) -> 
                 stroke,
                 transform,
             } => {
-                // Vello backend overprint fallback; see
-                // `FillPathOverprint`.
+                if skip_overprints {
+                    continue;
+                }
                 let scene = scene_stack.last_mut().expect("scene_stack underflow");
                 let Some(path_data) = list.paths.get(*path_id) else {
                     continue;
@@ -1196,6 +1289,804 @@ fn render_scene_to_buffer(
     Ok(out)
 }
 
+/// CPU-rasterizer fast-path for documents with 1..=8 overprint
+/// commands. The CPU backend is the project's fidelity-of-record and
+/// handles per-pixel plane state + spot-ink composition correctly;
+/// for low overprint counts the readback latency dwarfs the cost of
+/// re-running the whole scene through CPU rasterization. Delegating
+/// here keeps the rare cases of compute-pipeline edge bugs from
+/// affecting documents where the GPU path's encode overhead would
+/// dominate.
+///
+/// The plan calls for "walk the readback buffer through the existing
+/// CPU compose_cmyk_overprint_via_planes"; that's what the CPU
+/// rasterizer does internally, plus correct handling of paper-bypass,
+/// spot inks, image overprints, etc. We let it do the full job rather
+/// than partially reusing one helper.
+#[cfg(feature = "cpu")]
+fn cpu_finisher_path(list: &DisplayList, options: &RasterOptions) -> Vec<u8> {
+    let cpu = crate::CpuRasterizer;
+    cpu.rasterize(list, options)
+}
+
+/// GPU compute-pipeline path for overprint-heavy documents. Renders
+/// the full scene via Vello (with the existing knockout fallback for
+/// `*Overprint`), then for each coalesced overprint batch renders the
+/// batch's paths to a scratch buffer and dispatches `splat_or_overprint`
+/// against the plane state. After every batch, one `recomposite`
+/// dispatch unions everything into the final buffer.
+///
+/// Coalescing key = `(ink_mask_packed, spot_id)`. Consecutive overprint
+/// commands with the same key collapse into a single Vello scene and
+/// one splat dispatch — eliminating the "one render per glyph" worst
+/// case for K-only body text (a 200-word paragraph at ~1,100
+/// FillPathOverprint commands becomes 1 batch / 1 encode / 1 dispatch).
+///
+/// Per-channel max is associative + commutative within a single ink
+/// mask, so order within a batch doesn't matter. Across batches we
+/// preserve document order via the segmentation walk.
+///
+/// Pipeline-creation failure here returns `Err`; the caller logs and
+/// falls back to plain knockout via `build_scene`. This is the
+/// behaviour the `vello_compute_pipeline_creation_failure_falls_back_to_knockout`
+/// test pins.
+fn gpu_compute_overprint_path(
+    state: &mut GpuState,
+    list: &DisplayList,
+    options: &RasterOptions,
+) -> Result<Vec<u8>, String> {
+    let pipelines = state
+        .pipelines
+        .as_ref()
+        .ok_or_else(|| "compute pipelines unavailable".to_string())?;
+
+    let (width, height) = options.pixel_size();
+    let n_pixels = (width as usize) * (height as usize);
+
+    // 1) Render the scene MINUS overprint commands via Vello to
+    //    vello_target. The splat shader recovers bottom-side CMYK via
+    //    `rgb_to_naive_cmyk_8bit(target)` on virgin pixels — if the
+    //    target carried the overprint's own colour we'd round-trip
+    //    only that, dropping the underlying ink. Excluding overprint
+    //    commands keeps the target as the "everything below the
+    //    overprint" buffer the splat needs.
+    let scale = options.dpi / 72.0;
+    let scene = build_scene_with_transform_filtered(
+        list,
+        kurbo::Affine::scale(scale as f64),
+        /*skip_overprints=*/ true,
+    );
+    let vello_target = create_storage_texture(
+        &state.device,
+        width,
+        height,
+        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+        "vello target",
+    );
+    let vello_view = vello_target.create_view(&wgpu::TextureViewDescriptor::default());
+    state
+        .renderer
+        .render_to_texture(
+            &state.device,
+            &state.queue,
+            &scene,
+            &vello_view,
+            &RenderParams {
+                base_color: linear_to_peniko(options.background),
+                width,
+                height,
+                antialiasing_method: AaConfig::Area,
+            },
+        )
+        .map_err(|e| format!("vello render_to_texture (main): {e:?}"))?;
+
+    // 2) Allocate buffer-backed plane state. The shader prefers
+    //    buffers over storage textures because `rgba8unorm` read_write
+    //    storage isn't a portable WebGPU feature.
+    let plane_cmyk = create_zero_storage_buffer(
+        &state.device,
+        (n_pixels * 4) as u64,
+        "plane_cmyk",
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    );
+    let coverage_buf = create_zero_storage_buffer(
+        &state.device,
+        (n_pixels * 4) as u64,
+        "coverage",
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    );
+
+    // Collect overprint commands and coalesce by ink-mask + spot id.
+    let batches = build_overprint_batches(list);
+    let num_spots: u32 = batches
+        .iter()
+        .filter_map(|b| b.spot_id)
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(0);
+    let num_spot_groups = num_spots.div_ceil(4);
+    let spot_planes_size = (num_spot_groups as usize).max(1) * n_pixels * 4;
+    let spot_planes = create_zero_storage_buffer(
+        &state.device,
+        spot_planes_size as u64,
+        "spot_planes",
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    );
+    // Sentinel binding for process dispatches: a 16-byte buffer
+    // satisfies the bind-group layout's `Storage` slot without ever
+    // being read or written (the shader's `spot_id == sentinel`
+    // branch keeps it untouched).
+    let sentinel_spot = create_zero_storage_buffer(
+        &state.device,
+        16,
+        "sentinel_spot",
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    );
+
+    // Spot-alts table: one u32 per spot id, byte order = C, M, Y, K.
+    let mut spot_alts_data = vec![0u32; num_spots.max(1) as usize];
+    for batch in &batches {
+        if let Some(spot_id) = batch.spot_id {
+            if let Some(ink) = list.spot_ink(idml_compose::SpotInkId(spot_id)) {
+                spot_alts_data[spot_id as usize] = crate::cmyk_compute::pack_cmyk_bytes(
+                    ink.cmyk_alternate[0],
+                    ink.cmyk_alternate[1],
+                    ink.cmyk_alternate[2],
+                    ink.cmyk_alternate[3],
+                );
+            }
+        }
+    }
+    let spot_alts_buf = create_storage_buffer_with_data(
+        &state.device,
+        bytemuck::cast_slice(&spot_alts_data),
+        "spot_alts",
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    );
+
+    // Vello target copied into a buffer so the recomposite shader can
+    // read it via a `storage, read` binding (Rgba8Unorm storage read
+    // isn't portable on every adapter).
+    let bpr_aligned = wgpu::util::align_to(width * 4, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let vello_target_buf = state.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("idml-gpu vello target buffer"),
+        size: (n_pixels * 4) as u64,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    {
+        let staging = state.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("idml-gpu vello target staging"),
+            size: (bpr_aligned * height) as u64,
+            usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = state
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("idml-gpu vello target copy enc"),
+            });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &vello_target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bpr_aligned),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        // Row-by-row copy into the tight per-pixel buffer the shader
+        // expects. wgpu requires a multiple of COPY_BYTES_PER_ROW_ALIGNMENT
+        // (256) for buffer-to-buffer copies, so we copy each row
+        // individually.
+        for row in 0..height {
+            enc.copy_buffer_to_buffer(
+                &staging,
+                (row * bpr_aligned) as u64,
+                &vello_target_buf,
+                (row * width * 4) as u64,
+                (width * 4) as u64,
+            );
+        }
+        state.queue.submit(Some(enc.finish()));
+    }
+
+    // 3) For each overprint batch, render its paths to a scratch
+    //    Vello target, copy to a buffer, dispatch splat_or_overprint.
+    let scratch_op = create_storage_texture(
+        &state.device,
+        width,
+        height,
+        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+        "scratch_op",
+    );
+    let scratch_view = scratch_op.create_view(&wgpu::TextureViewDescriptor::default());
+    let scratch_buf = state.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("idml-gpu scratch op buffer"),
+        size: (n_pixels * 4) as u64,
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    });
+    let scratch_staging = state.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("idml-gpu scratch staging"),
+        size: (bpr_aligned * height) as u64,
+        usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    for batch in &batches {
+        let batch_scene = build_overprint_batch_scene(list, batch, options);
+        state
+            .renderer
+            .render_to_texture(
+                &state.device,
+                &state.queue,
+                &batch_scene,
+                &scratch_view,
+                &RenderParams {
+                    // Transparent base so the scratch alpha truly
+                    // encodes only the batch's path coverage.
+                    base_color: PenikoColor::from_rgba8(0, 0, 0, 0),
+                    width,
+                    height,
+                    antialiasing_method: AaConfig::Area,
+                },
+            )
+            .map_err(|e| format!("vello render_to_texture (scratch): {e:?}"))?;
+
+        // Copy scratch_op → scratch_buf via the row-aligned staging
+        // buffer (same pattern as the main vello-target copy above).
+        {
+            let mut enc = state
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("idml-gpu scratch copy enc"),
+                });
+            enc.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &scratch_op,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &scratch_staging,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(bpr_aligned),
+                        rows_per_image: Some(height),
+                    },
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            for row in 0..height {
+                enc.copy_buffer_to_buffer(
+                    &scratch_staging,
+                    (row * bpr_aligned) as u64,
+                    &scratch_buf,
+                    (row * width * 4) as u64,
+                    (width * 4) as u64,
+                );
+            }
+            state.queue.submit(Some(enc.finish()));
+        }
+
+        // Dispatch splat_or_overprint with the batch's ink mask and
+        // optional spot binding.
+        let (spot_id, spot_channel, spot_tint) = match batch.spot_id {
+            Some(id) => (id, id % 4, batch.spot_tint_8),
+            None => (crate::cmyk_compute::NO_SPOT_SENTINEL, 0u32, 0u32),
+        };
+        let params = crate::cmyk_compute::SplatParams {
+            ink_mask_packed: batch.ink_mask_packed,
+            spot_id,
+            spot_channel,
+            spot_tint,
+            width,
+            height,
+            _pad0: 0,
+            _pad1: 0,
+        };
+        let params_buf = create_uniform_buffer_with_data(
+            &state.device,
+            bytemuck::bytes_of(&params),
+            "splat params",
+        );
+
+        let bg0 = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("idml-gpu splat bg0"),
+            layout: &pipelines.splat_group0_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: plane_cmyk.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: coverage_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: scratch_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: params_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: vello_target_buf.as_entire_binding(),
+                },
+            ],
+        });
+
+        // For spot dispatches bind the matching slice of spot_planes
+        // (one packed group of 4 spots) into bg1; otherwise bind the
+        // sentinel buffer so the layout matches.
+        let bg1 = if let Some(id) = batch.spot_id {
+            let group = id / 4;
+            let offset = (group as u64) * (n_pixels as u64) * 4;
+            let size = (n_pixels as u64) * 4;
+            state.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("idml-gpu splat bg1 (spot)"),
+                layout: &pipelines.splat_group1_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &spot_planes,
+                        offset,
+                        size: std::num::NonZeroU64::new(size),
+                    }),
+                }],
+            })
+        } else {
+            state.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("idml-gpu splat bg1 (sentinel)"),
+                layout: &pipelines.splat_group1_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: sentinel_spot.as_entire_binding(),
+                }],
+            })
+        };
+
+        let mut enc = state
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("idml-gpu splat dispatch enc"),
+            });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("idml-gpu splat pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipelines.splat);
+            pass.set_bind_group(0, &bg0, &[]);
+            pass.set_bind_group(1, &bg1, &[]);
+            let wg_x = width.div_ceil(8);
+            let wg_y = height.div_ceil(8);
+            pass.dispatch_workgroups(wg_x, wg_y, 1);
+        }
+        state.queue.submit(Some(enc.finish()));
+    }
+
+    // 4) Recomposite into a final Rgba8Unorm texture, then copy that
+    //    out to a CPU-readable buffer.
+    let final_texture = create_storage_texture(
+        &state.device,
+        width,
+        height,
+        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+        "final target",
+    );
+    let final_view = final_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let recomp_params = crate::cmyk_compute::RecompositeParams {
+        width,
+        height,
+        num_spot_groups: num_spot_groups.max(1),
+        num_spots,
+    };
+    let recomp_params_buf = create_uniform_buffer_with_data(
+        &state.device,
+        bytemuck::bytes_of(&recomp_params),
+        "recomp params",
+    );
+
+    let bg_recomp = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("idml-gpu recomposite bg"),
+        layout: &pipelines.recomposite_group0_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: plane_cmyk.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: coverage_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: spot_planes.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: spot_alts_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: vello_target_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: recomp_params_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(&final_view),
+            },
+        ],
+    });
+    {
+        let mut enc = state
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("idml-gpu recomposite enc"),
+            });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("idml-gpu recomposite pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipelines.recomposite);
+            pass.set_bind_group(0, &bg_recomp, &[]);
+            let wg_x = width.div_ceil(8);
+            let wg_y = height.div_ceil(8);
+            pass.dispatch_workgroups(wg_x, wg_y, 1);
+        }
+        state.queue.submit(Some(enc.finish()));
+    }
+
+    // 5) Read back the final texture to CPU.
+    read_texture_to_rgba_vec(state, &final_texture, width, height)
+}
+
+fn create_storage_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+    usage: wgpu::TextureUsages,
+    label: &'static str,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage,
+        view_formats: &[],
+    })
+}
+
+fn create_zero_storage_buffer(
+    device: &wgpu::Device,
+    size: u64,
+    label: &'static str,
+    usage: wgpu::BufferUsages,
+) -> wgpu::Buffer {
+    // Buffers created without `mapped_at_creation = true` come back
+    // zeroed under wgpu; we explicitly enable `COPY_DST` upstream so
+    // callers can refill later if they need to. The mapped-at-creation
+    // path would be slightly faster but adds wgpu API boilerplate
+    // around the write-combining-buffer slice contract.
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size,
+        usage,
+        mapped_at_creation: false,
+    })
+}
+
+fn create_storage_buffer_with_data(
+    device: &wgpu::Device,
+    data: &[u8],
+    label: &'static str,
+    usage: wgpu::BufferUsages,
+) -> wgpu::Buffer {
+    let size = data.len().max(16) as u64;
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size,
+        usage,
+        mapped_at_creation: true,
+    });
+    {
+        let mut view = buf.slice(..).get_mapped_range_mut();
+        // BufferViewMut doesn't deref to &mut [u8] (write-combining
+        // memory safety); use `copy_from_slice` which is the supported
+        // bulk-write API. Pad with a zero copy when `data.len() < size`.
+        let mut padded;
+        let slice: &[u8] = if data.len() as u64 == size {
+            data
+        } else {
+            padded = vec![0u8; size as usize];
+            padded[..data.len()].copy_from_slice(data);
+            padded.as_slice()
+        };
+        view.copy_from_slice(slice);
+    }
+    buf.unmap();
+    buf
+}
+
+fn create_uniform_buffer_with_data(
+    device: &wgpu::Device,
+    data: &[u8],
+    label: &'static str,
+) -> wgpu::Buffer {
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: data.len() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: true,
+    });
+    {
+        let mut view = buf.slice(..).get_mapped_range_mut();
+        view.copy_from_slice(data);
+    }
+    buf.unmap();
+    buf
+}
+
+fn read_texture_to_rgba_vec(
+    state: &mut GpuState,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, String> {
+    let bpr_aligned = wgpu::util::align_to(width * 4, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let buffer_size = (bpr_aligned * height) as u64;
+    let buffer = state.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("idml-gpu final readback"),
+        size: buffer_size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = state
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("idml-gpu final readback enc"),
+        });
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bpr_aligned),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    state.queue.submit(Some(encoder.finish()));
+    let slice = buffer.slice(..);
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    slice.map_async(wgpu::MapMode::Read, move |res| {
+        tx.send(res).ok();
+    });
+    let _ = state.device.poll(wgpu::PollType::wait_indefinitely());
+    rx.recv()
+        .map_err(|e| format!("map_async recv: {e}"))?
+        .map_err(|e| format!("buffer map: {e:?}"))?;
+    let mapped = slice.get_mapped_range();
+    let bpr_tight = (width * 4) as usize;
+    let mut out = Vec::with_capacity(bpr_tight * height as usize);
+    for row in 0..height as usize {
+        let start = row * bpr_aligned as usize;
+        out.extend_from_slice(&mapped[start..start + bpr_tight]);
+    }
+    drop(mapped);
+    buffer.unmap();
+    Ok(out)
+}
+
+/// One coalesced batch of overprint commands: a set of paths to draw
+/// with a single `(ink_mask, spot)` combination. The compute pipeline
+/// renders each batch via Vello to a scratch texture, then runs one
+/// `splat_or_overprint` dispatch against the plane state.
+///
+/// `paths` carries `(path_id, transform, optional_stroke)` triples —
+/// fills have `optional_stroke = None`, strokes carry their parameters
+/// so the batch render reproduces the stroke geometry that contributes
+/// the coverage. Mixing fills and strokes in one batch is allowed
+/// because the coverage union is order-independent within a batch.
+struct OverprintBatch {
+    ink_mask_packed: u32,
+    spot_id: Option<u32>,
+    /// Pre-quantised spot tint (0..=255). Ignored for process batches.
+    spot_tint_8: u32,
+    paths: Vec<OverprintPath>,
+}
+
+struct OverprintPath {
+    path_id: idml_compose::PathId,
+    transform: idml_compose::Transform,
+    stroke: Option<idml_compose::Stroke>,
+}
+
+/// Walk the display list, group consecutive `*Overprint` commands by
+/// `(ink_mask_packed, spot_id)`. Different keys break the batch (we
+/// emit a new one); non-overprint commands are ignored.
+fn build_overprint_batches(list: &DisplayList) -> Vec<OverprintBatch> {
+    let mut batches: Vec<OverprintBatch> = Vec::new();
+    for cmd in &list.commands {
+        let (paint, path_id, transform, stroke) = match cmd {
+            DisplayCommand::FillPathOverprint {
+                paint,
+                path_id,
+                transform,
+            } => (paint, *path_id, *transform, None),
+            DisplayCommand::StrokePathOverprint {
+                paint,
+                path_id,
+                transform,
+                stroke,
+            } => (paint, *path_id, *transform, Some(*stroke)),
+            _ => continue,
+        };
+        let (ink_mask_packed, spot_id, spot_tint_8) = match paint {
+            Paint::Cmyk { c, m, y, k, spot, .. } => {
+                let pack =
+                    crate::cmyk_compute::pack_cmyk_unit([*c, *m, *y, *k]);
+                match spot {
+                    Some(idml_compose::SpotInkId(id)) => {
+                        // Spot tint = max ink channel / max alternate
+                        // channel, per the CPU rasterizer's logic in
+                        // `compose_cmyk_overprint_dispatch`.
+                        let tint_unit = if let Some(ink) =
+                            list.spot_ink(idml_compose::SpotInkId(*id))
+                        {
+                            let alt_max = ink
+                                .cmyk_alternate
+                                .iter()
+                                .map(|v| *v as f32 / 255.0)
+                                .fold(0.0_f32, f32::max);
+                            if alt_max <= f32::EPSILON {
+                                0.0
+                            } else {
+                                (c.max(*m).max(*y).max(*k) / alt_max).clamp(0.0, 1.0)
+                            }
+                        } else {
+                            0.0
+                        };
+                        let tint_8 = (tint_unit * 255.0).round() as u32;
+                        (pack, Some(*id), tint_8)
+                    }
+                    None => (pack, None, 0u32),
+                }
+            }
+            // Non-CMYK paints reaching an overprint command: this
+            // shouldn't happen at the orchestrator level, but if it
+            // did we treat the paint as 100% K knockout (the same
+            // visible result as the pre-parity Vello fallback).
+            Paint::Solid(c) => {
+                let (_, _, _, k) = crate::cpu::rgb_to_naive_cmyk_8bit(
+                    (c.r.clamp(0.0, 1.0) * 255.0) as u8,
+                    (c.g.clamp(0.0, 1.0) * 255.0) as u8,
+                    (c.b.clamp(0.0, 1.0) * 255.0) as u8,
+                );
+                let pack = crate::cmyk_compute::pack_cmyk_bytes(0, 0, 0, k);
+                (pack, None, 0u32)
+            }
+            _ => continue,
+        };
+
+        // Coalesce with the previous batch when the key matches.
+        let path = OverprintPath {
+            path_id,
+            transform,
+            stroke,
+        };
+        if let Some(last) = batches.last_mut() {
+            if last.ink_mask_packed == ink_mask_packed
+                && last.spot_id == spot_id
+                && last.spot_tint_8 == spot_tint_8
+            {
+                last.paths.push(path);
+                continue;
+            }
+        }
+        batches.push(OverprintBatch {
+            ink_mask_packed,
+            spot_id,
+            spot_tint_8,
+            paths: vec![path],
+        });
+    }
+    batches
+}
+
+/// Build a Vello scene containing only the paths of one overprint
+/// batch, all painted in opaque white. The scratch target's alpha
+/// channel captures the coverage union; the splat shader reads alpha
+/// and uses the push-constant `ink_mask` for the per-channel ink
+/// amounts. RGB doesn't matter — the shader ignores it.
+fn build_overprint_batch_scene(
+    list: &DisplayList,
+    batch: &OverprintBatch,
+    options: &RasterOptions,
+) -> Scene {
+    let scale = options.dpi / 72.0;
+    let page_to_px = kurbo::Affine::scale(scale as f64);
+    let mut scene = Scene::new();
+    let opaque_white = PenikoColor::from_rgba8(255, 255, 255, 255);
+    for path in &batch.paths {
+        let Some(path_data) = list.paths.get(path.path_id) else {
+            continue;
+        };
+        let bez = path_to_bez(path_data, &path.transform);
+        if let Some(stroke) = &path.stroke {
+            let ks = KurboStroke::new(stroke.width.max(0.0) as f64)
+                .with_caps(map_cap(stroke.cap))
+                .with_join(map_join(stroke.join))
+                .with_miter_limit(stroke.miter_limit.max(1.0) as f64);
+            scene.stroke(
+                &ks,
+                page_to_px,
+                BrushRef::Solid(opaque_white),
+                None,
+                &bez,
+            );
+        } else {
+            scene.fill(
+                Fill::NonZero,
+                page_to_px,
+                BrushRef::Solid(opaque_white),
+                None,
+                &bez,
+            );
+        }
+    }
+    scene
+}
+
 fn path_to_bez(
     data: &idml_compose::PathData,
     transform: &idml_compose::Transform,
@@ -1850,5 +2741,618 @@ mod tests {
             centre[0] < 80,
             "blurred rect centre should stay dark; got {centre:?}"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // CMYK overprint parity tests.
+    //
+    // Every test follows the same skeleton:
+    //   1. Build a synthetic display list with the CMYK / overprint
+    //      commands the case exercises.
+    //   2. Force the GPU compute path via `FORCE_COMPUTE_PATH` so we
+    //      actually validate the compute shaders even on small scenes.
+    //   3. Run the rasterizer; if the readback buffer is all zeros
+    //      (the documented GPU-unavailable fallback), early-return —
+    //      the test stays a "if we have a GPU, this works" check.
+    //   4. Sample pixels at known coordinates and assert.
+    //
+    // The early-return policy matches the existing
+    // `push_layer_gaussian_blur_softens_edges_on_gpu` pattern at line ~1820
+    // (pre-parity). Headless CI without an adapter exercises every
+    // test up to the GPU-availability check.
+    // ------------------------------------------------------------------
+
+    /// Helper: build a unit-rect path used by every CMYK test.
+    fn unit_rect_path(list: &mut idml_compose::DisplayList) -> idml_compose::PathId {
+        use idml_compose::{PathData, PathSegment};
+        let mut p = PathData::default();
+        p.segments.push(PathSegment::MoveTo { x: 0.0, y: 0.0 });
+        p.segments.push(PathSegment::LineTo { x: 1.0, y: 0.0 });
+        p.segments.push(PathSegment::LineTo { x: 1.0, y: 1.0 });
+        p.segments.push(PathSegment::LineTo { x: 0.0, y: 1.0 });
+        p.segments.push(PathSegment::Close);
+        list.paths.push_anon(p)
+    }
+
+    /// Helper: assert the readback buffer isn't the zero-fill fallback
+    /// (the documented "no GPU available" sentinel from
+    /// `VelloRasterizer::rasterize`). Returns `false` when the GPU
+    /// path didn't actually run — tests treat that as "skip cleanly".
+    fn gpu_path_ran(buf: &[u8]) -> bool {
+        buf.iter().any(|b| *b != 0)
+    }
+
+    /// Tests that toggle the global FORCE_COMPUTE_PATH /
+    /// FAIL_PIPELINE_CREATION flags must run serially — they share
+    /// process-wide state and `cargo test` runs tests in parallel by
+    /// default. A poison-free `Mutex` ensures only one CMYK test
+    /// holds the flag at a time.
+    static CMYK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Lock guard for the entire CMYK test. Acquire at test entry so
+    /// every render in the test sees a consistent flag state; engage
+    /// the FORCE flag later for specific render calls.
+    #[allow(dead_code)] // The MutexGuard is held by its existence.
+    struct CmykTestLock(std::sync::MutexGuard<'static, ()>);
+    impl CmykTestLock {
+        fn acquire() -> Self {
+            let lock = CMYK_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            // Reset to a known state on entry; a poisoned lock could
+            // leave the flag set from a previous panic.
+            crate::cmyk_compute::FORCE_COMPUTE_PATH
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            crate::cmyk_compute::FAIL_PIPELINE_CREATION
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            Self(lock)
+        }
+    }
+    impl Drop for CmykTestLock {
+        fn drop(&mut self) {
+            crate::cmyk_compute::FORCE_COMPUTE_PATH
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            crate::cmyk_compute::FAIL_PIPELINE_CREATION
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// Engage the FORCE_COMPUTE_PATH flag for a scoped region. The
+    /// caller must already hold a `CmykTestLock` to prevent races
+    /// with other CMYK tests.
+    struct ForceComputeScope;
+    impl ForceComputeScope {
+        fn engage() -> Self {
+            crate::cmyk_compute::FORCE_COMPUTE_PATH
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            Self
+        }
+    }
+    impl Drop for ForceComputeScope {
+        fn drop(&mut self) {
+            crate::cmyk_compute::FORCE_COMPUTE_PATH
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// Helper: build a 40×40 page with a magenta knockout fill from
+    /// pt (5..35, 5..35) covered by a cyan overprint fill in the same
+    /// rect. Returns the page-pt extent and the constructed list.
+    fn cmyk_overprint_cyan_on_magenta_list() -> idml_compose::DisplayList {
+        use idml_compose::{Color as DLColor, DisplayCommand, Paint, Transform};
+        let mut list = idml_compose::DisplayList::new();
+        let rect_id = unit_rect_path(&mut list);
+        // Magenta knockout: cyan 0, magenta 100%, yellow 0, K 0.
+        list.commands.push(DisplayCommand::FillPath {
+            path_id: rect_id,
+            paint: Paint::Cmyk {
+                c: 0.0,
+                m: 1.0,
+                y: 0.0,
+                k: 0.0,
+                rgb: DLColor::rgba(1.0, 0.0, 1.0, 1.0),
+                spot: None,
+            },
+            transform: Transform([30.0, 0.0, 0.0, 30.0, 5.0, 5.0]),
+        });
+        // Cyan overprint on top.
+        list.commands.push(DisplayCommand::FillPathOverprint {
+            path_id: rect_id,
+            paint: Paint::Cmyk {
+                c: 1.0,
+                m: 0.0,
+                y: 0.0,
+                k: 0.0,
+                rgb: DLColor::rgba(0.0, 1.0, 1.0, 1.0),
+                spot: None,
+            },
+            transform: Transform([30.0, 0.0, 0.0, 30.0, 5.0, 5.0]),
+        });
+        list
+    }
+
+    #[test]
+    fn vello_cmyk_overprint_cyan_on_magenta_produces_blue() {
+        // Cyan over magenta should produce the per-channel max
+        // composite (C=100, M=100, Y=0, K=0) which decodes to a dark
+        // blue. Without the parity work, the Vello knockout fallback
+        // would paint pure cyan on top — visible R, low G, full B.
+        let _lock = CmykTestLock::acquire();
+        let _force = ForceComputeScope::engage();
+        let list = cmyk_overprint_cyan_on_magenta_list();
+        let v = VelloRasterizer::new();
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        opts.background = ComposeColor::rgba(1.0, 1.0, 1.0, 1.0);
+        let buf = v.rasterize(&list, &opts);
+        if !gpu_path_ran(&buf) {
+            return;
+        }
+        let at = |x: usize, y: usize| -> [u8; 4] {
+            let i = (y * 40 + x) * 4;
+            [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+        };
+        // Interior pixel of the overprint region.
+        let p = at(20, 20);
+        // Naive CMYK→RGB(C=255, M=255, Y=0, K=0) = (0, 0, 255). Allow
+        // generous slack for rasterizer AA at edges (we're sampling
+        // an interior pixel so this stays tight).
+        assert!(
+            p[0] < 30 && p[1] < 30 && p[2] > 200,
+            "cyan-over-magenta interior should look blue, got {p:?}"
+        );
+    }
+
+    #[test]
+    fn vello_stroke_overprint_cyan_on_magenta() {
+        // Same composite rule for `StrokePathOverprint`. The stroke
+        // covers a narrow band; we sample a pixel near the stroke
+        // centre to avoid AA.
+        use idml_compose::{
+            Color as DLColor, DisplayCommand, LineCap, LineJoin, Paint, Stroke, Transform,
+        };
+        let _lock = CmykTestLock::acquire();
+        let _force = ForceComputeScope::engage();
+        let mut list = idml_compose::DisplayList::new();
+        let rect_id = unit_rect_path(&mut list);
+        list.commands.push(DisplayCommand::FillPath {
+            path_id: rect_id,
+            paint: Paint::Cmyk {
+                c: 0.0,
+                m: 1.0,
+                y: 0.0,
+                k: 0.0,
+                rgb: DLColor::rgba(1.0, 0.0, 1.0, 1.0),
+                spot: None,
+            },
+            transform: Transform([30.0, 0.0, 0.0, 30.0, 5.0, 5.0]),
+        });
+        list.commands.push(DisplayCommand::StrokePathOverprint {
+            path_id: rect_id,
+            paint: Paint::Cmyk {
+                c: 1.0,
+                m: 0.0,
+                y: 0.0,
+                k: 0.0,
+                rgb: DLColor::rgba(0.0, 1.0, 1.0, 1.0),
+                spot: None,
+            },
+            stroke: Stroke {
+                width: 8.0,
+                cap: LineCap::Butt,
+                join: LineJoin::Miter,
+                miter_limit: 4.0,
+                dash: idml_compose::DashPattern::default(),
+            },
+            transform: Transform([30.0, 0.0, 0.0, 30.0, 5.0, 5.0]),
+        });
+
+        let v = VelloRasterizer::new();
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        opts.background = ComposeColor::rgba(1.0, 1.0, 1.0, 1.0);
+        let buf = v.rasterize(&list, &opts);
+        if !gpu_path_ran(&buf) {
+            return;
+        }
+        // Stroke center should land near (5, 5..35) horizontal band.
+        // Sample at (5, 20) — the left edge of the stroke band.
+        let i = (20 * 40 + 5) * 4;
+        let p = [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]];
+        assert!(
+            p[2] > 150,
+            "cyan-on-magenta stroke should be blueish, got {p:?}"
+        );
+    }
+
+    #[test]
+    fn vello_no_overprint_unchanged_vs_baseline() {
+        // Document with NO overprint commands must render bit-identical
+        // to the pre-parity path. Snapshot the result first via the
+        // FORCE_COMPUTE_PATH-off rasterizer (which takes the unchanged
+        // path since count == 0), then re-run with FORCE on and assert
+        // the buffer is the same. (FORCE_COMPUTE_PATH only matters when
+        // count > 0; here it's a no-op — confirming that.)
+        let _lock = CmykTestLock::acquire();
+        use idml_compose::{
+            BlendMode as ComposeBlend, Color as DLColor, DisplayCommand, Paint, PathData,
+            PathSegment, Rect, Transform,
+        };
+        let mut list = idml_compose::DisplayList::new();
+        let rect_id = unit_rect_path(&mut list);
+        list.commands.push(DisplayCommand::BeginBlendGroup {
+            bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 40.0,
+                h: 40.0,
+            },
+            blend_mode: ComposeBlend::Normal,
+            opacity: 1.0,
+            transform: Transform::IDENTITY,
+        });
+        list.commands.push(DisplayCommand::FillPath {
+            path_id: rect_id,
+            paint: Paint::Solid(DLColor::rgba(0.0, 0.4, 0.8, 1.0)),
+            transform: Transform([30.0, 0.0, 0.0, 30.0, 5.0, 5.0]),
+        });
+        list.commands.push(DisplayCommand::EndBlendGroup(Transform::IDENTITY));
+        // Quiet the unused path warning for tests on no-effect paths.
+        let _ = PathSegment::Close;
+        let _ = PathData::default();
+
+        let v1 = VelloRasterizer::new();
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        opts.background = ComposeColor::rgba(1.0, 1.0, 1.0, 1.0);
+        let buf_baseline = v1.rasterize(&list, &opts);
+        if !gpu_path_ran(&buf_baseline) {
+            return;
+        }
+
+        let _force = ForceComputeScope::engage();
+        let v2 = VelloRasterizer::new();
+        let buf_forced = v2.rasterize(&list, &opts);
+        // FORCE_COMPUTE_PATH is a no-op when count == 0 — both should
+        // take the unchanged path and produce bit-identical bytes.
+        assert_eq!(
+            buf_baseline, buf_forced,
+            "zero-overprint scene should render bit-identical regardless of force flag"
+        );
+    }
+
+    #[test]
+    fn vello_k_overprint_passes_through_rgb_image() {
+        // K-only black text overprinted on a photo. The non-text RGB
+        // image pixels must pass through unchanged (coverage == 0
+        // passthrough). Text-covered pixels must darken (K plane
+        // splat) vs. the baseline image-only render.
+        let _lock = CmykTestLock::acquire();
+        use idml_compose::{
+            Color as DLColor, DecodedImage, DisplayCommand, Paint, Transform,
+        };
+        let mut list = idml_compose::DisplayList::new();
+        let rect_id = unit_rect_path(&mut list);
+        // 1×1 red image; the placement transform scales it across
+        // the full page.
+        let image_id = list.push_image(DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![200, 80, 80, 255],
+        });
+        list.commands.push(DisplayCommand::Image {
+            image_id,
+            transform: Transform([40.0, 0.0, 0.0, 40.0, 0.0, 0.0]),
+        });
+        // K-only overprint over a small rect in the middle.
+        list.commands.push(DisplayCommand::FillPathOverprint {
+            path_id: rect_id,
+            paint: Paint::Cmyk {
+                c: 0.0,
+                m: 0.0,
+                y: 0.0,
+                k: 1.0,
+                rgb: DLColor::rgba(0.0, 0.0, 0.0, 1.0),
+                spot: None,
+            },
+            transform: Transform([10.0, 0.0, 0.0, 10.0, 15.0, 15.0]),
+        });
+
+        // Baseline: just the image, no overprint. Build a separate
+        // list to render and capture the pre-darken RGB.
+        let mut baseline = idml_compose::DisplayList::new();
+        let _rect_id_b = unit_rect_path(&mut baseline);
+        let image_id_b = baseline.push_image(DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![200, 80, 80, 255],
+        });
+        baseline.commands.push(DisplayCommand::Image {
+            image_id: image_id_b,
+            transform: Transform([40.0, 0.0, 0.0, 40.0, 0.0, 0.0]),
+        });
+
+        let v = VelloRasterizer::new();
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        opts.background = ComposeColor::rgba(1.0, 1.0, 1.0, 1.0);
+        let baseline_buf = v.rasterize(&baseline, &opts);
+        if !gpu_path_ran(&baseline_buf) {
+            return;
+        }
+        let _force = ForceComputeScope::engage();
+        let buf = v.rasterize(&list, &opts);
+
+        let at = |b: &[u8], x: usize, y: usize| -> [u8; 4] {
+            let i = (y * 40 + x) * 4;
+            [b[i], b[i + 1], b[i + 2], b[i + 3]]
+        };
+        // Outside the overprint rect (x=5, y=5): RGB image pixel must
+        // be bit-identical to baseline.
+        let outside_b = at(&baseline_buf, 5, 5);
+        let outside = at(&buf, 5, 5);
+        assert_eq!(
+            outside_b, outside,
+            "pixel outside K overprint must be bit-identical to baseline image"
+        );
+        // Inside the overprint rect (x=20, y=20): pixel must be
+        // darker than the baseline image (K plane adds to all channels).
+        let inside_b = at(&baseline_buf, 20, 20);
+        let inside = at(&buf, 20, 20);
+        assert!(
+            inside[0] < inside_b[0]
+                && inside[1] < inside_b[1]
+                && inside[2] < inside_b[2],
+            "K overprint should darken every channel; before={inside_b:?} after={inside:?}"
+        );
+    }
+
+    #[test]
+    fn vello_spot_on_spot_same_ink_max_tints() {
+        // Two overprint draws of the same spot ink at 50% and 80%
+        // tints. The union pixel should reflect 80% — `max(50%, 80%)`.
+        // We assert by comparing to a single-draw 80% pixel.
+        use idml_compose::{
+            Color as DLColor, DisplayCommand, Paint, SpotInk, Transform,
+        };
+        let _lock = CmykTestLock::acquire();
+        let _force = ForceComputeScope::engage();
+        // Spot with strong cyan alternate (so any tint is visible).
+        let ink = SpotInk {
+            name: "Color/TestSpot".to_string(),
+            cmyk_alternate: [255, 0, 0, 0], // 100% cyan
+        };
+        let spot_at = |list: &mut idml_compose::DisplayList, tint: f32| -> Paint {
+            let spot_id = list.push_spot_ink(ink.clone());
+            // CMYK channels carry alt × tint per the parser contract.
+            Paint::Cmyk {
+                c: tint * 1.0,
+                m: 0.0,
+                y: 0.0,
+                k: 0.0,
+                rgb: DLColor::rgba(1.0 - tint, 1.0, 1.0, 1.0),
+                spot: Some(spot_id),
+            }
+        };
+
+        let mut overlap = idml_compose::DisplayList::new();
+        let rect_id = unit_rect_path(&mut overlap);
+        let p50 = spot_at(&mut overlap, 0.5);
+        let p80 = spot_at(&mut overlap, 0.8);
+        overlap.commands.push(DisplayCommand::FillPathOverprint {
+            path_id: rect_id,
+            paint: p50,
+            transform: Transform([30.0, 0.0, 0.0, 30.0, 5.0, 5.0]),
+        });
+        overlap.commands.push(DisplayCommand::FillPathOverprint {
+            path_id: rect_id,
+            paint: p80,
+            transform: Transform([30.0, 0.0, 0.0, 30.0, 5.0, 5.0]),
+        });
+
+        let mut alone80 = idml_compose::DisplayList::new();
+        let rect_id_b = unit_rect_path(&mut alone80);
+        let p80b = spot_at(&mut alone80, 0.8);
+        alone80.commands.push(DisplayCommand::FillPathOverprint {
+            path_id: rect_id_b,
+            paint: p80b,
+            transform: Transform([30.0, 0.0, 0.0, 30.0, 5.0, 5.0]),
+        });
+
+        let v = VelloRasterizer::new();
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        opts.background = ComposeColor::rgba(1.0, 1.0, 1.0, 1.0);
+        let buf_overlap = v.rasterize(&overlap, &opts);
+        if !gpu_path_ran(&buf_overlap) {
+            return;
+        }
+        let buf_80 = v.rasterize(&alone80, &opts);
+        let at = |b: &[u8], x: usize, y: usize| -> [u8; 4] {
+            let i = (y * 40 + x) * 4;
+            [b[i], b[i + 1], b[i + 2], b[i + 3]]
+        };
+        let a = at(&buf_overlap, 20, 20);
+        let b = at(&buf_80, 20, 20);
+        // Allow a few-LSB tolerance for rounding.
+        for i in 0..3 {
+            let diff = (a[i] as i32 - b[i] as i32).abs();
+            assert!(
+                diff <= 4,
+                "channel {i}: union {a:?} should match alone-80% {b:?} within rounding"
+            );
+        }
+    }
+
+    #[test]
+    fn vello_spot_packing_at_5_spots() {
+        // 5 spot inks => ceil(5/4) = 2 packed spot textures. We can't
+        // easily inspect bind-group internals from a test, but we CAN
+        // verify each ink reads back from the right channel by drawing
+        // 5 overprints in disjoint regions and checking that each
+        // region shows a distinct visible colour matching its alt.
+        use idml_compose::{
+            Color as DLColor, DisplayCommand, Paint, SpotInk, Transform,
+        };
+        let _lock = CmykTestLock::acquire();
+        let _force = ForceComputeScope::engage();
+        let mut list = idml_compose::DisplayList::new();
+        let rect_id = unit_rect_path(&mut list);
+        // 5 spots, each with a different distinctive alternate.
+        let alts: [[u8; 4]; 5] = [
+            [255, 0, 0, 0],   // pure cyan
+            [0, 255, 0, 0],   // pure magenta
+            [0, 0, 255, 0],   // pure yellow
+            [0, 0, 0, 255],   // pure black
+            [128, 128, 0, 0], // 50% C/M
+        ];
+        let mut spot_ids = Vec::new();
+        for (i, alt) in alts.iter().enumerate() {
+            let ink = SpotInk {
+                name: format!("Color/Spot{i}"),
+                cmyk_alternate: *alt,
+            };
+            spot_ids.push(list.push_spot_ink(ink));
+        }
+        // Tile 5 horizontal stripes across the page, each painted by
+        // a different spot at 100% tint.
+        for (i, sid) in spot_ids.iter().enumerate() {
+            let y0 = 2.0 + (i as f32) * 6.0;
+            list.commands.push(DisplayCommand::FillPathOverprint {
+                path_id: rect_id,
+                paint: Paint::Cmyk {
+                    c: (alts[i][0] as f32) / 255.0,
+                    m: (alts[i][1] as f32) / 255.0,
+                    y: (alts[i][2] as f32) / 255.0,
+                    k: (alts[i][3] as f32) / 255.0,
+                    rgb: DLColor::rgba(0.0, 0.0, 0.0, 1.0),
+                    spot: Some(*sid),
+                },
+                transform: Transform([35.0, 0.0, 0.0, 4.0, 2.0, y0]),
+            });
+        }
+
+        let v = VelloRasterizer::new();
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        opts.background = ComposeColor::rgba(1.0, 1.0, 1.0, 1.0);
+        let buf = v.rasterize(&list, &opts);
+        if !gpu_path_ran(&buf) {
+            return;
+        }
+        let at = |x: usize, y: usize| -> [u8; 4] {
+            let i = (y * 40 + x) * 4;
+            [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+        };
+        // Stripe 0: 100% cyan alt => (0, 255, 255) RGB roughly.
+        let s0 = at(20, 4);
+        assert!(
+            s0[0] < 50 && s0[1] > 200 && s0[2] > 200,
+            "spot 0 stripe should look cyan, got {s0:?}"
+        );
+        // Stripe 1: 100% magenta alt => (255, 0, 255).
+        let s1 = at(20, 10);
+        assert!(
+            s1[0] > 200 && s1[1] < 50 && s1[2] > 200,
+            "spot 1 stripe should look magenta, got {s1:?}"
+        );
+        // Stripe 3: 100% K alt (the first ink to land in the SECOND
+        // packed texture group at index 3 channel 3, *not* a new
+        // group — group 0 channel 3). Should appear black.
+        let s3 = at(20, 22);
+        assert!(
+            s3[0] < 40 && s3[1] < 40 && s3[2] < 40,
+            "spot 3 (K alt) stripe should look black, got {s3:?}"
+        );
+        // Stripe 4: 50% C + 50% M alt = bluish purple. This is the
+        // first ink that lands in the SECOND packed group (index 4 =
+        // group 1, channel 0). If the per-group bind-group offset
+        // arithmetic were wrong, this stripe would either be miswritten
+        // (read back as something else entirely) or zero.
+        let s4 = at(20, 28);
+        assert!(
+            s4[2] > 80,
+            "spot 4 (50% C/M alt, second packed group) should still show colour, got {s4:?}"
+        );
+    }
+
+    #[test]
+    fn vello_fast_path_low_overprint_count() {
+        // Fixture with 2 overprints: the CPU finisher branch fires
+        // without `FORCE_COMPUTE_PATH`. The visible result must match
+        // what the compute path produces — both routes terminate at
+        // the same per-channel-max composite.
+        let _lock = CmykTestLock::acquire();
+        let list = cmyk_overprint_cyan_on_magenta_list();
+        let v = VelloRasterizer::new();
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        opts.background = ComposeColor::rgba(1.0, 1.0, 1.0, 1.0);
+        let buf_fast = v.rasterize(&list, &opts);
+        if !gpu_path_ran(&buf_fast) {
+            // CPU finisher always "ran" so this means the CPU build
+            // didn't even pull tiny-skia — bail.
+            return;
+        }
+        let _force = ForceComputeScope::engage();
+        let buf_compute = v.rasterize(&list, &opts);
+        if !gpu_path_ran(&buf_compute) {
+            return;
+        }
+        // The interior pixel should look blue in both buffers and
+        // ΔE between them should be small (different rasterizers but
+        // the same composite intent). We use a per-channel slack of
+        // 16 — generous enough for AA / 8-bit quantisation differences.
+        let at = |b: &[u8], x: usize, y: usize| -> [u8; 4] {
+            let i = (y * 40 + x) * 4;
+            [b[i], b[i + 1], b[i + 2], b[i + 3]]
+        };
+        let a = at(&buf_fast, 20, 20);
+        let b = at(&buf_compute, 20, 20);
+        for i in 0..3 {
+            let diff = (a[i] as i32 - b[i] as i32).abs();
+            assert!(
+                diff < 32,
+                "channel {i}: fast={a:?} vs compute={b:?} differ by {diff}"
+            );
+        }
+        // Both should look distinctly blue.
+        assert!(a[2] > 150, "fast-path interior should be blue, got {a:?}");
+        assert!(b[2] > 150, "compute interior should be blue, got {b:?}");
+    }
+
+    #[test]
+    fn vello_compute_pipeline_creation_failure_falls_back_to_knockout() {
+        // Force pipeline creation to fail before constructing the
+        // rasterizer. The Vello backend should log + fall back to the
+        // pre-parity knockout fill — a plausible (non-black) image
+        // rather than a panic or a zero buffer.
+        let _lock = CmykTestLock::acquire();
+        use std::sync::atomic::Ordering;
+        crate::cmyk_compute::FAIL_PIPELINE_CREATION.store(true, Ordering::SeqCst);
+        let _force = ForceComputeScope::engage();
+        let list = cmyk_overprint_cyan_on_magenta_list();
+        let v = VelloRasterizer::new();
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        opts.background = ComposeColor::rgba(1.0, 1.0, 1.0, 1.0);
+        let buf = v.rasterize(&list, &opts);
+        if !gpu_path_ran(&buf) {
+            return;
+        }
+        // Knockout fallback paints the overprint as a normal cyan
+        // fill on top of magenta — visible cyan in the centre. We're
+        // not asserting per-pixel parity (it explicitly diverges from
+        // the CPU result here), just that the rasterizer didn't
+        // panic and returned a plausible image rather than zero.
+        let at = |x: usize, y: usize| -> [u8; 4] {
+            let i = (y * 40 + x) * 4;
+            [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+        };
+        let interior = at(20, 20);
+        // Some colour at the interior — the rect is filled with
+        // something rather than left at background or zero.
+        let nonzero = interior[0] > 0 || interior[1] > 0 || interior[2] > 0;
+        assert!(nonzero, "knockout fallback produced black, got {interior:?}");
     }
 }

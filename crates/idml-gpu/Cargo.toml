@@ -39,3 +39,11 @@ wgpu = { version = "29.0.1", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3", features = ["HtmlCanvasElement"] }
+
+# Build-time WGSL validation for the Vello CMYK-parity compute
+# shaders. The cmyk_compute module is gated behind `vello-backend`,
+# but cargo doesn't surface a feature-gated `[build-dependencies]`
+# table cleanly — the build.rs is a no-op when the shader files are
+# absent, so the unconditional dep is benign for non-Vello builds.
+[build-dependencies]
+naga = { version = "29", features = ["wgsl-in"] }
