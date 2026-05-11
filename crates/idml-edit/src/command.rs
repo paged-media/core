@@ -5,6 +5,7 @@
 //! vocabulary; `ts-rs` will eventually mirror it into TypeScript so
 //! the bridge stays typed end-to-end.
 
+use idml_parse::Justification;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -34,7 +35,11 @@ pub enum RunAttrPatch {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "key", content = "value")]
 pub enum ParagraphAttrPatch {
-    Justification(Option<String>),
+    /// `Justification` as the typed IDML enum. The serde format is
+    /// the raw IDML attribute string (`"LeftAlign"`, etc.), so the
+    /// JSON wire payload from the bridge is byte-identical to the
+    /// pre-enum world.
+    Justification(Option<Justification>),
     FirstLineIndent(Option<f32>),
     SpaceBefore(Option<f32>),
     SpaceAfter(Option<f32>),

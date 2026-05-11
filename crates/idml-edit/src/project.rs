@@ -387,7 +387,7 @@ impl Project {
             .get(para.0 as usize)?;
         Some(ParagraphAttrs {
             paragraph_style: p.paragraph_style.clone(),
-            justification: p.justification.clone(),
+            justification: p.justification,
             first_line_indent: p.first_line_indent,
             space_before: p.space_before,
             space_after: p.space_after,
@@ -2142,7 +2142,7 @@ fn apply_run_attr(attrs: &mut RunAttrs, patch: &RunAttrPatch) {
 
 fn apply_paragraph_attr(attrs: &mut ParagraphAttrs, patch: &ParagraphAttrPatch) {
     match patch {
-        ParagraphAttrPatch::Justification(v) => attrs.justification = v.clone(),
+        ParagraphAttrPatch::Justification(v) => attrs.justification = *v,
         ParagraphAttrPatch::FirstLineIndent(v) => attrs.first_line_indent = *v,
         ParagraphAttrPatch::SpaceBefore(v) => attrs.space_before = *v,
         ParagraphAttrPatch::SpaceAfter(v) => attrs.space_after = *v,
