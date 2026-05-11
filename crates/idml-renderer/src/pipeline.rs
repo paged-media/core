@@ -1671,31 +1671,64 @@ fn emit_paragraph_into_chain(
             .unwrap_or(i);
         unique_idx.push(head);
     }
-    let mut shaping_faces: Vec<Option<rustybuzz::Face>> =
-        (0..bytes_pool.len()).map(|_| None).collect();
+    // Outline faces stay per-paragraph (ttf_parser::Face is cheap
+    // and the outline interner already caches glyph outlines at the
+    // DisplayList level — caching the Face itself buys little).
     let mut outline_faces: Vec<Option<ttf_parser::Face>> =
         (0..bytes_pool.len()).map(|_| None).collect();
+    // Shaping faces: prefer the per-render FontTable cache; fall
+    // back to building one on the fly when the cache misses (e.g.
+    // a run added dynamically after build, or a fallback-font slot
+    // the harvest pass didn't see). `owned_shaping_faces` holds the
+    // fallbacks; `shaping_faces` is the parallel array of borrowed
+    // references that StyledRun consumes downstream.
+    let mut owned_shaping_faces: Vec<Option<rustybuzz::Face>> =
+        (0..bytes_pool.len()).map(|_| None).collect();
+    let mut shaping_faces: Vec<Option<&rustybuzz::Face>> =
+        (0..bytes_pool.len()).map(|_| None).collect();
+    let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
+    let bytes_font_ids: Vec<u32> = bytes_pool
+        .iter()
+        .map(|b| fnv_1a_u32(b.as_ref()))
+        .collect();
     for i in 0..bytes_pool.len() {
         if unique_idx[i] != i {
             continue;
         }
         let bytes_ref = bytes_pool[i].as_ref();
-        let Some(mut rf) = rustybuzz::Face::from_slice(bytes_ref, 0) else {
-            return;
-        };
         let Ok(mut of) = ttf_parser::Face::parse(bytes_ref, 0) else {
             return;
         };
-        // Set wght variation on both faces. No-op for static fonts
-        // (set_variation returns Some only when the axis exists).
-        let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
-        rf.set_variations(&[rustybuzz::Variation {
-            tag: wght_tag,
-            value: wghts[i],
-        }]);
         let _ = of.set_variation(wght_tag, wghts[i]);
-        shaping_faces[i] = Some(rf);
         outline_faces[i] = Some(of);
+
+        // Shaping Face: cache lookup first, build on miss.
+        if em
+            .font_table
+            .face(bytes_font_ids[i], wghts[i].to_bits())
+            .is_none()
+        {
+            let Some(mut rf) = rustybuzz::Face::from_slice(bytes_ref, 0) else {
+                return;
+            };
+            rf.set_variations(&[rustybuzz::Variation {
+                tag: wght_tag,
+                value: wghts[i],
+            }]);
+            owned_shaping_faces[i] = Some(rf);
+        }
+    }
+    // Second pass: assemble the borrowed-reference array. The cache
+    // is borrowed via `em.font_table` (which outlives this scope);
+    // the on-demand owned faces are borrowed from `owned_shaping_faces`
+    // (which lives to the end of the paragraph emission).
+    for i in 0..bytes_pool.len() {
+        let head = unique_idx[i];
+        if let Some(cached) = em.font_table.face(bytes_font_ids[head], wghts[head].to_bits()) {
+            shaping_faces[i] = Some(cached);
+        } else if let Some(owned) = owned_shaping_faces[head].as_ref() {
+            shaping_faces[i] = Some(owned);
+        }
     }
 
     // font_id mixes in the wght variation so the glyph-outline cache
@@ -1820,7 +1853,7 @@ fn emit_paragraph_into_chain(
             } else {
                 &run.text
             },
-            face: shaping_faces[unique_idx[i]].as_ref().unwrap(),
+            face: shaping_faces[unique_idx[i]].unwrap(),
             point_size: resolved_runs[i]
                 .point_size
                 .unwrap_or(em.options.default_point_size),
@@ -1920,7 +1953,7 @@ fn emit_paragraph_into_chain(
         if split > 0 {
             let dropped_slice = &head[..split];
             let cap_face_idx = unique_idx[0];
-            let cap_face_ref = shaping_faces[cap_face_idx].as_ref().unwrap();
+            let cap_face_ref = shaping_faces[cap_face_idx].unwrap();
             let cap_shaped = idml_text::shape_run(cap_face_ref, dropped_slice, cap_point_size);
             // Gutter: half the body's space-glyph advance — a small
             // proxy for InDesign's `DropCapDetail` side-bearing.
@@ -3485,10 +3518,29 @@ fn emit_text_path_into(
                 .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
                 .map(|p| apply_fill_tint(p, resolved.fill_tint))
                 .unwrap_or(default_paint);
-            let Some(rb_face) = rustybuzz::Face::from_slice(face_bytes_b.as_ref(), 0) else {
-                continue;
+            // Pull the pre-configured (wght-baked) Face from the
+            // FontTable cache when possible; build on the fly only
+            // on a miss (e.g. a run whose bytes resolved through the
+            // fallback path that `harvest_face_keys` didn't see).
+            let font_id = fnv_1a_u32(face_bytes_b.as_ref());
+            let wght_bits = wght_for_font_style(resolved.font_style.as_deref()).to_bits();
+            let owned_face: Option<rustybuzz::Face> = if font_table.face(font_id, wght_bits).is_none() {
+                let Some(mut rf) = rustybuzz::Face::from_slice(face_bytes_b.as_ref(), 0) else {
+                    continue;
+                };
+                rf.set_variations(&[rustybuzz::Variation {
+                    tag: ttf_parser::Tag::from_bytes(b"wght"),
+                    value: f32::from_bits(wght_bits),
+                }]);
+                Some(rf)
+            } else {
+                None
             };
-            let mut shaped = idml_text::shape::shape_run(&rb_face, &run.text, point_size);
+            let rb_face: &rustybuzz::Face = match font_table.face(font_id, wght_bits) {
+                Some(f) => f,
+                None => owned_face.as_ref().unwrap(),
+            };
+            let mut shaped = idml_text::shape::shape_run(rb_face, &run.text, point_size);
             if let Some(t) = resolved.tracking {
                 idml_text::shape::apply_tracking(&mut shaped, t, point_size);
             }
@@ -5412,22 +5464,45 @@ fn measure_cell_paragraph(
             .unwrap_or(i);
         unique_idx.push(head);
     }
-    let mut shaping_faces: Vec<Option<rustybuzz::Face>> =
+    // Shaping faces: prefer the per-render FontTable cache (built
+    // from a full harvest of every run, table cells included); fall
+    // back to building on demand for runs the cache didn't see.
+    let mut owned_shaping_faces: Vec<Option<rustybuzz::Face>> =
         (0..bytes_pool.len()).map(|_| None).collect();
+    let mut shaping_faces: Vec<Option<&rustybuzz::Face>> =
+        (0..bytes_pool.len()).map(|_| None).collect();
+    let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
+    let bytes_font_ids: Vec<u32> = bytes_pool
+        .iter()
+        .map(|b| fnv_1a_u32(b.as_ref()))
+        .collect();
     for i in 0..bytes_pool.len() {
         if unique_idx[i] != i {
             continue;
         }
-        let bytes_ref = bytes_pool[i].as_ref();
-        let Some(mut rf) = rustybuzz::Face::from_slice(bytes_ref, 0) else {
-            return 0.0;
-        };
-        let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
-        rf.set_variations(&[rustybuzz::Variation {
-            tag: wght_tag,
-            value: wghts[i],
-        }]);
-        shaping_faces[i] = Some(rf);
+        if em
+            .font_table
+            .face(bytes_font_ids[i], wghts[i].to_bits())
+            .is_none()
+        {
+            let bytes_ref = bytes_pool[i].as_ref();
+            let Some(mut rf) = rustybuzz::Face::from_slice(bytes_ref, 0) else {
+                return 0.0;
+            };
+            rf.set_variations(&[rustybuzz::Variation {
+                tag: wght_tag,
+                value: wghts[i],
+            }]);
+            owned_shaping_faces[i] = Some(rf);
+        }
+    }
+    for i in 0..bytes_pool.len() {
+        let head = unique_idx[i];
+        if let Some(cached) = em.font_table.face(bytes_font_ids[head], wghts[head].to_bits()) {
+            shaping_faces[i] = Some(cached);
+        } else if let Some(owned) = owned_shaping_faces[head].as_ref() {
+            shaping_faces[i] = Some(owned);
+        }
     }
     let font_ids: Vec<u32> = bytes_pool
         .iter()
@@ -5440,7 +5515,7 @@ fn measure_cell_paragraph(
         .enumerate()
         .map(|(i, run)| idml_text::StyledRun {
             text: &run.text,
-            face: shaping_faces[unique_idx[i]].as_ref().unwrap(),
+            face: shaping_faces[unique_idx[i]].unwrap(),
             point_size: resolved_runs[i]
                 .point_size
                 .unwrap_or(em.options.default_point_size),
@@ -5528,29 +5603,54 @@ fn emit_cell_paragraph(
             .unwrap_or(i);
         unique_idx.push(head);
     }
-    let mut shaping_faces: Vec<Option<rustybuzz::Face>> =
-        (0..bytes_pool.len()).map(|_| None).collect();
+    // Outline faces stay per-paragraph; shaping faces pull from
+    // the per-render FontTable cache (built from a full
+    // table-cell-aware harvest at startup) with an on-demand
+    // fallback for any (font_id, wght_bits) the cache didn't see.
     let mut outline_faces: Vec<Option<ttf_parser::Face>> =
         (0..bytes_pool.len()).map(|_| None).collect();
+    let mut owned_shaping_faces: Vec<Option<rustybuzz::Face>> =
+        (0..bytes_pool.len()).map(|_| None).collect();
+    let mut shaping_faces: Vec<Option<&rustybuzz::Face>> =
+        (0..bytes_pool.len()).map(|_| None).collect();
+    let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
+    let bytes_font_ids: Vec<u32> = bytes_pool
+        .iter()
+        .map(|b| fnv_1a_u32(b.as_ref()))
+        .collect();
     for i in 0..bytes_pool.len() {
         if unique_idx[i] != i {
             continue;
         }
         let bytes_ref = bytes_pool[i].as_ref();
-        let Some(mut rf) = rustybuzz::Face::from_slice(bytes_ref, 0) else {
-            return 0.0;
-        };
         let Ok(mut of) = ttf_parser::Face::parse(bytes_ref, 0) else {
             return 0.0;
         };
-        let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
-        rf.set_variations(&[rustybuzz::Variation {
-            tag: wght_tag,
-            value: wghts[i],
-        }]);
         let _ = of.set_variation(wght_tag, wghts[i]);
-        shaping_faces[i] = Some(rf);
         outline_faces[i] = Some(of);
+
+        if em
+            .font_table
+            .face(bytes_font_ids[i], wghts[i].to_bits())
+            .is_none()
+        {
+            let Some(mut rf) = rustybuzz::Face::from_slice(bytes_ref, 0) else {
+                return 0.0;
+            };
+            rf.set_variations(&[rustybuzz::Variation {
+                tag: wght_tag,
+                value: wghts[i],
+            }]);
+            owned_shaping_faces[i] = Some(rf);
+        }
+    }
+    for i in 0..bytes_pool.len() {
+        let head = unique_idx[i];
+        if let Some(cached) = em.font_table.face(bytes_font_ids[head], wghts[head].to_bits()) {
+            shaping_faces[i] = Some(cached);
+        } else if let Some(owned) = owned_shaping_faces[head].as_ref() {
+            shaping_faces[i] = Some(owned);
+        }
     }
     // font_id mixes in the wght variation so the glyph-outline cache
     // (keyed on (font_id, glyph_id)) doesn't conflate outlines from a
@@ -5567,7 +5667,7 @@ fn emit_cell_paragraph(
         .enumerate()
         .map(|(i, run)| idml_text::StyledRun {
             text: &run.text,
-            face: shaping_faces[unique_idx[i]].as_ref().unwrap(),
+            face: shaping_faces[unique_idx[i]].unwrap(),
             point_size: resolved_runs[i]
                 .point_size
                 .unwrap_or(em.options.default_point_size),
@@ -8151,7 +8251,50 @@ fn map_tab_alignment(a: Option<&str>) -> idml_text::layout::TabAlignment {
 /// resolves. Also extracts OS/2 / hhea metrics per font_id at
 /// build time so baseline math doesn't have to re-parse the font
 /// per paragraph.
+///
+/// Field declaration order matters: `faces` is declared FIRST so on
+/// drop it is dropped FIRST — before `face_bytes`. The cached
+/// `rustybuzz::Face<'static>` values borrow from the `Bytes` stored
+/// in `face_bytes`; if we dropped `face_bytes` first the Faces would
+/// briefly hold dangling references. Rust drops struct fields in
+/// declaration order (first declared = first dropped), so keeping
+/// `faces` above `face_bytes` is load-bearing for soundness.
 struct FontTable {
+    /// Pre-configured rustybuzz `Face` cache keyed by
+    /// `(font_id, wght_bits)`. The `Face<'static>` lifetime is a
+    /// LIE narrowed back to `&self` at the public accessor.
+    ///
+    /// SAFETY contract (also enforced at each insertion site):
+    ///   1. Each cached Face borrows from the `Bytes` stored under
+    ///      the matching `font_id` key in `face_bytes`. `bytes::Bytes`
+    ///      is refcounted with a stable heap pointer — the underlying
+    ///      buffer cannot move while any clone is alive.
+    ///   2. `face_bytes` is never removed-from or overwritten after
+    ///      `FontTable::build` returns: it is populated inside
+    ///      `build` and never touched by any later method. Therefore
+    ///      the buffer a cached Face borrows from outlives that Face.
+    ///   3. `faces` is declared before `face_bytes`, so on `Drop` the
+    ///      Faces are dropped first — they never see a freed `Bytes`.
+    ///   4. The accessor [`Self::face`] returns `&rustybuzz::Face<'_>`
+    ///      with the lifetime narrowed to `&self`. No caller ever
+    ///      observes the `'static` lifetime, so the lie can't escape.
+    ///   5. Variations are baked in at insert time. The cached Face
+    ///      is never mutated post-insert (no `&mut Face` is ever
+    ///      exposed). Two runs with the same bytes but different
+    ///      `wght` use distinct cache keys → distinct cached Faces.
+    faces: HashMap<(u32, u32), rustybuzz::Face<'static>>,
+    /// Bytes kept alive for `faces` to point into. One entry per
+    /// distinct `font_id` (the wght variant is irrelevant — same
+    /// buffer, just different variation state on the Face).
+    ///
+    /// Marked `dead_code`-allow: the field is never read after
+    /// `build`, but its EXISTENCE is load-bearing — drop-time
+    /// soundness of `faces` (which holds `Face<'static>` references
+    /// into these buffers) depends on this map keeping the `Bytes`
+    /// values alive for at least as long as `faces`. See the SAFETY
+    /// contract on `faces` above.
+    #[allow(dead_code)]
+    face_bytes: HashMap<u32, Bytes>,
     cache: HashMap<(String, Option<String>), Bytes>,
     fallback: Option<Bytes>,
     /// Metrics keyed by `fnv_1a_u32(bytes)` (same id the rest of
@@ -8229,6 +8372,132 @@ impl FontTable {
                 }
             }
         }
+        // Pre-build the shaping-Face cache. Walk every run again to
+        // collect each distinct `(font_id, wght_bits)` actually used
+        // across all stories (incl. nested table cells). The first
+        // pass above resolves bytes from the asset resolver; the wght
+        // axis value comes from the per-run resolved `FontStyle`.
+        // Storing the configured Face here (vs. per-paragraph) lets
+        // the shaping sites in `emit_paragraph_into_chain`,
+        // `emit_cell_paragraph`, and `measure_cell_paragraph` share
+        // one rustybuzz::Face across the entire render — Adobe-typical
+        // docs reuse the same (font, weight) thousands of times.
+        let mut face_keys: std::collections::HashSet<(u32, u32)> =
+            std::collections::HashSet::new();
+        let mut id_to_bytes: HashMap<u32, Bytes> = HashMap::new();
+        let harvest_face_keys = |paragraph: &idml_parse::Paragraph,
+                                 face_keys: &mut std::collections::HashSet<(u32, u32)>,
+                                 id_to_bytes: &mut HashMap<u32, Bytes>| {
+            // Inner walk: handle both top-level paragraphs and
+            // recursive table-cell paragraphs.
+            fn walk(
+                document: &Document,
+                cache: &HashMap<(String, Option<String>), Bytes>,
+                fallback: &Option<Bytes>,
+                paragraph: &idml_parse::Paragraph,
+                face_keys: &mut std::collections::HashSet<(u32, u32)>,
+                id_to_bytes: &mut HashMap<u32, Bytes>,
+            ) {
+                for run in &paragraph.runs {
+                    let resolved = document.resolved_run_attrs(paragraph, run);
+                    // Mirror `FontTable::bytes_for`: (family, style)
+                    // direct hit, then bare-family, then fallback.
+                    let bytes = resolved
+                        .font
+                        .as_deref()
+                        .and_then(|f| {
+                            cache
+                                .get(&(f.to_string(), resolved.font_style.clone()))
+                                .or_else(|| cache.get(&(f.to_string(), None)))
+                        })
+                        .or(fallback.as_ref());
+                    if let Some(b) = bytes {
+                        let font_id = fnv_1a_u32(b.as_ref());
+                        let wght = wght_for_font_style(resolved.font_style.as_deref());
+                        face_keys.insert((font_id, wght.to_bits()));
+                        id_to_bytes
+                            .entry(font_id)
+                            .or_insert_with(|| b.clone());
+                    }
+                }
+                if let Some(table) = paragraph.table.as_ref() {
+                    for cell in &table.cells {
+                        for inner in &cell.paragraphs {
+                            walk(
+                                document,
+                                cache,
+                                fallback,
+                                inner,
+                                face_keys,
+                                id_to_bytes,
+                            );
+                        }
+                    }
+                }
+            }
+            walk(
+                document,
+                &cache,
+                &fallback,
+                paragraph,
+                face_keys,
+                id_to_bytes,
+            );
+        };
+        for parsed in &document.stories {
+            for paragraph in &parsed.story.paragraphs {
+                harvest_face_keys(paragraph, &mut face_keys, &mut id_to_bytes);
+            }
+        }
+        // Build `face_bytes` first (so the buffers are owned before
+        // any Face borrows from them), then build `faces`. Per the
+        // SAFETY contract on `faces`, the cached Face<'static>
+        // borrows from the Bytes stored at the same `font_id` in
+        // `face_bytes`; `Bytes` is a refcounted heap buffer whose
+        // pointer is stable across clones, so the buffer is alive
+        // for as long as the `face_bytes` map holds an entry.
+        let face_bytes: HashMap<u32, Bytes> = id_to_bytes;
+        let mut faces: HashMap<(u32, u32), rustybuzz::Face<'static>> =
+            HashMap::with_capacity(face_keys.len());
+        let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
+        for (font_id, wght_bits) in face_keys {
+            let Some(buf) = face_bytes.get(&font_id) else {
+                continue;
+            };
+            // SAFETY: extending the byte slice's lifetime to 'static.
+            //  1. `buf` is a `Bytes` stored in `face_bytes` and owned
+            //     by `Self`. `bytes::Bytes` is a refcounted heap
+            //     buffer with a stable interior pointer — the
+            //     underlying allocation cannot move while any clone
+            //     exists.
+            //  2. The map `face_bytes` is never mutated after this
+            //     `build` returns (it has no exposed `&mut` accessor)
+            //     so the buffer survives as long as the `FontTable`.
+            //  3. The cached `Face<'static>` is dropped before
+            //     `face_bytes`: `faces` is declared above `face_bytes`
+            //     in `FontTable`, and Rust drops struct fields in
+            //     declaration order (first declared = first dropped).
+            //  4. The public accessor [`Self::face`] returns
+            //     `&rustybuzz::Face<'_>` with the lifetime re-anchored
+            //     to `&self`, so the 'static lie never escapes the
+            //     module.
+            //  5. The Face is never mutated post-insert: no `&mut`
+            //     reference to it is exposed. Variations are baked
+            //     in at insert time below; (font_id, wght_bits) keys
+            //     guarantee a bold-vs-regular pair sharing the same
+            //     bytes ends up in distinct cache slots.
+            let bytes_static: &'static [u8] =
+                unsafe { std::mem::transmute::<&[u8], &'static [u8]>(buf.as_ref()) };
+            let Some(mut face) = rustybuzz::Face::from_slice(bytes_static, 0) else {
+                continue;
+            };
+            let wght = f32::from_bits(wght_bits);
+            face.set_variations(&[rustybuzz::Variation {
+                tag: wght_tag,
+                value: wght,
+            }]);
+            faces.insert((font_id, wght_bits), face);
+        }
         // Parse metrics for every distinct byte buffer we ended up
         // caching, plus the fallback. Keyed by the same fnv hash
         // emit_paragraph uses for font_id — so the lookup is direct.
@@ -8286,11 +8555,25 @@ impl FontTable {
             );
         }
         Self {
+            faces,
+            face_bytes,
             cache,
             fallback,
             metrics,
             family_metrics,
         }
+    }
+
+    /// Returns the cached, pre-configured shaping Face for the given
+    /// `(font_id, wght_bits)` key. The returned reference's lifetime
+    /// is narrowed to `&self`, hiding the underlying `'static` lie
+    /// (see the SAFETY contract on `FontTable::faces`).
+    ///
+    /// Callers must NOT call `set_variations` on the returned Face —
+    /// variations are baked in at cache-insert time. The signature
+    /// (`&Face`, not `&mut Face`) enforces that at compile time.
+    fn face(&self, font_id: u32, wght_bits: u32) -> Option<&rustybuzz::Face<'_>> {
+        self.faces.get(&(font_id, wght_bits))
     }
 
     /// Look up the bytes a paragraph should shape with.
