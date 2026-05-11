@@ -3972,15 +3972,27 @@ fn collect_wrap_rects_per_page(
 /// origin and column width.
 ///
 /// Scope:
-/// * Honours per-row `SingleRowHeight` and per-column
-///   `SingleColumnWidth`. Cells with `RowSpan > 1` or
-///   `ColumnSpan > 1` widen / lengthen their rect; multi-cell text
-///   merging across spans isn't separately modelled.
-/// * No cell strokes / fills — those live on `<CellStyle>` and
-///   `<TableStyle>` definitions in `Resources/Styles.xml` we don't
-///   yet resolve.
-/// * Threaded overflow of a table across frames is not modeled
-///   (rare in real-world IDMLs).
+/// * Honours per-row `SingleRowHeight`, `MinimumHeight`,
+///   `MaximumHeight` (Task T3.2) and per-column `SingleColumnWidth`.
+///   Cells with `RowSpan > 1` or `ColumnSpan > 1` widen / lengthen
+///   their rect; multi-cell text merging across spans isn't
+///   separately modelled.
+/// * Cells with content overflow grow their row up to
+///   `MaximumHeight` — a top-down pre-measure pass computes per-row
+///   required heights, then `row_heights[r] =
+///   max(SingleRowHeight, MinimumHeight, max_cell_required) ` clamped
+///   to `MaximumHeight`. For RowSpan > 1 cells the constraint is
+///   applied to the LAST spanned row only (simpler heuristic; the
+///   common case has spans inside header rows that don't grow).
+/// * Header rows duplicate at the top of every continuation frame
+///   when the table breaks across a NextTextFrame chain; footer
+///   rows duplicate at the bottom of every frame except the last
+///   (Task T3.1). `RepeatingHeader="false"` / `RepeatingFooter="false"`
+///   opt out.
+// Range-loops over `row_heights` carry the row index (`r`) as data
+// — it doubles as a template index into `table.rows` / `table.cells`
+// — so the `needless_range_loop` lint is a false positive here.
+#[allow(clippy::needless_range_loop)]
 fn emit_table_into_chain(
     em: &mut StoryEmitter,
     table: &idml_parse::Table,
@@ -3994,11 +4006,6 @@ fn emit_table_into_chain(
         .columns
         .iter()
         .map(|c| c.single_column_width.unwrap_or(0.0))
-        .collect();
-    let row_heights: Vec<f32> = table
-        .rows
-        .iter()
-        .map(|r| r.single_row_height.unwrap_or(0.0))
         .collect();
     let mut col_x: Vec<f32> = Vec::with_capacity(col_widths.len() + 1);
     let mut acc = 0.0f32;
@@ -4016,15 +4023,94 @@ fn emit_table_into_chain(
         .unwrap_or_default();
     let header_count = table.header_row_count as usize;
     let footer_count = table.footer_row_count as usize;
-    // TODO(T3.1): when chain_idx advances at the frame-boundary check
-    // below, re-emit `table.cells` whose row falls in `0..header_count`
-    // at the top of the new frame (and `(total_rows - footer_count)..`
-    // at the bottom of the previous frame). Requires synthesising
-    // RowBasis entries for the duplicates and routing emit_cell_paragraph
-    // through them. Deferred until we have a threaded-table sample to
-    // test against — Sample-3's tables don't span frames.
-    let total_rows = row_heights.len();
+    let total_rows = table.rows.len();
     let total_cols = col_widths.len();
+
+    // Content-driven row growth. For each row, find the tallest
+    // required cell height (sum of per-paragraph consumed heights
+    // + top/bottom insets). For span > 1 cells, only the LAST row
+    // of the span enforces the shortfall — earlier rows in the
+    // span are left at their declared height. This is the simpler
+    // heuristic the plan calls out; a smarter distributor would
+    // share the slack across the span proportionally.
+    //
+    // Final height per row =
+    //   max(SingleRowHeight, MinimumHeight, content_required)
+    // clamped to MaximumHeight (when set; unbounded otherwise).
+    let mut row_heights: Vec<f32> = table
+        .rows
+        .iter()
+        .map(|r| {
+            r.single_row_height
+                .unwrap_or(0.0)
+                .max(r.minimum_height.unwrap_or(0.0))
+        })
+        .collect();
+    // Per-cell pre-measured content height, keyed by the cell's
+    // starting (col, row) — independent of where the cell lands
+    // geometrically. Used both for the row-growth pass and to skip
+    // re-laying-out the same cell during emission.
+    let mut cell_required: std::collections::HashMap<(u32, u32), f32> =
+        std::collections::HashMap::with_capacity(table.cells.len());
+    for cell in &table.cells {
+        let Some((c, r)) = cell.coords() else { continue };
+        let (cu, ru) = (c as usize, r as usize);
+        if cu >= col_widths.len() || ru >= total_rows {
+            continue;
+        }
+        let span_cols = cell.column_span.max(1) as usize;
+        let last_c = (cu + span_cols).min(col_widths.len());
+        let inner_w = (col_x[last_c]
+            - col_x[cu]
+            - cell.text_left_inset
+            - cell.text_right_inset)
+            .max(0.0);
+        let mut paragraph_y = 0.0f32;
+        for paragraph in &cell.paragraphs {
+            if paragraph.runs.is_empty() {
+                continue;
+            }
+            paragraph_y += measure_cell_paragraph(em, paragraph, inner_w);
+        }
+        let required = paragraph_y + cell.text_top_inset + cell.text_bottom_inset;
+        cell_required.insert((c, r), required);
+    }
+    // Walk rows top-to-bottom; for each row grow it to fit cells
+    // that *end* in this row (span_rows + start_row - 1 == r).
+    // We iterate by ending-row, look at all cells with that ending,
+    // and bump `row_heights[r]` to cover any shortfall remaining
+    // after the prior rows of the span. This way RowSpan > 1
+    // cells don't blow up multiple rows.
+    for r in 0..total_rows {
+        let mut required = row_heights[r];
+        for cell in &table.cells {
+            let Some((c, sr)) = cell.coords() else { continue };
+            let span = cell.row_span.max(1) as usize;
+            let (cu, sru) = (c as usize, sr as usize);
+            if sru + span - 1 != r {
+                continue;
+            }
+            if cu >= col_widths.len() {
+                continue;
+            }
+            let Some(cell_h) = cell_required.get(&(c, sr)).copied() else {
+                continue;
+            };
+            // Heights already grown for the prior rows of the span.
+            let prior: f32 = (sru..r).map(|i| row_heights[i]).sum();
+            let shortfall = cell_h - prior;
+            if shortfall > required {
+                required = shortfall;
+            }
+        }
+        let max_h = table
+            .rows
+            .get(r)
+            .and_then(|tr| tr.maximum_height)
+            .unwrap_or(f32::INFINITY);
+        row_heights[r] = required.min(max_h);
+    }
+
     let region_cell_style_for = |c: usize, r: usize| -> Option<&str> {
         if r < header_count {
             return resolved_table.header_region_cell_style.as_deref();
@@ -4045,19 +4131,47 @@ fn emit_table_into_chain(
         resolved_table.body_region_cell_style.as_deref()
     };
 
-    // Per-row layout basis: which chain frame the row lives in
-    // and the page-local top y for that row. Walks rows
-    // top-to-bottom, advancing through the chain when a row would
-    // overflow its frame. Cells consult their starting row's basis
-    // for positioning; spans clip to the starting frame's bottom
-    // rather than splitting across frames.
+    // Repeating-header / repeating-footer flags. IDML defaults
+    // both to true (the attribute is absent in the common case
+    // and the rows *do* repeat); explicit `RepeatingHeader="false"`
+    // / `RepeatingFooter="false"` opt out.
+    let repeating_header = table.repeating_header.unwrap_or(true) && header_count > 0;
+    let repeating_footer = table.repeating_footer.unwrap_or(true) && footer_count > 0;
+
+    // Per-row layout basis: which chain frame the row lives in,
+    // page-local row-top y, AND which template row in `table.rows`
+    // sources the cells / heights for this row. Body rows have
+    // `template_idx == phys_idx_in_source`; header/footer replays
+    // reuse a template row's index while sitting at a different
+    // geometric position.
+    #[derive(Clone, Copy, Debug)]
+    #[allow(dead_code)]
+    enum RowKind {
+        /// Body / header / footer row from the original sequence,
+        /// emitted once.
+        Original,
+        /// Replayed header row at the top of a continuation frame.
+        HeaderReplay,
+        /// Replayed footer row at the bottom of a non-last frame.
+        FooterReplay,
+    }
     #[derive(Clone, Copy)]
-    struct RowBasis {
+    struct PhysicalRow {
+        /// Index into `table.rows` whose cells / height this
+        /// physical row mirrors. Cells look up `table.cells` by
+        /// `(col, template_idx)`.
+        template_idx: usize,
+        height: f32,
         chain_idx: usize,
         target_page: usize,
         table_left_pt: f32,
-        // Page-local y for the top of THIS row.
+        /// Page-local y for the top of THIS row.
         row_top_in_page: f32,
+        /// Kept for debugging / future per-kind hooks (e.g. when
+        /// header replays want a different divider style than the
+        /// original header dividers). Not read by current emission.
+        #[allow(dead_code)]
+        kind: RowKind,
     }
     let frame_basis_for = |chain_idx: usize, x_shift: f32| -> (f32, f32, f32, f32, usize) {
         let frame = em.chain[chain_idx];
@@ -4085,7 +4199,25 @@ fn emit_table_into_chain(
     } else {
         top_inset
     };
-    let mut row_bases: Vec<RowBasis> = Vec::with_capacity(total_rows);
+    // Total replayed-footer height we should leave reserved below
+    // body rows in any non-last frame. Equals the sum of footer
+    // template heights when `repeating_footer` is set.
+    let footer_reserved_h: f32 = if repeating_footer {
+        (total_rows - footer_count..total_rows)
+            .map(|r| row_heights[r])
+            .sum()
+    } else {
+        0.0
+    };
+    // Same for headers — height of header rows we replay at the
+    // top of every continuation frame.
+    let header_reserved_h: f32 = if repeating_header {
+        (0..header_count).map(|r| row_heights[r]).sum()
+    } else {
+        0.0
+    };
+
+    let mut physical_rows: Vec<PhysicalRow> = Vec::with_capacity(total_rows);
     // Per-frame extent for table-border emission below.
     // Each entry: (chain_idx, target_page, table_left_pt, row_top
     // of the first row in this frame, row_bottom of the last row
@@ -4094,20 +4226,70 @@ fn emit_table_into_chain(
     let mut current_frame_first_top = frame_top_in_page + row_top_y_in_frame;
     let mut current_frame_last_bottom = current_frame_first_top;
 
-    for &h in row_heights.iter() {
-        // Advance to the next frame if this row would overflow
-        // the current frame and we already have at least one row
-        // placed in it. Without the "already placed" guard a row
-        // taller than the head frame's available space would
-        // trigger an infinite handover loop on a single-frame story.
-        let already_placed_in_this_frame = row_bases
-            .last()
-            .map(|b| b.chain_idx == chain_idx)
-            .unwrap_or(false);
-        if row_top_y_in_frame + h > frame_height
-            && chain_idx + 1 < em.chain.len()
-            && already_placed_in_this_frame
-        {
+    // Track which "body" rows (rows whose template index falls in
+    // `header_count..total_rows - footer_count`) we still need to
+    // emit. Header rows are always emitted at the top of frame 1
+    // (their position in the original sequence) plus replayed at
+    // the top of every continuation frame. Footer rows are emitted
+    // at the bottom of the *last* frame in the original sequence
+    // position, plus replayed at the bottom of every non-last frame.
+    let body_range = header_count..total_rows.saturating_sub(footer_count);
+
+    // Helper closures need to keep the borrow of `em` short, so we
+    // pull the frame-advance logic into an inline block. The body
+    // of the loop below is mechanical: append the next body row
+    // (or first run of original headers / final footers) and check
+    // whether we still fit.
+    let mut placed_in_frame = 0usize;
+
+    // Emit the original header rows at the start of the head frame
+    // (they sit in the natural sequence — no replay).
+    for r in 0..header_count {
+        let h = row_heights[r];
+        // We don't attempt to fit headers across a frame split on
+        // their own — if a head frame is too small to hold even
+        // the headers we'd loop forever. Leave them in this frame
+        // and let the body rows trigger the chain advance instead.
+        physical_rows.push(PhysicalRow {
+            template_idx: r,
+            height: h,
+            chain_idx,
+            target_page,
+            table_left_pt: tab_left,
+            row_top_in_page: frame_top_in_page + row_top_y_in_frame,
+            kind: RowKind::Original,
+        });
+        row_top_y_in_frame += h;
+        current_frame_last_bottom = frame_top_in_page + row_top_y_in_frame;
+        placed_in_frame += 1;
+    }
+
+    // Emit body rows. Before placing each row, check whether it
+    // (plus the footer-reserve, if any) would overflow the current
+    // frame. If so, close out this frame with replayed footers,
+    // advance, then prepend replayed headers in the new frame.
+    for r in body_range.clone() {
+        let h = row_heights[r];
+        let need_extra_for_split = footer_reserved_h;
+        let would_overflow = row_top_y_in_frame + h + need_extra_for_split > frame_height;
+        if would_overflow && chain_idx + 1 < em.chain.len() && placed_in_frame > 0 {
+            // Append replayed footers at the bottom of this frame.
+            if repeating_footer {
+                for fr in (total_rows - footer_count)..total_rows {
+                    let fh = row_heights[fr];
+                    physical_rows.push(PhysicalRow {
+                        template_idx: fr,
+                        height: fh,
+                        chain_idx,
+                        target_page,
+                        table_left_pt: tab_left,
+                        row_top_in_page: frame_top_in_page + row_top_y_in_frame,
+                        kind: RowKind::FooterReplay,
+                    });
+                    row_top_y_in_frame += fh;
+                    current_frame_last_bottom = frame_top_in_page + row_top_y_in_frame;
+                }
+            }
             // Close out current frame's extent.
             frame_extents.push((
                 chain_idx,
@@ -4125,13 +4307,59 @@ fn emit_table_into_chain(
             target_page = tp;
             row_top_y_in_frame = top_inset;
             current_frame_first_top = frame_top_in_page + row_top_y_in_frame;
+            placed_in_frame = 0;
+            // Prepend replayed headers at the top of the new frame.
+            // (current_frame_last_bottom is updated by the body push
+            // immediately following — no need to maintain it here.)
+            if repeating_header {
+                for hr in 0..header_count {
+                    let hh = row_heights[hr];
+                    physical_rows.push(PhysicalRow {
+                        template_idx: hr,
+                        height: hh,
+                        chain_idx,
+                        target_page,
+                        table_left_pt: tab_left,
+                        row_top_in_page: frame_top_in_page + row_top_y_in_frame,
+                        kind: RowKind::HeaderReplay,
+                    });
+                    row_top_y_in_frame += hh;
+                    placed_in_frame += 1;
+                }
+                let _ = header_reserved_h;
+            }
+            // current_frame_last_bottom updates when the next body
+            // row pushes below; no need to maintain it here.
         }
-        let row_top_in_page = frame_top_in_page + row_top_y_in_frame;
-        row_bases.push(RowBasis {
+        physical_rows.push(PhysicalRow {
+            template_idx: r,
+            height: h,
             chain_idx,
             target_page,
             table_left_pt: tab_left,
-            row_top_in_page,
+            row_top_in_page: frame_top_in_page + row_top_y_in_frame,
+            kind: RowKind::Original,
+        });
+        row_top_y_in_frame += h;
+        current_frame_last_bottom = frame_top_in_page + row_top_y_in_frame;
+        placed_in_frame += 1;
+    }
+
+    // Original footer rows — emitted on whatever frame the body
+    // left off in (= the last frame), in their natural sequence.
+    for r in (total_rows - footer_count)..total_rows {
+        if footer_count == 0 {
+            break;
+        }
+        let h = row_heights[r];
+        physical_rows.push(PhysicalRow {
+            template_idx: r,
+            height: h,
+            chain_idx,
+            target_page,
+            table_left_pt: tab_left,
+            row_top_in_page: frame_top_in_page + row_top_y_in_frame,
+            kind: RowKind::Original,
         });
         row_top_y_in_frame += h;
         current_frame_last_bottom = frame_top_in_page + row_top_y_in_frame;
@@ -4173,7 +4401,11 @@ fn emit_table_into_chain(
                 .map(|c| (c, resolved_table.end_row_fill_tint))
         }
     };
-    for r in 0..total_rows {
+    // Alternating fills iterate the physical-row sequence: replayed
+    // headers / footers count from their *original* template index
+    // so the visual cycle stays coherent across frame splits.
+    for prow in &physical_rows {
+        let r = prow.template_idx;
         if r < header_count {
             continue;
         }
@@ -4188,43 +4420,73 @@ fn emit_table_into_chain(
             continue;
         };
         let paint = apply_fill_tint(paint, tint);
-        let basis = row_bases[r];
         let rect = Rect {
-            x: basis.table_left_pt,
-            y: basis.row_top_in_page,
+            x: prow.table_left_pt,
+            y: prow.row_top_in_page,
             w: total_w,
-            h: row_heights[r],
+            h: prow.height,
         };
-        emit_rect(rect, paint, &mut pages[basis.target_page].list);
+        emit_rect(rect, paint, &mut pages[prow.target_page].list);
     }
 
+    // Iterate physical rows × cells. For each physical row, find
+    // the `<Cell>` entries whose template row matches and emit
+    // them at the row's actual page-local coordinates. This naturally
+    // handles header/footer replays — the same `<Cell>` definition
+    // re-renders at the duplicated row's basis.
+    //
+    // Build a (col, template_row) → cell index map so the inner
+    // loop is O(1) per cell rather than O(cells × physical_rows).
+    let mut cell_by_origin: std::collections::HashMap<(u32, u32), &idml_parse::TableCell> =
+        std::collections::HashMap::with_capacity(table.cells.len());
     for cell in &table.cells {
-        let Some((c, r)) = cell.coords() else {
-            continue;
-        };
-        let (c, r) = (c as usize, r as usize);
-        if c >= col_widths.len() || r >= row_heights.len() {
-            continue;
+        if let Some(coords) = cell.coords() {
+            cell_by_origin.insert(coords, cell);
         }
-        let basis = row_bases[r];
-        let target_page = basis.target_page;
-        let cell_x_pt = basis.table_left_pt + col_x[c];
-        let cell_y_pt = basis.row_top_in_page;
+    }
+    for prow_i in 0..physical_rows.len() {
+        let prow = physical_rows[prow_i];
+        let r = prow.template_idx;
+        for c in 0..col_widths.len() {
+            let Some(cell) = cell_by_origin.get(&(c as u32, r as u32)).copied() else {
+                continue;
+            };
+        let target_page = prow.target_page;
+        let cell_x_pt = prow.table_left_pt + col_x[c];
+        let cell_y_pt = prow.row_top_in_page;
         let last_c = (c + cell.column_span.max(1) as usize).min(col_widths.len());
-        // For row spans, accumulate heights and clip to the
-        // starting frame's bottom so spans that would cross a
-        // frame boundary don't fly off-page. For body of work in
-        // sample.idml all spans stay within their starting frame.
+        // For row spans, accumulate heights of the contiguous
+        // *physical* rows that sit in the same frame as this cell's
+        // starting row. Spans that would straddle a frame boundary
+        // clip to the originating frame's bottom (same conservative
+        // policy as before). Walk physical rows starting at the
+        // current physical row, advancing while their template_idx
+        // is within `[r, r + span)` and `chain_idx` matches.
         let span_rows = cell.row_span.max(1) as usize;
-        let last_r = (r + span_rows).min(row_heights.len());
         let mut cell_h_pt = 0.0f32;
-        for sr in r..last_r {
-            // Stop accumulating if a successor row jumped to a new
-            // frame — clip the cell to the originating frame.
-            if row_bases[sr].chain_idx != basis.chain_idx {
+        let mut step = 0usize;
+        while step < span_rows && prow_i + step < physical_rows.len() {
+            let next = &physical_rows[prow_i + step];
+            if next.chain_idx != prow.chain_idx {
                 break;
             }
-            cell_h_pt += row_heights[sr];
+            // Only accumulate template rows in [r, r + span). A
+            // continuation frame whose first row is a HeaderReplay
+            // would otherwise add the header's height to the body
+            // cell's span. The replay rows live in a *different*
+            // physical row index, so we'd never reach them mid-span
+            // anyway — but the explicit range guard makes this
+            // robust if the physical-row sequence ever interleaves
+            // replays differently.
+            let t = next.template_idx;
+            if t < r || t >= r + span_rows {
+                break;
+            }
+            cell_h_pt += next.height;
+            step += 1;
+        }
+        if cell_h_pt <= 0.0 {
+            cell_h_pt = prow.height;
         }
         let cell_w_pt = col_x[last_c] - col_x[c];
 
@@ -4482,7 +4744,8 @@ fn emit_table_into_chain(
                 }
             }
         }
-    }
+        } // close inner `for c in 0..col_widths.len()`
+    } // close outer `for prow_i in 0..physical_rows.len()`
 
     // Resolve effective outer-border attributes. Direct `<Table>`
     // attributes (e.g. `LeftBorderStrokeColor` on the `<Table>`
@@ -4607,14 +4870,18 @@ fn emit_table_into_chain(
         }
     };
 
-    // Emit row dividers. A divider sits at the bottom edge of row
-    // `r` (= top edge of row `r+1`). Skip dividers that would
-    // straddle a frame boundary.
-    for r in 0..total_rows.saturating_sub(1) {
-        if row_bases[r].chain_idx != row_bases[r + 1].chain_idx {
+    // Emit row dividers. A divider sits at the bottom edge of a
+    // physical row when the next physical row sits in the same
+    // frame. The dividing-stroke pick still cycles via the *template*
+    // index so replayed header / footer rows match the original
+    // dividers (visually consistent across continuation frames).
+    for i in 0..physical_rows.len().saturating_sub(1) {
+        let curr = physical_rows[i];
+        let next = physical_rows[i + 1];
+        if curr.chain_idx != next.chain_idx {
             continue;
         }
-        let (stype, scolor, sweight) = pick_row_stroke(r);
+        let (stype, scolor, sweight) = pick_row_stroke(curr.template_idx);
         let Some(color_id) = scolor else { continue };
         if sweight <= 0.0 {
             continue;
@@ -4622,16 +4889,15 @@ fn emit_table_into_chain(
         let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) else {
             continue;
         };
-        let basis = row_bases[r];
-        let y = basis.row_top_in_page + row_heights[r];
+        let y = curr.row_top_in_page + curr.height;
         emit_table_horizontal_edge(
-            basis.table_left_pt,
+            curr.table_left_pt,
             y,
             total_w,
             stype,
             sweight,
             paint,
-            &mut pages[basis.target_page].list,
+            &mut pages[curr.target_page].list,
         );
     }
 
@@ -5099,6 +5365,110 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
         });
     }
     subs
+}
+
+/// Measure-only pass for one cell paragraph: shapes + lays out at
+/// `column_width_pt` and returns the vertical extent the paragraph
+/// would consume, without emitting glyphs. Mirrors
+/// [`emit_cell_paragraph`]'s layout half so content-driven row
+/// growth can sum cell heights before committing row geometry.
+///
+/// Returns `0.0` when the paragraph is empty or the font assets
+/// don't resolve — callers compare against `SingleRowHeight` /
+/// `MinimumHeight` so a 0 is safely absorbed.
+fn measure_cell_paragraph(
+    em: &StoryEmitter,
+    paragraph: &idml_parse::Paragraph,
+    column_width_pt: f32,
+) -> f32 {
+    if column_width_pt <= 0.0 || paragraph.runs.is_empty() {
+        return 0.0;
+    }
+    let resolved_runs: Vec<idml_scene::ResolvedRunAttrs> = paragraph
+        .runs
+        .iter()
+        .map(|r| em.document.resolved_run_attrs(paragraph, r))
+        .collect();
+    let mut bytes_pool: Vec<bytes::Bytes> = Vec::with_capacity(paragraph.runs.len());
+    for resolved in &resolved_runs {
+        let Some(b) = em
+            .font_table
+            .bytes_for(resolved.font.as_deref(), resolved.font_style.as_deref())
+        else {
+            return 0.0;
+        };
+        bytes_pool.push(b);
+    }
+    let wghts: Vec<f32> = resolved_runs
+        .iter()
+        .map(|r| wght_for_font_style(r.font_style.as_deref()))
+        .collect();
+    let mut unique_idx: Vec<usize> = Vec::with_capacity(bytes_pool.len());
+    for (i, b) in bytes_pool.iter().enumerate() {
+        let head = bytes_pool[..i]
+            .iter()
+            .zip(wghts[..i].iter())
+            .position(|(prior, w)| prior.as_ptr() == b.as_ptr() && (*w - wghts[i]).abs() < 0.5)
+            .unwrap_or(i);
+        unique_idx.push(head);
+    }
+    let mut shaping_faces: Vec<Option<rustybuzz::Face>> =
+        (0..bytes_pool.len()).map(|_| None).collect();
+    for i in 0..bytes_pool.len() {
+        if unique_idx[i] != i {
+            continue;
+        }
+        let bytes_ref = bytes_pool[i].as_ref();
+        let Some(mut rf) = rustybuzz::Face::from_slice(bytes_ref, 0) else {
+            return 0.0;
+        };
+        let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
+        rf.set_variations(&[rustybuzz::Variation {
+            tag: wght_tag,
+            value: wghts[i],
+        }]);
+        shaping_faces[i] = Some(rf);
+    }
+    let font_ids: Vec<u32> = bytes_pool
+        .iter()
+        .zip(wghts.iter())
+        .map(|(b, w)| fnv_1a_u32(b.as_ref()) ^ w.to_bits())
+        .collect();
+    let styled_runs: Vec<idml_text::StyledRun> = paragraph
+        .runs
+        .iter()
+        .enumerate()
+        .map(|(i, run)| idml_text::StyledRun {
+            text: &run.text,
+            face: shaping_faces[unique_idx[i]].as_ref().unwrap(),
+            point_size: resolved_runs[i]
+                .point_size
+                .unwrap_or(em.options.default_point_size),
+            tracking: resolved_runs[i].tracking,
+            font_id: font_ids[i],
+            underline: resolved_runs[i].underline.unwrap_or(false),
+            strikethru: resolved_runs[i].strikethru.unwrap_or(false),
+            baseline_shift_pt: resolved_runs[i].baseline_shift.unwrap_or(0.0),
+        })
+        .collect();
+    let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
+    let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
+    let mut lopts = idml_text::LayoutOptions::new(column_width_pt, paragraph_size);
+    lopts.alignment = map_justification(resolved_paragraph.justification);
+    apply_paragraph_compose_options(&mut lopts, em.hyphenator, &resolved_paragraph);
+    lopts.first_baseline =
+        ((paragraph_size * 0.8) * idml_text::shape::ADVANCE_PRECISION).round() as i32;
+    let laid_out = idml_text::layout_runs(&styled_runs, &lopts);
+    if laid_out.lines.is_empty() {
+        return 0.0;
+    }
+    let leading_pt = paragraph_size * 1.2;
+    let max_baseline_pt = laid_out
+        .lines
+        .iter()
+        .map(|l| l.baseline_y as f32 / idml_text::shape::ADVANCE_PRECISION)
+        .fold(0.0f32, f32::max);
+    max_baseline_pt + leading_pt * 0.4
 }
 
 /// Lay out and emit a single cell paragraph at `(origin_pt.0,
@@ -7829,15 +8199,32 @@ impl FontTable {
             // requests the right font.
             let mut keys: std::collections::HashSet<(String, Option<String>)> =
                 std::collections::HashSet::new();
-            for parsed in &document.stories {
-                for paragraph in &parsed.story.paragraphs {
-                    for run in &paragraph.runs {
-                        let resolved = document.resolved_run_attrs(paragraph, run);
-                        let Some(family) = resolved.font else {
-                            continue;
-                        };
+            // Helper: harvest font keys from a paragraph + every
+            // run nested inside its table cells (cells host their
+            // own ParagraphStyleRange children; their runs never
+            // surface through the outer story paragraph list).
+            fn harvest_keys(
+                document: &Document,
+                paragraph: &idml_parse::Paragraph,
+                keys: &mut std::collections::HashSet<(String, Option<String>)>,
+            ) {
+                for run in &paragraph.runs {
+                    let resolved = document.resolved_run_attrs(paragraph, run);
+                    if let Some(family) = resolved.font {
                         keys.insert((family, resolved.font_style));
                     }
+                }
+                if let Some(table) = paragraph.table.as_ref() {
+                    for cell in &table.cells {
+                        for inner in &cell.paragraphs {
+                            harvest_keys(document, inner, keys);
+                        }
+                    }
+                }
+            }
+            for parsed in &document.stories {
+                for paragraph in &parsed.story.paragraphs {
+                    harvest_keys(document, paragraph, &mut keys);
                 }
             }
             cache.reserve(keys.len());
