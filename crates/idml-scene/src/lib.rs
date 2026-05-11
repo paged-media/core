@@ -380,7 +380,7 @@ impl ResolvedParagraphAttrs {
     /// the ParagraphStyleRange win over the cascaded paragraph style.
     pub fn from_paragraph(paragraph: &Paragraph) -> Self {
         Self {
-            justification: paragraph.justification.clone(),
+            justification: paragraph.justification,
             first_line_indent: paragraph.first_line_indent,
             space_before: paragraph.space_before,
             space_after: paragraph.space_after,
@@ -402,9 +402,7 @@ impl ResolvedParagraphAttrs {
 
     /// Fill any unset field from a resolved paragraph style.
     pub fn merge_below(&mut self, p: &idml_parse::ResolvedParagraph) {
-        if self.justification.is_none() {
-            self.justification = p.justification.clone();
-        }
+        self.justification = self.justification.or(p.justification);
         self.first_line_indent = self.first_line_indent.or(p.first_line_indent);
         self.space_before = self.space_before.or(p.space_before);
         self.space_after = self.space_after.or(p.space_after);
@@ -496,7 +494,7 @@ pub struct ResolvedRunAttrs {
 /// (direct > applied paragraph style).
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ResolvedParagraphAttrs {
-    pub justification: Option<String>,
+    pub justification: Option<idml_parse::Justification>,
     pub first_line_indent: Option<f32>,
     pub space_before: Option<f32>,
     pub space_after: Option<f32>,

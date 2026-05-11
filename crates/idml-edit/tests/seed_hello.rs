@@ -12,6 +12,7 @@ use idml_edit::{
     command::{ParagraphAttrPatch, RectanglePayloadBounds, RunAttrPatch},
     hit_test_spread, Command, NodeId, ParaId, Project, StoryId,
 };
+use idml_parse::Justification;
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 fn pack_seed(seed_dir: &Path) -> Vec<u8> {
@@ -352,20 +353,16 @@ fn set_paragraph_attr_changes_justification_and_inverts() {
         .iter()
         .position(|s| s.self_id == story.0)
         .unwrap();
-    let prev = p.document().stories[idx].story.paragraphs[para.0 as usize]
-        .justification
-        .clone();
+    let prev = p.document().stories[idx].story.paragraphs[para.0 as usize].justification;
 
     p.apply(Command::SetParagraphAttr {
         story: story.clone(),
         para,
-        attr: ParagraphAttrPatch::Justification(Some("CenterAlign".into())),
+        attr: ParagraphAttrPatch::Justification(Some(Justification::CenterAlign)),
     })
     .unwrap();
-    let now = p.document().stories[idx].story.paragraphs[para.0 as usize]
-        .justification
-        .clone();
-    assert_eq!(now.as_deref(), Some("CenterAlign"));
+    let now = p.document().stories[idx].story.paragraphs[para.0 as usize].justification;
+    assert_eq!(now, Some(Justification::CenterAlign));
     p.undo();
     assert_eq!(
         p.document().stories[idx].story.paragraphs[para.0 as usize].justification,

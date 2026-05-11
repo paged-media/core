@@ -23,7 +23,7 @@
 //! `idml-scene`; this module stays focused on shape extraction.
 
 use quick_xml::events::Event;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::util::{attr, parse_tint_attr};
 use crate::ParseError;
@@ -37,6 +37,97 @@ pub const AUTO_PAGE_NUMBER_MARKER: char = '\u{E018}';
 /// Same idea for `<?ACE 19?>` (next-page-number marker; used in
 /// "continued on page" footers).
 pub const NEXT_PAGE_NUMBER_MARKER: char = '\u{E019}';
+
+/// IDML `Justification` attribute values, as carried on
+/// `<ParagraphStyleRange>` and `<ParagraphStyle>`. The IDML default
+/// is `LeftAlign`. Parsed once at XML-read time; the renderer maps
+/// these down to `idml_text::Alignment` (Left / Right / Center /
+/// Justify).
+///
+/// `ToBindingSide` / `AwayFromBindingSide` are binding-aware values
+/// (left page vs. right page in a spread). The renderer currently
+/// treats them as `LeftAlign` / `RightAlign` respectively — binding
+/// side is a document-level setting that's not yet plumbed through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Justification {
+    LeftAlign,
+    CenterAlign,
+    RightAlign,
+    /// Justify with last line left-aligned.
+    LeftJustified,
+    /// Justify with last line centered.
+    CenterJustified,
+    /// Justify with last line right-aligned.
+    RightJustified,
+    /// "Fully justified" — every line including the last is stretched
+    /// to fill the column. The composer currently treats this the
+    /// same as `LeftJustified`; kept as a distinct variant so
+    /// round-tripping the parsed attribute is lossless.
+    FullyJustified,
+    /// Binding-aware: aligns toward the spine. Falls back to
+    /// `LeftAlign` until binding side is plumbed through.
+    ToBindingSide,
+    /// Binding-aware: aligns away from the spine. Falls back to
+    /// `RightAlign`.
+    AwayFromBindingSide,
+}
+
+impl Justification {
+    /// Parse an IDML attribute value. Unknown values return `None`,
+    /// which mirrors the pre-enum stringly-typed behaviour (the
+    /// renderer's `map_justification` fell through to Left for any
+    /// value it didn't recognise).
+    pub fn from_idml(s: &str) -> Option<Self> {
+        match s {
+            "LeftAlign" => Some(Self::LeftAlign),
+            "CenterAlign" => Some(Self::CenterAlign),
+            "RightAlign" => Some(Self::RightAlign),
+            "LeftJustified" => Some(Self::LeftJustified),
+            "CenterJustified" => Some(Self::CenterJustified),
+            "RightJustified" => Some(Self::RightJustified),
+            "FullyJustified" => Some(Self::FullyJustified),
+            "ToBindingSide" => Some(Self::ToBindingSide),
+            "AwayFromBindingSide" => Some(Self::AwayFromBindingSide),
+            _ => None,
+        }
+    }
+
+    /// Render back to the IDML attribute string. Used by JSON
+    /// surfaces (the editor wasm bridge) and any path that needs to
+    /// round-trip the value through a string format.
+    pub fn as_idml(self) -> &'static str {
+        match self {
+            Self::LeftAlign => "LeftAlign",
+            Self::CenterAlign => "CenterAlign",
+            Self::RightAlign => "RightAlign",
+            Self::LeftJustified => "LeftJustified",
+            Self::CenterJustified => "CenterJustified",
+            Self::RightJustified => "RightJustified",
+            Self::FullyJustified => "FullyJustified",
+            Self::ToBindingSide => "ToBindingSide",
+            Self::AwayFromBindingSide => "AwayFromBindingSide",
+        }
+    }
+}
+
+// Serialise as the IDML attribute string ("LeftAlign", etc.) so the
+// JSON wire format used by the editor bridge stays stable across
+// the enum promotion. Deserialise rejects unknown strings via a
+// serde error (matches `from_idml`'s strictness).
+impl Serialize for Justification {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        ser.serialize_str(self.as_idml())
+    }
+}
+
+impl<'de> Deserialize<'de> for Justification {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        let s = <&str>::deserialize(de)?;
+        Self::from_idml(s).ok_or_else(|| {
+            serde::de::Error::custom(format!("unknown Justification value: {s:?}"))
+        })
+    }
+}
 
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct Story {
@@ -59,10 +150,12 @@ pub struct Story {
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct Paragraph {
     pub paragraph_style: Option<String>,
-    /// `Justification` attribute from IDML. Common values:
-    /// `LeftAlign`, `CenterAlign`, `RightAlign`, `FullyJustified`,
-    /// `LeftJustified`, `CenterJustified`, `RightJustified`.
-    pub justification: Option<String>,
+    /// `Justification` attribute from IDML, parsed into a typed
+    /// `Justification` enum at XML-read time. Unknown attribute
+    /// values become `None` (matches the pre-enum fallback in
+    /// `map_justification`, which mapped anything it didn't
+    /// recognise to `Left`).
+    pub justification: Option<Justification>,
     /// `FirstLineIndent` in pt.
     pub first_line_indent: Option<f32>,
     /// `SpaceBefore` in pt.
@@ -642,7 +735,9 @@ impl Story {
                     b"ParagraphStyleRange" => {
                         current_paragraph = Some(Paragraph {
                             paragraph_style: attr(&e, b"AppliedParagraphStyle"),
-                            justification: attr(&e, b"Justification"),
+                            justification: attr(&e, b"Justification")
+                                .as_deref()
+                                .and_then(Justification::from_idml),
                             first_line_indent: attr(&e, b"FirstLineIndent")
                                 .and_then(|s| s.parse().ok()),
                             space_before: attr(&e, b"SpaceBefore").and_then(|s| s.parse().ok()),
@@ -1869,5 +1964,46 @@ mod tests {
         let s = Story::parse(xml).unwrap();
         assert!(s.optical_margin_alignment);
         assert_eq!(s.optical_margin_size, 9.0);
+    }
+
+    #[test]
+    fn justification_from_idml_covers_every_variant_and_unknowns() {
+        // Every documented IDML attribute string maps to its enum
+        // variant. Unknown / typo'd strings return `None` so the
+        // renderer's fallback (Left alignment) kicks in.
+        for (raw, expected) in [
+            ("LeftAlign", Justification::LeftAlign),
+            ("CenterAlign", Justification::CenterAlign),
+            ("RightAlign", Justification::RightAlign),
+            ("LeftJustified", Justification::LeftJustified),
+            ("CenterJustified", Justification::CenterJustified),
+            ("RightJustified", Justification::RightJustified),
+            ("FullyJustified", Justification::FullyJustified),
+            ("ToBindingSide", Justification::ToBindingSide),
+            ("AwayFromBindingSide", Justification::AwayFromBindingSide),
+        ] {
+            assert_eq!(Justification::from_idml(raw), Some(expected));
+            // Round-trip: enum -> string -> enum stays stable.
+            assert_eq!(Justification::from_idml(expected.as_idml()), Some(expected));
+        }
+        assert_eq!(Justification::from_idml("leftalign"), None);
+        assert_eq!(Justification::from_idml(""), None);
+        assert_eq!(Justification::from_idml("Unknown"), None);
+    }
+
+    #[test]
+    fn paragraph_style_range_parses_justification_into_enum() {
+        let xml = br#"<Story>
+          <ParagraphStyleRange Justification="CenterAlign">
+            <CharacterStyleRange><Content>X</Content></CharacterStyleRange>
+          </ParagraphStyleRange>
+          <ParagraphStyleRange Justification="NotARealValue">
+            <CharacterStyleRange><Content>Y</Content></CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        assert_eq!(s.paragraphs[0].justification, Some(Justification::CenterAlign));
+        // Unrecognised string ⇒ None; renderer falls back to Left.
+        assert_eq!(s.paragraphs[1].justification, None);
     }
 }

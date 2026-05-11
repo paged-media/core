@@ -33,8 +33,8 @@ pub use spread::{
 };
 pub use story::{
     AnchoredFrame, AnchoredFrameKind, AnchoredObjectSetting, CellDiagonal, CharacterRun,
-    Paragraph, Story, TabStop, Table, TableBorder, TableCell, TableColumn, TableLineStrokes,
-    TableRow, AUTO_PAGE_NUMBER_MARKER, NEXT_PAGE_NUMBER_MARKER,
+    Justification, Paragraph, Story, TabStop, Table, TableBorder, TableCell, TableColumn,
+    TableLineStrokes, TableRow, AUTO_PAGE_NUMBER_MARKER, NEXT_PAGE_NUMBER_MARKER,
 };
 pub use styles::{
     CellStyleDef, CharacterStyleDef, ObjectStyleDef, ParagraphStyleDef, ResolvedCell,

@@ -218,7 +218,7 @@ mod wasm {
                 Some(a) => format!(
                     "{{\"justification\":{},\"firstLineIndent\":{},\
                      \"spaceBefore\":{},\"spaceAfter\":{},\"paragraphStyle\":{}}}",
-                    json_opt_string(a.justification.as_deref()),
+                    json_opt_string(a.justification.map(|j| j.as_idml())),
                     json_opt_f32(a.first_line_indent),
                     json_opt_f32(a.space_before),
                     json_opt_f32(a.space_after),

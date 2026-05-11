@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 use quick_xml::events::Event;
 use serde::Serialize;
 
-use crate::story::TabStop;
+use crate::story::{Justification, TabStop};
 use crate::util::{attr, parse_tint_attr};
 use crate::ParseError;
 
@@ -223,7 +223,9 @@ pub struct ParagraphStyleDef {
     pub vertical_scale: Option<f32>,
     pub position: Option<String>,
     pub tracking: Option<f32>,
-    pub justification: Option<String>,
+    /// `Justification` from the style. Parsed into the typed
+    /// `Justification` enum at XML-read time.
+    pub justification: Option<Justification>,
     pub first_line_indent: Option<f32>,
     pub space_before: Option<f32>,
     pub space_after: Option<f32>,
@@ -308,7 +310,7 @@ pub struct ResolvedParagraph {
     pub vertical_scale: Option<f32>,
     pub position: Option<String>,
     pub tracking: Option<f32>,
-    pub justification: Option<String>,
+    pub justification: Option<Justification>,
     pub first_line_indent: Option<f32>,
     pub space_before: Option<f32>,
     pub space_after: Option<f32>,
@@ -801,9 +803,7 @@ impl ResolvedParagraph {
             self.position = def.position.clone();
         }
         self.tracking = self.tracking.or(def.tracking);
-        if self.justification.is_none() {
-            self.justification = def.justification.clone();
-        }
+        self.justification = self.justification.or(def.justification);
         self.first_line_indent = self.first_line_indent.or(def.first_line_indent);
         self.space_before = self.space_before.or(def.space_before);
         self.space_after = self.space_after.or(def.space_after);
@@ -962,7 +962,9 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         vertical_scale: attr(e, b"VerticalScale").and_then(|s| s.parse().ok()),
         position: attr(e, b"Position"),
         tracking: attr(e, b"Tracking").and_then(|s| s.parse().ok()),
-        justification: attr(e, b"Justification"),
+        justification: attr(e, b"Justification")
+            .as_deref()
+            .and_then(Justification::from_idml),
         first_line_indent: attr(e, b"FirstLineIndent").and_then(|s| s.parse().ok()),
         space_before: attr(e, b"SpaceBefore").and_then(|s| s.parse().ok()),
         space_after: attr(e, b"SpaceAfter").and_then(|s| s.parse().ok()),
@@ -1044,7 +1046,7 @@ mod tests {
         let r = s.resolve_paragraph("ParagraphStyle/Heading");
         assert_eq!(r.point_size, Some(22.0)); // override
         assert_eq!(r.font.as_deref(), Some("Body Font")); // inherited
-        assert_eq!(r.justification.as_deref(), Some("LeftAlign"));
+        assert_eq!(r.justification, Some(Justification::LeftAlign));
         assert_eq!(r.space_after, Some(6.0));
     }
 

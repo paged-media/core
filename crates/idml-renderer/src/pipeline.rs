@@ -1821,7 +1821,7 @@ fn emit_paragraph_into_chain(
         return;
     };
     let mut lopts = idml_text::LayoutOptions::new(col_pt, paragraph_size);
-    lopts.alignment = map_justification(resolved_paragraph.justification.as_deref());
+    lopts.alignment = map_justification(resolved_paragraph.justification);
     apply_paragraph_compose_options(&mut lopts, em.hyphenator, &resolved_paragraph);
     // Explicit `Leading` on the leading run mirrors IDML semantics:
     // every line uses the override regardless of the largest glyph
@@ -4944,7 +4944,7 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
     let mut subs: Vec<idml_parse::Paragraph> = Vec::new();
     let mut current = idml_parse::Paragraph {
         paragraph_style: paragraph.paragraph_style.clone(),
-        justification: paragraph.justification.clone(),
+        justification: paragraph.justification,
         first_line_indent: paragraph.first_line_indent,
         space_before: paragraph.space_before,
         space_after: None, // applied to last sub-paragraph only
@@ -4979,7 +4979,7 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
                 // `\n`s, common at the end of bullet lists).
                 let mut next = idml_parse::Paragraph {
                     paragraph_style: paragraph.paragraph_style.clone(),
-                    justification: paragraph.justification.clone(),
+                    justification: paragraph.justification,
                     first_line_indent: paragraph.first_line_indent,
                     space_before: None,
                     space_after: None,
@@ -5019,7 +5019,7 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
         // bookkeeping consistent without rendering anything.
         subs.push(idml_parse::Paragraph {
             paragraph_style: paragraph.paragraph_style.clone(),
-            justification: paragraph.justification.clone(),
+            justification: paragraph.justification,
             first_line_indent: paragraph.first_line_indent,
             space_before: paragraph.space_before,
             space_after: paragraph.space_after,
@@ -5150,7 +5150,7 @@ fn emit_cell_paragraph(
     let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
     let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
     let mut lopts = idml_text::LayoutOptions::new(column_width_pt, paragraph_size);
-    lopts.alignment = map_justification(resolved_paragraph.justification.as_deref());
+    lopts.alignment = map_justification(resolved_paragraph.justification);
     apply_paragraph_compose_options(&mut lopts, em.hyphenator, &resolved_paragraph);
     lopts.first_baseline =
         ((paragraph_size * 0.8) * idml_text::shape::ADVANCE_PRECISION).round() as i32;
@@ -6787,7 +6787,7 @@ pub fn build(document: &Document, options: &PipelineOptions) -> anyhow::Result<B
             };
             let measurer = idml_text::RustybuzzMeasurer::new(face, paragraph_size);
             let mut lopts = idml_text::LayoutOptions::new(col_pt, paragraph_size);
-            lopts.alignment = map_justification(paragraph.justification.as_deref());
+            lopts.alignment = map_justification(paragraph.justification);
             let laid_out = idml_text::layout_paragraph(&paragraph_text, &measurer, &lopts);
             stats.lines += laid_out.lines.len();
 
@@ -7423,14 +7423,25 @@ fn emit_line_decorations(
     }
 }
 
-/// Map IDML `Justification` attribute values to `idml_text::Alignment`.
-/// Unknown or missing values fall back to `Left`.
-pub fn map_justification(j: Option<&str>) -> idml_text::Alignment {
+/// Map an IDML `Justification` enum value to `idml_text::Alignment`.
+/// `None` (no attribute on the cascade) falls back to `Left`, the
+/// IDML default.
+///
+/// `ToBindingSide` / `AwayFromBindingSide` are binding-aware values
+/// that ideally consult the spread's page side (left vs. right). We
+/// don't plumb binding side through to the composer today, so they
+/// resolve to `Left` / `Right` respectively — matches the historical
+/// stringly-typed behaviour, which fell through to `Left` for any
+/// unrecognised string.
+pub fn map_justification(j: Option<idml_parse::Justification>) -> idml_text::Alignment {
+    use idml_parse::Justification as J;
     match j {
-        Some("RightAlign") | Some("RightJustified") => idml_text::Alignment::Right,
-        Some("CenterAlign") | Some("CenterJustified") => idml_text::Alignment::Center,
-        Some("FullyJustified") | Some("LeftJustified") => idml_text::Alignment::Justify,
-        _ => idml_text::Alignment::Left,
+        Some(J::RightAlign) | Some(J::RightJustified) | Some(J::AwayFromBindingSide) => {
+            idml_text::Alignment::Right
+        }
+        Some(J::CenterAlign) | Some(J::CenterJustified) => idml_text::Alignment::Center,
+        Some(J::FullyJustified) | Some(J::LeftJustified) => idml_text::Alignment::Justify,
+        Some(J::LeftAlign) | Some(J::ToBindingSide) | None => idml_text::Alignment::Left,
     }
 }
 

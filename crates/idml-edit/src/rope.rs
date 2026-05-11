@@ -24,7 +24,7 @@
 //! `String`-per-run shape is fast enough.
 
 use idml_parse::{
-    CharacterRun, Paragraph as ParsedParagraph, Story as ParsedStory, TabStop, Table,
+    CharacterRun, Justification, Paragraph as ParsedParagraph, Story as ParsedStory, TabStop, Table,
 };
 
 /// Run-level attributes (everything on `CharacterRun` except `text`).
@@ -95,7 +95,7 @@ impl RunAttrs {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ParagraphAttrs {
     pub paragraph_style: Option<String>,
-    pub justification: Option<String>,
+    pub justification: Option<Justification>,
     pub first_line_indent: Option<f32>,
     pub space_before: Option<f32>,
     pub space_after: Option<f32>,
@@ -106,7 +106,7 @@ impl ParagraphAttrs {
     fn from_paragraph(p: &ParsedParagraph) -> Self {
         Self {
             paragraph_style: p.paragraph_style.clone(),
-            justification: p.justification.clone(),
+            justification: p.justification,
             first_line_indent: p.first_line_indent,
             space_before: p.space_before,
             space_after: p.space_after,
@@ -315,7 +315,7 @@ impl StoryRope {
                 };
                 ParsedParagraph {
                     paragraph_style: p.attrs.paragraph_style.clone(),
-                    justification: p.attrs.justification.clone(),
+                    justification: p.attrs.justification,
                     first_line_indent: p.attrs.first_line_indent,
                     space_before: p.attrs.space_before,
                     space_after: p.attrs.space_after,
@@ -432,7 +432,7 @@ mod tests {
             optical_margin_size: 0.0,
             paragraphs: vec![ParsedParagraph {
                 paragraph_style: Some("ParagraphStyle/Body".into()),
-                justification: Some("LeftAlign".into()),
+                justification: Some(Justification::LeftAlign),
                 first_line_indent: None,
                 space_before: None,
                 space_after: None,
