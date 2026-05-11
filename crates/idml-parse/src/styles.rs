@@ -265,6 +265,28 @@ pub struct ParagraphStyleDef {
     /// one "Character Style" picker regardless of list kind), so the
     /// renderer falls back to it when shaping bullets.
     pub bullets_and_numbering_digits_character_style: Option<String>,
+    /// `NumberingExpression` — the formatting template for the
+    /// numbered-list marker. Tokens:
+    /// - `^#` substitutes the formatted counter (per
+    ///   `numbering_format`),
+    /// - `^.` is a literal period,
+    /// - `^t` is a literal tab.
+    ///
+    /// Anything else passes through unchanged. `None` falls back
+    /// to the IDML default `^#.^t` (e.g. `"1.\t"`).
+    pub numbering_expression: Option<String>,
+    /// `NumberingStartAt` — explicit integer the paragraph's
+    /// counter starts at. Overrides any continued count from a
+    /// previous paragraph. `None` means "no explicit start"; the
+    /// counter increments off whatever the story carries.
+    pub numbering_start_at: Option<i32>,
+    /// `NumberingContinue` — when `true`, the counter persists
+    /// across the previous paragraph (even if that paragraph
+    /// applied a different style or wasn't a numbered list at all,
+    /// up to whatever the previous numbered-list state was). When
+    /// `false`, the counter resets at the start of this paragraph.
+    /// `None` ⇒ inherit; the renderer's default is "continue".
+    pub numbering_continue: Option<bool>,
     /// `Hyphenation` boolean. IDML default is true; the resolver
     /// only flips a paragraph off when an explicit `Hyphenation="false"`
     /// lands on the cascade. Drives whether the composer registers a
@@ -342,6 +364,15 @@ pub struct ResolvedParagraph {
     /// Cascaded `BulletsAndNumberingDigitsCharacterStyle` ref. See
     /// [`ParagraphStyleDef::bullets_and_numbering_digits_character_style`].
     pub bullets_and_numbering_digits_character_style: Option<String>,
+    /// `NumberingExpression` template (`^#`, `^.`, `^t` tokens
+    /// plus literal characters). `None` ⇒ renderer default `^#.^t`.
+    pub numbering_expression: Option<String>,
+    /// `NumberingStartAt` explicit start integer. See
+    /// `ParagraphStyleDef::numbering_start_at`.
+    pub numbering_start_at: Option<i32>,
+    /// `NumberingContinue` flag. See
+    /// `ParagraphStyleDef::numbering_continue`.
+    pub numbering_continue: Option<bool>,
     pub hyphenation: Option<bool>,
     pub applied_language: Option<String>,
     pub minimum_word_spacing: Option<f32>,
@@ -379,6 +410,9 @@ enum CurrentStyle {
 enum CurrentProperty {
     AppliedFont,
     BasedOn,
+    /// `<NumberingExpression type="string">^#.^t</NumberingExpression>`
+    /// inside a `ParagraphStyle`'s `<Properties>` block. Paragraph-only.
+    NumberingExpression,
 }
 
 impl StyleSheet {
@@ -443,6 +477,11 @@ impl StyleSheet {
                     b"BasedOn" if current_style.is_some() => {
                         pending_property = Some(CurrentProperty::BasedOn);
                     }
+                    b"NumberingExpression"
+                        if matches!(current_style, Some(CurrentStyle::Paragraph)) =>
+                    {
+                        pending_property = Some(CurrentProperty::NumberingExpression);
+                    }
                     _ => {}
                 },
                 Event::Text(t) if pending_property.is_some() => {
@@ -465,6 +504,11 @@ impl StyleSheet {
                                                     p.based_on = Some(text);
                                                 }
                                             }
+                                            CurrentProperty::NumberingExpression => {
+                                                if p.numbering_expression.is_none() {
+                                                    p.numbering_expression = Some(text);
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -483,6 +527,8 @@ impl StyleSheet {
                                                     c.based_on = Some(text);
                                                 }
                                             }
+                                            // NumberingExpression is paragraph-only.
+                                            CurrentProperty::NumberingExpression => {}
                                         }
                                     }
                                 }
@@ -583,7 +629,7 @@ impl StyleSheet {
                             current_style = None;
                         }
                     }
-                    b"AppliedFont" | b"BasedOn" => {
+                    b"AppliedFont" | b"BasedOn" | b"NumberingExpression" => {
                         // Pending property is consumed by the next
                         // Text event; clearing here prevents
                         // mismatched-tag leaks if the element was
@@ -849,6 +895,11 @@ impl ResolvedParagraph {
             self.bullets_and_numbering_digits_character_style =
                 def.bullets_and_numbering_digits_character_style.clone();
         }
+        if self.numbering_expression.is_none() {
+            self.numbering_expression = def.numbering_expression.clone();
+        }
+        self.numbering_start_at = self.numbering_start_at.or(def.numbering_start_at);
+        self.numbering_continue = self.numbering_continue.or(def.numbering_continue);
         self.hyphenation = self.hyphenation.or(def.hyphenation);
         if self.applied_language.is_none() {
             self.applied_language = def.applied_language.clone();
@@ -1007,6 +1058,9 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
             e,
             b"BulletsAndNumberingDigitsCharacterStyle",
         ),
+        numbering_expression: attr(e, b"NumberingExpression"),
+        numbering_start_at: attr(e, b"NumberingStartAt").and_then(|s| s.parse().ok()),
+        numbering_continue: attr(e, b"NumberingContinue").and_then(|s| s.parse().ok()),
         hyphenation: attr(e, b"Hyphenation").and_then(|s| s.parse().ok()),
         applied_language: attr(e, b"AppliedLanguage"),
         minimum_word_spacing: attr(e, b"MinimumWordSpacing").and_then(|s| s.parse().ok()),
@@ -1185,6 +1239,73 @@ mod tests {
         // Both were folded in once; the depth limiter prevents looping.
         assert_eq!(r.point_size, Some(10.0));
         assert_eq!(r.font_style.as_deref(), Some("Bold"));
+    }
+
+    #[test]
+    fn parses_numbering_expression_start_at_and_continue_attrs() {
+        // Real-world IDML carries these as attributes on the
+        // ParagraphStyle start tag for the simple cases.
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootParagraphStyleGroup>
+            <ParagraphStyle Self="ParagraphStyle/Numbered"
+                            BulletsAndNumberingListType="NumberedList"
+                            NumberingExpression="Step ^# of 5^t"
+                            NumberingStartAt="5"
+                            NumberingContinue="false"/>
+          </RootParagraphStyleGroup>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let p = s.paragraph_styles.get("ParagraphStyle/Numbered").unwrap();
+        assert_eq!(p.numbering_expression.as_deref(), Some("Step ^# of 5^t"));
+        assert_eq!(p.numbering_start_at, Some(5));
+        assert_eq!(p.numbering_continue, Some(false));
+    }
+
+    #[test]
+    fn parses_numbering_expression_as_property_element() {
+        // InDesign often emits NumberingExpression as an element-form
+        // child of <Properties> (typed string), not as an attribute.
+        // The parser must pick that up so the cascade carries the
+        // template forward.
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootParagraphStyleGroup>
+            <ParagraphStyle Self="ParagraphStyle/Numbered"
+                            BulletsAndNumberingListType="NumberedList">
+              <Properties>
+                <NumberingExpression type="string">^#)^t</NumberingExpression>
+              </Properties>
+            </ParagraphStyle>
+          </RootParagraphStyleGroup>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let p = s.paragraph_styles.get("ParagraphStyle/Numbered").unwrap();
+        assert_eq!(p.numbering_expression.as_deref(), Some("^#)^t"));
+    }
+
+    #[test]
+    fn resolve_paragraph_propagates_numbering_overrides_through_based_on() {
+        // Numbered base style sets the expression + start; a child
+        // style only flips Continue. Cascade should pull the
+        // expression and StartAt from the parent while overriding
+        // Continue locally.
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootParagraphStyleGroup>
+            <ParagraphStyle Self="ParagraphStyle/Base"
+                            NumberingExpression="^#.^t"
+                            NumberingStartAt="3"/>
+            <ParagraphStyle Self="ParagraphStyle/Child"
+                            BasedOn="ParagraphStyle/Base"
+                            NumberingContinue="true"/>
+          </RootParagraphStyleGroup>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let r = s.resolve_paragraph("ParagraphStyle/Child");
+        assert_eq!(r.numbering_expression.as_deref(), Some("^#.^t"));
+        assert_eq!(r.numbering_start_at, Some(3));
+        assert_eq!(r.numbering_continue, Some(true));
     }
 
     /// InDesign exports `AppliedFont` and `BasedOn` as element-form
