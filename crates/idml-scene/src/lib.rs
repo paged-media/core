@@ -13,8 +13,8 @@
 use std::collections::HashMap;
 
 use idml_parse::{
-    CharacterRun, Container, Graphic, Paragraph, ParseError, Spread, Story, StoryRef, StyleSheet,
-    TextFrame,
+    Bounds, CharacterRun, Container, Graphic, Paragraph, ParseError, Spread, Story, StoryRef,
+    StyleSheet, TOCStyleDef, TextFrame,
 };
 
 /// Owned, parsed representation of an IDML document.
@@ -291,6 +291,193 @@ impl Document {
     pub fn story_refs(&self) -> &[StoryRef] {
         &self.container.designmap.stories
     }
+
+    /// Resolve a `<TOCStyle>` into a flat ordered list of TOC entries.
+    ///
+    /// Walks every story's paragraphs in document order; whenever a
+    /// paragraph's `AppliedParagraphStyle` matches an entry's
+    /// `IncludeStyle`, we emit a [`TOCEntry`] carrying:
+    ///
+    /// - the entry's `level` / `separator` / page-number toggle,
+    /// - the resolved entry text (concatenated runs, stripped of
+    ///   placeholder markers),
+    /// - the body page-index of the paragraph's host frame.
+    ///
+    /// The page-index assignment is conservative: it returns the page
+    /// hosting the *head* frame of the paragraph's parent story. A
+    /// long threaded story that breaks across many frames still
+    /// resolves every TOC entry from its style to that head frame —
+    /// the renderer's chain pass is what would distribute paragraphs
+    /// across pages at emit time, and the scene layer doesn't run
+    /// composition. Most real-world TOC fixtures use one frame per
+    /// story per page anyway, so the heuristic matches InDesign's
+    /// output in the common case.
+    ///
+    /// `None` for an entry's `page_number` means the document has no
+    /// host frame for the paragraph (orphan story) — the renderer
+    /// should suppress the page number for that row.
+    pub fn resolve_toc(&self, toc_style: &TOCStyleDef) -> Vec<TOCEntry> {
+        let mut out: Vec<TOCEntry> = Vec::new();
+        let body_page_index = self.body_page_index_map();
+        for parsed in &self.stories {
+            for paragraph in &parsed.story.paragraphs {
+                let Some(applied) = paragraph.paragraph_style.as_deref() else {
+                    continue;
+                };
+                let Some(entry_def) = toc_style
+                    .entries
+                    .iter()
+                    .find(|e| e.include_style.as_deref() == Some(applied))
+                else {
+                    continue;
+                };
+                let text = paragraph_plain_text(paragraph);
+                if text.is_empty() {
+                    continue;
+                }
+                let page_number = body_page_index.get(&parsed.self_id).copied();
+                out.push(TOCEntry {
+                    level: entry_def.level.unwrap_or(1),
+                    text,
+                    page_number,
+                    separator: entry_def.separator.clone().unwrap_or_else(|| "^t".to_string()),
+                    format_style: entry_def.format_style.clone(),
+                    include_style: applied.to_string(),
+                    page_number_visible: !matches!(
+                        entry_def.page_number.as_deref(),
+                        Some("Off") | Some("NoPageNumber")
+                    ),
+                });
+            }
+        }
+        out
+    }
+
+    /// Map story-id → body page-index of the chain head frame.
+    ///
+    /// Body page indices are 0-based and match the renderer's page
+    /// ordering: spreads are concatenated in manifest order, pages
+    /// inside each spread land in document order. The map is keyed
+    /// off the *parent* story (not threaded targets), so a chain
+    /// hosted across multiple frames resolves to its head frame's
+    /// page. Stories with no hosting frame are absent.
+    fn body_page_index_map(&self) -> HashMap<String, usize> {
+        let mut out: HashMap<String, usize> = HashMap::new();
+        // Pre-compute per-spread page index offsets so we can map
+        // (spread_idx, local_page_idx) → body page index in O(1).
+        let mut spread_page_offsets = Vec::with_capacity(self.spreads.len() + 1);
+        let mut running = 0usize;
+        for parsed in &self.spreads {
+            spread_page_offsets.push(running);
+            running += parsed.spread.pages.len().max(1);
+        }
+        spread_page_offsets.push(running);
+
+        for parsed_story in &self.stories {
+            let chain = self.frame_chain(&parsed_story.self_id);
+            let Some(head) = chain.first() else { continue };
+            let Some(self_id) = head.self_id.as_deref() else {
+                continue;
+            };
+            let Some(&(spread_idx, _frame_idx)) = self.text_frame_index.get(self_id) else {
+                continue;
+            };
+            let spread = match self.spreads.get(spread_idx) {
+                Some(s) => &s.spread,
+                None => continue,
+            };
+            let local_page = page_index_for_bounds(&spread.pages, head.bounds, head.item_transform)
+                .unwrap_or(0);
+            out.insert(
+                parsed_story.self_id.clone(),
+                spread_page_offsets[spread_idx] + local_page,
+            );
+        }
+        out
+    }
+}
+
+/// Find the page in a spread that contains a frame's centroid. Uses
+/// the frame's `GeometricBounds` after applying its `ItemTransform`
+/// (since bounds are stored in the frame's inner coords). Returns
+/// `None` if no page contains the centroid — caller defaults to the
+/// first page.
+fn page_index_for_bounds(
+    pages: &[idml_parse::Page],
+    bounds: Bounds,
+    item_transform: Option<[f32; 6]>,
+) -> Option<usize> {
+    let cx = (bounds.left + bounds.right) * 0.5;
+    let cy = (bounds.top + bounds.bottom) * 0.5;
+    let (cx, cy) = match item_transform {
+        Some([a, b, c, d, tx, ty]) => (a * cx + c * cy + tx, b * cx + d * cy + ty),
+        None => (cx, cy),
+    };
+    pages.iter().position(|p| {
+        let (left, right, top, bottom) = match p.item_transform {
+            // Real IDML page ItemTransforms are pure translation
+            // (InDesign limits the field to dx/dy plus 0/90/180/270
+            // rotation); rotation is rare for body pages so we treat
+            // the matrix as translation-only for containment.
+            Some([_, _, _, _, tx, ty]) => (
+                p.bounds.left + tx,
+                p.bounds.right + tx,
+                p.bounds.top + ty,
+                p.bounds.bottom + ty,
+            ),
+            None => (p.bounds.left, p.bounds.right, p.bounds.top, p.bounds.bottom),
+        };
+        cx >= left && cx <= right && cy >= top && cy <= bottom
+    })
+}
+
+/// Concatenate a paragraph's `runs` text into a plain string,
+/// dropping the IDML auto-page-number / next-page-number sentinel
+/// characters (they'd appear as private-use code-points in the TOC
+/// output otherwise).
+fn paragraph_plain_text(p: &Paragraph) -> String {
+    let mut buf = String::new();
+    for run in &p.runs {
+        for ch in run.text.chars() {
+            if ch == idml_parse::AUTO_PAGE_NUMBER_MARKER || ch == idml_parse::NEXT_PAGE_NUMBER_MARKER
+            {
+                continue;
+            }
+            buf.push(ch);
+        }
+    }
+    buf.trim().to_string()
+}
+
+/// One resolved row of a Table of Contents.
+///
+/// The renderer composes one paragraph per entry, applying the
+/// referenced `format_style`, the entry's `text` followed by
+/// `separator`, then the formatted page number (when
+/// `page_number_visible`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TOCEntry {
+    /// Outline depth, 1-based. Top-level entries are level 1.
+    pub level: u32,
+    /// The trimmed text of the source paragraph.
+    pub text: String,
+    /// Body page-index of the paragraph's host frame head, or `None`
+    /// for orphan stories (no hosting frame).
+    pub page_number: Option<usize>,
+    /// Separator string between `text` and the page number. IDML
+    /// serialises tabs as `^t`; the renderer expands them at use
+    /// time. Default is `"^t"`.
+    pub separator: String,
+    /// `FormatStyle` reference from the matching `<TOCStyleEntry>`,
+    /// or `None` when the entry didn't declare one.
+    pub format_style: Option<String>,
+    /// The `IncludeStyle` reference this entry matched against — kept
+    /// for debugging / book-style cross-referencing.
+    pub include_style: String,
+    /// When `false`, the IDML entry asked to suppress the page
+    /// number (`PageNumber="Off"` / `NoPageNumber"`). The renderer
+    /// should drop the separator + number for these rows.
+    pub page_number_visible: bool,
 }
 
 impl ResolvedRunAttrs {
@@ -587,11 +774,199 @@ pub enum OpenError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use idml_parse::{TOCStyleDef, TOCStyleEntryDef};
+    use std::io::Write;
+    use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
     #[test]
     fn story_id_strips_dir_and_prefix() {
         assert_eq!(derive_story_id("Stories/Story_u10.xml"), "u10");
         assert_eq!(derive_story_id("u10.xml"), "u10");
         assert_eq!(derive_story_id("Stories/custom_u10.xml"), "custom_u10");
+    }
+
+    /// Pack an IDML with three body pages on a single spread, three
+    /// host frames (one per page, each with one story), where each
+    /// paragraph carries an explicit `AppliedParagraphStyle` so the
+    /// resolver can filter against it. The three frames are arranged
+    /// vertically so per-page centroid containment lands each frame
+    /// on a different page.
+    fn pack_toc_idml(paragraphs: &[(&str, &str, &str)]) -> Vec<u8> {
+        // paragraphs: (story_id, applied_style, text) — one per
+        // paragraph; multiple entries with the same story_id stack
+        // inside that story in order.
+        let buf = std::io::Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+        zip.start_file("mimetype", stored).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+
+        let mut story_ids: Vec<&str> = Vec::new();
+        for (sid, _, _) in paragraphs {
+            if !story_ids.contains(sid) {
+                story_ids.push(sid);
+            }
+        }
+
+        // designmap references all stories + the single spread.
+        let mut designmap = String::from(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+"#,
+        );
+        for sid in &story_ids {
+            designmap.push_str(&format!(
+                "  <idPkg:Story src=\"Stories/Story_{sid}.xml\"/>\n"
+            ));
+        }
+        designmap.push_str("</Document>");
+        zip.start_file("designmap.xml", deflated).unwrap();
+        zip.write_all(designmap.as_bytes()).unwrap();
+
+        // One page per story, vertically stacked.
+        let mut spread = String::from(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+"#,
+        );
+        for (i, _sid) in story_ids.iter().enumerate() {
+            let top = (i as f32) * 100.0;
+            let bottom = top + 100.0;
+            spread.push_str(&format!(
+                "    <Page Self=\"page{i}\" GeometricBounds=\"{top} 0 {bottom} 100\"/>\n"
+            ));
+        }
+        for (i, sid) in story_ids.iter().enumerate() {
+            let top = (i as f32) * 100.0;
+            let bottom = top + 100.0;
+            spread.push_str(&format!(
+                "    <TextFrame Self=\"frame_{sid}\" ParentStory=\"{sid}\" GeometricBounds=\"{top} 0 {bottom} 100\"/>\n"
+            ));
+        }
+        spread.push_str("  </Spread>\n</idPkg:Spread>");
+        zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+        zip.write_all(spread.as_bytes()).unwrap();
+
+        for sid in &story_ids {
+            let mut story = String::from(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story>
+"#,
+            );
+            for (psid, style, text) in paragraphs {
+                if psid != sid {
+                    continue;
+                }
+                story.push_str(&format!(
+                    "    <ParagraphStyleRange AppliedParagraphStyle=\"{style}\">
+      <CharacterStyleRange><Content>{text}</Content></CharacterStyleRange>
+    </ParagraphStyleRange>
+"
+                ));
+            }
+            story.push_str("  </Story>\n</idPkg:Story>");
+            zip.start_file(format!("Stories/Story_{sid}.xml"), deflated)
+                .unwrap();
+            zip.write_all(story.as_bytes()).unwrap();
+        }
+
+        zip.finish().unwrap().into_inner()
+    }
+
+    fn toc_style_with_two_entries() -> TOCStyleDef {
+        TOCStyleDef {
+            self_id: "TOCStyle/Main".to_string(),
+            name: Some("Main".to_string()),
+            title: Some("Contents".to_string()),
+            title_style: Some("ParagraphStyle/TocTitle".to_string()),
+            include_book_documents: Some(false),
+            include_hidden: Some(false),
+            run_in: Some(false),
+            entries: vec![
+                TOCStyleEntryDef {
+                    name: Some("H1".to_string()),
+                    include_style: Some("ParagraphStyle/Heading1".to_string()),
+                    format_style: Some("ParagraphStyle/TocFormat1".to_string()),
+                    level: Some(1),
+                    page_number: Some("On".to_string()),
+                    separator: Some("^t".to_string()),
+                },
+                TOCStyleEntryDef {
+                    name: Some("H2".to_string()),
+                    include_style: Some("ParagraphStyle/Heading2".to_string()),
+                    format_style: Some("ParagraphStyle/TocFormat2".to_string()),
+                    level: Some(2),
+                    page_number: Some("On".to_string()),
+                    separator: Some(" -- ".to_string()),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn resolve_toc_picks_paragraphs_in_document_order() {
+        // Three stories on three pages. Story 'intro' (page 0) holds
+        // H1 "Intro" + a Body paragraph (should be ignored) + H2
+        // "Background". Story 'mid' (page 1) has H2 "Setup". Story
+        // 'tail' (page 2) has H1 "Results".
+        let bytes = pack_toc_idml(&[
+            ("intro", "ParagraphStyle/Heading1", "Intro"),
+            ("intro", "ParagraphStyle/Body", "Skip me"),
+            ("intro", "ParagraphStyle/Heading2", "Background"),
+            ("mid", "ParagraphStyle/Heading2", "Setup"),
+            ("tail", "ParagraphStyle/Heading1", "Results"),
+        ]);
+        let doc = Document::open(&bytes).expect("open IDML");
+        let toc = toc_style_with_two_entries();
+        let entries = doc.resolve_toc(&toc);
+        assert_eq!(entries.len(), 4, "{:?}", entries);
+        assert_eq!(entries[0].text, "Intro");
+        assert_eq!(entries[0].level, 1);
+        assert_eq!(entries[0].page_number, Some(0));
+        assert_eq!(
+            entries[0].format_style.as_deref(),
+            Some("ParagraphStyle/TocFormat1")
+        );
+        assert_eq!(entries[0].separator, "^t");
+
+        assert_eq!(entries[1].text, "Background");
+        assert_eq!(entries[1].level, 2);
+        assert_eq!(entries[1].page_number, Some(0));
+        assert_eq!(entries[1].separator, " -- ");
+
+        assert_eq!(entries[2].text, "Setup");
+        assert_eq!(entries[2].level, 2);
+        assert_eq!(entries[2].page_number, Some(1));
+
+        assert_eq!(entries[3].text, "Results");
+        assert_eq!(entries[3].level, 1);
+        assert_eq!(entries[3].page_number, Some(2));
+    }
+
+    #[test]
+    fn resolve_toc_respects_page_number_off_flag() {
+        let bytes = pack_toc_idml(&[("intro", "ParagraphStyle/Heading1", "Foreword")]);
+        let doc = Document::open(&bytes).expect("open IDML");
+        let mut toc = toc_style_with_two_entries();
+        toc.entries[0].page_number = Some("NoPageNumber".to_string());
+        let entries = doc.resolve_toc(&toc);
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].page_number_visible);
+    }
+
+    #[test]
+    fn resolve_toc_uses_default_separator_when_absent() {
+        let bytes = pack_toc_idml(&[("intro", "ParagraphStyle/Heading1", "Foreword")]);
+        let doc = Document::open(&bytes).expect("open IDML");
+        let mut toc = toc_style_with_two_entries();
+        toc.entries[0].separator = None;
+        let entries = doc.resolve_toc(&toc);
+        assert_eq!(entries[0].separator, "^t");
     }
 }

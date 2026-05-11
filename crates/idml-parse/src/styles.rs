@@ -56,6 +56,73 @@ pub struct StyleSheet {
     /// CellStyle per region (header, body, footer, left column,
     /// right column) plus the table-level border strokes.
     pub table_styles: BTreeMap<String, TableStyleDef>,
+    /// `<TOCStyle>` definitions from `Resources/Styles.xml`. Each
+    /// carries an ordered list of `<TOCStyleEntry>` children
+    /// declaring which paragraph styles feed the TOC, the format
+    /// style applied to each rendered entry, and the page-number /
+    /// separator settings. Real-world IDMLs commonly serialise a
+    /// single default empty TOCStyle (no entries) alongside any
+    /// user-defined ones.
+    pub toc_styles: BTreeMap<String, TOCStyleDef>,
+}
+
+/// `<TOCStyle>` — Table of Contents style. Carries the heading text,
+/// the paragraph style for the title, and an ordered list of
+/// `<TOCStyleEntry>` children declaring which paragraph styles
+/// should be picked up as TOC entries.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct TOCStyleDef {
+    pub self_id: String,
+    pub name: Option<String>,
+    /// `Title` attribute — the heading text printed at the top of
+    /// the resolved TOC story (e.g. `"Contents"` / `"Inhalt"`).
+    /// `None` when omitted; some IDMLs use an empty string.
+    pub title: Option<String>,
+    /// `TitleStyle` — `ParagraphStyle/<id>` reference applied to
+    /// the title paragraph. May resolve to the `[No paragraph
+    /// style]` sentinel for the default TOCStyle.
+    pub title_style: Option<String>,
+    /// `IncludeBookDocuments` — true when entries should be pulled
+    /// from sibling book documents in addition to this one. Single-
+    /// document renders ignore this; captured for round-trip.
+    pub include_book_documents: Option<bool>,
+    /// `IncludeHidden` — when true the resolver should also pick up
+    /// paragraphs on hidden layers. The renderer currently honours
+    /// layer visibility at emission time and matches this default.
+    pub include_hidden: Option<bool>,
+    /// `RunIn` — when true, sibling entries at the same level
+    /// concatenate on the same line separated by a soft separator
+    /// rather than each landing on its own line. The current
+    /// resolver leaves run-in handling to the renderer; captured
+    /// here for round-trip.
+    pub run_in: Option<bool>,
+    /// Ordered list of `<TOCStyleEntry>` children in document order.
+    pub entries: Vec<TOCStyleEntryDef>,
+}
+
+/// `<TOCStyleEntry>` — one row in the TOC style table. IDML serialises
+/// these in document order under the `<TOCStyle>`.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct TOCStyleEntryDef {
+    /// `Name` — human-readable label (usually mirrors the paragraph
+    /// style name picked up by `IncludeStyle`).
+    pub name: Option<String>,
+    /// `IncludeStyle` — `ParagraphStyle/<id>` reference. Paragraphs
+    /// with this applied paragraph style feed the TOC entry.
+    pub include_style: Option<String>,
+    /// `FormatStyle` — `ParagraphStyle/<id>` reference applied to
+    /// the rendered TOC entry paragraph.
+    pub format_style: Option<String>,
+    /// `Level` — outline depth (1 is the top level). `None` falls
+    /// back to 1 at resolve time.
+    pub level: Option<u32>,
+    /// `PageNumber` — IDML enum (`On` / `Off` / `NoPageNumber`).
+    /// `On` is the default when absent.
+    pub page_number: Option<String>,
+    /// `Separator` — string placed between the entry text and the
+    /// page number. IDML serialises tabs as `^t`; the resolver
+    /// expands them at use time. Default `^t` when absent.
+    pub separator: Option<String>,
 }
 
 /// `<ObjectStyle>` — the page-item analogue of paragraph/character
@@ -431,6 +498,12 @@ impl StyleSheet {
         let mut current_object_style: Option<String> = None;
         let mut current_cell_style: Option<String> = None;
         let mut current_table_style: Option<String> = None;
+        // Track an open `<TOCStyle>` so nested `<TOCStyleEntry>` /
+        // `<Properties>` text events attach to the right entry. TOC
+        // styles aren't part of the cascade-tracking `CurrentStyle`
+        // because they don't share the AppliedFont / BasedOn /
+        // NumberingExpression property elements the others do.
+        let mut current_toc_style: Option<String> = None;
         let mut current_style: Option<CurrentStyle> = None;
         let mut pending_property: Option<CurrentProperty> = None;
         loop {
@@ -469,6 +542,26 @@ impl StyleSheet {
                             current_table_style = Some(s.self_id.clone());
                             current_style = Some(CurrentStyle::Table);
                             out.table_styles.insert(s.self_id.clone(), s);
+                        }
+                    }
+                    b"TOCStyle" => {
+                        if let Some(s) = parse_toc_style(&e) {
+                            current_toc_style = Some(s.self_id.clone());
+                            out.toc_styles.insert(s.self_id.clone(), s);
+                        }
+                    }
+                    b"TOCStyleEntry" => {
+                        // Element-form `<TOCStyleEntry>...</TOCStyleEntry>`
+                        // appears when InDesign attaches `<Properties>`
+                        // children. The attributes we care about all live
+                        // on the start tag, so reuse the same parser.
+                        if let (Some(id), Some(entry)) = (
+                            current_toc_style.as_deref(),
+                            parse_toc_style_entry(&e),
+                        ) {
+                            if let Some(t) = out.toc_styles.get_mut(id) {
+                                t.entries.push(entry);
+                            }
                         }
                     }
                     b"AppliedFont" if current_style.is_some() => {
@@ -576,6 +669,25 @@ impl StyleSheet {
                             out.paragraph_styles.insert(s.self_id.clone(), s);
                         }
                     }
+                    b"TOCStyle" => {
+                        // Self-closing `<TOCStyle ... />` — common for
+                        // the document's default empty TOCStyle that
+                        // carries no entries (real-world IDMLs ship this
+                        // even when the document has no TOC).
+                        if let Some(s) = parse_toc_style(&e) {
+                            out.toc_styles.insert(s.self_id.clone(), s);
+                        }
+                    }
+                    b"TOCStyleEntry" => {
+                        if let (Some(id), Some(entry)) = (
+                            current_toc_style.as_deref(),
+                            parse_toc_style_entry(&e),
+                        ) {
+                            if let Some(t) = out.toc_styles.get_mut(id) {
+                                t.entries.push(entry);
+                            }
+                        }
+                    }
                     b"TabStop" => {
                         if let (Some(id), Some(stop)) = (
                             current_paragraph_style.as_deref(),
@@ -628,6 +740,9 @@ impl StyleSheet {
                         if matches!(current_style, Some(CurrentStyle::Table)) {
                             current_style = None;
                         }
+                    }
+                    b"TOCStyle" => {
+                        current_toc_style = None;
                     }
                     b"AppliedFont" | b"BasedOn" | b"NumberingExpression" => {
                         // Pending property is consumed by the next
@@ -1024,6 +1139,30 @@ fn parse_object_style(e: &quick_xml::events::BytesStart) -> Option<ObjectStyleDe
     })
 }
 
+fn parse_toc_style(e: &quick_xml::events::BytesStart) -> Option<TOCStyleDef> {
+    Some(TOCStyleDef {
+        self_id: attr(e, b"Self")?,
+        name: attr(e, b"Name"),
+        title: attr(e, b"Title"),
+        title_style: attr(e, b"TitleStyle"),
+        include_book_documents: attr(e, b"IncludeBookDocuments").and_then(|s| s.parse().ok()),
+        include_hidden: attr(e, b"IncludeHidden").and_then(|s| s.parse().ok()),
+        run_in: attr(e, b"RunIn").and_then(|s| s.parse().ok()),
+        entries: Vec::new(),
+    })
+}
+
+fn parse_toc_style_entry(e: &quick_xml::events::BytesStart) -> Option<TOCStyleEntryDef> {
+    Some(TOCStyleEntryDef {
+        name: attr(e, b"Name"),
+        include_style: attr(e, b"IncludeStyle"),
+        format_style: attr(e, b"FormatStyle"),
+        level: attr(e, b"Level").and_then(|s| s.parse().ok()),
+        page_number: attr(e, b"PageNumber"),
+        separator: attr(e, b"Separator"),
+    })
+}
+
 fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphStyleDef> {
     Some(ParagraphStyleDef {
         self_id: attr(e, b"Self")?,
@@ -1349,5 +1488,86 @@ mod tests {
         // Cascade pulls font through to the resolved paragraph attrs.
         let r = s.resolve_paragraph("ParagraphStyle/Body");
         assert_eq!(r.font.as_deref(), Some("Open Sans"));
+    }
+
+    #[test]
+    fn parses_toc_style_with_entries() {
+        // Real-world `<TOCStyle>` carries a `<TOCStyleEntry>` per
+        // outline level. The parser must capture the title, the
+        // title-style ref, and each entry's IncludeStyle /
+        // FormatStyle / Level / PageNumber / Separator (separator
+        // defaults to a tab `^t` at resolve time when absent).
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootParagraphStyleGroup>
+            <ParagraphStyle Self="ParagraphStyle/TocTitle" Name="TocTitle"/>
+            <ParagraphStyle Self="ParagraphStyle/Heading1" Name="Heading1"/>
+            <ParagraphStyle Self="ParagraphStyle/Heading2" Name="Heading2"/>
+            <ParagraphStyle Self="ParagraphStyle/TocFormat1" Name="TocFormat1"/>
+            <ParagraphStyle Self="ParagraphStyle/TocFormat2" Name="TocFormat2"/>
+          </RootParagraphStyleGroup>
+          <TOCStyle Self="TOCStyle/Main" Name="Main" Title="Contents"
+                    TitleStyle="ParagraphStyle/TocTitle"
+                    IncludeBookDocuments="false"
+                    IncludeHidden="false"
+                    RunIn="false">
+            <TOCStyleEntry Name="Heading1"
+                           IncludeStyle="ParagraphStyle/Heading1"
+                           FormatStyle="ParagraphStyle/TocFormat1"
+                           Level="1"
+                           PageNumber="On"
+                           Separator="^t"/>
+            <TOCStyleEntry Name="Heading2"
+                           IncludeStyle="ParagraphStyle/Heading2"
+                           FormatStyle="ParagraphStyle/TocFormat2"
+                           Level="2"
+                           PageNumber="On"
+                           Separator=" -- "/>
+          </TOCStyle>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let toc = s.toc_styles.get("TOCStyle/Main").unwrap();
+        assert_eq!(toc.title.as_deref(), Some("Contents"));
+        assert_eq!(toc.title_style.as_deref(), Some("ParagraphStyle/TocTitle"));
+        assert_eq!(toc.include_book_documents, Some(false));
+        assert_eq!(toc.include_hidden, Some(false));
+        assert_eq!(toc.run_in, Some(false));
+        assert_eq!(toc.entries.len(), 2);
+        let e1 = &toc.entries[0];
+        assert_eq!(e1.include_style.as_deref(), Some("ParagraphStyle/Heading1"));
+        assert_eq!(
+            e1.format_style.as_deref(),
+            Some("ParagraphStyle/TocFormat1")
+        );
+        assert_eq!(e1.level, Some(1));
+        assert_eq!(e1.page_number.as_deref(), Some("On"));
+        assert_eq!(e1.separator.as_deref(), Some("^t"));
+        let e2 = &toc.entries[1];
+        assert_eq!(e2.level, Some(2));
+        assert_eq!(e2.separator.as_deref(), Some(" -- "));
+    }
+
+    #[test]
+    fn parses_self_closing_empty_toc_style() {
+        // InDesign always emits a default `<TOCStyle .../>` even when
+        // the document has no TOC. The parser must accept the self-
+        // closing form and produce an entry with no children.
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <TOCStyle Self="TOCStyle/$ID/DefaultTOCStyleName"
+                    Name="$ID/DefaultTOCStyleName"
+                    Title="Contents"
+                    TitleStyle="ParagraphStyle/$ID/[No paragraph style]"
+                    RunIn="false"
+                    IncludeHidden="false"
+                    IncludeBookDocuments="false"/>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let toc = s
+            .toc_styles
+            .get("TOCStyle/$ID/DefaultTOCStyleName")
+            .unwrap();
+        assert_eq!(toc.title.as_deref(), Some("Contents"));
+        assert!(toc.entries.is_empty());
     }
 }

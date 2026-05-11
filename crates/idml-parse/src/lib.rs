@@ -39,7 +39,8 @@ pub use story::{
 };
 pub use styles::{
     CellStyleDef, CharacterStyleDef, ObjectStyleDef, ParagraphStyleDef, ResolvedCell,
-    ResolvedCharacter, ResolvedObject, ResolvedParagraph, ResolvedTable, StyleSheet, TableStyleDef,
+    ResolvedCharacter, ResolvedObject, ResolvedParagraph, ResolvedTable, StyleSheet, TOCStyleDef,
+    TOCStyleEntryDef, TableStyleDef,
 };
 
 #[derive(Debug, thiserror::Error)]
