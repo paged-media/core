@@ -42,6 +42,14 @@ impl Color {
 ///
 /// `Paint` is `Copy`, so gradients are stored once in
 /// `DisplayList::gradients` and referenced by id rather than embedded.
+///
+/// `Cmyk` carries native CMYK channels (0.0..=1.0 each) all the way
+/// through to the rasterizer — necessary for true per-channel CMYK
+/// overprint compositing (Phase 3 Tier 3 #14 Stage A). For ordinary
+/// draws the rasterizer uses the `rgb` cached field (the compose stage
+/// pre-baked the ICC-converted display colour) so the visible result
+/// stays bit-identical to a `Paint::Solid` of the same swatch. Only
+/// the overprint path consumes the C/M/Y/K channels separately.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Paint {
     Solid(Color),
@@ -50,6 +58,20 @@ pub enum Paint {
     /// coords. Same id-space as linear gradients but resolved against
     /// `DisplayList::radial_gradients` instead of `gradients`.
     RadialGradient(GradientId),
+    /// Native CMYK paint preserved end to end. Channels are 0.0..=1.0
+    /// (NOT percentages — the renderer scales IDML's 0..100 percent
+    /// values to the unit range at compose time). `rgb` is the
+    /// already-ICC-resolved linear-RGB colour the rasterizer would
+    /// have used pre-Stage-A — keeping it on the paint lets ordinary
+    /// (non-overprint) draws render bit-identically to the prior
+    /// `Paint::Solid` path without re-running ICC at raster time.
+    Cmyk {
+        c: f32,
+        m: f32,
+        y: f32,
+        k: f32,
+        rgb: Color,
+    },
 }
 
 /// Index into `DisplayList::gradients` *or* `DisplayList::radial_gradients`,

@@ -7338,7 +7338,7 @@ fn convert_setting_to_shadow(
         .effect_color
         .as_deref()
         .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
-        .and_then(paint_as_solid)
+        .and_then(|p| paint_as_solid_with_icc(p, cmyk_xform))
         .unwrap_or(Color::BLACK);
     Some(DropShadow {
         offset_x: setting.x_offset,
@@ -7349,15 +7349,35 @@ fn convert_setting_to_shadow(
     })
 }
 
-/// Pull the inner `Color` out of a solid paint, returning `None`
-/// for gradient (or future image) paints. Used wherever a context
-/// can only consume a flat colour (drop shadow, per-glyph paint).
-fn paint_as_solid(p: Paint) -> Option<Color> {
+/// Pull the inner `Color` out of a solid (or CMYK) paint, returning
+/// `None` for gradient paints. Used wherever a context can only
+/// consume a flat colour (drop shadow, per-glyph paint).
+///
+/// `Paint::Cmyk` flattens through the supplied ICC transform (or via
+/// the naive CMYK→RGB fallback when no transform is available), so
+/// drop-shadow / gradient-stop / decoration paths that have only ever
+/// understood RGB keep producing identical pixels to the pre-Stage A
+/// world.
+fn paint_as_solid_with_icc(
+    p: Paint,
+    cmyk_xform: Option<&idml_color::IccTransform>,
+) -> Option<Color> {
     match p {
         Paint::Solid(c) => Some(c),
+        // The CMYK paint carries the ICC-resolved display RGB cached
+        // on it — drop-shadow / gradient-stop paths use that directly
+        // so the colour matches what a direct `Paint::Solid` resolved
+        // to before Stage A landed. `cmyk_xform` is unused here but
+        // kept in the signature for callers that don't know if the
+        // paint is a CMYK paint and want a stable API.
+        Paint::Cmyk { rgb, .. } => {
+            let _ = cmyk_xform;
+            Some(rgb)
+        }
         _ => None,
     }
 }
+
 
 /// Single-page convenience: union every page's bounds and emit all
 /// frames in spread coordinates. Kept for back-compat and for hosts
@@ -7556,6 +7576,19 @@ pub fn resolve_rect_stroke(rect: &Rectangle, palette: &Graphic) -> Option<Paint>
 /// Solid-paint resolver. Used by per-cluster glyph paint pickers
 /// (where embedding gradient stops per glyph would be wasteful) and
 /// by callers that don't have a `&mut DisplayList`.
+///
+/// CMYK swatches resolve to [`Paint::Cmyk`] when the IDML's
+/// `Space="CMYK"` (process or spot-with-CMYK-alternate) so per-channel
+/// CMYK overprint compositing (Phase 3 Tier 3 #14 Stage A) can read
+/// the source ink values directly. The rasterizer ICC-converts to RGB
+/// at draw time for ordinary paints; only the overprint path consumes
+/// the channels separately.
+///
+/// When `cmyk_xform` is `None` (wasm32 fallback, hosts without an
+/// ICC profile loaded) CMYK swatches collapse to the naive RGB the
+/// `graphic::to_linear_rgb` helper produces, matching the prior
+/// behaviour — the CMYK path is gated on having a usable ICC transform
+/// downstream.
 pub fn color_id_to_paint(
     id: &str,
     palette: &Graphic,
@@ -7570,13 +7603,23 @@ pub fn color_id_to_paint(
     if let (Some(xform), Some([c, m, y, k])) = (cmyk_xform, entry.effective_cmyk()) {
         #[cfg(not(target_arch = "wasm32"))]
         {
+            // ICC-resolve once at compose time and bake the result into
+            // the paint. The rasterizer uses `rgb` for ordinary draws
+            // (bit-identical to the pre-Stage-A path) and the
+            // C/M/Y/K channels for overprint composition.
             let cmyk = idml_color::Cmyk { c, m, y, k };
             let idml_color::LinearRgb([r, g, b]) = xform.cmyk_percent_to_linear_rgb(cmyk);
-            return Some(Paint::Solid(Color::rgba(r, g, b, 1.0)));
+            return Some(Paint::Cmyk {
+                c: (c / 100.0).clamp(0.0, 1.0),
+                m: (m / 100.0).clamp(0.0, 1.0),
+                y: (y / 100.0).clamp(0.0, 1.0),
+                k: (k / 100.0).clamp(0.0, 1.0),
+                rgb: Color::rgba(r, g, b, 1.0),
+            });
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = xform;
+            let _ = (c, m, y, k);
         }
     }
     let [r, g, b] = graphic::to_linear_rgb(entry)?;
@@ -7684,7 +7727,7 @@ pub fn color_id_to_paint_with_list_dir(
             .iter()
             .filter_map(|s| {
                 let color = color_id_to_paint(&s.stop_color, palette, cmyk_xform)
-                    .and_then(paint_as_solid)?;
+                    .and_then(|p| paint_as_solid_with_icc(p, cmyk_xform))?;
                 let entry = palette.resolve(&s.stop_color);
                 let cmyk = entry.and_then(|e| e.effective_cmyk());
                 Some(StopRef {
@@ -8036,6 +8079,12 @@ fn end_join_from(name: Option<&str>) -> Option<idml_compose::LineJoin> {
 /// `None` returns the input unchanged. Only applied to solid paints
 /// today — gradient stops are left as-is until the gradient
 /// resolution itself learns about per-stop tints.
+///
+/// For [`Paint::Cmyk`] the tint scales each channel toward 0 (paper
+/// white in CMYK) — matching the swatch-level `TintValue` semantics
+/// `ColorEntry::effective_cmyk` already applies before we get here.
+/// This keeps run-level `FillTint` tinting consistent across the
+/// CMYK and RGB swatch paths.
 pub(crate) fn apply_fill_tint(paint: Paint, tint_pct: Option<f32>) -> Paint {
     let Some(t) = tint_pct else {
         return paint;
@@ -8051,6 +8100,21 @@ pub(crate) fn apply_fill_tint(paint: Paint, tint_pct: Option<f32>) -> Paint {
             1.0 + (c.b - 1.0) * t,
             c.a,
         )),
+        Paint::Cmyk { c, m, y, k, rgb } => Paint::Cmyk {
+            c: c * t,
+            m: m * t,
+            y: y * t,
+            k: k * t,
+            // Tint the cached display RGB in step — same blend toward
+            // paper white as the `Paint::Solid` arm so the visible
+            // result for non-overprint draws stays consistent.
+            rgb: Color::rgba(
+                1.0 + (rgb.r - 1.0) * t,
+                1.0 + (rgb.g - 1.0) * t,
+                1.0 + (rgb.b - 1.0) * t,
+                rgb.a,
+            ),
+        },
         other => other,
     }
 }

@@ -1369,6 +1369,13 @@ fn resolve_paint(
 ) -> Option<VelloBrush> {
     match paint {
         Paint::Solid(c) => Some(VelloBrush::Solid(linear_to_peniko(*c))),
+        Paint::Cmyk { rgb, .. } => {
+            // The pipeline baked the ICC-resolved display colour
+            // onto the paint at compose time — use it so ordinary
+            // (non-overprint) draws stay identical to the prior
+            // `Paint::Solid` path on the GPU backend.
+            Some(VelloBrush::Solid(linear_to_peniko(*rgb)))
+        }
         Paint::LinearGradient(id) => {
             let g = list.linear_gradient(*id)?;
             if g.stops.len() < 2 {

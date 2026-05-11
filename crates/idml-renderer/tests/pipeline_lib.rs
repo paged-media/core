@@ -326,6 +326,9 @@ fn pipeline_options_default_uses_gray_fallback() {
         Paint::LinearGradient(_) | Paint::RadialGradient(_) => {
             panic!("default should be a solid grey, not a gradient")
         }
+        Paint::Cmyk { .. } => {
+            panic!("default should be a solid grey, not a CMYK paint")
+        }
     }
 }
 

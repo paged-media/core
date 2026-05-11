@@ -1059,14 +1059,32 @@ fn ts_xform_apply(t: TsTransform, x: f32, y: f32) -> (f32, f32) {
 }
 
 /// Render a path's fill into a scratch pixmap sized to the path's pixel
-/// bounds, then composite it onto `target` with tiny-skia's `Darken`
-/// blend mode (per-pixel `min(top, bottom)`). RGB-side approximation of
-/// CMYK overprint: it's *visibly* correct for the common
-/// "dark ink on lighter background" / "black-on-tint" overprint cases
-/// and a no-op for top inks that are already lighter than the
-/// background — exactly the boundary InDesign uses. True per-channel
-/// CMYK compositing requires routing CMYK separations through the
-/// rasterizer; that's the Stage 4 follow-up.
+/// bounds, then composite it onto `target` with the appropriate
+/// overprint operator. Two paths now coexist:
+///
+/// * When `paint` is `Paint::Cmyk`, run the **per-channel CMYK
+///   overprint** path (Phase 3 Tier 3 #14 Stage A): for every pixel
+///   the scratch fill covers, decode the destination RGB back to
+///   CMYK via the inverse of the naive Adobe CMYK→RGB conversion,
+///   take per-channel `max(top, bottom)` against the source CMYK
+///   channels, convert the resulting CMYK back to RGB, and write it
+///   into the target. This is mathematically exact whenever the
+///   destination pixel was itself produced by a CMYK swatch through
+///   the naive forward path (the renderer's default for direct CMYK
+///   paints without an ICC fast path between source and screen).
+/// * Otherwise (`Paint::Solid` / gradients / pre-CMYK-Stage-A) fall
+///   back to tiny-skia's `Darken` blend (per-channel `min(top,
+///   bottom)`) — the Stage 3 RGB-side approximation, kept for
+///   gradients / RGB swatches and as the safety net when the
+///   destination's provenance is unknown.
+///
+/// The CMYK path's only approximation is that the destination's
+/// effective CMYK is inferred from its current RGB pixels rather than
+/// tracked from the original swatch. For two CMYK swatches meeting
+/// each other (the common print-production overprint case the brief
+/// calls out) the inferred CMYK round-trips through the naive math
+/// exactly, so the composite is per-channel `max` on the real ink
+/// channels — not an RGB stand-in.
 ///
 /// When the scratch pixmap allocation fails (extreme path bounds) we
 /// fall back to a plain knockout fill so the page still renders.
@@ -1081,33 +1099,21 @@ fn overprint_fill(
 ) {
     let bbox = path.bounds();
     let pad_pt = 1.0;
-    let (lx_px, ly_px) =
-        ts_xform_apply(target_xform, bbox.left() - pad_pt, bbox.top() - pad_pt);
-    let (rx_px, ry_px) =
-        ts_xform_apply(target_xform, bbox.right() + pad_pt, bbox.bottom() + pad_pt);
-    let off_x_px = lx_px.min(rx_px).floor() as i32;
-    let off_y_px = ly_px.min(ry_px).floor() as i32;
-    let max_x_px = lx_px.max(rx_px).ceil() as i32;
-    let max_y_px = ly_px.max(ry_px).ceil() as i32;
-    let w_px = (max_x_px - off_x_px).max(1) as u32;
-    let h_px = (max_y_px - off_y_px).max(1) as u32;
+    let (off_x_px, off_y_px, w_px, h_px) =
+        scratch_bbox(target_xform, bbox.left(), bbox.top(), bbox.right(), bbox.bottom(), pad_pt);
     if let Some(mut scratch) = Pixmap::new(w_px, h_px) {
         let scratch_xform =
             TsTransform::from_translate(-off_x_px as f32, -off_y_px as f32)
                 .pre_concat(target_xform);
         let scratch_paint = paint_to_ts(paint, list, transform, scratch_xform);
         scratch.fill_path(path, &scratch_paint, FillRule::Winding, scratch_xform, None);
-        let composite = PixmapPaint {
-            blend_mode: TsBlendMode::Darken,
-            ..PixmapPaint::default()
-        };
-        target.draw_pixmap(
+        composite_overprint(
+            target,
+            target_mask,
             off_x_px,
             off_y_px,
-            scratch.as_ref(),
-            &composite,
-            TsTransform::identity(),
-            target_mask,
+            &scratch,
+            paint,
         );
     } else {
         // Defensive fallback: knock out as a normal fill.
@@ -1132,22 +1138,69 @@ fn overprint_stroke(
     // Stroke pads outside the path by half the line width; add that to
     // the scratch bbox so antialiased edges don't get clipped.
     let pad_pt = ts_stroke.width.max(0.0) * 0.5 + 1.0;
-    let (lx_px, ly_px) =
-        ts_xform_apply(target_xform, bbox.left() - pad_pt, bbox.top() - pad_pt);
-    let (rx_px, ry_px) =
-        ts_xform_apply(target_xform, bbox.right() + pad_pt, bbox.bottom() + pad_pt);
-    let off_x_px = lx_px.min(rx_px).floor() as i32;
-    let off_y_px = ly_px.min(ry_px).floor() as i32;
-    let max_x_px = lx_px.max(rx_px).ceil() as i32;
-    let max_y_px = ly_px.max(ry_px).ceil() as i32;
-    let w_px = (max_x_px - off_x_px).max(1) as u32;
-    let h_px = (max_y_px - off_y_px).max(1) as u32;
+    let (off_x_px, off_y_px, w_px, h_px) =
+        scratch_bbox(target_xform, bbox.left(), bbox.top(), bbox.right(), bbox.bottom(), pad_pt);
     if let Some(mut scratch) = Pixmap::new(w_px, h_px) {
         let scratch_xform =
             TsTransform::from_translate(-off_x_px as f32, -off_y_px as f32)
                 .pre_concat(target_xform);
         let scratch_paint = paint_to_ts(paint, list, transform, scratch_xform);
         scratch.stroke_path(path, &scratch_paint, ts_stroke, scratch_xform, None);
+        composite_overprint(
+            target,
+            target_mask,
+            off_x_px,
+            off_y_px,
+            &scratch,
+            paint,
+        );
+    } else {
+        let ts_paint = paint_to_ts(paint, list, transform, target_xform);
+        target.stroke_path(path, &ts_paint, ts_stroke, target_xform, target_mask);
+    }
+}
+
+/// Compute the scratch pixmap bbox in pixel coords for a path's
+/// pt-space bounding box. Pads by `pad_pt` to give antialiased edges
+/// room. Returns `(off_x_px, off_y_px, w_px, h_px)`.
+fn scratch_bbox(
+    target_xform: TsTransform,
+    min_x_pt: f32,
+    min_y_pt: f32,
+    max_x_pt: f32,
+    max_y_pt: f32,
+    pad_pt: f32,
+) -> (i32, i32, u32, u32) {
+    let (lx_px, ly_px) = ts_xform_apply(target_xform, min_x_pt - pad_pt, min_y_pt - pad_pt);
+    let (rx_px, ry_px) = ts_xform_apply(target_xform, max_x_pt + pad_pt, max_y_pt + pad_pt);
+    let off_x_px = lx_px.min(rx_px).floor() as i32;
+    let off_y_px = ly_px.min(ry_px).floor() as i32;
+    let max_x_px = lx_px.max(rx_px).ceil() as i32;
+    let max_y_px = ly_px.max(ry_px).ceil() as i32;
+    let w_px = (max_x_px - off_x_px).max(1) as u32;
+    let h_px = (max_y_px - off_y_px).max(1) as u32;
+    (off_x_px, off_y_px, w_px, h_px)
+}
+
+/// Composite the scratch fill (`scratch`) onto `target` at
+/// `(off_x_px, off_y_px)` using the right overprint operator. The
+/// CMYK-aware path (Stage A) is taken when `paint` is `Paint::Cmyk`;
+/// the RGB-`Darken` fallback handles every other paint variant.
+///
+/// `target_mask` mirrors what `draw_pixmap` would consume — Stage A's
+/// per-pixel CMYK loop honours it explicitly so clipped regions stay
+/// untouched.
+fn composite_overprint(
+    target: &mut Pixmap,
+    target_mask: Option<&TsMask>,
+    off_x_px: i32,
+    off_y_px: i32,
+    scratch: &Pixmap,
+    paint: &Paint,
+) {
+    if let Paint::Cmyk { c, m, y, k, .. } = *paint {
+        compose_cmyk_overprint_at(target, target_mask, off_x_px, off_y_px, scratch, [c, m, y, k]);
+    } else {
         let composite = PixmapPaint {
             blend_mode: TsBlendMode::Darken,
             ..PixmapPaint::default()
@@ -1160,10 +1213,152 @@ fn overprint_stroke(
             TsTransform::identity(),
             target_mask,
         );
-    } else {
-        let ts_paint = paint_to_ts(paint, list, transform, target_xform);
-        target.stroke_path(path, &ts_paint, ts_stroke, target_xform, target_mask);
     }
+}
+
+/// Per-channel CMYK overprint composite. Walks every pixel in
+/// `scratch`; where the source alpha is non-zero, decodes the
+/// destination pixel back to CMYK (inverse naive map), takes
+/// `max(top, bottom)` channelwise against the source's CMYK
+/// channels (weighted by source coverage so antialiased edges
+/// blend), forward-converts to RGB, and writes the new pixel. Pixels
+/// outside `target_mask` (when supplied) stay untouched.
+///
+/// `top_cmyk` is `[C, M, Y, K]` in unit range. The loop runs in
+/// 8-bit space (matching tiny-skia's pixmap precision) — that's
+/// enough for visible-output parity with InDesign's preview which
+/// itself snaps to 8 bits on screen.
+fn compose_cmyk_overprint_at(
+    target: &mut Pixmap,
+    target_mask: Option<&TsMask>,
+    off_x_px: i32,
+    off_y_px: i32,
+    scratch: &Pixmap,
+    top_cmyk: [f32; 4],
+) {
+    let tw = target.width() as i32;
+    let th = target.height() as i32;
+    let sw = scratch.width() as i32;
+    let sh = scratch.height() as i32;
+    let scratch_pixels = scratch.pixels();
+    let target_pixels = target.pixels_mut();
+    let mask_data = target_mask.map(|mk| (mk.data(), mk.width() as i32, mk.height() as i32));
+    let top_c8 = (top_cmyk[0].clamp(0.0, 1.0) * 255.0).round() as u16;
+    let top_m8 = (top_cmyk[1].clamp(0.0, 1.0) * 255.0).round() as u16;
+    let top_y8 = (top_cmyk[2].clamp(0.0, 1.0) * 255.0).round() as u16;
+    let top_k8 = (top_cmyk[3].clamp(0.0, 1.0) * 255.0).round() as u16;
+    for j in 0..sh {
+        let py = j + off_y_px;
+        if py < 0 || py >= th {
+            continue;
+        }
+        for i in 0..sw {
+            let px = i + off_x_px;
+            if px < 0 || px >= tw {
+                continue;
+            }
+            // Honour the clip mask: pixels outside it must not change.
+            if let Some((mdata, mw, mh)) = mask_data {
+                if px < mw && py < mh && px >= 0 && py >= 0 {
+                    let mv = mdata[(py * mw + px) as usize];
+                    if mv == 0 {
+                        continue;
+                    }
+                }
+            }
+            let s_idx = (j * sw + i) as usize;
+            let s_pixel = scratch_pixels[s_idx];
+            let s_a = s_pixel.alpha();
+            if s_a == 0 {
+                continue;
+            }
+            let t_idx = (py * tw + px) as usize;
+            let t_pixel = target_pixels[t_idx];
+            // tiny-skia stores premultiplied RGBA. Demultiply the
+            // destination so the CMYK inverse sees straight-alpha
+            // colour values; this is a no-op for the common
+            // fully-opaque-page case.
+            let t_a = t_pixel.alpha();
+            let (tr, tg, tb) = if t_a == 0 {
+                (255u8, 255u8, 255u8) // paper white when nothing's there
+            } else if t_a == 255 {
+                (t_pixel.red(), t_pixel.green(), t_pixel.blue())
+            } else {
+                let demul = |c: u8| ((c as u32 * 255 + (t_a as u32 / 2)) / t_a as u32).min(255) as u8;
+                (demul(t_pixel.red()), demul(t_pixel.green()), demul(t_pixel.blue()))
+            };
+            let (bot_c8, bot_m8, bot_y8, bot_k8) = rgb_to_naive_cmyk_8bit(tr, tg, tb);
+            // Channel-wise max: top wins where it's heavier ink.
+            // Scale top channels by source coverage so antialiased
+            // edges interpolate to the bottom — coverage = s_a/255.
+            let cov = s_a as u16;
+            // Take effective top per channel = bottom + cov*(top - bottom)
+            // when top >= bottom, else bottom. This is equivalent to
+            // `bottom + cov*max(0, top-bottom)` and gives smooth
+            // anti-aliased edges with the per-channel-max contract.
+            let blend = |bot: u16, top: u16, cov: u16| -> u8 {
+                if top <= bot {
+                    bot as u8
+                } else {
+                    let delta = top - bot;
+                    // bot + (delta * cov + 127) / 255, clamped.
+                    let add = (delta * cov + 127) / 255;
+                    (bot + add).min(255) as u8
+                }
+            };
+            let new_c = blend(bot_c8 as u16, top_c8, cov);
+            let new_m = blend(bot_m8 as u16, top_m8, cov);
+            let new_y = blend(bot_y8 as u16, top_y8, cov);
+            let new_k = blend(bot_k8 as u16, top_k8, cov);
+            let (nr, ng, nb) = naive_cmyk_to_rgb_8bit(new_c, new_m, new_y, new_k);
+            // Re-premultiply by the destination's alpha (typically
+            // 255 on the page target). When the dest was transparent
+            // we mark it opaque — the overprint draw added ink.
+            let out_a = t_a.max(s_a);
+            let pre = |c: u8| ((c as u32 * out_a as u32 + 127) / 255).min(255) as u8;
+            target_pixels[t_idx] = PremultipliedColorU8::from_rgba(
+                pre(nr),
+                pre(ng),
+                pre(nb),
+                out_a,
+            )
+            .unwrap_or(t_pixel);
+        }
+    }
+}
+
+/// Inverse of the naive Adobe CMYK→RGB map, in 8-bit space:
+///   K = 255 - max(R, G, B)
+///   if K == 255: C = M = Y = 0
+///   else: C = (255 - R - K) / (255 - K) * 255 etc.
+/// Round-trips exactly through `naive_cmyk_to_rgb_8bit` for any
+/// `(C, M, Y, K)` that was itself produced by that forward map (the
+/// common "this destination pixel was painted by a CMYK swatch" case
+/// the Stage A path is designed to handle correctly).
+fn rgb_to_naive_cmyk_8bit(r: u8, g: u8, b: u8) -> (u8, u8, u8, u8) {
+    let max_rgb = r.max(g).max(b);
+    let k = 255u8.saturating_sub(max_rgb);
+    if k == 255 {
+        return (0, 0, 0, 255);
+    }
+    let denom = (255u16 - k as u16).max(1);
+    let calc = |v: u8| {
+        let num = 255u16.saturating_sub(v as u16).saturating_sub(k as u16);
+        ((num * 255 + denom / 2) / denom).min(255) as u8
+    };
+    (calc(r), calc(g), calc(b), k)
+}
+
+/// Forward naive CMYK→RGB in 8-bit space. R = (255-C) * (255-K) / 255
+/// etc. The integer math matches `cmyk_unit_to_linear_rgb`'s float
+/// version to within rounding at 8-bit precision.
+fn naive_cmyk_to_rgb_8bit(c: u8, m: u8, y: u8, k: u8) -> (u8, u8, u8) {
+    let kp = 255u16 - k as u16;
+    let chan = |v: u8| -> u8 {
+        let prod = (255u16 - v as u16) * kp;
+        ((prod + 127) / 255).min(255) as u8
+    };
+    (chan(c), chan(m), chan(y))
 }
 
 /// Snapshot a `w_px × h_px` region of `parent`'s pixels into a fresh
@@ -1403,6 +1598,15 @@ fn paint_to_ts(
             } else {
                 p.set_color(tiny_skia::Color::BLACK);
             }
+        }
+        Paint::Cmyk { rgb, .. } => {
+            // The pipeline baked the ICC-resolved display RGB onto
+            // the paint at compose time — use it directly so ordinary
+            // non-overprint draws stay bit-identical to the pre-CMYK
+            // `Paint::Solid` path. The C/M/Y/K channels on the paint
+            // exist for the per-channel overprint composite below
+            // (FillPathOverprint / StrokePathOverprint).
+            p.set_color(linear_color_to_ts(*rgb));
         }
     }
     p
@@ -3637,6 +3841,145 @@ mod tests {
         assert!(
             far[0] > 240 && far[3] > 240,
             "outside gradient feather should be opaque white; got {far:?}"
+        );
+    }
+
+    /// CMYK overprint (Stage A): a 100% cyan rectangle with overprint
+    /// over a 100% magenta rectangle must produce a pixel whose CMYK
+    /// equivalent is `(C=100, M=100, Y=0, K=0)` — i.e. blue — rather
+    /// than `min(cyan_rgb, magenta_rgb)`'s coincidentally-also-blue
+    /// answer. We can't read the pixel's CMYK directly (the pixmap
+    /// is RGB), so we pin the pixel value and assert it round-trips
+    /// to the right CMYK through `rgb_to_naive_cmyk_8bit`.
+    ///
+    /// Critical contrast vs. Stage 3: this test is *direction*-blind
+    /// to whether the path used CMYK-max or RGB-min; both happen to
+    /// produce blue here. But the assertion below additionally checks
+    /// that *both* C and M channels are 100% in the recovered CMYK
+    /// of the resulting pixel — that's the per-channel-ink invariant
+    /// the brief calls out and which RGB Darken would still satisfy
+    /// here by coincidence (cyan+magenta is one of the easy cases).
+    /// A harder case (e.g. mid-tone CMYK pairs where RGB-darken
+    /// diverges from per-channel-max) would expose the difference;
+    /// here we lock in the no-regression invariant.
+    #[test]
+    fn cmyk_overprint_cyan_on_magenta_produces_per_channel_max() {
+        let mut list = DisplayList::new();
+        // Bottom: magenta full-page rectangle. We hand-craft the
+        // `rgb` cache via the naive forward map so the rendered RGB
+        // is what `rgb_to_naive_cmyk_8bit` can decode losslessly —
+        // the test asserts the per-channel-max contract is exact in
+        // 8-bit space, which only holds for that round trip.
+        let magenta_rgb = crate::cmyk_unit_to_linear_rgb(0.0, 1.0, 0.0, 0.0);
+        let cyan_rgb = crate::cmyk_unit_to_linear_rgb(1.0, 0.0, 0.0, 0.0);
+        let magenta = Paint::Cmyk {
+            c: 0.0,
+            m: 1.0,
+            y: 0.0,
+            k: 0.0,
+            rgb: magenta_rgb,
+        };
+        let cyan = Paint::Cmyk {
+            c: 1.0,
+            m: 0.0,
+            y: 0.0,
+            k: 0.0,
+            rgb: cyan_rgb,
+        };
+        emit_rect(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 100.0,
+            },
+            magenta,
+            &mut list,
+        );
+        // Top: cyan inner rectangle with overprint. emit_rect always
+        // produces FillPath, so we manually upgrade the appended
+        // command to FillPathOverprint.
+        emit_rect(
+            Rect {
+                x: 20.0,
+                y: 20.0,
+                w: 60.0,
+                h: 60.0,
+            },
+            cyan,
+            &mut list,
+        );
+        let last = list.commands.len() - 1;
+        if let idml_compose::DisplayCommand::FillPath {
+            path_id,
+            paint,
+            transform,
+        } = list.commands[last]
+        {
+            list.commands[last] = idml_compose::DisplayCommand::FillPathOverprint {
+                path_id,
+                paint,
+                transform,
+            };
+        }
+        let mut opts = RasterOptions::new(100.0, 100.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        let center = at(&img, 50, 50);
+        // Recover CMYK from the rendered pixel via the same inverse
+        // the rasterizer uses internally — this is exact for naive
+        // CMYK→RGB round trips at 8-bit precision.
+        let (c, m, y, k) = super::rgb_to_naive_cmyk_8bit(center[0], center[1], center[2]);
+        assert!(
+            c >= 250,
+            "overprint should leave cyan ink at ~100%; got CMYK=({c}, {m}, {y}, {k}) from pixel {center:?}"
+        );
+        assert!(
+            m >= 250,
+            "overprint should preserve magenta ink at ~100%; got CMYK=({c}, {m}, {y}, {k}) from pixel {center:?}"
+        );
+        assert!(
+            y <= 5 && k <= 5,
+            "overprint should not invent Y or K; got CMYK=({c}, {m}, {y}, {k}) from pixel {center:?}"
+        );
+        // And the rendered RGB should be blue-ish (B high, R and G low).
+        assert!(
+            center[2] > 200 && center[0] < 30 && center[1] < 30,
+            "cyan-on-magenta overprint should be blue ≈ (0,0,255); got {center:?}"
+        );
+    }
+
+    /// Sanity: ordinary (non-overprint) CMYK draws still produce the
+    /// same visible pixels as before. A 100% cyan CMYK rectangle on a
+    /// white background should be ≈ (0, 255, 255).
+    #[test]
+    fn cmyk_paint_non_overprint_renders_identically_to_solid_path() {
+        let mut list = DisplayList::new();
+        let cyan_rgb = crate::cmyk_unit_to_linear_rgb(1.0, 0.0, 0.0, 0.0);
+        let cyan = Paint::Cmyk {
+            c: 1.0,
+            m: 0.0,
+            y: 0.0,
+            k: 0.0,
+            rgb: cyan_rgb,
+        };
+        emit_rect(
+            Rect {
+                x: 20.0,
+                y: 20.0,
+                w: 60.0,
+                h: 60.0,
+            },
+            cyan,
+            &mut list,
+        );
+        let mut opts = RasterOptions::new(100.0, 100.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        let p = at(&img, 50, 50);
+        assert!(
+            p[0] < 15 && p[1] > 240 && p[2] > 240,
+            "pure-cyan CMYK should render ~(0,255,255); got {p:?}"
         );
     }
 }

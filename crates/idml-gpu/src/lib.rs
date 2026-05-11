@@ -13,6 +13,31 @@
 
 use idml_compose::{Color, DisplayList};
 
+/// CMYK (each channel 0..=1) → linear-RGB via the naive Adobe-style
+/// conversion (R=(1-C)(1-K) etc.) followed by sRGB→linear. Used by
+/// rasterizers as the fallback when no ICC transform is plumbed
+/// through. Matches the per-component math `idml-parse::graphic::to_linear_rgb`
+/// applies for swatch-side CMYK, so a `Paint::Cmyk` of swatch values
+/// rasterises identically to the prior `Paint::Solid` path for the
+/// non-ICC case.
+pub fn cmyk_unit_to_linear_rgb(c: f32, m: f32, y: f32, k: f32) -> Color {
+    let c = c.clamp(0.0, 1.0);
+    let m = m.clamp(0.0, 1.0);
+    let y = y.clamp(0.0, 1.0);
+    let k = k.clamp(0.0, 1.0);
+    let r = (1.0 - c) * (1.0 - k);
+    let g = (1.0 - m) * (1.0 - k);
+    let b = (1.0 - y) * (1.0 - k);
+    fn srgb_to_linear(v: f32) -> f32 {
+        if v <= 0.040_45 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    Color::rgba(srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b), 1.0)
+}
+
 #[cfg(feature = "cpu")]
 pub mod cpu;
 #[cfg(all(feature = "vello-backend", target_arch = "wasm32"))]
