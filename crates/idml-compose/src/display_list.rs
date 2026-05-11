@@ -50,6 +50,18 @@ impl Color {
 /// pre-baked the ICC-converted display colour) so the visible result
 /// stays bit-identical to a `Paint::Solid` of the same swatch. Only
 /// the overprint path consumes the C/M/Y/K channels separately.
+///
+/// Stage C: a `Cmyk` paint can optionally carry a [`SpotInkId`] that
+/// identifies a named-ink swatch (e.g. PANTONE 286). The rasterizer
+/// routes spot draws to a dedicated per-spot-ink plane in addition to
+/// painting the cached `rgb` into the framebuffer; overprint of two
+/// runs of the SAME spot ink composes via per-pixel `max(top, bot)`
+/// in the spot plane. Different-named spots overprint as independent
+/// inks. The CMYK channels on the paint carry the spot's CMYK alternate
+/// (with any swatch-level `TintValue` already folded in by the parser
+/// via `ColorEntry::effective_cmyk`) — preserved so the legacy CMYK
+/// overprint composite can still operate when a spot overprints over
+/// a non-spot CMYK ink.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Paint {
     Solid(Color),
@@ -65,12 +77,20 @@ pub enum Paint {
     /// have used pre-Stage-A — keeping it on the paint lets ordinary
     /// (non-overprint) draws render bit-identically to the prior
     /// `Paint::Solid` path without re-running ICC at raster time.
+    ///
+    /// `spot = Some(id)` marks the paint as a named-ink spot colour
+    /// resolved via the `DisplayList::spot_inks` table. The CMYK
+    /// channels remain populated with the spot's CMYK alternate; the
+    /// `id` lets the rasterizer route the per-pixel ink into a
+    /// dedicated spot plane rather than collapsing immediately into
+    /// the C/M/Y/K planes. `spot = None` is a plain process CMYK.
     Cmyk {
         c: f32,
         m: f32,
         y: f32,
         k: f32,
         rgb: Color,
+        spot: Option<SpotInkId>,
     },
 }
 
@@ -78,6 +98,27 @@ pub enum Paint {
 /// depending on the [`Paint`] variant carrying it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GradientId(pub u32);
+
+/// Index into `DisplayList::spot_inks`. Identifies a named spot ink
+/// (e.g. PANTONE 286 C) so the rasterizer can track per-pixel tints
+/// for that ink on its own plane and composite spot-on-same-spot
+/// overprints correctly. Stage C of the CMYK pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SpotInkId(pub u32);
+
+/// A named-ink spot colour registered on the display list. `name` is
+/// the IDML `<Color Self="...">` id (e.g. `"Color/Pantone286"`) —
+/// stable across draws so two paints with the same ink intern to the
+/// same `SpotInkId`. `cmyk_alternate` holds the spot's CMYK alternate
+/// in 8-bit space (0..=255 per channel) with the swatch-level `TintValue`
+/// already folded in — that's what the final flush composites into the
+/// CMYK planes for spot-over-spot or spot-over-CMYK pixels where the
+/// late-bound preview needs to converge to a single visible colour.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpotInk {
+    pub name: String,
+    pub cmyk_alternate: [u8; 4],
+}
 
 /// One stop in a gradient: a colour at a normalised offset (0..=1).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1004,6 +1045,12 @@ pub struct DisplayList {
     pub gradients: Vec<LinearGradient>,
     pub radial_gradients: Vec<RadialGradient>,
     pub images: Vec<DecodedImage>,
+    /// Named spot inks the document references. Indexed by
+    /// [`SpotInkId`]. Two `Paint::Cmyk` paints carrying the same spot
+    /// name intern to the same id so the rasterizer can identify
+    /// spot-on-same-spot overprints (which compose per-pixel `max`) vs.
+    /// different-named-ink overprints (which accumulate independently).
+    pub spot_inks: Vec<SpotInk>,
 }
 
 impl DisplayList {
@@ -1048,6 +1095,29 @@ impl DisplayList {
 
     pub fn image(&self, id: ImageId) -> Option<&DecodedImage> {
         self.images.get(id.0 as usize)
+    }
+
+    /// Intern a spot ink name. Returns the existing id if the document
+    /// already registered an ink with that `name`; otherwise pushes the
+    /// `ink` and returns the freshly minted id. Dedup keeps the spot
+    /// plane count proportional to the document's distinct named inks
+    /// rather than to the number of `Paint::Cmyk` constructions.
+    pub fn push_spot_ink(&mut self, ink: SpotInk) -> SpotInkId {
+        if let Some((i, _)) = self
+            .spot_inks
+            .iter()
+            .enumerate()
+            .find(|(_, e)| e.name == ink.name)
+        {
+            return SpotInkId(i as u32);
+        }
+        let id = SpotInkId(self.spot_inks.len() as u32);
+        self.spot_inks.push(ink);
+        id
+    }
+
+    pub fn spot_ink(&self, id: SpotInkId) -> Option<&SpotInk> {
+        self.spot_inks.get(id.0 as usize)
     }
 }
 

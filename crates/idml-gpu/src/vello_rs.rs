@@ -1374,6 +1374,16 @@ fn resolve_paint(
             // onto the paint at compose time — use it so ordinary
             // (non-overprint) draws stay identical to the prior
             // `Paint::Solid` path on the GPU backend.
+            //
+            // Stage C (`Paint::Cmyk::spot`) is ignored on the Vello
+            // backend: spot-on-same-spot overprint requires the same
+            // per-pixel plane walk Stage 4A/4B use on the CPU
+            // rasterizer, which doesn't have a Vello equivalent today
+            // (would need a custom shader). Spot paints still render
+            // visibly correct here because the cached `rgb` already
+            // encodes the alternate-CMYK × tint colour; only the
+            // spot-on-same-spot overprint case loses fidelity vs. the
+            // CPU rasterizer.
             Some(VelloBrush::Solid(linear_to_peniko(*rgb)))
         }
         Paint::LinearGradient(id) => {

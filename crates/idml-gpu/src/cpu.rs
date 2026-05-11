@@ -17,7 +17,7 @@ use idml_compose::{
     BevelEmboss, BlendMode, Color as CComposeColor, DirectionalFeather, DisplayCommand,
     DisplayList, Feather, FeatherCornerType, GradientFeather, GradientFeatherKind, InnerGlow,
     InnerShadow, LayerEffect, LineCap, LineJoin, OuterGlow, Paint, PathData, PathSegment, Satin,
-    Transform as CTransform,
+    SpotInkId, Transform as CTransform,
 };
 use image::{Rgba, RgbaImage};
 use tiny_skia::{
@@ -119,9 +119,33 @@ struct GroupFrame {
 /// per-channel overprint composite works whenever the *destination*
 /// pixel was itself produced by a CMYK draw, regardless of how many
 /// (non-overprint) CMYK paints sit between it and the page background.
+///
+/// Stage C: extends Stage B with per-spot-ink planes. Each named spot
+/// ink (`Paint::Cmyk { spot: Some(id), .. }`) gets its own coverage
+/// plane (`spots[id]`) plus a cached 8-bit CMYK alternate
+/// (`spot_alts[id]`) used at the overprint composite to convert the
+/// per-pixel spot tint into a CMYK contribution. Spot planes coexist
+/// with the process C/M/Y/K planes; the late-bound flush composites
+/// every active ink (process + spots) into the framebuffer via the
+/// naive CMYK→RGB map.
+///
+/// Why per-id parallel `Vec`s instead of `HashMap<String, _>`: spot
+/// names are already interned on the `DisplayList` as `SpotInkId(u32)`,
+/// so the array index *is* the id. Lookup stays O(1), no hashing per
+/// pixel.
 struct CmykPlanes {
     planes: [Vec<u8>; 4],
     coverage: Vec<u8>,
+    /// One plane per spot ink id. `spots[id]` records the per-pixel
+    /// tint of that ink (0..=255, with `0` meaning "no ink here"). Lazy
+    /// pushed by `ensure_spot_plane` on the first draw that references
+    /// the id, so documents with no spot inks pay zero memory.
+    spots: Vec<Vec<u8>>,
+    /// 8-bit CMYK alternate per spot id — mirror of
+    /// `SpotInk::cmyk_alternate`. Resolving at the overprint composite
+    /// avoids walking the `DisplayList` from inside the inner pixel
+    /// loop.
+    spot_alts: Vec<[u8; 4]>,
     w: u32,
     h: u32,
 }
@@ -132,10 +156,24 @@ impl CmykPlanes {
         Self {
             planes: [vec![0u8; n], vec![0u8; n], vec![0u8; n], vec![0u8; n]],
             coverage: vec![0u8; n],
+            spots: Vec::new(),
+            spot_alts: Vec::new(),
             w,
             h,
         }
     }
+}
+
+/// Grow the `spots` table so id `idx` is reachable; allocates a zeroed
+/// plane and records the spot's 8-bit CMYK alternate for the flush
+/// composite. Idempotent — repeated calls update only the alternate.
+fn ensure_spot_plane(planes: &mut CmykPlanes, idx: usize, alt: [u8; 4]) {
+    let n = (planes.w as usize) * (planes.h as usize);
+    while planes.spots.len() <= idx {
+        planes.spots.push(vec![0u8; n]);
+        planes.spot_alts.push([0u8; 4]);
+    }
+    planes.spot_alts[idx] = alt;
 }
 
 /// Lazy-init helper: returns a mutable handle to the plane state,
@@ -351,6 +389,304 @@ fn compose_cmyk_overprint_via_planes(
                     .unwrap_or(t_pixel);
         }
     }
+}
+
+/// Splat a CMYK draw (process or spot) into the right plane(s) and
+/// record it in the page-level plane state. Centralises the Stage B/C
+/// non-overprint splat so the call sites in `rasterize` don't have to
+/// branch between process and spot. Returns `Some(())` when the splat
+/// happened, `None` if the scratch pixmap couldn't be built (extreme
+/// path bounds).
+///
+/// Spot paints route entirely into the per-spot plane and do NOT
+/// touch the process C/M/Y/K planes — that's the whole point of Stage
+/// C, the spot identity stays separable until the late-bound flush
+/// composes it back into CMYK via the alternate × tint path. Process
+/// paints route into the four process planes as Stage B did.
+fn splat_cmyk_draw(
+    planes: &mut CmykPlanes,
+    list: &DisplayList,
+    paint: &Paint,
+    target_mask: Option<&TsMask>,
+    scratch: &Pixmap,
+    off_x: i32,
+    off_y: i32,
+) {
+    let Paint::Cmyk { c, m, y, k, spot, .. } = *paint else {
+        return;
+    };
+    if let Some(SpotInkId(spot_id)) = spot {
+        // The renderer interns the spot ink on the display list; if
+        // the id is somehow stale (mismatched list), fall through to
+        // the process-plane path so the visible ink at least stays
+        // approximately correct.
+        if let Some(ink) = list.spot_ink(SpotInkId(spot_id)) {
+            ensure_spot_plane(planes, spot_id as usize, ink.cmyk_alternate);
+            // 100% spot ink at compose time means `c+m+y+k` already
+            // carries the alternate-CMYK channels (tint folded in by
+            // the parser). The spot plane tracks the per-pixel TINT
+            // applied — `100%` for an un-tinted spot fill. Per-glyph
+            // FillTint scales the CMYK channels on the paint already,
+            // so we recover the source tint by reading the heaviest
+            // channel of the alternate-scaled CMYK: this matches
+            // InDesign's "100% PANTONE 286 C" being stored as the
+            // alternate at full strength.
+            let tint_unit = {
+                // The cleanest signal of "how much of this spot is
+                // here" is `max(c, m, y, k) / max(alt.c, alt.m, alt.y,
+                // alt.k)` (in unit space). The alternate is the spot
+                // at full strength; the current paint is the alternate
+                // × per-use tint. When the alternate has any non-zero
+                // channel this ratio is well-defined; when all
+                // alternates are zero (a degenerate spot that maps to
+                // paper white) we treat the tint as 0.
+                let alt_max = ink
+                    .cmyk_alternate
+                    .iter()
+                    .map(|v| *v as f32 / 255.0)
+                    .fold(0.0_f32, f32::max);
+                if alt_max <= f32::EPSILON {
+                    0.0
+                } else {
+                    let paint_max = c.max(m).max(y).max(k);
+                    (paint_max / alt_max).clamp(0.0, 1.0)
+                }
+            };
+            let tint_8 = (tint_unit * 255.0).round() as u16;
+            splat_spot_into_plane(planes, spot_id as usize, target_mask, off_x, off_y, scratch, tint_8);
+            return;
+        }
+    }
+    splat_scratch_into_planes(planes, target_mask, off_x, off_y, scratch, [c, m, y, k]);
+}
+
+/// Splat a non-overprint spot draw's path coverage into the spot
+/// plane. Mirrors `splat_scratch_into_planes` for process CMYK: each
+/// touched pixel gets `max(existing, source_tint * coverage)`. The RGB
+/// framebuffer is updated separately by the standard `paint_to_ts`
+/// path (using the cached `Paint::Cmyk { rgb }` colour) so the visible
+/// pixel stays identical to the Stage A/B render of the same spot
+/// swatch. The plane purely accumulates ink state for the next
+/// overprint to read.
+fn splat_spot_into_plane(
+    planes: &mut CmykPlanes,
+    spot_idx: usize,
+    coverage_mask: Option<&TsMask>,
+    off_x_px: i32,
+    off_y_px: i32,
+    scratch: &Pixmap,
+    source_tint_8: u16,
+) {
+    let pw = planes.w as i32;
+    let ph = planes.h as i32;
+    let sw = scratch.width() as i32;
+    let sh = scratch.height() as i32;
+    let scratch_pixels = scratch.pixels();
+    let mask_data = coverage_mask.map(|mk| (mk.data(), mk.width() as i32, mk.height() as i32));
+    for j in 0..sh {
+        let py = j + off_y_px;
+        if py < 0 || py >= ph {
+            continue;
+        }
+        for i in 0..sw {
+            let px = i + off_x_px;
+            if px < 0 || px >= pw {
+                continue;
+            }
+            if let Some((mdata, mw, mh)) = mask_data {
+                if px < mw && py < mh {
+                    let mv = mdata[(py * mw + px) as usize];
+                    if mv == 0 {
+                        continue;
+                    }
+                }
+            }
+            let s_idx = (j * sw + i) as usize;
+            let s_a = scratch_pixels[s_idx].alpha();
+            if s_a == 0 {
+                continue;
+            }
+            let cov = s_a as u16;
+            let t_idx = (py * pw + px) as usize;
+            let add = (source_tint_8 * cov + 127) / 255;
+            let bot = planes.spots[spot_idx][t_idx] as u16;
+            let new = bot.max(add).min(255);
+            planes.spots[spot_idx][t_idx] = new as u8;
+        }
+    }
+}
+
+/// Per-spot-ink overprint composite.
+///
+/// Three documented cases (per the brief):
+///
+///  1. *Same ink overprints same ink*: per-pixel
+///     `max(top_tint, bottom_tint)` in this spot's own plane. Different
+///     copies of "PANTONE 286 C" at different tints compose to the
+///     heaviest tint — matches InDesign's preview for overprinted
+///     same-ink runs.
+///  2. *Different ink overprints*: spot B never touches spot A's plane;
+///     each ink accumulates independently. The visible composite (in
+///     RGB) is the union of both inks' CMYK contributions at this
+///     pixel, computed below by walking *every* spot plane plus the
+///     process CMYK planes.
+///  3. *Spot overprints CMYK (or vice versa)*: the process C/M/Y/K
+///     planes stay untouched by spot draws; the spot tint accumulates
+///     only in the spot plane. The flush composite reads both and
+///     produces the visible pixel.
+///
+/// All three converge at the framebuffer write: we walk every active
+/// ink plane (process + spots) at the touched pixel, fold each spot's
+/// tint through its CMYK alternate, take the per-channel max with the
+/// process CMYK plane state, and finally `naive_cmyk_to_rgb_8bit` to
+/// write the visible pixel.
+fn compose_spot_overprint_via_plane(
+    target: &mut Pixmap,
+    target_mask: Option<&TsMask>,
+    planes: &mut CmykPlanes,
+    spot_idx: usize,
+    off_x_px: i32,
+    off_y_px: i32,
+    scratch: &Pixmap,
+    source_tint_8: u16,
+) {
+    let tw = target.width() as i32;
+    let th = target.height() as i32;
+    let sw = scratch.width() as i32;
+    let sh = scratch.height() as i32;
+    let scratch_pixels = scratch.pixels();
+    let target_pixels = target.pixels_mut();
+    let pw = planes.w as i32;
+    let ph = planes.h as i32;
+    let mask_data = target_mask.map(|mk| (mk.data(), mk.width() as i32, mk.height() as i32));
+    for j in 0..sh {
+        let py = j + off_y_px;
+        if py < 0 || py >= th || py >= ph {
+            continue;
+        }
+        for i in 0..sw {
+            let px = i + off_x_px;
+            if px < 0 || px >= tw || px >= pw {
+                continue;
+            }
+            if let Some((mdata, mw, mh)) = mask_data {
+                if px < mw && py < mh {
+                    let mv = mdata[(py * mw + px) as usize];
+                    if mv == 0 {
+                        continue;
+                    }
+                }
+            }
+            let s_idx = (j * sw + i) as usize;
+            let s_a = scratch_pixels[s_idx].alpha();
+            if s_a == 0 {
+                continue;
+            }
+            let t_idx = (py * pw + px) as usize;
+            // Per-channel max of source vs. destination spot tint
+            // weighted by source coverage. Same blend rule the process
+            // CMYK overprint composite uses, just on a single channel.
+            let cov = s_a as u16;
+            let bot_tint = planes.spots[spot_idx][t_idx] as u16;
+            let new_tint = if source_tint_8 <= bot_tint {
+                bot_tint as u8
+            } else {
+                let delta = source_tint_8 - bot_tint;
+                let add = (delta * cov + 127) / 255;
+                (bot_tint + add).min(255) as u8
+            };
+            planes.spots[spot_idx][t_idx] = new_tint;
+            // Compose the visible pixel: process CMYK plane state +
+            // every active spot's CMYK contribution at this pixel,
+            // per-channel max. If a process CMYK plane was never
+            // written at this pixel, we fall back to the existing
+            // framebuffer (paper white when nothing's there) so spot
+            // inks layered over a `Paint::Solid` rect don't wipe the
+            // RGB background.
+            let cov_proc = planes.coverage[t_idx];
+            let (mut acc_c, mut acc_m, mut acc_y, mut acc_k) = if cov_proc > 0 {
+                (
+                    planes.planes[0][t_idx] as u16,
+                    planes.planes[1][t_idx] as u16,
+                    planes.planes[2][t_idx] as u16,
+                    planes.planes[3][t_idx] as u16,
+                )
+            } else {
+                (0u16, 0u16, 0u16, 0u16)
+            };
+            for (sidx, plane) in planes.spots.iter().enumerate() {
+                let tint = plane[t_idx] as u16;
+                if tint == 0 {
+                    continue;
+                }
+                let alt = planes.spot_alts[sidx];
+                let contrib = |alt_ch: u8| -> u16 { (alt_ch as u16 * tint + 127) / 255 };
+                acc_c = acc_c.max(contrib(alt[0]));
+                acc_m = acc_m.max(contrib(alt[1]));
+                acc_y = acc_y.max(contrib(alt[2]));
+                acc_k = acc_k.max(contrib(alt[3]));
+            }
+            let (nr, ng, nb) =
+                naive_cmyk_to_rgb_8bit(acc_c.min(255) as u8, acc_m.min(255) as u8, acc_y.min(255) as u8, acc_k.min(255) as u8);
+            let t_pixel = target_pixels[t_idx];
+            let out_a = t_pixel.alpha().max(s_a);
+            let pre = |c: u8| ((c as u32 * out_a as u32 + 127) / 255).min(255) as u8;
+            target_pixels[t_idx] =
+                PremultipliedColorU8::from_rgba(pre(nr), pre(ng), pre(nb), out_a)
+                    .unwrap_or(t_pixel);
+            // Coverage marker so flush-time logic (if ever enabled)
+            // knows this pixel carries plane-state truth.
+            let prev_cov = planes.coverage[t_idx] as u16;
+            planes.coverage[t_idx] = prev_cov.max(cov).min(255) as u8;
+        }
+    }
+}
+
+/// Route a CMYK overprint draw through the right composite. Spot
+/// paints write into the spot plane (per-pixel `max` for same-ink
+/// overprint) and update the visible pixel via the union of every
+/// active ink's CMYK contribution at that pixel; process CMYK paints
+/// stay on Stage B's `compose_cmyk_overprint_via_planes`.
+///
+/// Centralises the dispatch so the four draw arms (FillPath /
+/// FillPathBlend / FillPathOverprint / StrokePathOverprint) don't
+/// duplicate the branching.
+fn compose_cmyk_overprint_dispatch(
+    target: &mut Pixmap,
+    target_mask: Option<&TsMask>,
+    planes: &mut CmykPlanes,
+    list: &DisplayList,
+    paint: &Paint,
+    off_x: i32,
+    off_y: i32,
+    scratch: &Pixmap,
+) {
+    let Paint::Cmyk { c, m, y, k, spot, .. } = *paint else {
+        return;
+    };
+    if let Some(SpotInkId(spot_id)) = spot {
+        if let Some(ink) = list.spot_ink(SpotInkId(spot_id)) {
+            ensure_spot_plane(planes, spot_id as usize, ink.cmyk_alternate);
+            let alt_max = ink
+                .cmyk_alternate
+                .iter()
+                .map(|v| *v as f32 / 255.0)
+                .fold(0.0_f32, f32::max);
+            let tint_unit = if alt_max <= f32::EPSILON {
+                0.0
+            } else {
+                (c.max(m).max(y).max(k) / alt_max).clamp(0.0, 1.0)
+            };
+            let tint_8 = (tint_unit * 255.0).round() as u16;
+            compose_spot_overprint_via_plane(
+                target, target_mask, planes, spot_id as usize, off_x, off_y, scratch, tint_8,
+            );
+            return;
+        }
+    }
+    compose_cmyk_overprint_via_planes(
+        target, target_mask, planes, off_x, off_y, scratch, [c, m, y, k],
+    );
 }
 
 /// Final-pass flush: walk every page pixel; where coverage > 0,
@@ -588,31 +924,23 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
                 let ts_paint = paint_to_ts(paint, list, transform, target_xform);
                 target.fill_path(&path, &ts_paint, FillRule::Winding, target_xform, target_mask);
-                // Stage B: when the paint is CMYK and we're drawing
+                // Stage B/C: when the paint is CMYK and we're drawing
                 // directly to the page (not inside a transparency
                 // group), also splat the per-channel ink amounts into
                 // the page-level plane state via the same path
-                // coverage.
-                if !in_group {
-                    if let Paint::Cmyk { c, m, y, k, .. } = *paint {
-                        if let Some((scratch, off_x, off_y)) = rasterize_cmyk_scratch_fill(
-                            &path,
-                            paint,
-                            list,
-                            transform,
-                            target_xform,
-                            1.0,
-                        ) {
-                            let planes = ensure_planes(&mut cmyk_planes, px_w, px_h);
-                            splat_scratch_into_planes(
-                                planes,
-                                target_mask,
-                                off_x,
-                                off_y,
-                                &scratch,
-                                [c, m, y, k],
-                            );
-                        }
+                // coverage. Stage C: spot paints route to the spot
+                // plane instead of the process C/M/Y/K planes.
+                if !in_group && matches!(paint, Paint::Cmyk { .. }) {
+                    if let Some((scratch, off_x, off_y)) = rasterize_cmyk_scratch_fill(
+                        &path,
+                        paint,
+                        list,
+                        transform,
+                        target_xform,
+                        1.0,
+                    ) {
+                        let planes = ensure_planes(&mut cmyk_planes, px_w, px_h);
+                        splat_cmyk_draw(planes, list, paint, target_mask, &scratch, off_x, off_y);
                     }
                 }
             }
@@ -642,31 +970,22 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                         target_xform,
                         target_mask,
                     );
-                    // Stage B plane splat — mirror the FillPath arm so
-                    // CMYK fills routed through FillPathBlend (Normal)
-                    // keep the plane state coherent.
-                    if !in_group {
-                        if let Paint::Cmyk { c, m, y, k, .. } = *paint {
-                            if let Some((scratch, off_x, off_y)) =
-                                rasterize_cmyk_scratch_fill(
-                                    &path,
-                                    paint,
-                                    list,
-                                    transform,
-                                    target_xform,
-                                    1.0,
-                                )
-                            {
-                                let planes = ensure_planes(&mut cmyk_planes, px_w, px_h);
-                                splat_scratch_into_planes(
-                                    planes,
-                                    target_mask,
-                                    off_x,
-                                    off_y,
-                                    &scratch,
-                                    [c, m, y, k],
-                                );
-                            }
+                    // Stage B/C plane splat — mirror the FillPath arm
+                    // so CMYK fills routed through FillPathBlend
+                    // (Normal) keep the plane state coherent.
+                    if !in_group && matches!(paint, Paint::Cmyk { .. }) {
+                        if let Some((scratch, off_x, off_y)) =
+                            rasterize_cmyk_scratch_fill(
+                                &path,
+                                paint,
+                                list,
+                                transform,
+                                target_xform,
+                                1.0,
+                            )
+                        {
+                            let planes = ensure_planes(&mut cmyk_planes, px_w, px_h);
+                            splat_cmyk_draw(planes, list, paint, target_mask, &scratch, off_x, off_y);
                         }
                     }
                 } else {
@@ -770,27 +1089,18 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     target_xform,
                     target_mask,
                 );
-                // Stage B plane splat for CMYK strokes on the page.
-                if !in_group {
-                    if let Paint::Cmyk { c, m, y, k, .. } = *paint {
-                        if let Some((scratch, off_x, off_y)) = rasterize_cmyk_scratch_stroke(
-                            &path,
-                            paint,
-                            list,
-                            transform,
-                            target_xform,
-                            &ts_stroke,
-                        ) {
-                            let planes = ensure_planes(&mut cmyk_planes, px_w, px_h);
-                            splat_scratch_into_planes(
-                                planes,
-                                target_mask,
-                                off_x,
-                                off_y,
-                                &scratch,
-                                [c, m, y, k],
-                            );
-                        }
+                // Stage B/C plane splat for CMYK strokes on the page.
+                if !in_group && matches!(paint, Paint::Cmyk { .. }) {
+                    if let Some((scratch, off_x, off_y)) = rasterize_cmyk_scratch_stroke(
+                        &path,
+                        paint,
+                        list,
+                        transform,
+                        target_xform,
+                        &ts_stroke,
+                    ) {
+                        let planes = ensure_planes(&mut cmyk_planes, px_w, px_h);
+                        splat_cmyk_draw(planes, list, paint, target_mask, &scratch, off_x, off_y);
                     }
                 }
             }
@@ -813,46 +1123,38 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     continue;
                 };
                 let in_group = !group_stack.is_empty();
-                if !in_group {
-                    if let Paint::Cmyk { c, m, y, k, .. } = *paint {
-                        let (target, target_xform, target_mask) = resolve_target(
-                            &mut pixmap,
-                            &mut group_stack,
-                            page_to_px,
-                            &clip_stack,
+                if !in_group && matches!(paint, Paint::Cmyk { .. }) {
+                    let (target, target_xform, target_mask) = resolve_target(
+                        &mut pixmap,
+                        &mut group_stack,
+                        page_to_px,
+                        &clip_stack,
+                    );
+                    if let Some((scratch, off_x, off_y)) = rasterize_cmyk_scratch_fill(
+                        &path,
+                        paint,
+                        list,
+                        transform,
+                        target_xform,
+                        1.0,
+                    ) {
+                        let planes = ensure_planes(&mut cmyk_planes, px_w, px_h);
+                        compose_cmyk_overprint_dispatch(
+                            target, target_mask, planes, list, paint, off_x, off_y, &scratch,
                         );
-                        if let Some((scratch, off_x, off_y)) = rasterize_cmyk_scratch_fill(
+                    } else {
+                        // Defensive fallback: knockout fill.
+                        let ts_paint =
+                            paint_to_ts(paint, list, transform, target_xform);
+                        target.fill_path(
                             &path,
-                            paint,
-                            list,
-                            transform,
+                            &ts_paint,
+                            FillRule::Winding,
                             target_xform,
-                            1.0,
-                        ) {
-                            let planes = ensure_planes(&mut cmyk_planes, px_w, px_h);
-                            compose_cmyk_overprint_via_planes(
-                                target,
-                                target_mask,
-                                planes,
-                                off_x,
-                                off_y,
-                                &scratch,
-                                [c, m, y, k],
-                            );
-                        } else {
-                            // Defensive fallback: knockout fill.
-                            let ts_paint =
-                                paint_to_ts(paint, list, transform, target_xform);
-                            target.fill_path(
-                                &path,
-                                &ts_paint,
-                                FillRule::Winding,
-                                target_xform,
-                                target_mask,
-                            );
-                        }
-                        continue;
+                            target_mask,
+                        );
                     }
+                    continue;
                 }
                 let (target, target_xform, target_mask) =
                     resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
@@ -892,45 +1194,37 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     },
                 };
                 let in_group = !group_stack.is_empty();
-                if !in_group {
-                    if let Paint::Cmyk { c, m, y, k, .. } = *paint {
-                        let (target, target_xform, target_mask) = resolve_target(
-                            &mut pixmap,
-                            &mut group_stack,
-                            page_to_px,
-                            &clip_stack,
+                if !in_group && matches!(paint, Paint::Cmyk { .. }) {
+                    let (target, target_xform, target_mask) = resolve_target(
+                        &mut pixmap,
+                        &mut group_stack,
+                        page_to_px,
+                        &clip_stack,
+                    );
+                    if let Some((scratch, off_x, off_y)) = rasterize_cmyk_scratch_stroke(
+                        &path,
+                        paint,
+                        list,
+                        transform,
+                        target_xform,
+                        &ts_stroke,
+                    ) {
+                        let planes = ensure_planes(&mut cmyk_planes, px_w, px_h);
+                        compose_cmyk_overprint_dispatch(
+                            target, target_mask, planes, list, paint, off_x, off_y, &scratch,
                         );
-                        if let Some((scratch, off_x, off_y)) = rasterize_cmyk_scratch_stroke(
+                    } else {
+                        let ts_paint =
+                            paint_to_ts(paint, list, transform, target_xform);
+                        target.stroke_path(
                             &path,
-                            paint,
-                            list,
-                            transform,
-                            target_xform,
+                            &ts_paint,
                             &ts_stroke,
-                        ) {
-                            let planes = ensure_planes(&mut cmyk_planes, px_w, px_h);
-                            compose_cmyk_overprint_via_planes(
-                                target,
-                                target_mask,
-                                planes,
-                                off_x,
-                                off_y,
-                                &scratch,
-                                [c, m, y, k],
-                            );
-                        } else {
-                            let ts_paint =
-                                paint_to_ts(paint, list, transform, target_xform);
-                            target.stroke_path(
-                                &path,
-                                &ts_paint,
-                                &ts_stroke,
-                                target_xform,
-                                target_mask,
-                            );
-                        }
-                        continue;
+                            target_xform,
+                            target_mask,
+                        );
                     }
+                    continue;
                 }
                 let (target, target_xform, target_mask) =
                     resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
@@ -4452,6 +4746,7 @@ mod tests {
             y: 0.0,
             k: 0.0,
             rgb: magenta_rgb,
+            spot: None,
         };
         let cyan = Paint::Cmyk {
             c: 1.0,
@@ -4459,6 +4754,7 @@ mod tests {
             y: 0.0,
             k: 0.0,
             rgb: cyan_rgb,
+            spot: None,
         };
         emit_rect(
             Rect {
@@ -4536,6 +4832,7 @@ mod tests {
             y: 0.0,
             k: 0.0,
             rgb: cyan_rgb,
+            spot: None,
         };
         emit_rect(
             Rect {
@@ -4577,6 +4874,7 @@ mod tests {
             y: 0.0,
             k: 0.0,
             rgb: magenta_rgb,
+            spot: None,
         };
         let yellow = Paint::Cmyk {
             c: 0.0,
@@ -4584,6 +4882,7 @@ mod tests {
             y: 1.0,
             k: 0.0,
             rgb: yellow_rgb,
+            spot: None,
         };
         // Normal CMYK draw (no overprint) — feeds the plane state.
         emit_rect(
@@ -4700,6 +4999,7 @@ mod tests {
             y: 1.0,
             k: 0.0,
             rgb: yellow_rgb,
+            spot: None,
         };
         let magenta = Paint::Cmyk {
             c: 0.0,
@@ -4707,6 +5007,7 @@ mod tests {
             y: 0.0,
             k: 0.0,
             rgb: magenta_rgb,
+            spot: None,
         };
         // First overprint draw: yellow on paper.
         emit_rect(
@@ -4768,6 +5069,281 @@ mod tests {
         assert!(
             c <= 5 && k <= 5,
             "chained overprint shouldn't invent C/K; got CMYK=({c}, {m}, {y}, {k}) pixel={center:?}"
+        );
+    }
+
+    /// Stage C: a non-overprint spot draw must render bit-identical
+    /// pixels to a process CMYK draw using the same CMYK alternate.
+    /// The spot ink is plumbed through `Paint::Cmyk { spot: Some(id) }`
+    /// — the rasterizer should paint the cached `rgb` colour exactly
+    /// like Stage A/B, and the spot plane should accumulate the tint
+    /// separately for any later overprint.
+    #[test]
+    fn spot_paint_non_overprint_renders_like_process_cmyk_alternate() {
+        use idml_compose::{SpotInk, SpotInkId};
+        let mut list = DisplayList::new();
+        // 100% PANTONE 286 C alternate = (100, 75, 0, 0) percent.
+        let alt_rgb = crate::cmyk_unit_to_linear_rgb(1.0, 0.75, 0.0, 0.0);
+        let spot_id = list.push_spot_ink(SpotInk {
+            name: "Color/Pantone286".to_string(),
+            cmyk_alternate: [255, 191, 0, 0], // 100/75/0/0% → 255/191/0/0 in 8-bit
+        });
+        let _ = SpotInkId(0); // proves the type is re-exported and Copy
+        let spot = Paint::Cmyk {
+            c: 1.0,
+            m: 0.75,
+            y: 0.0,
+            k: 0.0,
+            rgb: alt_rgb,
+            spot: Some(spot_id),
+        };
+        emit_rect(
+            Rect { x: 20.0, y: 20.0, w: 60.0, h: 60.0 },
+            spot,
+            &mut list,
+        );
+        let mut opts = RasterOptions::new(100.0, 100.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        let center = at(&img, 50, 50);
+        // Expected RGB is the alternate-CMYK ICC-resolved colour the
+        // paint baked in. The cached `rgb` field on the paint is what
+        // `paint_to_ts` reads — the rasterizer painted *that*, so the
+        // sRGB-encoded version of `alt_rgb` is what we expect on the
+        // framebuffer (within rounding).
+        let expected_r = (linear_to_srgb(alt_rgb.r) * 255.0).round() as i32;
+        let expected_g = (linear_to_srgb(alt_rgb.g) * 255.0).round() as i32;
+        let expected_b = (linear_to_srgb(alt_rgb.b) * 255.0).round() as i32;
+        let diff = |a: u8, b: i32| (a as i32 - b).abs();
+        assert!(
+            diff(center[0], expected_r) <= 2
+                && diff(center[1], expected_g) <= 2
+                && diff(center[2], expected_b) <= 2,
+            "non-overprint spot should render its CMYK alternate verbatim; got {:?}, expected ~({}, {}, {})",
+            center,
+            expected_r,
+            expected_g,
+            expected_b
+        );
+    }
+
+    /// Stage C invariant 1: two runs of the SAME spot ink overprinting
+    /// each other compose per-pixel `max(top_tint, bottom_tint)` in
+    /// the spot's own plane. Rendering 50% PANTONE 286 over 30%
+    /// PANTONE 286 (same alternate) yields 50% in the overlap — NOT
+    /// `max(50%-alt, 30%-alt)` channel-wise (Stage B's process CMYK
+    /// path, which would give the same answer here but for the wrong
+    /// reason). We pin the visible RGB to what 50% of the alternate
+    /// converts to, asserting the spot plane composed the heavier
+    /// tint rather than additively combining the two.
+    #[test]
+    fn spot_overprint_same_ink_takes_max_tint() {
+        use idml_compose::SpotInk;
+        let mut list = DisplayList::new();
+        // Spot ink with full-strength CMYK alternate of (100, 75, 0, 0)%.
+        let alt = [255u8, 191, 0, 0];
+        let spot_id = list.push_spot_ink(SpotInk {
+            name: "Color/Pantone286".to_string(),
+            cmyk_alternate: alt,
+        });
+        let rgb_30 = crate::cmyk_unit_to_linear_rgb(0.30, 0.225, 0.0, 0.0);
+        let rgb_50 = crate::cmyk_unit_to_linear_rgb(0.50, 0.375, 0.0, 0.0);
+        let spot_30 = Paint::Cmyk {
+            c: 0.30,
+            m: 0.225,
+            y: 0.0,
+            k: 0.0,
+            rgb: rgb_30,
+            spot: Some(spot_id),
+        };
+        let spot_50 = Paint::Cmyk {
+            c: 0.50,
+            m: 0.375,
+            y: 0.0,
+            k: 0.0,
+            rgb: rgb_50,
+            spot: Some(spot_id),
+        };
+        emit_rect(
+            Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 },
+            spot_30,
+            &mut list,
+        );
+        emit_rect(
+            Rect { x: 20.0, y: 20.0, w: 60.0, h: 60.0 },
+            spot_50,
+            &mut list,
+        );
+        // Upgrade the top draw to overprint.
+        let last = list.commands.len() - 1;
+        if let idml_compose::DisplayCommand::FillPath { path_id, paint, transform } =
+            list.commands[last]
+        {
+            list.commands[last] = idml_compose::DisplayCommand::FillPathOverprint {
+                path_id,
+                paint,
+                transform,
+            };
+        }
+        let mut opts = RasterOptions::new(100.0, 100.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        let center = at(&img, 50, 50);
+        // The overlap pixel: max(50%, 30%) = 50% of the alternate.
+        // Resulting CMYK is (50, 37, 0, 0) — recover and compare.
+        // Note alt[1] = 191 ⇒ 50% of 191 ≈ 95 (which is 0.50 * 0.75 ≈ 0.375).
+        let (rc, rm, ry, rk) = super::rgb_to_naive_cmyk_8bit(center[0], center[1], center[2]);
+        // 50% spot composed via alternate × tint gives CMYK ≈ (128, 95, 0, 0).
+        assert!(
+            (rc as i32 - 128).abs() <= 6,
+            "overlap should carry 50% spot's C ≈ 128; got CMYK=({rc},{rm},{ry},{rk}) pixel={center:?}"
+        );
+        assert!(
+            (rm as i32 - 95).abs() <= 6,
+            "overlap should carry 50% spot's M ≈ 95; got CMYK=({rc},{rm},{ry},{rk}) pixel={center:?}"
+        );
+        assert!(
+            ry <= 5 && rk <= 5,
+            "overlap should not invent Y or K; got CMYK=({rc},{rm},{ry},{rk}) pixel={center:?}"
+        );
+    }
+
+    /// Stage C invariant 2: two DIFFERENT spot inks overprinting
+    /// each other accumulate independently in their own planes. The
+    /// visible pixel is the per-channel max of each ink's CMYK
+    /// contribution. Spot A with alternate (100, 0, 0, 0) over spot B
+    /// with alternate (0, 100, 0, 0) at 100% each should produce
+    /// CMYK=(100, 100, 0, 0) — i.e. blue.
+    #[test]
+    fn spot_overprint_different_inks_accumulate_independently() {
+        use idml_compose::SpotInk;
+        let mut list = DisplayList::new();
+        let spot_a = list.push_spot_ink(SpotInk {
+            name: "Color/InkA".to_string(),
+            cmyk_alternate: [255, 0, 0, 0],
+        });
+        let spot_b = list.push_spot_ink(SpotInk {
+            name: "Color/InkB".to_string(),
+            cmyk_alternate: [0, 255, 0, 0],
+        });
+        let rgb_a = crate::cmyk_unit_to_linear_rgb(1.0, 0.0, 0.0, 0.0);
+        let rgb_b = crate::cmyk_unit_to_linear_rgb(0.0, 1.0, 0.0, 0.0);
+        let paint_a = Paint::Cmyk {
+            c: 1.0,
+            m: 0.0,
+            y: 0.0,
+            k: 0.0,
+            rgb: rgb_a,
+            spot: Some(spot_a),
+        };
+        let paint_b = Paint::Cmyk {
+            c: 0.0,
+            m: 1.0,
+            y: 0.0,
+            k: 0.0,
+            rgb: rgb_b,
+            spot: Some(spot_b),
+        };
+        emit_rect(
+            Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 },
+            paint_a,
+            &mut list,
+        );
+        emit_rect(
+            Rect { x: 20.0, y: 20.0, w: 60.0, h: 60.0 },
+            paint_b,
+            &mut list,
+        );
+        let last = list.commands.len() - 1;
+        if let idml_compose::DisplayCommand::FillPath { path_id, paint, transform } =
+            list.commands[last]
+        {
+            list.commands[last] = idml_compose::DisplayCommand::FillPathOverprint {
+                path_id,
+                paint,
+                transform,
+            };
+        }
+        let mut opts = RasterOptions::new(100.0, 100.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        let center = at(&img, 50, 50);
+        let (c, m, y, k) = super::rgb_to_naive_cmyk_8bit(center[0], center[1], center[2]);
+        assert!(
+            c >= 250 && m >= 250,
+            "different-ink spot overprint should accumulate both inks; got CMYK=({c},{m},{y},{k}) pixel={center:?}"
+        );
+        assert!(
+            y <= 5 && k <= 5,
+            "different-ink spot overprint shouldn't invent Y/K; got CMYK=({c},{m},{y},{k}) pixel={center:?}"
+        );
+    }
+
+    /// Stage C invariant 3: spot ink overprinting a process CMYK
+    /// paint accumulates both inks in their respective planes — the
+    /// process CMYK plane stays at its prior values and the spot
+    /// plane stores the new tint. Visible pixel is the union.
+    /// Magenta (process CMYK) covered with spot-ink-yellow (alternate
+    /// = pure Y) at 100% overprint should produce CMYK=(0,100,100,0)
+    /// i.e. red.
+    #[test]
+    fn spot_overprint_over_process_cmyk_is_union_of_inks() {
+        use idml_compose::SpotInk;
+        let mut list = DisplayList::new();
+        let yellow_spot = list.push_spot_ink(SpotInk {
+            name: "Color/CustomYellow".to_string(),
+            cmyk_alternate: [0, 0, 255, 0],
+        });
+        let magenta_rgb = crate::cmyk_unit_to_linear_rgb(0.0, 1.0, 0.0, 0.0);
+        let yellow_rgb = crate::cmyk_unit_to_linear_rgb(0.0, 0.0, 1.0, 0.0);
+        let magenta = Paint::Cmyk {
+            c: 0.0,
+            m: 1.0,
+            y: 0.0,
+            k: 0.0,
+            rgb: magenta_rgb,
+            spot: None,
+        };
+        let yellow_spot_paint = Paint::Cmyk {
+            c: 0.0,
+            m: 0.0,
+            y: 1.0,
+            k: 0.0,
+            rgb: yellow_rgb,
+            spot: Some(yellow_spot),
+        };
+        emit_rect(
+            Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 },
+            magenta,
+            &mut list,
+        );
+        emit_rect(
+            Rect { x: 20.0, y: 20.0, w: 60.0, h: 60.0 },
+            yellow_spot_paint,
+            &mut list,
+        );
+        let last = list.commands.len() - 1;
+        if let idml_compose::DisplayCommand::FillPath { path_id, paint, transform } =
+            list.commands[last]
+        {
+            list.commands[last] = idml_compose::DisplayCommand::FillPathOverprint {
+                path_id,
+                paint,
+                transform,
+            };
+        }
+        let mut opts = RasterOptions::new(100.0, 100.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        let center = at(&img, 50, 50);
+        let (c, m, y, k) = super::rgb_to_naive_cmyk_8bit(center[0], center[1], center[2]);
+        assert!(
+            m >= 250 && y >= 250,
+            "spot over process CMYK should compose both inks; got CMYK=({c},{m},{y},{k}) pixel={center:?}"
+        );
+        assert!(
+            c <= 5 && k <= 5,
+            "should not invent C/K; got CMYK=({c},{m},{y},{k}) pixel={center:?}"
         );
     }
 }

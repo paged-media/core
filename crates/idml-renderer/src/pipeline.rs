@@ -7615,6 +7615,13 @@ pub fn color_id_to_paint(
                 y: (y / 100.0).clamp(0.0, 1.0),
                 k: (k / 100.0).clamp(0.0, 1.0),
                 rgb: Color::rgba(r, g, b, 1.0),
+                // The list-aware wrappers (e.g. `color_id_to_paint_with_list_dir`)
+                // re-tag this paint with a `SpotInkId` for `Model="Spot"`
+                // swatches; this function lacks a `&mut DisplayList`,
+                // so it leaves the field empty and the visible behaviour
+                // collapses to the CMYK-alternate path (matching the
+                // Stage A/B output).
+                spot: None,
             });
         }
         #[cfg(target_arch = "wasm32")]
@@ -7840,7 +7847,47 @@ pub fn color_id_to_paint_with_list_dir(
         });
         return Some(Paint::LinearGradient(id));
     }
-    color_id_to_paint(id, palette, cmyk_xform)
+    let paint = color_id_to_paint(id, palette, cmyk_xform)?;
+    // Stage C: when the swatch is a named-ink spot colour, intern the
+    // ink name on the display list and tag the paint with the resulting
+    // id. Spot-on-same-spot overprint then composites per-pixel in the
+    // spot's own plane (see `idml-gpu::cpu::compose_spot_overprint_via_planes`).
+    // Process CMYK swatches and non-CMYK paints pass through unchanged.
+    if let Paint::Cmyk {
+        c,
+        m,
+        y,
+        k,
+        rgb,
+        spot: _,
+    } = paint
+    {
+        if let Some(entry) = palette.resolve(id) {
+            if entry.model == idml_parse::ColorModel::Spot && entry.effective_cmyk().is_some() {
+                let cmyk_alt_unit = entry.effective_cmyk().unwrap();
+                let to_8 = |v: f32| (v.clamp(0.0, 100.0) * 2.55).round() as u8;
+                let alt_8 = [
+                    to_8(cmyk_alt_unit[0]),
+                    to_8(cmyk_alt_unit[1]),
+                    to_8(cmyk_alt_unit[2]),
+                    to_8(cmyk_alt_unit[3]),
+                ];
+                let spot_id = list.push_spot_ink(idml_compose::SpotInk {
+                    name: id.to_string(),
+                    cmyk_alternate: alt_8,
+                });
+                return Some(Paint::Cmyk {
+                    c,
+                    m,
+                    y,
+                    k,
+                    rgb,
+                    spot: Some(spot_id),
+                });
+            }
+        }
+    }
+    Some(paint)
 }
 
 /// Cluster → Paint picker built from a paragraph's run table.
@@ -8100,7 +8147,7 @@ pub(crate) fn apply_fill_tint(paint: Paint, tint_pct: Option<f32>) -> Paint {
             1.0 + (c.b - 1.0) * t,
             c.a,
         )),
-        Paint::Cmyk { c, m, y, k, rgb } => Paint::Cmyk {
+        Paint::Cmyk { c, m, y, k, rgb, spot } => Paint::Cmyk {
             c: c * t,
             m: m * t,
             y: y * t,
@@ -8114,6 +8161,11 @@ pub(crate) fn apply_fill_tint(paint: Paint, tint_pct: Option<f32>) -> Paint {
                 1.0 + (rgb.b - 1.0) * t,
                 rgb.a,
             ),
+            // Per-use FillTint preserves the spot identity. The spot
+            // plane is tinted by the new C/M/Y/K (whose value is
+            // already the tint-scaled CMYK alternate) — that's the
+            // late-bound "PANTONE at N%" preview path.
+            spot,
         },
         other => other,
     }

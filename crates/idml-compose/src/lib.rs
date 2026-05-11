@@ -16,7 +16,8 @@ pub use display_list::{
     DisplayList, DropShadow, Feather, FeatherCornerType, GlyphCacheKey, GradientFeather,
     GradientFeatherKind, GradientFeatherStop, GradientId, GradientStop, ImageId, InnerGlow,
     InnerShadow, LayerEffect, LineCap, LineJoin, LinearGradient, OuterGlow, Paint, PathBuffer,
-    PathData, PathId, PathSegment, RadialGradient, Rect, Satin, Stroke, Transform,
+    PathData, PathId, PathSegment, RadialGradient, Rect, Satin, SpotInk, SpotInkId, Stroke,
+    Transform,
 };
 pub use glyph::{GlyphOutliner, TtfOutliner, UnitSquareOutliner};
 pub use primitives::{
