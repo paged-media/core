@@ -726,6 +726,42 @@ fn build_scene_with_transform(list: &DisplayList, page_to_px: kurbo::Affine) -> 
                     layer_depth -= 1;
                 }
             }
+            DisplayCommand::PushLayer {
+                bounds,
+                blend_mode,
+                opacity,
+                ..
+            } => {
+                // Vello-side stub: treat PushLayer as a plain
+                // transparency group. The CPU rasterizer applies the
+                // Gaussian blur from `LayerEffect::GaussianBlur` at
+                // pop time, but Vello doesn't expose a built-in
+                // separable Gaussian over the layer buffer. Drawing
+                // without the blur produces a hard-edged stamp —
+                // visibly different from the CPU output but keeps
+                // the rest of the page in shape; a proper
+                // shader-based blur lives on the Vello backlog.
+                let rect = kurbo::Rect::new(
+                    bounds.x as f64,
+                    bounds.y as f64,
+                    (bounds.x + bounds.w) as f64,
+                    (bounds.y + bounds.h) as f64,
+                );
+                scene.push_layer(
+                    Fill::NonZero,
+                    blend_to_peniko(*blend_mode),
+                    opacity.clamp(0.0, 1.0),
+                    page_to_px,
+                    &rect,
+                );
+                layer_depth += 1;
+            }
+            DisplayCommand::PopLayer(_) => {
+                if layer_depth > 0 {
+                    scene.pop_layer();
+                    layer_depth -= 1;
+                }
+            }
         }
     }
     // Defensive: any pushes left unmatched at scene end still need

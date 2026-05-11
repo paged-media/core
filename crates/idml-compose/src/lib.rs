@@ -15,8 +15,8 @@ pub use display_list::{
     BevelEmboss, BlendMode, Color, DashPattern, DecodedImage, DirectionalFeather, DisplayCommand,
     DisplayList, DropShadow, Feather, FeatherCornerType, GlyphCacheKey, GradientFeather,
     GradientFeatherKind, GradientFeatherStop, GradientId, GradientStop, ImageId, InnerGlow,
-    InnerShadow, LineCap, LineJoin, LinearGradient, OuterGlow, Paint, PathBuffer, PathData, PathId,
-    PathSegment, RadialGradient, Rect, Satin, Stroke, Transform,
+    InnerShadow, LayerEffect, LineCap, LineJoin, LinearGradient, OuterGlow, Paint, PathBuffer,
+    PathData, PathId, PathSegment, RadialGradient, Rect, Satin, Stroke, Transform,
 };
 pub use glyph::{GlyphOutliner, TtfOutliner, UnitSquareOutliner};
 pub use primitives::{
