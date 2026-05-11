@@ -54,6 +54,15 @@ pub(crate) struct ResolvedFrame<'a> {
     pub corner_radius: Option<f32>,
     pub corner_option: Option<&'a str>,
     pub applied_object_style: Option<&'a str>,
+    /// `OverprintFill="true"` on the source shape. Flagged at adapter
+    /// time so the fill module can route its emit through
+    /// [`idml_compose::DisplayCommand::FillPathOverprint`] instead of
+    /// the knockout `FillPath`.
+    pub overprint_fill: bool,
+    /// `OverprintStroke="true"` analogue. Drives the stroke module's
+    /// choice between [`idml_compose::DisplayCommand::StrokePath`] and
+    /// [`idml_compose::DisplayCommand::StrokePathOverprint`].
+    pub overprint_stroke: bool,
     pub geometry: Geometry<'a>,
 }
 
@@ -149,6 +158,8 @@ impl<'a> ResolvedFrame<'a> {
             corner_radius: None,
             corner_option: None,
             applied_object_style: frame.applied_object_style.as_deref(),
+            overprint_fill: frame.overprint_fill,
+            overprint_stroke: frame.overprint_stroke,
             geometry: Geometry::TextFrameRect {
                 rect: rect_from_bounds(frame.bounds),
             },
@@ -178,6 +189,8 @@ impl<'a> ResolvedFrame<'a> {
             corner_radius: rect.corner_radius,
             corner_option: rect.corner_option.as_deref(),
             applied_object_style: rect.applied_object_style.as_deref(),
+            overprint_fill: rect.overprint_fill,
+            overprint_stroke: rect.overprint_stroke,
             geometry: Geometry::Rect {
                 rect: rect_from_bounds(rect.bounds),
             },
@@ -207,6 +220,8 @@ impl<'a> ResolvedFrame<'a> {
             corner_radius: None,
             corner_option: None,
             applied_object_style: oval.applied_object_style.as_deref(),
+            overprint_fill: oval.overprint_fill,
+            overprint_stroke: oval.overprint_stroke,
             geometry: Geometry::Oval {
                 rect: rect_from_bounds(oval.bounds),
             },
@@ -248,6 +263,8 @@ impl<'a> ResolvedFrame<'a> {
             corner_radius: None,
             corner_option: None,
             applied_object_style: poly.applied_object_style.as_deref(),
+            overprint_fill: poly.overprint_fill,
+            overprint_stroke: poly.overprint_stroke,
             geometry,
         }
     }
@@ -285,6 +302,8 @@ impl<'a> ResolvedFrame<'a> {
             corner_radius: None,
             corner_option: None,
             applied_object_style: line.applied_object_style.as_deref(),
+            overprint_fill: false,
+            overprint_stroke: line.overprint_stroke,
             geometry: Geometry::Line {
                 p0: (bounds.left, bounds.top),
                 p1: (bounds.right, bounds.bottom),

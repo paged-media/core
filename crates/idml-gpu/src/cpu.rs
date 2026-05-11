@@ -318,6 +318,77 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     target_mask,
                 );
             }
+            DisplayCommand::FillPathOverprint {
+                path_id,
+                paint,
+                transform,
+            } => {
+                // Overprint approximation: render the fill into a
+                // scratch pixmap sized to the path's pixel bbox, then
+                // composite with `Darken` (per-channel
+                // `min(top, bottom)`). This is a CMYK-overprint *RGB*
+                // approximation — exact only for dark inks on lighter
+                // backgrounds and black-on-tints, but the standard
+                // visible failure mode (dark text knocking out colour
+                // behind it instead of overprinting) goes away.
+                // True per-channel CMYK compositing requires routing
+                // separations through the rasterizer; that's Stage 4.
+                let Some(path_data) = list.paths.get(*path_id) else {
+                    continue;
+                };
+                let Some(path) = build_path_transformed(path_data, transform) else {
+                    continue;
+                };
+                let (target, target_xform, target_mask) =
+                    resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
+                overprint_fill(
+                    target,
+                    target_xform,
+                    target_mask,
+                    &path,
+                    paint,
+                    list,
+                    transform,
+                );
+            }
+            DisplayCommand::StrokePathOverprint {
+                path_id,
+                paint,
+                stroke,
+                transform,
+            } => {
+                // Stroke overprint analogue; see `FillPathOverprint`
+                // for the approximation contract.
+                let Some(path_data) = list.paths.get(*path_id) else {
+                    continue;
+                };
+                let Some(path) = build_path_transformed(path_data, transform) else {
+                    continue;
+                };
+                let (target, target_xform, target_mask) =
+                    resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
+                let ts_stroke = TsStroke {
+                    width: stroke.width.max(0.0),
+                    line_cap: map_cap(stroke.cap),
+                    line_join: map_join(stroke.join),
+                    miter_limit: stroke.miter_limit.max(1.0),
+                    dash: if stroke.dash.is_solid() {
+                        None
+                    } else {
+                        tiny_skia::StrokeDash::new(stroke.dash.as_slice().to_vec(), 0.0)
+                    },
+                };
+                overprint_stroke(
+                    target,
+                    target_xform,
+                    target_mask,
+                    &path,
+                    &ts_stroke,
+                    paint,
+                    list,
+                    transform,
+                );
+            }
             DisplayCommand::DropShadow {
                 path_id,
                 transform,
@@ -985,6 +1056,114 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
 /// requires a mutable reference; this helper sticks to plain f32 math.
 fn ts_xform_apply(t: TsTransform, x: f32, y: f32) -> (f32, f32) {
     (t.sx * x + t.kx * y + t.tx, t.ky * x + t.sy * y + t.ty)
+}
+
+/// Render a path's fill into a scratch pixmap sized to the path's pixel
+/// bounds, then composite it onto `target` with tiny-skia's `Darken`
+/// blend mode (per-pixel `min(top, bottom)`). RGB-side approximation of
+/// CMYK overprint: it's *visibly* correct for the common
+/// "dark ink on lighter background" / "black-on-tint" overprint cases
+/// and a no-op for top inks that are already lighter than the
+/// background — exactly the boundary InDesign uses. True per-channel
+/// CMYK compositing requires routing CMYK separations through the
+/// rasterizer; that's the Stage 4 follow-up.
+///
+/// When the scratch pixmap allocation fails (extreme path bounds) we
+/// fall back to a plain knockout fill so the page still renders.
+fn overprint_fill(
+    target: &mut Pixmap,
+    target_xform: TsTransform,
+    target_mask: Option<&TsMask>,
+    path: &tiny_skia::Path,
+    paint: &Paint,
+    list: &DisplayList,
+    transform: &CTransform,
+) {
+    let bbox = path.bounds();
+    let pad_pt = 1.0;
+    let (lx_px, ly_px) =
+        ts_xform_apply(target_xform, bbox.left() - pad_pt, bbox.top() - pad_pt);
+    let (rx_px, ry_px) =
+        ts_xform_apply(target_xform, bbox.right() + pad_pt, bbox.bottom() + pad_pt);
+    let off_x_px = lx_px.min(rx_px).floor() as i32;
+    let off_y_px = ly_px.min(ry_px).floor() as i32;
+    let max_x_px = lx_px.max(rx_px).ceil() as i32;
+    let max_y_px = ly_px.max(ry_px).ceil() as i32;
+    let w_px = (max_x_px - off_x_px).max(1) as u32;
+    let h_px = (max_y_px - off_y_px).max(1) as u32;
+    if let Some(mut scratch) = Pixmap::new(w_px, h_px) {
+        let scratch_xform =
+            TsTransform::from_translate(-off_x_px as f32, -off_y_px as f32)
+                .pre_concat(target_xform);
+        let scratch_paint = paint_to_ts(paint, list, transform, scratch_xform);
+        scratch.fill_path(path, &scratch_paint, FillRule::Winding, scratch_xform, None);
+        let composite = PixmapPaint {
+            blend_mode: TsBlendMode::Darken,
+            ..PixmapPaint::default()
+        };
+        target.draw_pixmap(
+            off_x_px,
+            off_y_px,
+            scratch.as_ref(),
+            &composite,
+            TsTransform::identity(),
+            target_mask,
+        );
+    } else {
+        // Defensive fallback: knock out as a normal fill.
+        let ts_paint = paint_to_ts(paint, list, transform, target_xform);
+        target.fill_path(path, &ts_paint, FillRule::Winding, target_xform, target_mask);
+    }
+}
+
+/// Stroke counterpart to [`overprint_fill`]. See that function for the
+/// approximation contract.
+fn overprint_stroke(
+    target: &mut Pixmap,
+    target_xform: TsTransform,
+    target_mask: Option<&TsMask>,
+    path: &tiny_skia::Path,
+    ts_stroke: &TsStroke,
+    paint: &Paint,
+    list: &DisplayList,
+    transform: &CTransform,
+) {
+    let bbox = path.bounds();
+    // Stroke pads outside the path by half the line width; add that to
+    // the scratch bbox so antialiased edges don't get clipped.
+    let pad_pt = ts_stroke.width.max(0.0) * 0.5 + 1.0;
+    let (lx_px, ly_px) =
+        ts_xform_apply(target_xform, bbox.left() - pad_pt, bbox.top() - pad_pt);
+    let (rx_px, ry_px) =
+        ts_xform_apply(target_xform, bbox.right() + pad_pt, bbox.bottom() + pad_pt);
+    let off_x_px = lx_px.min(rx_px).floor() as i32;
+    let off_y_px = ly_px.min(ry_px).floor() as i32;
+    let max_x_px = lx_px.max(rx_px).ceil() as i32;
+    let max_y_px = ly_px.max(ry_px).ceil() as i32;
+    let w_px = (max_x_px - off_x_px).max(1) as u32;
+    let h_px = (max_y_px - off_y_px).max(1) as u32;
+    if let Some(mut scratch) = Pixmap::new(w_px, h_px) {
+        let scratch_xform =
+            TsTransform::from_translate(-off_x_px as f32, -off_y_px as f32)
+                .pre_concat(target_xform);
+        let scratch_paint = paint_to_ts(paint, list, transform, scratch_xform);
+        scratch.stroke_path(path, &scratch_paint, ts_stroke, scratch_xform, None);
+        let composite = PixmapPaint {
+            blend_mode: TsBlendMode::Darken,
+            ..PixmapPaint::default()
+        };
+        target.draw_pixmap(
+            off_x_px,
+            off_y_px,
+            scratch.as_ref(),
+            &composite,
+            TsTransform::identity(),
+            target_mask,
+        );
+    } else {
+        let ts_paint = paint_to_ts(paint, list, transform, target_xform);
+        target.stroke_path(path, &ts_paint, ts_stroke, target_xform, target_mask);
+    }
 }
 
 /// Snapshot a `w_px × h_px` region of `parent`'s pixels into a fresh

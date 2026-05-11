@@ -618,24 +618,16 @@ pub struct CharacterRun {
     /// annotation text, sizing it as a fraction of the base, etc.)
     /// is queued. See docs/plan.md Tier 4 — CJK Stage 4.
     pub ruby_flag: Option<bool>,
-    /// `RubyType` — `PerCharacter` / `GroupRuby`. The character vs.
-    /// group form changes how the annotation distributes over the
-    /// base text. Parser-only today.
+    /// `RubyType` — `PerCharacter` / `GroupRuby`. Parser-only today.
     pub ruby_type: Option<String>,
-    /// `RubyString` — the ruby annotation text itself. Stored on the
-    /// CharacterStyleRange the ruby applies to (the *base* run).
+    /// `RubyString` — the ruby annotation text itself.
     pub ruby_string: Option<String>,
-    /// `KentenKind` — the emphasis-mark glyph that sits above (or
-    /// beside, in vertical mode) every character of this run.
-    /// Common values: `None` / `SesameDot` / `BlackCircle` /
-    /// `WhiteCircle` / `Custom` / etc. Parser-only — full emphasis-
-    /// mark rendering is queued (Tier 4 Stage 4).
+    /// `KentenKind` — the emphasis-mark glyph for this run.
+    /// Parser-only — emphasis-mark rendering is queued (Tier 4 Stage 4).
     pub kenten_kind: Option<String>,
-    /// `KentenCharacter` — when `kenten_kind == "Custom"`, the
-    /// literal codepoint to stamp above each character. Parser-only.
+    /// `KentenCharacter` — codepoint to stamp when `kenten_kind == "Custom"`.
     pub kenten_character: Option<String>,
-    /// `KentenFontSize` — emphasis-mark glyph size as a percentage of
-    /// the base run's `point_size`. Parser-only.
+    /// `KentenFontSize` — emphasis-mark glyph size as a percentage.
     pub kenten_font_size: Option<f32>,
     /// `OverprintFill="true"` on the `<CharacterStyleRange>`. None ⇒
     /// inherit from the applied character / paragraph style cascade.
@@ -2426,9 +2418,6 @@ mod tests {
 
     #[test]
     fn story_direction_absent_defaults_to_none() {
-        // The IDML default is implicit horizontal — we expose absence
-        // as `None` so the renderer can distinguish "unset (horizontal)"
-        // from "explicit vertical" if it ever needs to.
         let xml = br#"<Story Self="u1">
           <ParagraphStyleRange>
             <CharacterStyleRange><Content>x</Content></CharacterStyleRange>
@@ -2480,16 +2469,6 @@ mod tests {
 
     #[test]
     fn character_style_range_parses_ruby_and_kenten() {
-        // IDML serialises ruby + emphasis-mark attributes directly on
-        // the `<CharacterStyleRange>`. We surface them on the parsed
-        // run; the renderer doesn't yet honour them (Tier 4 — CJK
-        // Stage 4).
-        //
-        // The XML keeps ASCII placeholders for the ruby + base text
-        // so it can live in a `br#"..."#` byte-string literal (raw
-        // byte strings reject non-ASCII source bytes). The real-world
-        // attribute carries the annotation string verbatim — we
-        // verify the round-trip works regardless of the script.
         let xml = br#"<Story Self="u1">
           <ParagraphStyleRange>
             <CharacterStyleRange
@@ -2527,5 +2506,27 @@ mod tests {
         assert!(r.kenten_kind.is_none());
         assert!(r.kenten_character.is_none());
         assert!(r.kenten_font_size.is_none());
+    }
+
+    #[test]
+    fn overprint_round_trips_on_paragraph_and_run() {
+        // `OverprintFill` / `OverprintStroke` lift off the
+        // `<ParagraphStyleRange>` (paragraph-level) and the
+        // `<CharacterStyleRange>` (run-level). Absent ⇒ `None`.
+        let xml = br#"<Story>
+          <ParagraphStyleRange OverprintFill="true" OverprintStroke="false">
+            <CharacterStyleRange OverprintFill="true">
+              <Content>Hello</Content>
+            </CharacterStyleRange>
+            <CharacterStyleRange>
+              <Content>World</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        assert_eq!(s.paragraphs[0].overprint_fill, Some(true));
+        assert_eq!(s.paragraphs[0].overprint_stroke, Some(false));
+        assert_eq!(s.paragraphs[0].runs[0].overprint_fill, Some(true));
+        assert_eq!(s.paragraphs[0].runs[1].overprint_fill, None);
     }
 }

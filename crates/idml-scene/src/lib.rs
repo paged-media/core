@@ -506,6 +506,8 @@ impl ResolvedRunAttrs {
             kenten_kind: run.kenten_kind.clone(),
             kenten_character: run.kenten_character.clone(),
             kenten_font_size: run.kenten_font_size,
+            overprint_fill: run.overprint_fill,
+            overprint_stroke: run.overprint_stroke,
         }
     }
 
@@ -548,6 +550,8 @@ impl ResolvedRunAttrs {
             self.kenten_character = c.kenten_character.clone();
         }
         self.kenten_font_size = self.kenten_font_size.or(c.kenten_font_size);
+        self.overprint_fill = self.overprint_fill.or(c.overprint_fill);
+        self.overprint_stroke = self.overprint_stroke.or(c.overprint_stroke);
     }
 
     /// Fill any unset field from a resolved paragraph style.
@@ -577,6 +581,8 @@ impl ResolvedRunAttrs {
         self.tracking = self.tracking.or(p.tracking);
         self.underline = self.underline.or(p.underline);
         self.strikethru = self.strikethru.or(p.strikethru);
+        self.overprint_fill = self.overprint_fill.or(p.overprint_fill);
+        self.overprint_stroke = self.overprint_stroke.or(p.overprint_stroke);
     }
 }
 
@@ -613,6 +619,8 @@ impl ResolvedParagraphAttrs {
             kinsoku_type: paragraph.kinsoku_type.clone(),
             mojikumi_table: paragraph.mojikumi_table.clone(),
             mojikumi_set: paragraph.mojikumi_set.clone(),
+            overprint_fill: paragraph.overprint_fill,
+            overprint_stroke: paragraph.overprint_stroke,
         }
     }
 
@@ -669,6 +677,8 @@ impl ResolvedParagraphAttrs {
         if self.mojikumi_set.is_none() {
             self.mojikumi_set = p.mojikumi_set.clone();
         }
+        self.overprint_fill = self.overprint_fill.or(p.overprint_fill);
+        self.overprint_stroke = self.overprint_stroke.or(p.overprint_stroke);
     }
 }
 
@@ -743,6 +753,15 @@ pub struct ResolvedRunAttrs {
     pub kenten_character: Option<String>,
     /// Cascaded `KentenFontSize` — % of base size.
     pub kenten_font_size: Option<f32>,
+    /// Cascaded `OverprintFill` flag — `true` means this run's fill
+    /// should composite with darken (per-channel `min(top, bottom)`)
+    /// instead of knocking out the underlying ink. The renderer's
+    /// glyph emitter consumes this once run-level overprint is wired
+    /// (frame-level overprint already flows through the display list).
+    pub overprint_fill: Option<bool>,
+    /// Cascaded `OverprintStroke` flag (rare on text — only outlined
+    /// text strokes).
+    pub overprint_stroke: Option<bool>,
 }
 
 /// Effective paragraph-level attributes after walking the cascade
@@ -829,6 +848,13 @@ pub struct ResolvedParagraphAttrs {
     pub mojikumi_table: Option<String>,
     /// Cascaded `MojikumiSet` ref (older IDML attribute name).
     pub mojikumi_set: Option<String>,
+    /// Cascaded `OverprintFill` flag from the paragraph cascade. Stage
+    /// 3 frame-level overprint flows through `ResolvedFrame`; this
+    /// surface lets the future glyph-level overprint path consume the
+    /// paragraph cascade.
+    pub overprint_fill: Option<bool>,
+    /// Cascaded `OverprintStroke` flag.
+    pub overprint_stroke: Option<bool>,
 }
 
 #[derive(Debug, thiserror::Error)]

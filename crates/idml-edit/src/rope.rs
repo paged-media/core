@@ -85,14 +85,11 @@ impl RunAttrs {
             underline: self.underline,
             strikethru: self.strikethru,
             leading: self.leading,
-            // Overprint flags live on the parser; the edit rope
-            // doesn't yet expose them as editable attrs.
+            // Overprint + Ruby + Kenten land in the parser today; the
+            // edit rope does not yet surface them as editable run-level
+            // attrs, so we default to None on rebuild.
             overprint_fill: None,
             overprint_stroke: None,
-            // Ruby + Kenten land in the parser today; the edit rope
-            // doesn't yet expose them as editable run-level attrs, so
-            // we default to None on rebuild. M3+ can plumb these
-            // through `RunAttrs` when the editor surfaces them.
             ruby_flag: None,
             ruby_type: None,
             ruby_string: None,

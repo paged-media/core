@@ -13,7 +13,7 @@
 use idml_compose::{PathId, Stroke, Transform};
 use idml_parse::Graphic;
 
-use super::geometry::emit_stroked;
+use super::geometry::{emit_stroked, rewrite_tail_for_overprint};
 use super::{Geometry, ResolvedFrame};
 use crate::pipeline::{color_id_to_paint_with_list_dir, BuiltPage};
 
@@ -61,5 +61,7 @@ pub(crate) fn stroke_paint_module(
     }) else {
         return;
     };
+    let start = page.list.commands.len();
     emit_stroked(&frame.geometry, page, paint, stroke, outer, stroke_path);
+    rewrite_tail_for_overprint(page, start, false, frame.overprint_stroke);
 }

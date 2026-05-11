@@ -272,6 +272,15 @@ pub struct TextFrame {
     /// for the resolver's output (see `Document::resolve_toc`). `None`
     /// for ordinary body frames.
     pub applied_toc_style: Option<String>,
+    /// `OverprintFill="true"` on the IDML element. When true, the
+    /// frame's fill physically mixes with whatever ink already sits
+    /// behind it instead of knocking out the underlying separations
+    /// (Adobe's print-preview overprint behaviour). The renderer
+    /// approximates this on RGB with a per-pixel darken composite;
+    /// per-channel CMYK overprint is deferred (see Phase 3 plan).
+    pub overprint_fill: bool,
+    /// `OverprintStroke="true"` analogue for the frame stroke.
+    pub overprint_stroke: bool,
 }
 
 /// IDML `<TextFramePreference VerticalJustification="...">` values.
@@ -465,6 +474,10 @@ pub struct Rectangle {
     /// `<TextPath>` children attached to this rectangle. See
     /// [`Polygon::text_paths`].
     pub text_paths: Vec<TextPath>,
+    /// `OverprintFill="true"`. See [`TextFrame::overprint_fill`].
+    pub overprint_fill: bool,
+    /// `OverprintStroke="true"`. See [`TextFrame::overprint_stroke`].
+    pub overprint_stroke: bool,
 }
 
 /// Mirror of IDML's optional `InnerShadow`, `OuterGlow`, `InnerGlow`,
@@ -686,6 +699,10 @@ pub struct Oval {
     pub opacity: Option<f32>,
     /// See [`Rectangle::blend_mode`].
     pub blend_mode: Option<String>,
+    /// `OverprintFill="true"`. See [`TextFrame::overprint_fill`].
+    pub overprint_fill: bool,
+    /// `OverprintStroke="true"`. See [`TextFrame::overprint_stroke`].
+    pub overprint_stroke: bool,
 }
 
 /// Straight line — `<GraphicLine>` in IDML. The endpoints are the
@@ -717,6 +734,9 @@ pub struct GraphicLine {
     /// `<TextPath>` children attached to this line. See
     /// [`Polygon::text_paths`].
     pub text_paths: Vec<TextPath>,
+    /// `OverprintStroke="true"`. See [`TextFrame::overprint_stroke`].
+    /// Lines carry no fill, so only the stroke flag is meaningful.
+    pub overprint_stroke: bool,
 }
 
 /// One point on an IDML `<PathGeometry>` path. `anchor` is the
@@ -866,6 +886,10 @@ pub struct Polygon {
     /// `ItemTransform` attribute on the nested `<Image>` element.
     /// See [`Rectangle::image_item_transform`].
     pub image_item_transform: Option<[f32; 6]>,
+    /// `OverprintFill="true"`. See [`TextFrame::overprint_fill`].
+    pub overprint_fill: bool,
+    /// `OverprintStroke="true"`. See [`TextFrame::overprint_stroke`].
+    pub overprint_stroke: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
@@ -1025,6 +1049,11 @@ struct CommonAttrs {
     stroke_weight: Option<f32>,
     applied_object_style: Option<String>,
     item_layer: Option<String>,
+    /// `OverprintFill="true"` on the IDML element. Absent attribute
+    /// or unparseable value ⇒ `false` (IDML default).
+    overprint_fill: bool,
+    /// `OverprintStroke="true"` analogue.
+    overprint_stroke: bool,
 }
 
 fn read_common_attrs(e: &quick_xml::events::BytesStart) -> CommonAttrs {
@@ -1041,6 +1070,12 @@ fn read_common_attrs(e: &quick_xml::events::BytesStart) -> CommonAttrs {
         stroke_weight: attr(e, b"StrokeWeight").and_then(|s| s.parse().ok()),
         applied_object_style: attr(e, b"AppliedObjectStyle"),
         item_layer: attr(e, b"ItemLayer"),
+        overprint_fill: attr(e, b"OverprintFill")
+            .and_then(|s| s.parse::<bool>().ok())
+            .unwrap_or(false),
+        overprint_stroke: attr(e, b"OverprintStroke")
+            .and_then(|s| s.parse::<bool>().ok())
+            .unwrap_or(false),
     }
 }
 
@@ -1282,6 +1317,8 @@ impl Spread {
                             gradient_stroke_angle: common.gradient_stroke_angle,
                             gradient_stroke_length: common.gradient_stroke_length,
                             applied_toc_style: attr(&e, b"AppliedTOCStyle"),
+                            overprint_fill: common.overprint_fill,
+                            overprint_stroke: common.overprint_stroke,
                         });
                         let idx = out.text_frames.len() - 1;
                         register_with_group(
@@ -1344,6 +1381,8 @@ impl Spread {
                             gradient_stroke_angle: common.gradient_stroke_angle,
                             gradient_stroke_length: common.gradient_stroke_length,
                             text_paths: Vec::new(),
+                            overprint_fill: common.overprint_fill,
+                            overprint_stroke: common.overprint_stroke,
                         });
                         let idx = out.rectangles.len() - 1;
                         register_with_group(
@@ -1385,6 +1424,8 @@ impl Spread {
                             gradient_stroke_length: common.gradient_stroke_length,
                             opacity: None,
                             blend_mode: None,
+                            overprint_fill: common.overprint_fill,
+                            overprint_stroke: common.overprint_stroke,
                         });
                         let idx = out.ovals.len() - 1;
                         register_with_group(&mut group_builders, FrameRef::Oval(idx));
@@ -2026,6 +2067,7 @@ impl Spread {
                             anchors: Vec::new(),
                             subpath_starts: Vec::new(),
                             text_paths: Vec::new(),
+                            overprint_stroke: common.overprint_stroke,
                         });
                         let idx = out.graphic_lines.len() - 1;
                         register_with_group(
@@ -2073,6 +2115,8 @@ impl Spread {
                             text_paths: Vec::new(),
                             image_link: None,
                             image_item_transform: None,
+                            overprint_fill: common.overprint_fill,
+                            overprint_stroke: common.overprint_stroke,
                         });
                         let idx = out.polygons.len() - 1;
                         register_with_group(&mut group_builders, FrameRef::Polygon(idx));
@@ -3211,5 +3255,73 @@ mod tests {
             s.polygons[0].subpath_starts.is_empty(),
             "single contour → no markers (legacy path stays hot)"
         );
+    }
+
+    #[test]
+    fn overprint_attributes_round_trip_through_every_shape() {
+        // Pin that `OverprintFill` / `OverprintStroke` lift off the
+        // outer tag for every page-item kind (Rectangle / Oval /
+        // TextFrame / Polygon / GraphicLine). Absent attributes
+        // default to `false` (the IDML default).
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+              <Spread Self="s1">
+                <Rectangle Self="r1"
+                           GeometricBounds="0 0 10 10"
+                           FillColor="Color/Black"
+                           StrokeColor="Color/None"
+                           OverprintFill="true"
+                           OverprintStroke="true"/>
+                <Rectangle Self="r2"
+                           GeometricBounds="0 0 10 10"
+                           FillColor="Color/Cyan"/>
+                <Oval Self="o1"
+                      GeometricBounds="0 0 10 10"
+                      FillColor="Color/Black"
+                      OverprintFill="true"/>
+                <TextFrame Self="t1"
+                           ParentStory="u10"
+                           GeometricBounds="0 0 10 10"
+                           OverprintFill="true"/>
+                <Polygon Self="p1"
+                         GeometricBounds="0 0 10 10"
+                         FillColor="Color/Black"
+                         OverprintFill="true"
+                         OverprintStroke="false">
+                  <Properties>
+                    <PathGeometry>
+                      <GeometryPathType>
+                        <PathPointArray>
+                          <PathPointType Anchor="0 0"/>
+                          <PathPointType Anchor="10 0"/>
+                          <PathPointType Anchor="10 10"/>
+                          <PathPointType Anchor="0 10"/>
+                        </PathPointArray>
+                      </GeometryPathType>
+                    </PathGeometry>
+                  </Properties>
+                </Polygon>
+                <GraphicLine Self="l1"
+                             GeometricBounds="0 0 10 10"
+                             StrokeColor="Color/Black"
+                             OverprintStroke="true"/>
+              </Spread>
+            </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        // Rect r1: both flags true; r2: both false (defaults).
+        assert!(s.rectangles[0].overprint_fill);
+        assert!(s.rectangles[0].overprint_stroke);
+        assert!(!s.rectangles[1].overprint_fill);
+        assert!(!s.rectangles[1].overprint_stroke);
+        // Oval: fill flag picked up.
+        assert!(s.ovals[0].overprint_fill);
+        assert!(!s.ovals[0].overprint_stroke);
+        // TextFrame: fill flag picked up.
+        assert!(s.text_frames[0].overprint_fill);
+        // Polygon: fill true, stroke explicitly false.
+        assert!(s.polygons[0].overprint_fill);
+        assert!(!s.polygons[0].overprint_stroke);
+        // GraphicLine: only stroke is meaningful.
+        assert!(s.graphic_lines[0].overprint_stroke);
     }
 }

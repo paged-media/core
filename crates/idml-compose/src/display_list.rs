@@ -822,6 +822,35 @@ pub enum DisplayCommand {
     /// transform is unused; same rationale as
     /// [`DisplayCommand::PopClip`].
     PopLayer(Transform),
+    /// Fill a path with overprint semantics. Identical wire-format to
+    /// [`DisplayCommand::FillPath`] (path / paint / transform), but the
+    /// rasterizer composites the result with a per-channel
+    /// `min(top, bottom)` darken instead of standard alpha blending.
+    /// This is a CMYK-overprint *approximation* done in RGB: it's
+    /// visibly correct for dark ink on lighter background and
+    /// black-on-tints (the common real-world overprint cases) but not
+    /// a true per-channel CMYK composite — that's deferred until the
+    /// rasterizer carries separations end to end (see Phase 3 Tier 3
+    /// #14, Stage 4).
+    ///
+    /// Lifted to a distinct variant rather than a flag on `FillPath`
+    /// so the common knock-out path stays one variant + one rasterizer
+    /// arm with no per-command branch, and so existing construction
+    /// sites for `FillPath` need no churn.
+    FillPathOverprint {
+        path_id: PathId,
+        paint: Paint,
+        transform: Transform,
+    },
+    /// Stroke a path with overprint semantics. See
+    /// [`DisplayCommand::FillPathOverprint`] for the rasterizer
+    /// approximation.
+    StrokePathOverprint {
+        path_id: PathId,
+        paint: Paint,
+        stroke: Stroke,
+        transform: Transform,
+    },
 }
 
 impl DisplayCommand {
@@ -850,7 +879,9 @@ impl DisplayCommand {
             | DisplayCommand::DirectionalFeather { transform, .. }
             | DisplayCommand::GradientFeather { transform, .. }
             | DisplayCommand::PushLayer { transform, .. }
-            | DisplayCommand::PopLayer(transform) => transform,
+            | DisplayCommand::PopLayer(transform)
+            | DisplayCommand::FillPathOverprint { transform, .. }
+            | DisplayCommand::StrokePathOverprint { transform, .. } => transform,
         }
     }
 }

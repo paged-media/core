@@ -2964,6 +2964,10 @@ fn emit_anchored_rect_via_pipeline(
         gradient_stroke_angle: None,
         gradient_stroke_length: None,
         text_paths: Vec::new(),
+        // Anchored frames don't currently carry overprint attrs in our
+        // AnchoredFrame mirror; default to knockout (the IDML default).
+        overprint_fill: false,
+        overprint_stroke: false,
     };
     // `emit_rectangle_into` increments `page.stats.frames` internally.
     emit_rectangle_into(
@@ -3038,6 +3042,10 @@ fn emit_anchored_rect_image(
         gradient_stroke_angle: None,
         gradient_stroke_length: None,
         text_paths: Vec::new(),
+        // Anchored frames don't currently carry overprint attrs in our
+        // AnchoredFrame mirror; default to knockout (the IDML default).
+        overprint_fill: false,
+        overprint_stroke: false,
     };
     emit_rectangle_image(page, &synthetic, options, page_image_cache, decoded_cache);
 }
@@ -3131,6 +3139,8 @@ fn emit_anchored_textframe_story<'a>(
         gradient_stroke_angle: None,
         gradient_stroke_length: None,
         applied_toc_style: None,
+        overprint_fill: false,
+        overprint_stroke: false,
     };
     // Sub-emitter borrows from the parent's `'a` so the document /
     // palette / font_table refs share lifetimes with the body pass.

@@ -8,7 +8,7 @@
 use idml_compose::{BlendMode, Paint, PathId, Transform};
 use idml_parse::Graphic;
 
-use super::geometry::emit_filled;
+use super::geometry::{emit_filled, rewrite_tail_for_overprint};
 use super::{Geometry, ResolvedFrame};
 use crate::pipeline::{
     apply_fill_tint, color_id_to_paint_with_list_dir, frame_fill_is_transparent, BuiltPage,
@@ -61,5 +61,7 @@ pub(crate) fn fill_paint_module(
         })
         .unwrap_or(fallback);
     let fill = apply_fill_tint(fill, frame.fill_tint);
+    let start = page.list.commands.len();
     emit_filled(&frame.geometry, page, fill, BlendMode::Normal, outer, fill_path);
+    rewrite_tail_for_overprint(page, start, frame.overprint_fill, false);
 }
