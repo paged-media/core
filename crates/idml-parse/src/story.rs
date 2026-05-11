@@ -206,6 +206,13 @@ pub struct Paragraph {
     /// Tables can't currently nest inside tables — only one per
     /// paragraph.
     pub table: Option<Table>,
+    /// `OverprintFill="true"` on the `<ParagraphStyleRange>`. None ⇒
+    /// inherit from the applied paragraph style cascade. Stage 3
+    /// honours this when a run inside the paragraph leaves its own
+    /// overprint unset.
+    pub overprint_fill: Option<bool>,
+    /// `OverprintStroke="true"` analogue.
+    pub overprint_stroke: Option<bool>,
 }
 
 /// One anchored frame declared inside a `<CharacterStyleRange>`. The
@@ -545,6 +552,12 @@ pub struct CharacterRun {
     /// number on the CharacterStyleRange, with magic `Auto` not
     /// modelled here (we treat absence == Auto).
     pub leading: Option<f32>,
+    /// `OverprintFill="true"` on the `<CharacterStyleRange>`. None ⇒
+    /// inherit from the applied character / paragraph style cascade.
+    /// Drives the renderer's Stage 3 darken composite when true.
+    pub overprint_fill: Option<bool>,
+    /// `OverprintStroke="true"` analogue (rare on text but parsed).
+    pub overprint_stroke: Option<bool>,
     pub text: String,
 }
 
@@ -772,6 +785,10 @@ impl Story {
                             runs: Vec::new(),
                             anchored_frames: Vec::new(),
                             table: None,
+                            overprint_fill: attr(&e, b"OverprintFill")
+                                .and_then(|s| s.parse::<bool>().ok()),
+                            overprint_stroke: attr(&e, b"OverprintStroke")
+                                .and_then(|s| s.parse::<bool>().ok()),
                         });
                     }
                     b"Table" => {
@@ -971,6 +988,10 @@ impl Story {
                             strikethru: attr(&e, b"StrikeThru")
                                 .and_then(|s| s.parse::<bool>().ok()),
                             leading: attr(&e, b"Leading").and_then(|s| s.parse::<f32>().ok()),
+                            overprint_fill: attr(&e, b"OverprintFill")
+                                .and_then(|s| s.parse::<bool>().ok()),
+                            overprint_stroke: attr(&e, b"OverprintStroke")
+                                .and_then(|s| s.parse::<bool>().ok()),
                             text: String::new(),
                         });
                     }
@@ -2264,5 +2285,28 @@ mod tests {
         assert_eq!(s.paragraphs[0].justification, Some(Justification::CenterAlign));
         // Unrecognised string ⇒ None; renderer falls back to Left.
         assert_eq!(s.paragraphs[1].justification, None);
+    }
+
+    #[test]
+    fn overprint_round_trips_on_paragraph_and_run() {
+        // Pin that `OverprintFill` / `OverprintStroke` lift off the
+        // `<ParagraphStyleRange>` (paragraph-level) and the
+        // `<CharacterStyleRange>` (run-level). Absent attribute ⇒
+        // `None` (defers to the style cascade).
+        let xml = br#"<Story>
+          <ParagraphStyleRange OverprintFill="true" OverprintStroke="false">
+            <CharacterStyleRange OverprintFill="true">
+              <Content>Hello</Content>
+            </CharacterStyleRange>
+            <CharacterStyleRange>
+              <Content>World</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        assert_eq!(s.paragraphs[0].overprint_fill, Some(true));
+        assert_eq!(s.paragraphs[0].overprint_stroke, Some(false));
+        assert_eq!(s.paragraphs[0].runs[0].overprint_fill, Some(true));
+        assert_eq!(s.paragraphs[0].runs[1].overprint_fill, None);
     }
 }

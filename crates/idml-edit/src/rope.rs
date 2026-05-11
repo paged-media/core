@@ -85,6 +85,12 @@ impl RunAttrs {
             underline: self.underline,
             strikethru: self.strikethru,
             leading: self.leading,
+            // Overprint lands in the parser today; the edit rope does
+            // not yet surface it as an editable run-level attr, so we
+            // default to None on rebuild. The renderer's cascade will
+            // pick up paragraph- and style-level overprint normally.
+            overprint_fill: None,
+            overprint_stroke: None,
             text,
         }
     }
@@ -328,6 +334,10 @@ impl StoryRope {
                     runs,
                     anchored_frames: Vec::new(),
                     table: p.table.clone(),
+                    // Overprint cascade happens at render time; the
+                    // rope doesn't surface it as an editable attr yet.
+                    overprint_fill: None,
+                    overprint_stroke: None,
                 }
             })
             .collect();
@@ -460,6 +470,8 @@ mod tests {
                         underline: None,
                         strikethru: None,
                         leading: None,
+                        overprint_fill: None,
+                        overprint_stroke: None,
                         text: "Hello, ".into(),
                     },
                     CharacterRun {
@@ -478,10 +490,14 @@ mod tests {
                         underline: None,
                         strikethru: None,
                         leading: None,
+                        overprint_fill: None,
+                        overprint_stroke: None,
                         text: "world".into(),
                     },
                 ],
                 table: None,
+                overprint_fill: None,
+                overprint_stroke: None,
             }],
         };
         let rope = StoryRope::from_story(&original);

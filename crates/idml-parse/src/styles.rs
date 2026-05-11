@@ -271,6 +271,14 @@ pub struct CharacterStyleDef {
     pub tracking: Option<f32>,
     pub underline: Option<bool>,
     pub strikethru: Option<bool>,
+    /// `OverprintFill="true"` declared on the `<CharacterStyle>`.
+    /// Cascades through `BasedOn` like every other field. None ⇒
+    /// inherit; bottom of cascade = false (IDML's default).
+    pub overprint_fill: Option<bool>,
+    /// `OverprintStroke="true"` analogue. Currently rare on text
+    /// runs (only outlined text carries a stroke) but parsed for
+    /// completeness.
+    pub overprint_stroke: Option<bool>,
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -379,6 +387,12 @@ pub struct ParagraphStyleDef {
     pub drop_cap_lines: Option<u32>,
     /// `DropCapDetail` — InDesign's scaling-factor integer.
     pub drop_cap_detail: Option<i32>,
+    /// `OverprintFill="true"` declared on the `<ParagraphStyle>`. See
+    /// [`CharacterStyleDef::overprint_fill`]. Cascades like every other
+    /// paragraph attribute via `merge_below`.
+    pub overprint_fill: Option<bool>,
+    /// `OverprintStroke="true"` analogue.
+    pub overprint_stroke: Option<bool>,
 }
 
 /// Effective character-level attributes after walking BasedOn.
@@ -397,6 +411,12 @@ pub struct ResolvedCharacter {
     pub tracking: Option<f32>,
     pub underline: Option<bool>,
     pub strikethru: Option<bool>,
+    /// Cascaded `OverprintFill` flag. See
+    /// [`CharacterStyleDef::overprint_fill`]. None at the bottom of
+    /// the cascade ⇒ false (the IDML default).
+    pub overprint_fill: Option<bool>,
+    /// Cascaded `OverprintStroke` flag.
+    pub overprint_stroke: Option<bool>,
 }
 
 /// Effective paragraph-level attributes after walking BasedOn.
@@ -455,6 +475,11 @@ pub struct ResolvedParagraph {
     /// `DropCapDetail` (the IDML scaling factor InDesign records on
     /// the drop cap's character formatting; an arbitrary integer).
     pub drop_cap_detail: Option<i32>,
+    /// Cascaded `OverprintFill` flag from the paragraph style chain.
+    /// See [`CharacterStyleDef::overprint_fill`].
+    pub overprint_fill: Option<bool>,
+    /// Cascaded `OverprintStroke` flag.
+    pub overprint_stroke: Option<bool>,
 }
 
 /// Identifies which kind of style is open while we walk
@@ -955,6 +980,8 @@ impl ResolvedCharacter {
         self.tracking = self.tracking.or(def.tracking);
         self.underline = self.underline.or(def.underline);
         self.strikethru = self.strikethru.or(def.strikethru);
+        self.overprint_fill = self.overprint_fill.or(def.overprint_fill);
+        self.overprint_stroke = self.overprint_stroke.or(def.overprint_stroke);
     }
 }
 
@@ -1025,6 +1052,8 @@ impl ResolvedParagraph {
         self.drop_cap_characters = self.drop_cap_characters.or(def.drop_cap_characters);
         self.drop_cap_lines = self.drop_cap_lines.or(def.drop_cap_lines);
         self.drop_cap_detail = self.drop_cap_detail.or(def.drop_cap_detail);
+        self.overprint_fill = self.overprint_fill.or(def.overprint_fill);
+        self.overprint_stroke = self.overprint_stroke.or(def.overprint_stroke);
     }
 }
 
@@ -1046,6 +1075,8 @@ fn parse_character_style(e: &quick_xml::events::BytesStart) -> Option<CharacterS
         tracking: attr(e, b"Tracking").and_then(|s| s.parse().ok()),
         underline: attr(e, b"Underline").and_then(|s| s.parse().ok()),
         strikethru: attr(e, b"StrikeThru").and_then(|s| s.parse().ok()),
+        overprint_fill: attr(e, b"OverprintFill").and_then(|s| s.parse().ok()),
+        overprint_stroke: attr(e, b"OverprintStroke").and_then(|s| s.parse().ok()),
     })
 }
 
@@ -1208,6 +1239,8 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         drop_cap_characters: attr(e, b"DropCapCharacters").and_then(|s| s.parse().ok()),
         drop_cap_lines: attr(e, b"DropCapLines").and_then(|s| s.parse().ok()),
         drop_cap_detail: attr(e, b"DropCapDetail").and_then(|s| s.parse().ok()),
+        overprint_fill: attr(e, b"OverprintFill").and_then(|s| s.parse().ok()),
+        overprint_stroke: attr(e, b"OverprintStroke").and_then(|s| s.parse().ok()),
     })
 }
 

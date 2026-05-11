@@ -1778,6 +1778,8 @@ impl Project {
             gradient_stroke_angle: None,
             gradient_stroke_length: None,
             text_paths: Vec::new(),
+            overprint_fill: false,
+            overprint_stroke: false,
         };
         let position = self.doc.spreads[spread_idx].spread.rectangles.len();
         self.doc.spreads[spread_idx].spread.rectangles.push(rect);

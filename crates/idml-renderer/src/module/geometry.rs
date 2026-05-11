@@ -115,3 +115,52 @@ pub(crate) fn emit_fill_path(
         });
     }
 }
+
+/// Rewrite the tail of `page.list.commands` from `start` onward so that
+/// any `FillPath` / `StrokePath` commands become their
+/// `*Overprint` counterparts. Used by the orchestrator to apply a
+/// frame's `OverprintFill` / `OverprintStroke` flag without threading
+/// the boolean through every emit helper. `FillPathBlend` commands
+/// don't get rewritten: a non-Normal blend already produces a darken-
+/// like composite of its own (or the user explicitly asked for a
+/// different mode), so layering overprint on top would double-darken.
+pub(crate) fn rewrite_tail_for_overprint(
+    page: &mut BuiltPage,
+    start: usize,
+    overprint_fill: bool,
+    overprint_stroke: bool,
+) {
+    if !overprint_fill && !overprint_stroke {
+        return;
+    }
+    let cmds = &mut page.list.commands;
+    for cmd in cmds.iter_mut().skip(start) {
+        match cmd {
+            DisplayCommand::FillPath {
+                path_id,
+                paint,
+                transform,
+            } if overprint_fill => {
+                *cmd = DisplayCommand::FillPathOverprint {
+                    path_id: *path_id,
+                    paint: *paint,
+                    transform: *transform,
+                };
+            }
+            DisplayCommand::StrokePath {
+                path_id,
+                paint,
+                stroke,
+                transform,
+            } if overprint_stroke => {
+                *cmd = DisplayCommand::StrokePathOverprint {
+                    path_id: *path_id,
+                    paint: *paint,
+                    stroke: *stroke,
+                    transform: *transform,
+                };
+            }
+            _ => {}
+        }
+    }
+}

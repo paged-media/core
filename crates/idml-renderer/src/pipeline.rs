@@ -2886,6 +2886,10 @@ fn emit_anchored_rect_via_pipeline(
         gradient_stroke_angle: None,
         gradient_stroke_length: None,
         text_paths: Vec::new(),
+        // Anchored frames don't currently carry overprint attrs in our
+        // AnchoredFrame mirror; default to knockout (the IDML default).
+        overprint_fill: false,
+        overprint_stroke: false,
     };
     // `emit_rectangle_into` increments `page.stats.frames` internally.
     emit_rectangle_into(
@@ -2960,6 +2964,10 @@ fn emit_anchored_rect_image(
         gradient_stroke_angle: None,
         gradient_stroke_length: None,
         text_paths: Vec::new(),
+        // Anchored frames don't currently carry overprint attrs in our
+        // AnchoredFrame mirror; default to knockout (the IDML default).
+        overprint_fill: false,
+        overprint_stroke: false,
     };
     emit_rectangle_image(page, &synthetic, options, page_image_cache, decoded_cache);
 }
@@ -3052,6 +3060,8 @@ fn emit_anchored_textframe_story<'a>(
         gradient_fill_length: None,
         gradient_stroke_angle: None,
         gradient_stroke_length: None,
+        overprint_fill: false,
+        overprint_stroke: false,
     };
     // Sub-emitter borrows from the parent's `'a` so the document /
     // palette / font_table refs share lifetimes with the body pass.
@@ -5339,6 +5349,8 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
         anchored_frames: paragraph.anchored_frames.clone(),
         runs: Vec::new(),
         table: None,
+        overprint_fill: paragraph.overprint_fill,
+        overprint_stroke: paragraph.overprint_stroke,
     };
     for run in &paragraph.runs {
         if !run.text.contains('\n') {
@@ -5373,6 +5385,8 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
                     anchored_frames: Vec::new(),
                     runs: Vec::new(),
                     table: None,
+                    overprint_fill: paragraph.overprint_fill,
+                    overprint_stroke: paragraph.overprint_stroke,
                 };
                 std::mem::swap(&mut current, &mut next);
                 // Keep empty sub-paragraphs — `<Br/><Br/>` and similar
@@ -5414,6 +5428,8 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
             anchored_frames: Vec::new(),
             runs: Vec::new(),
             table: None,
+            overprint_fill: paragraph.overprint_fill,
+            overprint_stroke: paragraph.overprint_stroke,
         });
     }
     subs

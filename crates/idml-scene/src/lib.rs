@@ -500,6 +500,8 @@ impl ResolvedRunAttrs {
             underline: run.underline,
             strikethru: run.strikethru,
             leading: run.leading,
+            overprint_fill: run.overprint_fill,
+            overprint_stroke: run.overprint_stroke,
         }
     }
 
@@ -528,6 +530,8 @@ impl ResolvedRunAttrs {
         self.tracking = self.tracking.or(c.tracking);
         self.underline = self.underline.or(c.underline);
         self.strikethru = self.strikethru.or(c.strikethru);
+        self.overprint_fill = self.overprint_fill.or(c.overprint_fill);
+        self.overprint_stroke = self.overprint_stroke.or(c.overprint_stroke);
     }
 
     /// Fill any unset field from a resolved paragraph style.
@@ -557,6 +561,8 @@ impl ResolvedRunAttrs {
         self.tracking = self.tracking.or(p.tracking);
         self.underline = self.underline.or(p.underline);
         self.strikethru = self.strikethru.or(p.strikethru);
+        self.overprint_fill = self.overprint_fill.or(p.overprint_fill);
+        self.overprint_stroke = self.overprint_stroke.or(p.overprint_stroke);
     }
 }
 
@@ -589,6 +595,8 @@ impl ResolvedParagraphAttrs {
             drop_cap_characters: None,
             drop_cap_lines: None,
             drop_cap_detail: None,
+            overprint_fill: paragraph.overprint_fill,
+            overprint_stroke: paragraph.overprint_stroke,
         }
     }
 
@@ -633,6 +641,8 @@ impl ResolvedParagraphAttrs {
         self.drop_cap_characters = self.drop_cap_characters.or(p.drop_cap_characters);
         self.drop_cap_lines = self.drop_cap_lines.or(p.drop_cap_lines);
         self.drop_cap_detail = self.drop_cap_detail.or(p.drop_cap_detail);
+        self.overprint_fill = self.overprint_fill.or(p.overprint_fill);
+        self.overprint_stroke = self.overprint_stroke.or(p.overprint_stroke);
     }
 }
 
@@ -692,6 +702,15 @@ pub struct ResolvedRunAttrs {
     /// Explicit `Leading` in pt. `None` ⇒ Auto leading
     /// (`point_size × 1.2`).
     pub leading: Option<f32>,
+    /// Cascaded `OverprintFill` flag — `true` means this run's fill
+    /// should composite with darken (per-channel `min(top, bottom)`)
+    /// instead of knocking out the underlying ink. The renderer's
+    /// glyph emitter consumes this once run-level overprint is wired
+    /// (frame-level overprint already flows through the display list).
+    pub overprint_fill: Option<bool>,
+    /// Cascaded `OverprintStroke` flag (rare on text — only outlined
+    /// text strokes).
+    pub overprint_stroke: Option<bool>,
 }
 
 /// Effective paragraph-level attributes after walking the cascade
@@ -761,6 +780,13 @@ pub struct ResolvedParagraphAttrs {
     pub drop_cap_lines: Option<u32>,
     /// `DropCapDetail` — InDesign's scaling integer.
     pub drop_cap_detail: Option<i32>,
+    /// Cascaded `OverprintFill` flag from the paragraph cascade. Stage
+    /// 3 frame-level overprint flows through `ResolvedFrame`; this
+    /// surface lets the future glyph-level overprint path consume the
+    /// paragraph cascade.
+    pub overprint_fill: Option<bool>,
+    /// Cascaded `OverprintStroke` flag.
+    pub overprint_stroke: Option<bool>,
 }
 
 #[derive(Debug, thiserror::Error)]

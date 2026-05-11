@@ -379,6 +379,49 @@ fn build_scene_with_transform(list: &DisplayList, page_to_px: kurbo::Affine) -> 
                     .with_miter_limit(stroke.miter_limit.max(1.0) as f64);
                 scene.stroke(&ks, page_to_px, brush.as_ref(), None, &path);
             }
+            DisplayCommand::FillPathOverprint {
+                path_id,
+                paint,
+                transform,
+            } => {
+                // Vello backend doesn't yet implement overprint; the
+                // CMYK-darken approximation requires either a custom
+                // shader or an offscreen layer + per-channel blend
+                // that peniko doesn't expose. Fall through to a normal
+                // knockout fill so the page still renders — Stage 4's
+                // separation routing is the path of record on GPU.
+                let scene = scene_stack.last_mut().expect("scene_stack underflow");
+                let Some(path_data) = list.paths.get(*path_id) else {
+                    continue;
+                };
+                let path = path_to_bez(path_data, transform);
+                let Some(brush) = resolve_paint(paint, list, transform) else {
+                    continue;
+                };
+                scene.fill(Fill::NonZero, page_to_px, brush.as_ref(), None, &path);
+            }
+            DisplayCommand::StrokePathOverprint {
+                path_id,
+                paint,
+                stroke,
+                transform,
+            } => {
+                // Vello backend overprint fallback; see
+                // `FillPathOverprint`.
+                let scene = scene_stack.last_mut().expect("scene_stack underflow");
+                let Some(path_data) = list.paths.get(*path_id) else {
+                    continue;
+                };
+                let path = path_to_bez(path_data, transform);
+                let Some(brush) = resolve_paint(paint, list, transform) else {
+                    continue;
+                };
+                let ks = KurboStroke::new(stroke.width.max(0.0) as f64)
+                    .with_caps(map_cap(stroke.cap))
+                    .with_join(map_join(stroke.join))
+                    .with_miter_limit(stroke.miter_limit.max(1.0) as f64);
+                scene.stroke(&ks, page_to_px, brush.as_ref(), None, &path);
+            }
             DisplayCommand::Image {
                 image_id,
                 transform,
