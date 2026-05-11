@@ -865,6 +865,21 @@ pub fn build_document(
         if chain.is_empty() {
             continue;
         }
+        // TOC swap-in: if the head text frame carries
+        // `AppliedTOCStyle="TOCStyle/<id>"`, replace the story's
+        // own paragraphs with the resolver's output for that TOC
+        // style. Real-world unresolved TOC stories carry a single
+        // placeholder paragraph; the frame's `AppliedTOCStyle`
+        // attribute is what binds it to a `<TOCStyle>` in
+        // `Resources/Styles.xml`. After the swap the synthetic
+        // paragraphs go through the standard paragraph-emission
+        // path so they get full shaping, tab handling, applied
+        // paragraph-style cascade resolution, etc.
+        let toc_paragraphs: Option<Vec<idml_parse::Paragraph>> = chain
+            .first()
+            .and_then(|f| f.applied_toc_style.as_deref())
+            .and_then(|toc_id| document.styles.toc_styles.get(toc_id))
+            .map(|toc| build_toc_paragraphs(document, toc, &page_labels));
         let chain_pages: Vec<usize> = chain
             .iter()
             .map(|f| {
@@ -908,8 +923,14 @@ pub fn build_document(
             parsed.story.optical_margin_alignment,
             parsed.story.optical_margin_size,
         );
-        for paragraph in &parsed.story.paragraphs {
-            emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
+        if let Some(paragraphs) = toc_paragraphs.as_ref() {
+            for paragraph in paragraphs {
+                emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
+            }
+        } else {
+            for paragraph in &parsed.story.paragraphs {
+                emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
+            }
         }
         emitter.apply_vertical_justification(&mut pages);
         emitter.apply_polygon_clip(&mut pages);
@@ -1548,6 +1569,63 @@ impl<'a> StoryEmitter<'a> {
             }
         }
     }
+}
+
+/// Build the synthetic `Paragraph` sequence for an unresolved TOC
+/// story. Walks `Document::resolve_toc(toc_style)` and turns every
+/// `TOCEntry` into a single `Paragraph` whose:
+///   - `paragraph_style` = entry's `format_style`,
+///   - one run carrying `text` + expanded `separator` + page label.
+///
+/// Tabs in `Separator` (IDML serialises a tab as `^t`) expand to a
+/// literal `\t`, which `idml_text::layout::apply_tab_stops` snaps
+/// to the next tab stop (or, when none, to a single tab width).
+/// Page labels come from the per-page `page_labels` slice so
+/// Section overrides (Roman numerals etc.) carry through.
+///
+/// Returns an empty vec when the TOC has no resolved entries —
+/// keeps the renderer from emitting any glyphs into the host
+/// frame (matches InDesign, which leaves the frame blank).
+fn build_toc_paragraphs(
+    document: &Document,
+    toc_style: &idml_parse::TOCStyleDef,
+    page_labels: &[String],
+) -> Vec<idml_parse::Paragraph> {
+    let entries = document.resolve_toc(toc_style);
+    let mut out: Vec<idml_parse::Paragraph> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        // Expand the IDML tab token. Only `^t` is recognised
+        // today — Adobe's full set (^m em-space, ^>, etc.) is
+        // queued; the corpus only carries `^t` separators.
+        let separator = entry.separator.replace("^t", "\t");
+        // Resolve the page label. `TOCEntry::page_number` is a
+        // 0-based body-page index; `page_labels` is parallel to
+        // the renderer's `pages` slice and already carries the
+        // user-visible label (Section overrides included). When
+        // the resolver returned `None` (orphan story) or the
+        // entry suppressed the page number, skip the separator
+        // + page-number tail.
+        let page_label = entry
+            .page_number
+            .filter(|_| entry.page_number_visible)
+            .and_then(|i| page_labels.get(i).cloned());
+        let mut text = entry.text;
+        if let Some(label) = page_label {
+            text.push_str(&separator);
+            text.push_str(&label);
+        }
+        let run = idml_parse::CharacterRun {
+            text,
+            ..idml_parse::CharacterRun::default()
+        };
+        let paragraph = idml_parse::Paragraph {
+            paragraph_style: entry.format_style,
+            runs: vec![run],
+            ..idml_parse::Paragraph::default()
+        };
+        out.push(paragraph);
+    }
+    out
 }
 
 /// Body of `StoryEmitter::emit_paragraph`. Lives as a free fn so
@@ -3052,6 +3130,7 @@ fn emit_anchored_textframe_story<'a>(
         gradient_fill_length: None,
         gradient_stroke_angle: None,
         gradient_stroke_length: None,
+        applied_toc_style: None,
     };
     // Sub-emitter borrows from the parent's `'a` so the document /
     // palette / font_table refs share lifetimes with the body pass.
