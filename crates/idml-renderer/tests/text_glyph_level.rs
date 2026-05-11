@@ -1233,6 +1233,134 @@ fn numbering_continue_resumes_count_across_non_numbered_paragraph() {
     let reset_leading = rows[2][0].1;
     assert_eq!(
         leading_1, reset_leading,
-        "without NumberingContinue, paragraph 3 must lead with the same '1' glyph as paragraph 1",
+        "without NumberingContinue, paragraph 3 must lead with the same '1' glyph as paragraph 1.",
     );
 }
+
+// ─────────────────────────── 12. tab-stop leader characters ─────────
+//
+// `<TabStop Leader=".">` tiles the leader string across the gap a
+// snapped tab opens up — classic TOC dot-leader pattern:
+//   "Chapter 1 ........ Page 3"
+// The two assertions here pin both ends of the behaviour:
+//   - non-empty Leader emits many leader glyphs between the label and
+//     the right-aligned segment;
+//   - absent Leader emits no leader glyphs (the existing tab snap
+//     widens the gap but leaves it visually empty).
+
+fn build_toc_leader_idml(leader_attr: &str) -> Vec<u8> {
+    let spread = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 612"/>
+    <TextFrame Self="frameA" ParentStory="u10" GeometricBounds="40 40 160 540" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#;
+    // 400 pt-wide right-aligned tab stop puts the "Page 3" segment
+    // far to the right of the "Chapter 1" label, opening a gap wide
+    // enough to absorb many `.` copies at 14pt Inter.
+    let story = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">
+    <ParagraphStyleRange>
+      <Properties>
+        <TabList>
+          <ListItem><TabStop Position="400" Alignment="RightAlign"{leader_attr}/></ListItem>
+        </TabList>
+      </Properties>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="14">
+        <Content>Chapter 1</Content>
+        <Tab/>
+        <Content>Page 3</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#
+    );
+    write_zip(|zip| {
+        put(zip, "designmap.xml", DESIGNMAP);
+        put(zip, "Resources/Graphic.xml", GRAPHIC_XML);
+        put(zip, "Spreads/Spread_sp1.xml", spread);
+        put(zip, "Stories/Story_u10.xml", story.as_bytes());
+    })
+}
+
+/// Count glyph FillPath commands whose centre-x sits between
+/// `gap_left` and `gap_right` (in pt). Used to count leader glyphs
+/// that landed in the tab gap.
+fn glyphs_in_x_range(cmds: &[DisplayCommand], gap_left: f32, gap_right: f32) -> usize {
+    glyph_xys(cmds)
+        .iter()
+        .filter(|(x, _, _)| *x > gap_left && *x < gap_right)
+        .count()
+}
+
+#[test]
+fn tab_stop_leader_dots_tile_across_the_gap() {
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+
+    // With Leader=".", the gap between "Chapter 1" (label, ends near
+    // x ≈ 40 pt + label width ≈ 100 pt) and "Page 3" (right-snapped
+    // segment near the 400 pt stop, frame origin 40, so ending near
+    // x ≈ 440) must contain many `.` glyphs.
+    let bytes_with = build_toc_leader_idml(r#" Leader=".""#);
+    let doc_with = Document::open(&bytes_with).unwrap();
+    let built_with = pipeline::build_document(&doc_with, &opts).unwrap();
+    let cmds_with = &built_with.pages[0].list.commands;
+
+    // The right-snapped "Page 3" segment ends near x ≈ 440 pt and is
+    // 6 chars wide (~40 pt). Look at glyphs between x = 130 (after
+    // "Chapter 1") and x = 380 (before "Page 3"). All such glyphs
+    // must be leader periods (the only thing that lives in the gap).
+    let leader_count = glyphs_in_x_range(cmds_with, 130.0, 380.0);
+    assert!(
+        leader_count > 5,
+        "expected many leader '.' glyphs in the tab gap, got {leader_count}",
+    );
+
+    // Cross-check: same paragraph without Leader → zero leader glyphs
+    // in the gap. The tab still snaps "Page 3" to the right, so the
+    // gap is structurally the same width.
+    let bytes_without = build_toc_leader_idml("");
+    let doc_without = Document::open(&bytes_without).unwrap();
+    let built_without = pipeline::build_document(&doc_without, &opts).unwrap();
+    let cmds_without = &built_without.pages[0].list.commands;
+    let no_leader_count = glyphs_in_x_range(cmds_without, 130.0, 380.0);
+    assert_eq!(
+        no_leader_count, 0,
+        "without Leader, the tab gap must contain zero glyphs, got {no_leader_count}",
+    );
+
+    // Tighter pin: the leader glyphs should all share a single
+    // PathId (one '.' outline reused). Walk the FillPaths that landed
+    // in the gap and confirm a single path_id dominates.
+    let mut path_ids_in_gap: Vec<u32> = Vec::new();
+    for c in cmds_with {
+        if let DisplayCommand::FillPath {
+            path_id, transform, ..
+        } = c
+        {
+            let [a, b, c2, d, tx, _ty] = transform.0;
+            let is_glyph =
+                b.abs() < 1e-5 && c2.abs() < 1e-5 && a > 0.0 && d < 0.0 && (a + d).abs() < 1e-4;
+            if is_glyph && tx > 130.0 && tx < 380.0 {
+                path_ids_in_gap.push(path_id.0);
+            }
+        }
+    }
+    let unique_path_ids: std::collections::BTreeSet<u32> =
+        path_ids_in_gap.iter().copied().collect();
+    assert_eq!(
+        unique_path_ids.len(),
+        1,
+        "all leader glyphs should share one outline (interned by font_id+glyph_id); got {} distinct path_ids in the gap",
+        unique_path_ids.len(),
+    );
+}
+

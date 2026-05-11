@@ -1555,6 +1555,35 @@ mod tests {
     }
 
     #[test]
+    fn tab_stop_leader_preserves_multichar_and_whitespace() {
+        // IDML's `Leader` attribute is a short string the renderer tiles
+        // across the snapped tab gap. Multi-character leaders (e.g.
+        // `". "` for space-separated dots) and trailing whitespace are
+        // significant — the parser must round-trip them verbatim.
+        // Raw byte literals can't embed non-ASCII — build the XML as
+        // a regular string (which allows `…`) and parse its bytes.
+        let xml = r#"<Story>
+          <ParagraphStyleRange>
+            <Properties>
+              <TabList>
+                <ListItem><TabStop Position="72" Alignment="RightAlign" Leader=". "/></ListItem>
+                <ListItem><TabStop Position="144" Alignment="RightAlign" Leader="-"/></ListItem>
+                <ListItem><TabStop Position="216" Alignment="RightAlign" Leader="…"/></ListItem>
+              </TabList>
+            </Properties>
+            <CharacterStyleRange>
+              <Content>x</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml.as_bytes()).unwrap();
+        let stops = &s.paragraphs[0].tab_list;
+        assert_eq!(stops[0].leader.as_deref(), Some(". "));
+        assert_eq!(stops[1].leader.as_deref(), Some("-"));
+        assert_eq!(stops[2].leader.as_deref(), Some("…"));
+    }
+
+    #[test]
     fn parses_table_with_rows_columns_and_cells() {
         // Mirrors the IDML serialisation: a Table nested in a
         // CharacterStyleRange, with Row/Column/Cell siblings inside

@@ -2210,11 +2210,15 @@ fn emit_paragraph_into_chain(
                     .as_deref()
                     .and_then(|s| s.chars().next())
                     .unwrap_or('.'),
+                // IDML's `Leader` is a short string (commonly ".",
+                // ". ", or "…"). Empty leaders are treated as absent
+                // so the tab snaps without filling. Trailing
+                // whitespace is significant — ". " produces
+                // space-separated dots — so it's kept verbatim.
                 leader: t
                     .leader
-                    .as_deref()
-                    .and_then(|s| s.chars().next())
-                    .filter(|c| !c.is_whitespace()),
+                    .clone()
+                    .filter(|s| !s.is_empty()),
             })
             .collect();
         let paragraph_text: String = paragraph
@@ -2229,8 +2233,23 @@ fn emit_paragraph_into_chain(
                 }
             })
             .collect();
+        // Pre-build the leader context once per paragraph so each
+        // `\t` snap that has a non-empty `<TabStop Leader="...">` can
+        // shape the leader with the run that owns the tab.
+        let any_leader = tab_stops.iter().any(|t| t.leader.is_some());
+        let leader_ctx = if any_leader {
+            Some(idml_text::layout::LeaderContext::new(styled_runs_ref))
+        } else {
+            None
+        };
         for line in laid_out.lines.iter_mut() {
-            idml_text::layout::apply_tab_stops(line, &paragraph_text, &tab_stops, 36.0);
+            idml_text::layout::apply_tab_stops_with_leaders(
+                line,
+                &paragraph_text,
+                &tab_stops,
+                36.0,
+                leader_ctx.as_ref(),
+            );
         }
     }
 

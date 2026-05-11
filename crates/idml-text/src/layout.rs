@@ -616,7 +616,7 @@ pub enum TabAlignment {
 
 /// One tab stop spec with position, alignment, and (for Decimal)
 /// the character to align on.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TabStopSpec {
     pub position_pt: f32,
     pub alignment: TabAlignment,
@@ -624,12 +624,16 @@ pub struct TabStopSpec {
     /// IDML defaults to `.` when `<TabStop AlignmentCharacter>` is
     /// absent. Ignored for the other alignments.
     pub alignment_character: char,
-    /// Leader character to tile across the widened tab gap.
-    /// IDML's `<TabStop Leader="..." />` is typically `.` (TOC dot
-    /// leaders) or empty. `None` ⇒ no leader. Currently surfaced for
-    /// downstream emission; the renderer's leader-glyph fill is a
-    /// queued follow-up.
-    pub leader: Option<char>,
+    /// Leader string tiled across the widened tab gap.
+    /// IDML's `<TabStop Leader="..." />` is typically `"."` (TOC dot
+    /// leaders), `". "` (dot + space pattern), or empty. `None` /
+    /// empty ⇒ no leader. The renderer's `apply_tab_stops_with_leaders`
+    /// shapes the leader with the run owning the `\t` and tiles whole
+    /// copies across the gap; partial trailing copies are dropped to
+    /// keep the leader visually uniform (matches InDesign behaviour
+    /// where a leader wider than the gap emits nothing rather than
+    /// overflowing into the snapped text).
+    pub leader: Option<String>,
 }
 
 impl TabStopSpec {
@@ -672,6 +676,37 @@ pub fn apply_tab_stops(
     tab_stops: &[TabStopSpec],
     default_stop_pt: f32,
 ) {
+    apply_tab_stops_with_leaders(line, paragraph_text, tab_stops, default_stop_pt, None);
+}
+
+/// Like [`apply_tab_stops`] but with optional leader-character
+/// emission for stops whose `<TabStop Leader="...">` carries a
+/// non-empty string. When `leader_ctx` is `Some`, each snapped tab
+/// whose stop has a leader gets the leader string shaped (using the
+/// run that owns the tab's `\t` cluster) and tiled across the gap;
+/// the synthesised leader glyphs are inserted into `line.glyphs`
+/// between the tab and the following segment.
+///
+/// Tiling strategy: whole copies only. The number of full leader
+/// copies that fit is `floor(gap / leader_width)`; any partial
+/// trailing space is left empty so the leader stays visually uniform
+/// and never collides with the snapped text. A leader strictly wider
+/// than the gap emits zero copies (matches InDesign's behaviour of
+/// dropping the leader when there isn't room for one whole repeat).
+///
+/// The shaped leader glyphs are placed with absolute `x` values
+/// inside the already-widened tab's span, so they do not contribute
+/// further advance to subsequent glyphs (positions are absolute by
+/// this stage of the pipeline). The leader inherits the font /
+/// point_size / paint of the run that owns the `\t`; IDML doesn't
+/// expose a separate style for the leader characters.
+pub fn apply_tab_stops_with_leaders(
+    line: &mut LaidOutLine,
+    paragraph_text: &str,
+    tab_stops: &[TabStopSpec],
+    default_stop_pt: f32,
+    leader_ctx: Option<&LeaderContext<'_, '_>>,
+) {
     let bytes = paragraph_text.as_bytes();
     let default_stop_64 = (default_stop_pt * ADVANCE_PRECISION).round() as i32;
     if default_stop_64 <= 0 && tab_stops.is_empty() {
@@ -685,8 +720,8 @@ pub fn apply_tab_stops(
             continue;
         }
         let current_x = line.glyphs[i].x;
-        let (next_stop_64, alignment, decimal_char) =
-            next_tab_stop_64(current_x, tab_stops, default_stop_64);
+        let (next_stop_64, alignment, decimal_char, leader_str) =
+            next_tab_stop_at(current_x, tab_stops, default_stop_64);
         if next_stop_64 <= current_x {
             i += 1;
             continue;
@@ -735,26 +770,152 @@ pub fn apply_tab_stops(
             line.glyphs[i].x_advance = new_advance;
             line.width += delta;
         }
+        // Leader emission: after the tab has been widened, tile the
+        // leader string across [current_x .. target_segment_left]
+        // using the run that owns this tab's `\t` cluster.
+        let leader_glyphs = leader_ctx
+            .zip(leader_str)
+            .filter(|(_, s)| !s.is_empty())
+            .and_then(|(ctx, leader)| {
+                let gap_64 = target_segment_left - current_x;
+                if gap_64 <= 0 {
+                    return None;
+                }
+                ctx.shape_leader_for_tab(line.glyphs[i].cluster, leader, gap_64, line.glyphs[i].y)
+            })
+            .unwrap_or_default();
+        if !leader_glyphs.is_empty() {
+            let n = leader_glyphs.len();
+            let insert_at = i + 1;
+            // Shift positioned glyphs to absolute x within the tab's
+            // widened span. shape_leader_for_tab returns glyphs whose
+            // x is relative to current_x.
+            let mut adjusted: Vec<PositionedGlyph> = leader_glyphs;
+            for g in &mut adjusted {
+                g.x += current_x;
+            }
+            line.glyphs.splice(insert_at..insert_at, adjusted);
+            // Skip past the inserted leader glyphs — they don't carry
+            // tabs and shouldn't trigger another snap.
+            i += n;
+        }
         i += 1;
     }
 }
 
-fn next_tab_stop_64(
+fn next_tab_stop_at(
     current_x_64: i32,
     stops: &[TabStopSpec],
     default_stop_64: i32,
-) -> (i32, TabAlignment, char) {
+) -> (i32, TabAlignment, char, Option<&str>) {
     for spec in stops {
         let stop_64 = (spec.position_pt * ADVANCE_PRECISION).round() as i32;
         if stop_64 > current_x_64 {
-            return (stop_64, spec.alignment, spec.alignment_character);
+            return (
+                stop_64,
+                spec.alignment,
+                spec.alignment_character,
+                spec.leader.as_deref(),
+            );
         }
     }
     if default_stop_64 <= 0 {
-        return (current_x_64, TabAlignment::Left, '.');
+        return (current_x_64, TabAlignment::Left, '.', None);
     }
     let n = current_x_64 / default_stop_64 + 1;
-    (n * default_stop_64, TabAlignment::Left, '.')
+    (n * default_stop_64, TabAlignment::Left, '.', None)
+}
+
+/// Per-paragraph context the leader-aware tab pass needs to shape
+/// `<TabStop Leader="...">` characters with the right font + size.
+/// Wraps the styled run slice the paragraph was laid out with so
+/// `apply_tab_stops_with_leaders` can look up which run owns a given
+/// `\t` cluster and reuse its `Face` for the leader glyphs.
+pub struct LeaderContext<'a, 'b> {
+    pub runs: &'a [StyledRun<'b>],
+    /// `runs[i].text` starts at byte `run_starts[i]` in the
+    /// concatenated paragraph text the layout pass saw. Used to map a
+    /// glyph cluster back to its originating run.
+    pub run_starts: Vec<usize>,
+}
+
+impl<'a, 'b> LeaderContext<'a, 'b> {
+    /// Build a context from a styled-run slice. `run_starts` is
+    /// derived by accumulating each run's byte length.
+    pub fn new(runs: &'a [StyledRun<'b>]) -> Self {
+        let mut starts = Vec::with_capacity(runs.len());
+        let mut acc = 0usize;
+        for r in runs {
+            starts.push(acc);
+            acc += r.text.len();
+        }
+        Self {
+            runs,
+            run_starts: starts,
+        }
+    }
+
+    fn run_for_cluster(&self, cluster: u32) -> Option<&StyledRun<'b>> {
+        let cl = cluster as usize;
+        let mut owner: Option<usize> = None;
+        for (i, &s) in self.run_starts.iter().enumerate() {
+            if s <= cl {
+                owner = Some(i);
+            } else {
+                break;
+            }
+        }
+        owner.and_then(|i| self.runs.get(i))
+    }
+
+    /// Shape `leader_str` with the run owning `tab_cluster` and tile
+    /// whole copies across `gap_64` 1/64 pt. Returns positioned
+    /// glyphs with `x` relative to the gap's left edge (caller adds
+    /// the absolute offset). `y` is the baseline carried in from the
+    /// tab glyph (so leader sits on the same baseline as the line).
+    fn shape_leader_for_tab(
+        &self,
+        tab_cluster: u32,
+        leader_str: &str,
+        gap_64: i32,
+        baseline_y: i32,
+    ) -> Option<Vec<PositionedGlyph>> {
+        let run = self.run_for_cluster(tab_cluster)?;
+        let shape = shape_run(run.face, leader_str, run.point_size);
+        if shape.glyphs.is_empty() || shape.total_advance <= 0 {
+            return None;
+        }
+        let leader_w = shape.total_advance;
+        let copies = (gap_64 / leader_w) as usize;
+        if copies == 0 {
+            return None;
+        }
+        let baseline_shift_64 = (run.baseline_shift_pt * ADVANCE_PRECISION).round() as i32;
+        let mut out: Vec<PositionedGlyph> = Vec::with_capacity(shape.glyphs.len() * copies);
+        let mut pen_x: i32 = 0;
+        for _ in 0..copies {
+            for g in &shape.glyphs {
+                out.push(PositionedGlyph {
+                    glyph_id: g.glyph_id,
+                    // Carry the tab's cluster so per-cluster paint
+                    // pickers attribute the leader to the same run.
+                    cluster: tab_cluster,
+                    x: pen_x + g.x_offset,
+                    y: baseline_y + g.y_offset - baseline_shift_64,
+                    x_advance: g.x_advance,
+                    font_id: run.font_id,
+                    point_size: run.point_size,
+                    // Leaders don't carry underline / strikethrough —
+                    // those decorations belong to the visible content
+                    // runs, not the synthesised tab fill.
+                    underline: false,
+                    strikethru: false,
+                });
+                pen_x += g.x_advance;
+            }
+        }
+        Some(out)
+    }
 }
 
 /// Find the first byte offset of `target_char` in
