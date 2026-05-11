@@ -714,6 +714,135 @@ fn bullet_glyph_precedes_content_glyphs_at_inherited_scale() {
     );
 }
 
+// ───────────────────── 5b. bullet character style ───────────────────
+
+/// IDML with a bulleted paragraph that points at a
+/// `BulletsCharacterStyle` overriding the marker's `FillColor`. The
+/// paragraph body uses the default (black) fill so the bullet and
+/// content glyphs end up with distinguishable `Paint` values in the
+/// DisplayList — the property the override is supposed to give us.
+fn build_bullet_with_character_style_idml() -> Vec<u8> {
+    let graphic = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic>
+    <Color Self="Color/Red" Name="Red" Space="RGB" ColorValue="220 30 30"/>
+  </Graphic>
+</idPkg:Graphic>"#;
+    let styles = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <RootCharacterStyleGroup>
+    <CharacterStyle Self="CharacterStyle/RedBullet"
+                    Name="RedBullet"
+                    FillColor="Color/Red"/>
+  </RootCharacterStyleGroup>
+  <RootParagraphStyleGroup>
+    <ParagraphStyle Self="ParagraphStyle/RedBullets"
+                    Name="RedBullets"
+                    BulletsAndNumberingListType="BulletList"
+                    BulletsTextAfter=" "
+                    BulletsCharacterStyle="CharacterStyle/RedBullet">
+      <Properties>
+        <BulletChar BulletCharacterValue="8226"/>
+      </Properties>
+    </ParagraphStyle>
+  </RootParagraphStyleGroup>
+</idPkg:Styles>"#;
+    let spread = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 612"/>
+    <TextFrame Self="frameA" ParentStory="u10" GeometricBounds="40 40 160 572" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#;
+    let story = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/RedBullets">
+      <CharacterStyleRange AppliedFont="Inter" PointSize="24">
+        <Content>Item</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#;
+    write_zip(|zip| {
+        put(zip, "designmap.xml", DESIGNMAP_STYLED);
+        put(zip, "Resources/Graphic.xml", graphic);
+        put(zip, "Resources/Styles.xml", styles);
+        put(zip, "Spreads/Spread_sp1.xml", spread);
+        put(zip, "Stories/Story_u10.xml", story);
+    })
+}
+
+#[test]
+fn bullet_character_style_paints_bullet_differently_from_content() {
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+
+    let doc = Document::open(&build_bullet_with_character_style_idml()).unwrap();
+    let built = pipeline::build_document(&doc, &opts).unwrap();
+
+    // Collect every glyph FillPath in emit order. The filter mirrors
+    // `glyph_xys` — uniform-scale-with-y-flip matrices are glyphs;
+    // frame fills carry shearing/scaling, so they get rejected.
+    let glyph_paints: Vec<(f32, idml_compose::Paint)> = built.pages[0]
+        .list
+        .commands
+        .iter()
+        .filter_map(|c| match c {
+            DisplayCommand::FillPath {
+                paint, transform, ..
+            } => {
+                let [a, b, c2, d, tx, _] = transform.0;
+                if b.abs() < 1e-5
+                    && c2.abs() < 1e-5
+                    && a > 0.0
+                    && d < 0.0
+                    && (a + d).abs() < 1e-4
+                {
+                    Some((tx, *paint))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
+        .collect();
+
+    assert!(
+        glyph_paints.len() >= 2,
+        "expected at least bullet + content glyphs, got {}",
+        glyph_paints.len(),
+    );
+
+    // The first glyph (leftmost) is the bullet marker. The last is
+    // a content character. Their paints must differ — that's the
+    // BulletsCharacterStyle override doing its job.
+    let bullet_paint = glyph_paints.first().map(|(_, p)| *p).unwrap();
+    let content_paint = glyph_paints.last().map(|(_, p)| *p).unwrap();
+    assert_ne!(
+        bullet_paint, content_paint,
+        "bullet character style should produce a distinct fill paint vs content (bullet={bullet_paint:?}, content={content_paint:?})",
+    );
+
+    // And the bullet's paint must be the override red, not the
+    // fallback default — assert directly so a future regression that
+    // forgets to wire `BulletsCharacterStyle` through `resolve_character`
+    // is caught precisely.
+    match bullet_paint {
+        idml_compose::Paint::Solid(c) => {
+            assert!(
+                c.r > 0.5 && c.g < 0.5 && c.b < 0.5,
+                "bullet paint should resolve from Color/Red (RGB 220,30,30 → ~0.86,0.12,0.12), got {c:?}",
+            );
+        }
+        other => panic!("bullet paint should be Solid, got {other:?}"),
+    }
+}
+
 // ─────────────────────────── 6. numbered list ───────────────────────
 
 fn build_numbered_list_idml() -> Vec<u8> {
