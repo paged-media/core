@@ -251,6 +251,20 @@ pub struct ParagraphStyleDef {
     /// reads only the prefix before the first comma to decide
     /// the format. `None` falls back to Arabic.
     pub numbering_format: Option<String>,
+    /// `BulletsCharacterStyle` — a `CharacterStyle/<id>` reference
+    /// that styles the bullet marker (font, size, colour) independently
+    /// of the paragraph text. IDML applies this only to `BulletList`
+    /// paragraphs. `None` ⇒ the bullet inherits the first run's
+    /// formatting (the historical fallback).
+    pub bullets_character_style: Option<String>,
+    /// `BulletsAndNumberingDigitsCharacterStyle` — a `CharacterStyle/<id>`
+    /// reference that styles the digits of a `NumberedList` paragraph's
+    /// marker. IDML overloads this same field as the bullet-style
+    /// reference for `BulletList` paragraphs when
+    /// `bullets_character_style` is absent (the InDesign UI presents
+    /// one "Character Style" picker regardless of list kind), so the
+    /// renderer falls back to it when shaping bullets.
+    pub bullets_and_numbering_digits_character_style: Option<String>,
     /// `Hyphenation` boolean. IDML default is true; the resolver
     /// only flips a paragraph off when an explicit `Hyphenation="false"`
     /// lands on the cascade. Drives whether the composer registers a
@@ -322,6 +336,12 @@ pub struct ResolvedParagraph {
     pub bullet_character: Option<u32>,
     pub bullets_text_after: Option<String>,
     pub numbering_format: Option<String>,
+    /// Cascaded `BulletsCharacterStyle` ref. See
+    /// [`ParagraphStyleDef::bullets_character_style`].
+    pub bullets_character_style: Option<String>,
+    /// Cascaded `BulletsAndNumberingDigitsCharacterStyle` ref. See
+    /// [`ParagraphStyleDef::bullets_and_numbering_digits_character_style`].
+    pub bullets_and_numbering_digits_character_style: Option<String>,
     pub hyphenation: Option<bool>,
     pub applied_language: Option<String>,
     pub minimum_word_spacing: Option<f32>,
@@ -822,6 +842,13 @@ impl ResolvedParagraph {
         if self.numbering_format.is_none() {
             self.numbering_format = def.numbering_format.clone();
         }
+        if self.bullets_character_style.is_none() {
+            self.bullets_character_style = def.bullets_character_style.clone();
+        }
+        if self.bullets_and_numbering_digits_character_style.is_none() {
+            self.bullets_and_numbering_digits_character_style =
+                def.bullets_and_numbering_digits_character_style.clone();
+        }
         self.hyphenation = self.hyphenation.or(def.hyphenation);
         if self.applied_language.is_none() {
             self.applied_language = def.applied_language.clone();
@@ -975,6 +1002,11 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         bullet_character: None,
         bullets_text_after: attr(e, b"BulletsTextAfter"),
         numbering_format: attr(e, b"NumberingFormat"),
+        bullets_character_style: attr(e, b"BulletsCharacterStyle"),
+        bullets_and_numbering_digits_character_style: attr(
+            e,
+            b"BulletsAndNumberingDigitsCharacterStyle",
+        ),
         hyphenation: attr(e, b"Hyphenation").and_then(|s| s.parse().ok()),
         applied_language: attr(e, b"AppliedLanguage"),
         minimum_word_spacing: attr(e, b"MinimumWordSpacing").and_then(|s| s.parse().ok()),
@@ -1069,6 +1101,65 @@ mod tests {
         assert_eq!(p.bullets_list_type.as_deref(), Some("BulletList"));
         assert_eq!(p.bullet_character, Some(8226)); // U+2022 BULLET
         assert_eq!(p.bullets_text_after.as_deref(), Some(" "));
+    }
+
+    #[test]
+    fn parses_bullets_character_style_attrs() {
+        // Both `BulletsCharacterStyle` (bullets) and
+        // `BulletsAndNumberingDigitsCharacterStyle` (numbered-list
+        // digits) survive the parser as plain string refs.
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootParagraphStyleGroup>
+            <ParagraphStyle Self="ParagraphStyle/Bulleted"
+                            BulletsAndNumberingListType="BulletList"
+                            BulletsCharacterStyle="CharacterStyle/RedDot"/>
+            <ParagraphStyle Self="ParagraphStyle/Numbered"
+                            BulletsAndNumberingListType="NumberedList"
+                            BulletsAndNumberingDigitsCharacterStyle="CharacterStyle/BlueDigit"/>
+          </RootParagraphStyleGroup>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let b = s.paragraph_styles.get("ParagraphStyle/Bulleted").unwrap();
+        assert_eq!(
+            b.bullets_character_style.as_deref(),
+            Some("CharacterStyle/RedDot")
+        );
+        assert!(b.bullets_and_numbering_digits_character_style.is_none());
+        let n = s.paragraph_styles.get("ParagraphStyle/Numbered").unwrap();
+        assert_eq!(
+            n.bullets_and_numbering_digits_character_style.as_deref(),
+            Some("CharacterStyle/BlueDigit")
+        );
+        assert!(n.bullets_character_style.is_none());
+    }
+
+    #[test]
+    fn resolve_paragraph_propagates_bullets_character_style_through_based_on() {
+        // A child style without its own BulletsCharacterStyle should
+        // inherit it via BasedOn so cascade-only IDMLs continue
+        // working.
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootParagraphStyleGroup>
+            <ParagraphStyle Self="ParagraphStyle/Base"
+                            BulletsAndNumberingListType="BulletList"
+                            BulletsCharacterStyle="CharacterStyle/RedDot"
+                            BulletsAndNumberingDigitsCharacterStyle="CharacterStyle/BlueDigit"/>
+            <ParagraphStyle Self="ParagraphStyle/Child"
+                            BasedOn="ParagraphStyle/Base"/>
+          </RootParagraphStyleGroup>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let r = s.resolve_paragraph("ParagraphStyle/Child");
+        assert_eq!(
+            r.bullets_character_style.as_deref(),
+            Some("CharacterStyle/RedDot")
+        );
+        assert_eq!(
+            r.bullets_and_numbering_digits_character_style.as_deref(),
+            Some("CharacterStyle/BlueDigit")
+        );
     }
 
     #[test]

@@ -1698,11 +1698,13 @@ fn emit_paragraph_into_chain(
         .collect();
 
     // Bulleted paragraphs prepend `<bullet><separator>` to the
-    // first run's text. The bullet picks up the first run's font
-    // and size; a future batch can route it through the paragraph
-    // style's character formatting instead. IDML serialises tabs
-    // in BulletsTextAfter as the literal `^t` two-byte sequence —
-    // expand to a real `\t` so apply_tab_stops snaps it.
+    // first run's text. The bullet's font / size still inherit
+    // from the first run; its colour can be overridden by a
+    // `BulletsCharacterStyle` (see `bullet_paint_override` below).
+    // Font / size override through the same character style is a
+    // follow-up — the parser fields are in place. IDML serialises
+    // tabs in BulletsTextAfter as the literal `^t` two-byte
+    // sequence — expand to a real `\t` so apply_tab_stops snaps it.
     let list_first_text: Option<String> =
         list_prefix(&resolved_paragraph, &mut em.numbered_counter).and_then(|prefix| {
             paragraph
@@ -2218,12 +2220,38 @@ fn emit_paragraph_into_chain(
         }
     }
 
+    // Bullet-character-style paint override. When the paragraph
+    // style references a `BulletsCharacterStyle` /
+    // `BulletsAndNumberingDigitsCharacterStyle`, resolve that
+    // character style's `FillColor` (with `FillTint` applied) so the
+    // bullet / digit marker can render in a colour distinct from
+    // run 0's fill. Font / size override via the same character
+    // style is not yet wired through; this batch ships colour-only
+    // and the parser fields are in place for the follow-up.
+    let bullet_paint_override: Option<(u32, Paint)> = list_first_text
+        .as_deref()
+        .and_then(|lft| {
+            let bullet_len = lft.len().saturating_sub(
+                paragraph.runs.first().map(|r| r.text.len()).unwrap_or(0),
+            );
+            if bullet_len == 0 {
+                return None;
+            }
+            let style_id = bullet_marker_character_style(&resolved_paragraph)?;
+            let resolved = em.document.styles.resolve_character(style_id);
+            let fill_id = resolved.fill_color.as_deref()?;
+            let base = color_id_to_paint(fill_id, em.palette, em.cmyk_xform)?;
+            let paint = apply_fill_tint(base, resolved.fill_tint);
+            Some((bullet_len as u32, paint))
+        });
+
     let picker = build_run_paint_picker_resolved(
         paragraph,
         &resolved_runs,
         em.palette,
         em.cmyk_xform,
         em.options.fallback_text_paint,
+        bullet_paint_override,
     );
 
     let space_after_64 =
@@ -5166,6 +5194,7 @@ fn emit_cell_paragraph(
         em.palette,
         em.cmyk_xform,
         em.options.fallback_text_paint,
+        None,
     );
     let leading_pt = paragraph_size * 1.2;
     let cell_origin = (origin_pt.0, origin_pt.1 + paragraph_y);
@@ -7184,15 +7213,32 @@ pub fn build_run_paint_picker_with_cmyk(
 /// cascaded `fill_color` (so a run that only carries an
 /// `AppliedCharacterStyle` still picks up the right paint). Applies
 /// the run's resolved `FillTint` after colour conversion.
+///
+/// `bullet_paint_override` carries `(bullet_byte_len, paint)` when a
+/// `BulletsCharacterStyle` / `BulletsAndNumberingDigitsCharacterStyle`
+/// resolves a colour that overrides run 0's fill for the list marker
+/// only. The picker prepends a band at cursor 0 with the override
+/// paint and pushes every content band by `bullet_byte_len` so the
+/// bullet glyphs (clusters 0..bullet_byte_len) get the override while
+/// the body text past the marker keeps each run's resolved fill.
 fn build_run_paint_picker_resolved(
     paragraph: &idml_parse::Paragraph,
     resolved_runs: &[idml_scene::ResolvedRunAttrs],
     palette: &Graphic,
     cmyk_xform: Option<&idml_color::IccTransform>,
     default: Paint,
+    bullet_paint_override: Option<(u32, Paint)>,
 ) -> RunPaintPicker {
-    let mut bands: Vec<(u32, Paint)> = Vec::with_capacity(paragraph.runs.len());
+    let mut bands: Vec<(u32, Paint)> = Vec::with_capacity(paragraph.runs.len() + 1);
+    // When a bullet character style overrides the marker's paint, the
+    // marker text sits at cluster 0..bullet_byte_len; the content
+    // runs follow at cluster bullet_byte_len.. so we seed `cursor` at
+    // that offset and emit a leading bullet band.
     let mut cursor: u32 = 0;
+    if let Some((bullet_len, bullet_paint)) = bullet_paint_override {
+        bands.push((0, bullet_paint));
+        cursor = bullet_len;
+    }
     for (i, run) in paragraph.runs.iter().enumerate() {
         // Resolve the swatch (or fall through to `default`) FIRST,
         // then apply the run's `FillTint`. The tint affects both
@@ -7495,6 +7541,36 @@ fn list_prefix(p: &idml_scene::ResolvedParagraphAttrs, counter: &mut u32) -> Opt
             *counter = 0;
             None
         }
+    }
+}
+
+/// Pick the cascaded `CharacterStyle/<id>` that styles the list
+/// marker, per IDML's two-field convention:
+///
+/// - `NumberedList` paragraphs read
+///   `BulletsAndNumberingDigitsCharacterStyle` (the digits-style).
+/// - `BulletList` paragraphs read `BulletsCharacterStyle` if set,
+///   otherwise fall back to
+///   `BulletsAndNumberingDigitsCharacterStyle` — the InDesign UI
+///   exposes a single "Character Style" picker per paragraph style
+///   regardless of list kind, and real-world IDML often lands the
+///   reference in the digits-style slot even when the paragraph is
+///   a bullet list.
+///
+/// Returns `None` when no override applies (the bullet/marker then
+/// inherits the first run's formatting, the historical behaviour).
+fn bullet_marker_character_style(
+    p: &idml_scene::ResolvedParagraphAttrs,
+) -> Option<&str> {
+    match p.bullets_list_type.as_deref() {
+        Some("NumberedList") => p
+            .bullets_and_numbering_digits_character_style
+            .as_deref(),
+        Some("BulletList") => p
+            .bullets_character_style
+            .as_deref()
+            .or(p.bullets_and_numbering_digits_character_style.as_deref()),
+        _ => None,
     }
 }
 

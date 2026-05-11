@@ -389,6 +389,8 @@ impl ResolvedParagraphAttrs {
             bullet_character: paragraph.bullet_character,
             bullets_text_after: None,
             numbering_format: None,
+            bullets_character_style: None,
+            bullets_and_numbering_digits_character_style: None,
             hyphenation: None,
             applied_language: None,
             minimum_word_spacing: None,
@@ -418,6 +420,13 @@ impl ResolvedParagraphAttrs {
         }
         if self.numbering_format.is_none() {
             self.numbering_format = p.numbering_format.clone();
+        }
+        if self.bullets_character_style.is_none() {
+            self.bullets_character_style = p.bullets_character_style.clone();
+        }
+        if self.bullets_and_numbering_digits_character_style.is_none() {
+            self.bullets_and_numbering_digits_character_style =
+                p.bullets_and_numbering_digits_character_style.clone();
         }
         self.hyphenation = self.hyphenation.or(p.hyphenation);
         if self.applied_language.is_none() {
@@ -513,6 +522,17 @@ pub struct ResolvedParagraphAttrs {
     /// Arabic / Roman / alpha / zero-padded formatting for
     /// `NumberedList` paragraphs.
     pub numbering_format: Option<String>,
+    /// `CharacterStyle/<id>` ref styling the bullet marker (font,
+    /// size, colour) independently of the paragraph body. `None` ⇒
+    /// inherit the first run's formatting (the historical fallback).
+    /// IDML applies this only to `BulletList` paragraphs.
+    pub bullets_character_style: Option<String>,
+    /// `CharacterStyle/<id>` ref styling the digits of a
+    /// `NumberedList` paragraph's marker. The InDesign UI surfaces a
+    /// single "Character Style" picker per paragraph style regardless
+    /// of list kind, so the renderer also treats this as a fallback
+    /// bullet style when `bullets_character_style` is absent.
+    pub bullets_and_numbering_digits_character_style: Option<String>,
     /// `Hyphenation` boolean from the cascaded paragraph style.
     /// Drives whether the composer wires up a hyphenator.
     pub hyphenation: Option<bool>,
