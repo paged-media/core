@@ -294,6 +294,16 @@ pub struct Table {
     pub footer_row_count: u32,
     pub body_row_count: u32,
     pub column_count: u32,
+    /// `RepeatingHeader` flag — when the table breaks across a chain
+    /// of threaded text frames, the first `header_row_count` rows
+    /// duplicate at the top of every continuation frame. `None` means
+    /// the attribute was absent; IDML treats that as the default
+    /// ("Repeat" / true). `Some(false)` is the explicit "Once" / no-
+    /// repeat case.
+    pub repeating_header: Option<bool>,
+    /// `RepeatingFooter` analogue — the last `footer_row_count` rows
+    /// duplicate at the bottom of every frame except the last.
+    pub repeating_footer: Option<bool>,
     /// `AppliedTableStyle="TableStyle/..."` reference. Currently
     /// recorded; cell rendering uses TextTopInset etc. directly off
     /// the cell rather than resolving styles.
@@ -375,6 +385,11 @@ pub struct TableRow {
     pub name: Option<String>,
     pub single_row_height: Option<f32>,
     pub minimum_height: Option<f32>,
+    /// `MaximumHeight` clamp. `None` means unbounded — the row may grow
+    /// to fit its tallest cell content. IDML defaults this to a large
+    /// sentinel (`8640pt`) when omitted; we keep it `None` and treat
+    /// missing as infinity at the call site.
+    pub maximum_height: Option<f32>,
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -777,6 +792,10 @@ impl Story {
                             column_count: attr(&e, b"ColumnCount")
                                 .and_then(|s| s.parse().ok())
                                 .unwrap_or(0),
+                            repeating_header: attr(&e, b"RepeatingHeader")
+                                .and_then(|s| s.parse::<bool>().ok()),
+                            repeating_footer: attr(&e, b"RepeatingFooter")
+                                .and_then(|s| s.parse::<bool>().ok()),
                             applied_table_style: attr(&e, b"AppliedTableStyle"),
                             rows: Vec::new(),
                             columns: Vec::new(),
@@ -1234,6 +1253,8 @@ impl Story {
                                 single_row_height: attr(&e, b"SingleRowHeight")
                                     .and_then(|s| s.parse().ok()),
                                 minimum_height: attr(&e, b"MinimumHeight")
+                                    .and_then(|s| s.parse().ok()),
+                                maximum_height: attr(&e, b"MaximumHeight")
                                     .and_then(|s| s.parse().ok()),
                             });
                         }
@@ -1828,6 +1849,49 @@ mod tests {
         );
         assert_eq!(cell.paragraphs[1].runs[0].text, "First body paragraph.");
         assert_eq!(cell.paragraphs[2].runs[0].text, "Second body paragraph.");
+    }
+
+    #[test]
+    fn parses_table_repeating_header_footer_and_row_max_min_height() {
+        // `RepeatingHeader` / `RepeatingFooter` toggle whether the
+        // header / footer rows duplicate at frame splits when a
+        // table flows across a NextTextFrame chain. `MaximumHeight`
+        // caps content-driven row growth.
+        let xml =
+            br#"<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Story Self="s1">
+            <ParagraphStyleRange>
+              <CharacterStyleRange>
+                <Table Self="t1" HeaderRowCount="1" BodyRowCount="1" FooterRowCount="1"
+                       ColumnCount="1" RepeatingHeader="false" RepeatingFooter="true">
+                  <Row Self="r0" Name="0" SingleRowHeight="20" MinimumHeight="18" MaximumHeight="200"/>
+                  <Row Self="r1" Name="1" SingleRowHeight="30"/>
+                  <Row Self="r2" Name="2" SingleRowHeight="20"/>
+                  <Column Self="c0" Name="0" SingleColumnWidth="100"/>
+                  <Cell Self="c00" Name="0:0"><ParagraphStyleRange><CharacterStyleRange>
+                    <Content>H</Content>
+                  </CharacterStyleRange></ParagraphStyleRange></Cell>
+                  <Cell Self="c01" Name="0:1"><ParagraphStyleRange><CharacterStyleRange>
+                    <Content>B</Content>
+                  </CharacterStyleRange></ParagraphStyleRange></Cell>
+                  <Cell Self="c02" Name="0:2"><ParagraphStyleRange><CharacterStyleRange>
+                    <Content>F</Content>
+                  </CharacterStyleRange></ParagraphStyleRange></Cell>
+                </Table>
+              </CharacterStyleRange>
+            </ParagraphStyleRange>
+          </Story>
+        </idPkg:Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let table = s.paragraphs[0].table.as_ref().unwrap();
+        assert_eq!(table.repeating_header, Some(false));
+        assert_eq!(table.repeating_footer, Some(true));
+        assert_eq!(table.rows[0].minimum_height, Some(18.0));
+        assert_eq!(table.rows[0].maximum_height, Some(200.0));
+        // Absent on r1 / r2 — kept as None so the renderer treats
+        // them as unbounded.
+        assert_eq!(table.rows[1].maximum_height, None);
+        assert_eq!(table.rows[2].minimum_height, None);
     }
 
     #[test]

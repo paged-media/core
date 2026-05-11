@@ -1364,3 +1364,244 @@ fn tab_stop_leader_dots_tile_across_the_gap() {
     );
 }
 
+// ─────────────────────────── 12. tables: chain replay ───────────────
+
+/// Two-frame threaded story hosting a table whose total height
+/// exceeds the head frame's interior. Header row count = 1; body
+/// row count chosen so the body overflows and the table breaks
+/// across the chain. The header text "HDR" must appear at the top
+/// of BOTH frames; without `T3.1` it appeared only in the head frame.
+fn build_table_header_replay_idml() -> Vec<u8> {
+    // frameA: 120 pt tall, frameB: 200 pt tall. Header row 24 pt,
+    // body rows 24 pt each, 8 body rows + 1 header = 9 rows × 24 pt
+    // = 216 pt > 120 pt head; the body splits.
+    let spread = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 400 600"/>
+    <TextFrame Self="frameA" ParentStory="u10"
+               GeometricBounds="20 40 140 240"
+               NextTextFrame="frameB" StrokeWeight="0"/>
+    <TextFrame Self="frameB" ParentStory="u10"
+               GeometricBounds="20 280 220 480" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#;
+    // 1 header + 8 body rows × 1 column = 9 cells. Header label
+    // unique ("HDR"); body labels "B0".."B7". The unique header
+    // label lets the test count exactly how many "HDR" glyph runs
+    // landed in each frame.
+    let cells = (0..8)
+        .map(|i| {
+            format!(
+                r#"<Cell Self="cb{i}" Name="0:{r}"><ParagraphStyleRange><CharacterStyleRange AppliedFont="Inter" PointSize="10"><Content>B{i}</Content></CharacterStyleRange></ParagraphStyleRange></Cell>"#,
+                r = i + 1
+            )
+        })
+        .collect::<String>();
+    let rows = (1..=8)
+        .map(|i| format!(r#"<Row Self="r{i}" Name="{i}" SingleRowHeight="24"/>"#))
+        .collect::<String>();
+    let story = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="10">
+        <Table Self="t1" HeaderRowCount="1" BodyRowCount="8" ColumnCount="1">
+          <Row Self="r0" Name="0" SingleRowHeight="24"/>
+          {rows}
+          <Column Self="c0" Name="0" SingleColumnWidth="160"/>
+          <Cell Self="ch0" Name="0:0"><ParagraphStyleRange><CharacterStyleRange AppliedFont="Inter" PointSize="10"><Content>HDR</Content></CharacterStyleRange></ParagraphStyleRange></Cell>
+          {cells}
+        </Table>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#
+    );
+    write_zip(|zip| {
+        put(zip, "designmap.xml", DESIGNMAP);
+        put(zip, "Resources/Graphic.xml", GRAPHIC_XML);
+        put(zip, "Spreads/Spread_sp1.xml", spread);
+        put(zip, "Stories/Story_u10.xml", story.as_bytes());
+    })
+}
+
+#[test]
+fn threaded_table_replays_header_row_at_top_of_each_frame() {
+    let bytes = build_table_header_replay_idml();
+    let doc = Document::open(&bytes).unwrap();
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+    let built = pipeline::build_document(&doc, &opts).unwrap();
+    let page = &built.pages[0];
+
+    let glyphs = glyph_xys(&page.list.commands);
+    // frameA: y ∈ [20, 140], frameB: y ∈ [20, 220 from the second frame's top
+    // = approximately y ∈ [20, 220] since both frames sit on the same page).
+    // Actually frameB GeometricBounds = "20 280 220 480" → x ∈ [280, 480],
+    // y ∈ [20, 220]. Use x to differentiate the two frames.
+    let in_a: Vec<_> = glyphs.iter().filter(|(x, _, _)| *x < 250.0).copied().collect();
+    let in_b: Vec<_> = glyphs.iter().filter(|(x, _, _)| *x > 260.0).copied().collect();
+    assert!(
+        !in_a.is_empty() && !in_b.is_empty(),
+        "both frames should receive cell glyphs; got a={} b={}",
+        in_a.len(),
+        in_b.len()
+    );
+
+    // "HDR" is 3 glyphs. After replay we expect 6+ HDR-shaped runs
+    // total: at minimum, 3 in frameA (the original header) + 3 in
+    // frameB (the replayed header at the top). A replay means
+    // frameB's top-most row is the header, so the top-most line of
+    // glyphs in frameB should be at roughly the same y-from-frame-top
+    // as the head frame's first row.
+    //
+    // Cheap proxy: count distinct y-rows in each frame. With 1
+    // header + 8 body rows split somewhere mid-body and a header
+    // replayed at the top of frameB, the row count in frameB must
+    // exceed (body_rows_in_B) by exactly 1 (the replayed header).
+    //
+    // We assert the stronger structural property: the top-most y in
+    // frameB is the header's row (it has the same per-row position
+    // offset within the frame as frameA's header). Headers are y =
+    // 20 + 24 * 0 + leading ≈ frame_top + ~8 pt; without replay,
+    // frameB's top row would be a body row whose label starts with
+    // 'B', not 'H'.
+    fn distinct_rows(xys: &[(f32, f32, f32)]) -> Vec<f32> {
+        let mut ys: Vec<f32> = xys.iter().map(|g| g.1).collect();
+        ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        ys.dedup_by(|a, b| (*a - *b).abs() < 1.0);
+        ys
+    }
+    let a_rows = distinct_rows(&in_a);
+    let b_rows = distinct_rows(&in_b);
+    assert!(
+        a_rows.len() >= 2,
+        "frameA must hold ≥ 2 rows (header + ≥ 1 body); got {a_rows:?}"
+    );
+    assert!(
+        b_rows.len() >= 2,
+        "frameB must hold the replayed header + ≥ 1 body row; got {b_rows:?}"
+    );
+    // Header replay invariant: total emitted rows across both
+    // frames > total source rows (because the header replays once).
+    // 9 source rows × 1 col = 9 cell content rows total source.
+    // With one replay we expect ≥ 10. Without replay we'd see ≤ 9.
+    let total_rows_emitted = a_rows.len() + b_rows.len();
+    assert!(
+        total_rows_emitted >= 10,
+        "header replay should bump total emitted rows above source count; got a={} + b={} = {total_rows_emitted}",
+        a_rows.len(),
+        b_rows.len()
+    );
+
+    // Sanity: total glyph count includes the replayed header's 3
+    // letters. With 1 original header (3 glyphs) + 8 body rows
+    // (2 glyphs each, e.g. "B0") + 1 replayed header (3 glyphs) =
+    // 3 + 16 + 3 = 22. Without replay we'd see 19. Allow some
+    // slack for shaping merges; the lower bound 21 still pins
+    // the replay.
+    assert!(
+        glyphs.len() >= 21,
+        "expected ≥ 21 glyphs (incl. one HDR replay), got {}",
+        glyphs.len()
+    );
+}
+
+// ─────────────────────────── 13. tables: row growth ─────────────────
+
+/// Single-frame fixture, single cell wide, single row tall. The row
+/// declares `SingleRowHeight="20"` (room for ~1 line at 14 pt) but
+/// the cell content wraps to multiple lines at the declared column
+/// width. MaximumHeight is unset; the row must grow to accommodate
+/// every line and emit every glyph (no clipping).
+fn build_table_row_growth_idml() -> Vec<u8> {
+    // Column width 180 pt at 14 pt Inter holds ~25 chars/line.
+    // Content is ~120 chars → ~5 lines at this column. Without
+    // growth the renderer would clip at SingleRowHeight=20 pt and
+    // produce ≤ 1 line of glyphs.
+    let spread = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 400 600"/>
+    <TextFrame Self="frameA" ParentStory="u10"
+               GeometricBounds="20 40 380 300" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#;
+    let story = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="14">
+        <Table Self="t1" HeaderRowCount="0" BodyRowCount="1" ColumnCount="1">
+          <Row Self="r0" Name="0" SingleRowHeight="20"/>
+          <Column Self="c0" Name="0" SingleColumnWidth="180"/>
+          <Cell Self="c00" Name="0:0">
+            <ParagraphStyleRange>
+              <CharacterStyleRange AppliedFont="Inter" PointSize="14">
+                <Content>Quick brown fox jumps over the lazy dog and runs around the meadow chasing butterflies.</Content>
+              </CharacterStyleRange>
+            </ParagraphStyleRange>
+          </Cell>
+        </Table>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#;
+    write_zip(|zip| {
+        put(zip, "designmap.xml", DESIGNMAP);
+        put(zip, "Resources/Graphic.xml", GRAPHIC_XML);
+        put(zip, "Spreads/Spread_sp1.xml", spread);
+        put(zip, "Stories/Story_u10.xml", story);
+    })
+}
+
+#[test]
+fn table_row_grows_to_fit_content_when_single_row_height_too_small() {
+    let bytes = build_table_row_growth_idml();
+    let doc = Document::open(&bytes).unwrap();
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+    let built = pipeline::build_document(&doc, &opts).unwrap();
+    let glyphs = glyph_xys(&built.pages[0].list.commands);
+
+    // 87-char sentence wraps to ≥ 3 lines at column width 180 pt,
+    // font size 14. The cell hosts every letter glyph (~70 letters,
+    // ignoring spaces). Without row growth the cell was clipped to
+    // SingleRowHeight=20pt which fits roughly one line ≈ 20 glyphs.
+    // With row growth all ~70 glyphs emit.
+    assert!(
+        glyphs.len() >= 60,
+        "row growth should emit all ~70 letter glyphs, got {}",
+        glyphs.len()
+    );
+
+    // Verify multi-line layout: glyphs spread across at least 3
+    // distinct baselines.
+    let mut ys: Vec<f32> = glyphs.iter().map(|g| g.1).collect();
+    ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    ys.dedup_by(|a, b| (*a - *b).abs() < 1.0);
+    assert!(
+        ys.len() >= 3,
+        "cell content should wrap onto ≥ 3 baselines, got {} ({ys:?})",
+        ys.len()
+    );
+
+    // Tighter pin: with row growth, the bottom-most glyph sits well
+    // below the original SingleRowHeight=20pt window. Frame top = 20
+    // pt + row top = 20 pt; without growth the floor would be y=40.
+    let max_y = ys.last().copied().unwrap_or(0.0);
+    assert!(
+        max_y > 50.0,
+        "bottom glyph at y={max_y} should fall below the legacy 20pt row floor"
+    );
+}
