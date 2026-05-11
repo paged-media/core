@@ -85,6 +85,20 @@ impl RunAttrs {
             underline: self.underline,
             strikethru: self.strikethru,
             leading: self.leading,
+            // Overprint flags live on the parser; the edit rope
+            // doesn't yet expose them as editable attrs.
+            overprint_fill: None,
+            overprint_stroke: None,
+            // Ruby + Kenten land in the parser today; the edit rope
+            // doesn't yet expose them as editable run-level attrs, so
+            // we default to None on rebuild. M3+ can plumb these
+            // through `RunAttrs` when the editor surfaces them.
+            ruby_flag: None,
+            ruby_type: None,
+            ruby_string: None,
+            kenten_kind: None,
+            kenten_character: None,
+            kenten_font_size: None,
             text,
         }
     }
@@ -325,6 +339,12 @@ impl StoryRope {
                     drop_cap_characters: 0,
                     drop_cap_lines: 0,
                     drop_cap_detail: 0,
+                    overprint_fill: None,
+                    overprint_stroke: None,
+                    kinsoku_set: None,
+                    kinsoku_type: None,
+                    mojikumi_table: None,
+                    mojikumi_set: None,
                     runs,
                     anchored_frames: Vec::new(),
                     table: p.table.clone(),
@@ -335,6 +355,7 @@ impl StoryRope {
             paragraphs,
             optical_margin_alignment: false,
             optical_margin_size: 0.0,
+            story_direction: None,
         }
     }
 
@@ -442,6 +463,12 @@ mod tests {
                 drop_cap_characters: 0,
                 drop_cap_lines: 0,
                 drop_cap_detail: 0,
+                overprint_fill: None,
+                overprint_stroke: None,
+                kinsoku_set: None,
+                kinsoku_type: None,
+                mojikumi_table: None,
+                mojikumi_set: None,
                 anchored_frames: vec![],
                 runs: vec![
                     CharacterRun {
@@ -460,6 +487,14 @@ mod tests {
                         underline: None,
                         strikethru: None,
                         leading: None,
+                        overprint_fill: None,
+                        overprint_stroke: None,
+                        ruby_flag: None,
+                        ruby_type: None,
+                        ruby_string: None,
+                        kenten_kind: None,
+                        kenten_character: None,
+                        kenten_font_size: None,
                         text: "Hello, ".into(),
                     },
                     CharacterRun {
@@ -478,11 +513,20 @@ mod tests {
                         underline: None,
                         strikethru: None,
                         leading: None,
+                        overprint_fill: None,
+                        overprint_stroke: None,
+                        ruby_flag: None,
+                        ruby_type: None,
+                        ruby_string: None,
+                        kenten_kind: None,
+                        kenten_character: None,
+                        kenten_font_size: None,
                         text: "world".into(),
                     },
                 ],
                 table: None,
             }],
+            story_direction: None,
         };
         let rope = StoryRope::from_story(&original);
         assert_eq!(rope.paragraph(0).unwrap().text(), "Hello, world");

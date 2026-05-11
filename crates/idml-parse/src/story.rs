@@ -129,6 +129,28 @@ impl<'de> Deserialize<'de> for Justification {
     }
 }
 
+/// IDML `StoryDirection` attribute — the writing-mode flag carried on
+/// `<Story>`. The IDML default is `HorizontalWritingDirection` (left-
+/// to-right body text). `VerticalWritingDirection` is the CJK vertical
+/// mode where lines stack top-to-bottom and columns advance right-to-
+/// left. The parser only captures this; the layout / renderer
+/// integration is queued (see docs/plan.md Tier 4 — CJK Stage 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StoryDirection {
+    HorizontalWritingDirection,
+    VerticalWritingDirection,
+}
+
+impl StoryDirection {
+    pub fn from_idml(s: &str) -> Option<Self> {
+        match s {
+            "HorizontalWritingDirection" => Some(Self::HorizontalWritingDirection),
+            "VerticalWritingDirection" => Some(Self::VerticalWritingDirection),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct Story {
     pub paragraphs: Vec<Paragraph>,
@@ -145,6 +167,12 @@ pub struct Story {
     /// typically writes 12 (the body-copy point size). 0.0 means the
     /// attribute was absent.
     pub optical_margin_size: f32,
+    /// `<Story StoryDirection="VerticalWritingDirection">` — CJK
+    /// vertical-text mode. `None` when the attribute is absent (IDML
+    /// implicit default: horizontal). Parser-only today; the renderer
+    /// does not yet honour this — see docs/plan.md Tier 4 — CJK
+    /// Stage 3.
+    pub story_direction: Option<StoryDirection>,
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -187,6 +215,38 @@ pub struct Paragraph {
     /// IDML serialisation allows negative values.
     pub drop_cap_detail: i32,
     pub runs: Vec<CharacterRun>,
+    /// `KinsokuSet="KinsokuTable/$ID/PhotoshopKinsokuHard"` (or
+    /// similar) reference. Identifies the set of CJK line-break
+    /// characters InDesign should respect for this paragraph. `None`
+    /// when absent. Parser-only today — the composer uses a built-in
+    /// "Hard Kinsoku" set when `KinsokuType` triggers enforcement
+    /// (see `idml_text::compose`).
+    pub kinsoku_set: Option<String>,
+    /// `KinsokuType` flavour controlling how the breaker reacts to a
+    /// no-start / no-end violation:
+    /// - `None` ⇒ no kinsoku enforcement
+    /// - `WordbreakWithJustification` ⇒ allow line-end whitespace
+    ///   stretch to absorb the violation
+    /// - `PushIn` ⇒ pull the offending character back onto the
+    ///   previous line (shrinks glue)
+    /// - `PushOut` ⇒ push the offending character to the next line
+    ///   (forces a break earlier)
+    ///
+    /// IDML default when absent: `None`. Parser captures the string
+    /// verbatim; the composer keys "any value present" → "apply
+    /// hard-kinsoku penalty" today, with finer flavour-specific
+    /// resolution queued.
+    pub kinsoku_type: Option<String>,
+    /// `MojikumiTable="MojikumiTable/$ID/PhotoshopMojikumiSet4"` (or
+    /// similar) reference. Drives the per-character-class inter-glyph
+    /// spacing rules (e.g. shrink the space before an opening
+    /// bracket if it follows a Hiragana). Parser-only — the renderer
+    /// does not yet implement Mojikumi spacing adjustments. See
+    /// docs/plan.md Tier 4 — CJK Stage 4.
+    pub mojikumi_table: Option<String>,
+    /// `MojikumiSet` — analogous to `MojikumiTable`, but the older
+    /// IDML attribute name some exporters still emit.
+    pub mojikumi_set: Option<String>,
     /// Anchored frames declared as a child of any
     /// `<CharacterStyleRange>` inside this paragraph (a `<TextFrame>`,
     /// `<Rectangle>`, or `<Group>` nested directly under a
@@ -206,6 +266,13 @@ pub struct Paragraph {
     /// Tables can't currently nest inside tables — only one per
     /// paragraph.
     pub table: Option<Table>,
+    /// `OverprintFill="true"` on the `<ParagraphStyleRange>`. None ⇒
+    /// inherit from the applied paragraph style cascade. Stage 3
+    /// honours this when a run inside the paragraph leaves its own
+    /// overprint unset.
+    pub overprint_fill: Option<bool>,
+    /// `OverprintStroke="true"` analogue.
+    pub overprint_stroke: Option<bool>,
 }
 
 /// One anchored frame declared inside a `<CharacterStyleRange>`. The
@@ -545,6 +612,37 @@ pub struct CharacterRun {
     /// number on the CharacterStyleRange, with magic `Auto` not
     /// modelled here (we treat absence == Auto).
     pub leading: Option<f32>,
+    /// `RubyFlag` — when `true`, this run carries ruby annotation
+    /// (small phonetic-guide text) above / beside the base run. The
+    /// parser captures the flag; full ruby layout (positioning the
+    /// annotation text, sizing it as a fraction of the base, etc.)
+    /// is queued. See docs/plan.md Tier 4 — CJK Stage 4.
+    pub ruby_flag: Option<bool>,
+    /// `RubyType` — `PerCharacter` / `GroupRuby`. The character vs.
+    /// group form changes how the annotation distributes over the
+    /// base text. Parser-only today.
+    pub ruby_type: Option<String>,
+    /// `RubyString` — the ruby annotation text itself. Stored on the
+    /// CharacterStyleRange the ruby applies to (the *base* run).
+    pub ruby_string: Option<String>,
+    /// `KentenKind` — the emphasis-mark glyph that sits above (or
+    /// beside, in vertical mode) every character of this run.
+    /// Common values: `None` / `SesameDot` / `BlackCircle` /
+    /// `WhiteCircle` / `Custom` / etc. Parser-only — full emphasis-
+    /// mark rendering is queued (Tier 4 Stage 4).
+    pub kenten_kind: Option<String>,
+    /// `KentenCharacter` — when `kenten_kind == "Custom"`, the
+    /// literal codepoint to stamp above each character. Parser-only.
+    pub kenten_character: Option<String>,
+    /// `KentenFontSize` — emphasis-mark glyph size as a percentage of
+    /// the base run's `point_size`. Parser-only.
+    pub kenten_font_size: Option<f32>,
+    /// `OverprintFill="true"` on the `<CharacterStyleRange>`. None ⇒
+    /// inherit from the applied character / paragraph style cascade.
+    /// Drives the renderer's Stage 3 darken composite when true.
+    pub overprint_fill: Option<bool>,
+    /// `OverprintStroke="true"` analogue (rare on text but parsed).
+    pub overprint_stroke: Option<bool>,
     pub text: String,
 }
 
@@ -731,6 +829,16 @@ impl Story {
                         }
                     }
                     match name {
+                    // `<Story Self="..." StoryDirection="...">` is the
+                    // document root inside `<idPkg:Story>`. We only
+                    // surface the writing-direction flag today;
+                    // additional Story-level attributes (`AppliedTOCStyle`,
+                    // `TrackChanges`, etc.) land in followup parser slices.
+                    b"Story" => {
+                        if let Some(v) = attr(&e, b"StoryDirection") {
+                            out.story_direction = StoryDirection::from_idml(&v);
+                        }
+                    }
                     // <StoryPreference> may also appear with
                     // children (e.g. nested <Properties>) instead of
                     // self-closing. Read the attributes off the Start
@@ -769,9 +877,17 @@ impl Story {
                             drop_cap_detail: attr(&e, b"DropCapDetail")
                                 .and_then(|s| s.parse().ok())
                                 .unwrap_or(0),
+                            kinsoku_set: attr(&e, b"KinsokuSet"),
+                            kinsoku_type: attr(&e, b"KinsokuType"),
+                            mojikumi_table: attr(&e, b"MojikumiTable"),
+                            mojikumi_set: attr(&e, b"MojikumiSet"),
                             runs: Vec::new(),
                             anchored_frames: Vec::new(),
                             table: None,
+                            overprint_fill: attr(&e, b"OverprintFill")
+                                .and_then(|s| s.parse::<bool>().ok()),
+                            overprint_stroke: attr(&e, b"OverprintStroke")
+                                .and_then(|s| s.parse::<bool>().ok()),
                         });
                     }
                     b"Table" => {
@@ -971,6 +1087,18 @@ impl Story {
                             strikethru: attr(&e, b"StrikeThru")
                                 .and_then(|s| s.parse::<bool>().ok()),
                             leading: attr(&e, b"Leading").and_then(|s| s.parse::<f32>().ok()),
+                            ruby_flag: attr(&e, b"RubyFlag")
+                                .and_then(|s| s.parse::<bool>().ok()),
+                            ruby_type: attr(&e, b"RubyType"),
+                            ruby_string: attr(&e, b"RubyString"),
+                            kenten_kind: attr(&e, b"KentenKind"),
+                            kenten_character: attr(&e, b"KentenCharacter"),
+                            kenten_font_size: attr(&e, b"KentenFontSize")
+                                .and_then(|s| s.parse().ok()),
+                            overprint_fill: attr(&e, b"OverprintFill")
+                                .and_then(|s| s.parse::<bool>().ok()),
+                            overprint_stroke: attr(&e, b"OverprintStroke")
+                                .and_then(|s| s.parse::<bool>().ok()),
                             text: String::new(),
                         });
                     }
@@ -2264,5 +2392,140 @@ mod tests {
         assert_eq!(s.paragraphs[0].justification, Some(Justification::CenterAlign));
         // Unrecognised string ⇒ None; renderer falls back to Left.
         assert_eq!(s.paragraphs[1].justification, None);
+    }
+
+    // ---- CJK Stage 1 (parser surface) ----
+
+    #[test]
+    fn parses_story_direction_vertical() {
+        let xml = br#"<Story Self="u1" StoryDirection="VerticalWritingDirection">
+          <ParagraphStyleRange>
+            <CharacterStyleRange><Content>CJK body</Content></CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        assert_eq!(
+            s.story_direction,
+            Some(StoryDirection::VerticalWritingDirection)
+        );
+    }
+
+    #[test]
+    fn parses_story_direction_horizontal_explicit() {
+        let xml = br#"<Story Self="u1" StoryDirection="HorizontalWritingDirection">
+          <ParagraphStyleRange>
+            <CharacterStyleRange><Content>x</Content></CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        assert_eq!(
+            s.story_direction,
+            Some(StoryDirection::HorizontalWritingDirection)
+        );
+    }
+
+    #[test]
+    fn story_direction_absent_defaults_to_none() {
+        // The IDML default is implicit horizontal — we expose absence
+        // as `None` so the renderer can distinguish "unset (horizontal)"
+        // from "explicit vertical" if it ever needs to.
+        let xml = br#"<Story Self="u1">
+          <ParagraphStyleRange>
+            <CharacterStyleRange><Content>x</Content></CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        assert_eq!(s.story_direction, None);
+    }
+
+    #[test]
+    fn paragraph_style_range_parses_kinsoku_and_mojikumi() {
+        let xml = br#"<Story Self="u1">
+          <ParagraphStyleRange
+              KinsokuSet="KinsokuTable/$ID/PhotoshopKinsokuHard"
+              KinsokuType="PushIn"
+              MojikumiTable="MojikumiTable/$ID/PhotoshopMojikumiSet4"
+              MojikumiSet="MojikumiSet/$ID/SomeOldSet">
+            <CharacterStyleRange><Content>body</Content></CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let p = &s.paragraphs[0];
+        assert_eq!(
+            p.kinsoku_set.as_deref(),
+            Some("KinsokuTable/$ID/PhotoshopKinsokuHard")
+        );
+        assert_eq!(p.kinsoku_type.as_deref(), Some("PushIn"));
+        assert_eq!(
+            p.mojikumi_table.as_deref(),
+            Some("MojikumiTable/$ID/PhotoshopMojikumiSet4")
+        );
+        assert_eq!(p.mojikumi_set.as_deref(), Some("MojikumiSet/$ID/SomeOldSet"));
+    }
+
+    #[test]
+    fn kinsoku_and_mojikumi_default_to_none_when_absent() {
+        let xml = br#"<Story Self="u1">
+          <ParagraphStyleRange>
+            <CharacterStyleRange><Content>x</Content></CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let p = &s.paragraphs[0];
+        assert!(p.kinsoku_set.is_none());
+        assert!(p.kinsoku_type.is_none());
+        assert!(p.mojikumi_table.is_none());
+        assert!(p.mojikumi_set.is_none());
+    }
+
+    #[test]
+    fn character_style_range_parses_ruby_and_kenten() {
+        // IDML serialises ruby + emphasis-mark attributes directly on
+        // the `<CharacterStyleRange>`. We surface them on the parsed
+        // run; the renderer doesn't yet honour them (Tier 4 — CJK
+        // Stage 4).
+        //
+        // The XML keeps ASCII placeholders for the ruby + base text
+        // so it can live in a `br#"..."#` byte-string literal (raw
+        // byte strings reject non-ASCII source bytes). The real-world
+        // attribute carries the annotation string verbatim — we
+        // verify the round-trip works regardless of the script.
+        let xml = br#"<Story Self="u1">
+          <ParagraphStyleRange>
+            <CharacterStyleRange
+                RubyFlag="true"
+                RubyType="PerCharacter"
+                RubyString="furigana"
+                KentenKind="SesameDot"
+                KentenCharacter=""
+                KentenFontSize="50">
+              <Content>base</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let r = &s.paragraphs[0].runs[0];
+        assert_eq!(r.ruby_flag, Some(true));
+        assert_eq!(r.ruby_type.as_deref(), Some("PerCharacter"));
+        assert_eq!(r.ruby_string.as_deref(), Some("furigana"));
+        assert_eq!(r.kenten_kind.as_deref(), Some("SesameDot"));
+        assert_eq!(r.kenten_font_size, Some(50.0));
+    }
+
+    #[test]
+    fn ruby_and_kenten_default_to_none_when_absent() {
+        let xml = br#"<Story Self="u1">
+          <ParagraphStyleRange>
+            <CharacterStyleRange><Content>plain</Content></CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let r = &s.paragraphs[0].runs[0];
+        assert!(r.ruby_flag.is_none());
+        assert!(r.ruby_type.is_none());
+        assert!(r.ruby_string.is_none());
+        assert!(r.kenten_kind.is_none());
+        assert!(r.kenten_character.is_none());
+        assert!(r.kenten_font_size.is_none());
     }
 }

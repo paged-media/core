@@ -271,6 +271,32 @@ pub struct CharacterStyleDef {
     pub tracking: Option<f32>,
     pub underline: Option<bool>,
     pub strikethru: Option<bool>,
+    /// `OverprintFill="true"` declared on the `<CharacterStyle>`.
+    /// Cascades through `BasedOn` like every other field. None ⇒
+    /// inherit; bottom of cascade = false (IDML's default).
+    pub overprint_fill: Option<bool>,
+    /// `OverprintStroke="true"` analogue. Currently rare on text
+    /// runs (only outlined text carries a stroke) but parsed for
+    /// completeness.
+    pub overprint_stroke: Option<bool>,
+    /// `RubyFlag` — when `true`, this character style carries ruby
+    /// annotation. See [`CharacterRun::ruby_flag`]. Parser-only;
+    /// renderer integration is queued under Tier 4 — CJK Stage 4.
+    pub ruby_flag: Option<bool>,
+    /// `RubyType` — `PerCharacter` / `GroupRuby`. See
+    /// [`CharacterRun::ruby_type`].
+    pub ruby_type: Option<String>,
+    /// `RubyString` — the ruby annotation text. See
+    /// [`CharacterRun::ruby_string`].
+    pub ruby_string: Option<String>,
+    /// `KentenKind` — emphasis-mark glyph. See
+    /// [`CharacterRun::kenten_kind`].
+    pub kenten_kind: Option<String>,
+    /// `KentenCharacter` — custom emphasis-mark codepoint when
+    /// `kenten_kind == "Custom"`.
+    pub kenten_character: Option<String>,
+    /// `KentenFontSize` — emphasis-mark size as a % of base size.
+    pub kenten_font_size: Option<f32>,
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -379,6 +405,23 @@ pub struct ParagraphStyleDef {
     pub drop_cap_lines: Option<u32>,
     /// `DropCapDetail` — InDesign's scaling-factor integer.
     pub drop_cap_detail: Option<i32>,
+    /// `OverprintFill="true"` declared on the `<ParagraphStyle>`. See
+    /// [`CharacterStyleDef::overprint_fill`]. Cascades like every other
+    /// paragraph attribute via `merge_below`.
+    pub overprint_fill: Option<bool>,
+    /// `OverprintStroke="true"` analogue.
+    pub overprint_stroke: Option<bool>,
+    /// `KinsokuSet="KinsokuTable/$ID/PhotoshopKinsokuHard"` ref on the
+    /// `<ParagraphStyle>`. Cascades like every other paragraph attribute.
+    /// See [`Paragraph::kinsoku_set`].
+    pub kinsoku_set: Option<String>,
+    /// `KinsokuType` flavour. See [`Paragraph::kinsoku_type`].
+    pub kinsoku_type: Option<String>,
+    /// `MojikumiTable` ref. See [`Paragraph::mojikumi_table`].
+    pub mojikumi_table: Option<String>,
+    /// `MojikumiSet` (older IDML attribute name; see
+    /// [`Paragraph::mojikumi_set`]).
+    pub mojikumi_set: Option<String>,
 }
 
 /// Effective character-level attributes after walking BasedOn.
@@ -397,6 +440,24 @@ pub struct ResolvedCharacter {
     pub tracking: Option<f32>,
     pub underline: Option<bool>,
     pub strikethru: Option<bool>,
+    /// Cascaded `OverprintFill` flag. See
+    /// [`CharacterStyleDef::overprint_fill`]. None at the bottom of
+    /// the cascade ⇒ false (the IDML default).
+    pub overprint_fill: Option<bool>,
+    /// Cascaded `OverprintStroke` flag.
+    pub overprint_stroke: Option<bool>,
+    /// Cascaded `RubyFlag`. See [`CharacterStyleDef::ruby_flag`].
+    pub ruby_flag: Option<bool>,
+    /// Cascaded `RubyType`.
+    pub ruby_type: Option<String>,
+    /// Cascaded `RubyString`.
+    pub ruby_string: Option<String>,
+    /// Cascaded `KentenKind`.
+    pub kenten_kind: Option<String>,
+    /// Cascaded `KentenCharacter`.
+    pub kenten_character: Option<String>,
+    /// Cascaded `KentenFontSize`.
+    pub kenten_font_size: Option<f32>,
 }
 
 /// Effective paragraph-level attributes after walking BasedOn.
@@ -455,6 +516,19 @@ pub struct ResolvedParagraph {
     /// `DropCapDetail` (the IDML scaling factor InDesign records on
     /// the drop cap's character formatting; an arbitrary integer).
     pub drop_cap_detail: Option<i32>,
+    /// Cascaded `OverprintFill` flag from the paragraph style chain.
+    /// See [`CharacterStyleDef::overprint_fill`].
+    pub overprint_fill: Option<bool>,
+    /// Cascaded `OverprintStroke` flag.
+    pub overprint_stroke: Option<bool>,
+    /// Cascaded `KinsokuSet` ref. See [`Paragraph::kinsoku_set`].
+    pub kinsoku_set: Option<String>,
+    /// Cascaded `KinsokuType` flavour.
+    pub kinsoku_type: Option<String>,
+    /// Cascaded `MojikumiTable` ref.
+    pub mojikumi_table: Option<String>,
+    /// Cascaded `MojikumiSet` ref.
+    pub mojikumi_set: Option<String>,
 }
 
 /// Identifies which kind of style is open while we walk
@@ -955,6 +1029,22 @@ impl ResolvedCharacter {
         self.tracking = self.tracking.or(def.tracking);
         self.underline = self.underline.or(def.underline);
         self.strikethru = self.strikethru.or(def.strikethru);
+        self.overprint_fill = self.overprint_fill.or(def.overprint_fill);
+        self.overprint_stroke = self.overprint_stroke.or(def.overprint_stroke);
+        self.ruby_flag = self.ruby_flag.or(def.ruby_flag);
+        if self.ruby_type.is_none() {
+            self.ruby_type = def.ruby_type.clone();
+        }
+        if self.ruby_string.is_none() {
+            self.ruby_string = def.ruby_string.clone();
+        }
+        if self.kenten_kind.is_none() {
+            self.kenten_kind = def.kenten_kind.clone();
+        }
+        if self.kenten_character.is_none() {
+            self.kenten_character = def.kenten_character.clone();
+        }
+        self.kenten_font_size = self.kenten_font_size.or(def.kenten_font_size);
     }
 }
 
@@ -1025,6 +1115,20 @@ impl ResolvedParagraph {
         self.drop_cap_characters = self.drop_cap_characters.or(def.drop_cap_characters);
         self.drop_cap_lines = self.drop_cap_lines.or(def.drop_cap_lines);
         self.drop_cap_detail = self.drop_cap_detail.or(def.drop_cap_detail);
+        self.overprint_fill = self.overprint_fill.or(def.overprint_fill);
+        self.overprint_stroke = self.overprint_stroke.or(def.overprint_stroke);
+        if self.kinsoku_set.is_none() {
+            self.kinsoku_set = def.kinsoku_set.clone();
+        }
+        if self.kinsoku_type.is_none() {
+            self.kinsoku_type = def.kinsoku_type.clone();
+        }
+        if self.mojikumi_table.is_none() {
+            self.mojikumi_table = def.mojikumi_table.clone();
+        }
+        if self.mojikumi_set.is_none() {
+            self.mojikumi_set = def.mojikumi_set.clone();
+        }
     }
 }
 
@@ -1046,6 +1150,14 @@ fn parse_character_style(e: &quick_xml::events::BytesStart) -> Option<CharacterS
         tracking: attr(e, b"Tracking").and_then(|s| s.parse().ok()),
         underline: attr(e, b"Underline").and_then(|s| s.parse().ok()),
         strikethru: attr(e, b"StrikeThru").and_then(|s| s.parse().ok()),
+        overprint_fill: attr(e, b"OverprintFill").and_then(|s| s.parse().ok()),
+        overprint_stroke: attr(e, b"OverprintStroke").and_then(|s| s.parse().ok()),
+        ruby_flag: attr(e, b"RubyFlag").and_then(|s| s.parse().ok()),
+        ruby_type: attr(e, b"RubyType"),
+        ruby_string: attr(e, b"RubyString"),
+        kenten_kind: attr(e, b"KentenKind"),
+        kenten_character: attr(e, b"KentenCharacter"),
+        kenten_font_size: attr(e, b"KentenFontSize").and_then(|s| s.parse().ok()),
     })
 }
 
@@ -1208,6 +1320,12 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         drop_cap_characters: attr(e, b"DropCapCharacters").and_then(|s| s.parse().ok()),
         drop_cap_lines: attr(e, b"DropCapLines").and_then(|s| s.parse().ok()),
         drop_cap_detail: attr(e, b"DropCapDetail").and_then(|s| s.parse().ok()),
+        overprint_fill: attr(e, b"OverprintFill").and_then(|s| s.parse().ok()),
+        overprint_stroke: attr(e, b"OverprintStroke").and_then(|s| s.parse().ok()),
+        kinsoku_set: attr(e, b"KinsokuSet"),
+        kinsoku_type: attr(e, b"KinsokuType"),
+        mojikumi_table: attr(e, b"MojikumiTable"),
+        mojikumi_set: attr(e, b"MojikumiSet"),
     })
 }
 
@@ -1569,5 +1687,86 @@ mod tests {
             .unwrap();
         assert_eq!(toc.title.as_deref(), Some("Contents"));
         assert!(toc.entries.is_empty());
+    }
+
+    // ---- CJK Stage 1 (parser surface) ----
+
+    #[test]
+    fn paragraph_style_captures_kinsoku_and_mojikumi_attributes() {
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootParagraphStyleGroup>
+            <ParagraphStyle Self="ParagraphStyle/Japanese"
+                            KinsokuSet="KinsokuTable/$ID/PhotoshopKinsokuHard"
+                            KinsokuType="PushOut"
+                            MojikumiTable="MojikumiTable/$ID/PhotoshopMojikumiSet4"
+                            MojikumiSet="MojikumiSet/$ID/OldSet"/>
+          </RootParagraphStyleGroup>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let p = s.paragraph_styles.get("ParagraphStyle/Japanese").unwrap();
+        assert_eq!(
+            p.kinsoku_set.as_deref(),
+            Some("KinsokuTable/$ID/PhotoshopKinsokuHard")
+        );
+        assert_eq!(p.kinsoku_type.as_deref(), Some("PushOut"));
+        assert_eq!(
+            p.mojikumi_table.as_deref(),
+            Some("MojikumiTable/$ID/PhotoshopMojikumiSet4")
+        );
+        assert_eq!(p.mojikumi_set.as_deref(), Some("MojikumiSet/$ID/OldSet"));
+    }
+
+    #[test]
+    fn character_style_captures_ruby_and_kenten_attributes() {
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootCharacterStyleGroup>
+            <CharacterStyle Self="CharacterStyle/RubyBase"
+                            RubyFlag="true"
+                            RubyType="GroupRuby"
+                            RubyString="furigana"
+                            KentenKind="BlackCircle"
+                            KentenFontSize="50"/>
+          </RootCharacterStyleGroup>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let c = s.character_styles.get("CharacterStyle/RubyBase").unwrap();
+        assert_eq!(c.ruby_flag, Some(true));
+        assert_eq!(c.ruby_type.as_deref(), Some("GroupRuby"));
+        assert_eq!(c.ruby_string.as_deref(), Some("furigana"));
+        assert_eq!(c.kenten_kind.as_deref(), Some("BlackCircle"));
+        assert_eq!(c.kenten_font_size, Some(50.0));
+    }
+
+    #[test]
+    fn resolve_paragraph_propagates_kinsoku_through_based_on() {
+        // Base style sets the kinsoku ref; child overrides only one
+        // field. Cascade should pull the rest from BasedOn.
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootParagraphStyleGroup>
+            <ParagraphStyle Self="ParagraphStyle/JpBase"
+                            KinsokuSet="KinsokuTable/$ID/PhotoshopKinsokuHard"
+                            KinsokuType="PushIn"
+                            MojikumiTable="MojikumiTable/$ID/PhotoshopMojikumiSet4"/>
+            <ParagraphStyle Self="ParagraphStyle/JpChild"
+                            BasedOn="ParagraphStyle/JpBase"
+                            KinsokuType="PushOut"/>
+          </RootParagraphStyleGroup>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let r = s.resolve_paragraph("ParagraphStyle/JpChild");
+        // Local override wins for KinsokuType.
+        assert_eq!(r.kinsoku_type.as_deref(), Some("PushOut"));
+        // Other fields cascade from BasedOn.
+        assert_eq!(
+            r.kinsoku_set.as_deref(),
+            Some("KinsokuTable/$ID/PhotoshopKinsokuHard")
+        );
+        assert_eq!(
+            r.mojikumi_table.as_deref(),
+            Some("MojikumiTable/$ID/PhotoshopMojikumiSet4")
+        );
     }
 }

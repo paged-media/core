@@ -1066,6 +1066,7 @@ mod tests {
                 looseness: 0,
                 hyphenator: None,
                 hyphen_penalty: 50,
+                kinsoku_enforce: false,
             },
             line_height: 20,
             first_baseline: 15,
