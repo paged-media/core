@@ -179,6 +179,7 @@ fn resolve_effect_color(
     };
     match color_id_to_paint_with_list(id, palette, cmyk_xform, list) {
         Some(Paint::Solid(c)) => c,
+        Some(Paint::Cmyk { rgb, .. }) => rgb,
         _ => Color::BLACK,
     }
 }
