@@ -5,9 +5,17 @@
 //! ColorValue. `<Swatch>` elements are also captured for the "None" /
 //! "Paper" / "Registration" special cases.
 //!
-//! This is a minimal slice: process colours only, no tint / mixed-ink.
-//! Spot colour definitions pull through as `Lab` space when present;
-//! otherwise they're flagged as unresolved.
+//! Spot colours are captured with `Model="Spot"` plus optional
+//! `AlternateSpace` / `AlternateColorValue` (CMYK fallback used when
+//! the spot ink isn't physically applied). A per-swatch `TintValue`
+//! (0..=100) records "PANTONE 286 at 50% tint" stored on the swatch
+//! itself — distinct from the per-run `FillTint` cascade. We always
+//! render spot colours via the CMYK alternate (we don't know the
+//! spectral spot ink); the swatch's tint is multiplied into the
+//! alternate channels before ICC conversion to match InDesign's
+//! preview behaviour. Spot colours whose `AlternateSpace` isn't CMYK
+//! (rare in practice) fall back to the swatch's own `Space` /
+//! `ColorValue`.
 
 use std::collections::BTreeMap;
 
@@ -34,6 +42,23 @@ pub struct ColorEntry {
     pub name: Option<String>,
     pub space: ColorSpace,
     pub value: Vec<f32>,
+    /// IDML `Model` attribute. `Process` is the default; `Spot` marks
+    /// a named-ink swatch (e.g. PANTONE 286) which the renderer
+    /// previews via the alternate-CMYK fallback.
+    pub model: ColorModel,
+    /// `AlternateSpace` — colour space of the CMYK / RGB fallback the
+    /// IDML carries for a spot swatch. `None` when not a spot or when
+    /// the producer omitted it.
+    pub alternate_space: Option<ColorSpace>,
+    /// `AlternateColorValue` — whitespace-separated channel values
+    /// in the `alternate_space`. For a CMYK alternate this is four
+    /// percentages.
+    pub alternate_value: Vec<f32>,
+    /// `TintValue` (0..=100) stored on a spot `<Color>` swatch that
+    /// represents "base spot ink at N% tint". `None` means the swatch
+    /// has no swatch-level tint (the most common case — per-use tints
+    /// arrive via `FillTint` on the *user*, handled separately).
+    pub tint: Option<f32>,
     /// Optional alpha channel (0..=1, 1 = fully opaque) sourced from
     /// the IDML `Alpha` / `AlphaPercentage` attribute on `<Color>`.
     /// `None` means the swatch carries no alpha; the consumer should
@@ -41,6 +66,49 @@ pub struct ColorEntry {
     /// renderer when a `<GradientStop>` in spec form references a
     /// `<Color>` whose alpha defines the stop's opacity.
     pub alpha: Option<f32>,
+}
+
+impl ColorEntry {
+    /// Resolve a swatch to the effective CMYK percentages a renderer
+    /// should send to ICC. Returns `Some([c, m, y, k])` when:
+    ///
+    /// * the swatch is a process CMYK colour (just returns `value`), or
+    /// * the swatch is a spot colour with a CMYK alternate — in which
+    ///   case the swatch-level `TintValue` (if any) is multiplied into
+    ///   each channel here (`tinted = base * tint / 100`), matching
+    ///   InDesign's preview interpolation between the spot ink and
+    ///   paper white in CMYK before the ICC transform.
+    ///
+    /// Returns `None` for RGB / LAB / Gray swatches and for spot
+    /// colours whose alternate isn't CMYK (rare; caller falls back to
+    /// the swatch's primary `value` via [`to_linear_rgb`]).
+    pub fn effective_cmyk(&self) -> Option<[f32; 4]> {
+        let (base_space, base_value) = match self.model {
+            ColorModel::Spot => {
+                // Spot inks are previewed via the CMYK alternate; we
+                // don't try to interpret the spot's primary Lab/RGB
+                // value because spot rendering requires a spectral
+                // model we don't ship.
+                match self.alternate_space {
+                    Some(ColorSpace::Cmyk) if self.alternate_value.len() == 4 => {
+                        (ColorSpace::Cmyk, self.alternate_value.as_slice())
+                    }
+                    _ => return None,
+                }
+            }
+            _ => (self.space, self.value.as_slice()),
+        };
+        if base_space != ColorSpace::Cmyk || base_value.len() != 4 {
+            return None;
+        }
+        let t = self.tint.map(|v| (v / 100.0).clamp(0.0, 1.0)).unwrap_or(1.0);
+        Some([
+            base_value[0] * t,
+            base_value[1] * t,
+            base_value[2] * t,
+            base_value[3] * t,
+        ])
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -84,6 +152,30 @@ pub enum ColorSpace {
     /// Anything we didn't recognise — callers should treat it as
     /// unresolved and fall back to a sensible default.
     Unknown,
+}
+
+/// IDML `<Color Model="…">`. `Process` is the default (CMYK / RGB /
+/// Lab inks blended on press); `Spot` marks a named ink that ships
+/// with a CMYK fallback for preview / un-spotted output. `MixedInk`
+/// is recognised but treated as `Unknown` — we don't ship the
+/// per-ink decomposition.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub enum ColorModel {
+    Process,
+    Spot,
+    MixedInk,
+    Unknown,
+}
+
+impl ColorModel {
+    fn from_attr(s: &str) -> Self {
+        match s {
+            "Process" => ColorModel::Process,
+            "Spot" => ColorModel::Spot,
+            "MixedInk" | "MixedInkGroup" => ColorModel::MixedInk,
+            _ => ColorModel::Unknown,
+        }
+    }
 }
 
 impl ColorSpace {
@@ -183,12 +275,24 @@ fn parse_color(e: &quick_xml::events::BytesStart) -> Option<ColorEntry> {
         .map(ColorSpace::from_attr)
         .unwrap_or(ColorSpace::Unknown);
     let value = attr(e, b"ColorValue")
-        .map(|s| {
-            s.split_whitespace()
-                .filter_map(|t| t.parse::<f32>().ok())
-                .collect()
-        })
+        .map(parse_color_value)
         .unwrap_or_default();
+    let model = attr(e, b"Model")
+        .as_deref()
+        .map(ColorModel::from_attr)
+        .unwrap_or(ColorModel::Process);
+    let alternate_space = attr(e, b"AlternateSpace")
+        .as_deref()
+        .map(ColorSpace::from_attr);
+    let alternate_value = attr(e, b"AlternateColorValue")
+        .map(parse_color_value)
+        .unwrap_or_default();
+    // `TintValue` is an IDML float 0..=100. Treat -1 (Adobe's "unset"
+    // sentinel) and out-of-range values as absent so a swatch with
+    // no swatch-level tint flows the alternate through unscaled.
+    let tint = attr(e, b"TintValue")
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|v| (0.0..=100.0).contains(v));
     // Alpha lives on `<Color>` in two competing serialisations.
     // Adobe's reference uses `AlphaPercentage` (0..=100); some
     // tooling emits a plain `Alpha` (0..=100 or 0..=1). Accept
@@ -204,8 +308,18 @@ fn parse_color(e: &quick_xml::events::BytesStart) -> Option<ColorEntry> {
         name: attr(e, b"Name"),
         space,
         value,
+        model,
+        alternate_space,
+        alternate_value,
+        tint,
         alpha,
     })
+}
+
+fn parse_color_value(s: String) -> Vec<f32> {
+    s.split_whitespace()
+        .filter_map(|t| t.parse::<f32>().ok())
+        .collect()
 }
 
 fn parse_gradient(e: &quick_xml::events::BytesStart) -> Option<GradientEntry> {
@@ -251,20 +365,25 @@ fn parse_swatch(e: &quick_xml::events::BytesStart) -> Option<SwatchEntry> {
 /// This is a stopgap — the proper path goes through `idml-color` with
 /// ICC profiles. Fine for exploratory tooling and the fidelity
 /// harness's first seed documents.
+///
+/// Spot swatches route through their CMYK alternate (with any
+/// swatch-level `TintValue` already folded in by
+/// [`ColorEntry::effective_cmyk`]). Spot swatches without a CMYK
+/// alternate fall back to whatever the primary `Space` claims —
+/// usually `Lab`, which we render as `None` (unresolved).
 pub fn to_linear_rgb(c: &ColorEntry) -> Option<[f32; 3]> {
+    if let Some([cv, mv, yv, kv]) = c.effective_cmyk() {
+        let cv = cv / 100.0;
+        let mv = mv / 100.0;
+        let yv = yv / 100.0;
+        let kv = kv / 100.0;
+        let r = (1.0 - cv) * (1.0 - kv);
+        let g = (1.0 - mv) * (1.0 - kv);
+        let b = (1.0 - yv) * (1.0 - kv);
+        return Some([srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b)]);
+    }
     let v = c.value.as_slice();
     match c.space {
-        ColorSpace::Cmyk if v.len() == 4 => {
-            // CMYK percentages → naive RGB, then sRGB-linearize.
-            let cv = v[0] / 100.0;
-            let mv = v[1] / 100.0;
-            let yv = v[2] / 100.0;
-            let kv = v[3] / 100.0;
-            let r = (1.0 - cv) * (1.0 - kv);
-            let g = (1.0 - mv) * (1.0 - kv);
-            let b = (1.0 - yv) * (1.0 - kv);
-            Some([srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b)])
-        }
         ColorSpace::Rgb if v.len() == 3 => Some([
             srgb_to_linear(v[0] / 255.0),
             srgb_to_linear(v[1] / 255.0),
@@ -398,5 +517,107 @@ mod tests {
     fn resolve_alpha_unknown_id_returns_none() {
         let g = Graphic::parse(ALPHA_SAMPLE).unwrap();
         assert!(g.resolve_alpha("Color/NotThere").is_none());
+    }
+
+    const SPOT_SAMPLE: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic>
+    <Color Self="Color/Pantone286" Name="PANTONE 286 C" Model="Spot"
+           Space="LAB" ColorValue="20 25 -70"
+           AlternateSpace="CMYK" AlternateColorValue="100 75 0 0"/>
+    <Color Self="Color/Pantone286Half" Name="PANTONE 286 C 50%" Model="Spot"
+           Space="LAB" ColorValue="20 25 -70"
+           AlternateSpace="CMYK" AlternateColorValue="100 75 0 0"
+           TintValue="50"/>
+    <Color Self="Color/PantonePlain" Name="PANTONE plain" Model="Spot"
+           Space="LAB" ColorValue="20 25 -70"/>
+    <Color Self="Color/ProcessPureM" Name="Magenta" Model="Process"
+           Space="CMYK" ColorValue="0 100 0 0"/>
+  </Graphic>
+</idPkg:Graphic>"#;
+
+    #[test]
+    fn parses_spot_color_with_alternate_cmyk() {
+        let g = Graphic::parse(SPOT_SAMPLE).unwrap();
+        let spot = g.resolve("Color/Pantone286").unwrap();
+        assert_eq!(spot.model, ColorModel::Spot);
+        assert_eq!(spot.alternate_space, Some(ColorSpace::Cmyk));
+        assert_eq!(spot.alternate_value, vec![100.0, 75.0, 0.0, 0.0]);
+        assert!(spot.tint.is_none(), "no swatch-level tint here");
+    }
+
+    #[test]
+    fn parses_swatch_level_tint_value() {
+        let g = Graphic::parse(SPOT_SAMPLE).unwrap();
+        let spot = g.resolve("Color/Pantone286Half").unwrap();
+        assert_eq!(spot.tint, Some(50.0));
+    }
+
+    #[test]
+    fn effective_cmyk_for_process_returns_value_unchanged() {
+        // (M=100) → (M=100). No tint, no spot fallback.
+        let g = Graphic::parse(SPOT_SAMPLE).unwrap();
+        let m = g.resolve("Color/ProcessPureM").unwrap();
+        assert_eq!(m.effective_cmyk(), Some([0.0, 100.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn effective_cmyk_for_spot_uses_alternate() {
+        let g = Graphic::parse(SPOT_SAMPLE).unwrap();
+        let spot = g.resolve("Color/Pantone286").unwrap();
+        assert_eq!(spot.effective_cmyk(), Some([100.0, 75.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn effective_cmyk_for_spot_with_tint_scales_each_channel() {
+        // The pinned math: spot at 50% tint mixes 50% toward paper
+        // white in CMYK, i.e. multiplies each channel by 0.5.
+        let g = Graphic::parse(SPOT_SAMPLE).unwrap();
+        let spot = g.resolve("Color/Pantone286Half").unwrap();
+        assert_eq!(spot.effective_cmyk(), Some([50.0, 37.5, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn effective_cmyk_for_spot_without_cmyk_alternate_returns_none() {
+        // PantonePlain has no AlternateSpace — there's no CMYK to
+        // tint, so the renderer must fall back to the swatch's
+        // primary `Space` via to_linear_rgb (which will say None
+        // because we don't ship Lab→RGB).
+        let g = Graphic::parse(SPOT_SAMPLE).unwrap();
+        let spot = g.resolve("Color/PantonePlain").unwrap();
+        assert!(spot.effective_cmyk().is_none());
+    }
+
+    #[test]
+    fn to_linear_rgb_routes_spot_tint_to_lighter_rgb() {
+        // 50% tinted PANTONE 286 (CMYK alt 100,75,0,0) should render
+        // visibly lighter / less saturated than the 100% version.
+        // Naive CMYK→linear-RGB suffices for the comparison.
+        let g = Graphic::parse(SPOT_SAMPLE).unwrap();
+        let full = to_linear_rgb(g.resolve("Color/Pantone286").unwrap()).unwrap();
+        let half = to_linear_rgb(g.resolve("Color/Pantone286Half").unwrap()).unwrap();
+        // 100% tint: R = (1-1)(1-0)=0; G = (1-0.75)(1-0)=0.25; B=1.
+        // 50% tint: R = (1-0.5)(1-0)=0.5; G=(1-0.375)=0.625; B=1.
+        // Each channel of `half` is brighter than `full` in linear:
+        assert!(half[0] > full[0], "R lighter: {} > {}", half[0], full[0]);
+        assert!(half[1] > full[1], "G lighter: {} > {}", half[1], full[1]);
+        // Blue stays at 1.0 in both — no Y / K to scale it down.
+        assert!((half[2] - full[2]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn tint_value_minus_one_is_treated_as_absent() {
+        const NEG: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic>
+    <Color Self="Color/X" Name="X" Model="Spot" Space="LAB" ColorValue="20 25 -70"
+           AlternateSpace="CMYK" AlternateColorValue="100 0 0 0" TintValue="-1"/>
+  </Graphic>
+</idPkg:Graphic>"#;
+        let g = Graphic::parse(NEG).unwrap();
+        let c = g.resolve("Color/X").unwrap();
+        assert!(c.tint.is_none());
+        // Effective CMYK is the unscaled alternate.
+        assert_eq!(c.effective_cmyk(), Some([100.0, 0.0, 0.0, 0.0]));
     }
 }
