@@ -138,6 +138,13 @@ fn render_fills_frame_with_resolved_paint() {
 }
 
 fn build_gradient_idml() -> Vec<u8> {
+    build_gradient_idml_with_angle(None)
+}
+
+/// Like `build_gradient_idml` but writes the supplied
+/// `GradientFillAngle` (in degrees) onto the rectangle. `None`
+/// omits the attribute, exercising IDML's spec default of 0°.
+fn build_gradient_idml_with_angle(angle_deg: Option<f32>) -> Vec<u8> {
     let buf = std::io::Cursor::new(Vec::new());
     let mut zip = ZipWriter::new(buf);
     let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
@@ -172,18 +179,22 @@ fn build_gradient_idml() -> Vec<u8> {
     )
     .unwrap();
 
-    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
-    zip.write_all(
-        br#"<?xml version="1.0" encoding="UTF-8"?>
+    let angle_attr = match angle_deg {
+        Some(a) => format!(" GradientFillAngle=\"{a}\""),
+        None => String::new(),
+    };
+    let spread_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
 <idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
   <Spread Self="sp1">
     <Page Self="p1" GeometricBounds="0 0 200 200"/>
     <Rectangle Self="r1" GeometricBounds="0 0 200 200"
-               FillColor="Gradient/SkyDown" StrokeWeight="0"/>
+               FillColor="Gradient/SkyDown" StrokeWeight="0"{angle_attr}/>
   </Spread>
 </idPkg:Spread>"#,
-    )
-    .unwrap();
+    );
+    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+    zip.write_all(spread_xml.as_bytes()).unwrap();
 
     zip.finish().unwrap().into_inner()
 }
@@ -219,6 +230,52 @@ fn linear_gradient_fills_left_to_right_by_default() {
     );
     // The display list carries one gradient definition.
     assert_eq!(built.pages[0].list.gradients.len(), 1);
+}
+
+#[test]
+fn linear_gradient_rotated_90_degrees_runs_vertically() {
+    // Regression for Tier 1 #2: a rotated `GradientFillAngle`
+    // (= IDML's `<Gradient>` Angle) must rotate the gradient line
+    // through the rect centre. Before the fix the renderer hardcoded
+    // unit endpoints `(0, 0) → (0, 1)` which painted every gradient
+    // top-to-bottom regardless of the angle.
+    //
+    // At 90° (vertical-down per IDML convention) the warm `Color/Sun`
+    // (first stop) lives at the TOP and the cool `Color/Sky` (last
+    // stop) at the BOTTOM. The horizontal default test asserts the
+    // 0° = left→right axis; this one pins the 90° = top→bottom axis,
+    // so the two together reject a hardcoded direction in either
+    // orientation.
+    let bytes = build_gradient_idml_with_angle(Some(90.0));
+    let document = Document::open(&bytes).unwrap();
+    let opts = PipelineOptions::default();
+    let (_, images) = pipeline::render_document(&document, &opts, 72.0, Color::WHITE).unwrap();
+    let img = &images[0];
+
+    let top = *img.get_pixel(100, 5);
+    let bottom = *img.get_pixel(100, 195);
+    assert!(
+        top.0[0] > top.0[2] + 50,
+        "expected warm top pixel at 90°, got {:?}",
+        top
+    );
+    assert!(
+        bottom.0[2] > bottom.0[0] + 50,
+        "expected cool bottom pixel at 90°, got {:?}",
+        bottom
+    );
+
+    // Sibling cross-check: the horizontal strip at the rect centre
+    // should be ~uniform when the gradient runs vertically — proving
+    // the axis really rotated, not just shifted.
+    let mid_left = *img.get_pixel(5, 100);
+    let mid_right = *img.get_pixel(195, 100);
+    let dr = (mid_left.0[0] as i32 - mid_right.0[0] as i32).abs();
+    let db = (mid_left.0[2] as i32 - mid_right.0[2] as i32).abs();
+    assert!(
+        dr < 15 && db < 15,
+        "expected near-uniform horizontal strip at 90°, got left={mid_left:?} right={mid_right:?}",
+    );
 }
 
 #[test]

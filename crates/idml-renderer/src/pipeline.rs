@@ -5787,9 +5787,25 @@ fn emit_line_into(
     // document cascade default (Color/Black). Falling back here
     // keeps real-InDesign exports rendering with visible lines —
     // those frequently leave StrokeColor implicit.
+    //
+    // Routes through the `_dir` variant so `GradientStrokeAngle` /
+    // `GradientStrokeLength` on a line-stroke gradient still rotate
+    // the gradient line. Lines have no rect bbox, so `path_dims` is
+    // `None`; the helper falls back to the unit-rect default centred
+    // on (0.5, 0.5) — angle still rotates around that centre.
     let stroke_paint = resolved
         .stroke_color
-        .and_then(|id| color_id_to_paint_with_list(id, palette, cmyk_xform, &mut page.list))
+        .and_then(|id| {
+            color_id_to_paint_with_list_dir(
+                id,
+                palette,
+                cmyk_xform,
+                &mut page.list,
+                resolved.gradient_stroke_angle,
+                resolved.gradient_stroke_length,
+                None,
+            )
+        })
         .or_else(|| color_id_to_paint("Color/Black", palette, cmyk_xform))
         .unwrap_or(Paint::Solid(Color::BLACK));
     let stroke_width = resolved.effective_stroke_weight();
