@@ -1636,6 +1636,172 @@ mod tests {
     }
 
     #[test]
+    fn parses_table_with_header_body_footer_and_corner_cells() {
+        // 3x3 grid with one header row, one body row, one footer row.
+        // Covers all four corner cells + verifies the section counts
+        // come through as distinct attributes (vs. just BodyRowCount).
+        // IDML serialises cells column-major: every cell of column 0
+        // before column 1, etc. Cell `Name` is `col:row` zero-indexed
+        // (the `coords()` helper returns `(column, row)`).
+        let xml =
+            br#"<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Story Self="s1">
+            <ParagraphStyleRange>
+              <CharacterStyleRange>
+                <Table Self="t1" HeaderRowCount="1" BodyRowCount="1" FooterRowCount="1"
+                       ColumnCount="3">
+                  <Row Self="r0" Name="0" SingleRowHeight="24"/>
+                  <Row Self="r1" Name="1" SingleRowHeight="36"/>
+                  <Row Self="r2" Name="2" SingleRowHeight="20"/>
+                  <Column Self="c0" Name="0" SingleColumnWidth="80"/>
+                  <Column Self="c1" Name="1" SingleColumnWidth="100"/>
+                  <Column Self="c2" Name="2" SingleColumnWidth="60"/>
+                  <Cell Self="c00" Name="0:0">
+                    <ParagraphStyleRange><CharacterStyleRange>
+                      <Content>TL</Content>
+                    </CharacterStyleRange></ParagraphStyleRange>
+                  </Cell>
+                  <Cell Self="c01" Name="0:1">
+                    <ParagraphStyleRange><CharacterStyleRange>
+                      <Content>ml</Content>
+                    </CharacterStyleRange></ParagraphStyleRange>
+                  </Cell>
+                  <Cell Self="c02" Name="0:2">
+                    <ParagraphStyleRange><CharacterStyleRange>
+                      <Content>BL</Content>
+                    </CharacterStyleRange></ParagraphStyleRange>
+                  </Cell>
+                  <Cell Self="c10" Name="1:0">
+                    <ParagraphStyleRange><CharacterStyleRange>
+                      <Content>tm</Content>
+                    </CharacterStyleRange></ParagraphStyleRange>
+                  </Cell>
+                  <Cell Self="c11" Name="1:1">
+                    <ParagraphStyleRange><CharacterStyleRange>
+                      <Content>mm</Content>
+                    </CharacterStyleRange></ParagraphStyleRange>
+                  </Cell>
+                  <Cell Self="c12" Name="1:2">
+                    <ParagraphStyleRange><CharacterStyleRange>
+                      <Content>bm</Content>
+                    </CharacterStyleRange></ParagraphStyleRange>
+                  </Cell>
+                  <Cell Self="c20" Name="2:0">
+                    <ParagraphStyleRange><CharacterStyleRange>
+                      <Content>TR</Content>
+                    </CharacterStyleRange></ParagraphStyleRange>
+                  </Cell>
+                  <Cell Self="c21" Name="2:1">
+                    <ParagraphStyleRange><CharacterStyleRange>
+                      <Content>mr</Content>
+                    </CharacterStyleRange></ParagraphStyleRange>
+                  </Cell>
+                  <Cell Self="c22" Name="2:2">
+                    <ParagraphStyleRange><CharacterStyleRange>
+                      <Content>BR</Content>
+                    </CharacterStyleRange></ParagraphStyleRange>
+                  </Cell>
+                </Table>
+              </CharacterStyleRange>
+            </ParagraphStyleRange>
+          </Story>
+        </idPkg:Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let table = s.paragraphs[0]
+            .table
+            .as_ref()
+            .expect("paragraph hosts a table");
+        assert_eq!(table.header_row_count, 1);
+        assert_eq!(table.body_row_count, 1);
+        assert_eq!(table.footer_row_count, 1);
+        assert_eq!(table.column_count, 3);
+
+        // Row heights / column widths preserved in document order.
+        assert_eq!(table.rows.len(), 3);
+        assert_eq!(table.rows[0].single_row_height, Some(24.0));
+        assert_eq!(table.rows[1].single_row_height, Some(36.0));
+        assert_eq!(table.rows[2].single_row_height, Some(20.0));
+        assert_eq!(table.columns.len(), 3);
+        assert_eq!(table.columns[0].single_column_width, Some(80.0));
+        assert_eq!(table.columns[1].single_column_width, Some(100.0));
+        assert_eq!(table.columns[2].single_column_width, Some(60.0));
+
+        assert_eq!(table.cells.len(), 9);
+
+        // Build a `(col, row) -> &TableCell` lookup so corner
+        // assertions are order-independent (IDML serialises
+        // column-major, but the test only cares about content).
+        let cell_at = |col: u32, row: u32| -> &TableCell {
+            table
+                .cells
+                .iter()
+                .find(|c| c.coords() == Some((col, row)))
+                .unwrap_or_else(|| panic!("missing cell at ({col}, {row})"))
+        };
+
+        // Four-corner content: TL / TR top row (header), BL / BR
+        // bottom row (footer). Confirms cells at the extremes parse
+        // correctly regardless of serialisation order.
+        assert_eq!(cell_at(0, 0).paragraphs[0].runs[0].text, "TL");
+        assert_eq!(cell_at(2, 0).paragraphs[0].runs[0].text, "TR");
+        assert_eq!(cell_at(0, 2).paragraphs[0].runs[0].text, "BL");
+        assert_eq!(cell_at(2, 2).paragraphs[0].runs[0].text, "BR");
+        // Interior body-row cell.
+        assert_eq!(cell_at(1, 1).paragraphs[0].runs[0].text, "mm");
+    }
+
+    #[test]
+    fn parses_multi_paragraph_cell_content() {
+        // A single cell can host multiple `<ParagraphStyleRange>`
+        // children — the parser must append each to
+        // `TableCell::paragraphs` instead of collapsing them onto the
+        // story-level paragraph list (which would discard cell
+        // membership entirely).
+        let xml =
+            br#"<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Story Self="s1">
+            <ParagraphStyleRange>
+              <CharacterStyleRange>
+                <Table Self="t1" HeaderRowCount="0" BodyRowCount="1" ColumnCount="1">
+                  <Row Self="r0" Name="0" SingleRowHeight="60"/>
+                  <Column Self="c0" Name="0" SingleColumnWidth="200"/>
+                  <Cell Self="c00" Name="0:0">
+                    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Heading">
+                      <CharacterStyleRange><Content>Title</Content></CharacterStyleRange>
+                    </ParagraphStyleRange>
+                    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Body">
+                      <CharacterStyleRange><Content>First body paragraph.</Content></CharacterStyleRange>
+                    </ParagraphStyleRange>
+                    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Body">
+                      <CharacterStyleRange><Content>Second body paragraph.</Content></CharacterStyleRange>
+                    </ParagraphStyleRange>
+                  </Cell>
+                </Table>
+              </CharacterStyleRange>
+            </ParagraphStyleRange>
+          </Story>
+        </idPkg:Story>"#;
+        let s = Story::parse(xml).unwrap();
+        // Cell content stays nested in the cell — story-level
+        // paragraphs should only carry the table-host paragraph,
+        // never the cell's own paragraphs.
+        assert_eq!(s.paragraphs.len(), 1);
+        let cell = &s.paragraphs[0].table.as_ref().unwrap().cells[0];
+        assert_eq!(cell.paragraphs.len(), 3, "all three cell paragraphs retained");
+        assert_eq!(
+            cell.paragraphs[0].paragraph_style.as_deref(),
+            Some("ParagraphStyle/Heading")
+        );
+        assert_eq!(cell.paragraphs[0].runs[0].text, "Title");
+        assert_eq!(
+            cell.paragraphs[1].paragraph_style.as_deref(),
+            Some("ParagraphStyle/Body")
+        );
+        assert_eq!(cell.paragraphs[1].runs[0].text, "First body paragraph.");
+        assert_eq!(cell.paragraphs[2].runs[0].text, "Second body paragraph.");
+    }
+
+    #[test]
     fn parses_drop_cap_attributes_on_paragraph_style_range() {
         let xml = br#"<Story>
           <ParagraphStyleRange DropCapCharacters="1" DropCapLines="3" DropCapDetail="0">
