@@ -44,6 +44,8 @@ pub mod cpu;
 pub mod surface;
 #[cfg(feature = "vello-backend")]
 pub mod vello_rs;
+#[cfg(feature = "vello-backend")]
+pub mod cmyk_compute;
 
 #[cfg(feature = "cpu")]
 pub use cpu::rasterize;
