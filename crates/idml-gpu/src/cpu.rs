@@ -16,7 +16,7 @@
 use idml_compose::{
     BevelEmboss, BlendMode, Color as CComposeColor, DirectionalFeather, DisplayCommand,
     DisplayList, Feather, FeatherCornerType, GradientFeather, GradientFeatherKind, InnerGlow,
-    InnerShadow, LineCap, LineJoin, OuterGlow, Paint, PathData, PathSegment, Satin,
+    InnerShadow, LayerEffect, LineCap, LineJoin, OuterGlow, Paint, PathData, PathSegment, Satin,
     Transform as CTransform,
 };
 use image::{Rgba, RgbaImage};
@@ -75,6 +75,17 @@ struct GroupFrame {
     /// taken at BeginBlendGroup time. `None` for SourceOver groups
     /// where no paper-bypass correction is needed.
     backdrop_snapshot: Option<Pixmap>,
+    /// Optional post-effect applied to the buffer before it
+    /// composites onto the parent target. `None` for `BeginBlendGroup`
+    /// frames; populated from `PushLayer { effect, .. }` for
+    /// effect-driven layers. Today only `LayerEffect::GaussianBlur`
+    /// triggers a real pass — `LayerEffect::None` falls through to the
+    /// normal blend-group composite.
+    effect: Option<LayerEffect>,
+    /// Pixel σ used by the blur pass, derived at push time from
+    /// `effect.sigma_pt() * scale`. Cached so the pop site doesn't
+    /// have to rescan `effect`.
+    effect_sigma_px: f32,
 }
 
 /// Rasterise `list` to an 8-bit sRGB RGBA image at the configured DPI.
@@ -636,6 +647,8 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                             blend_mode: ts_blend,
                             opacity: opacity.clamp(0.0, 1.0),
                             backdrop_snapshot,
+                            effect: None,
+                            effect_sigma_px: 0.0,
                         });
                     }
                     None => {
@@ -650,6 +663,69 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                                 blend_mode: TsBlendMode::SourceOver,
                                 opacity: 1.0,
                                 backdrop_snapshot: None,
+                                effect: None,
+                                effect_sigma_px: 0.0,
+                            });
+                        }
+                    }
+                }
+            }
+            DisplayCommand::PushLayer {
+                bounds,
+                effect,
+                blend_mode,
+                opacity,
+                ..
+            } => {
+                // Same offscreen-pixmap stack as BeginBlendGroup, but
+                // with a `LayerEffect` applied at the matching
+                // PopLayer site. The bounds are padded by `3σ` for
+                // the blur kernel's tail plus a 1px AA slack so the
+                // soft edge isn't clipped on the way back to the
+                // parent target.
+                let scale_factor = scale;
+                let sigma_pt = effect.sigma_pt();
+                let pad_pt = 3.0 * sigma_pt + 1.0 / scale_factor.max(1e-6);
+                let min_x_pt = bounds.x - pad_pt;
+                let min_y_pt = bounds.y - pad_pt;
+                let max_x_pt = bounds.x + bounds.w + pad_pt;
+                let max_y_pt = bounds.y + bounds.h + pad_pt;
+                let off_x_px = (min_x_pt * scale_factor).floor() as i32;
+                let off_y_px = (min_y_pt * scale_factor).floor() as i32;
+                let max_x_px = (max_x_pt * scale_factor).ceil() as i32;
+                let max_y_px = (max_y_pt * scale_factor).ceil() as i32;
+                let w_px = (max_x_px - off_x_px).max(1) as u32;
+                let h_px = (max_y_px - off_y_px).max(1) as u32;
+                let ts_blend = blend_mode_to_ts(*blend_mode);
+                let effect_sigma_px = sigma_pt * scale_factor;
+                // PushLayer is effect-isolated: the post-effect runs
+                // on the buffer's contents alone, so we don't need
+                // the paper-backdrop snapshot here (the blur sees its
+                // own padded transparent background, which is the
+                // correct clamp-to-edge value). The matching pop
+                // composites with `blend_mode`/`opacity` as usual.
+                match Pixmap::new(w_px, h_px) {
+                    Some(buf) => {
+                        group_stack.push(GroupFrame {
+                            pixmap: buf,
+                            offset: (off_x_px, off_y_px),
+                            blend_mode: ts_blend,
+                            opacity: opacity.clamp(0.0, 1.0),
+                            backdrop_snapshot: None,
+                            effect: Some(*effect),
+                            effect_sigma_px,
+                        });
+                    }
+                    None => {
+                        if let Some(buf) = Pixmap::new(1, 1) {
+                            group_stack.push(GroupFrame {
+                                pixmap: buf,
+                                offset: (0, 0),
+                                blend_mode: TsBlendMode::SourceOver,
+                                opacity: 1.0,
+                                backdrop_snapshot: None,
+                                effect: None,
+                                effect_sigma_px: 0.0,
                             });
                         }
                     }
@@ -794,7 +870,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     paper_premul,
                 );
             }
-            DisplayCommand::EndBlendGroup(_) => {
+            DisplayCommand::EndBlendGroup(_) | DisplayCommand::PopLayer(_) => {
                 let Some(top) = group_stack.pop() else {
                     continue;
                 };
@@ -804,12 +880,28 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 let group_scope = ClipScope::Group(group_stack.len() + 1);
                 clip_stack.retain(|e| e.scope != group_scope);
                 let GroupFrame {
-                    pixmap: group_pix,
+                    pixmap: mut group_pix,
                     offset: (off_x_px, off_y_px),
                     blend_mode,
                     opacity,
                     backdrop_snapshot,
+                    effect,
+                    effect_sigma_px,
                 } = top;
+                // Apply the layer effect (Gaussian blur) before
+                // compositing. The buffer was padded by `3σ + 1px` at
+                // push time so the kernel doesn't clip its tails;
+                // blurring premultiplied RGBA is the correct
+                // convolution for an isolated stamp (blurring straight
+                // alpha would brighten the edges into a halo).
+                if let Some(LayerEffect::GaussianBlur { .. }) = effect {
+                    if effect_sigma_px > 0.5 {
+                        let kernel = gaussian_kernel(effect_sigma_px);
+                        let w = group_pix.width();
+                        let h = group_pix.height();
+                        gaussian_blur_premul(group_pix.data_mut(), w, h, &kernel);
+                    }
+                }
                 let mut composite = PixmapPaint::default();
                 composite.blend_mode = blend_mode;
                 composite.opacity = opacity;
@@ -2799,6 +2891,134 @@ mod tests {
             far[0] > 240 && far[1] > 240 && far[2] > 240,
             "far-away pixel should be white bg; got {far:?}"
         );
+    }
+
+    #[test]
+    fn push_layer_with_gaussian_blur_softens_filled_rect_edge() {
+        // PushLayer { effect: GaussianBlur { sigma_pt: 3.0 } } around
+        // a black rect: the rect's hard edge should bleed outward,
+        // producing a soft alpha falloff in the buffer's padded
+        // border. We verify the kernel ran by sampling *outside*
+        // the rect's geometric bounds (where a hard-edge fill would
+        // leave white pixels) and checking that the pixel has been
+        // darkened by the blur halo.
+        let mut list = DisplayList::new();
+        let black = Paint::Solid(Color::rgba(0.0, 0.0, 0.0, 1.0));
+        list.commands.push(idml_compose::DisplayCommand::PushLayer {
+            bounds: idml_compose::Rect {
+                x: 10.0,
+                y: 10.0,
+                w: 20.0,
+                h: 20.0,
+            },
+            effect: idml_compose::LayerEffect::GaussianBlur { sigma_pt: 3.0 },
+            blend_mode: idml_compose::BlendMode::Normal,
+            opacity: 1.0,
+            transform: idml_compose::Transform::IDENTITY,
+        });
+        emit_rect(
+            Rect {
+                x: 10.0,
+                y: 10.0,
+                w: 20.0,
+                h: 20.0,
+            },
+            black,
+            &mut list,
+        );
+        list.commands.push(idml_compose::DisplayCommand::PopLayer(
+            idml_compose::Transform::IDENTITY,
+        ));
+        let mut opts = RasterOptions::new(50.0, 50.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        // Pixel a few pt outside the rect's right edge (rect spans
+        // x=10..30, y=10..30; sample at x=33, y=20): hard-edge fill
+        // would leave white here, blurred edge should be a soft mid-
+        // gray. Allow generous slack on the exact value — the test's
+        // job is to assert the blur ran, not to pin a precise σ.
+        let halo = at(&img, 33, 20);
+        assert!(
+            halo[0] < 230,
+            "blur halo should darken pixel outside rect; got {halo:?}"
+        );
+        // Pixel at the rect's centre: should still be (nearly)
+        // opaque black — blur softens edges, not the interior.
+        let centre = at(&img, 20, 20);
+        assert!(
+            centre[0] < 100,
+            "blurred rect centre should stay dark; got {centre:?}"
+        );
+        // Pixel far outside the layer's padded bounds: untouched
+        // white background. Layer bounds + 3σ padding ≈ 10..40 pt
+        // — sample at (46, 46), well outside.
+        let far = at(&img, 46, 46);
+        assert!(
+            far[0] > 240 && far[1] > 240 && far[2] > 240,
+            "far pixel should be background white; got {far:?}"
+        );
+    }
+
+    #[test]
+    fn push_layer_none_effect_behaves_like_blend_group() {
+        // PushLayer { effect: None } should produce the same composite
+        // as a `BeginBlendGroup` with matching blend_mode/opacity —
+        // a transparency-group fallback for callers that want the
+        // generic plumbing without an effect.
+        let mut list = DisplayList::new();
+        list.commands.push(idml_compose::DisplayCommand::PushLayer {
+            bounds: idml_compose::Rect {
+                x: 10.0,
+                y: 10.0,
+                w: 20.0,
+                h: 20.0,
+            },
+            effect: idml_compose::LayerEffect::None,
+            blend_mode: idml_compose::BlendMode::Normal,
+            opacity: 0.5,
+            transform: idml_compose::Transform::IDENTITY,
+        });
+        let black = Paint::Solid(Color::rgba(0.0, 0.0, 0.0, 1.0));
+        emit_rect(
+            Rect {
+                x: 10.0,
+                y: 10.0,
+                w: 20.0,
+                h: 20.0,
+            },
+            black,
+            &mut list,
+        );
+        list.commands.push(idml_compose::DisplayCommand::PopLayer(
+            idml_compose::Transform::IDENTITY,
+        ));
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        // 50% black on white through the layer's group composite
+        // should be ~mid-gray, exactly like the blend_group_opacity_50
+        // test above.
+        let p = at(&img, 15, 15);
+        assert!(
+            p[0] > 100 && p[0] < 180,
+            "expected mid-gray (50% black on white), got {p:?}"
+        );
+    }
+
+    #[test]
+    fn unmatched_pop_layer_is_a_noop() {
+        // A stray `PopLayer` without a matching `PushLayer` must not
+        // panic or underflow the group stack — matches the
+        // `EndBlendGroup` / `PopClip` tolerance policy.
+        let mut list = DisplayList::new();
+        list.commands.push(idml_compose::DisplayCommand::PopLayer(
+            idml_compose::Transform::IDENTITY,
+        ));
+        let opts = RasterOptions::new(10.0, 10.0);
+        let img = rasterize(&list, &opts);
+        // Background still rendered cleanly.
+        let p = at(&img, 2, 2);
+        assert!(p[0] > 240 && p[3] == 255, "expected white bg, got {p:?}");
     }
 
     /// Helper: install an anonymous unit-rect path in `list` and

@@ -541,6 +541,43 @@ pub struct GradientFeather {
     pub stops: Vec<GradientFeatherStop>,
 }
 
+/// Pixel-space transform applied to an offscreen layer after the
+/// commands inside it have rasterised, before it composites back onto
+/// the parent target. The blur variant runs a separable Gaussian over
+/// the layer's premultiplied RGBA buffer; `None` is a pure
+/// transparency group (semantically identical to a `BeginBlendGroup`
+/// pair, but emitted through the generic `PushLayer`/`PopLayer`
+/// plumbing that future per-layer effects will share).
+///
+/// `GaussianBlur::sigma_pt` is in page-space pt — the CPU rasterizer
+/// scales by `dpi / 72` to derive pixel σ, matching the existing
+/// `DropShadow::blur_radius` semantic. The pipeline can build a
+/// blur-only soft drop shadow with
+/// `PushLayer { effect: LayerEffect::GaussianBlur { sigma_pt } } +
+/// FillPath(shadow stamp) + PopLayer`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LayerEffect {
+    /// No post-effect — equivalent to a plain transparency group.
+    /// Carries `opacity` so a single command can express both grouping
+    /// + a uniform fade (matching `BeginBlendGroup` semantics).
+    None,
+    /// Convolve the layer with a separable Gaussian of radius σ
+    /// (in pt) before compositing. Edges clamp to transparent (the
+    /// layer's bounds are padded by 3σ at composite time).
+    GaussianBlur { sigma_pt: f32 },
+}
+
+impl LayerEffect {
+    /// Effective σ in pt — `0.0` for non-blur variants. Lets callers
+    /// pad the layer bounds uniformly.
+    pub fn sigma_pt(&self) -> f32 {
+        match self {
+            LayerEffect::None => 0.0,
+            LayerEffect::GaussianBlur { sigma_pt } => sigma_pt.max(0.0),
+        }
+    }
+}
+
 /// IDML compositing blend mode. `Normal` (the default, source-over
 /// alpha composite) keeps the existing fast path; everything else
 /// requires the rasterizer to render the fill into an offscreen
@@ -751,7 +788,40 @@ pub enum DisplayCommand {
         transform: Transform,
         params: GradientFeather,
     },
-    // PushLayer, PopLayer land with §10.4.
+    /// Push a generic transparency / effect layer. Subsequent drawing
+    /// commands emit into an offscreen buffer sized to `bounds` (page
+    /// coords, padded internally by `3σ + 1px` so a Gaussian-blur
+    /// kernel doesn't clip its tails); the matching [`PopLayer`]
+    /// applies `effect` to the buffer and composites it onto the
+    /// parent target with `blend_mode` and `opacity`.
+    ///
+    /// `PushLayer` is the structural successor to
+    /// [`BeginBlendGroup`](DisplayCommand::BeginBlendGroup): the
+    /// blend-group variant predates `LayerEffect` and is kept for the
+    /// per-frame paper-backdrop-bypass path that the orchestrator
+    /// already relies on. `PushLayer` is the right primitive for
+    /// effect-driven layers (soft drop shadows, future glow refactors)
+    /// because the effect runs *after* the contents are buffered, so
+    /// the blur kernel sees the layer's full alpha (overlapping
+    /// stamps included) instead of the parent target's alpha.
+    ///
+    /// `transform` is a stub (matches `BeginBlendGroup`'s scheme) so
+    /// [`DisplayCommand::transform_mut`] keeps returning a non-None
+    /// reference. Emitters initialise it to identity; the rasterizer
+    /// never consumes it.
+    PushLayer {
+        bounds: Rect,
+        effect: LayerEffect,
+        blend_mode: BlendMode,
+        opacity: f32,
+        transform: Transform,
+    },
+    /// Pop the most-recently-pushed [`PushLayer`]. Mismatched pairs
+    /// are tolerated (a stray `PopLayer` is a no-op), matching the
+    /// `BeginBlendGroup` / `EndBlendGroup` policy. The contained
+    /// transform is unused; same rationale as
+    /// [`DisplayCommand::PopClip`].
+    PopLayer(Transform),
 }
 
 impl DisplayCommand {
@@ -778,7 +848,9 @@ impl DisplayCommand {
             | DisplayCommand::Satin { transform, .. }
             | DisplayCommand::Feather { transform, .. }
             | DisplayCommand::DirectionalFeather { transform, .. }
-            | DisplayCommand::GradientFeather { transform, .. } => transform,
+            | DisplayCommand::GradientFeather { transform, .. }
+            | DisplayCommand::PushLayer { transform, .. }
+            | DisplayCommand::PopLayer(transform) => transform,
         }
     }
 }
