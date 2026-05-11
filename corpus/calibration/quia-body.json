@@ -1,0 +1,17 @@
+{
+  "name": "quia-body",
+  "comment": "BODY:Body Text paragraph from sample.idml page 5 (Quia ipidest...). Open Sans 8pt, ~270pt column. Reference line breaks read from sample.pdf via pdftotext -bbox.",
+  "spec": {
+    "font": "corpus/fonts/OpenSans.ttf",
+    "point_size": 8.0,
+    "column_width_pt": 270,
+    "text": "Quia ipidest iumquo blandae poria iliquo mintus exerferit, sed ut hitinus am, officimet repudi dic totaquam aut rem etur, qui aut mos mos aut aut ipsumque dolo conempo rionseq uiant, conetur aut dollam que et molorem. Ut que magni ipsanis diorio. Itaescia in eum expel inctemo luptatqui as id quo expliat."
+  },
+  "expected_lines": [
+    "Quia ipidest iumquo blandae poria iliquo mintus exerferit, sed ut hitinus",
+    "am, officimet repudi dic totaquam aut rem etur, qui aut mos mos aut",
+    "aut ipsumque dolo conempo rionseq uiant, conetur aut dollam que et",
+    "molorem. Ut que magni ipsanis diorio. Itaescia in eum expel inctemo",
+    "luptatqui as id quo expliat."
+  ]
+}

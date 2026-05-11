@@ -1,0 +1,15 @@
+{
+  "name": "dis-body",
+  "comment": "BODY:Body Text paragraph from sample.idml page 5 (Dis eictur...). Open Sans 8pt, ~270pt column. Three-line paragraph; tests short-paragraph break behaviour.",
+  "spec": {
+    "font": "corpus/fonts/OpenSans.ttf",
+    "point_size": 8.0,
+    "column_width_pt": 270,
+    "text": "Dis eictur, tem conseque qui nulpa sam doluptas quibus ute quatur, quament iisquas voleceris aut hil id quiste doloris cipsum eos sequi odionse rsperfe rumquo magnatem fugia consequiat."
+  },
+  "expected_lines": [
+    "Dis eictur, tem conseque qui nulpa sam doluptas quibus ute quatur,",
+    "quament iisquas voleceris aut hil id quiste doloris cipsum eos sequi",
+    "odionse rsperfe rumquo magnatem fugia consequiat."
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "accus-body",
+  "comment": "BODY:Body Text paragraph from sample.idml page 5 (Accus voluptis...). Open Sans 8pt, ~270pt column. Four lines, last line short with significant slack on line 2 — exercises high-stretch left-aligned tolerance.",
+  "spec": {
+    "font": "corpus/fonts/OpenSans.ttf",
+    "point_size": 8.0,
+    "column_width_pt": 270,
+    "text": "Accus voluptis quaernatur adipsum es ipis molliant. Gendestibus quia vidi optiunt. Equiatatus dentiusa vent inctatemquas excearchit atur reium fuga. Xereria spitiscit dolorrovit, non pra velit lam faccaeperi ut volorro Menis eossi iligent ecepellenist entur, cuptat quaectur."
+  },
+  "expected_lines": [
+    "Accus voluptis quaernatur adipsum es ipis molliant. Gendestibus quia",
+    "vidi optiunt. Equiatatus dentiusa vent inctatemquas excearchit atur",
+    "reium fuga. Xereria spitiscit dolorrovit, non pra velit lam faccaeperi ut",
+    "volorro Menis eossi iligent ecepellenist entur, cuptat quaectur."
+  ]
+}
