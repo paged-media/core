@@ -461,8 +461,33 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         .as_deref()
         .filter(|v| !v.is_empty())
         .unwrap_or(&single_width);
-    let breaks: Vec<Breakpoint> =
+    // paragraph_breaker returns an empty break list when no feasible
+    // fit exists at the configured tolerance. Very long real-world
+    // paragraphs that interleave many run-color-switch boxes (e.g.
+    // body copy that repeats the same sentence 60+ times with no
+    // hyphenation opportunities) can trip this. Retry at
+    // progressively looser tolerance so the breaker still produces
+    // lines instead of dropping the paragraph entirely — the
+    // resulting lines won't be perfectly tight, but a slightly looser
+    // break beats no break at all.
+    // paragraph_breaker returns an empty break list when no feasible
+    // fit exists at the configured tolerance. Real-world body copy
+    // that interleaves many run-color-switch boxes or runs past the
+    // configured per-line `column_widths` slice can trip this. Retry
+    // at progressively looser tolerance so the breaker still produces
+    // lines instead of dropping the paragraph entirely — the
+    // resulting lines won't be perfectly tight, but a slightly looser
+    // break beats no break at all.
+    let mut breaks: Vec<Breakpoint> =
         paragraph_breaker::total_fit(&items, lengths, opts.tolerance, opts.looseness);
+    if breaks.is_empty() && !items.is_empty() {
+        for fallback_tol in [opts.tolerance * 4.0, opts.tolerance * 16.0, 1_000.0] {
+            breaks = paragraph_breaker::total_fit(&items, lengths, fallback_tol, opts.looseness);
+            if !breaks.is_empty() {
+                break;
+            }
+        }
+    }
 
     // 4. For each chosen line, walk `flat` in cluster order and pull
     // glyphs whose cluster is in the line's byte range. Position

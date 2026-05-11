@@ -685,8 +685,23 @@ pub fn compose_paragraph(
         .as_deref()
         .filter(|v| !v.is_empty())
         .unwrap_or(&single_width);
-    let breaks: Vec<Breakpoint> =
+    // Mirror layout_runs' fallback: when the configured tolerance
+    // can't fit the paragraph, retry progressively looser so a long
+    // paragraph isn't dropped entirely.
+    let mut breaks: Vec<Breakpoint> =
         paragraph_breaker::total_fit(&items, lengths, options.tolerance, options.looseness);
+    if breaks.is_empty() && !items.is_empty() {
+        for fallback_tol in [
+            options.tolerance * 4.0,
+            options.tolerance * 16.0,
+            1000.0,
+        ] {
+            breaks = paragraph_breaker::total_fit(&items, lengths, fallback_tol, options.looseness);
+            if !breaks.is_empty() {
+                break;
+            }
+        }
+    }
 
     // Translate Breakpoints (item indices) into byte ranges. A break
     // at a flagged hyphenation penalty marks the line for hyphen

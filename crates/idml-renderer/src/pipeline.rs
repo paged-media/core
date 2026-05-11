@@ -1035,6 +1035,18 @@ struct StoryEmitter<'a> {
     chain_spread_bounds: Vec<idml_parse::Bounds>,
     frame_idx: usize,
     y_cursor: i32,
+    /// Leading (in 1/64 pt) of the most recently placed line (or
+    /// empty paragraph). Adobe positions each baseline at
+    /// `prev_baseline + leading(THIS line)`; our `y_cursor` instead
+    /// tracks `prev_baseline + leading(THAT line)`. When the new
+    /// line/paragraph has a different leading (mixed-size flow:
+    /// 12pt body → 24pt heading, or vice versa), the next baseline
+    /// needs to rewind by `prev_line_height_64` and re-apply with
+    /// the new line's leading. We record the most recent advance so
+    /// the next placement can do that adjustment. None at frame
+    /// start (no baseline yet — `first_baseline_for_frame` will be
+    /// used instead).
+    prev_line_height_64: Option<i32>,
     frame_cmd_ranges: Vec<Option<(usize, usize)>>,
     frame_max_baseline_64: Vec<i32>,
     /// Per-frame list of `(cmd_start, cmd_end)` slices, one entry
@@ -1200,6 +1212,7 @@ impl<'a> StoryEmitter<'a> {
             chain_spread_bounds,
             frame_idx: 0,
             y_cursor: -1,
+            prev_line_height_64: None,
             frame_cmd_ranges: vec![None; len],
             frame_max_baseline_64: vec![0; len],
             paragraph_cmd_ranges: vec![Vec::new(); len],
@@ -1672,17 +1685,28 @@ fn emit_paragraph_into_chain(
         .any(|r| !r.text.is_empty() && r.text != "\n");
     if !runs_have_text {
         let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
-        let para_pt = em
-            .document
-            .styles
-            .resolve_paragraph(
-                paragraph
-                    .paragraph_style
-                    .as_deref()
-                    .unwrap_or("ParagraphStyle/$ID/[No paragraph style]"),
-            )
-            .point_size
-            .unwrap_or(em.options.default_point_size);
+        // Prefer the synthetic zero-text run's resolved PointSize when
+        // present (the split function plants it on every empty
+        // sub-paragraph so the leading reflects the surrounding text
+        // size — e.g. 24pt `<Br/><Br/>` produces a 28.8pt gap, not
+        // 14.4pt). Falls back to the paragraph style's PointSize and
+        // ultimately the renderer-wide default.
+        let run_pt = paragraph
+            .runs
+            .first()
+            .and_then(|r| em.document.resolved_run_attrs(paragraph, r).point_size);
+        let para_pt = run_pt.unwrap_or_else(|| {
+            em.document
+                .styles
+                .resolve_paragraph(
+                    paragraph
+                        .paragraph_style
+                        .as_deref()
+                        .unwrap_or("ParagraphStyle/$ID/[No paragraph style]"),
+                )
+                .point_size
+                .unwrap_or(em.options.default_point_size)
+        });
         let space_before_64 =
             resolved_paragraph.space_before.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION;
         let line_height_64 = (para_pt * 1.2 * idml_text::shape::ADVANCE_PRECISION).round() as i32;
@@ -1692,7 +1716,19 @@ fn emit_paragraph_into_chain(
         if em.y_cursor < 0 {
             em.y_cursor = (para_pt * 0.8 * idml_text::shape::ADVANCE_PRECISION).round() as i32;
         }
-        em.y_cursor += space_before_64.round() as i32 + line_height_64;
+        em.y_cursor += space_before_64.round() as i32;
+        // Adobe places the empty paragraph's virtual baseline at
+        // `prev_baseline + leading(empty)`, then the next line at
+        // `empty_baseline + leading(next)`. Our y_cursor encodes
+        // `prev_baseline + leading(prev_line)`; rewind the previous
+        // advance and re-apply with this paragraph's leading so a
+        // 12pt empty between 24pt body and 24pt heading still
+        // contributes only ~14.4pt (matching InDesign), while a
+        // 12pt empty after a 12pt run unchanged (no-op when prev
+        // and current leadings agree).
+        let prev_lh = em.prev_line_height_64.unwrap_or(line_height_64);
+        em.y_cursor = em.y_cursor - prev_lh + line_height_64 + line_height_64;
+        em.prev_line_height_64 = Some(line_height_64);
         let space_after_64 =
             resolved_paragraph.space_after.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION;
         em.y_cursor += space_after_64.round() as i32;
@@ -1985,6 +2021,16 @@ fn emit_paragraph_into_chain(
         let space_before_64 =
             resolved_paragraph.space_before.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION;
         em.y_cursor += space_before_64.round() as i32;
+        // Adobe places each baseline at `prev_baseline + leading(THIS
+        // line)`, not `+ leading(prev line)`. The most recent
+        // y_cursor bump used the previous line/empty-paragraph's
+        // leading; rewind that and re-apply with this paragraph's
+        // first-line leading so mixed-size flows (12pt body → 24pt
+        // heading) gain the extra leading Adobe expects. No-op when
+        // previous and current leadings agree (the common case).
+        if let Some(prev_lh) = em.prev_line_height_64 {
+            em.y_cursor += lopts.line_height - prev_lh;
+        }
     }
     lopts.first_baseline = em.y_cursor;
 
@@ -2556,6 +2602,7 @@ fn emit_paragraph_into_chain(
         }
 
         em.y_cursor = line.baseline_y + line_h;
+        em.prev_line_height_64 = Some(line_h);
     }
     // Drop-cap glyph emission: now that the body lines have landed,
     // position the dropped run at the paragraph's origin (left edge,
@@ -5470,6 +5517,20 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
                 current.runs.push(copy);
             }
             if i + 1 < segments.len() {
+                // If the about-to-be-closed sub-paragraph has no runs
+                // (the previous segment ended with a `\n` and produced
+                // a paragraph terminator straight away), surface the
+                // run's character attributes via a zero-text run so
+                // the empty-paragraph emit branch can read its
+                // PointSize. Without this, an empty paragraph inside
+                // a 24pt `<Br/><Br/>` falls through to the paragraph
+                // style's PointSize (or the default 12pt), collapsing
+                // the leading from 28.8pt to 14.4pt.
+                if current.runs.is_empty() {
+                    let mut hint = run.clone();
+                    hint.text = String::new();
+                    current.runs.push(hint);
+                }
                 // Close the current sub-paragraph and start a new
                 // one. Discard empty sub-paragraphs (consecutive
                 // `\n`s, common at the end of bullet lists).
