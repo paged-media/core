@@ -266,6 +266,12 @@ pub struct TextFrame {
     pub gradient_stroke_angle: Option<f32>,
     /// See [`Rectangle::gradient_stroke_length`].
     pub gradient_stroke_length: Option<f32>,
+    /// `AppliedTOCStyle` attribute — `TOCStyle/<id>` reference. Frames
+    /// authored as Table-of-Contents hosts carry this; the renderer
+    /// detects it at story emission and swaps the story's paragraphs
+    /// for the resolver's output (see `Document::resolve_toc`). `None`
+    /// for ordinary body frames.
+    pub applied_toc_style: Option<String>,
 }
 
 /// IDML `<TextFramePreference VerticalJustification="...">` values.
@@ -1275,6 +1281,7 @@ impl Spread {
                             gradient_fill_length: common.gradient_fill_length,
                             gradient_stroke_angle: common.gradient_stroke_angle,
                             gradient_stroke_length: common.gradient_stroke_length,
+                            applied_toc_style: attr(&e, b"AppliedTOCStyle"),
                         });
                         let idx = out.text_frames.len() - 1;
                         register_with_group(
@@ -2442,6 +2449,25 @@ mod tests {
         );
         assert_eq!(f.minimum_first_baseline_offset, Some(14.0));
         assert_eq!(f.inset_spacing, Some([6.0, 8.0, 10.0, 12.0]));
+    }
+
+    #[test]
+    fn parses_applied_toc_style_on_text_frame() {
+        // TOC-host TextFrames carry `AppliedTOCStyle="TOCStyle/<id>"`
+        // so the renderer can swap the unresolved story's paragraphs
+        // for the resolver's output.
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <TextFrame Self="frameA" ParentStory="u1" GeometricBounds="0 0 100 200"
+                       AppliedTOCStyle="TOCStyle/Main"/>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(
+            s.text_frames[0].applied_toc_style.as_deref(),
+            Some("TOCStyle/Main")
+        );
     }
 
     #[test]

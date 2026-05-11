@@ -497,7 +497,7 @@ pub struct TabStop {
     pub leader: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct CharacterRun {
     pub character_style: Option<String>,
     pub font: Option<String>,
