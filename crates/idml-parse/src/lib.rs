@@ -23,7 +23,8 @@ mod util;
 
 pub use designmap::{ColorSettings, DesignMap, Layer, SpreadRef, StoryRef, TextVariable};
 pub use graphic::{
-    ColorEntry, ColorSpace, GradientEntry, GradientKind, GradientStopRef, Graphic, SwatchEntry,
+    ColorEntry, ColorModel, ColorSpace, GradientEntry, GradientKind, GradientStopRef, Graphic,
+    SwatchEntry,
 };
 pub use spread::{
     Bounds, DirectionalFeatherParams, DropShadowSetting, FirstBaselineOffset, FrameEffects,

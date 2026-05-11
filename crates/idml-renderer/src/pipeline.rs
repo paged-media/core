@@ -6962,23 +6962,21 @@ pub fn color_id_to_paint(
     cmyk_xform: Option<&idml_color::IccTransform>,
 ) -> Option<Paint> {
     let entry = palette.resolve(id)?;
-    if let (Some(xform), idml_parse::ColorSpace::Cmyk) = (cmyk_xform, entry.space) {
-        if entry.value.len() == 4 {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let cmyk = idml_color::Cmyk {
-                    c: entry.value[0],
-                    m: entry.value[1],
-                    y: entry.value[2],
-                    k: entry.value[3],
-                };
-                let idml_color::LinearRgb([r, g, b]) = xform.cmyk_percent_to_linear_rgb(cmyk);
-                return Some(Paint::Solid(Color::rgba(r, g, b, 1.0)));
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                let _ = xform;
-            }
+    // Prefer the swatch's *effective* CMYK — it folds Spot →
+    // alternate-CMYK resolution and any swatch-level `TintValue`
+    // (e.g. "PANTONE 286 C at 50%") into the channels before ICC.
+    // Tint scales each channel toward paper white (0,0,0,0) linearly
+    // in CMYK space, which is what InDesign does in preview.
+    if let (Some(xform), Some([c, m, y, k])) = (cmyk_xform, entry.effective_cmyk()) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let cmyk = idml_color::Cmyk { c, m, y, k };
+            let idml_color::LinearRgb([r, g, b]) = xform.cmyk_percent_to_linear_rgb(cmyk);
+            return Some(Paint::Solid(Color::rgba(r, g, b, 1.0)));
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = xform;
         }
     }
     let [r, g, b] = graphic::to_linear_rgb(entry)?;
@@ -7073,10 +7071,13 @@ pub fn color_id_to_paint_with_list_dir(
         // produces over-saturated mid-tones because CMYK→sRGB is
         // non-linear (e.g. 50% C + 50% M is a duller violet than the
         // average of pure-C-sRGB and pure-M-sRGB).
-        struct StopRef<'a> {
+        struct StopRef {
             offset: f32,
             color: idml_compose::Color,
-            cmyk: Option<&'a [f32]>,
+            // Owned so a spot swatch's tint-scaled alternate CMYK can
+            // participate in CMYK-space gradient interpolation just
+            // like a process CMYK swatch would.
+            cmyk: Option<[f32; 4]>,
         }
         let raw_stops: Vec<StopRef> = grad
             .stops
@@ -7085,13 +7086,7 @@ pub fn color_id_to_paint_with_list_dir(
                 let color = color_id_to_paint(&s.stop_color, palette, cmyk_xform)
                     .and_then(paint_as_solid)?;
                 let entry = palette.resolve(&s.stop_color);
-                let cmyk = entry.and_then(|e| {
-                    if matches!(e.space, idml_parse::ColorSpace::Cmyk) && e.value.len() == 4 {
-                        Some(e.value.as_slice())
-                    } else {
-                        None
-                    }
-                });
+                let cmyk = entry.and_then(|e| e.effective_cmyk());
                 Some(StopRef {
                     offset: (s.location_pct / 100.0).clamp(0.0, 1.0),
                     color,
