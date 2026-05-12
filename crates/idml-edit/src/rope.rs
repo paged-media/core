@@ -85,11 +85,14 @@ impl RunAttrs {
             underline: self.underline,
             strikethru: self.strikethru,
             leading: self.leading,
-            // Overprint + Ruby + Kenten land in the parser today; the
-            // edit rope does not yet surface them as editable run-level
-            // attrs, so we default to None on rebuild.
+            // Overprint + Ruby + Kenten + text-stroke land in the
+            // parser today; the edit rope does not yet surface them
+            // as editable run-level attrs, so we default to None on
+            // rebuild.
             overprint_fill: None,
             overprint_stroke: None,
+            stroke_color: None,
+            stroke_weight: None,
             ruby_flag: None,
             ruby_type: None,
             ruby_string: None,
@@ -486,6 +489,8 @@ mod tests {
                         leading: None,
                         overprint_fill: None,
                         overprint_stroke: None,
+                        stroke_color: None,
+                        stroke_weight: None,
                         ruby_flag: None,
                         ruby_type: None,
                         ruby_string: None,
@@ -512,6 +517,8 @@ mod tests {
                         leading: None,
                         overprint_fill: None,
                         overprint_stroke: None,
+                        stroke_color: None,
+                        stroke_weight: None,
                         ruby_flag: None,
                         ruby_type: None,
                         ruby_string: None,

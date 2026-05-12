@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use idml_compose::{
-    emit_ellipse, emit_glyph_slice, emit_line, emit_paragraph, emit_rect,
+    emit_ellipse, emit_glyph_slice, emit_glyph_slice_stroke, emit_line, emit_paragraph, emit_rect,
     emit_stroke_rect, emit_stroke_rect_transformed, Color, DisplayList, DropShadow, GlyphCacheKey,
     GlyphOutliner, Paint, PathData, PathSegment, Rect, Stroke, Transform, TtfOutliner,
 };
@@ -2456,6 +2456,14 @@ fn emit_paragraph_into_chain(
         em.options.fallback_text_paint,
         bullet_paint_override,
     );
+    let stroke_picker = build_run_stroke_picker(
+        paragraph,
+        &resolved_runs,
+        em.palette,
+        em.cmyk_xform,
+        bullet_paint_override.map(|(len, _)| len).unwrap_or(0),
+    );
+    let any_text_stroke = stroke_picker.any_visible();
 
     let space_after_64 =
         resolved_paragraph.space_after.unwrap_or(0.0) * idml_text::shape::ADVANCE_PRECISION;
@@ -2548,6 +2556,24 @@ fn emit_paragraph_into_chain(
                 &outliner,
                 &mut pages[target_page].list,
             );
+            // Text strokes are sparse — guard the second sweep with
+            // `any_text_stroke` so paragraphs without a single
+            // `StrokeColor` cascade skip the per-glyph picker probe
+            // entirely. When active, the stroke commands land in
+            // display order *after* the matching fills so the outline
+            // paints on top of the silhouette (InDesign's default for
+            // `OutsideAlignment`-style outlines).
+            if any_text_stroke {
+                emit_glyph_slice_stroke(
+                    &line.glyphs[start..end],
+                    fid,
+                    line.glyphs[start].point_size,
+                    |cluster| stroke_picker.pick(cluster),
+                    text_origin_pt,
+                    &outliner,
+                    &mut pages[target_page].list,
+                );
+            }
             start = end;
         }
         emit_line_decorations(
@@ -2674,6 +2700,21 @@ fn emit_paragraph_into_chain(
             &outliner,
             &mut pages[target_page].list,
         );
+        // Drop-cap glyphs inherit run 0's outline when the paragraph
+        // resolves a text stroke (cluster=0 routes the picker to the
+        // first run's band). Rare but cheap to honour for the few
+        // paragraphs where it applies.
+        if any_text_stroke {
+            emit_glyph_slice_stroke(
+                &positioned,
+                cap_font_id,
+                cap_point_size,
+                |cluster| stroke_picker.pick(cluster),
+                text_origin_pt,
+                &outliner,
+                &mut pages[target_page].list,
+            );
+        }
         let after_cap_cmds = pages[target_page].list.commands.len();
         // Track the drop-cap glyphs against the same frame range so
         // any later transparency / vertical-justification pass
@@ -5894,6 +5935,14 @@ fn emit_cell_paragraph(
         em.options.fallback_text_paint,
         None,
     );
+    let stroke_picker = build_run_stroke_picker(
+        paragraph,
+        &resolved_runs,
+        em.palette,
+        em.cmyk_xform,
+        0,
+    );
+    let any_text_stroke = stroke_picker.any_visible();
     let leading_pt = paragraph_size * 1.2;
     let cell_origin = (origin_pt.0, origin_pt.1 + paragraph_y);
     let list = &mut pages[target_page].list;
@@ -5931,6 +5980,17 @@ fn emit_cell_paragraph(
                 &outliner,
                 list,
             );
+            if any_text_stroke {
+                emit_glyph_slice_stroke(
+                    &line.glyphs[start..end],
+                    fid,
+                    line.glyphs[start].point_size,
+                    |cluster| stroke_picker.pick(cluster),
+                    cell_origin,
+                    &outliner,
+                    list,
+                );
+            }
             start = end;
         }
     }
@@ -7975,6 +8035,40 @@ impl RunPaintPicker {
     }
 }
 
+/// Per-cluster lookup for a run's text outline (paint + stroke geometry).
+/// Constructed once per paragraph alongside `RunPaintPicker`. `pick`
+/// returns `None` for clusters whose cascade leaves `StrokeColor`
+/// unset (the common case — IDML records a stroke colour on a run
+/// only when the author has explicitly assigned one). A `Some` value
+/// drives one extra `StrokePath` per glyph in that run.
+#[derive(Default)]
+pub struct RunStrokePicker {
+    /// `(start_cluster, paint_and_stroke_or_none)`. The picker walks
+    /// in cluster order so we keep the bands sorted at build time.
+    bands: Vec<(u32, Option<(Paint, Stroke)>)>,
+}
+
+impl RunStrokePicker {
+    pub fn pick(&self, cluster: u32) -> Option<(Paint, Stroke)> {
+        let mut chosen: Option<(Paint, Stroke)> = None;
+        for (start, entry) in &self.bands {
+            if *start <= cluster {
+                chosen = *entry;
+            } else {
+                break;
+            }
+        }
+        chosen
+    }
+
+    /// True iff at least one band carries a visible stroke. Lets the
+    /// hot per-line emit loop skip the second glyph sweep entirely
+    /// for the overwhelming majority of paragraphs.
+    pub fn any_visible(&self) -> bool {
+        self.bands.iter().any(|(_, e)| e.is_some())
+    }
+}
+
 pub fn build_run_paint_picker(
     paragraph: &idml_parse::Paragraph,
     palette: &Graphic,
@@ -8020,6 +8114,46 @@ pub fn build_run_paint_picker_with_cmyk(
 /// paint and pushes every content band by `bullet_byte_len` so the
 /// bullet glyphs (clusters 0..bullet_byte_len) get the override while
 /// the body text past the marker keeps each run's resolved fill.
+/// Build a per-cluster stroke picker for a paragraph.
+///
+/// Each run's cascaded `(stroke_color, stroke_weight)` decides whether
+/// glyphs in that run carry an outline. When `stroke_color` resolves
+/// to a real paint but `stroke_weight` is `None`, we fall back to 1pt
+/// — matching the value the document's `<TextDefault>` records for a
+/// fresh InDesign document (the parser doesn't surface TextDefault as
+/// its own node yet; 1pt is the InDesign-published default).
+fn build_run_stroke_picker(
+    paragraph: &idml_parse::Paragraph,
+    resolved_runs: &[idml_scene::ResolvedRunAttrs],
+    palette: &Graphic,
+    cmyk_xform: Option<&idml_color::IccTransform>,
+    bullet_byte_offset: u32,
+) -> RunStrokePicker {
+    let mut bands: Vec<(u32, Option<(Paint, Stroke)>)> =
+        Vec::with_capacity(paragraph.runs.len() + 1);
+    let mut cursor = bullet_byte_offset;
+    if bullet_byte_offset > 0 {
+        // The bullet marker carries no per-run stroke today (the parser
+        // wires only fill / fill-tint through the bullet character
+        // style). Seed a no-stroke band at cluster 0 so the marker
+        // stays fill-only.
+        bands.push((0, None));
+    }
+    for (i, run) in paragraph.runs.iter().enumerate() {
+        let entry = resolved_runs[i]
+            .stroke_color
+            .as_deref()
+            .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+            .map(|paint| {
+                let width = resolved_runs[i].stroke_weight.unwrap_or(1.0);
+                (paint, Stroke::new(width))
+            });
+        bands.push((cursor, entry));
+        cursor += run.text.len() as u32;
+    }
+    RunStrokePicker { bands }
+}
+
 fn build_run_paint_picker_resolved(
     paragraph: &idml_parse::Paragraph,
     resolved_runs: &[idml_scene::ResolvedRunAttrs],

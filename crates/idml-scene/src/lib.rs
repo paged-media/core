@@ -491,6 +491,8 @@ impl ResolvedRunAttrs {
             point_size: run.point_size,
             fill_color: run.fill_color.clone(),
             fill_tint: run.fill_tint,
+            stroke_color: run.stroke_color.clone(),
+            stroke_weight: run.stroke_weight,
             capitalization: run.capitalization.clone(),
             baseline_shift: run.baseline_shift,
             horizontal_scale: run.horizontal_scale,
@@ -524,6 +526,10 @@ impl ResolvedRunAttrs {
             self.fill_color = c.fill_color.clone();
         }
         self.fill_tint = self.fill_tint.or(c.fill_tint);
+        if self.stroke_color.is_none() {
+            self.stroke_color = c.stroke_color.clone();
+        }
+        self.stroke_weight = self.stroke_weight.or(c.stroke_weight);
         if self.capitalization.is_none() {
             self.capitalization = c.capitalization.clone();
         }
@@ -569,6 +575,10 @@ impl ResolvedRunAttrs {
             self.fill_color = p.fill_color.clone();
         }
         self.fill_tint = self.fill_tint.or(p.fill_tint);
+        if self.stroke_color.is_none() {
+            self.stroke_color = p.stroke_color.clone();
+        }
+        self.stroke_weight = self.stroke_weight.or(p.stroke_weight);
         if self.capitalization.is_none() {
             self.capitalization = p.capitalization.clone();
         }
@@ -716,6 +726,16 @@ pub struct ResolvedRunAttrs {
     /// at full strength. The renderer scales the resolved RGB toward
     /// paper white by `(1 - tint/100)` when `Some`.
     pub fill_tint: Option<f32>,
+    /// Cascaded `StrokeColor` for text outline. `None` ⇒ no outline
+    /// (run renders fill-only). Resolves through the same direct >
+    /// character-style > paragraph-style chain as every other field.
+    /// See [`CharacterRun::stroke_color`].
+    pub stroke_color: Option<String>,
+    /// Cascaded `StrokeWeight` in pt. The renderer falls back to
+    /// 1pt at emit time when `stroke_color` resolves but
+    /// `stroke_weight` is None — matching IDML's `<TextDefault>`
+    /// default for new documents.
+    pub stroke_weight: Option<f32>,
     /// `Capitalization` value (Normal/AllCaps/SmallCaps/CapToSmallCap).
     /// Renderer uppercases the input string before shaping for
     /// `AllCaps` / `SmallCaps` (the latter without OT smcp lookup is
