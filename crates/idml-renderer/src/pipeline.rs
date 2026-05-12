@@ -2001,8 +2001,25 @@ fn emit_paragraph_into_chain(
     if em.y_cursor < 0 {
         // Family-keyed override wins over the byte-hash lookup so a
         // documented Arial → Roboto substitution can pin Arial's
-        // ascender (0.905) instead of letting Roboto's (0.928)
-        // shift every first baseline by ~0.023 × point_size.
+        // ascender (0.728 em from sTypoAscender) via `--font-metrics`
+        // instead of letting the substitute font's metrics override
+        // every first baseline. See `manual-sample.fonts.sh` for the
+        // concrete numbers.
+        //
+        // The byte-hash fallback uses `font_ids[0]`, which XORs in
+        // the wght axis bits. `FontTable::metrics` is keyed by the
+        // raw bytes-fnv hash without wght, so this lookup misses by
+        // design: it forces AscentOffset to fall through to the
+        // `0.8 × pt` heuristic when no family override is set.
+        // Empirically `0.8 × pt` is closer to Adobe's actual baseline
+        // (~0.7–0.75 em sTypoAscender for typical fonts) than most
+        // substitute fonts' raw ascender values (Cormorant Garamond
+        // 0.924, Roboto 1.048, etc.) — switching to the unmixed
+        // lookup regressed the text-fixture's Minion Pro → Cormorant
+        // substitution by ~2.4 pt per first baseline. The fix is to
+        // pin the original font's metrics through `--font-metrics`
+        // (the family-override branch above) rather than trusting the
+        // substitute's metrics.
         let head_family = resolved_runs.first().and_then(|r| r.font.as_deref());
         let head_font_metrics = head_family
             .and_then(|f| em.font_table.metrics_for_family(f))
