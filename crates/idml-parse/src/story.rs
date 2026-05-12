@@ -635,6 +635,21 @@ pub struct CharacterRun {
     pub overprint_fill: Option<bool>,
     /// `OverprintStroke="true"` analogue (rare on text but parsed).
     pub overprint_stroke: Option<bool>,
+    /// `StrokeColor` on the `<CharacterStyleRange>` — the paint used
+    /// to outline each glyph. None ⇒ inherit from the applied
+    /// character / paragraph style cascade; if still absent at the
+    /// bottom of the cascade the renderer treats the glyph as
+    /// fill-only (no outline). IDML stores "no stroke" as
+    /// `Swatch/None`; the parser normalises that to `None` for text
+    /// runs the same way object strokes do.
+    pub stroke_color: Option<String>,
+    /// `StrokeWeight` on the `<CharacterStyleRange>` in pt. Absent on
+    /// most runs because InDesign records the run's stroke weight
+    /// only when it differs from the document's `<TextDefault>`
+    /// value (which is 1pt for new documents). The renderer falls
+    /// back to 1pt at emit time when `stroke_color` resolves but
+    /// `stroke_weight` doesn't.
+    pub stroke_weight: Option<f32>,
     pub text: String,
 }
 
@@ -1091,6 +1106,17 @@ impl Story {
                                 .and_then(|s| s.parse::<bool>().ok()),
                             overprint_stroke: attr(&e, b"OverprintStroke")
                                 .and_then(|s| s.parse::<bool>().ok()),
+                            // `Swatch/None` is IDML's literal for
+                            // "no stroke"; treat it as a missing
+                            // colour so the cascade fall-through can
+                            // see "no run-level override" rather
+                            // than "Swatch/None override".
+                            stroke_color: attr(&e, b"StrokeColor").and_then(|s| match s.as_str() {
+                                "Swatch/None" | "n" | "" => None,
+                                _ => Some(s),
+                            }),
+                            stroke_weight: attr(&e, b"StrokeWeight")
+                                .and_then(|s| s.parse::<f32>().ok()),
                             text: String::new(),
                         });
                     }

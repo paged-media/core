@@ -263,6 +263,13 @@ pub struct CharacterStyleDef {
     pub fill_color: Option<String>,
     /// `FillTint` — see `CharacterRun::fill_tint` for semantics.
     pub fill_tint: Option<f32>,
+    /// `StrokeColor` declared on the `<CharacterStyle>`. Cascades
+    /// through `BasedOn` like every other field. `Swatch/None` is
+    /// normalised to `None` at parse time so a cascade can fall
+    /// through to a real colour from the base style.
+    pub stroke_color: Option<String>,
+    /// `StrokeWeight` declared on the `<CharacterStyle>` in pt.
+    pub stroke_weight: Option<f32>,
     pub capitalization: Option<String>,
     pub baseline_shift: Option<f32>,
     pub horizontal_scale: Option<f32>,
@@ -310,6 +317,12 @@ pub struct ParagraphStyleDef {
     pub fill_color: Option<String>,
     /// `FillTint` — see `CharacterRun::fill_tint` for semantics.
     pub fill_tint: Option<f32>,
+    /// `StrokeColor` declared on the `<ParagraphStyle>` — the paint
+    /// used to outline glyphs whose run / character style don't
+    /// override it. `Swatch/None` normalises to `None`.
+    pub stroke_color: Option<String>,
+    /// `StrokeWeight` declared on the `<ParagraphStyle>` in pt.
+    pub stroke_weight: Option<f32>,
     pub capitalization: Option<String>,
     pub baseline_shift: Option<f32>,
     pub horizontal_scale: Option<f32>,
@@ -432,6 +445,11 @@ pub struct ResolvedCharacter {
     pub point_size: Option<f32>,
     pub fill_color: Option<String>,
     pub fill_tint: Option<f32>,
+    /// Cascaded text-stroke colour. See
+    /// [`CharacterStyleDef::stroke_color`].
+    pub stroke_color: Option<String>,
+    /// Cascaded text-stroke weight in pt.
+    pub stroke_weight: Option<f32>,
     pub capitalization: Option<String>,
     pub baseline_shift: Option<f32>,
     pub horizontal_scale: Option<f32>,
@@ -468,6 +486,11 @@ pub struct ResolvedParagraph {
     pub point_size: Option<f32>,
     pub fill_color: Option<String>,
     pub fill_tint: Option<f32>,
+    /// Cascaded text-stroke colour. See
+    /// [`ParagraphStyleDef::stroke_color`].
+    pub stroke_color: Option<String>,
+    /// Cascaded text-stroke weight in pt.
+    pub stroke_weight: Option<f32>,
     pub capitalization: Option<String>,
     pub baseline_shift: Option<f32>,
     pub horizontal_scale: Option<f32>,
@@ -1017,6 +1040,10 @@ impl ResolvedCharacter {
             self.fill_color = def.fill_color.clone();
         }
         self.fill_tint = self.fill_tint.or(def.fill_tint);
+        if self.stroke_color.is_none() {
+            self.stroke_color = def.stroke_color.clone();
+        }
+        self.stroke_weight = self.stroke_weight.or(def.stroke_weight);
         if self.capitalization.is_none() {
             self.capitalization = def.capitalization.clone();
         }
@@ -1064,6 +1091,10 @@ impl ResolvedParagraph {
             self.fill_color = def.fill_color.clone();
         }
         self.fill_tint = self.fill_tint.or(def.fill_tint);
+        if self.stroke_color.is_none() {
+            self.stroke_color = def.stroke_color.clone();
+        }
+        self.stroke_weight = self.stroke_weight.or(def.stroke_weight);
         if self.capitalization.is_none() {
             self.capitalization = def.capitalization.clone();
         }
@@ -1133,6 +1164,12 @@ impl ResolvedParagraph {
 }
 
 fn parse_character_style(e: &quick_xml::events::BytesStart) -> Option<CharacterStyleDef> {
+    // `Swatch/None` is IDML's literal for "no stroke" — normalise to
+    // None so a `BasedOn` cascade can fall through to a real colour.
+    let normalize = |c: Option<String>| match c.as_deref() {
+        Some("Swatch/None") | Some("n") | Some("") => None,
+        _ => c,
+    };
     Some(CharacterStyleDef {
         self_id: attr(e, b"Self")?,
         name: attr(e, b"Name"),
@@ -1142,6 +1179,8 @@ fn parse_character_style(e: &quick_xml::events::BytesStart) -> Option<CharacterS
         point_size: attr(e, b"PointSize").and_then(|s| s.parse().ok()),
         fill_color: attr(e, b"FillColor"),
         fill_tint: parse_tint_attr(e, b"FillTint"),
+        stroke_color: normalize(attr(e, b"StrokeColor")),
+        stroke_weight: attr(e, b"StrokeWeight").and_then(|s| s.parse().ok()),
         capitalization: attr(e, b"Capitalization"),
         baseline_shift: attr(e, b"BaselineShift").and_then(|s| s.parse().ok()),
         horizontal_scale: attr(e, b"HorizontalScale").and_then(|s| s.parse().ok()),
@@ -1276,6 +1315,12 @@ fn parse_toc_style_entry(e: &quick_xml::events::BytesStart) -> Option<TOCStyleEn
 }
 
 fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphStyleDef> {
+    // `Swatch/None` is IDML's literal for "no stroke" — normalise to
+    // None so a `BasedOn` cascade can fall through to a real colour.
+    let normalize = |c: Option<String>| match c.as_deref() {
+        Some("Swatch/None") | Some("n") | Some("") => None,
+        _ => c,
+    };
     Some(ParagraphStyleDef {
         self_id: attr(e, b"Self")?,
         name: attr(e, b"Name"),
@@ -1285,6 +1330,8 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         point_size: attr(e, b"PointSize").and_then(|s| s.parse().ok()),
         fill_color: attr(e, b"FillColor"),
         fill_tint: parse_tint_attr(e, b"FillTint"),
+        stroke_color: normalize(attr(e, b"StrokeColor")),
+        stroke_weight: attr(e, b"StrokeWeight").and_then(|s| s.parse().ok()),
         capitalization: attr(e, b"Capitalization"),
         baseline_shift: attr(e, b"BaselineShift").and_then(|s| s.parse().ok()),
         horizontal_scale: attr(e, b"HorizontalScale").and_then(|s| s.parse().ok()),

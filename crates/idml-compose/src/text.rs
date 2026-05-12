@@ -17,7 +17,9 @@
 
 use idml_text::layout::{LaidOutParagraph, PositionedGlyph};
 
-use crate::display_list::{DisplayCommand, DisplayList, GlyphCacheKey, Paint, PathId, Transform};
+use crate::display_list::{
+    DisplayCommand, DisplayList, GlyphCacheKey, Paint, PathId, Stroke, Transform,
+};
 use crate::glyph::GlyphOutliner;
 
 /// Advance precision used by `idml_text::layout`: positions are in
@@ -164,6 +166,53 @@ pub fn emit_glyph_slice_blend<O, F>(
                 blend_mode,
             });
         }
+    }
+}
+
+/// Emit `StrokePath` commands for glyphs whose run cascade resolves a
+/// visible text stroke. `stroke_for(cluster)` returns `Some((paint,
+/// stroke))` for clusters that should be outlined and `None` for
+/// clusters that should remain fill-only — the typical sparse case
+/// where only a handful of runs carry a `StrokeColor`. The stroke
+/// commands are appended *after* the matching fills so they land on
+/// top of the glyph in display order (matching InDesign's default
+/// `OutsideAlignment` look: fill underneath, stroke around the
+/// silhouette).
+pub fn emit_glyph_slice_stroke<O, S>(
+    glyphs: &[PositionedGlyph],
+    font_id: u32,
+    point_size: f32,
+    stroke_for: S,
+    frame_origin_pt: (f32, f32),
+    outliner: &O,
+    list: &mut DisplayList,
+) where
+    O: GlyphOutliner,
+    S: Fn(u32) -> Option<(Paint, Stroke)>,
+{
+    let upem = outliner.units_per_em();
+    let scale = point_size / upem;
+    let (ox, oy) = frame_origin_pt;
+    for g in glyphs {
+        let Some((paint, stroke)) = stroke_for(g.cluster) else {
+            continue;
+        };
+        let Some(path_id) = get_or_intern_glyph_outline(font_id, g.glyph_id, outliner, list) else {
+            continue;
+        };
+        let gx = ox + g.x as f32 / ADVANCE_PRECISION;
+        let gy = oy + g.y as f32 / ADVANCE_PRECISION;
+        // Same column-major 2×3 as `emit_glyph_slice`: y-flip + scale,
+        // then translate to (gx, gy). Stroke widths are document-space
+        // pt so the rasterizer reads `stroke.width` directly rather
+        // than transforming through `scale`.
+        let transform = Transform([scale, 0.0, 0.0, -scale, gx, gy]);
+        list.push(DisplayCommand::StrokePath {
+            path_id,
+            paint,
+            stroke,
+            transform,
+        });
     }
 }
 
