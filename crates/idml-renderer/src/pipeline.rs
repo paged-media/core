@@ -2182,6 +2182,27 @@ fn emit_paragraph_into_chain(
         twin_after,
     } = build_perline_wrap_widths(em, styled_runs_ref, &mut lopts);
 
+    // Twin segments (text wrap on both sides of an obstacle) emit
+    // alternating narrow/wide widths to the breaker. For long
+    // paragraphs `paragraph_breaker::total_fit`'s fitness-class
+    // machinery prunes every candidate before the end-of-paragraph
+    // penalty and returns zero breaks. Bumping the glue stretch
+    // budget from 0.33 (Adobe's calibrated default) to 0.5 gives
+    // Knuth-Plass enough headroom to absorb the narrow-to-wide row
+    // transitions and converge on a feasible solution — verified
+    // against the manual-sample page 7 case (~300 words flowing
+    // around two obstacles, previously emitted zero lines). We
+    // bump only when twins are present so the regular-column
+    // corpus keeps the tightly-calibrated 0.33 and its 100%
+    // line-break parity on the calibration suite. The bump trades
+    // tighter line-break match against InDesign for the ability to
+    // render at all — without it, a wrap-around-object paragraph
+    // longer than ~165 words drops to an empty frame.
+    let twins_present = twin_after.iter().any(|&t| t);
+    if twins_present {
+        lopts.compose.stretch_ratio = lopts.compose.stretch_ratio.max(0.5);
+    }
+
     let mut laid_out = idml_text::layout_runs(styled_runs_ref, &lopts);
 
     // Optical margin alignment: when the story carries
@@ -6252,18 +6273,24 @@ fn build_perline_wrap_widths(
                 })
                 .collect();
             if usable.is_empty() {
-                // Polygon-clipped frames: emit a 1pt width that
-                // Knuth-Plass treats as infeasible so the line at the
-                // apex (or beyond the polygon's vertical extent)
-                // drops cleanly rather than re-flooding the AABB.
-                // Plain rectangle / wrap-rect lines still fall back
-                // to scalar so a hostile carve at least renders text.
-                if poly.is_some() {
-                    widths_64.push(64);
-                    shifts_64.push(0);
-                    twin_after.push(false);
-                    continue;
-                }
+                // No usable segment at this line. Previously the
+                // polygon-clipped branch emitted a 1pt sentinel
+                // intending to mark the line as "infeasible — break
+                // here", but `paragraph_breaker::total_fit` reads
+                // that as "every line at this index has ratio < -1",
+                // pruning every active node that crosses the
+                // sentinel slot. For paragraphs whose content needs
+                // more rows than fit *before* the apex (the common
+                // case for table-cell-style threaded polygons), the
+                // breaker can no longer reach the end-of-paragraph
+                // penalty and returns zero breaks — leaving the
+                // entire story unrendered. Falling back to
+                // `scalar_width_64` at apex rows lets the breaker
+                // proceed; any glyph laid out at those y positions
+                // falls outside the polygon path and is invisible
+                // once `apply_polygon_clip` wraps the frame's
+                // commands in a clipping path. The cost is a few
+                // extra glyph commands the rasteriser discards.
                 widths_64.push(scalar_width_64);
                 shifts_64.push(0);
                 twin_after.push(false);
