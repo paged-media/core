@@ -1747,20 +1747,15 @@ fn emit_paragraph_into_chain(
     let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
 
     // Resolve every run's font bytes up front so the borrows for
-    // `Face` construction below all live in the same scope.
-    let mut bytes_pool: Vec<bytes::Bytes> = Vec::with_capacity(paragraph.runs.len());
-    for resolved in &resolved_runs {
-        let Some(b) = em
-            .font_table
-            .bytes_for(resolved.font.as_deref(), resolved.font_style.as_deref())
-        else {
-            continue;
-        };
-        bytes_pool.push(b);
-    }
-    if bytes_pool.is_empty() || bytes_pool.len() != paragraph.runs.len() {
+    // `Face` construction below all live in the same scope. Any run
+    // whose (family, style) is unknown to the FontTable inherits a
+    // paragraph-level fallback (first resolvable sibling > document
+    // default font) — without this, an IDML referencing one missing
+    // font (e.g. an obscure decorative face) would silently drop the
+    // entire paragraph and lose every neighbouring run with it.
+    let Some(bytes_pool) = em.font_table.resolve_paragraph_bytes(&resolved_runs) else {
         return;
-    }
+    };
 
     // Per-run wght axis values. Variable fonts ship one TTF that
     // covers the whole weight axis; a run flagged `FontStyle="Bold"`
@@ -5632,16 +5627,12 @@ fn measure_cell_paragraph(
         .iter()
         .map(|r| em.document.resolved_run_attrs(paragraph, r))
         .collect();
-    let mut bytes_pool: Vec<bytes::Bytes> = Vec::with_capacity(paragraph.runs.len());
-    for resolved in &resolved_runs {
-        let Some(b) = em
-            .font_table
-            .bytes_for(resolved.font.as_deref(), resolved.font_style.as_deref())
-        else {
-            return 0.0;
-        };
-        bytes_pool.push(b);
-    }
+    // Per-run bytes with per-paragraph fallback for any run whose
+    // (family, style) doesn't resolve — keeps height-measurement
+    // honest even when one cell run references an absent font.
+    let Some(bytes_pool) = em.font_table.resolve_paragraph_bytes(&resolved_runs) else {
+        return 0.0;
+    };
     let wghts: Vec<f32> = resolved_runs
         .iter()
         .map(|r| wght_for_font_style(r.font_style.as_deref()))
@@ -5761,16 +5752,12 @@ fn emit_cell_paragraph(
         .iter()
         .map(|r| em.document.resolved_run_attrs(paragraph, r))
         .collect();
-    let mut bytes_pool: Vec<bytes::Bytes> = Vec::with_capacity(paragraph.runs.len());
-    for resolved in &resolved_runs {
-        let Some(b) = em
-            .font_table
-            .bytes_for(resolved.font.as_deref(), resolved.font_style.as_deref())
-        else {
-            return 0.0;
-        };
-        bytes_pool.push(b);
-    }
+    // Per-run bytes with per-paragraph fallback (matches the main
+    // emit path). A single unresolvable run no longer takes the
+    // whole cell paragraph down with it.
+    let Some(bytes_pool) = em.font_table.resolve_paragraph_bytes(&resolved_runs) else {
+        return 0.0;
+    };
     // Per-run wght axis values, derived from the resolved FontStyle.
     // Identical wiring to the main `emit_paragraph_into_chain` path —
     // table-cell text needs Bold / Light pinning too. Without this,
@@ -8909,6 +8896,42 @@ impl FontTable {
         self.fallback.clone()
     }
 
+    /// Resolve a paragraph's per-run font bytes, filling any
+    /// individually-unresolvable run with a paragraph-level fallback
+    /// so a single bad run doesn't drop the entire paragraph. The
+    /// per-paragraph fallback is, in order: the first sibling run
+    /// that DID resolve (keeps the visual style closest to what the
+    /// rest of the paragraph uses), then [`FontTable::fallback`]
+    /// (the renderer-wide default font), then `None` — signalling
+    /// no font is available anywhere and the caller should skip.
+    ///
+    /// Returns `None` when no run resolves AND no document-wide
+    /// fallback is configured. In that case the paragraph still has
+    /// to be dropped because there's nothing to shape with.
+    fn resolve_paragraph_bytes(
+        &self,
+        runs: &[idml_scene::ResolvedRunAttrs],
+    ) -> Option<Vec<Bytes>> {
+        if runs.is_empty() {
+            return None;
+        }
+        let per_run: Vec<Option<Bytes>> = runs
+            .iter()
+            .map(|r| self.bytes_for(r.font.as_deref(), r.font_style.as_deref()))
+            .collect();
+        let paragraph_fallback: Option<Bytes> = per_run
+            .iter()
+            .find_map(|b| b.clone())
+            .or_else(|| self.fallback.clone());
+        let paragraph_fallback = paragraph_fallback?;
+        Some(
+            per_run
+                .into_iter()
+                .map(|b| b.unwrap_or_else(|| paragraph_fallback.clone()))
+                .collect(),
+        )
+    }
+
     fn metrics_for(&self, font_id: u32) -> Option<&FontMetrics> {
         self.metrics.get(&font_id)
     }
@@ -9450,5 +9473,79 @@ mod tests {
             "out-of-range / duplicate markers collapse to one contour"
         );
         assert_eq!(closes, 1);
+    }
+
+    fn font_table_with(
+        cache: &[(&str, Option<&str>, &[u8])],
+        fallback: Option<&[u8]>,
+    ) -> FontTable {
+        let mut hm: HashMap<(String, Option<String>), Bytes> = HashMap::new();
+        for (family, style, b) in cache {
+            hm.insert(
+                (family.to_string(), style.map(str::to_string)),
+                Bytes::copy_from_slice(b),
+            );
+        }
+        FontTable {
+            faces: HashMap::new(),
+            face_bytes: HashMap::new(),
+            cache: hm,
+            fallback: fallback.map(Bytes::copy_from_slice),
+            metrics: HashMap::new(),
+            family_metrics: HashMap::new(),
+        }
+    }
+
+    fn run_attrs(family: Option<&str>, style: Option<&str>) -> idml_scene::ResolvedRunAttrs {
+        idml_scene::ResolvedRunAttrs {
+            font: family.map(str::to_string),
+            font_style: style.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn resolve_paragraph_bytes_falls_back_per_run_to_sibling_font() {
+        // Mixed paragraph: one run references a registered family,
+        // another references something the cache doesn't know AND no
+        // document-wide fallback is configured. The unknown run
+        // inherits the resolved sibling's bytes instead of dropping
+        // the whole paragraph.
+        let table = font_table_with(&[("Inter", None, b"INTER")], None);
+        let runs = vec![
+            run_attrs(Some("Inter"), None),
+            run_attrs(Some("Limon Script"), None),
+            run_attrs(Some("Inter"), None),
+        ];
+        let pool = table.resolve_paragraph_bytes(&runs).expect("paragraph kept");
+        assert_eq!(pool.len(), 3);
+        assert_eq!(&pool[0][..], b"INTER");
+        assert_eq!(&pool[1][..], b"INTER", "missing run inherits sibling");
+        assert_eq!(&pool[2][..], b"INTER");
+    }
+
+    #[test]
+    fn resolve_paragraph_bytes_prefers_table_fallback_when_no_run_resolves() {
+        // All runs reference unknown families but the renderer was
+        // given a document-wide default font — every slot picks it up.
+        let table = font_table_with(&[], Some(b"DEFAULT"));
+        let runs = vec![
+            run_attrs(Some("Unknown A"), None),
+            run_attrs(Some("Unknown B"), Some("Bold")),
+        ];
+        let pool = table.resolve_paragraph_bytes(&runs).expect("paragraph kept");
+        assert_eq!(pool.len(), 2);
+        assert_eq!(&pool[0][..], b"DEFAULT");
+        assert_eq!(&pool[1][..], b"DEFAULT");
+    }
+
+    #[test]
+    fn resolve_paragraph_bytes_returns_none_when_nothing_resolves() {
+        // No registered family, no fallback — caller still has to
+        // skip the paragraph because there's literally no shaping
+        // input.
+        let table = font_table_with(&[], None);
+        let runs = vec![run_attrs(Some("Unknown"), None)];
+        assert!(table.resolve_paragraph_bytes(&runs).is_none());
     }
 }
