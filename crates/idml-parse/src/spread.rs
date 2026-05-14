@@ -381,6 +381,13 @@ pub struct Rectangle {
     /// `AssetResolver::resolve_image`. `None` means the rectangle
     /// is a plain colour swatch.
     pub image_link: Option<String>,
+    /// True when the rectangle nests an `<Image>` / `<EPSImage>` /
+    /// `<PDF>` / `<ImportedPage>` child regardless of whether a
+    /// `LinkResourceURI` resolved. Distinguishes "plain colour
+    /// swatch" (false) from "image frame whose link is unresolvable"
+    /// (true) so the renderer can stamp a missing-image placeholder
+    /// instead of falling back to the frame's raw fill.
+    pub has_image_element: bool,
     /// `ItemTransform` attribute on the nested `<Image>` element.
     /// Maps the image's natural-pixel coordinate space (origin at the
     /// top-left of the source pixmap, with 1px ≈ 1pt at 72 ppi) into
@@ -889,6 +896,8 @@ pub struct Polygon {
     /// polygon's path becomes the image's clip mask. `None` means the
     /// polygon is a plain colour swatch.
     pub image_link: Option<String>,
+    /// See [`Rectangle::has_image_element`].
+    pub has_image_element: bool,
     /// `ItemTransform` attribute on the nested `<Image>` element.
     /// See [`Rectangle::image_item_transform`].
     pub image_item_transform: Option<[f32; 6]>,
@@ -1367,6 +1376,7 @@ impl Spread {
                             drop_shadow: None,
                             stroke_drop_shadow: None,
                             image_link: None,
+                            has_image_element: false,
                             image_item_transform: None,
                             applied_object_style: common.applied_object_style,
                             text_wrap: None,
@@ -1954,15 +1964,29 @@ impl Spread {
                             }
                         }
                     }
-                    b"Image" | b"Link" => {
+                    b"Image" | b"EPSImage" | b"PDF" | b"ImportedPage" | b"Link" => {
                         // IDML's image-bearing frame nests an
                         // <Image> with a LinkResourceURI on the
                         // element itself or on its <Link> child.
                         // Both Rectangle and Polygon may host placed
                         // images; routing here dispatches on the
                         // open frame's kind.
+                        //
+                        // The image-element tags (Image / EPSImage /
+                        // PDF / ImportedPage) also flip
+                        // `has_image_element` so the renderer can
+                        // distinguish a plain colour swatch from an
+                        // image frame whose link failed to resolve
+                        // (Envato template placeholders) and stamp
+                        // InDesign's missing-image placeholder
+                        // instead of falling back to raw fill.
+                        let is_image_element =
+                            !matches!(e.name().as_ref(), b"Link");
                         match current_frame.as_ref().map(|cf| cf.kind) {
                             Some(CurrentFrameKind::Rect(i)) => {
+                                if is_image_element {
+                                    out.rectangles[i].has_image_element = true;
+                                }
                                 if let Some(uri) =
                                     attr(&e, b"LinkResourceURI").or_else(|| attr(&e, b"href"))
                                 {
@@ -1983,6 +2007,9 @@ impl Spread {
                                 }
                             }
                             Some(CurrentFrameKind::Polygon(i)) => {
+                                if is_image_element {
+                                    out.polygons[i].has_image_element = true;
+                                }
                                 if let Some(uri) =
                                     attr(&e, b"LinkResourceURI").or_else(|| attr(&e, b"href"))
                                 {
@@ -2123,6 +2150,7 @@ impl Spread {
                             blend_mode: None,
                             text_paths: Vec::new(),
                             image_link: None,
+                            has_image_element: false,
                             image_item_transform: None,
                             overprint_fill: common.overprint_fill,
                             overprint_stroke: common.overprint_stroke,

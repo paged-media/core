@@ -81,6 +81,14 @@ pub struct PipelineOptions<'a> {
     /// matches an entry here, the override wins over the metrics
     /// parsed from the substitute font's bytes. Empty by default.
     pub font_metrics_overrides: &'a [(String, FontMetricsOverride)],
+    /// When `true` (default), frames that nest an `<Image>` (or
+    /// `<EPSImage>` / `<PDF>` / `<ImportedPage>`) whose link cannot be
+    /// resolved are stamped with InDesign's missing-image placeholder
+    /// — a 30% grey fill clipped to the host path plus two diagonal
+    /// stroke segments. Templates routinely ship with broken links so
+    /// every "Your Image Here" slot ends up looking like the IDML's
+    /// reference PDF instead of falling back to the frame's raw fill.
+    pub missing_image_placeholder: bool,
 }
 
 impl std::fmt::Debug for PipelineOptions<'_> {
@@ -108,6 +116,7 @@ impl Default for PipelineOptions<'_> {
             cmyk_icc_profile: None,
             frame_drop_shadow: None,
             font_metrics_overrides: &[],
+            missing_image_placeholder: true,
         }
     }
 }
@@ -3084,6 +3093,7 @@ fn emit_anchored_rect_via_pipeline(
         // pass can pick them up. Today's anchored.idml ships no
         // image-bearing anchored Rectangles.
         image_link: None,
+        has_image_element: false,
         image_item_transform: None,
         applied_object_style: af.applied_object_style.clone(),
         text_wrap: None,
@@ -3162,6 +3172,7 @@ fn emit_anchored_rect_image(
         drop_shadow: None,
         stroke_drop_shadow: None,
         image_link: af.image_link.clone(),
+        has_image_element: af.image_link.is_some(),
         image_item_transform: af.image_item_transform,
         applied_object_style: af.applied_object_style.clone(),
         text_wrap: None,
@@ -6948,45 +6959,22 @@ fn emit_rectangle_image(
     page_image_cache: &mut HashMap<String, idml_compose::ImageId>,
     decoded_cache: &mut HashMap<String, idml_compose::DecodedImage>,
 ) {
-    let Some(uri) = rect.image_link.as_deref() else {
-        return;
+    // Routing: `has_image_element` true with no resolvable image (or
+    // a resolvable URI that fails to decode) is what InDesign stamps
+    // its 30% grey + diagonal-X placeholder over. We try to resolve
+    // first; only fall back to the placeholder when nothing usable
+    // came back.
+    let resolved = match rect.image_link.as_deref() {
+        Some(uri) => resolve_image_id(uri, options, &mut page.list, page_image_cache, decoded_cache),
+        None => None,
     };
-    // Decode (or fetch from cache) so we know the image's natural
-    // pixel dimensions. The display-list ImageId is cached per-page
-    // so multiple rectangles sharing the same URI share one buffer.
-    let id = match page_image_cache.get(uri).copied() {
-        Some(id) => id,
-        None => {
-            let decoded = if let Some(d) = decoded_cache.get(uri) {
-                d.clone()
-            } else {
-                let Some(resolver) = options.assets else {
-                    return;
-                };
-                let Some(bytes) = resolver.resolve_image(uri) else {
-                    tracing::warn!(uri, "image resolver returned no bytes; skipping");
-                    return;
-                };
-                let Some(d) = decode_image_bytes(bytes.as_ref()) else {
-                    tracing::warn!(uri, "image decode failed; skipping");
-                    return;
-                };
-                decoded_cache.insert(uri.to_string(), d.clone());
-                d
-            };
-            let id = page.list.push_image(decoded);
-            page_image_cache.insert(uri.to_string(), id);
-            id
-        }
-    };
-    let (img_w, img_h) = match page.list.image(id) {
-        Some(d) => (d.width as f32, d.height as f32),
-        None => return,
-    };
-    if img_w <= 0.0 || img_h <= 0.0 {
-        return;
-    }
     let outer = frame_outer_transform(page, rect.item_transform);
+    let Some((id, img_w, img_h)) = resolved else {
+        if rect.has_image_element && options.missing_image_placeholder {
+            emit_rectangle_missing_image_placeholder(page, rect, outer);
+        }
+        return;
+    };
 
     if let Some(image_t) = rect.image_item_transform {
         // Path 1: honour the inner Image[ItemTransform]. The image's
@@ -7064,42 +7052,17 @@ fn emit_polygon_image(
     page_image_cache: &mut HashMap<String, idml_compose::ImageId>,
     decoded_cache: &mut HashMap<String, idml_compose::DecodedImage>,
 ) {
-    let Some(uri) = poly.image_link.as_deref() else {
-        return;
+    let resolved = match poly.image_link.as_deref() {
+        Some(uri) => resolve_image_id(uri, options, &mut page.list, page_image_cache, decoded_cache),
+        None => None,
     };
-    let id = match page_image_cache.get(uri).copied() {
-        Some(id) => id,
-        None => {
-            let decoded = if let Some(d) = decoded_cache.get(uri) {
-                d.clone()
-            } else {
-                let Some(resolver) = options.assets else {
-                    return;
-                };
-                let Some(bytes) = resolver.resolve_image(uri) else {
-                    tracing::warn!(uri, "image resolver returned no bytes; skipping");
-                    return;
-                };
-                let Some(d) = decode_image_bytes(bytes.as_ref()) else {
-                    tracing::warn!(uri, "image decode failed; skipping");
-                    return;
-                };
-                decoded_cache.insert(uri.to_string(), d.clone());
-                d
-            };
-            let id = page.list.push_image(decoded);
-            page_image_cache.insert(uri.to_string(), id);
-            id
-        }
-    };
-    let (img_w, img_h) = match page.list.image(id) {
-        Some(d) => (d.width as f32, d.height as f32),
-        None => return,
-    };
-    if img_w <= 0.0 || img_h <= 0.0 {
-        return;
-    }
     let outer = frame_outer_transform(page, poly.item_transform);
+    let Some((id, img_w, img_h)) = resolved else {
+        if poly.has_image_element && options.missing_image_placeholder {
+            emit_polygon_missing_image_placeholder(page, poly, outer);
+        }
+        return;
+    };
 
     // Build (or reuse) the polygon's clip path. Falls back to the
     // bounds AABB when the polygon carries no Bezier anchors.
@@ -7261,6 +7224,192 @@ fn emit_image_under_clip(
         transform: img_transform,
     });
     list.push(DisplayCommand::PopClip(Transform::IDENTITY));
+}
+
+/// Resolve a `LinkResourceURI` to a renderer `ImageId` plus its
+/// natural pixel dimensions, threading through both the per-page
+/// `ImageId` cache and the renderer-scoped decoded-bytes cache.
+/// Returns `None` for any failure along the resolver / decode chain
+/// (no resolver, resolver miss, undecodable bytes, zero-pixel image)
+/// so callers can fall back to a missing-image placeholder.
+fn resolve_image_id(
+    uri: &str,
+    options: &PipelineOptions,
+    list: &mut idml_compose::DisplayList,
+    page_image_cache: &mut HashMap<String, idml_compose::ImageId>,
+    decoded_cache: &mut HashMap<String, idml_compose::DecodedImage>,
+) -> Option<(idml_compose::ImageId, f32, f32)> {
+    let id = match page_image_cache.get(uri).copied() {
+        Some(id) => id,
+        None => {
+            let decoded = if let Some(d) = decoded_cache.get(uri) {
+                d.clone()
+            } else {
+                let resolver = options.assets?;
+                let Some(bytes) = resolver.resolve_image(uri) else {
+                    tracing::warn!(uri, "image resolver returned no bytes; skipping");
+                    return None;
+                };
+                let Some(d) = decode_image_bytes(bytes.as_ref()) else {
+                    tracing::warn!(uri, "image decode failed; skipping");
+                    return None;
+                };
+                decoded_cache.insert(uri.to_string(), d.clone());
+                d
+            };
+            let id = list.push_image(decoded);
+            page_image_cache.insert(uri.to_string(), id);
+            id
+        }
+    };
+    let (img_w, img_h) = match list.image(id) {
+        Some(d) => (d.width as f32, d.height as f32),
+        None => return None,
+    };
+    if img_w <= 0.0 || img_h <= 0.0 {
+        return None;
+    }
+    Some((id, img_w, img_h))
+}
+
+/// 30% grey fill + two diagonal stroke lines stamped over a
+/// rectangle's path, matching InDesign's placeholder visual for image
+/// frames whose `LinkResourceURI` doesn't resolve. The fill replaces
+/// the host frame's normal paint (rectangles already drew their fill
+/// in `emit_rectangle_into`; the placeholder paints on top because
+/// the missing image would have done the same).
+fn emit_rectangle_missing_image_placeholder(
+    page: &mut BuiltPage,
+    rect: &Rectangle,
+    outer: Transform,
+) {
+    let r = idml_compose::Rect {
+        x: rect.bounds.left,
+        y: rect.bounds.top,
+        w: rect.bounds.width(),
+        h: rect.bounds.height(),
+    };
+    if r.w <= 0.0 || r.h <= 0.0 {
+        return;
+    }
+    let grey = Paint::Solid(Color::rgba(0.7, 0.7, 0.7, 1.0));
+    idml_compose::emit_rect_transformed(r, outer, grey, &mut page.list);
+    let stroke = idml_compose::Stroke::new(0.5);
+    let dark = Paint::Solid(Color::rgba(0.25, 0.25, 0.25, 1.0));
+    // Diagonals drawn in inner coords; `outer` carries the
+    // page-origin + frame ItemTransform so they rotate / shear with
+    // the host frame.
+    emit_diagonal_under_transform(
+        &mut page.list,
+        rect.bounds.left,
+        rect.bounds.top,
+        rect.bounds.right,
+        rect.bounds.bottom,
+        outer,
+        stroke,
+        dark,
+    );
+    emit_diagonal_under_transform(
+        &mut page.list,
+        rect.bounds.right,
+        rect.bounds.top,
+        rect.bounds.left,
+        rect.bounds.bottom,
+        outer,
+        stroke,
+        dark,
+    );
+}
+
+/// Polygon analogue of [`emit_rectangle_missing_image_placeholder`].
+/// Reuses the polygon's curved path (or falls back to AABB when the
+/// polygon was declared from `GeometricBounds` only) so the
+/// placeholder hugs the polygon outline.
+fn emit_polygon_missing_image_placeholder(
+    page: &mut BuiltPage,
+    poly: &Polygon,
+    outer: Transform,
+) {
+    use idml_compose::DisplayCommand;
+    let bounds = poly.bounds;
+    if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
+        return;
+    }
+    let grey = Paint::Solid(Color::rgba(0.7, 0.7, 0.7, 1.0));
+    if !poly.anchors.is_empty() {
+        let path = polygon_path_from_anchors(&poly.anchors, &poly.subpath_starts);
+        let cache_key = match poly.self_id.as_deref() {
+            Some(sid) => fnv_1a_u64(sid.as_bytes()),
+            None => path_signature(&poly.anchors),
+        };
+        let (path_id, _) = page.list.paths.intern(cache_key, path);
+        page.list.push(DisplayCommand::FillPath {
+            path_id,
+            paint: grey,
+            transform: outer,
+        });
+    } else {
+        let r = idml_compose::Rect {
+            x: bounds.left,
+            y: bounds.top,
+            w: bounds.width(),
+            h: bounds.height(),
+        };
+        idml_compose::emit_rect_transformed(r, outer, grey, &mut page.list);
+    }
+    let stroke = idml_compose::Stroke::new(0.5);
+    let dark = Paint::Solid(Color::rgba(0.25, 0.25, 0.25, 1.0));
+    emit_diagonal_under_transform(
+        &mut page.list,
+        bounds.left,
+        bounds.top,
+        bounds.right,
+        bounds.bottom,
+        outer,
+        stroke,
+        dark,
+    );
+    emit_diagonal_under_transform(
+        &mut page.list,
+        bounds.right,
+        bounds.top,
+        bounds.left,
+        bounds.bottom,
+        outer,
+        stroke,
+        dark,
+    );
+}
+
+/// Push a `StrokePath` for a single line segment whose endpoints live
+/// in inner-frame coords. The segment is interned as an anonymous
+/// path (lines aren't naturally interned by [`emit_line`] either)
+/// and stamped through `outer` so it picks up the frame's
+/// ItemTransform / page-origin shift.
+fn emit_diagonal_under_transform(
+    list: &mut idml_compose::DisplayList,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    outer: Transform,
+    stroke: idml_compose::Stroke,
+    paint: Paint,
+) {
+    use idml_compose::{DisplayCommand, PathData, PathSegment};
+    let path = PathData {
+        segments: vec![
+            PathSegment::MoveTo { x: x1, y: y1 },
+            PathSegment::LineTo { x: x2, y: y2 },
+        ],
+    };
+    let path_id = list.paths.push_anon(path);
+    list.push(DisplayCommand::StrokePath {
+        path_id,
+        paint,
+        stroke,
+        transform: outer,
+    });
 }
 
 /// Decode raw image bytes to RGBA8. Format detection is via magic
