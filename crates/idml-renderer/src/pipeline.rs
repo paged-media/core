@@ -160,6 +160,11 @@ pub struct PipelineStats {
     /// image sharing (one decode per URI, regardless of how many
     /// rectangles or pages reference it).
     pub decoded_images: usize,
+    /// Number of laid-out lines dropped because they fell past the
+    /// last frame in their chain (typically a wider font substitute).
+    /// Surfaced for diagnostics; non-zero means a story didn't fit
+    /// its declared frame chain (P-13).
+    pub dropped_overflow_lines: usize,
 }
 
 /// Build one `BuiltPage` per `<Page>` in the document. Each page's
@@ -2657,6 +2662,7 @@ fn emit_paragraph_into_chain(
     // host frame, and a frame switch closes the prior segment so the
     // pass can shift each paragraph independently.
     let mut active_seg: Option<(usize, usize, usize)> = None; // (frame_idx, cmd_start, cmd_end)
+    let mut dropped_overflow_lines: usize = 0;
     for mut line in laid_out.lines.into_iter() {
         let line_h = idml_text::layout::max_line_height_for_glyphs(&line.glyphs)
             .unwrap_or(lopts.line_height);
@@ -2673,6 +2679,16 @@ fn emit_paragraph_into_chain(
                 g.y += dy;
             }
             line.baseline_y = new_baseline;
+        }
+        // P-13 short-term: when the last frame in the chain overflows
+        // (typically because a font substitute is wider than the
+        // requested face), drop the overflow lines rather than letting
+        // them spill across following frames/pages with no clip. The
+        // reference PDFs hide the overflow via the same out-of-frame
+        // clip; matching this prevents large ΔE regions.
+        if line.baseline_y > frame_height_64 && em.frame_idx + 1 >= em.chain.len() {
+            dropped_overflow_lines += 1;
+            continue;
         }
 
         let target_page = em.chain_pages[em.frame_idx];
@@ -2927,6 +2943,9 @@ fn emit_paragraph_into_chain(
         if s != e {
             em.paragraph_cmd_ranges[f].push((s, e));
         }
+    }
+    if dropped_overflow_lines > 0 {
+        total_stats.dropped_overflow_lines += dropped_overflow_lines;
     }
     em.y_cursor += space_after_64.round() as i32;
 
