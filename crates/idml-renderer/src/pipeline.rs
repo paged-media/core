@@ -3462,6 +3462,7 @@ fn emit_anchored_textframe_story<'a>(
         blend_mode: None,
         anchors: Vec::new(),
         subpath_starts: Vec::new(),
+        subpath_open: Vec::new(),
         gradient_fill_angle: None,
         gradient_fill_length: None,
         gradient_stroke_angle: None,
@@ -3536,6 +3537,21 @@ struct PageGeom {
 /// inner contour to the outer one with a stray segment. An empty
 /// or single-entry slice means "single contour" — the legacy path.
 fn polygon_path_from_anchors(anchors: &[PathAnchor], subpath_starts: &[usize]) -> PathData {
+    polygon_path_from_anchors_with_open(anchors, subpath_starts, &[])
+}
+
+/// Same as `polygon_path_from_anchors` but consults a parallel
+/// `subpath_open` slice. An open contour skips the closing CubicTo +
+/// Close so a hand-drawn lassoed stroke or a `PathOpen="true"` clip
+/// path doesn't get auto-filled (P-15). `subpath_open` is interpreted
+/// against the indexed order of contours (the `i`th true ⇒ `i`th
+/// contour open); a shorter slice / empty slice means every contour
+/// is closed (legacy behaviour).
+fn polygon_path_from_anchors_with_open(
+    anchors: &[PathAnchor],
+    subpath_starts: &[usize],
+    subpath_open: &[bool],
+) -> PathData {
     if anchors.is_empty() {
         return PathData {
             segments: Vec::new(),
@@ -3570,11 +3586,12 @@ fn polygon_path_from_anchors(anchors: &[PathAnchor], subpath_starts: &[usize]) -
         }
     }
     let mut segs = Vec::with_capacity(anchors.len() * 2 + ranges.len() * 2);
-    for (lo, hi) in ranges {
+    for (range_idx, (lo, hi)) in ranges.iter().copied().enumerate() {
         let sub = &anchors[lo..hi];
         if sub.is_empty() {
             continue;
         }
+        let is_open = subpath_open.get(range_idx).copied().unwrap_or(false);
         let (mx, my) = sub[0].anchor;
         segs.push(PathSegment::MoveTo { x: mx, y: my });
         for window in sub.windows(2) {
@@ -3593,7 +3610,9 @@ fn polygon_path_from_anchors(anchors: &[PathAnchor], subpath_starts: &[usize]) -
         // implied by the last point's `right` and the first point's
         // `left` — IDML polygons are otherwise always closed. Single-
         // anchor contours degenerate to a point and skip the closer.
-        if sub.len() >= 2 {
+        // Open contours skip the closing curve + Close so the path
+        // stays open (P-15).
+        if !is_open && sub.len() >= 2 {
             let last = sub.last().unwrap();
             let first = &sub[0];
             segs.push(PathSegment::CubicTo {
@@ -3605,7 +3624,9 @@ fn polygon_path_from_anchors(anchors: &[PathAnchor], subpath_starts: &[usize]) -
                 y: first.anchor.1,
             });
         }
-        segs.push(PathSegment::Close);
+        if !is_open {
+            segs.push(PathSegment::Close);
+        }
     }
     PathData { segments: segs }
 }
@@ -3657,10 +3678,11 @@ fn emit_polygon_into(
     let path_id = if let Geometry::Polygon {
         anchors,
         subpath_starts,
+        subpath_open,
         ..
     } = &resolved.geometry
     {
-        let path = polygon_path_from_anchors(anchors, subpath_starts);
+        let path = polygon_path_from_anchors_with_open(anchors, subpath_starts, subpath_open);
         let cache_key = match resolved.self_id {
             Some(id) => fnv_1a_u64(id.as_bytes()),
             None => path_signature(anchors),
@@ -7289,9 +7311,15 @@ fn emit_polygon_image(
     };
 
     // Build (or reuse) the polygon's clip path. Falls back to the
-    // bounds AABB when the polygon carries no Bezier anchors.
+    // bounds AABB when the polygon carries no Bezier anchors. Honours
+    // `subpath_open` so open contours don't get auto-closed when used
+    // as an image clip (P-15).
     let clip_path_id = if !poly.anchors.is_empty() {
-        let path = polygon_path_from_anchors(&poly.anchors, &poly.subpath_starts);
+        let path = polygon_path_from_anchors_with_open(
+            &poly.anchors,
+            &poly.subpath_starts,
+            &poly.subpath_open,
+        );
         let cache_key = match poly.self_id.as_deref() {
             Some(sid) => fnv_1a_u64(sid.as_bytes()),
             None => path_signature(&poly.anchors),
@@ -7561,7 +7589,11 @@ fn emit_polygon_missing_image_placeholder(
     }
     let grey = Paint::Solid(Color::rgba(0.7, 0.7, 0.7, 1.0));
     if !poly.anchors.is_empty() {
-        let path = polygon_path_from_anchors(&poly.anchors, &poly.subpath_starts);
+        let path = polygon_path_from_anchors_with_open(
+            &poly.anchors,
+            &poly.subpath_starts,
+            &poly.subpath_open,
+        );
         let cache_key = match poly.self_id.as_deref() {
             Some(sid) => fnv_1a_u64(sid.as_bytes()),
             None => path_signature(&poly.anchors),
@@ -10119,6 +10151,39 @@ mod tests {
             "out-of-range / duplicate markers collapse to one contour"
         );
         assert_eq!(closes, 1);
+    }
+
+    /// P-15: open contours skip the closing CubicTo + Close so a
+    /// `<GeometryPathType PathOpen="true">` polygon doesn't get
+    /// auto-filled.
+    #[test]
+    fn polygon_path_from_anchors_with_open_skips_close_for_open_contour() {
+        let anchors = vec![
+            anchor_at(0.0, 0.0),
+            anchor_at(40.0, 0.0),
+            anchor_at(20.0, 40.0),
+        ];
+        let path = polygon_path_from_anchors_with_open(&anchors, &[], &[true]);
+        let moves = path
+            .segments
+            .iter()
+            .filter(|s| matches!(s, PathSegment::MoveTo { .. }))
+            .count();
+        let closes = path
+            .segments
+            .iter()
+            .filter(|s| matches!(s, PathSegment::Close))
+            .count();
+        let cubics = path
+            .segments
+            .iter()
+            .filter(|s| matches!(s, PathSegment::CubicTo { .. }))
+            .count();
+        assert_eq!(moves, 1, "single contour → one MoveTo");
+        assert_eq!(closes, 0, "open contour skips the Close");
+        // 3 anchors → 2 inter-anchor CubicTos; the closing back-to-first
+        // cubic must NOT fire (so 2, not 3).
+        assert_eq!(cubics, 2, "open contour skips the closing CubicTo");
     }
 
     fn font_table_with(

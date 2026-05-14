@@ -82,6 +82,13 @@ pub(crate) enum Geometry<'a> {
         /// the renderer emits one MoveTo/Close per subpath rather
         /// than joining them.
         subpath_starts: &'a [usize],
+        /// Parallel to `subpath_starts`. `true` ⇒ that contour is
+        /// open (skip auto-close + final cubic). Empty slice =
+        /// every contour closed (the legacy default). For single-
+        /// contour shapes with an open path, this is a 1-element
+        /// vec carrying `true`, even though `subpath_starts` stays
+        /// empty (P-15).
+        subpath_open: &'a [bool],
         bbox: Rect,
     },
     /// TextFrames render as rectangles today; carrying a distinct
@@ -238,6 +245,7 @@ impl<'a> ResolvedFrame<'a> {
             Geometry::Polygon {
                 anchors: &poly.anchors,
                 subpath_starts: &poly.subpath_starts,
+                subpath_open: &poly.subpath_open,
                 bbox,
             }
         };

@@ -260,6 +260,13 @@ pub struct TextFrame {
     /// single broken polyline. Empty for the common single-contour
     /// case (so existing callers can keep using the slice as-is).
     pub subpath_starts: Vec<usize>,
+    /// Parallel to `subpath_starts`: `true` ⇒ the contour is open
+    /// (omit the closing curve + Close). When `subpath_starts` is
+    /// empty (single-contour shape) and this is also empty, the
+    /// renderer treats the contour as closed (legacy behaviour).
+    /// IDML's `<GeometryPathType PathOpen="true">` lifts to a `true`
+    /// here so the renderer doesn't auto-close lassoed paths (P-15).
+    pub subpath_open: Vec<bool>,
     /// See [`Rectangle::gradient_fill_angle`].
     pub gradient_fill_angle: Option<f32>,
     /// See [`Rectangle::gradient_fill_length`].
@@ -742,6 +749,8 @@ pub struct GraphicLine {
     /// single contour, but the field is parsed uniformly for symmetry
     /// with the other path-bearing shapes.
     pub subpath_starts: Vec<usize>,
+    /// Parallel to `subpath_starts`. See [`TextFrame::subpath_open`].
+    pub subpath_open: Vec<bool>,
     /// `<TextPath>` children attached to this line. See
     /// [`Polygon::text_paths`].
     pub text_paths: Vec<TextPath>,
@@ -870,6 +879,11 @@ pub struct Polygon {
     /// a single connected polyline would silently merge the inner
     /// loop into the outer outline.
     pub subpath_starts: Vec<usize>,
+    /// Parallel to `subpath_starts`. See
+    /// [`TextFrame::subpath_open`] — open contours skip the auto-
+    /// close so polygons used as lassoed strokes / clip paths don't
+    /// silently fill into rectangles (P-15).
+    pub subpath_open: Vec<bool>,
     /// `<TextWrapPreference>` parsed off the polygon, if any.
     /// `None` ⇒ the polygon does not exclude text.
     pub text_wrap: Option<TextWrap>,
@@ -980,6 +994,9 @@ struct CurrentFrame {
     /// etc.) into multiple `MoveTo`/`Close` segments rather than
     /// joining them into one broken polyline.
     subpath_starts: Vec<usize>,
+    /// Parallel to `subpath_starts`: the open/closed flag harvested
+    /// from each `<GeometryPathType PathOpen="...">` (P-15).
+    subpath_open: Vec<bool>,
     /// True for Polygons even when `needs_bounds` is false, so the
     /// emitter still gets the curved-path data.
     keep_anchors: bool,
@@ -1328,6 +1345,7 @@ impl Spread {
                             blend_mode: None,
                             anchors: Vec::new(),
                             subpath_starts: Vec::new(),
+                            subpath_open: Vec::new(),
                             gradient_fill_angle: common.gradient_fill_angle,
                             gradient_fill_length: common.gradient_fill_length,
                             gradient_stroke_angle: common.gradient_stroke_angle,
@@ -1346,6 +1364,7 @@ impl Spread {
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
                             subpath_starts: Vec::new(),
+                            subpath_open: Vec::new(),
                             // Always retain Bezier path anchors so the
                             // renderer can detect non-rectangular text
                             // frame outlines (triangle, pentagon, …)
@@ -1411,6 +1430,7 @@ impl Spread {
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
                             subpath_starts: Vec::new(),
+                            subpath_open: Vec::new(),
                             keep_anchors: false,
                             in_text_wrap: false,
                             stroke_transparency_depth: 0,
@@ -1452,6 +1472,7 @@ impl Spread {
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
                             subpath_starts: Vec::new(),
+                            subpath_open: Vec::new(),
                             keep_anchors: false,
                             in_text_wrap: false,
                             stroke_transparency_depth: 0,
@@ -1857,10 +1878,16 @@ impl Spread {
                         // We only track this for shapes that retain
                         // anchors (text frames / graphic lines /
                         // polygons); for the others the field is
-                        // unused.
+                        // unused. The companion `PathOpen` flag lifts
+                        // here too so the renderer can skip auto-close
+                        // on open paths (P-15).
                         if let Some(cf) = current_frame.as_mut() {
                             if cf.keep_anchors {
                                 cf.subpath_starts.push(cf.anchors.len());
+                                let open = attr(&e, b"PathOpen")
+                                    .and_then(|s| s.parse::<bool>().ok())
+                                    .unwrap_or(false);
+                                cf.subpath_open.push(open);
                             }
                         }
                     }
@@ -2101,6 +2128,7 @@ impl Spread {
                             item_layer: common.item_layer,
                             anchors: Vec::new(),
                             subpath_starts: Vec::new(),
+                            subpath_open: Vec::new(),
                             text_paths: Vec::new(),
                             overprint_stroke: common.overprint_stroke,
                         });
@@ -2114,6 +2142,7 @@ impl Spread {
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
                             subpath_starts: Vec::new(),
+                            subpath_open: Vec::new(),
                             // Always retain Bezier path anchors for
                             // graphic lines so a child <TextPath> can
                             // flow text along the actual stroke.
@@ -2141,6 +2170,7 @@ impl Spread {
                             text_wrap: None,
                             anchors: Vec::new(),
                             subpath_starts: Vec::new(),
+                            subpath_open: Vec::new(),
                             item_layer: common.item_layer,
                             gradient_fill_angle: common.gradient_fill_angle,
                             gradient_fill_length: common.gradient_fill_length,
@@ -2162,6 +2192,7 @@ impl Spread {
                             needs_bounds: bounds_attr.is_none(),
                             anchors: Vec::new(),
                             subpath_starts: Vec::new(),
+                            subpath_open: Vec::new(),
                             // Always retain Bezier path anchors for
                             // polygons so the renderer can emit a
                             // FillPath instead of a bbox FillRect.
@@ -2241,29 +2272,70 @@ impl Spread {
                                 // and the canonical single-contour
                                 // case is encoded as `[]` (so callers
                                 // can keep using the slice as-is).
-                                let mut subpath_starts = cf.subpath_starts;
-                                subpath_starts.retain(|&i| i < cf.anchors.len());
-                                if subpath_starts.len() <= 1 {
-                                    subpath_starts.clear();
-                                }
+                                // `subpath_open` stays parallel to
+                                // `subpath_starts`, so when we either
+                                // empty or shorten the latter we mirror
+                                // the truncation here (P-15).
+                                let (subpath_starts, subpath_open) = {
+                                    let mut starts = cf.subpath_starts.clone();
+                                    let mut opens = cf.subpath_open.clone();
+                                    // Keep the indices that point at a
+                                    // real anchor; trim the parallel
+                                    // open flags by index so the two
+                                    // arrays stay in step.
+                                    let mut keep = vec![true; starts.len()];
+                                    for (k, &s) in starts.iter().enumerate() {
+                                        if s >= cf.anchors.len() {
+                                            keep[k] = false;
+                                        }
+                                    }
+                                    let mut filtered_starts = Vec::with_capacity(starts.len());
+                                    let mut filtered_open = Vec::with_capacity(opens.len());
+                                    for k in 0..starts.len() {
+                                        if keep[k] {
+                                            filtered_starts.push(starts[k]);
+                                            filtered_open.push(opens.get(k).copied().unwrap_or(false));
+                                        }
+                                    }
+                                    starts = filtered_starts;
+                                    opens = filtered_open;
+                                    if starts.len() <= 1 {
+                                        // The legacy canonical form for
+                                        // a single contour. Surface the
+                                        // open flag onto a 1-element vec
+                                        // so the renderer can still see
+                                        // an open single contour.
+                                        let lone_open = opens.first().copied().unwrap_or(false);
+                                        if lone_open {
+                                            (Vec::new(), vec![true])
+                                        } else {
+                                            (Vec::new(), Vec::new())
+                                        }
+                                    } else {
+                                        (starts, opens)
+                                    }
+                                };
                                 match cf.kind {
                                     CurrentFrameKind::Polygon(i)
                                         if i < out.polygons.len() =>
                                     {
                                         out.polygons[i].anchors = cf.anchors;
                                         out.polygons[i].subpath_starts = subpath_starts;
+                                        out.polygons[i].subpath_open = subpath_open;
                                     }
                                     CurrentFrameKind::Line(i)
                                         if i < out.graphic_lines.len() =>
                                     {
                                         out.graphic_lines[i].anchors = cf.anchors;
                                         out.graphic_lines[i].subpath_starts = subpath_starts;
+                                        out.graphic_lines[i].subpath_open = subpath_open;
                                     }
                                     CurrentFrameKind::Text(i)
                                         if i < out.text_frames.len() =>
                                     {
                                         out.text_frames[i].anchors = cf.anchors;
                                         out.text_frames[i].subpath_starts = subpath_starts;
+                                        out.text_frames[i].subpath_open = subpath_open;
                                     }
                                     _ => {}
                                 }
@@ -3265,6 +3337,70 @@ mod tests {
     /// Single-contour polygons (the InDesign-export shape every plain
     /// rectangle / polygon uses) leave `subpath_starts` empty so the
     /// renderer's legacy single-MoveTo path keeps firing.
+    #[test]
+    fn polygon_path_open_lifts_to_subpath_open_flag() {
+        // P-15: `<GeometryPathType PathOpen="true">` should lift onto
+        // the polygon's `subpath_open` slice so the renderer can skip
+        // the auto-close. Single open contour: `subpath_starts` stays
+        // empty (legacy canonical form for one contour) but
+        // `subpath_open` carries `[true]` so the renderer can branch.
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+              <Spread Self="s">
+                <Polygon Self="p1" FillColor="Color/Black">
+                  <Properties>
+                    <PathGeometry>
+                      <GeometryPathType PathOpen="true">
+                        <PathPointArray>
+                          <PathPointType Anchor="0 0"/>
+                          <PathPointType Anchor="100 0"/>
+                          <PathPointType Anchor="50 50"/>
+                        </PathPointArray>
+                      </GeometryPathType>
+                    </PathGeometry>
+                  </Properties>
+                </Polygon>
+              </Spread>
+            </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.polygons.len(), 1);
+        assert_eq!(s.polygons[0].subpath_open, vec![true]);
+    }
+
+    #[test]
+    fn polygon_compound_path_open_records_per_contour_flags() {
+        // P-15: two contours, one open and one closed; the flags need
+        // to come out in declaration order parallel to `subpath_starts`.
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+              <Spread Self="s">
+                <Polygon Self="p1" FillColor="Color/Black">
+                  <Properties>
+                    <PathGeometry>
+                      <GeometryPathType PathOpen="true">
+                        <PathPointArray>
+                          <PathPointType Anchor="0 0"/>
+                          <PathPointType Anchor="40 40"/>
+                        </PathPointArray>
+                      </GeometryPathType>
+                      <GeometryPathType PathOpen="false">
+                        <PathPointArray>
+                          <PathPointType Anchor="100 0"/>
+                          <PathPointType Anchor="200 0"/>
+                          <PathPointType Anchor="200 100"/>
+                        </PathPointArray>
+                      </GeometryPathType>
+                    </PathGeometry>
+                  </Properties>
+                </Polygon>
+              </Spread>
+            </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.polygons.len(), 1);
+        assert_eq!(s.polygons[0].subpath_starts, vec![0, 2]);
+        assert_eq!(s.polygons[0].subpath_open, vec![true, false]);
+    }
+
     #[test]
     fn polygon_single_contour_leaves_subpath_starts_empty() {
         let xml =
