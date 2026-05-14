@@ -520,6 +520,38 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             }
         }
     }
+    // P-17: when even the loosest tolerance can't break (typically a
+    // single token wider than every column width), synthesise one
+    // breakpoint per Box so each "word" emits as its own line. The
+    // resulting glyphs overflow the right edge — same as InDesign's
+    // headline-overflow behaviour — instead of the whole paragraph
+    // disappearing.
+    if breaks.is_empty() && !items.is_empty() {
+        let mut fallback: Vec<Breakpoint> = Vec::new();
+        for (i, item) in items.iter().enumerate() {
+            if matches!(item, Item::Box { .. }) {
+                fallback.push(Breakpoint {
+                    index: i,
+                    ratio: 0.0,
+                    width: 0,
+                });
+            }
+        }
+        // Final forced break (the paragraph-end Penalty entry).
+        if let Some((last_idx, _)) = items
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, it)| matches!(it, Item::Penalty { .. }))
+        {
+            fallback.push(Breakpoint {
+                index: last_idx,
+                ratio: 0.0,
+                width: 0,
+            });
+        }
+        breaks = fallback;
+    }
 
     // 4. For each chosen line, walk `flat` in cluster order and pull
     // glyphs whose cluster is in the line's byte range. Position
