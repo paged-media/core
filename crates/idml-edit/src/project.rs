@@ -416,6 +416,7 @@ impl Project {
             baseline_shift: r.baseline_shift,
             horizontal_scale: r.horizontal_scale,
             vertical_scale: r.vertical_scale,
+            skew: r.skew,
             position: r.position.clone(),
             tracking: r.tracking,
             underline: r.underline,

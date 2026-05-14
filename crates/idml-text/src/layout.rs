@@ -46,6 +46,10 @@ pub struct PositionedGlyph {
     /// them false.
     pub underline: bool,
     pub strikethru: bool,
+    /// IDML `HorizontalScale` as a multiplier (1.0 = identity). Drives
+    /// the glyph-emit affine x-scale so painted glyphs are stretched
+    /// to match the breaker's advance (P-08).
+    pub x_scale: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -203,6 +207,7 @@ pub fn position_line(
             point_size: 0.0,
             underline: false,
             strikethru: false,
+            x_scale: 1.0,
         });
         pen_x += g.x_advance;
     }
@@ -301,6 +306,10 @@ pub struct StyledRun<'a> {
     /// so the line height (computed from font metrics + leading)
     /// stays unchanged.
     pub baseline_shift_pt: f32,
+    /// IDML `HorizontalScale` percentage (100 = identity). Folded
+    /// into the shaped glyph x-advances so the breaker sees the
+    /// requested glyph width (P-08).
+    pub horizontal_scale_pct: f32,
 }
 
 /// Multi-font flavour of [`layout_paragraph`].
@@ -330,6 +339,23 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         let mut s = shape_run(r.face, r.text, r.point_size);
         if let Some(t) = r.tracking {
             apply_tracking(&mut s, t, r.point_size);
+        }
+        // HorizontalScale folds into the per-glyph x_advance so the
+        // breaker sees the requested width directly (P-08). The
+        // glyph-emit affine also needs a matching x-scale so painted
+        // glyphs land where the breaker placed them.
+        let hs_pct = r.horizontal_scale_pct;
+        if (hs_pct - 100.0).abs() > 0.05 {
+            let factor = hs_pct / 100.0;
+            let mut total: i32 = 0;
+            for g in s.glyphs.iter_mut() {
+                let scaled = (g.x_advance as f32 * factor).round() as i32;
+                g.x_advance = scaled;
+                let scaled_off = (g.x_offset as f32 * factor).round() as i32;
+                g.x_offset = scaled_off;
+                total = total.saturating_add(scaled);
+            }
+            s.total_advance = total;
         }
         run_shapes.push(s);
     }
@@ -374,10 +400,16 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     let opts = &options.compose;
     // Use the first run's space width as the glue width — IDML
     // doesn't change inter-word spacing across runs, and pulling a
-    // per-word space face would require a synthetic face index.
-    let space_width = shape_run(runs[0].face, " ", runs[0].point_size).total_advance;
-    let stretch = (space_width as f32 * opts.stretch_ratio).round() as i32;
-    let shrink = (space_width as f32 * opts.shrink_ratio).round() as i32;
+    // per-word space face would require a synthetic face index. Fold
+    // the first run's HorizontalScale into the natural width so the
+    // breaker's glue matches the scaled glyph advances (P-08).
+    let raw_space = shape_run(runs[0].face, " ", runs[0].point_size).total_advance;
+    let hs_factor = (runs[0].horizontal_scale_pct / 100.0).max(0.0);
+    let natural_space = (raw_space as f32 * hs_factor).round() as i32;
+    let space_width =
+        (natural_space as f32 * opts.desired_space_ratio.max(0.0)).round() as i32;
+    let stretch = (natural_space as f32 * opts.stretch_ratio).round() as i32;
+    let shrink = (natural_space as f32 * opts.shrink_ratio).round() as i32;
 
     let mut items: Vec<Item<()>> = Vec::with_capacity(words.len() * 4 + 2);
     let mut byte_ends: Vec<usize> = Vec::with_capacity(items.capacity());
@@ -540,6 +572,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                 point_size: run.point_size,
                 underline: run.underline,
                 strikethru: run.strikethru,
+                x_scale: (run.horizontal_scale_pct / 100.0).max(0.0),
             });
             pen_x += fg.x_advance;
             last_run_idx = Some(fg.run_idx);
@@ -564,6 +597,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                         point_size: r.point_size,
                         underline: r.underline,
                         strikethru: r.strikethru,
+                        x_scale: (r.horizontal_scale_pct / 100.0).max(0.0),
                     });
                     pen_x += g.x_advance;
                 }
@@ -935,6 +969,7 @@ impl<'a, 'b> LeaderContext<'a, 'b> {
                     // runs, not the synthesised tab fill.
                     underline: false,
                     strikethru: false,
+                    x_scale: (run.horizontal_scale_pct / 100.0).max(0.0),
                 });
                 pen_x += g.x_advance;
             }
@@ -1225,6 +1260,7 @@ mod tests {
             point_size,
             underline: false,
             strikethru: false,
+            x_scale: 1.0,
         }
     }
 
@@ -1258,6 +1294,7 @@ mod tests {
                 point_size: 12.0,
                 underline: false,
                 strikethru: false,
+                x_scale: 1.0,
             });
             pen += adv;
         }

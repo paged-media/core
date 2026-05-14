@@ -2174,3 +2174,112 @@ fn master_full_bleed_rectangle_reaches_both_body_pages() {
         );
     }
 }
+
+/// P-08 regression: when a run carries `HorizontalScale=200`, every
+/// emitted glyph must (a) advance twice as far across the frame as
+/// the same run at 100%, AND (b) carry a 2× x-axis scale in its
+/// FillPath transform so the glyph outline is stretched in place.
+#[test]
+fn horizontal_scale_folds_into_glyph_advance_and_affine() {
+    // Like `glyph_xys` but tolerates non-uniform x/y scale (the very
+    // shape `HorizontalScale` produces). Returns the FillPath x
+    // translation for every FillPath whose off-diagonal is ~0.
+    fn glyph_xs(page: &idml_renderer::BuiltPage) -> Vec<f32> {
+        let mut out = Vec::new();
+        for c in &page.list.commands {
+            if let DisplayCommand::FillPath { transform, .. } = c {
+                let [a, b, c2, d, tx, _] = transform.0;
+                if b.abs() < 1e-4 && c2.abs() < 1e-4 && a > 0.0 && d < 0.0 {
+                    out.push(tx);
+                }
+            }
+        }
+        out
+    }
+    fn glyph_affines(page: &idml_renderer::BuiltPage) -> Vec<[f32; 6]> {
+        page.list
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::FillPath { transform, .. } => Some(transform.0),
+                _ => None,
+            })
+            .collect()
+    }
+    let content = "MMMMMM";
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = || PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+    let baseline_bytes = build_decoration_idml("", content);
+    let baseline_doc = Document::open(&baseline_bytes).unwrap();
+    let baseline_built = pipeline::build_document(&baseline_doc, &opts()).unwrap();
+    let baseline_xs = glyph_xs(&baseline_built.pages[0]);
+
+    let stretched_bytes = build_decoration_idml(" HorizontalScale=\"200\"", content);
+    let stretched_doc = Document::open(&stretched_bytes).unwrap();
+    let stretched_built = pipeline::build_document(&stretched_doc, &opts()).unwrap();
+    let stretched_xs = glyph_xs(&stretched_built.pages[0]);
+    let stretched_affines = glyph_affines(&stretched_built.pages[0]);
+
+    assert!(
+        baseline_xs.len() >= 6 && stretched_xs.len() >= 6,
+        "baseline {} glyphs / stretched {} glyphs",
+        baseline_xs.len(),
+        stretched_xs.len()
+    );
+    // The run between consecutive M glyphs should roughly double when
+    // HorizontalScale=200. Compare the average inter-glyph gap so a
+    // single outlier doesn't trigger flakiness.
+    let gap = |xs: &[f32]| -> f32 {
+        let mut sum = 0.0f32;
+        let mut n = 0usize;
+        for w in xs.windows(2) {
+            sum += w[1] - w[0];
+            n += 1;
+        }
+        if n == 0 {
+            0.0
+        } else {
+            sum / n as f32
+        }
+    };
+    let g0 = gap(&baseline_xs);
+    let g1 = gap(&stretched_xs);
+    assert!(
+        g0 > 0.5,
+        "baseline glyph gap should be positive; got {g0}"
+    );
+    let ratio = g1 / g0;
+    assert!(
+        (1.7..=2.3).contains(&ratio),
+        "HorizontalScale=200 should ~double the inter-glyph gap; baseline gap {g0}, stretched gap {g1}, ratio {ratio}"
+    );
+    // At least one stretched glyph's affine should carry an x-scale
+    // about 2× the y-scale magnitude (the glyph itself is stretched,
+    // not just repositioned). Glyph affines have shape
+    //   [a, 0, 0, -d, tx, ty]
+    // with a positive, d positive, normally a ≈ d. With HS=200
+    // we expect a ≈ 2 × d.
+    let mut found = false;
+    for [a, b, c2, d, _, _] in stretched_affines {
+        if b.abs() > 1e-4 || c2.abs() > 1e-4 {
+            continue;
+        }
+        let dy = -d;
+        if dy.abs() < 1e-4 {
+            continue;
+        }
+        let ratio = a / dy;
+        if (1.7..=2.3).contains(&ratio) {
+            found = true;
+            break;
+        }
+    }
+    assert!(
+        found,
+        "expected at least one HorizontalScale=200 glyph FillPath whose x-scale ≈ 2 × y-scale; affine list did not contain one"
+    );
+}

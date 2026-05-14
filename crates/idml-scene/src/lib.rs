@@ -497,6 +497,7 @@ impl ResolvedRunAttrs {
             baseline_shift: run.baseline_shift,
             horizontal_scale: run.horizontal_scale,
             vertical_scale: run.vertical_scale,
+            skew: run.skew,
             position: run.position.clone(),
             tracking: run.tracking,
             underline: run.underline,
@@ -536,6 +537,7 @@ impl ResolvedRunAttrs {
         self.baseline_shift = self.baseline_shift.or(c.baseline_shift);
         self.horizontal_scale = self.horizontal_scale.or(c.horizontal_scale);
         self.vertical_scale = self.vertical_scale.or(c.vertical_scale);
+        self.skew = self.skew.or(c.skew);
         if self.position.is_none() {
             self.position = c.position.clone();
         }
@@ -585,6 +587,7 @@ impl ResolvedRunAttrs {
         self.baseline_shift = self.baseline_shift.or(p.baseline_shift);
         self.horizontal_scale = self.horizontal_scale.or(p.horizontal_scale);
         self.vertical_scale = self.vertical_scale.or(p.vertical_scale);
+        self.skew = self.skew.or(p.skew);
         if self.position.is_none() {
             self.position = p.position.clone();
         }
@@ -743,12 +746,15 @@ pub struct ResolvedRunAttrs {
     pub capitalization: Option<String>,
     /// `BaselineShift` in pt. Applied as a per-glyph y-offset.
     pub baseline_shift: Option<f32>,
-    /// `HorizontalScale` percentage (100 = identity). Parsed; not
-    /// yet honoured by the rasterizer.
+    /// `HorizontalScale` percentage (100 = identity). Folded into
+    /// glyph x-advance + glyph affine at shape/emit time (P-08).
     pub horizontal_scale: Option<f32>,
     /// `VerticalScale` percentage (100 = identity). Parsed; not yet
     /// honoured.
     pub vertical_scale: Option<f32>,
+    /// `Skew` in degrees (positive = right-leaning). Folded into the
+    /// glyph affine alongside `HorizontalScale` (P-08).
+    pub skew: Option<f32>,
     /// `Position` value (Normal / Superscript / Subscript / etc).
     /// Parsed; not yet honoured.
     pub position: Option<String>,

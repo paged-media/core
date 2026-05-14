@@ -2132,6 +2132,7 @@ fn emit_paragraph_into_chain(
             underline: resolved_runs[i].underline.unwrap_or(false),
             strikethru: resolved_runs[i].strikethru.unwrap_or(false),
             baseline_shift_pt: resolved_runs[i].baseline_shift.unwrap_or(0.0),
+            horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
         })
         .collect();
 
@@ -2335,6 +2336,7 @@ fn emit_paragraph_into_chain(
                 underline: r.underline,
                 strikethru: r.strikethru,
                 baseline_shift_pt: r.baseline_shift_pt,
+                horizontal_scale_pct: r.horizontal_scale_pct,
             });
         }
         styled_runs_storage = adjusted;
@@ -2867,6 +2869,7 @@ fn emit_paragraph_into_chain(
                 point_size: cap_point_size,
                 underline: false,
                 strikethru: false,
+                x_scale: 1.0,
             });
             pen_x += g.x_advance;
         }
@@ -5961,6 +5964,7 @@ fn measure_cell_paragraph(
             underline: resolved_runs[i].underline.unwrap_or(false),
             strikethru: resolved_runs[i].strikethru.unwrap_or(false),
             baseline_shift_pt: resolved_runs[i].baseline_shift.unwrap_or(0.0),
+            horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
         })
         .collect();
     let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
@@ -6117,6 +6121,7 @@ fn emit_cell_paragraph(
             underline: resolved_runs[i].underline.unwrap_or(false),
             strikethru: resolved_runs[i].strikethru.unwrap_or(false),
             baseline_shift_pt: resolved_runs[i].baseline_shift.unwrap_or(0.0),
+            horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
         })
         .collect();
     let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);

@@ -150,8 +150,11 @@ pub fn emit_glyph_slice_blend<O, F>(
         let paint = paint_for(g.cluster);
         // Column-major 2×3 as `[a b c d tx ty]`: scale by (scale,
         // scale) and flip y by negating the y-axis scale. Then
-        // translate to (gx, gy).
-        let transform = Transform([scale, 0.0, 0.0, -scale, gx, gy]);
+        // translate to (gx, gy). `x_scale` folds IDML `HorizontalScale`
+        // into the glyph affine (P-08); the breaker already accounted
+        // for the advance, so glyphs are merely stretched in place.
+        let sx = scale * g.x_scale;
+        let transform = Transform([sx, 0.0, 0.0, -scale, gx, gy]);
         if normal {
             list.push(DisplayCommand::FillPath {
                 path_id,
@@ -205,8 +208,10 @@ pub fn emit_glyph_slice_stroke<O, S>(
         // Same column-major 2×3 as `emit_glyph_slice`: y-flip + scale,
         // then translate to (gx, gy). Stroke widths are document-space
         // pt so the rasterizer reads `stroke.width` directly rather
-        // than transforming through `scale`.
-        let transform = Transform([scale, 0.0, 0.0, -scale, gx, gy]);
+        // than transforming through `scale`. `x_scale` mirrors the fill
+        // path so a stretched run keeps its stroke aligned (P-08).
+        let sx = scale * g.x_scale;
+        let transform = Transform([sx, 0.0, 0.0, -scale, gx, gy]);
         list.push(DisplayCommand::StrokePath {
             path_id,
             paint,
@@ -251,6 +256,7 @@ mod tests {
                 tolerance: 10.0,
                 stretch_ratio: 1.0,
                 shrink_ratio: 0.5,
+                desired_space_ratio: 1.0,
                 looseness: 0,
                 hyphenator: None,
                 hyphen_penalty: 50,
@@ -394,6 +400,7 @@ mod tests {
             point_size: 0.0,
             underline: false,
             strikethru: false,
+            x_scale: 1.0,
         }];
         let glyphs_b = vec![PositionedGlyph {
             glyph_id: 65,
@@ -405,6 +412,7 @@ mod tests {
             point_size: 0.0,
             underline: false,
             strikethru: false,
+            x_scale: 1.0,
         }];
         emit_glyph_slice(
             &glyphs_a,

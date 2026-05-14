@@ -274,6 +274,7 @@ pub struct CharacterStyleDef {
     pub baseline_shift: Option<f32>,
     pub horizontal_scale: Option<f32>,
     pub vertical_scale: Option<f32>,
+    pub skew: Option<f32>,
     pub position: Option<String>,
     pub tracking: Option<f32>,
     pub underline: Option<bool>,
@@ -327,6 +328,7 @@ pub struct ParagraphStyleDef {
     pub baseline_shift: Option<f32>,
     pub horizontal_scale: Option<f32>,
     pub vertical_scale: Option<f32>,
+    pub skew: Option<f32>,
     pub position: Option<String>,
     pub tracking: Option<f32>,
     /// `Justification` from the style. Parsed into the typed
@@ -454,6 +456,7 @@ pub struct ResolvedCharacter {
     pub baseline_shift: Option<f32>,
     pub horizontal_scale: Option<f32>,
     pub vertical_scale: Option<f32>,
+    pub skew: Option<f32>,
     pub position: Option<String>,
     pub tracking: Option<f32>,
     pub underline: Option<bool>,
@@ -495,6 +498,7 @@ pub struct ResolvedParagraph {
     pub baseline_shift: Option<f32>,
     pub horizontal_scale: Option<f32>,
     pub vertical_scale: Option<f32>,
+    pub skew: Option<f32>,
     pub position: Option<String>,
     pub tracking: Option<f32>,
     pub justification: Option<Justification>,
@@ -1050,6 +1054,7 @@ impl ResolvedCharacter {
         self.baseline_shift = self.baseline_shift.or(def.baseline_shift);
         self.horizontal_scale = self.horizontal_scale.or(def.horizontal_scale);
         self.vertical_scale = self.vertical_scale.or(def.vertical_scale);
+        self.skew = self.skew.or(def.skew);
         if self.position.is_none() {
             self.position = def.position.clone();
         }
@@ -1101,6 +1106,7 @@ impl ResolvedParagraph {
         self.baseline_shift = self.baseline_shift.or(def.baseline_shift);
         self.horizontal_scale = self.horizontal_scale.or(def.horizontal_scale);
         self.vertical_scale = self.vertical_scale.or(def.vertical_scale);
+        self.skew = self.skew.or(def.skew);
         if self.position.is_none() {
             self.position = def.position.clone();
         }
@@ -1185,6 +1191,7 @@ fn parse_character_style(e: &quick_xml::events::BytesStart) -> Option<CharacterS
         baseline_shift: attr(e, b"BaselineShift").and_then(|s| s.parse().ok()),
         horizontal_scale: attr(e, b"HorizontalScale").and_then(|s| s.parse().ok()),
         vertical_scale: attr(e, b"VerticalScale").and_then(|s| s.parse().ok()),
+        skew: attr(e, b"Skew").and_then(|s| s.parse().ok()),
         position: attr(e, b"Position"),
         tracking: attr(e, b"Tracking").and_then(|s| s.parse().ok()),
         underline: attr(e, b"Underline").and_then(|s| s.parse().ok()),
@@ -1336,6 +1343,7 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         baseline_shift: attr(e, b"BaselineShift").and_then(|s| s.parse().ok()),
         horizontal_scale: attr(e, b"HorizontalScale").and_then(|s| s.parse().ok()),
         vertical_scale: attr(e, b"VerticalScale").and_then(|s| s.parse().ok()),
+        skew: attr(e, b"Skew").and_then(|s| s.parse().ok()),
         position: attr(e, b"Position"),
         tracking: attr(e, b"Tracking").and_then(|s| s.parse().ok()),
         justification: attr(e, b"Justification")

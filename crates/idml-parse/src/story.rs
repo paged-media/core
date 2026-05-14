@@ -588,12 +588,16 @@ pub struct CharacterRun {
     /// `BaselineShift` in pt. Positive lifts glyphs above the
     /// baseline, negative drops them. Applied per-glyph at emit time.
     pub baseline_shift: Option<f32>,
-    /// `HorizontalScale` percentage (100 = identity). Parsed for
-    /// future per-glyph x-scale; not applied yet.
+    /// `HorizontalScale` percentage (100 = identity). Folded into the
+    /// glyph affine by [`crate::CharacterRun::to_styled_run`] so the
+    /// shaper sees the requested glyph x-scale (P-08).
     pub horizontal_scale: Option<f32>,
     /// `VerticalScale` percentage (100 = identity). Parsed for future
     /// per-glyph y-scale; not applied yet.
     pub vertical_scale: Option<f32>,
+    /// `Skew` in degrees (positive = right-leaning). Folded into the
+    /// glyph affine alongside `HorizontalScale` (P-08).
+    pub skew: Option<f32>,
     /// `Position` value (`Normal | Superscript | Subscript |
     /// OTSuperscript | OTSubscript | OTNumerator | OTDenominator`).
     /// Parsed for future scaling/baseline-shift application; not yet
@@ -1088,6 +1092,7 @@ impl Story {
                             horizontal_scale: attr(&e, b"HorizontalScale")
                                 .and_then(|s| s.parse().ok()),
                             vertical_scale: attr(&e, b"VerticalScale").and_then(|s| s.parse().ok()),
+                            skew: attr(&e, b"Skew").and_then(|s| s.parse().ok()),
                             position: attr(&e, b"Position"),
                             tracking: attr(&e, b"Tracking").and_then(|s| s.parse().ok()),
                             underline: attr(&e, b"Underline").and_then(|s| s.parse::<bool>().ok()),
