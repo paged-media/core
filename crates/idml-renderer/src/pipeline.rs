@@ -7636,10 +7636,24 @@ fn emit_diagonal_under_transform(
     });
 }
 
+/// Detect PostScript / EPS magic in the first few bytes of a resolved
+/// image buffer. EPS streams start with `%!PS-Adobe` (or `%!PS`); the
+/// `image` crate can't decode them, so the caller falls back to the
+/// missing-image placeholder rather than emit nothing (P-14).
+fn is_eps_magic(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"%!PS")
+}
+
 /// Decode raw image bytes to RGBA8. Format detection is via magic
 /// bytes (`image::load_from_memory`). Returns `None` for any decode
-/// or buffer-shape failure.
+/// or buffer-shape failure — including EPS / PostScript streams,
+/// which would need a Ghostscript sidecar to rasterise (deferred,
+/// see `docs/plan.md` Phase 4).
 fn decode_image_bytes(bytes: &[u8]) -> Option<idml_compose::DecodedImage> {
+    if is_eps_magic(bytes) {
+        tracing::warn!("EPS / PostScript image detected; emitting missing-image placeholder");
+        return None;
+    }
     let img = image::load_from_memory(bytes).ok()?;
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
