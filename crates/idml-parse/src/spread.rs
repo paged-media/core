@@ -717,6 +717,16 @@ pub struct Oval {
     pub opacity: Option<f32>,
     /// See [`Rectangle::blend_mode`].
     pub blend_mode: Option<String>,
+    /// `LinkResourceURI` of the placed image (or `<Image href>`), if
+    /// the oval nests one. Mirrors [`Rectangle::image_link`] (P-16).
+    pub image_link: Option<String>,
+    /// True when the oval nests an `<Image>` / `<EPSImage>` / `<PDF>` /
+    /// `<ImportedPage>` element, regardless of resolvability. Mirrors
+    /// [`Rectangle::has_image_element`] (P-16).
+    pub has_image_element: bool,
+    /// `ItemTransform` from the nested `<Image>`. Mirrors
+    /// [`Rectangle::image_item_transform`] (P-16).
+    pub image_item_transform: Option<[f32; 6]>,
     /// `OverprintFill="true"`. See [`TextFrame::overprint_fill`].
     pub overprint_fill: bool,
     /// `OverprintStroke="true"`. See [`TextFrame::overprint_stroke`].
@@ -1462,6 +1472,9 @@ impl Spread {
                             gradient_stroke_length: common.gradient_stroke_length,
                             opacity: None,
                             blend_mode: None,
+                            image_link: None,
+                            has_image_element: false,
+                            image_item_transform: None,
                             overprint_fill: common.overprint_fill,
                             overprint_stroke: common.overprint_stroke,
                         });
@@ -2050,6 +2063,27 @@ impl Spread {
                                     {
                                         if out.polygons[i].image_item_transform.is_none() {
                                             out.polygons[i].image_item_transform = Some(m);
+                                        }
+                                    }
+                                }
+                            }
+                            Some(CurrentFrameKind::Oval(i)) => {
+                                if is_image_element {
+                                    out.ovals[i].has_image_element = true;
+                                }
+                                if let Some(uri) =
+                                    attr(&e, b"LinkResourceURI").or_else(|| attr(&e, b"href"))
+                                {
+                                    if out.ovals[i].image_link.is_none() {
+                                        out.ovals[i].image_link = Some(uri);
+                                    }
+                                }
+                                if e.name().as_ref() == b"Image" {
+                                    if let Some(m) = attr(&e, b"ItemTransform")
+                                        .and_then(|s| parse_matrix(&s))
+                                    {
+                                        if out.ovals[i].image_item_transform.is_none() {
+                                            out.ovals[i].image_item_transform = Some(m);
                                         }
                                     }
                                 }

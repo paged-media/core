@@ -693,6 +693,16 @@ pub fn build_document(
                     options.fallback_frame_fill,
                     cmyk_xform.as_ref(),
                 );
+                // Oval-hosted images: clip the placed image to the
+                // oval's parametric ellipse (mirrors emit_polygon_image
+                // but with the unit-ellipse path interner) (P-16).
+                emit_oval_image(
+                    &mut pages[page_idx],
+                    oval,
+                    options,
+                    &mut page_image_caches[page_idx],
+                    &mut decoded_image_cache,
+                );
                 let after = pages[page_idx].list.commands.len();
                 if after > before && frame_spans.ovals[idx].is_none() {
                     frame_spans.ovals[idx] = Some(crate::module::FrameCmdSpan {
@@ -7409,6 +7419,189 @@ fn emit_polygon_image(
             id,
         );
     }
+}
+
+/// Mirror of `emit_polygon_image` for `<Oval>` frames hosting placed
+/// images. The clip path is the unit ellipse (interned at a stable
+/// key so multiple ovals share the same path); the image fits the
+/// oval's bounds unless the inner `<Image ItemTransform>` overrides
+/// it (P-16).
+fn emit_oval_image(
+    page: &mut BuiltPage,
+    oval: &Oval,
+    options: &PipelineOptions,
+    page_image_cache: &mut HashMap<String, idml_compose::ImageId>,
+    decoded_cache: &mut HashMap<String, idml_compose::DecodedImage>,
+) {
+    let resolved = match oval.image_link.as_deref() {
+        Some(uri) => resolve_image_id(uri, options, &mut page.list, page_image_cache, decoded_cache),
+        None => None,
+    };
+    let outer = frame_outer_transform(page, oval.item_transform);
+    let Some((id, img_w, img_h)) = resolved else {
+        if oval.has_image_element && options.missing_image_placeholder {
+            emit_oval_missing_image_placeholder(page, oval, outer);
+        }
+        return;
+    };
+
+    // Clip to the oval's parametric ellipse (unit-rect-scaled to the
+    // frame's bounds via the outer affine). UNIT_ELLIPSE_KEY is the
+    // same interner key the fill / stroke paths use, so the path is
+    // shared across all ovals.
+    let bounds = oval.bounds;
+    let clip_rect = idml_compose::Rect {
+        x: bounds.left,
+        y: bounds.top,
+        w: bounds.width(),
+        h: bounds.height(),
+    };
+    let (clip_path_id, _) = page
+        .list
+        .paths
+        .intern(idml_compose::UNIT_ELLIPSE_KEY, unit_ellipse_path());
+    let clip_transform = Transform::for_rect_in(clip_rect, outer);
+
+    let img_rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        w: img_w,
+        h: img_h,
+    };
+    let image_transform = if let Some(image_t) = oval.image_item_transform {
+        outer.compose(&Transform(image_t))
+    } else {
+        Transform::for_rect_in(clip_rect, outer)
+    };
+    if oval.image_item_transform.is_some() {
+        emit_image_under_clip(
+            &mut page.list,
+            clip_path_id,
+            clip_transform,
+            img_rect,
+            image_transform,
+            id,
+        );
+    } else {
+        let unit = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+        };
+        emit_image_under_clip(
+            &mut page.list,
+            clip_path_id,
+            clip_transform,
+            unit,
+            image_transform,
+            id,
+        );
+    }
+}
+
+/// Approximate a unit ellipse with four cubic Bezier curves (the
+/// standard 0.5522847 control-point distance for a circle). Returns
+/// a `PathData` ready to intern under `UNIT_ELLIPSE_KEY`.
+fn unit_ellipse_path() -> idml_compose::PathData {
+    use idml_compose::PathSegment;
+    // Kappa for circular Bezier approximation.
+    const K: f32 = 0.5522847498307933;
+    // Unit ellipse in the [0,1]×[0,1] rect: center (0.5, 0.5),
+    // radius 0.5. Each quadrant is one CubicTo.
+    let cx = 0.5;
+    let cy = 0.5;
+    let rx = 0.5;
+    let ry = 0.5;
+    let kx = rx * K;
+    let ky = ry * K;
+    idml_compose::PathData {
+        segments: vec![
+            PathSegment::MoveTo {
+                x: cx + rx,
+                y: cy,
+            },
+            PathSegment::CubicTo {
+                cx1: cx + rx,
+                cy1: cy + ky,
+                cx2: cx + kx,
+                cy2: cy + ry,
+                x: cx,
+                y: cy + ry,
+            },
+            PathSegment::CubicTo {
+                cx1: cx - kx,
+                cy1: cy + ry,
+                cx2: cx - rx,
+                cy2: cy + ky,
+                x: cx - rx,
+                y: cy,
+            },
+            PathSegment::CubicTo {
+                cx1: cx - rx,
+                cy1: cy - ky,
+                cx2: cx - kx,
+                cy2: cy - ry,
+                x: cx,
+                y: cy - ry,
+            },
+            PathSegment::CubicTo {
+                cx1: cx + kx,
+                cy1: cy - ry,
+                cx2: cx + rx,
+                cy2: cy - ky,
+                x: cx + rx,
+                y: cy,
+            },
+            PathSegment::Close,
+        ],
+    }
+}
+
+/// Missing-image placeholder for `<Oval>` (P-16). Stamps the 30% grey
+/// fill clipped to the oval's ellipse, plus the diagonal-X strokes
+/// across the bounding rect — the same visual the Rectangle path
+/// emits, with the elliptical clip applied so the placeholder reads
+/// as a placeholder oval rather than a placeholder square.
+fn emit_oval_missing_image_placeholder(
+    page: &mut BuiltPage,
+    oval: &Oval,
+    outer: Transform,
+) {
+    let bounds = oval.bounds;
+    if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
+        return;
+    }
+    let grey = Paint::Solid(Color::rgba(0.7, 0.7, 0.7, 1.0));
+    let rect = idml_compose::Rect {
+        x: bounds.left,
+        y: bounds.top,
+        w: bounds.width(),
+        h: bounds.height(),
+    };
+    idml_compose::emit_ellipse_transformed(rect, outer, grey, &mut page.list);
+    let stroke = idml_compose::Stroke::new(0.5);
+    let dark = Paint::Solid(Color::rgba(0.25, 0.25, 0.25, 1.0));
+    emit_diagonal_under_transform(
+        &mut page.list,
+        bounds.left,
+        bounds.top,
+        bounds.right,
+        bounds.bottom,
+        outer,
+        stroke,
+        dark,
+    );
+    emit_diagonal_under_transform(
+        &mut page.list,
+        bounds.right,
+        bounds.top,
+        bounds.left,
+        bounds.bottom,
+        outer,
+        stroke,
+        dark,
+    );
 }
 
 /// Push a rectangular clip path, emit an image, then pop the clip.
