@@ -1981,3 +1981,124 @@ fn toc_story_swaps_in_resolved_entries_with_heading_text_and_page_numbers() {
     // exactly the resolver's three entries replaced the original
     // story's content.
 }
+
+// ─────────────────────────── rotated text frames ────────────────────
+
+/// 90° CCW rotation around the origin moves the local +x axis to +y
+/// and the local +y axis to -x. As a row-major IDML transform
+/// (`[a b c d tx ty]` where rotated point = `[a c; b d] · (x,y) +
+/// (tx, ty)`), that's `[0, 1, -1, 0, tx, ty]`.
+///
+/// P-03 regression: a TextFrame authored with horizontal reading
+/// direction (`GeometricBounds="0 0 30 600"` — inner 600 wide × 30
+/// tall) plus a 90° `ItemTransform` projects to a *spread-space*
+/// AABB of 30 wide × 600 tall — i.e. width and height swap. The
+/// pre-fix renderer fed `column_width_pt = 30` to the composer
+/// (using the spread AABB), so a long string of glyphs ran out of
+/// room after the first wrap and the rest were silently dropped.
+/// Verify here that the story emits a healthy glyph count and that
+/// the per-glyph transforms carry a non-trivial rotation (the
+/// post-emit `rotate_transform_around` pass).
+fn build_rotated_text_idml() -> Vec<u8> {
+    // ItemTransform: 90° CCW rotation + translation that places the
+    // rotated 600×30 frame as a vertical sidebar at x≈400 on page.
+    //   IDML row-major matrix:
+    //     a=0, b=1, c=-1, d=0, tx=400, ty=40
+    //   Mapping a local point (x, y):
+    //     spread.x = a*x + c*y + tx = 0*x + (-1)*y + 400 = 400 - y
+    //     spread.y = b*x + d*y + ty = 1*x + 0*y + 40    = 40 + x
+    // Local (0,0)→(400,40); (600,0)→(400,640) ← off-page bottom;
+    // shrink to fit by choosing a smaller frame height. Use 400 tall
+    // so spread extent runs (400,40)→(400,440), comfortable on a
+    // 500×800 page.
+    let spread = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 500 800"/>
+    <TextFrame Self="rotFrame" ParentStory="u10"
+               GeometricBounds="0 0 30 400"
+               ItemTransform="0 1 -1 0 400 40"
+               StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#;
+    let story = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="14">
+        <Content>VERTICAL SIDEBAR LABEL FOR THE COVER TWO THOUSAND THIRTY</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#;
+    write_zip(|zip| {
+        put(zip, "designmap.xml", DESIGNMAP);
+        put(zip, "Resources/Graphic.xml", GRAPHIC_XML);
+        put(zip, "Spreads/Spread_sp1.xml", spread);
+        put(zip, "Stories/Story_u10.xml", story);
+    })
+}
+
+#[test]
+fn rotated_text_frame_emits_glyphs_along_rotated_axis() {
+    let bytes = build_rotated_text_idml();
+    let doc = Document::open(&bytes).unwrap();
+
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+    let built = pipeline::build_document(&doc, &opts).unwrap();
+    let page = &built.pages[0];
+
+    // Glyph emission survives the rotation: after the fix, the
+    // composer receives column_width = 30 from inner coords (long
+    // and narrow), which fits the same string the unrotated frame
+    // would have produced. Pre-fix the column_width_pt came from
+    // the spread AABB (600×30), the height collapsed to 30 pt, and
+    // the composer pinned the line to the first 1-2 glyphs.
+    let n_glyphs = page
+        .list
+        .commands
+        .iter()
+        .filter(|c| matches!(c, DisplayCommand::FillPath { .. }))
+        .count();
+    assert!(
+        n_glyphs >= 30,
+        "rotated frame should still emit a healthy glyph count, got {n_glyphs}",
+    );
+
+    // Per-glyph FillPath transforms must carry a non-trivial off-
+    // diagonal — the post-emit `rotate_transform_around` pass folds
+    // the frame's 90° linear into every glyph command. Unrotated
+    // glyph emit produces `[a, 0, 0, -a, tx, ty]` (off-diagonal
+    // near zero); the rotated pass moves the scale to the
+    // off-diagonal so a/d collapse and b/c2 carry the visible scale.
+    let mut rotated_glyphs = 0;
+    let mut diag_sum = 0.0f32;
+    let mut off_sum = 0.0f32;
+    for c in &page.list.commands {
+        if let DisplayCommand::FillPath { transform, .. } = c {
+            let [a, b, c2, d, _, _] = transform.0;
+            diag_sum += a.abs() + d.abs();
+            off_sum += b.abs() + c2.abs();
+            // Look for the rotated-glyph signature: off-diagonal
+            // entries dominate over the diagonal.
+            if b.abs() + c2.abs() > a.abs() + d.abs() {
+                rotated_glyphs += 1;
+            }
+        }
+    }
+    assert!(
+        rotated_glyphs >= 20,
+        "rotated TextFrame's glyphs should carry the frame's 90° linear in their transforms; got {rotated_glyphs} rotated of {n_glyphs} FillPath cmds (diag_sum={diag_sum}, off_sum={off_sum})",
+    );
+    // Sanity: with a 90° rotation, total off-diagonal magnitude
+    // should exceed total diagonal magnitude across the page.
+    assert!(
+        off_sum > diag_sum,
+        "rotated frame should produce off-diagonal-dominant transforms; got diag={diag_sum}, off={off_sum}",
+    );
+}

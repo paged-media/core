@@ -1193,7 +1193,17 @@ impl<'a> StoryEmitter<'a> {
             }
         }
 
-        let raw_width = (head_frame_spread.width() - head_insets[1] - head_insets[3]).max(0.0);
+        // Use the head frame's *inner-coord* width for column sizing
+        // so rotated TextFrames (90° sidebar labels, vertical
+        // wordmarks) don't degenerate to a frame-height-sized column.
+        // `transform_bounds` produces the spread-space AABB which
+        // swaps width/height under a 90° ItemTransform; that's the
+        // right input for wrap-obstacle / page-routing but the wrong
+        // one for the rotation-invariant text column. The post-emit
+        // pass at `frame_is_upright` later rotates the glyph commands
+        // around the frame's spread top-left so they land along the
+        // rotated axis.
+        let raw_width = (chain[0].bounds.width() - head_insets[1] - head_insets[3]).max(0.0);
         let wrapped_width = (raw_width - shrink_left - shrink_right).max(0.0);
         let column_width_pt = options.fallback_column_width_pt.or(Some(wrapped_width));
         let len = chain.len();
