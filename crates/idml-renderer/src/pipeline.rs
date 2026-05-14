@@ -5936,6 +5936,33 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
     } else if let Some(last) = subs.last_mut() {
         last.space_after = paragraph.space_after;
     }
+    // P-25 guard: drop a trailing sub-paragraph whose every run is
+    // empty or `\n`-only. The split loop above already discards the
+    // `current` working sub when its runs vec is empty, but a
+    // pathological run carrying ONLY `\n` characters in its text
+    // would seed a sub with a zero-text hint run (set at line ~5891)
+    // that has no visible glyphs yet still triggers bullet-marker
+    // emission for NumberedList paragraphs. Drop those at the tail
+    // so the numbering counter doesn't double-fire on the visible
+    // line. Stops short of dropping interior empty sub-paragraphs
+    // because consecutive `<Br/>` pairs intentionally render as
+    // empty vertical-leading slots.
+    while subs.len() > 1
+        && subs
+            .last()
+            .map(|p| {
+                p.runs
+                    .iter()
+                    .all(|r| r.text.is_empty() || r.text.chars().all(|c| c == '\n'))
+            })
+            .unwrap_or(false)
+    {
+        // Carry the dropped tail's space_after over to the new last.
+        let dropped = subs.pop().expect("len > 1 just checked");
+        if let Some(last) = subs.last_mut() {
+            last.space_after = last.space_after.or(dropped.space_after);
+        }
+    }
     if subs.is_empty() {
         // Defensive: the original was all `\n`s. Return a single
         // empty paragraph to keep the upstream loop's stat
@@ -10534,6 +10561,58 @@ mod tests {
     fn stroke_alignment_offset_center_and_none_return_zero() {
         assert_eq!(stroke_alignment_offset(Some("CenterAlignment"), 2.0), 0.0);
         assert_eq!(stroke_alignment_offset(None, 2.0), 0.0);
+    }
+
+    // P-25 regression: a paragraph ending with a trailing `\n` (the
+    // `<Br/>` after the final visible content) must NOT produce a
+    // phantom empty sub-paragraph. A NumberedList paragraph would
+    // otherwise increment its counter twice and emit two "01" /
+    // "02" markers per visible line.
+    #[test]
+    fn split_paragraph_at_breaks_drops_trailing_newline_only_sub_paragraph() {
+        let run = idml_parse::CharacterRun {
+            text: "01\n".to_string(),
+            ..idml_parse::CharacterRun::default()
+        };
+        let paragraph = idml_parse::Paragraph {
+            runs: vec![run],
+            ..idml_parse::Paragraph::default()
+        };
+        let subs = split_paragraph_at_breaks(&paragraph);
+        assert_eq!(subs.len(), 1, "trailing \\n must not produce a phantom sub-paragraph");
+        assert_eq!(subs[0].runs.len(), 1);
+        assert_eq!(subs[0].runs[0].text, "01");
+    }
+
+    // Belt + braces: pathological case where the splitter's hint
+    // path seeds an all-`\n` trailing run. The post-loop guard at
+    // the tail of `split_paragraph_at_breaks` must collapse it.
+    #[test]
+    fn split_paragraph_at_breaks_drops_trailing_all_newline_run_after_visible() {
+        let visible = idml_parse::CharacterRun {
+            text: "01".to_string(),
+            ..idml_parse::CharacterRun::default()
+        };
+        let nl_only = idml_parse::CharacterRun {
+            text: "\n\n".to_string(),
+            ..idml_parse::CharacterRun::default()
+        };
+        let paragraph = idml_parse::Paragraph {
+            runs: vec![visible, nl_only],
+            ..idml_parse::Paragraph::default()
+        };
+        let subs = split_paragraph_at_breaks(&paragraph);
+        // Two `\n` after visible content used to seed two empty
+        // hint-only subs after the "01" one (= 3 total). The guard
+        // collapses the trailing newline-only subs so a numbered
+        // list emits its marker once, not three times.
+        assert_eq!(
+            subs.len(),
+            1,
+            "trailing-only-newline tail subs must collapse"
+        );
+        assert_eq!(subs[0].runs.len(), 1);
+        assert_eq!(subs[0].runs[0].text, "01");
     }
 
     // Composed: inset_rect applied at the stroke offset must shrink
