@@ -17,7 +17,8 @@ pub mod shape;
 
 pub use compose::{
     compose_paragraph, compose_paragraph_with_drop_cap, drop_cap_column_widths,
-    drop_cap_point_size, AdvanceMeasurer, ComposeOptions, ComposedLine, DropCapComposition,
+    drop_cap_column_widths_with_min, drop_cap_point_size, AdvanceMeasurer, ComposeOptions,
+    ComposedLine, DropCapComposition,
     DropCapSpec, MonospaceMeasurer, RustybuzzMeasurer, TextShaper,
 };
 pub use hyphenate::{Hyphenator, Language};

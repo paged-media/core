@@ -2298,8 +2298,46 @@ fn emit_paragraph_into_chain(
             // Now overlay the carved widths onto lopts so the
             // remainder body wraps narrower for the first M lines.
             // If a wrap pass set widths already, take min per line.
+            //
+            // P-19: clamp every carved width to at least the widest
+            // shaped word in the remainder so paragraph_breaker can
+            // still place at least one token per line. Without this,
+            // wide-fallback fonts or aggressive cap sizes produced
+            // an empty break list and the entire body text dropped.
             let scalar_width_64 = lopts.compose.column_width;
-            let carved = idml_text::drop_cap_column_widths(&spec, scalar_width_64);
+            let max_word_width_64 =
+                styled_runs.iter().fold(0i32, |acc, run| {
+                    let shaped = idml_text::shape::shape_run(
+                        run.face,
+                        run.text,
+                        run.point_size,
+                    );
+                    let mut local_max = 0i32;
+                    let mut current = 0i32;
+                    let text_bytes = run.text.as_bytes();
+                    let is_break = |i: u32| -> bool {
+                        let idx = i as usize;
+                        idx < text_bytes.len()
+                            && (text_bytes[idx] == b' '
+                                || text_bytes[idx] == b'\t'
+                                || text_bytes[idx] == b'\n')
+                    };
+                    for g in &shaped.glyphs {
+                        if is_break(g.cluster) {
+                            local_max = local_max.max(current);
+                            current = 0;
+                        } else {
+                            current = current.saturating_add(g.x_advance);
+                        }
+                    }
+                    local_max = local_max.max(current);
+                    acc.max(local_max)
+                });
+            let carved = idml_text::drop_cap_column_widths_with_min(
+                &spec,
+                scalar_width_64,
+                max_word_width_64,
+            );
             if let Some(existing) = lopts.compose.column_widths.as_deref() {
                 let mut merged: Vec<i32> = carved.clone();
                 for (i, w) in merged.iter_mut().enumerate() {

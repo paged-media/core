@@ -348,12 +348,32 @@ pub fn drop_cap_point_size(body_line_height_pt: f32, drop_cap_lines: u32) -> f32
 ///
 /// All values in 1/64 pt.
 pub fn drop_cap_column_widths(spec: &DropCapSpec, base_width: i32) -> Vec<i32> {
+    drop_cap_column_widths_with_min(spec, base_width, 0)
+}
+
+/// Variant of [`drop_cap_column_widths`] that guarantees each carved
+/// line width is at least `min_width` (typically the paragraph's
+/// widest word). When the cap's footprint would shrink the column
+/// below the longest token, paragraph_breaker has no feasible fit
+/// and silently drops the wrapped body text (P-19). Clamping to a
+/// non-zero floor restores the legible-fall-back behaviour: the cap
+/// renders, and the body text wraps to the right of it at the
+/// minimum width — even if that overflows the column slightly.
+///
+/// `min_width` and the returned widths are in 1/64 pt.
+pub fn drop_cap_column_widths_with_min(
+    spec: &DropCapSpec,
+    base_width: i32,
+    min_width: i32,
+) -> Vec<i32> {
     if !spec.is_active() {
         return Vec::new();
     }
     let indent = spec.glyph_advance.saturating_add(spec.gutter);
     let narrow = (base_width - indent).max(0);
-    vec![narrow; spec.lines as usize]
+    let floor = min_width.max(0);
+    let clamped = narrow.max(floor);
+    vec![clamped; spec.lines as usize]
 }
 
 /// Result of [`compose_paragraph_with_drop_cap`].
@@ -1061,6 +1081,37 @@ mod tests {
     }
 
     // ----- Drop cap -----
+
+    #[test]
+    fn drop_cap_column_widths_with_min_clamps_narrow_to_min() {
+        // P-19: a cap whose footprint shrinks the column below the
+        // widest body word would otherwise yield zero feasible breaks
+        // and silently drop the body text. The `_with_min` variant
+        // floors every carved line at the supplied minimum so the
+        // breaker always has a fit (the text overflows the column
+        // edge slightly, which is the lesser evil).
+        let spec = DropCapSpec {
+            characters: 1,
+            lines: 3,
+            glyph_advance: 100,
+            gutter: 10,
+        };
+        // base column = 150, indent = 110, so the natural carved width
+        // is 40 — narrower than the widest word.
+        let widest_word: i32 = 80;
+        let widths = drop_cap_column_widths_with_min(&spec, 150, widest_word);
+        assert_eq!(widths.len(), 3, "spec.lines (=3) entries");
+        for w in widths {
+            assert_eq!(
+                w, widest_word,
+                "carved width clamps up to the widest-word floor"
+            );
+        }
+        // Sanity: when min is 0, behaviour matches the legacy fn.
+        let widths_legacy = drop_cap_column_widths(&spec, 150);
+        let widths_zero_min = drop_cap_column_widths_with_min(&spec, 150, 0);
+        assert_eq!(widths_legacy, widths_zero_min);
+    }
 
     #[test]
     fn drop_cap_inactive_returns_unchanged_composition() {
