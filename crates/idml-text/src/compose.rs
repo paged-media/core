@@ -180,6 +180,11 @@ pub struct ComposeOptions<'a> {
     pub stretch_ratio: f32,
     /// Inter-word glue: shrink as a fraction of `space_width`.
     pub shrink_ratio: f32,
+    /// Inter-word glue: natural width as a fraction of `space_width`.
+    /// Mirrors IDML's `DesiredWordSpacing` percentage (`100` = full
+    /// natural glyph). Default 1.0 so callers that don't carry a
+    /// paragraph-level value keep the legacy behaviour.
+    pub desired_space_ratio: f32,
     /// Optional hyphenation engine. When set, the composer emits
     /// flagged Penalty items at every TeX-pattern break opportunity
     /// inside each word; paragraph-breaker decides whether to take
@@ -237,6 +242,7 @@ impl ComposeOptions<'_> {
             looseness: 0,
             stretch_ratio: 0.33,
             shrink_ratio: 0.2,
+            desired_space_ratio: 1.0,
             hyphenator: None,
             hyphen_penalty: 50,
             kinsoku_enforce: false,
@@ -522,9 +528,15 @@ pub fn compose_paragraph(
     if options.hyphenator.is_some() {
         note_hyphenation_divergence_once();
     }
-    let space_width = measurer.space_width();
-    let stretch = (space_width as f32 * options.stretch_ratio).round() as i32;
-    let shrink = (space_width as f32 * options.shrink_ratio).round() as i32;
+    let natural_space = measurer.space_width();
+    // IDML's `DesiredWordSpacing` percentage scales the glue's natural
+    // width; the stretch/shrink ratios are still expressed against the
+    // raw glyph advance, so the breaker sees a Min..=Desired..=Max
+    // band shifted by `desired_space_ratio` (P-07).
+    let space_width =
+        (natural_space as f32 * options.desired_space_ratio.max(0.0)).round() as i32;
+    let stretch = (natural_space as f32 * options.stretch_ratio).round() as i32;
+    let shrink = (natural_space as f32 * options.shrink_ratio).round() as i32;
     let hyphen_width = if options.hyphenator.is_some() {
         measurer.measure_word("-")
     } else {

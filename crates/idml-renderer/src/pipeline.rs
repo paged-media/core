@@ -8585,15 +8585,18 @@ fn apply_paragraph_compose_options<'a>(
         lopts.compose.hyphenator = None;
     }
     // Word spacing: IDML carries percentages on the [Min..=Desired..=Max]
-    // axis. We translate to the composer's stretch/shrink ratios as
-    // (max - desired) / desired and (desired - min) / desired so the
-    // breaker gets a relative range matching what InDesign penalises.
+    // axis relative to the natural space-glyph advance. The composer's
+    // `desired_space_ratio` scales the glue's natural width;
+    // `stretch_ratio` / `shrink_ratio` are still relative to the raw
+    // glyph advance, so the breaker reads a Min..=Desired..=Max band
+    // shifted by Desired (P-07).
     let desired = resolved.desired_word_spacing.unwrap_or(100.0).max(1.0);
+    lopts.compose.desired_space_ratio = (desired / 100.0).max(0.0);
     if let Some(max) = resolved.maximum_word_spacing {
-        lopts.compose.stretch_ratio = ((max - desired) / desired).max(0.0);
+        lopts.compose.stretch_ratio = ((max - desired) / 100.0).max(0.0);
     }
     if let Some(min) = resolved.minimum_word_spacing {
-        lopts.compose.shrink_ratio = ((desired - min) / desired).clamp(0.0, 1.0);
+        lopts.compose.shrink_ratio = ((desired - min) / 100.0).clamp(0.0, 1.0);
     }
     // CJK Stage 2: enable hard-kinsoku enforcement whenever the cascade
     // carries any `KinsokuType` ("WordbreakWithJustification" / "PushIn"
