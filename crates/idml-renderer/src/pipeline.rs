@@ -2071,19 +2071,21 @@ fn emit_paragraph_into_chain(
         Vec::new()
     };
 
-    // Per-run uppercase override for `Capitalization=AllCaps |
-    // SmallCaps | CapToSmallCap`. We don't yet drive an OT smcp
-    // lookup, so SmallCaps falls back to AllCaps shaping — the metric
-    // gets the right glyph count and width even if the shape isn't
-    // optical-size-tuned. Allocates only for runs whose resolved
-    // capitalization actually differs from their input.
+    // Per-run uppercase override for `Capitalization=AllCaps`. The
+    // previous implementation also uppercased SmallCaps / CapToSmallCap,
+    // but our shaper doesn't drive the `smcp` OT feature yet — the
+    // result was a row of full-height capitals where the IDML asked
+    // for capital-tall + small-tall rhythm. Pass SmallCaps through
+    // with its original case until a real small-caps fallback lands
+    // (P-12). Allocates only for runs whose resolved capitalization
+    // actually differs from their input.
     let capitalized: Vec<Option<String>> = paragraph
         .runs
         .iter()
         .enumerate()
         .map(
             |(i, run)| match resolved_runs[i].capitalization.as_deref() {
-                Some("AllCaps") | Some("SmallCaps") | Some("CapToSmallCap") => {
+                Some("AllCaps") => {
                     let src: &str = if needs_page_subst {
                         page_substituted[i].as_str()
                     } else {
