@@ -77,6 +77,15 @@ struct Args {
     /// log lines.
     #[arg(long)]
     json: bool,
+    /// Suppress InDesign's missing-image placeholder (30% grey +
+    /// diagonal X) on image-bearing frames whose `LinkResourceURI`
+    /// doesn't resolve. The default is to stamp the placeholder so
+    /// renders match real-world InDesign PDFs that bake the
+    /// placeholder visual into broken-link templates. Synthetic
+    /// fixtures whose references were exported without the
+    /// placeholder visible can opt out via this flag.
+    #[arg(long)]
+    no_missing_image_placeholder: bool,
 }
 
 fn main() -> Result<()> {
@@ -299,6 +308,7 @@ fn main() -> Result<()> {
         default_point_size: args.default_size,
         fallback_column_width_pt: args.column_width_pt,
         font_metrics_overrides: &metric_overrides,
+        missing_image_placeholder: !args.no_missing_image_placeholder,
         ..PipelineOptions::default()
     };
     // Explicit for clarity; default already matches.
