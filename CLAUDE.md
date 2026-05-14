@@ -76,14 +76,19 @@ you've touched.
   wasm32.
 - `crates/idml-fidelity/` — ΔE2000 + SSIM diff library + `idml-diff`
   CLI. Reference is positional arg #1, candidate #2.
-- `crates/idml-edit/` + `crates/idml-edit-wasm/` — editing surface +
-  WASM bindings.
 - `crates/idml-wasm/` — `render_to_png` / `parse_summary`.
 - `corpus/generated/` — license-clear generator-produced fixtures
   (IDML + paired InDesign-exported PDF + meta JSON). Hard fidelity
   gate runs over these via `diff.sh` + `fidelity-thresholds.json`.
 - `corpus/samples/` — manually-staged samples, gitignored, advisory
   only.
+- `corpus/envato/` — 60+ real third-party InDesign templates from
+  Envato (zips gitignored). Smoke-tests the renderer across realistic
+  multi-page typography + images; gated subset grows over time. See
+  `corpus/envato/README.md`. The harness drives a local InDesign 2025
+  install via `osascript` to (a) convert INDD-only packs to IDML and
+  (b) export a reference PDF per pack using the same font
+  substitutions the renderer applies.
 - `corpus/seeds/hello/` — golden snapshot (PNG-pinned regression
   test).
 - `corpus/fonts/` — license-clear TTFs (Open Sans, Cormorant

@@ -10,8 +10,6 @@ members = [
     "crates/idml-renderer",
     "crates/idml-fidelity",
     "crates/idml-wasm",
-    "crates/idml-edit",
-    "crates/idml-edit-wasm",
     "crates/idml-gen",
     "spikes/vello-eval",
     "spikes/composer-calibration",
