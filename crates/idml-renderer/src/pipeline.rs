@@ -355,9 +355,35 @@ pub fn build_document(
                 .unwrap_or(0)
         };
 
+        // Master items belong to the current live page when either
+        // (a) their centroid lands on the matching master page, or
+        // (b) they're "full-bleed-ish" — area ≥ 50% of a master page
+        //     AND the item's spread bounds intersect this master page.
+        // The second arm covers spread-spanning brand-colour
+        // backgrounds whose centroid lands across the page fold; the
+        // pure centroid test would route them to the wrong page or
+        // (for items straddling the gutter) to one page only.
+        let target_master = &master_page_bounds[local_master_page_idx];
+        let target_master_area = (target_master.right - target_master.left).max(0.0)
+            * (target_master.bottom - target_master.top).max(0.0);
+        let item_belongs = |b: idml_parse::Bounds| -> bool {
+            if master_page_for(b) == local_master_page_idx {
+                return true;
+            }
+            let item_area = (b.right - b.left).max(0.0) * (b.bottom - b.top).max(0.0);
+            if target_master_area <= 0.0 || item_area < 0.5 * target_master_area {
+                return false;
+            }
+            // Intersection test against the target master page.
+            b.right > target_master.left
+                && b.left < target_master.right
+                && b.bottom > target_master.top
+                && b.top < target_master.bottom
+        };
+
         for frame in &master.spread.text_frames {
             let spread_b = transform_bounds(frame.bounds, frame.item_transform);
-            if master_page_for(spread_b) != local_master_page_idx {
+            if !item_belongs(spread_b) {
                 continue;
             }
             if frame
@@ -397,7 +423,7 @@ pub fn build_document(
         }
         for rect in &master.spread.rectangles {
             let spread_b = transform_bounds(rect.bounds, rect.item_transform);
-            if master_page_for(spread_b) != local_master_page_idx {
+            if !item_belongs(spread_b) {
                 continue;
             }
             if rect
@@ -418,6 +444,82 @@ pub fn build_document(
                 options.fallback_frame_fill,
                 cmyk_xform.as_ref(),
                 None,
+            );
+        }
+        // Non-text background shapes (Polygon / Oval / GraphicLine)
+        // routed onto live body pages. The legacy code stopped at
+        // Rectangle, so master-spread page backgrounds drawn as
+        // polygons / ovals (full-bleed brand colours, decorative
+        // bezel strokes) silently disappeared on every body page.
+        for poly in &master.spread.polygons {
+            let spread_b = transform_bounds(poly.bounds, poly.item_transform);
+            if !item_belongs(spread_b) {
+                continue;
+            }
+            if poly
+                .self_id
+                .as_deref()
+                .is_some_and(|id| override_set.contains(id))
+            {
+                continue;
+            }
+            total_stats.frames += 1;
+            let mut copy = poly.clone();
+            copy.item_transform = Some(compose_outer_translation(copy.item_transform, dx, dy));
+            emit_polygon_into(
+                &mut pages[i],
+                &copy,
+                document,
+                palette,
+                options.fallback_frame_fill,
+                cmyk_xform.as_ref(),
+            );
+        }
+        for oval in &master.spread.ovals {
+            let spread_b = transform_bounds(oval.bounds, oval.item_transform);
+            if !item_belongs(spread_b) {
+                continue;
+            }
+            if oval
+                .self_id
+                .as_deref()
+                .is_some_and(|id| override_set.contains(id))
+            {
+                continue;
+            }
+            total_stats.frames += 1;
+            let mut copy = oval.clone();
+            copy.item_transform = Some(compose_outer_translation(copy.item_transform, dx, dy));
+            emit_oval_into(
+                &mut pages[i],
+                &copy,
+                document,
+                palette,
+                options.fallback_frame_fill,
+                cmyk_xform.as_ref(),
+            );
+        }
+        for line in &master.spread.graphic_lines {
+            let spread_b = transform_bounds(line.bounds, line.item_transform);
+            if !item_belongs(spread_b) {
+                continue;
+            }
+            if line
+                .self_id
+                .as_deref()
+                .is_some_and(|id| override_set.contains(id))
+            {
+                continue;
+            }
+            total_stats.frames += 1;
+            let mut copy = line.clone();
+            copy.item_transform = Some(compose_outer_translation(copy.item_transform, dx, dy));
+            emit_line_into(
+                &mut pages[i],
+                &copy,
+                document,
+                palette,
+                cmyk_xform.as_ref(),
             );
         }
     }

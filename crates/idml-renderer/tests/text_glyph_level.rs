@@ -2102,3 +2102,75 @@ fn rotated_text_frame_emits_glyphs_along_rotated_axis() {
         "rotated frame should produce off-diagonal-dominant transforms; got diag={diag_sum}, off={off_sum}",
     );
 }
+
+// ─────────────────────────── master-spread routing ──────────────────
+
+/// Designmap that wires up one master spread + one body spread (2
+/// pages, both referencing the same master).
+const DESIGNMAP_MASTER: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:MasterSpread src="MasterSpreads/MasterSpread_uad.xml"/>
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+</Document>"#;
+
+/// P-05 regression: a full-bleed `<Rectangle>` defined once on a
+/// master spread, with bounds covering both master pages (e.g. a
+/// cover-spanning brand colour band), must replay onto BOTH body
+/// pages — not just the centroid-winning one. Pre-fix, the master
+/// pass routed the rectangle by AABB centroid, so the page that
+/// didn't own the centroid emitted nothing.
+fn build_master_full_bleed_idml() -> Vec<u8> {
+    // Master spread: two pages side by side (each 0..612 wide,
+    // 0..792 tall), with a single rectangle spanning the whole
+    // spread (0,0 → 1224,792). The body spread mirrors the master
+    // page geometry so the two body pages each pick up a slice of
+    // the spanning rectangle.
+    let master = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:MasterSpread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <MasterSpread Self="uad" Name="A-Master">
+    <Page Self="uad-p1" GeometricBounds="0 0 792 612"/>
+    <Page Self="uad-p2" GeometricBounds="0 612 792 1224"/>
+    <Rectangle Self="uad-bleed" GeometricBounds="0 0 792 1224"
+               FillColor="Color/Black" StrokeWeight="0"/>
+  </MasterSpread>
+</idPkg:MasterSpread>"#;
+    let spread = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 792 612" AppliedMaster="MasterSpread/uad"/>
+    <Page Self="p2" GeometricBounds="0 612 792 1224" AppliedMaster="MasterSpread/uad"/>
+  </Spread>
+</idPkg:Spread>"#;
+    write_zip(|zip| {
+        put(zip, "designmap.xml", DESIGNMAP_MASTER);
+        put(zip, "Resources/Graphic.xml", GRAPHIC_XML);
+        put(zip, "MasterSpreads/MasterSpread_uad.xml", master);
+        put(zip, "Spreads/Spread_sp1.xml", spread);
+    })
+}
+
+#[test]
+fn master_full_bleed_rectangle_reaches_both_body_pages() {
+    let bytes = build_master_full_bleed_idml();
+    let doc = Document::open(&bytes).expect("open synthetic master IDML");
+    let opts = PipelineOptions::default();
+    let built = pipeline::build_document(&doc, &opts).expect("build document");
+
+    assert_eq!(built.pages.len(), 2, "two body pages");
+
+    // Each body page should carry at least one FillPath command for
+    // the master's spanning rectangle. Pre-fix the centroid test
+    // routed the rect to one page only; the other was empty.
+    for (i, page) in built.pages.iter().enumerate() {
+        let n_fills = page
+            .list
+            .commands
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::FillPath { .. }))
+            .count();
+        assert!(
+            n_fills >= 1,
+            "page {i} should receive the master's full-bleed rectangle; got {n_fills} FillPaths",
+        );
+    }
+}
