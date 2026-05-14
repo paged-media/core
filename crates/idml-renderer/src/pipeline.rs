@@ -521,36 +521,46 @@ pub fn build_document(
             }
             total_stats.frames += 1;
             let spread_bounds = transform_bounds(rect.bounds, rect.item_transform);
-            let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
-            let page_idx = range.start + local_idx;
-            let before = pages[page_idx].list.commands.len();
-            emit_rectangle_into(
-                &mut pages[page_idx],
-                rect,
-                document,
-                palette,
-                options.fallback_frame_fill,
-                cmyk_xform.as_ref(),
-                options.frame_drop_shadow,
-            );
-            // The image draws on top of the rectangle's solid fill.
-            // Per-page cache: shares ImageId across same-URI
-            // rectangles on this page. Renderer-scoped cache:
-            // shares the decoded RGBA across pages.
-            emit_rectangle_image(
-                &mut pages[page_idx],
-                rect,
-                options,
-                &mut page_image_caches[page_idx],
-                &mut decoded_image_cache,
-            );
-            let after = pages[page_idx].list.commands.len();
-            if after > before {
-                frame_spans.rectangles[idx] = Some(crate::module::FrameCmdSpan {
-                    page_idx,
-                    start: before,
-                    end: after,
-                });
+            // Spread-spanning rectangles (page-wide hero bands, gutter
+            // backgrounds) emit onto every overlapping page; the
+            // raster pass clips off-page geometry per page.
+            let overlaps = pages_overlapping_frame(&spread_bounds, local_geoms);
+            let local_indices: Vec<usize> = if overlaps.is_empty() {
+                vec![page_for_frame(&spread_bounds, local_geoms).unwrap_or(0)]
+            } else {
+                overlaps
+            };
+            for &local_idx in &local_indices {
+                let page_idx = range.start + local_idx;
+                let before = pages[page_idx].list.commands.len();
+                emit_rectangle_into(
+                    &mut pages[page_idx],
+                    rect,
+                    document,
+                    palette,
+                    options.fallback_frame_fill,
+                    cmyk_xform.as_ref(),
+                    options.frame_drop_shadow,
+                );
+                // The image draws on top of the rectangle's solid fill.
+                // Per-page cache: shares ImageId across same-URI
+                // rectangles on this page. Renderer-scoped cache:
+                // shares the decoded RGBA across pages.
+                emit_rectangle_image(
+                    &mut pages[page_idx],
+                    rect,
+                    options,
+                    &mut page_image_caches[page_idx],
+                    &mut decoded_image_cache,
+                );
+                let after = pages[page_idx].list.commands.len();
+                if after > before && frame_spans.rectangles[idx].is_none() {
+                    frame_spans.rectangles[idx] = Some(crate::module::FrameCmdSpan {
+                        page_idx,
+                        start: before,
+                        end: after,
+                    });
+                }
             }
         }
         for (idx, oval) in spread.ovals.iter().enumerate() {
@@ -559,24 +569,31 @@ pub fn build_document(
             }
             total_stats.frames += 1;
             let spread_bounds = transform_bounds(oval.bounds, oval.item_transform);
-            let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
-            let page_idx = range.start + local_idx;
-            let before = pages[page_idx].list.commands.len();
-            emit_oval_into(
-                &mut pages[page_idx],
-                oval,
-                document,
-                palette,
-                options.fallback_frame_fill,
-                cmyk_xform.as_ref(),
-            );
-            let after = pages[page_idx].list.commands.len();
-            if after > before {
-                frame_spans.ovals[idx] = Some(crate::module::FrameCmdSpan {
-                    page_idx,
-                    start: before,
-                    end: after,
-                });
+            let overlaps = pages_overlapping_frame(&spread_bounds, local_geoms);
+            let local_indices: Vec<usize> = if overlaps.is_empty() {
+                vec![page_for_frame(&spread_bounds, local_geoms).unwrap_or(0)]
+            } else {
+                overlaps
+            };
+            for &local_idx in &local_indices {
+                let page_idx = range.start + local_idx;
+                let before = pages[page_idx].list.commands.len();
+                emit_oval_into(
+                    &mut pages[page_idx],
+                    oval,
+                    document,
+                    palette,
+                    options.fallback_frame_fill,
+                    cmyk_xform.as_ref(),
+                );
+                let after = pages[page_idx].list.commands.len();
+                if after > before && frame_spans.ovals[idx].is_none() {
+                    frame_spans.ovals[idx] = Some(crate::module::FrameCmdSpan {
+                        page_idx,
+                        start: before,
+                        end: after,
+                    });
+                }
             }
         }
         for (idx, line) in spread.graphic_lines.iter().enumerate() {
@@ -585,17 +602,24 @@ pub fn build_document(
             }
             total_stats.frames += 1;
             let spread_bounds = transform_bounds(line.bounds, line.item_transform);
-            let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
-            let page_idx = range.start + local_idx;
-            let before = pages[page_idx].list.commands.len();
-            emit_line_into(&mut pages[page_idx], line, document, palette, cmyk_xform.as_ref());
-            let after = pages[page_idx].list.commands.len();
-            if after > before {
-                frame_spans.graphic_lines[idx] = Some(crate::module::FrameCmdSpan {
-                    page_idx,
-                    start: before,
-                    end: after,
-                });
+            let overlaps = pages_overlapping_frame(&spread_bounds, local_geoms);
+            let local_indices: Vec<usize> = if overlaps.is_empty() {
+                vec![page_for_frame(&spread_bounds, local_geoms).unwrap_or(0)]
+            } else {
+                overlaps
+            };
+            for &local_idx in &local_indices {
+                let page_idx = range.start + local_idx;
+                let before = pages[page_idx].list.commands.len();
+                emit_line_into(&mut pages[page_idx], line, document, palette, cmyk_xform.as_ref());
+                let after = pages[page_idx].list.commands.len();
+                if after > before && frame_spans.graphic_lines[idx].is_none() {
+                    frame_spans.graphic_lines[idx] = Some(crate::module::FrameCmdSpan {
+                        page_idx,
+                        start: before,
+                        end: after,
+                    });
+                }
             }
         }
         for (idx, poly) in spread.polygons.iter().enumerate() {
@@ -604,35 +628,42 @@ pub fn build_document(
             }
             total_stats.frames += 1;
             let spread_bounds = transform_bounds(poly.bounds, poly.item_transform);
-            let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
-            let page_idx = range.start + local_idx;
-            let before = pages[page_idx].list.commands.len();
-            emit_polygon_into(
-                &mut pages[page_idx],
-                poly,
-                document,
-                palette,
-                options.fallback_frame_fill,
-                cmyk_xform.as_ref(),
-            );
-            // Polygon-hosted images: clip the placed image to the
-            // polygon's curved path (mirrors emit_rectangle_image but
-            // with the polygon's PathPointType anchors as the clip
-            // shape rather than the AABB).
-            emit_polygon_image(
-                &mut pages[page_idx],
-                poly,
-                options,
-                &mut page_image_caches[page_idx],
-                &mut decoded_image_cache,
-            );
-            let after = pages[page_idx].list.commands.len();
-            if after > before {
-                frame_spans.polygons[idx] = Some(crate::module::FrameCmdSpan {
-                    page_idx,
-                    start: before,
-                    end: after,
-                });
+            let overlaps = pages_overlapping_frame(&spread_bounds, local_geoms);
+            let local_indices: Vec<usize> = if overlaps.is_empty() {
+                vec![page_for_frame(&spread_bounds, local_geoms).unwrap_or(0)]
+            } else {
+                overlaps
+            };
+            for &local_idx in &local_indices {
+                let page_idx = range.start + local_idx;
+                let before = pages[page_idx].list.commands.len();
+                emit_polygon_into(
+                    &mut pages[page_idx],
+                    poly,
+                    document,
+                    palette,
+                    options.fallback_frame_fill,
+                    cmyk_xform.as_ref(),
+                );
+                // Polygon-hosted images: clip the placed image to the
+                // polygon's curved path (mirrors emit_rectangle_image but
+                // with the polygon's PathPointType anchors as the clip
+                // shape rather than the AABB).
+                emit_polygon_image(
+                    &mut pages[page_idx],
+                    poly,
+                    options,
+                    &mut page_image_caches[page_idx],
+                    &mut decoded_image_cache,
+                );
+                let after = pages[page_idx].list.commands.len();
+                if after > before && frame_spans.polygons[idx].is_none() {
+                    frame_spans.polygons[idx] = Some(crate::module::FrameCmdSpan {
+                        page_idx,
+                        start: before,
+                        end: after,
+                    });
+                }
             }
         }
         spread_frame_spans.push(frame_spans);
@@ -6433,6 +6464,32 @@ fn page_for_frame(frame: &idml_parse::Bounds, pages: &[PageGeom]) -> Option<usiz
         let b = p.bounds_in_spread;
         cx >= b.left && cx <= b.right && cy >= b.top && cy <= b.bottom
     })
+}
+
+/// Local page indices whose `bounds_in_spread` overlap `frame`.
+/// Used by the non-text shape emit loops (Rectangle / Oval /
+/// GraphicLine / Polygon) so spread-spanning page backgrounds, hero
+/// bands, and bleed-the-gutter decoratives render on every page they
+/// cover instead of only on the page that wins the AABB-centroid
+/// test. Pages clip raster output to their own dimensions, so emitting
+/// the same geometry twice is safe — the page-local rasterizer drops
+/// off-page commands.
+///
+/// `None` is treated as "no overlap"; callers fall back to the legacy
+/// `page_for_frame` centroid (or `0`) for backwards compatibility.
+fn pages_overlapping_frame(frame: &idml_parse::Bounds, pages: &[PageGeom]) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::new();
+    for (i, p) in pages.iter().enumerate() {
+        let b = p.bounds_in_spread;
+        if frame.right > b.left
+            && frame.left < b.right
+            && frame.bottom > b.top
+            && frame.top < b.bottom
+        {
+            out.push(i);
+        }
+    }
+    out
 }
 
 fn emit_text_frame_into(
