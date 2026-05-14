@@ -2118,6 +2118,25 @@ fn emit_paragraph_into_chain(
         )
         .collect();
 
+    // P-20: per-cluster glyph fallback. Build a list of every
+    // distinct sibling face used in this paragraph so a run that
+    // shapes a cluster to `.notdef` can retry against another run's
+    // face. Same-face siblings collapse via raw-pointer comparison
+    // so the fallback list is bounded by the number of distinct
+    // fonts in the paragraph (typically 1-3).
+    let mut fallback_faces_pool: Vec<&rustybuzz::Face> = Vec::new();
+    for (i, f) in shaping_faces.iter().enumerate() {
+        if unique_idx[i] != i {
+            continue;
+        }
+        let Some(face) = f else { continue };
+        if !fallback_faces_pool
+            .iter()
+            .any(|existing| std::ptr::eq(*existing, *face))
+        {
+            fallback_faces_pool.push(face);
+        }
+    }
     let styled_runs: Vec<idml_text::StyledRun> = paragraph
         .runs
         .iter()
@@ -2150,6 +2169,7 @@ fn emit_paragraph_into_chain(
             strikethru: resolved_runs[i].strikethru.unwrap_or(false),
             baseline_shift_pt: resolved_runs[i].baseline_shift.unwrap_or(0.0),
             horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
+            fallback_faces: &fallback_faces_pool,
         })
         .collect();
 
@@ -2392,6 +2412,7 @@ fn emit_paragraph_into_chain(
                 strikethru: r.strikethru,
                 baseline_shift_pt: r.baseline_shift_pt,
                 horizontal_scale_pct: r.horizontal_scale_pct,
+                fallback_faces: r.fallback_faces,
             });
         }
         styled_runs_storage = adjusted;
@@ -6056,6 +6077,7 @@ fn measure_cell_paragraph(
             strikethru: resolved_runs[i].strikethru.unwrap_or(false),
             baseline_shift_pt: resolved_runs[i].baseline_shift.unwrap_or(0.0),
             horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
+            fallback_faces: &[],
         })
         .collect();
     let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
@@ -6213,6 +6235,7 @@ fn emit_cell_paragraph(
             strikethru: resolved_runs[i].strikethru.unwrap_or(false),
             baseline_shift_pt: resolved_runs[i].baseline_shift.unwrap_or(0.0),
             horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
+            fallback_faces: &[],
         })
         .collect();
     let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);

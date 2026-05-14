@@ -310,6 +310,12 @@ pub struct StyledRun<'a> {
     /// into the shaped glyph x-advances so the breaker sees the
     /// requested glyph width (P-08).
     pub horizontal_scale_pct: f32,
+    /// Per-cluster glyph-fallback faces. When `face` shapes a cluster
+    /// to `.notdef` (glyph id 0), the composer retries that cluster
+    /// against each face in this slice in order, taking the first
+    /// shape whose glyphs are all non-notdef (P-20). Empty slice =
+    /// no per-cluster fallback (the legacy behaviour).
+    pub fallback_faces: &'a [&'a Face<'a>],
 }
 
 /// Multi-font flavour of [`layout_paragraph`].
@@ -322,6 +328,99 @@ pub struct StyledRun<'a> {
 ///
 /// Hyphenation is intentionally not threaded through here yet —
 /// `layout_paragraph` keeps that path while this batch lands.
+/// Shape `text` against `primary`; for any cluster the primary
+/// shapes to `.notdef` (glyph id 0), retry that cluster's source
+/// substring against each fallback face in order, taking the first
+/// shape whose glyphs are all non-notdef. Used by `layout_runs` when
+/// `StyledRun::fallback_faces` is non-empty (P-20).
+fn shape_with_per_cluster_fallback(
+    primary: &Face,
+    fallbacks: &[&Face],
+    text: &str,
+    point_size: f32,
+) -> ShapedRun {
+    let primary_shape = shape_run(primary, text, point_size);
+    if primary_shape.glyphs.iter().all(|g| g.glyph_id != 0) {
+        return primary_shape;
+    }
+    // Group glyphs by cluster; for each cluster, decide whether to
+    // keep the primary's glyphs or substitute a fallback's glyphs.
+    // Walk clusters in declaration order; cluster ranges are the
+    // monotonic spans between consecutive distinct `cluster` values.
+    let bytes = text.as_bytes();
+    // Build a list of (cluster, end_cluster) for each contiguous
+    // glyph group. End is exclusive — the byte range fed to the
+    // fallback shaper.
+    let mut groups: Vec<(usize, usize, Vec<usize>)> = Vec::new();
+    let mut i = 0usize;
+    while i < primary_shape.glyphs.len() {
+        let start_cluster = primary_shape.glyphs[i].cluster as usize;
+        let mut j = i;
+        while j < primary_shape.glyphs.len()
+            && (primary_shape.glyphs[j].cluster as usize) == start_cluster
+        {
+            j += 1;
+        }
+        let next_cluster = if j < primary_shape.glyphs.len() {
+            primary_shape.glyphs[j].cluster as usize
+        } else {
+            bytes.len()
+        };
+        groups.push((start_cluster, next_cluster, (i..j).collect()));
+        i = j;
+    }
+    let mut out_glyphs: Vec<crate::shape::ShapedGlyph> = Vec::with_capacity(primary_shape.glyphs.len());
+    let mut total: i32 = 0;
+    for (start, end, idxs) in groups {
+        let group_has_notdef = idxs
+            .iter()
+            .any(|&i| primary_shape.glyphs[i].glyph_id == 0);
+        if !group_has_notdef || start >= end || end > bytes.len() {
+            for k in &idxs {
+                let g = primary_shape.glyphs[*k];
+                total = total.saturating_add(g.x_advance);
+                out_glyphs.push(g);
+            }
+            continue;
+        }
+        let sub = &text[start..end];
+        let mut chosen = None;
+        for fb in fallbacks {
+            let fb_shape = shape_run(fb, sub, point_size);
+            if fb_shape.glyphs.iter().all(|g| g.glyph_id != 0) {
+                chosen = Some(fb_shape);
+                break;
+            }
+        }
+        match chosen {
+            Some(fb_shape) => {
+                for g in fb_shape.glyphs {
+                    // Re-anchor the cluster offset to the primary's
+                    // source space so downstream byte-range logic
+                    // (line splitting, hyphenation) lines up.
+                    let rebased = crate::shape::ShapedGlyph {
+                        cluster: g.cluster + start as u32,
+                        ..g
+                    };
+                    total = total.saturating_add(rebased.x_advance);
+                    out_glyphs.push(rebased);
+                }
+            }
+            None => {
+                for k in &idxs {
+                    let g = primary_shape.glyphs[*k];
+                    total = total.saturating_add(g.x_advance);
+                    out_glyphs.push(g);
+                }
+            }
+        }
+    }
+    ShapedRun {
+        glyphs: out_glyphs,
+        total_advance: total,
+    }
+}
+
 pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagraph {
     if runs.is_empty() {
         return LaidOutParagraph { lines: Vec::new() };
@@ -337,6 +436,17 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         run_starts.push(paragraph_text.len());
         paragraph_text.push_str(r.text);
         let mut s = shape_run(r.face, r.text, r.point_size);
+        // P-20: per-cluster glyph fallback. When the primary face
+        // shapes a cluster to `.notdef` (glyph id 0), retry that
+        // cluster's source bytes against each fallback face in turn
+        // and substitute the first all-non-notdef result. The
+        // run-level fallback only covers "primary face missing"; this
+        // covers "primary face present but glyph missing".
+        if !r.fallback_faces.is_empty()
+            && s.glyphs.iter().any(|g| g.glyph_id == 0)
+        {
+            s = shape_with_per_cluster_fallback(r.face, r.fallback_faces, r.text, r.point_size);
+        }
         if let Some(t) = r.tracking {
             apply_tracking(&mut s, t, r.point_size);
         }
