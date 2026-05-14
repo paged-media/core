@@ -2283,3 +2283,80 @@ fn horizontal_scale_folds_into_glyph_advance_and_affine() {
         "expected at least one HorizontalScale=200 glyph FillPath whose x-scale ≈ 2 × y-scale; affine list did not contain one"
     );
 }
+
+/// P-18 regression: two runs in the same paragraph, the second
+/// carrying a direct `FillColor` on its `CharacterStyleRange` (no
+/// AppliedCharacterStyle, no AppliedParagraphStyle). The second run
+/// must paint with its own colour — the cascade must NOT overwrite
+/// a directly-set run colour with the (unset) character / paragraph
+/// style default.
+#[test]
+fn per_run_fill_color_on_character_style_range_paints_run_specific_colour() {
+    const GRAPHIC: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic>
+    <Color Self="Color/Crimson" Name="Crimson" Space="RGB" ColorValue="220 20 60"/>
+  </Graphic>
+</idPkg:Graphic>"#;
+    let spread = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 612"/>
+    <TextFrame Self="frameA" ParentStory="u10" GeometricBounds="40 40 160 572" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#;
+    let story = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="36">
+        <Content>AAAA</Content>
+      </CharacterStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="36" FillColor="Color/Crimson">
+        <Content>BBBB</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#;
+    let bytes = write_zip(|zip| {
+        put(zip, "designmap.xml", DESIGNMAP);
+        put(zip, "Resources/Graphic.xml", GRAPHIC);
+        put(zip, "Spreads/Spread_sp1.xml", spread);
+        put(zip, "Stories/Story_u10.xml", story);
+    });
+    let doc = Document::open(&bytes).unwrap();
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+    let built = pipeline::build_document(&doc, &opts).unwrap();
+    let page = &built.pages[0];
+    let mut saw_crimson = false;
+    let mut saw_other = false;
+    for c in &page.list.commands {
+        if let DisplayCommand::FillPath { paint, .. } = c {
+            if let idml_compose::Paint::Solid(c) = paint {
+                // Crimson is a red-dominant shade: r >> g, b. The
+                // exact RGB depends on the colour-management pipeline
+                // (sRGB vs linear, ICC profile, etc.) — assert on
+                // "red-dominant" rather than an exact tuple.
+                let crimson_match = c.r > 0.4 && c.g < 0.4 && c.b < 0.4;
+                if crimson_match {
+                    saw_crimson = true;
+                } else {
+                    saw_other = true;
+                }
+            }
+        }
+    }
+    assert!(
+        saw_crimson,
+        "second run's direct FillColor=Color/Crimson should paint at least one glyph in that swatch's RGB",
+    );
+    assert!(
+        saw_other,
+        "first run should retain its default (black) fill",
+    );
+}
