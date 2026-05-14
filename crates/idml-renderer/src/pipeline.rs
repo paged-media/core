@@ -8094,6 +8094,60 @@ pub fn resolve_rect_stroke(rect: &Rectangle, palette: &Graphic) -> Option<Paint>
 /// `graphic::to_linear_rgb` helper produces, matching the prior
 /// behaviour — the CMYK path is gated on having a usable ICC transform
 /// downstream.
+/// Short-term fallback for gradient-painted glyphs (P-11): when a run's
+/// `FillColor` resolves to a gradient swatch but the glyph emit path
+/// only consumes solid paints, evaluate the gradient at its midpoint
+/// and substitute a representative `Paint::Solid` (or `Paint::Cmyk`).
+/// Returns `None` for non-gradient ids or when fewer than two stops
+/// could be resolved.
+pub fn gradient_midpoint_paint(
+    id: &str,
+    palette: &Graphic,
+    cmyk_xform: Option<&idml_color::IccTransform>,
+) -> Option<Paint> {
+    let grad = palette.gradients.get(id)?;
+    // Walk the stops in declaration order; interpolate the colour at
+    // 50% of the gradient line. Each stop's `StopColor` already routes
+    // through the same swatch table the renderer uses elsewhere, so the
+    // result respects ICC and tint cascades.
+    let resolved: Vec<(f32, Color)> = grad
+        .stops
+        .iter()
+        .filter_map(|s| {
+            let p = color_id_to_paint(&s.stop_color, palette, cmyk_xform)?;
+            let c = match p {
+                Paint::Solid(c) => c,
+                Paint::Cmyk { rgb, .. } => rgb,
+                _ => return None,
+            };
+            Some(((s.location_pct / 100.0).clamp(0.0, 1.0), c))
+        })
+        .collect();
+    if resolved.len() < 2 {
+        return None;
+    }
+    let target = 0.5_f32;
+    // Find the segment that brackets `target` and linearly interpolate.
+    let mut iter = resolved.windows(2);
+    let mut color = resolved.last().map(|s| s.1)?;
+    for pair in &mut iter {
+        let (off_a, ca) = pair[0];
+        let (off_b, cb) = pair[1];
+        if target <= off_b {
+            let span = (off_b - off_a).max(1e-6);
+            let t = ((target - off_a) / span).clamp(0.0, 1.0);
+            color = Color::rgba(
+                ca.r + (cb.r - ca.r) * t,
+                ca.g + (cb.g - ca.g) * t,
+                ca.b + (cb.b - ca.b) * t,
+                ca.a + (cb.a - ca.a) * t,
+            );
+            break;
+        }
+    }
+    Some(Paint::Solid(color))
+}
+
 pub fn color_id_to_paint(
     id: &str,
     palette: &Graphic,
@@ -8471,10 +8525,18 @@ pub fn build_run_paint_picker_with_cmyk(
     let mut bands: Vec<(u32, Paint)> = Vec::with_capacity(paragraph.runs.len());
     let mut cursor: u32 = 0;
     for run in &paragraph.runs {
+        // Gradient swatches fall through `color_id_to_paint` (returns
+        // None — gradient resolution requires the DisplayList). For
+        // glyph paints we don't yet support per-glyph gradient brushes;
+        // substitute the gradient's midpoint colour so display titles
+        // stop dropping out (P-11).
         let paint = run
             .fill_color
             .as_deref()
-            .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+            .and_then(|id| {
+                color_id_to_paint(id, palette, cmyk_xform)
+                    .or_else(|| gradient_midpoint_paint(id, palette, cmyk_xform))
+            })
             .unwrap_or(default);
         bands.push((cursor, paint));
         cursor += run.text.len() as u32;
@@ -8558,10 +8620,16 @@ fn build_run_paint_picker_resolved(
         // explicit swatches and the default paint — IDML treats it
         // as a strength-of-current-fill modifier independent of
         // whether the run carries a FillColor attribute.
+        // See `build_run_paint_picker_with_cmyk`: gradient swatches
+        // resolve via `gradient_midpoint_paint` as a short-term solid
+        // substitute (P-11) until per-glyph gradient brushes land.
         let base = resolved_runs[i]
             .fill_color
             .as_deref()
-            .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+            .and_then(|id| {
+                color_id_to_paint(id, palette, cmyk_xform)
+                    .or_else(|| gradient_midpoint_paint(id, palette, cmyk_xform))
+            })
             .unwrap_or(default);
         let paint = apply_fill_tint(base, resolved_runs[i].fill_tint);
         bands.push((cursor, paint));
