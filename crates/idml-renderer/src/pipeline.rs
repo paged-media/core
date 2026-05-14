@@ -1961,7 +1961,13 @@ fn emit_paragraph_into_chain(
         let Ok(mut of) = ttf_parser::Face::parse(bytes_ref, 0) else {
             return;
         };
-        let _ = of.set_variation(wght_tag, wghts[i]);
+        let has_wght_axis = of
+            .variation_axes()
+            .into_iter()
+            .any(|axis| axis.tag == wght_tag);
+        if has_wght_axis {
+            let _ = of.set_variation(wght_tag, wghts[i]);
+        }
         outline_faces[i] = Some(of);
 
         // Shaping Face: cache lookup first, build on miss.
@@ -1973,10 +1979,12 @@ fn emit_paragraph_into_chain(
             let Some(mut rf) = rustybuzz::Face::from_slice(bytes_ref, 0) else {
                 return;
             };
-            rf.set_variations(&[rustybuzz::Variation {
-                tag: wght_tag,
-                value: wghts[i],
-            }]);
+            if has_wght_axis {
+                rf.set_variations(&[rustybuzz::Variation {
+                    tag: wght_tag,
+                    value: wghts[i],
+                }]);
+            }
             owned_shaping_faces[i] = Some(rf);
         }
     }
@@ -3913,10 +3921,17 @@ fn emit_text_path_into(
                 let Some(mut rf) = rustybuzz::Face::from_slice(face_bytes_b.as_ref(), 0) else {
                     continue;
                 };
-                rf.set_variations(&[rustybuzz::Variation {
-                    tag: ttf_parser::Tag::from_bytes(b"wght"),
-                    value: f32::from_bits(wght_bits),
-                }]);
+                let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
+                let has_wght_axis = rf
+                    .variation_axes()
+                    .into_iter()
+                    .any(|axis| axis.tag == wght_tag);
+                if has_wght_axis {
+                    rf.set_variations(&[rustybuzz::Variation {
+                        tag: wght_tag,
+                        value: f32::from_bits(wght_bits),
+                    }]);
+                }
                 Some(rf)
             } else {
                 None
@@ -5905,10 +5920,16 @@ fn measure_cell_paragraph(
             let Some(mut rf) = rustybuzz::Face::from_slice(bytes_ref, 0) else {
                 return 0.0;
             };
-            rf.set_variations(&[rustybuzz::Variation {
-                tag: wght_tag,
-                value: wghts[i],
-            }]);
+            let has_wght_axis = rf
+                .variation_axes()
+                .into_iter()
+                .any(|axis| axis.tag == wght_tag);
+            if has_wght_axis {
+                rf.set_variations(&[rustybuzz::Variation {
+                    tag: wght_tag,
+                    value: wghts[i],
+                }]);
+            }
             owned_shaping_faces[i] = Some(rf);
         }
     }
@@ -6038,7 +6059,13 @@ fn emit_cell_paragraph(
         let Ok(mut of) = ttf_parser::Face::parse(bytes_ref, 0) else {
             return 0.0;
         };
-        let _ = of.set_variation(wght_tag, wghts[i]);
+        let has_wght_axis = of
+            .variation_axes()
+            .into_iter()
+            .any(|axis| axis.tag == wght_tag);
+        if has_wght_axis {
+            let _ = of.set_variation(wght_tag, wghts[i]);
+        }
         outline_faces[i] = Some(of);
 
         if em
@@ -6049,10 +6076,12 @@ fn emit_cell_paragraph(
             let Some(mut rf) = rustybuzz::Face::from_slice(bytes_ref, 0) else {
                 return 0.0;
             };
-            rf.set_variations(&[rustybuzz::Variation {
-                tag: wght_tag,
-                value: wghts[i],
-            }]);
+            if has_wght_axis {
+                rf.set_variations(&[rustybuzz::Variation {
+                    tag: wght_tag,
+                    value: wghts[i],
+                }]);
+            }
             owned_shaping_faces[i] = Some(rf);
         }
     }
@@ -9287,11 +9316,20 @@ impl FontTable {
             let Some(mut face) = rustybuzz::Face::from_slice(bytes_static, 0) else {
                 continue;
             };
+            // Only bake a wght variation when the face actually exposes
+            // a `wght` axis — otherwise `set_variations` silently no-ops
+            // and the bold/light slot reuses Regular metrics (P-06).
+            let has_wght_axis = face
+                .variation_axes()
+                .into_iter()
+                .any(|axis| axis.tag == wght_tag);
             let wght = f32::from_bits(wght_bits);
-            face.set_variations(&[rustybuzz::Variation {
-                tag: wght_tag,
-                value: wght,
-            }]);
+            if has_wght_axis {
+                face.set_variations(&[rustybuzz::Variation {
+                    tag: wght_tag,
+                    value: wght,
+                }]);
+            }
             faces.insert((font_id, wght_bits), face);
         }
         // Parse metrics for every distinct byte buffer we ended up
