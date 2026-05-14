@@ -10513,4 +10513,46 @@ mod tests {
         let runs = vec![run_attrs(Some("Unknown"), None)];
         assert!(table.resolve_paragraph_bytes(&runs).is_none());
     }
+
+    // P-22: lock the stroke-alignment inset math. `tiny_skia` strokes
+    // centered on the path, so Inside alignment needs the path inset
+    // by +stroke/2 inward (i.e. shrink the rect), Outside by
+    // -stroke/2 (grow the rect), Center / None ⇒ 0. Regressions in
+    // this math show up as ½-px nudges on line-art-dense pages.
+    #[test]
+    fn stroke_alignment_offset_inside_returns_positive_half_weight() {
+        assert!((stroke_alignment_offset(Some("InsideAlignment"), 2.0) - 1.0).abs() < 1e-6);
+        assert!((stroke_alignment_offset(Some("InsideAlignment"), 0.5) - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn stroke_alignment_offset_outside_returns_negative_half_weight() {
+        assert!((stroke_alignment_offset(Some("OutsideAlignment"), 2.0) + 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn stroke_alignment_offset_center_and_none_return_zero() {
+        assert_eq!(stroke_alignment_offset(Some("CenterAlignment"), 2.0), 0.0);
+        assert_eq!(stroke_alignment_offset(None, 2.0), 0.0);
+    }
+
+    // Composed: inset_rect applied at the stroke offset must shrink
+    // (Inside) or grow (Outside) the rect by exactly the stroke width
+    // along each axis. A 100×100 rect with a 2-pt Inside stroke ends
+    // up 98×98, drawn so the centered stroke lands fully inside.
+    #[test]
+    fn stroke_alignment_inside_shrinks_rect_by_stroke_width() {
+        let r = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 100.0,
+        };
+        let off = stroke_alignment_offset(Some("InsideAlignment"), 2.0);
+        let inset = inset_rect(r, off);
+        assert!((inset.x - 1.0).abs() < 1e-6);
+        assert!((inset.y - 1.0).abs() < 1e-6);
+        assert!((inset.w - 98.0).abs() < 1e-6);
+        assert!((inset.h - 98.0).abs() < 1e-6);
+    }
 }
