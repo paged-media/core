@@ -1,0 +1,19 @@
+[package]
+name = "idml-mutate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Typed scene-graph mutations + change notification, consumed by idml-introspect."
+
+[lints]
+workspace = true
+
+[dependencies]
+idml-parse = { path = "../idml-parse" }
+idml-scene = { path = "../idml-scene" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+bytes = { workspace = true }

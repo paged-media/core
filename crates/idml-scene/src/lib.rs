@@ -17,6 +17,9 @@ use idml_parse::{
     StyleSheet, TOCStyleDef, TextFrame,
 };
 
+pub mod value;
+pub use value::Value;
+
 /// Owned, parsed representation of an IDML document.
 #[derive(Debug, Clone)]
 pub struct Document {
