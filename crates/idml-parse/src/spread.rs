@@ -179,6 +179,8 @@ pub struct TextFrame {
     /// `FillColor` attribute, e.g. `Color/Red`. Resolved against
     /// `Graphic` in `idml-parse::graphic`.
     pub fill_color: Option<String>,
+    /// See [`Rectangle::fill_tint`].
+    pub fill_tint: Option<f32>,
     /// `StrokeColor` attribute.
     pub stroke_color: Option<String>,
     /// `StrokeWeight` attribute, in points. `None` → document default
@@ -677,6 +679,8 @@ pub struct Oval {
     pub bounds: Bounds,
     pub item_transform: Option<[f32; 6]>,
     pub fill_color: Option<String>,
+    /// See [`Rectangle::fill_tint`].
+    pub fill_tint: Option<f32>,
     pub stroke_color: Option<String>,
     pub stroke_weight: Option<f32>,
     pub drop_shadow: Option<DropShadowSetting>,
@@ -843,6 +847,8 @@ pub struct Polygon {
     pub bounds: Bounds,
     pub item_transform: Option<[f32; 6]>,
     pub fill_color: Option<String>,
+    /// See [`Rectangle::fill_tint`].
+    pub fill_tint: Option<f32>,
     pub stroke_color: Option<String>,
     pub stroke_weight: Option<f32>,
     pub applied_object_style: Option<String>,
@@ -1295,6 +1301,7 @@ impl Spread {
                             bounds: bounds_attr.unwrap_or(Bounds::ZERO),
                             item_transform,
                             fill_color: common.fill_color,
+                            fill_tint: common.fill_tint,
                             stroke_color: common.stroke_color,
                             stroke_weight: common.stroke_weight,
                             drop_shadow: None,
@@ -1411,6 +1418,7 @@ impl Spread {
                             bounds: bounds_attr.unwrap_or(Bounds::ZERO),
                             item_transform,
                             fill_color: common.fill_color,
+                            fill_tint: common.fill_tint,
                             stroke_color: common.stroke_color,
                             stroke_weight: common.stroke_weight,
                             drop_shadow: None,
@@ -2099,6 +2107,7 @@ impl Spread {
                             bounds: bounds_attr.unwrap_or(Bounds::ZERO),
                             item_transform,
                             fill_color: common.fill_color,
+                            fill_tint: common.fill_tint,
                             stroke_color: common.stroke_color,
                             stroke_weight: common.stroke_weight,
                             applied_object_style: common.applied_object_style,

@@ -3258,6 +3258,7 @@ fn emit_anchored_textframe_story<'a>(
         bounds,
         item_transform: None,
         fill_color: None,
+        fill_tint: None,
         stroke_color: None,
         stroke_weight: None,
         drop_shadow: None,
