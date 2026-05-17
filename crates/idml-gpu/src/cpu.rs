@@ -1543,7 +1543,8 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                         // for non-SourceOver blend modes — SourceOver
                         // against opaque paper already produces the
                         // right answer (no correction needed).
-                        let backdrop_snapshot = if matches!(ts_blend, TsBlendMode::SourceOver) {
+                        let mut backdrop_snapshot = if matches!(ts_blend, TsBlendMode::SourceOver)
+                        {
                             None
                         } else if let Some(parent) = group_stack.last() {
                             snapshot_parent_region(
@@ -1562,6 +1563,23 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                                 h_px,
                             )
                         };
+                        // Q-05: when the parent region is fully α=0
+                        // (no paint has landed beneath this blend
+                        // group), substitute the snapshot with opaque
+                        // paper so the bypass treats it as paper and
+                        // composites the group via plain SrcOver onto
+                        // paper. Without this a Multiply rect over
+                        // virgin transparent device-space disappears
+                        // (Multiply×0=0), where InDesign would multiply
+                        // against opaque white paper and show the rect.
+                        if let Some(snap) = backdrop_snapshot.as_mut() {
+                            if snapshot_is_fully_transparent(snap.as_ref()) {
+                                let paper_premul = linear_color_to_ts(options.background)
+                                    .premultiply()
+                                    .to_color_u8();
+                                fill_pixmap_with_premul(snap, paper_premul);
+                            }
+                        }
                         group_stack.push(GroupFrame {
                             pixmap: buf,
                             offset: (off_x_px, off_y_px),
@@ -2272,6 +2290,25 @@ fn snapshot_parent_region(
         }
     }
     Some(snap)
+}
+
+/// Q-05 helper: true iff every pixel of `snap` has α=0 (transparent
+/// device-space). When the snapshot is fully transparent, the parent
+/// region beneath the blend group has had no paint land on it and the
+/// snapshot should be substituted with paper before
+/// [`apply_paper_backdrop_bypass`] runs.
+fn snapshot_is_fully_transparent(snap: PixmapRef<'_>) -> bool {
+    snap.pixels().iter().all(|p| p.alpha() == 0)
+}
+
+/// Q-05 helper: fill every pixel of `pix` with `colour` (premultiplied).
+/// `Pixmap::fill` only accepts straight-alpha `Color`, so when the
+/// premultiplied paper colour matters bit-exactly (the bypass uses
+/// `near_paper` with ≤1-step tolerance), assign each pixel directly.
+fn fill_pixmap_with_premul(pix: &mut Pixmap, colour: PremultipliedColorU8) {
+    for p in pix.pixels_mut() {
+        *p = colour;
+    }
 }
 
 /// Second-pass paper-backdrop bypass for non-Normal blend groups.
@@ -5344,6 +5381,72 @@ mod tests {
         assert!(
             c <= 5 && k <= 5,
             "should not invent C/K; got CMYK=({c},{m},{y},{k}) pixel={center:?}"
+        );
+    }
+
+    #[test]
+    fn q05_multiply_group_over_transparent_paper_renders_as_multiply_on_white() {
+        // Q-05 regression: a 50%-grey Multiply rect over virgin
+        // (un-painted) page area should composite as Multiply onto
+        // opaque paper-white — InDesign treats paper as α=1 even
+        // though the device-space pixel beneath is α=0.
+        //
+        // Without the snapshot-substitute-paper bypass, the snapshot
+        // captures α=0 pixels, `near_paper` rejects them (alpha diff
+        // 255), and the Multiply composites against transparent
+        // black → annihilates: Multiply(grey, transparent) = grey,
+        // but the source-over result against opaque paper afterwards
+        // ends up showing grey-over-paper anyway only because
+        // tiny-skia's TsBlendMode::Multiply happens to clamp to
+        // SourceOver when the dst is fully transparent.
+        // The cycle-2 unit-test guard is the inverse case:
+        // Multiply 50%-grey over snapshot-substituted-paper should
+        // produce ~50% grey, not transparent.
+        use idml_compose::{BlendMode, Color, DisplayCommand as Cmd, Paint, Transform as XF};
+        let mut list = DisplayList::new();
+        // Begin a Multiply blend group covering (10,10)-(40,40).
+        let bounds = Rect { x: 10.0, y: 10.0, w: 30.0, h: 30.0 };
+        list.commands.push(Cmd::BeginBlendGroup {
+            bounds,
+            blend_mode: BlendMode::Multiply,
+            opacity: 1.0,
+            transform: XF([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+        });
+        // Inside the group: 50%-grey opaque fill over the same bounds.
+        let (path_id, xform) = unit_rect_at(&mut list, 10.0, 10.0, 30.0, 30.0);
+        list.commands.push(Cmd::FillPath {
+            path_id,
+            paint: Paint::Solid(Color::rgba(0.5, 0.5, 0.5, 1.0)),
+            transform: xform,
+        });
+        list.commands.push(Cmd::EndBlendGroup(XF([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])));
+        let mut opts = RasterOptions::new(50.0, 50.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        // Centre of the Multiply rect: should be ~50% grey, not paper-white
+        // (the rect contributed) and not transparent.
+        let centre = at(&img, 25, 25);
+        assert_eq!(centre[3], 255, "alpha must stay opaque; got {centre:?}");
+        // Multiply(linear 0.5, linear 1.0) = linear 0.5 → sRGB ≈ 188.
+        // The key guard is opaque-and-darker-than-paper; without the
+        // Q-05 snapshot-substitute-paper path the centre stays at the
+        // paper colour (alpha would still be 255 because the bypass
+        // wouldn't run, leaving the underlying paper untouched).
+        assert!(
+            centre[0] < 230,
+            "Multiply over paper should darken the page; got R={} pixel={centre:?}",
+            centre[0]
+        );
+        assert!(
+            centre[0] >= 100,
+            "Multiply 50% × paper-white shouldn't go black; got R={} pixel={centre:?}",
+            centre[0]
+        );
+        // Far outside the group: untouched paper.
+        let outside = at(&img, 2, 2);
+        assert!(
+            outside[0] > 240 && outside[3] == 255,
+            "outside should be paper white; got {outside:?}"
         );
     }
 }
