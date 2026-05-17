@@ -174,6 +174,22 @@ impl<'a> ResolvedFrame<'a> {
     }
 
     pub(crate) fn from_rectangle(rect: &'a Rectangle) -> Self {
+        // Q-11: a `<Rectangle>` with more than 4 path anchors carries a
+        // stylised non-rectangular outline (torn-paper, asymmetric
+        // multi-anchor decorations Envato saves as `<Rectangle>` rather
+        // than `<Polygon>`). Mirror `from_polygon`'s adapter so paint
+        // modules see the real curve instead of collapsing to the AABB.
+        let bbox = rect_from_bounds(rect.bounds);
+        let geometry = if rect.anchors.len() > 4 {
+            Geometry::Polygon {
+                anchors: &rect.anchors,
+                subpath_starts: &rect.subpath_starts,
+                subpath_open: &rect.subpath_open,
+                bbox,
+            }
+        } else {
+            Geometry::Rect { rect: bbox }
+        };
         Self {
             self_id: rect.self_id.as_deref(),
             item_transform: rect.item_transform,
@@ -198,9 +214,7 @@ impl<'a> ResolvedFrame<'a> {
             applied_object_style: rect.applied_object_style.as_deref(),
             overprint_fill: rect.overprint_fill,
             overprint_stroke: rect.overprint_stroke,
-            geometry: Geometry::Rect {
-                rect: rect_from_bounds(rect.bounds),
-            },
+            geometry,
         }
     }
 
@@ -316,6 +330,108 @@ impl<'a> ResolvedFrame<'a> {
                 p0: (bounds.left, bounds.top),
                 p1: (bounds.right, bounds.bottom),
             },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use idml_parse::{Bounds, PathAnchor};
+
+    fn rect_with_anchors(anchors: Vec<PathAnchor>) -> Rectangle {
+        Rectangle {
+            self_id: None,
+            bounds: Bounds {
+                top: 0.0,
+                left: 0.0,
+                bottom: 10.0,
+                right: 10.0,
+            },
+            item_transform: None,
+            fill_color: None,
+            fill_tint: None,
+            stroke_color: None,
+            stroke_weight: None,
+            drop_shadow: None,
+            stroke_drop_shadow: None,
+            image_link: None,
+            has_image_element: false,
+            has_inline_pdf: false,
+            image_item_transform: None,
+            applied_object_style: None,
+            text_wrap: None,
+            frame_fitting: None,
+            stroke_type: None,
+            stroke_alignment: None,
+            end_cap: None,
+            end_join: None,
+            miter_limit: None,
+            item_layer: None,
+            corner_radius: None,
+            corner_option: None,
+            is_anchored: false,
+            opacity: None,
+            blend_mode: None,
+            effects: None,
+            gradient_fill_angle: None,
+            gradient_fill_length: None,
+            gradient_stroke_angle: None,
+            gradient_stroke_length: None,
+            text_paths: Vec::new(),
+            overprint_fill: false,
+            overprint_stroke: false,
+            anchors,
+            subpath_starts: Vec::new(),
+            subpath_open: Vec::new(),
+        }
+    }
+
+    fn pa(x: f32, y: f32) -> PathAnchor {
+        PathAnchor {
+            anchor: (x, y),
+            left: (x, y),
+            right: (x, y),
+        }
+    }
+
+    #[test]
+    fn q11_rectangle_with_four_or_fewer_anchors_stays_rect_geometry() {
+        // 4 anchors (AABB) → keep Rect path. Empty anchors → same.
+        let r0 = rect_with_anchors(Vec::new());
+        let r4 = rect_with_anchors(vec![
+            pa(0.0, 0.0),
+            pa(10.0, 0.0),
+            pa(10.0, 10.0),
+            pa(0.0, 10.0),
+        ]);
+        for r in [r0, r4] {
+            let frame = ResolvedFrame::from_rectangle(&r);
+            assert!(
+                matches!(frame.geometry, Geometry::Rect { .. }),
+                "≤4 anchors must keep Rect geometry"
+            );
+        }
+    }
+
+    #[test]
+    fn q11_rectangle_with_many_anchors_routes_to_polygon_geometry() {
+        // 8-anchor stylised outline — the Q-11 case.
+        let anchors: Vec<PathAnchor> = (0..8)
+            .map(|i| {
+                let t = i as f32;
+                pa(t, t.sin() * 3.0 + 5.0)
+            })
+            .collect();
+        let r = rect_with_anchors(anchors);
+        let frame = ResolvedFrame::from_rectangle(&r);
+        match frame.geometry {
+            Geometry::Polygon { anchors, bbox, .. } => {
+                assert_eq!(anchors.len(), 8, "all anchors threaded through");
+                assert_eq!(bbox.x, 0.0);
+                assert_eq!(bbox.w, 10.0);
+            }
+            _ => panic!("multi-anchor Rectangle must lift to Polygon geometry"),
         }
     }
 }

@@ -500,6 +500,16 @@ pub struct Rectangle {
     pub overprint_fill: bool,
     /// `OverprintStroke="true"`. See [`TextFrame::overprint_stroke`].
     pub overprint_stroke: bool,
+    /// Q-11: Bezier path anchors captured from `<PathGeometry>` when
+    /// the rectangle's outline is non-rectangular (torn-paper /
+    /// asymmetric / multi-anchor stylised shapes that Envato saves as
+    /// `<Rectangle>` rather than `<Polygon>`). When this exceeds the
+    /// 4-anchor AABB case, the renderer routes through `Geometry::Polygon`.
+    pub anchors: Vec<PathAnchor>,
+    /// Subpath start offsets into `anchors`; see [`Polygon::subpath_starts`].
+    pub subpath_starts: Vec<usize>,
+    /// Per-contour open/closed flags; see [`Polygon::subpath_open`].
+    pub subpath_open: Vec<bool>,
 }
 
 /// Mirror of IDML's optional `InnerShadow`, `OuterGlow`, `InnerGlow`,
@@ -1442,6 +1452,9 @@ impl Spread {
                             text_paths: Vec::new(),
                             overprint_fill: common.overprint_fill,
                             overprint_stroke: common.overprint_stroke,
+                            anchors: Vec::new(),
+                            subpath_starts: Vec::new(),
+                            subpath_open: Vec::new(),
                         });
                         let idx = out.rectangles.len() - 1;
                         register_with_group(
@@ -1454,7 +1467,12 @@ impl Spread {
                             anchors: Vec::new(),
                             subpath_starts: Vec::new(),
                             subpath_open: Vec::new(),
-                            keep_anchors: false,
+                            // Q-11: retain anchors so stylised
+                            // non-rectangular outlines (torn-paper,
+                            // multi-anchor) can route through
+                            // `Geometry::Polygon` instead of collapsing
+                            // to the AABB.
+                            keep_anchors: true,
                             in_text_wrap: false,
                             stroke_transparency_depth: 0,
                             content_transparency_depth: 0,
@@ -2397,6 +2415,22 @@ impl Spread {
                                         out.text_frames[i].anchors = cf.anchors;
                                         out.text_frames[i].subpath_starts = subpath_starts;
                                         out.text_frames[i].subpath_open = subpath_open;
+                                    }
+                                    CurrentFrameKind::Rect(i)
+                                        if i < out.rectangles.len() =>
+                                    {
+                                        // Q-11: only stash when the
+                                        // outline is non-rectangular
+                                        // (>4 anchors). A plain 4-corner
+                                        // AABB is the existing default
+                                        // and skipping the stash here
+                                        // keeps `from_rectangle`'s
+                                        // legacy `Geometry::Rect` path.
+                                        if cf.anchors.len() > 4 {
+                                            out.rectangles[i].anchors = cf.anchors;
+                                            out.rectangles[i].subpath_starts = subpath_starts;
+                                            out.rectangles[i].subpath_open = subpath_open;
+                                        }
                                     }
                                     _ => {}
                                 }

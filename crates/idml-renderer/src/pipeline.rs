@@ -3364,6 +3364,9 @@ fn emit_anchored_rect_via_pipeline(
         // AnchoredFrame mirror; default to knockout (the IDML default).
         overprint_fill: false,
         overprint_stroke: false,
+        anchors: Vec::new(),
+        subpath_starts: Vec::new(),
+        subpath_open: Vec::new(),
     };
     // `emit_rectangle_into` increments `page.stats.frames` internally.
     emit_rectangle_into(
@@ -3444,6 +3447,9 @@ fn emit_anchored_rect_image(
         // AnchoredFrame mirror; default to knockout (the IDML default).
         overprint_fill: false,
         overprint_stroke: false,
+        anchors: Vec::new(),
+        subpath_starts: Vec::new(),
+        subpath_open: Vec::new(),
     };
     emit_rectangle_image(page, &synthetic, options, page_image_cache, decoded_cache);
 }
