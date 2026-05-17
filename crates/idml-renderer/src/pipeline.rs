@@ -84,12 +84,22 @@ pub struct PipelineOptions<'a> {
     /// When `true` (default), frames that nest an `<Image>` (or
     /// `<EPSImage>` / `<PDF>` / `<ImportedPage>`) whose link cannot be
     /// resolved are stamped with InDesign's missing-image placeholder
-    /// — a 30% grey fill clipped to the host path plus two diagonal
-    /// stroke segments. Templates routinely ship with broken links so
-    /// every "Your Image Here" slot ends up looking like the IDML's
-    /// reference PDF instead of falling back to the frame's raw fill.
+    /// — a 50% grey fill clipped to the host path plus two 1.5pt black
+    /// diagonal stroke segments. Templates routinely ship with broken
+    /// links so every "Your Image Here" slot ends up looking like the
+    /// IDML's reference PDF instead of falling back to the frame's raw
+    /// fill.
     pub missing_image_placeholder: bool,
 }
+
+/// Missing-image placeholder calibration (Q-22). Originally P-02
+/// shipped with 0.7-grey + 0.5pt 0.25-grey X, which under-printed
+/// against InDesign's reference. Histogramming the reference PNGs for
+/// magazine-editorial-layout / catalog / project-case-study-template
+/// puts the target at ~50% RGB grey with a 1.5pt near-black stroke.
+const PLACEHOLDER_FILL_RGB: f32 = 0.5;
+const PLACEHOLDER_X_STROKE_PT: f32 = 1.5;
+const PLACEHOLDER_X_RGB: f32 = 0.0;
 
 impl std::fmt::Debug for PipelineOptions<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -7330,7 +7340,7 @@ fn emit_rectangle_image(
 ) {
     // Routing: `has_image_element` true with no resolvable image (or
     // a resolvable URI that fails to decode) is what InDesign stamps
-    // its 30% grey + diagonal-X placeholder over. We try to resolve
+    // its 50% grey + diagonal-X placeholder over. We try to resolve
     // first; only fall back to the placeholder when nothing usable
     // came back.
     let resolved = match rect.image_link.as_deref() {
@@ -7684,7 +7694,7 @@ fn unit_ellipse_path() -> idml_compose::PathData {
     }
 }
 
-/// Missing-image placeholder for `<Oval>` (P-16). Stamps the 30% grey
+/// Missing-image placeholder for `<Oval>` (P-16). Stamps the 50% grey
 /// fill clipped to the oval's ellipse, plus the diagonal-X strokes
 /// across the bounding rect — the same visual the Rectangle path
 /// emits, with the elliptical clip applied so the placeholder reads
@@ -7698,7 +7708,12 @@ fn emit_oval_missing_image_placeholder(
     if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
         return;
     }
-    let grey = Paint::Solid(Color::rgba(0.7, 0.7, 0.7, 1.0));
+    let grey = Paint::Solid(Color::rgba(
+        PLACEHOLDER_FILL_RGB,
+        PLACEHOLDER_FILL_RGB,
+        PLACEHOLDER_FILL_RGB,
+        1.0,
+    ));
     let rect = idml_compose::Rect {
         x: bounds.left,
         y: bounds.top,
@@ -7706,8 +7721,13 @@ fn emit_oval_missing_image_placeholder(
         h: bounds.height(),
     };
     idml_compose::emit_ellipse_transformed(rect, outer, grey, &mut page.list);
-    let stroke = idml_compose::Stroke::new(0.5);
-    let dark = Paint::Solid(Color::rgba(0.25, 0.25, 0.25, 1.0));
+    let stroke = idml_compose::Stroke::new(PLACEHOLDER_X_STROKE_PT);
+    let dark = Paint::Solid(Color::rgba(
+        PLACEHOLDER_X_RGB,
+        PLACEHOLDER_X_RGB,
+        PLACEHOLDER_X_RGB,
+        1.0,
+    ));
     emit_diagonal_under_transform(
         &mut page.list,
         bounds.left,
@@ -7843,7 +7863,7 @@ fn resolve_image_id(
     Some((id, img_w, img_h))
 }
 
-/// 30% grey fill + two diagonal stroke lines stamped over a
+/// 50% grey fill + two 1.5pt diagonal stroke lines stamped over a
 /// rectangle's path, matching InDesign's placeholder visual for image
 /// frames whose `LinkResourceURI` doesn't resolve. The fill replaces
 /// the host frame's normal paint (rectangles already drew their fill
@@ -7863,10 +7883,20 @@ fn emit_rectangle_missing_image_placeholder(
     if r.w <= 0.0 || r.h <= 0.0 {
         return;
     }
-    let grey = Paint::Solid(Color::rgba(0.7, 0.7, 0.7, 1.0));
+    let grey = Paint::Solid(Color::rgba(
+        PLACEHOLDER_FILL_RGB,
+        PLACEHOLDER_FILL_RGB,
+        PLACEHOLDER_FILL_RGB,
+        1.0,
+    ));
     idml_compose::emit_rect_transformed(r, outer, grey, &mut page.list);
-    let stroke = idml_compose::Stroke::new(0.5);
-    let dark = Paint::Solid(Color::rgba(0.25, 0.25, 0.25, 1.0));
+    let stroke = idml_compose::Stroke::new(PLACEHOLDER_X_STROKE_PT);
+    let dark = Paint::Solid(Color::rgba(
+        PLACEHOLDER_X_RGB,
+        PLACEHOLDER_X_RGB,
+        PLACEHOLDER_X_RGB,
+        1.0,
+    ));
     // Diagonals drawn in inner coords; `outer` carries the
     // page-origin + frame ItemTransform so they rotate / shear with
     // the host frame.
@@ -7906,7 +7936,12 @@ fn emit_polygon_missing_image_placeholder(
     if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
         return;
     }
-    let grey = Paint::Solid(Color::rgba(0.7, 0.7, 0.7, 1.0));
+    let grey = Paint::Solid(Color::rgba(
+        PLACEHOLDER_FILL_RGB,
+        PLACEHOLDER_FILL_RGB,
+        PLACEHOLDER_FILL_RGB,
+        1.0,
+    ));
     if !poly.anchors.is_empty() {
         let path = polygon_path_from_anchors_with_open(
             &poly.anchors,
@@ -7932,8 +7967,13 @@ fn emit_polygon_missing_image_placeholder(
         };
         idml_compose::emit_rect_transformed(r, outer, grey, &mut page.list);
     }
-    let stroke = idml_compose::Stroke::new(0.5);
-    let dark = Paint::Solid(Color::rgba(0.25, 0.25, 0.25, 1.0));
+    let stroke = idml_compose::Stroke::new(PLACEHOLDER_X_STROKE_PT);
+    let dark = Paint::Solid(Color::rgba(
+        PLACEHOLDER_X_RGB,
+        PLACEHOLDER_X_RGB,
+        PLACEHOLDER_X_RGB,
+        1.0,
+    ));
     emit_diagonal_under_transform(
         &mut page.list,
         bounds.left,
@@ -10671,5 +10711,21 @@ mod tests {
         assert!((inset.y - 1.0).abs() < 1e-6);
         assert!((inset.w - 98.0).abs() < 1e-6);
         assert!((inset.h - 98.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn q22_missing_image_placeholder_calibration_pinned() {
+        assert!(
+            (PLACEHOLDER_FILL_RGB - 0.5).abs() < 1e-6,
+            "placeholder fill should target ~50% grey",
+        );
+        assert!(
+            (PLACEHOLDER_X_STROKE_PT - 1.5).abs() < 1e-6,
+            "placeholder X stroke should be 1.5pt",
+        );
+        assert!(
+            PLACEHOLDER_X_RGB < 0.05,
+            "placeholder X should read as near-black against the grey fill",
+        );
     }
 }
