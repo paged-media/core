@@ -598,28 +598,45 @@ pub fn build_document(
             // centroid lives in spread coords (matching
             // page_geometries).
             let spread_bounds = transform_bounds(frame.bounds, frame.item_transform);
-            let local_idx = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
-            let page_idx = range.start + local_idx;
+            let centroid_local = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
+            let centroid_page = range.start + centroid_local;
+            // Story-body flow lands on the centroid page; record that
+            // mapping so threaded-chain page lookup still picks one
+            // canonical home per frame.
             if let Some(self_id) = frame.self_id.clone() {
-                frame_to_page.insert(self_id, page_idx);
+                frame_to_page.insert(self_id, centroid_page);
             }
-            let before = pages[page_idx].list.commands.len();
-            emit_text_frame_into(
-                &mut pages[page_idx],
-                frame,
-                document,
-                palette,
-                options.fallback_frame_fill,
-                cmyk_xform.as_ref(),
-                options.frame_drop_shadow,
-            );
-            let after = pages[page_idx].list.commands.len();
-            if after > before {
-                frame_spans.text_frames[idx] = Some(crate::module::FrameCmdSpan {
-                    page_idx,
-                    start: before,
-                    end: after,
-                });
+            // Q-12: frame paint (drop-shadow + fill + stroke) emits on
+            // every overlapping page — a full-bleed coloured TextFrame
+            // panel whose centroid lands off this page would otherwise
+            // drop its fill here. Mirrors the Rectangle / Oval /
+            // Polygon path; per-page rasterizer clips off-page geometry.
+            let overlaps = pages_overlapping_frame(&spread_bounds, local_geoms);
+            let local_indices: Vec<usize> = if overlaps.is_empty() {
+                vec![centroid_local]
+            } else {
+                overlaps
+            };
+            for &local_idx in &local_indices {
+                let page_idx = range.start + local_idx;
+                let before = pages[page_idx].list.commands.len();
+                emit_text_frame_into(
+                    &mut pages[page_idx],
+                    frame,
+                    document,
+                    palette,
+                    options.fallback_frame_fill,
+                    cmyk_xform.as_ref(),
+                    options.frame_drop_shadow,
+                );
+                let after = pages[page_idx].list.commands.len();
+                if after > before && frame_spans.text_frames[idx].is_none() {
+                    frame_spans.text_frames[idx] = Some(crate::module::FrameCmdSpan {
+                        page_idx,
+                        start: before,
+                        end: after,
+                    });
+                }
             }
         }
         for (idx, rect) in spread.rectangles.iter().enumerate() {
