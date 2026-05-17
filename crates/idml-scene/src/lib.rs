@@ -1092,4 +1092,46 @@ mod tests {
         let entries = doc.resolve_toc(&toc);
         assert_eq!(entries[0].separator, "^t");
     }
+
+    #[test]
+    fn character_style_fill_color_wins_over_paragraph_style() {
+        use idml_parse::{CharacterStyleDef, ParagraphStyleDef, StyleSheet};
+
+        let mut styles = StyleSheet::default();
+        styles.paragraph_styles.insert(
+            "ParagraphStyle/Body".to_string(),
+            ParagraphStyleDef {
+                self_id: "ParagraphStyle/Body".to_string(),
+                fill_color: Some("Color/Black".to_string()),
+                ..Default::default()
+            },
+        );
+        styles.character_styles.insert(
+            "CharacterStyle/Inverse".to_string(),
+            CharacterStyleDef {
+                self_id: "CharacterStyle/Inverse".to_string(),
+                fill_color: Some("Color/Paper".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let paragraph = Paragraph {
+            paragraph_style: Some("ParagraphStyle/Body".to_string()),
+            ..Default::default()
+        };
+        let run = CharacterRun {
+            character_style: Some("CharacterStyle/Inverse".to_string()),
+            ..Default::default()
+        };
+
+        let mut acc = ResolvedRunAttrs::from_run(&run);
+        if let Some(id) = run.character_style.as_deref() {
+            acc.merge_below_character(&styles.resolve_character(id));
+        }
+        if let Some(id) = paragraph.paragraph_style.as_deref() {
+            acc.merge_below_paragraph(&styles.resolve_paragraph(id));
+        }
+
+        assert_eq!(acc.fill_color.as_deref(), Some("Color/Paper"));
+    }
 }
