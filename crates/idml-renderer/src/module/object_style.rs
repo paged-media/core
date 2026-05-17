@@ -42,6 +42,9 @@ pub(crate) fn object_style_cascade<'a>(
     if frame.fill_color.is_none() {
         frame.fill_color = style.fill_color.as_deref();
     }
+    if frame.fill_tint.is_none() {
+        frame.fill_tint = style.fill_tint;
+    }
     if frame.stroke_color.is_none() {
         frame.stroke_color = style.stroke_color.as_deref();
     }

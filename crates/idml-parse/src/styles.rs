@@ -134,7 +134,14 @@ pub struct ObjectStyleDef {
     pub name: Option<String>,
     pub based_on: Option<String>,
     pub fill_color: Option<String>,
+    /// `FillTint` percentage [0..100] from `<ObjectStyle FillTint="…">`.
+    /// `None` ⇒ inherit from BasedOn (and ultimately default to 100%
+    /// at the renderer). Cascades into a frame whose own inline
+    /// `FillTint` is absent — needed for placeholder rects whose
+    /// 15% grey paint comes entirely from the style.
+    pub fill_tint: Option<f32>,
     pub stroke_color: Option<String>,
+    pub stroke_tint: Option<f32>,
     pub stroke_weight: Option<f32>,
     /// `CornerRadius` in pt. Only honoured when `CornerOption` is one
     /// of the rounding variants (`Rounded`, `InverseRounded`, `Inset`,
@@ -151,7 +158,9 @@ pub struct ObjectStyleDef {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ResolvedObject {
     pub fill_color: Option<String>,
+    pub fill_tint: Option<f32>,
     pub stroke_color: Option<String>,
+    pub stroke_tint: Option<f32>,
     pub stroke_weight: Option<f32>,
     pub corner_radius: Option<f32>,
     pub corner_option: Option<String>,
@@ -948,9 +957,11 @@ impl ResolvedObject {
         if self.fill_color.is_none() {
             self.fill_color = def.fill_color.clone();
         }
+        self.fill_tint = self.fill_tint.or(def.fill_tint);
         if self.stroke_color.is_none() {
             self.stroke_color = def.stroke_color.clone();
         }
+        self.stroke_tint = self.stroke_tint.or(def.stroke_tint);
         self.stroke_weight = self.stroke_weight.or(def.stroke_weight);
         self.corner_radius = self.corner_radius.or(def.corner_radius);
         if self.corner_option.is_none() {
@@ -1290,7 +1301,9 @@ fn parse_object_style(e: &quick_xml::events::BytesStart) -> Option<ObjectStyleDe
         name: attr(e, b"Name"),
         based_on: attr(e, b"BasedOn"),
         fill_color: normalize(attr(e, b"FillColor")),
+        fill_tint: parse_tint_attr(e, b"FillTint"),
         stroke_color: normalize(attr(e, b"StrokeColor")),
+        stroke_tint: parse_tint_attr(e, b"StrokeTint"),
         stroke_weight,
         corner_radius: attr(e, b"CornerRadius").and_then(|s| s.parse().ok()),
         corner_option: attr(e, b"CornerOption"),
