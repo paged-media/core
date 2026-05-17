@@ -1031,6 +1031,42 @@ mod tests {
     }
 
     #[test]
+    fn q23_hypher_pattern_trie_is_case_insensitive() {
+        // hypher lowercases its input before pattern matching, so an
+        // all-caps word like "CONTRIBUTORS" (lifestyle-magazine-layout
+        // failure case) must surface the same break opportunities as
+        // its lowercase form. Lock that contract so a future hypher
+        // upgrade can't silently regress it.
+        let h = crate::Hyphenator::for_language(crate::Language::EnglishUS);
+        let lo = h.opportunities("contributors");
+        let up = h.opportunities("CONTRIBUTORS");
+        assert!(!lo.is_empty(), "lowercase should hyphenate: {:?}", lo);
+        assert_eq!(lo, up, "case must not alter break offsets");
+    }
+
+    #[test]
+    fn q23_all_caps_word_flags_hyphen_break() {
+        // The CON-/TRIBU- target wrap: an all-caps word in a narrow
+        // column should surface as a `ends_with_hyphen` flag on the
+        // first line. Pinning the compose-side contract here so the
+        // emit-side synthetic hyphen (layout::layout_runs:726+ /
+        // layout::layout_paragraph:148+) always has a flag to react to.
+        let m = MonospaceMeasurer::new(10, 10);
+        let h = crate::Hyphenator::for_language(crate::Language::EnglishUS);
+        let mut opts = ComposeOptions::new(0.0);
+        opts.column_width = 80;
+        opts.tolerance = 50.0;
+        opts.hyphenator = Some(&h);
+        let out = compose_paragraph("CONTRIBUTORS", &m, &opts);
+        assert!(out.len() >= 2, "expected wrap, got {:?}", out);
+        assert!(
+            out[0].ends_with_hyphen,
+            "first line should flag hyphen: {:?}",
+            out
+        );
+    }
+
+    #[test]
     fn no_hyphenator_means_no_hyphen_flag() {
         let m = MonospaceMeasurer::new(10, 10);
         let opts = ComposeOptions {
