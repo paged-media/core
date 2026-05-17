@@ -9097,6 +9097,11 @@ fn apply_paragraph_compose_options<'a>(
     if let Some(min) = resolved.minimum_word_spacing {
         lopts.compose.shrink_ratio = ((desired - min) / 100.0).clamp(0.0, 1.0);
     }
+    // Floor the stretch budget so the breaker can always find a feasible
+    // line. IDML paragraphs like `MinimumWordSpacing=90 MaximumWordSpacing=100`
+    // (Max == Desired) yield a zero-stretch budget which Knuth-Plass cannot
+    // satisfy on wide columns, collapsing wrap to one word per line (Q-15).
+    lopts.compose.stretch_ratio = lopts.compose.stretch_ratio.max(0.1);
     // CJK Stage 2: enable hard-kinsoku enforcement whenever the cascade
     // carries any `KinsokuType` ("WordbreakWithJustification" / "PushIn"
     // / "PushOut" / etc). The composer currently keys on presence only;

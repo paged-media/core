@@ -1373,6 +1373,52 @@ mod tests {
     }
 
     #[test]
+    fn zero_stretch_budget_does_not_collapse_wrap_to_one_word_per_line() {
+        // Reproduces Q-15: an IDML paragraph with
+        // MinimumWordSpacing=90 MaximumWordSpacing=100 lands at the
+        // composer with stretch_ratio=0.0, shrink_ratio=0.1. With zero
+        // stretch budget on a wide column the breaker has no slack and
+        // either drops the paragraph or collapses wrap to one word per
+        // line. The pipeline floors stretch_ratio (currently 0.1) at
+        // the IDML boundary so the breaker always sees some headroom.
+        // This test verifies the floored input produces healthy wrap
+        // (1-3 lines, not 12) and documents that the raw zero-stretch
+        // input degrades — justifying the floor.
+        let shaper = MonospaceMeasurer::new(10, 10);
+        let text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+        assert_eq!(text.split_whitespace().count(), 12);
+
+        // Failure-case inputs as they arrive at the composer after the
+        // pipeline floor (stretch lifted from 0.0 to 0.1).
+        let mut floored = opts(40, Alignment::Left);
+        floored.compose.desired_space_ratio = 1.0;
+        floored.compose.stretch_ratio = 0.1;
+        floored.compose.shrink_ratio = 0.1;
+        let out_floored = layout_paragraph(text, &shaper, &floored);
+        assert!(
+            !out_floored.lines.is_empty() && out_floored.lines.len() <= 3,
+            "floored stretch wrap should produce 1-3 lines, got {}",
+            out_floored.lines.len()
+        );
+
+        // Raw failure case: stretch=0.0 either collapses to one word
+        // per line (12) or drops the paragraph entirely (0). Neither
+        // is acceptable rendered output — that's why the pipeline
+        // applies the floor.
+        let mut raw = opts(40, Alignment::Left);
+        raw.compose.desired_space_ratio = 1.0;
+        raw.compose.stretch_ratio = 0.0;
+        raw.compose.shrink_ratio = 0.1;
+        let out_raw = layout_paragraph(text, &shaper, &raw);
+        let raw_degraded = out_raw.lines.is_empty() || out_raw.lines.len() >= 10;
+        assert!(
+            raw_degraded,
+            "expected zero-stretch input to degrade (0 or many lines) so the floor is justified; got {} lines",
+            out_raw.lines.len()
+        );
+    }
+
+    #[test]
     fn layout_paragraph_uses_monospace_shaper_end_to_end() {
         let shaper = MonospaceMeasurer::new(10, 10);
         let o = opts(12, Alignment::Left);
