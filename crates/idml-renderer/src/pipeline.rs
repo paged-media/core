@@ -3338,6 +3338,7 @@ fn emit_anchored_rect_via_pipeline(
         // image-bearing anchored Rectangles.
         image_link: None,
         has_image_element: false,
+        has_inline_pdf: false,
         image_item_transform: None,
         applied_object_style: af.applied_object_style.clone(),
         text_wrap: None,
@@ -3417,6 +3418,7 @@ fn emit_anchored_rect_image(
         stroke_drop_shadow: None,
         image_link: af.image_link.clone(),
         has_image_element: af.image_link.is_some(),
+        has_inline_pdf: false,
         image_item_transform: af.image_item_transform,
         applied_object_style: af.applied_object_style.clone(),
         text_wrap: None,
@@ -7314,7 +7316,14 @@ fn emit_rectangle_image(
     };
     let outer = frame_outer_transform(page, rect.item_transform);
     let Some((id, img_w, img_h)) = resolved else {
-        if rect.has_image_element && options.missing_image_placeholder {
+        // Q-06: inline `<PDF>` content we can't decode → fall through
+        // to the frame's intrinsic FillColor (already emitted by the
+        // earlier shape-fill pass) rather than stamping the grey-X
+        // missing-image placeholder over it.
+        if rect.has_image_element
+            && !rect.has_inline_pdf
+            && options.missing_image_placeholder
+        {
             emit_rectangle_missing_image_placeholder(page, rect, outer);
         }
         return;
@@ -7402,7 +7411,10 @@ fn emit_polygon_image(
     };
     let outer = frame_outer_transform(page, poly.item_transform);
     let Some((id, img_w, img_h)) = resolved else {
-        if poly.has_image_element && options.missing_image_placeholder {
+        if poly.has_image_element
+            && !poly.has_inline_pdf
+            && options.missing_image_placeholder
+        {
             emit_polygon_missing_image_placeholder(page, poly, outer);
         }
         return;
@@ -7527,7 +7539,10 @@ fn emit_oval_image(
     };
     let outer = frame_outer_transform(page, oval.item_transform);
     let Some((id, img_w, img_h)) = resolved else {
-        if oval.has_image_element && options.missing_image_placeholder {
+        if oval.has_image_element
+            && !oval.has_inline_pdf
+            && options.missing_image_placeholder
+        {
             emit_oval_missing_image_placeholder(page, oval, outer);
         }
         return;

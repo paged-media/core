@@ -395,6 +395,12 @@ pub struct Rectangle {
     /// (true) so the renderer can stamp a missing-image placeholder
     /// instead of falling back to the frame's raw fill.
     pub has_image_element: bool,
+    /// True when the rectangle nests a `<PDF>` element carrying inline
+    /// `<Contents>` CDATA but no `LinkResourceURI` — Envato templates
+    /// embed placed PDFs this way. Until we have a PDF decoder, the
+    /// frame should fall back to its intrinsic FillColor rather than
+    /// the grey-X missing-image placeholder (Q-06).
+    pub has_inline_pdf: bool,
     /// `ItemTransform` attribute on the nested `<Image>` element.
     /// Maps the image's natural-pixel coordinate space (origin at the
     /// top-left of the source pixmap, with 1px ≈ 1pt at 72 ppi) into
@@ -724,6 +730,9 @@ pub struct Oval {
     /// `<ImportedPage>` element, regardless of resolvability. Mirrors
     /// [`Rectangle::has_image_element`] (P-16).
     pub has_image_element: bool,
+    /// Inline-`<PDF>`-without-link marker (Q-06). Mirrors
+    /// [`Rectangle::has_inline_pdf`].
+    pub has_inline_pdf: bool,
     /// `ItemTransform` from the nested `<Image>`. Mirrors
     /// [`Rectangle::image_item_transform`] (P-16).
     pub image_item_transform: Option<[f32; 6]>,
@@ -922,6 +931,9 @@ pub struct Polygon {
     pub image_link: Option<String>,
     /// See [`Rectangle::has_image_element`].
     pub has_image_element: bool,
+    /// Inline-`<PDF>`-without-link marker (Q-06). Mirrors
+    /// [`Rectangle::has_inline_pdf`].
+    pub has_inline_pdf: bool,
     /// `ItemTransform` attribute on the nested `<Image>` element.
     /// See [`Rectangle::image_item_transform`].
     pub image_item_transform: Option<[f32; 6]>,
@@ -1406,6 +1418,7 @@ impl Spread {
                             stroke_drop_shadow: None,
                             image_link: None,
                             has_image_element: false,
+                            has_inline_pdf: false,
                             image_item_transform: None,
                             applied_object_style: common.applied_object_style,
                             text_wrap: None,
@@ -1474,6 +1487,7 @@ impl Spread {
                             blend_mode: None,
                             image_link: None,
                             has_image_element: false,
+                            has_inline_pdf: false,
                             image_item_transform: None,
                             overprint_fill: common.overprint_fill,
                             overprint_stroke: common.overprint_stroke,
@@ -2022,14 +2036,24 @@ impl Spread {
                         // instead of falling back to raw fill.
                         let is_image_element =
                             !matches!(e.name().as_ref(), b"Link");
+                        let is_pdf_element = matches!(e.name().as_ref(), b"PDF");
+                        let element_uri =
+                            attr(&e, b"LinkResourceURI").or_else(|| attr(&e, b"href"));
+                        // Q-06: a `<PDF>` element with no link URI carries
+                        // its content as inline `<Contents>` CDATA we can't
+                        // decode. Flag it so the renderer renders the
+                        // frame's intrinsic FillColor instead of the
+                        // missing-image grey-X placeholder.
+                        let inline_pdf = is_pdf_element && element_uri.is_none();
                         match current_frame.as_ref().map(|cf| cf.kind) {
                             Some(CurrentFrameKind::Rect(i)) => {
                                 if is_image_element {
                                     out.rectangles[i].has_image_element = true;
                                 }
-                                if let Some(uri) =
-                                    attr(&e, b"LinkResourceURI").or_else(|| attr(&e, b"href"))
-                                {
+                                if inline_pdf {
+                                    out.rectangles[i].has_inline_pdf = true;
+                                }
+                                if let Some(uri) = element_uri {
                                     // First-write-wins so the outer <Image>
                                     // attribute beats the inner <Link>'s.
                                     if out.rectangles[i].image_link.is_none() {
@@ -2050,9 +2074,10 @@ impl Spread {
                                 if is_image_element {
                                     out.polygons[i].has_image_element = true;
                                 }
-                                if let Some(uri) =
-                                    attr(&e, b"LinkResourceURI").or_else(|| attr(&e, b"href"))
-                                {
+                                if inline_pdf {
+                                    out.polygons[i].has_inline_pdf = true;
+                                }
+                                if let Some(uri) = element_uri {
                                     if out.polygons[i].image_link.is_none() {
                                         out.polygons[i].image_link = Some(uri);
                                     }
@@ -2071,9 +2096,10 @@ impl Spread {
                                 if is_image_element {
                                     out.ovals[i].has_image_element = true;
                                 }
-                                if let Some(uri) =
-                                    attr(&e, b"LinkResourceURI").or_else(|| attr(&e, b"href"))
-                                {
+                                if inline_pdf {
+                                    out.ovals[i].has_inline_pdf = true;
+                                }
+                                if let Some(uri) = element_uri {
                                     if out.ovals[i].image_link.is_none() {
                                         out.ovals[i].image_link = Some(uri);
                                     }
@@ -2215,6 +2241,7 @@ impl Spread {
                             text_paths: Vec::new(),
                             image_link: None,
                             has_image_element: false,
+                            has_inline_pdf: false,
                             image_item_transform: None,
                             overprint_fill: common.overprint_fill,
                             overprint_stroke: common.overprint_stroke,
