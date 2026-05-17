@@ -193,4 +193,22 @@ mod tests {
         assert_eq!(dm.spreads[0].src, "Spreads/Spread_u1.xml");
         assert_eq!(dm.stories[0].src, "Stories/Story_u10.xml");
     }
+
+    const LAYERS_SAMPLE: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Layer Self="ua" Name="Layer 1" Visible="true" Locked="false" Printable="true"/>
+  <Layer Self="ub" Name="Guides" Visible="true" Locked="true" Printable="false"/>
+  <Layer Self="uc" Name="Hidden" Visible="false" Printable="true"/>
+  <Layer Self="ud" Name="Defaults"/>
+</Document>"#;
+
+    #[test]
+    fn q17_layer_printable_attribute_round_trips() {
+        let dm = DesignMap::parse(LAYERS_SAMPLE).unwrap();
+        assert_eq!(dm.layers.len(), 4);
+        let printable: Vec<bool> = dm.layers.iter().map(|l| l.printable).collect();
+        assert_eq!(printable, vec![true, false, true, true]);
+        let visible: Vec<bool> = dm.layers.iter().map(|l| l.visible).collect();
+        assert_eq!(visible, vec![true, true, false, true]);
+    }
 }
