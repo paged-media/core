@@ -6993,6 +6993,70 @@ fn emit_line_into(
     );
 }
 
+/// Emit a Rectangle whose Q-11 multi-anchor PathGeometry adapter
+/// produced Geometry::Polygon. Mirrors `emit_polygon_into`'s post-
+/// resolve sequence: intern the curve, push a blend group when the
+/// frame's blend mode is non-trivial, then run fill + stroke modules
+/// against the interned path. Skips the corner-radius and effects
+/// branches the rectangular path runs because those don't apply to a
+/// curved outline.
+fn emit_rectangle_polygon_path(
+    page: &mut BuiltPage,
+    resolved: &ResolvedFrame<'_>,
+    palette: &Graphic,
+    fallback: Paint,
+    cmyk_xform: Option<&idml_color::IccTransform>,
+) {
+    page.stats.frames += 1;
+    let outer = frame_outer_transform(page, resolved.item_transform);
+    let needs_group = frame_needs_blend_group(resolved);
+    let bbox = match &resolved.geometry {
+        Geometry::Polygon { bbox, .. } => *bbox,
+        _ => return,
+    };
+    if needs_group {
+        push_blend_group(
+            page,
+            bbox,
+            outer,
+            resolved.blend_mode,
+            frame_group_opacity(resolved),
+        );
+    }
+    let path_id = if let Geometry::Polygon {
+        anchors,
+        subpath_starts,
+        subpath_open,
+        ..
+    } = &resolved.geometry
+    {
+        let path = polygon_path_from_anchors_with_open(anchors, subpath_starts, subpath_open);
+        let cache_key = match resolved.self_id {
+            Some(id) => fnv_1a_u64(id.as_bytes()),
+            None => path_signature(anchors),
+        };
+        let (id, _) = page.list.paths.intern(cache_key, path);
+        Some(id)
+    } else {
+        None
+    };
+    crate::module::fill_paint_module(
+        resolved, page, palette, cmyk_xform, fallback, outer, path_id,
+    );
+    crate::module::stroke_paint_module(
+        resolved,
+        page,
+        palette,
+        cmyk_xform,
+        outer,
+        path_id,
+        Stroke::new(resolved.effective_stroke_weight()),
+    );
+    if needs_group {
+        pop_blend_group(page);
+    }
+}
+
 fn emit_rectangle_into(
     page: &mut BuiltPage,
     rect: &Rectangle,
@@ -7007,8 +7071,18 @@ fn emit_rectangle_into(
     if let Some(s) = &style {
         crate::module::object_style_cascade(&mut resolved, s);
     }
+    // Q-11: a Rectangle whose PathGeometry carries more than four
+    // anchors is rendered as a curved polygon. `from_rectangle` lifts
+    // the geometry to Polygon for those cases; the rounded-corner /
+    // effect / stroke-alignment apparatus below assumes Rect so we
+    // route the polygon case through the same path emit
+    // `emit_polygon_into` uses, then return.
+    if matches!(resolved.geometry, Geometry::Polygon { .. }) {
+        emit_rectangle_polygon_path(page, &resolved, palette, fallback, cmyk_xform);
+        return;
+    }
     let Geometry::Rect { rect: r } = resolved.geometry else {
-        unreachable!("from_rectangle produces Geometry::Rect");
+        unreachable!("from_rectangle produces Geometry::Rect after polygon branch");
     };
     page.stats.frames += 1;
     let outer = frame_outer_transform(page, resolved.item_transform);
