@@ -2708,7 +2708,18 @@ fn map_join(join: LineJoin) -> TsLineJoin {
 
 /// Map the IDML / compose-layer `BlendMode` to tiny-skia's enum.
 /// Names line up 1:1 — Normal becomes SourceOver (the canonical
-/// alpha-composite default).
+/// alpha-composite default). tiny-skia implements W3C Compositing /
+/// Blending Level 1 formulae; InDesign PDF export uses PDF 1.7 Annex
+/// H formulae. The two agree for Multiply / Screen / Overlay /
+/// Darken / Lighten / Difference / Exclusion / Hue / Saturation /
+/// Color / Luminosity. They differ in edge cases for HardLight (when
+/// source alpha < 1 over a non-opaque backdrop), SoftLight (the
+/// Pegtop vs. W3C formula split), and ColorBurn (clamping at the
+/// transparent-backdrop boundary). Q-24: any per-mode mismatches
+/// surface as small ΔE on packs using those modes (the only cited
+/// case so far is soccer-career-flyer-templates which improved net
+/// post-Q-05); reconciling the formulae would require shimming
+/// per-mode rasterization rather than swapping tiny-skia's enum.
 fn blend_mode_to_ts(m: BlendMode) -> TsBlendMode {
     match m {
         BlendMode::Normal => TsBlendMode::SourceOver,
