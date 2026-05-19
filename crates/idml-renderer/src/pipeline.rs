@@ -2009,6 +2009,20 @@ fn emit_paragraph_into_chain(
             .any(|axis| axis.tag == wght_tag);
         if has_wght_axis {
             let _ = of.set_variation(wght_tag, wghts[i]);
+        } else if (wghts[i] - 400.0).abs() > 50.0 {
+            // Q-25: the IDML asked for a non-Regular weight but the
+            // matched font has no `wght` variation axis (single-
+            // weight TTF). Surface this as a trace so users know
+            // catalog-brochure-template / brand-guidelines display
+            // headlines render at the substitute's intrinsic weight
+            // (e.g. "Catalog" hero ~30% thicker than ref). Curable
+            // by routing the affected family through a variable font
+            // in the per-pack fonts overrides.
+            tracing::warn!(
+                font_id = bytes_font_ids[i],
+                requested_wght = wghts[i],
+                "matched font has no wght axis; requested weight ignored — substitute will render at the file's intrinsic weight"
+            );
         }
         outline_faces[i] = Some(of);
 
@@ -6251,6 +6265,20 @@ fn emit_cell_paragraph(
             .any(|axis| axis.tag == wght_tag);
         if has_wght_axis {
             let _ = of.set_variation(wght_tag, wghts[i]);
+        } else if (wghts[i] - 400.0).abs() > 50.0 {
+            // Q-25: the IDML asked for a non-Regular weight but the
+            // matched font has no `wght` variation axis (single-
+            // weight TTF). Surface this as a trace so users know
+            // catalog-brochure-template / brand-guidelines display
+            // headlines render at the substitute's intrinsic weight
+            // (e.g. "Catalog" hero ~30% thicker than ref). Curable
+            // by routing the affected family through a variable font
+            // in the per-pack fonts overrides.
+            tracing::warn!(
+                font_id = bytes_font_ids[i],
+                requested_wght = wghts[i],
+                "matched font has no wght axis; requested weight ignored — substitute will render at the file's intrinsic weight"
+            );
         }
         outline_faces[i] = Some(of);
 
