@@ -216,6 +216,24 @@ pub struct TextFrame {
     /// space-separated list of four numbers, IDML order
     /// `top left bottom right`). `None` when absent.
     pub inset_spacing: Option<[f32; 4]>,
+    /// `<TextFramePreference AutoSizingType="...">`. Drives whether
+    /// the frame's bounds should grow at composition time to fit the
+    /// story's content. `None`/`Off` ⇒ static frame (default).
+    pub auto_sizing: Option<AutoSizingType>,
+    /// `<TextFramePreference AutoSizingReferencePoint="...">`. Pins
+    /// which corner / midpoint stays fixed when the frame grows.
+    /// `None` ⇒ `TopLeftPoint` (the IDML default).
+    pub auto_sizing_reference_point: Option<AutoSizingReferencePoint>,
+    /// `<TextFramePreference MinimumWidthForAutoSizing="...">` in pt.
+    /// Floor for width-growth. `None` ⇒ no floor.
+    pub minimum_width_for_auto_sizing: Option<f32>,
+    /// `<TextFramePreference MinimumHeightForAutoSizing="...">` in pt.
+    /// Floor for height-growth (only consulted when
+    /// `use_minimum_height_for_auto_sizing == Some(true)`).
+    pub minimum_height_for_auto_sizing: Option<f32>,
+    /// `<TextFramePreference UseMinimumHeightForAutoSizing="...">`.
+    /// `Some(true)` ⇒ apply `minimum_height_for_auto_sizing`.
+    pub use_minimum_height_for_auto_sizing: Option<bool>,
     /// `AppliedObjectStyle` reference — `ObjectStyle/<id>`. Real-
     /// world IDMLs almost always rely on this for fill/stroke; the
     /// per-element FillColor attribute is rare. Resolved by
@@ -348,6 +366,87 @@ impl FirstBaselineOffset {
             "EmBoxHeight" => Some(Self::EmBoxHeight),
             "LeadingOffset" => Some(Self::LeadingOffset),
             "FixedHeight" => Some(Self::FixedHeight),
+            _ => None,
+        }
+    }
+}
+
+/// IDML `<TextFramePreference AutoSizingType="...">` values. Drives
+/// whether the frame's bounds grow at composition time so display
+/// headlines / dynamic copy don't clip against their authored bounds.
+/// `Off` is the IDML default (static frame).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum AutoSizingType {
+    /// Static frame — bounds are authoritative.
+    Off,
+    /// Frame may grow vertically to fit text.
+    HeightOnly,
+    /// Frame may grow horizontally to fit the longest line.
+    WidthOnly,
+    /// Frame may grow in both directions.
+    HeightAndWidth,
+    /// Same as `HeightAndWidth` but maintains the original aspect
+    /// ratio while growing.
+    HeightAndWidthProportionally,
+}
+
+impl AutoSizingType {
+    pub fn from_idml(s: &str) -> Option<Self> {
+        match s {
+            "Off" => Some(Self::Off),
+            "HeightOnly" => Some(Self::HeightOnly),
+            "WidthOnly" => Some(Self::WidthOnly),
+            "HeightAndWidth" => Some(Self::HeightAndWidth),
+            "HeightAndWidthProportionally" => Some(Self::HeightAndWidthProportionally),
+            _ => None,
+        }
+    }
+
+    /// True when the frame is allowed to grow in width.
+    pub fn grows_width(self) -> bool {
+        matches!(
+            self,
+            Self::WidthOnly | Self::HeightAndWidth | Self::HeightAndWidthProportionally
+        )
+    }
+
+    /// True when the frame is allowed to grow in height.
+    pub fn grows_height(self) -> bool {
+        matches!(
+            self,
+            Self::HeightOnly | Self::HeightAndWidth | Self::HeightAndWidthProportionally
+        )
+    }
+}
+
+/// IDML `<TextFramePreference AutoSizingReferencePoint="...">` values.
+/// Pins which corner / midpoint of the frame stays fixed when the
+/// frame grows. `TopLeftPoint` is the IDML default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum AutoSizingReferencePoint {
+    TopLeftPoint,
+    TopCenterPoint,
+    TopRightPoint,
+    CenterLeftPoint,
+    CenterPoint,
+    CenterRightPoint,
+    BottomLeftPoint,
+    BottomCenterPoint,
+    BottomRightPoint,
+}
+
+impl AutoSizingReferencePoint {
+    pub fn from_idml(s: &str) -> Option<Self> {
+        match s {
+            "TopLeftPoint" => Some(Self::TopLeftPoint),
+            "TopCenterPoint" => Some(Self::TopCenterPoint),
+            "TopRightPoint" => Some(Self::TopRightPoint),
+            "CenterLeftPoint" => Some(Self::CenterLeftPoint),
+            "CenterPoint" => Some(Self::CenterPoint),
+            "CenterRightPoint" => Some(Self::CenterRightPoint),
+            "BottomLeftPoint" => Some(Self::BottomLeftPoint),
+            "BottomCenterPoint" => Some(Self::BottomCenterPoint),
+            "BottomRightPoint" => Some(Self::BottomRightPoint),
             _ => None,
         }
     }
@@ -1369,6 +1468,11 @@ impl Spread {
                             first_baseline_offset: None,
                             minimum_first_baseline_offset: None,
                             inset_spacing: None,
+                            auto_sizing: None,
+                            auto_sizing_reference_point: None,
+                            minimum_width_for_auto_sizing: None,
+                            minimum_height_for_auto_sizing: None,
+                            use_minimum_height_for_auto_sizing: None,
                             applied_object_style: common.applied_object_style,
                             text_wrap: None,
                             item_layer: common.item_layer,
@@ -2034,6 +2138,33 @@ impl Spread {
                             {
                                 f.inset_spacing = Some(insets);
                             }
+                            if let Some(at) = attr(&e, b"AutoSizingType")
+                                .as_deref()
+                                .and_then(AutoSizingType::from_idml)
+                            {
+                                f.auto_sizing = Some(at);
+                            }
+                            if let Some(rp) = attr(&e, b"AutoSizingReferencePoint")
+                                .as_deref()
+                                .and_then(AutoSizingReferencePoint::from_idml)
+                            {
+                                f.auto_sizing_reference_point = Some(rp);
+                            }
+                            if let Some(min_w) = attr(&e, b"MinimumWidthForAutoSizing")
+                                .and_then(|s| s.parse::<f32>().ok())
+                            {
+                                f.minimum_width_for_auto_sizing = Some(min_w);
+                            }
+                            if let Some(min_h) = attr(&e, b"MinimumHeightForAutoSizing")
+                                .and_then(|s| s.parse::<f32>().ok())
+                            {
+                                f.minimum_height_for_auto_sizing = Some(min_h);
+                            }
+                            if let Some(use_min_h) = attr(&e, b"UseMinimumHeightForAutoSizing")
+                                .and_then(|s| s.parse::<bool>().ok())
+                            {
+                                f.use_minimum_height_for_auto_sizing = Some(use_min_h);
+                            }
                         }
                     }
                     b"Image" | b"EPSImage" | b"PDF" | b"ImportedPage" | b"Link" => {
@@ -2697,6 +2828,51 @@ mod tests {
         );
         assert_eq!(f.minimum_first_baseline_offset, Some(14.0));
         assert_eq!(f.inset_spacing, Some([6.0, 8.0, 10.0, 12.0]));
+    }
+
+    #[test]
+    fn q02_parses_text_frame_preference_auto_sizing() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <TextFrame Self="frameA" ParentStory="u1" GeometricBounds="0 0 50 30">
+              <Properties/>
+              <TextFramePreference AutoSizingType="WidthOnly"
+                                   AutoSizingReferencePoint="TopLeftPoint"
+                                   MinimumWidthForAutoSizing="40"
+                                   MinimumHeightForAutoSizing="20"
+                                   UseMinimumHeightForAutoSizing="true"/>
+            </TextFrame>
+            <TextFrame Self="frameB" ParentStory="u2" GeometricBounds="0 0 100 100">
+              <Properties/>
+              <TextFramePreference AutoSizingType="HeightAndWidth"/>
+            </TextFrame>
+            <TextFrame Self="frameC" ParentStory="u3" GeometricBounds="0 0 100 100">
+              <Properties/>
+              <TextFramePreference VerticalJustification="TopAlign"/>
+            </TextFrame>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        let a = &s.text_frames[0];
+        assert_eq!(a.auto_sizing, Some(AutoSizingType::WidthOnly));
+        assert!(a.auto_sizing.unwrap().grows_width());
+        assert!(!a.auto_sizing.unwrap().grows_height());
+        assert_eq!(
+            a.auto_sizing_reference_point,
+            Some(AutoSizingReferencePoint::TopLeftPoint)
+        );
+        assert_eq!(a.minimum_width_for_auto_sizing, Some(40.0));
+        assert_eq!(a.minimum_height_for_auto_sizing, Some(20.0));
+        assert_eq!(a.use_minimum_height_for_auto_sizing, Some(true));
+
+        let b = &s.text_frames[1];
+        assert_eq!(b.auto_sizing, Some(AutoSizingType::HeightAndWidth));
+        assert!(b.auto_sizing.unwrap().grows_width());
+        assert!(b.auto_sizing.unwrap().grows_height());
+
+        let c = &s.text_frames[2];
+        assert!(c.auto_sizing.is_none(), "frameC has no AutoSizingType");
     }
 
     #[test]
