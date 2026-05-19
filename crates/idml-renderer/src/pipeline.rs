@@ -572,42 +572,6 @@ pub fn build_document(
             None => true,
         }
     };
-    // Q-10: IDML lists layers top-first (layers[0] = topmost). Correct
-    // paint order is bottom-to-top, so items on layers[N-1] render
-    // first (behind) and items on layers[0] render last (on top). Within
-    // a layer, XML order is the tiebreaker (`sort_by_key` is stable).
-    // Items with no `ItemLayer` reference (or pointing to an unknown
-    // layer) sort as if they were on the bottom layer — matching the
-    // legacy "render in XML order, ignore layer" behaviour for those.
-    let layer_z_index: std::collections::HashMap<&str, usize> = document
-        .container
-        .designmap
-        .layers
-        .iter()
-        .enumerate()
-        .map(|(i, l)| (l.self_id.as_str(), i))
-        .collect();
-    let z_of_layer_ref = |layer_ref: Option<&str>| -> std::cmp::Reverse<usize> {
-        // Higher position in the layers vec (further from top) renders
-        // first. None ⇒ position usize::MAX so the item ends up at the
-        // very front of the sorted iteration (i.e. "render first /
-        // behind everything") only if explicit layers exist. If no
-        // layers are declared, the sort is a no-op anyway.
-        let pos = match layer_ref {
-            Some(id) => layer_z_index.get(id).copied().unwrap_or(usize::MAX),
-            None => usize::MAX,
-        };
-        std::cmp::Reverse(pos)
-    };
-    // Per-shape: build a Vec<usize> of indices sorted by descending
-    // layer position (back-first) with XML order as the stable
-    // tiebreaker. Used in place of `.iter().enumerate()` in each
-    // per-spread shape emit loop below.
-    let layer_sorted_indices = |layer_refs: &[Option<&str>]| -> Vec<usize> {
-        let mut idx: Vec<usize> = (0..layer_refs.len()).collect();
-        idx.sort_by_key(|&i| z_of_layer_ref(layer_refs[i]));
-        idx
-    };
 
     let mut decoded_image_cache: HashMap<String, idml_compose::DecodedImage> = HashMap::new();
     // Aggregated queue of image-bearing anchored Rectangles captured
@@ -634,13 +598,7 @@ pub fn build_document(
         frame_spans.ovals = vec![None; spread.ovals.len()];
         frame_spans.graphic_lines = vec![None; spread.graphic_lines.len()];
         frame_spans.polygons = vec![None; spread.polygons.len()];
-        let tf_layer_refs: Vec<Option<&str>> = spread
-            .text_frames
-            .iter()
-            .map(|f| f.item_layer.as_deref())
-            .collect();
-        for idx in layer_sorted_indices(&tf_layer_refs) {
-            let frame = &spread.text_frames[idx];
+        for (idx, frame) in spread.text_frames.iter().enumerate() {
             if !layer_visible(frame.item_layer.as_deref()) {
                 continue;
             }
@@ -691,13 +649,7 @@ pub fn build_document(
                 }
             }
         }
-        let rect_layer_refs: Vec<Option<&str>> = spread
-            .rectangles
-            .iter()
-            .map(|r| r.item_layer.as_deref())
-            .collect();
-        for idx in layer_sorted_indices(&rect_layer_refs) {
-            let rect = &spread.rectangles[idx];
+        for (idx, rect) in spread.rectangles.iter().enumerate() {
             if !layer_visible(rect.item_layer.as_deref()) {
                 continue;
             }
@@ -745,13 +697,7 @@ pub fn build_document(
                 }
             }
         }
-        let oval_layer_refs: Vec<Option<&str>> = spread
-            .ovals
-            .iter()
-            .map(|o| o.item_layer.as_deref())
-            .collect();
-        for idx in layer_sorted_indices(&oval_layer_refs) {
-            let oval = &spread.ovals[idx];
+        for (idx, oval) in spread.ovals.iter().enumerate() {
             if !layer_visible(oval.item_layer.as_deref()) {
                 continue;
             }
@@ -794,13 +740,7 @@ pub fn build_document(
                 }
             }
         }
-        let line_layer_refs: Vec<Option<&str>> = spread
-            .graphic_lines
-            .iter()
-            .map(|l| l.item_layer.as_deref())
-            .collect();
-        for idx in layer_sorted_indices(&line_layer_refs) {
-            let line = &spread.graphic_lines[idx];
+        for (idx, line) in spread.graphic_lines.iter().enumerate() {
             if !layer_visible(line.item_layer.as_deref()) {
                 continue;
             }
@@ -826,13 +766,7 @@ pub fn build_document(
                 }
             }
         }
-        let poly_layer_refs: Vec<Option<&str>> = spread
-            .polygons
-            .iter()
-            .map(|p| p.item_layer.as_deref())
-            .collect();
-        for idx in layer_sorted_indices(&poly_layer_refs) {
-            let poly = &spread.polygons[idx];
+        for (idx, poly) in spread.polygons.iter().enumerate() {
             if !layer_visible(poly.item_layer.as_deref()) {
                 continue;
             }
