@@ -3588,6 +3588,7 @@ fn emit_anchored_textframe_story<'a>(
         anchors: Vec::new(),
         subpath_starts: Vec::new(),
         subpath_open: Vec::new(),
+        effects: None,
         gradient_fill_angle: None,
         gradient_fill_length: None,
         gradient_stroke_angle: None,
@@ -3817,9 +3818,24 @@ fn emit_polygon_into(
     } else {
         None
     };
+    // Q-04: Polygon frame effects (GradientFeather, OuterGlow, etc.)
+    // ride the interned polygon path. The path is already in inner-
+    // coord space and `outer` carries the frame's ItemTransform plus
+    // the page-origin shift, so `effects_unit_normalize = None` (the
+    // effects module reads coordinates from the path directly).
+    if let (Some(pid), Some(effects)) = (path_id, poly.effects.as_ref()) {
+        crate::module::emit_effects_pre_fill(
+            page, effects, pid, outer, palette, cmyk_xform,
+        );
+    }
     crate::module::fill_paint_module(
         &resolved, page, palette, cmyk_xform, fallback, outer, path_id,
     );
+    if let (Some(pid), Some(effects)) = (path_id, poly.effects.as_ref()) {
+        crate::module::emit_effects_post_fill(
+            page, effects, pid, outer, palette, cmyk_xform, None,
+        );
+    }
     crate::module::stroke_paint_module(
         &resolved,
         page,
@@ -6898,9 +6914,54 @@ fn emit_text_frame_into(
         outer,
         frame.stroke_drop_shadow.as_ref(),
     );
+    // Q-04: extended GradientFeather (and the rest of FrameEffects) to
+    // TextFrame. The host geometry is a rectangular text panel, so we
+    // route through the unit-rect path the same way `emit_rectangle_into`
+    // does for non-rounded rectangles: intern the unit rect, scale via
+    // `Transform::for_rect_in`, flag `effects_unit_normalize` so the
+    // effects module knows to convert path-local coordinates from unit
+    // space into the frame's actual bounds.
+    let (effects_path, effects_xform, effects_unit_normalize) =
+        if frame.effects.is_some() {
+            if let Geometry::TextFrameRect { rect: r } = &resolved.geometry {
+                let (id, _) = page
+                    .list
+                    .paths
+                    .intern(idml_compose::UNIT_RECT_KEY, idml_compose::PathData {
+                        segments: vec![
+                            idml_compose::PathSegment::MoveTo { x: 0.0, y: 0.0 },
+                            idml_compose::PathSegment::LineTo { x: 1.0, y: 0.0 },
+                            idml_compose::PathSegment::LineTo { x: 1.0, y: 1.0 },
+                            idml_compose::PathSegment::LineTo { x: 0.0, y: 1.0 },
+                            idml_compose::PathSegment::Close,
+                        ],
+                    });
+                (Some(id), Transform::for_rect_in(*r, outer), Some(*r))
+            } else {
+                (None, outer, None)
+            }
+        } else {
+            (None, outer, None)
+        };
+    if let (Some(path_id), Some(effects)) = (effects_path, frame.effects.as_ref()) {
+        crate::module::emit_effects_pre_fill(
+            page, effects, path_id, effects_xform, palette, cmyk_xform,
+        );
+    }
     crate::module::fill_paint_module(
         &resolved, page, palette, cmyk_xform, fallback, outer, None,
     );
+    if let (Some(path_id), Some(effects)) = (effects_path, frame.effects.as_ref()) {
+        crate::module::emit_effects_post_fill(
+            page,
+            effects,
+            path_id,
+            effects_xform,
+            palette,
+            cmyk_xform,
+            effects_unit_normalize,
+        );
+    }
     crate::module::stroke_paint_module(
         &resolved,
         page,

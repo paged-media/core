@@ -37,6 +37,7 @@ pub fn empty_text_frame(self_id: &str, bounds: Bounds) -> TextFrame {
         anchors: Vec::new(),
         subpath_starts: Vec::new(),
         subpath_open: Vec::new(),
+        effects: None,
         gradient_fill_angle: None,
         gradient_fill_length: None,
         gradient_stroke_angle: None,

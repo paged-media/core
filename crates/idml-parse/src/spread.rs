@@ -285,6 +285,8 @@ pub struct TextFrame {
     /// IDML's `<GeometryPathType PathOpen="true">` lifts to a `true`
     /// here so the renderer doesn't auto-close lassoed paths (P-15).
     pub subpath_open: Vec<bool>,
+    /// See [`Rectangle::effects`] (Q-04).
+    pub effects: Option<FrameEffects>,
     /// See [`Rectangle::gradient_fill_angle`].
     pub gradient_fill_angle: Option<f32>,
     /// See [`Rectangle::gradient_fill_length`].
@@ -827,6 +829,8 @@ pub struct Oval {
     /// `<TextWrapPreference>` parsed off the oval.
     pub text_wrap: Option<TextWrap>,
     pub item_layer: Option<String>,
+    /// See [`Rectangle::effects`] (Q-04).
+    pub effects: Option<FrameEffects>,
     /// See [`Rectangle::gradient_fill_angle`].
     pub gradient_fill_angle: Option<f32>,
     /// See [`Rectangle::gradient_fill_length`].
@@ -891,6 +895,10 @@ pub struct GraphicLine {
     /// `<TextPath>` children attached to this line. See
     /// [`Polygon::text_paths`].
     pub text_paths: Vec<TextPath>,
+    /// See [`Rectangle::effects`] (Q-04). Lines carry no fill so
+    /// fill-only effects (GradientFeather, InnerShadow, etc.) just
+    /// log; stroke-side effects map naturally.
+    pub effects: Option<FrameEffects>,
     /// `OverprintStroke="true"`. See [`TextFrame::overprint_stroke`].
     /// Lines carry no fill, so only the stroke flag is meaningful.
     pub overprint_stroke: bool,
@@ -1025,6 +1033,8 @@ pub struct Polygon {
     /// `None` ⇒ the polygon does not exclude text.
     pub text_wrap: Option<TextWrap>,
     pub item_layer: Option<String>,
+    /// See [`Rectangle::effects`] (Q-04).
+    pub effects: Option<FrameEffects>,
     /// See [`Rectangle::gradient_fill_angle`].
     pub gradient_fill_angle: Option<f32>,
     /// See [`Rectangle::gradient_fill_length`].
@@ -1346,7 +1356,7 @@ impl Spread {
         // `<Gradient>` swatches in graphic.rs — those live in a
         // different parser entirely, so the state here can stay
         // scoped to spread.rs.
-        let mut current_gradient_feather: Option<usize> = None;
+        let mut current_gradient_feather: Option<CurrentFrameKind> = None;
         // Q-03: state for capturing inline `<Image><Properties><Contents>`
         // base64 CDATA. `Some(frame_kind)` between `<Contents>` start and
         // end while a frame is the active nested context; we append
@@ -1502,6 +1512,7 @@ impl Spread {
                             anchors: Vec::new(),
                             subpath_starts: Vec::new(),
                             subpath_open: Vec::new(),
+                            effects: None,
                             gradient_fill_angle: common.gradient_fill_angle,
                             gradient_fill_length: common.gradient_fill_length,
                             gradient_stroke_angle: common.gradient_stroke_angle,
@@ -1633,6 +1644,7 @@ impl Spread {
                             has_image_element: false,
                             has_inline_pdf: false,
                             image_item_transform: None,
+                            effects: None,
                             overprint_fill: common.overprint_fill,
                             overprint_stroke: common.overprint_stroke,
                         });
@@ -1765,14 +1777,13 @@ impl Spread {
                     | b"DirectionalFeatherSetting"
                     | b"GradientFeatherSetting" => {
                         // Surface each effect's parameters onto the
-                        // current Rectangle's effects bag, gated on
-                        // the `Applied="true"` flag — `Applied="false"`
-                        // (or absent) means the user disabled the
-                        // effect even though IDML still serialises the
-                        // settings for round-trip preservation.
-                        if let Some(CurrentFrameKind::Rect(i)) =
-                            current_frame.as_ref().map(|cf| cf.kind)
-                        {
+                        // current shape's effects bag, gated on the
+                        // `Applied="true"` flag — `Applied="false"` (or
+                        // absent) means the user disabled the effect
+                        // even though IDML still serialises the settings
+                        // for round-trip preservation. Q-04: extended
+                        // from Rectangle-only to all five shape kinds.
+                        if let Some(kind) = current_frame.as_ref().map(|cf| cf.kind) {
                             let applied = attr(&e, b"Applied")
                                 .and_then(|s| s.parse::<bool>().ok())
                                 .unwrap_or(false);
@@ -1782,9 +1793,10 @@ impl Spread {
                                 // renderer doesn't accidentally emit it.
                                 continue;
                             }
-                            let bag = out.rectangles[i]
-                                .effects
-                                .get_or_insert_with(Default::default);
+                            let Some(bag_slot) = effects_slot_mut(&mut out, kind) else {
+                                continue;
+                            };
+                            let bag = bag_slot.get_or_insert_with(Default::default);
                             match e.name().as_ref() {
                                 b"InnerShadowSetting" => {
                                     bag.inner_shadow = Some(InnerShadowParams {
@@ -1920,13 +1932,16 @@ impl Spread {
                                             .or_else(|| parse_f(&e, b"Angle")),
                                         stops: Vec::new(),
                                     });
-                                    // Mark this rectangle's gradient
+                                    // Mark the current frame's gradient
                                     // feather as the open target so
                                     // nested `<GradientStop>` /
                                     // `<OpacityGradientStop>` children
                                     // can append to it. Cleared on the
-                                    // close tag below.
-                                    current_gradient_feather = Some(i);
+                                    // close tag below. Q-04: tracks
+                                    // CurrentFrameKind (not just rect
+                                    // index) so non-Rectangle shapes
+                                    // can host gradient feathers too.
+                                    current_gradient_feather = Some(kind);
                                 }
                                 _ => {}
                             }
@@ -1949,8 +1964,10 @@ impl Spread {
                         // a separate parser file, so the routing here
                         // only fires when a gradient-feather block is
                         // actually open in the spread parser.
-                        if let Some(rect_idx) = current_gradient_feather {
-                            if let Some(bag) = out.rectangles[rect_idx].effects.as_mut() {
+                        if let Some(kind) = current_gradient_feather {
+                            if let Some(bag) = effects_slot_mut(&mut out, kind)
+                                .and_then(|s| s.as_mut())
+                            {
                                 if let Some(gf) = bag.gradient_feather.as_mut() {
                                     let location_pct = parse_f(&e, b"Location").unwrap_or(0.0);
                                     // `Opacity` (OpacityGradientStop)
@@ -2372,6 +2389,7 @@ impl Spread {
                             subpath_starts: Vec::new(),
                             subpath_open: Vec::new(),
                             text_paths: Vec::new(),
+                            effects: None,
                             overprint_stroke: common.overprint_stroke,
                         });
                         let idx = out.graphic_lines.len() - 1;
@@ -2426,6 +2444,7 @@ impl Spread {
                             has_image_element: false,
                             has_inline_pdf: false,
                             image_item_transform: None,
+                            effects: None,
                             overprint_fill: common.overprint_fill,
                             overprint_stroke: common.overprint_stroke,
                         });
@@ -2750,6 +2769,20 @@ fn decode_image_contents_base64(raw: &[u8]) -> Option<Vec<u8>> {
         }
     }
     base64::engine::general_purpose::STANDARD.decode(&cleaned).ok()
+}
+
+/// Q-04: borrow the effects bag slot for any frame kind. Returns
+/// `None` only when the kind's index is out of bounds (defensive —
+/// the parser shouldn't reach this state). Centralises the per-shape
+/// dispatch so the effect-routing block doesn't fan into five copies.
+fn effects_slot_mut(out: &mut Spread, kind: CurrentFrameKind) -> Option<&mut Option<FrameEffects>> {
+    match kind {
+        CurrentFrameKind::Text(i) => out.text_frames.get_mut(i).map(|f| &mut f.effects),
+        CurrentFrameKind::Rect(i) => out.rectangles.get_mut(i).map(|f| &mut f.effects),
+        CurrentFrameKind::Oval(i) => out.ovals.get_mut(i).map(|f| &mut f.effects),
+        CurrentFrameKind::Line(i) => out.graphic_lines.get_mut(i).map(|f| &mut f.effects),
+        CurrentFrameKind::Polygon(i) => out.polygons.get_mut(i).map(|f| &mut f.effects),
+    }
 }
 
 /// Q-03: stash decoded image bytes on the frame the just-closed
