@@ -7417,28 +7417,33 @@ fn emit_rectangle_image(
     page_image_cache: &mut HashMap<String, idml_compose::ImageId>,
     decoded_cache: &mut HashMap<String, idml_compose::DecodedImage>,
 ) {
-    // Routing: `has_image_element` true with no resolvable image (or
-    // a resolvable URI that fails to decode) is what InDesign stamps
-    // its 50% grey + diagonal-X placeholder over. We try to resolve
-    // first; only fall back to the placeholder when nothing usable
-    // came back.
+    // Routing: a `<Image>`-bearing frame whose link is *missing*
+    // gets InDesign's 50% grey + diagonal-X placeholder. A link that
+    // resolves but whose payload our decoder can't handle (Q-14) is
+    // a different case — InDesign still rasterises it, so we fall
+    // through to the frame's intrinsic FillColor instead of stamping
+    // a "missing image" badge over what should be real content.
     let resolved = match rect.image_link.as_deref() {
         Some(uri) => resolve_image_id(uri, options, &mut page.list, page_image_cache, decoded_cache),
-        None => None,
+        None => ImageResolution::LinkMissing,
     };
     let outer = frame_outer_transform(page, rect.item_transform);
-    let Some((id, img_w, img_h)) = resolved else {
-        // Q-06: inline `<PDF>` content we can't decode → fall through
-        // to the frame's intrinsic FillColor (already emitted by the
-        // earlier shape-fill pass) rather than stamping the grey-X
-        // missing-image placeholder over it.
-        if rect.has_image_element
-            && !rect.has_inline_pdf
-            && options.missing_image_placeholder
-        {
-            emit_rectangle_missing_image_placeholder(page, rect, outer);
+    let (id, img_w, img_h) = match resolved {
+        ImageResolution::Resolved(id, w, h) => (id, w, h),
+        ImageResolution::DecodeFailed => return,
+        ImageResolution::LinkMissing => {
+            // Q-06: inline `<PDF>` content we can't decode → fall
+            // through to the frame's intrinsic FillColor (already
+            // emitted by the earlier shape-fill pass) rather than
+            // stamping the grey-X missing-image placeholder over it.
+            if rect.has_image_element
+                && !rect.has_inline_pdf
+                && options.missing_image_placeholder
+            {
+                emit_rectangle_missing_image_placeholder(page, rect, outer);
+            }
+            return;
         }
-        return;
     };
 
     if let Some(image_t) = rect.image_item_transform {
@@ -7519,17 +7524,21 @@ fn emit_polygon_image(
 ) {
     let resolved = match poly.image_link.as_deref() {
         Some(uri) => resolve_image_id(uri, options, &mut page.list, page_image_cache, decoded_cache),
-        None => None,
+        None => ImageResolution::LinkMissing,
     };
     let outer = frame_outer_transform(page, poly.item_transform);
-    let Some((id, img_w, img_h)) = resolved else {
-        if poly.has_image_element
-            && !poly.has_inline_pdf
-            && options.missing_image_placeholder
-        {
-            emit_polygon_missing_image_placeholder(page, poly, outer);
+    let (id, img_w, img_h) = match resolved {
+        ImageResolution::Resolved(id, w, h) => (id, w, h),
+        ImageResolution::DecodeFailed => return,
+        ImageResolution::LinkMissing => {
+            if poly.has_image_element
+                && !poly.has_inline_pdf
+                && options.missing_image_placeholder
+            {
+                emit_polygon_missing_image_placeholder(page, poly, outer);
+            }
+            return;
         }
-        return;
     };
 
     // Build (or reuse) the polygon's clip path. Falls back to the
@@ -7647,17 +7656,21 @@ fn emit_oval_image(
 ) {
     let resolved = match oval.image_link.as_deref() {
         Some(uri) => resolve_image_id(uri, options, &mut page.list, page_image_cache, decoded_cache),
-        None => None,
+        None => ImageResolution::LinkMissing,
     };
     let outer = frame_outer_transform(page, oval.item_transform);
-    let Some((id, img_w, img_h)) = resolved else {
-        if oval.has_image_element
-            && !oval.has_inline_pdf
-            && options.missing_image_placeholder
-        {
-            emit_oval_missing_image_placeholder(page, oval, outer);
+    let (id, img_w, img_h) = match resolved {
+        ImageResolution::Resolved(id, w, h) => (id, w, h),
+        ImageResolution::DecodeFailed => return,
+        ImageResolution::LinkMissing => {
+            if oval.has_image_element
+                && !oval.has_inline_pdf
+                && options.missing_image_placeholder
+            {
+                emit_oval_missing_image_placeholder(page, oval, outer);
+            }
+            return;
         }
-        return;
     };
 
     // Clip to the oval's parametric ellipse (unit-rect-scaled to the
@@ -7902,27 +7915,44 @@ fn emit_image_under_clip(
 /// Returns `None` for any failure along the resolver / decode chain
 /// (no resolver, resolver miss, undecodable bytes, zero-pixel image)
 /// so callers can fall back to a missing-image placeholder.
+/// Outcome of `resolve_image_id`. `LinkMissing` means the IDML
+/// referenced a link the asset resolver couldn't find (typical Envato
+/// template placeholder — InDesign stamps a grey-X placeholder over
+/// these). `DecodeFailed` means the resolver returned bytes our
+/// decoder can't handle (oversized JPEG, unsupported PSD layers,
+/// streaming-only formats); in that case InDesign would still
+/// rasterise the actual content, so falling back to the
+/// missing-image placeholder is worse than emitting the frame's
+/// intrinsic FillColor (Q-14).
+enum ImageResolution {
+    Resolved(idml_compose::ImageId, f32, f32),
+    DecodeFailed,
+    LinkMissing,
+}
+
 fn resolve_image_id(
     uri: &str,
     options: &PipelineOptions,
     list: &mut idml_compose::DisplayList,
     page_image_cache: &mut HashMap<String, idml_compose::ImageId>,
     decoded_cache: &mut HashMap<String, idml_compose::DecodedImage>,
-) -> Option<(idml_compose::ImageId, f32, f32)> {
+) -> ImageResolution {
     let id = match page_image_cache.get(uri).copied() {
         Some(id) => id,
         None => {
             let decoded = if let Some(d) = decoded_cache.get(uri) {
                 d.clone()
             } else {
-                let resolver = options.assets?;
+                let Some(resolver) = options.assets else {
+                    return ImageResolution::LinkMissing;
+                };
                 let Some(bytes) = resolver.resolve_image(uri) else {
                     tracing::warn!(uri, "image resolver returned no bytes; skipping");
-                    return None;
+                    return ImageResolution::LinkMissing;
                 };
                 let Some(d) = decode_image_bytes(bytes.as_ref()) else {
                     tracing::warn!(uri, "image decode failed; skipping");
-                    return None;
+                    return ImageResolution::DecodeFailed;
                 };
                 decoded_cache.insert(uri.to_string(), d.clone());
                 d
@@ -7934,12 +7964,12 @@ fn resolve_image_id(
     };
     let (img_w, img_h) = match list.image(id) {
         Some(d) => (d.width as f32, d.height as f32),
-        None => return None,
+        None => return ImageResolution::DecodeFailed,
     };
     if img_w <= 0.0 || img_h <= 0.0 {
-        return None;
+        return ImageResolution::DecodeFailed;
     }
-    Some((id, img_w, img_h))
+    ImageResolution::Resolved(id, img_w, img_h)
 }
 
 /// 50% grey fill + two 1.5pt diagonal stroke lines stamped over a
