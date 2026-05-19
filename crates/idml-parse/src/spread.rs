@@ -512,6 +512,13 @@ pub struct Rectangle {
     /// bounds" behaviour for synthetic IDMLs that omit the inner
     /// transform.
     pub image_item_transform: Option<[f32; 6]>,
+    /// Q-03: raw bytes from `<Image><Properties><Contents><![CDATA[...]]>`
+    /// after base64 decode. Set when the IDML inlines the JPEG (or
+    /// other) payload instead of (or in addition to) a `LinkResourceURI`.
+    /// Real-world Envato newspaper / magazine packs do this for the
+    /// majority of placed images. `None` for swatch-only Rectangles or
+    /// link-only Image elements.
+    pub image_bytes: Option<Vec<u8>>,
     /// `AppliedObjectStyle` reference; see `TextFrame`.
     pub applied_object_style: Option<String>,
     /// `<TextWrapPreference>` parsed off the rectangle.
@@ -845,6 +852,8 @@ pub struct Oval {
     /// `ItemTransform` from the nested `<Image>`. Mirrors
     /// [`Rectangle::image_item_transform`] (P-16).
     pub image_item_transform: Option<[f32; 6]>,
+    /// Q-03: see [`Rectangle::image_bytes`].
+    pub image_bytes: Option<Vec<u8>>,
     /// `OverprintFill="true"`. See [`TextFrame::overprint_fill`].
     pub overprint_fill: bool,
     /// `OverprintStroke="true"`. See [`TextFrame::overprint_stroke`].
@@ -1046,6 +1055,8 @@ pub struct Polygon {
     /// `ItemTransform` attribute on the nested `<Image>` element.
     /// See [`Rectangle::image_item_transform`].
     pub image_item_transform: Option<[f32; 6]>,
+    /// Q-03: see [`Rectangle::image_bytes`].
+    pub image_bytes: Option<Vec<u8>>,
     /// `OverprintFill="true"`. See [`TextFrame::overprint_fill`].
     pub overprint_fill: bool,
     /// `OverprintStroke="true"`. See [`TextFrame::overprint_stroke`].
@@ -1336,6 +1347,15 @@ impl Spread {
         // different parser entirely, so the state here can stay
         // scoped to spread.rs.
         let mut current_gradient_feather: Option<usize> = None;
+        // Q-03: state for capturing inline `<Image><Properties><Contents>`
+        // base64 CDATA. `Some(frame_kind)` between `<Contents>` start and
+        // end while a frame is the active nested context; we append
+        // text / cdata events into `current_contents_buf` then
+        // base64-decode and stash on the parent shape at end-tag time.
+        // `<Contents>` only appears under image-bearing elements in
+        // spread.xml so we don't need to filter by parent tag.
+        let mut current_image_contents_target: Option<CurrentFrameKind> = None;
+        let mut current_contents_buf: Vec<u8> = Vec::new();
         let mut buf = Vec::new();
 
         // Register a freshly-opened frame with the innermost
@@ -1531,6 +1551,7 @@ impl Spread {
                             drop_shadow: None,
                             stroke_drop_shadow: None,
                             image_link: None,
+                            image_bytes: None,
                             has_image_element: false,
                             has_inline_pdf: false,
                             image_item_transform: None,
@@ -1608,6 +1629,7 @@ impl Spread {
                             opacity: None,
                             blend_mode: None,
                             image_link: None,
+                            image_bytes: None,
                             has_image_element: false,
                             has_inline_pdf: false,
                             image_item_transform: None,
@@ -2266,6 +2288,17 @@ impl Spread {
                             _ => {}
                         }
                     }
+                    b"Contents" => {
+                        // Q-03: enter the inline-image base64 capture
+                        // path when we're nested inside a frame.
+                        // `<Contents>` only appears under image-bearing
+                        // tags in spread.xml so this branch is safe
+                        // without a parent-tag filter.
+                        if let Some(kind) = current_frame.as_ref().map(|cf| cf.kind) {
+                            current_image_contents_target = Some(kind);
+                            current_contents_buf.clear();
+                        }
+                    }
                     b"FrameFittingOption" => {
                         // Attaches to the current Rectangle. Crops are
                         // signed pt offsets — negative values grow the
@@ -2389,6 +2422,7 @@ impl Spread {
                             blend_mode: None,
                             text_paths: Vec::new(),
                             image_link: None,
+                            image_bytes: None,
                             has_image_element: false,
                             has_inline_pdf: false,
                             image_item_transform: None,
@@ -2603,8 +2637,30 @@ impl Spread {
                         // doesn't accidentally route to this rect.
                         current_gradient_feather = None;
                     }
+                    b"Contents" => {
+                        // Q-03: close the inline-image base64 capture.
+                        // Decode and stash on the parent shape; clear
+                        // state so a later sibling can't accidentally
+                        // route into the same buffer.
+                        if let Some(kind) = current_image_contents_target.take() {
+                            let decoded = decode_image_contents_base64(&current_contents_buf);
+                            current_contents_buf.clear();
+                            if let Some(bytes) = decoded {
+                                set_image_bytes(&mut out, kind, bytes);
+                            }
+                        }
+                    }
                     _ => {}
                 },
+                Event::Text(t) if current_image_contents_target.is_some() => {
+                    // base64 CDATA can also arrive as Text events
+                    // (whitespace-padded between tags). Trim during
+                    // decode rather than at capture time.
+                    current_contents_buf.extend_from_slice(t.as_ref());
+                }
+                Event::CData(t) if current_image_contents_target.is_some() => {
+                    current_contents_buf.extend_from_slice(t.as_ref());
+                }
                 Event::Eof => break,
                 _ => {}
             }
@@ -2673,6 +2729,47 @@ fn parse_insets(s: &str) -> Option<[f32; 4]> {
         .filter_map(|p| p.parse().ok())
         .collect();
     (parts.len() == 4).then(|| [parts[0], parts[1], parts[2], parts[3]])
+}
+
+/// Q-03: decode the base64 CDATA payload of `<Image><Properties>
+/// <Contents>` into the original image bytes. The CDATA is standard
+/// RFC 4648 base64 with arbitrary whitespace (newlines, spaces) so
+/// strip those before decoding. Returns `None` on malformed input
+/// rather than panicking — the caller falls back to "no inline
+/// bytes" and the renderer's missing-image path takes over.
+fn decode_image_contents_base64(raw: &[u8]) -> Option<Vec<u8>> {
+    use base64::Engine;
+    // Strip whitespace in place into a scratch buffer. The XML
+    // serializer pretty-prints the base64 payload across many lines
+    // (typically 76-char wraps); base64's STANDARD engine rejects
+    // any whitespace, so we have to clean first.
+    let mut cleaned: Vec<u8> = Vec::with_capacity(raw.len());
+    for &b in raw {
+        if !matches!(b, b' ' | b'\n' | b'\r' | b'\t') {
+            cleaned.push(b);
+        }
+    }
+    base64::engine::general_purpose::STANDARD.decode(&cleaned).ok()
+}
+
+/// Q-03: stash decoded image bytes on the frame the just-closed
+/// `<Contents>` element was nested under. Centralised here so the
+/// per-shape match doesn't clutter the parser's main loop.
+fn set_image_bytes(out: &mut Spread, kind: CurrentFrameKind, bytes: Vec<u8>) {
+    match kind {
+        CurrentFrameKind::Rect(i) if i < out.rectangles.len() => {
+            out.rectangles[i].image_bytes = Some(bytes);
+        }
+        CurrentFrameKind::Oval(i) if i < out.ovals.len() => {
+            out.ovals[i].image_bytes = Some(bytes);
+        }
+        CurrentFrameKind::Polygon(i) if i < out.polygons.len() => {
+            out.polygons[i].image_bytes = Some(bytes);
+        }
+        // TextFrame / GraphicLine don't carry image_bytes — IDML
+        // doesn't put `<Image>` children under them.
+        _ => {}
+    }
 }
 
 fn parse_matrix(s: &str) -> Option<[f32; 6]> {
@@ -2828,6 +2925,59 @@ mod tests {
         );
         assert_eq!(f.minimum_first_baseline_offset, Some(14.0));
         assert_eq!(f.inset_spacing, Some([6.0, 8.0, 10.0, 12.0]));
+    }
+
+    #[test]
+    fn q03_parses_inline_image_contents_base64() {
+        // "Hello, IDML!" base64-encoded → the bytes round-trip.
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Rectangle Self="r1" GeometricBounds="0 0 50 50">
+              <Image>
+                <Properties>
+                  <Contents><![CDATA[SGVsbG8sIElETUwh]]></Contents>
+                </Properties>
+              </Image>
+            </Rectangle>
+            <Rectangle Self="r2" GeometricBounds="0 0 50 50">
+              <Image LinkResourceURI="file:///link.jpg"/>
+            </Rectangle>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.rectangles.len(), 2);
+        let r1 = &s.rectangles[0];
+        assert_eq!(
+            r1.image_bytes.as_deref(),
+            Some(b"Hello, IDML!" as &[u8]),
+            "inline CDATA should base64-decode and stash on the rect",
+        );
+        assert!(r1.has_image_element, "rect should still flag has_image_element");
+        let r2 = &s.rectangles[1];
+        assert!(r2.image_bytes.is_none(), "link-only rect carries no inline bytes");
+        assert_eq!(r2.image_link.as_deref(), Some("file:///link.jpg"));
+    }
+
+    #[test]
+    fn q03_decodes_whitespace_padded_base64() {
+        // InDesign's serializer wraps base64 at ~76 chars with
+        // surrounding whitespace; verify the decoder strips it.
+        let xml = br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Rectangle Self="r" GeometricBounds="0 0 1 1">
+              <Image><Properties><Contents><![CDATA[
+                SGVsbG8s
+                IElETUwh
+              ]]></Contents></Properties></Image>
+            </Rectangle>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(
+            s.rectangles[0].image_bytes.as_deref(),
+            Some(b"Hello, IDML!" as &[u8]),
+        );
     }
 
     #[test]

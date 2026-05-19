@@ -359,6 +359,7 @@ mod tests {
             has_image_element: false,
             has_inline_pdf: false,
             image_item_transform: None,
+            image_bytes: None,
             applied_object_style: None,
             text_wrap: None,
             frame_fitting: None,

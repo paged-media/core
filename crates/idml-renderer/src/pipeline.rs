@@ -3364,6 +3364,7 @@ fn emit_anchored_rect_via_pipeline(
         // pass can pick them up. Today's anchored.idml ships no
         // image-bearing anchored Rectangles.
         image_link: None,
+        image_bytes: None,
         has_image_element: false,
         has_inline_pdf: false,
         image_item_transform: None,
@@ -3450,6 +3451,7 @@ fn emit_anchored_rect_image(
         has_image_element: af.image_link.is_some(),
         has_inline_pdf: false,
         image_item_transform: af.image_item_transform,
+        image_bytes: None,
         applied_object_style: af.applied_object_style.clone(),
         text_wrap: None,
         frame_fitting: None,
@@ -7423,9 +7425,18 @@ fn emit_rectangle_image(
     // a different case — InDesign still rasterises it, so we fall
     // through to the frame's intrinsic FillColor instead of stamping
     // a "missing image" badge over what should be real content.
-    let resolved = match rect.image_link.as_deref() {
-        Some(uri) => resolve_image_id(uri, options, &mut page.list, page_image_cache, decoded_cache),
-        None => ImageResolution::LinkMissing,
+    //
+    // Q-03: inline base64 `<Image><Contents>` bytes take precedence
+    // over `LinkResourceURI` — when the IDML embeds the JPEG directly
+    // we decode straight from those bytes regardless of whether an
+    // asset resolver is wired up.
+    let resolved = if let Some(bytes) = rect.image_bytes.as_deref() {
+        resolve_inline_image_bytes(bytes, &mut page.list, page_image_cache, decoded_cache)
+    } else {
+        match rect.image_link.as_deref() {
+            Some(uri) => resolve_image_id(uri, options, &mut page.list, page_image_cache, decoded_cache),
+            None => ImageResolution::LinkMissing,
+        }
     };
     let outer = frame_outer_transform(page, rect.item_transform);
     let (id, img_w, img_h) = match resolved {
@@ -7522,9 +7533,13 @@ fn emit_polygon_image(
     page_image_cache: &mut HashMap<String, idml_compose::ImageId>,
     decoded_cache: &mut HashMap<String, idml_compose::DecodedImage>,
 ) {
-    let resolved = match poly.image_link.as_deref() {
-        Some(uri) => resolve_image_id(uri, options, &mut page.list, page_image_cache, decoded_cache),
-        None => ImageResolution::LinkMissing,
+    let resolved = if let Some(bytes) = poly.image_bytes.as_deref() {
+        resolve_inline_image_bytes(bytes, &mut page.list, page_image_cache, decoded_cache)
+    } else {
+        match poly.image_link.as_deref() {
+            Some(uri) => resolve_image_id(uri, options, &mut page.list, page_image_cache, decoded_cache),
+            None => ImageResolution::LinkMissing,
+        }
     };
     let outer = frame_outer_transform(page, poly.item_transform);
     let (id, img_w, img_h) = match resolved {
@@ -7654,9 +7669,13 @@ fn emit_oval_image(
     page_image_cache: &mut HashMap<String, idml_compose::ImageId>,
     decoded_cache: &mut HashMap<String, idml_compose::DecodedImage>,
 ) {
-    let resolved = match oval.image_link.as_deref() {
-        Some(uri) => resolve_image_id(uri, options, &mut page.list, page_image_cache, decoded_cache),
-        None => ImageResolution::LinkMissing,
+    let resolved = if let Some(bytes) = oval.image_bytes.as_deref() {
+        resolve_inline_image_bytes(bytes, &mut page.list, page_image_cache, decoded_cache)
+    } else {
+        match oval.image_link.as_deref() {
+            Some(uri) => resolve_image_id(uri, options, &mut page.list, page_image_cache, decoded_cache),
+            None => ImageResolution::LinkMissing,
+        }
     };
     let outer = frame_outer_transform(page, oval.item_transform);
     let (id, img_w, img_h) = match resolved {
@@ -7959,6 +7978,50 @@ fn resolve_image_id(
             };
             let id = list.push_image(decoded);
             page_image_cache.insert(uri.to_string(), id);
+            id
+        }
+    };
+    let (img_w, img_h) = match list.image(id) {
+        Some(d) => (d.width as f32, d.height as f32),
+        None => return ImageResolution::DecodeFailed,
+    };
+    if img_w <= 0.0 || img_h <= 0.0 {
+        return ImageResolution::DecodeFailed;
+    }
+    ImageResolution::Resolved(id, img_w, img_h)
+}
+
+/// Q-03: route inline base64 image bytes (the `<Contents>` payload
+/// captured by the parser) through the same per-page + decoded
+/// caches `resolve_image_id` uses. Cache key is the bytes' allocation
+/// address — stable across reuses inside a single render pass, and
+/// distinct per frame so two Rectangles with the same inline image
+/// share the decoded result.
+fn resolve_inline_image_bytes(
+    bytes: &[u8],
+    list: &mut idml_compose::DisplayList,
+    page_image_cache: &mut HashMap<String, idml_compose::ImageId>,
+    decoded_cache: &mut HashMap<String, idml_compose::DecodedImage>,
+) -> ImageResolution {
+    let key = format!("inline:{:p}:{}", bytes.as_ptr(), bytes.len());
+    let id = match page_image_cache.get(&key).copied() {
+        Some(id) => id,
+        None => {
+            let decoded = if let Some(d) = decoded_cache.get(&key) {
+                d.clone()
+            } else {
+                let Some(d) = decode_image_bytes(bytes) else {
+                    tracing::warn!(
+                        len = bytes.len(),
+                        "inline image decode failed; skipping"
+                    );
+                    return ImageResolution::DecodeFailed;
+                };
+                decoded_cache.insert(key.clone(), d.clone());
+                d
+            };
+            let id = list.push_image(decoded);
+            page_image_cache.insert(key, id);
             id
         }
     };
