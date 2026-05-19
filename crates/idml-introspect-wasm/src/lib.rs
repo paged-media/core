@@ -6,29 +6,31 @@
 //! import init, { Inspector } from 'idml-introspect-wasm';
 //! await init();
 //! const insp = new Inspector(idmlBytes);
-//! const tree = JSON.parse(insp.tree());        // hierarchical tree
+//! const tree = JSON.parse(insp.tree());            // hierarchical tree
 //! const props = JSON.parse(insp.properties(nodeJson));
-//! insp.apply(mutationJson);                    // returns MutationResult JSON
-//! const png = insp.renderPage(0, 144);         // Uint8Array
+//! const applied = JSON.parse(insp.apply(opJson));  // AppliedOperationJson
+//! const undone = JSON.parse(insp.undo());          // null when stack empty
+//! const redone = JSON.parse(insp.redo());          // null when stack empty
+//! const png = insp.renderPage(0, 144);             // Uint8Array
 //! ```
 //!
-//! The wire format is JSON-over-strings. Per RETROSPECTIVE.md this
-//! isn't the best long-term answer, but it keeps the bridge surface
-//! tiny in M0; promoting to typed objects via `serde-wasm-bindgen` is
-//! a follow-up once the API surface stabilises.
+//! The wire format is JSON-over-strings — same shape as the Rust-side
+//! `Operation` / `AppliedOperation` (`Serialize`/`Deserialize` on
+//! both ends). Per RETROSPECTIVE.md this isn't the best long-term
+//! answer, but it keeps the bridge surface tiny; promoting to typed
+//! objects via `serde-wasm-bindgen` is a follow-up.
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use idml_introspect::{build_tree, describe, descriptor::PropertyKeyJson};
+    use idml_introspect::tree::NodeIdJson;
+    use idml_introspect::{build_tree, describe};
     #[cfg(feature = "render")]
     use idml_introspect::render_page_png;
-    use idml_introspect::tree::NodeIdJson;
-    use idml_mutate::{Mutation, NodeId, Project, PropertyKey, PropertyValue};
+    use idml_mutate::{AppliedOperation, NodeId, Operation, Project};
     use idml_scene::Document;
-    use serde::{Deserialize, Serialize};
     use wasm_bindgen::prelude::*;
 
     #[wasm_bindgen(start)]
@@ -40,32 +42,6 @@ mod wasm {
     #[wasm_bindgen]
     pub struct Inspector {
         project: Rc<RefCell<Project>>,
-    }
-
-    /// JSON wire form of a mutation. The React app builds this and
-    /// hands it across; the Rust side parses and dispatches.
-    #[derive(Debug, Deserialize)]
-    struct MutationJson {
-        node: NodeIdJson,
-        property: PropertyKeyJson,
-        value: MutationValueJson,
-    }
-
-    #[derive(Debug, Deserialize)]
-    #[serde(tag = "type", content = "value", rename_all = "camelCase")]
-    enum MutationValueJson {
-        Bounds([f32; 4]),
-        ColorRef(Option<String>),
-    }
-
-    /// JSON form of a `MutationResult` returned to JS.
-    #[derive(Debug, Serialize)]
-    struct MutationResultJson {
-        node: NodeIdJson,
-        property: PropertyKeyJson,
-        previous: idml_introspect::descriptor::AuthoredValue,
-        new: idml_introspect::descriptor::AuthoredValue,
-        invalidation: String,
     }
 
     #[wasm_bindgen]
@@ -95,34 +71,47 @@ mod wasm {
             serde_json::to_string(&descs).map_err(|e| JsError::new(&format!("props json: {e}")))
         }
 
-        /// Apply a mutation. Returns a JSON `MutationResultJson`.
-        pub fn apply(&self, mutation_json: &str) -> Result<String, JsError> {
-            let m: MutationJson = serde_json::from_str(mutation_json)
-                .map_err(|e| JsError::new(&format!("parse mutation: {e}")))?;
-            let property = PropertyKey::from(m.property);
-            let value = match m.value {
-                MutationValueJson::Bounds(b) => PropertyValue::Bounds(b),
-                MutationValueJson::ColorRef(c) => PropertyValue::ColorRef(c),
-            };
-            let mutation = Mutation {
-                node: NodeId::from(&m.node),
-                property,
-                value,
-            };
-            let result = self
+        /// Apply an Operation. `op_json` is the wire form of
+        /// `idml_mutate::Operation`. Returns the wire form of
+        /// `AppliedOperation` on success.
+        pub fn apply(&self, op_json: &str) -> Result<String, JsError> {
+            let op: Operation = serde_json::from_str(op_json)
+                .map_err(|e| JsError::new(&format!("parse op: {e}")))?;
+            let applied = self
                 .project
                 .borrow_mut()
-                .apply(mutation)
+                .apply(op)
                 .map_err(|e| JsError::new(&format!("apply: {e}")))?;
-            let invalidation = format!("{:?}", result.invalidation);
-            let wire = MutationResultJson {
-                node: result.node.into(),
-                property: result.property.into(),
-                previous: result.previous_value.into(),
-                new: result.new_value.into(),
-                invalidation,
-            };
-            serde_json::to_string(&wire).map_err(|e| JsError::new(&format!("result json: {e}")))
+            applied_to_json(&applied)
+        }
+
+        /// Undo the most recent op. Returns the resulting
+        /// `AppliedOperation` (whose `op` is the inverse that just
+        /// ran) as JSON, or the literal `"null"` when the undo stack
+        /// is empty.
+        pub fn undo(&self) -> Result<String, JsError> {
+            match self
+                .project
+                .borrow_mut()
+                .undo()
+                .map_err(|e| JsError::new(&format!("undo: {e}")))?
+            {
+                Some(applied) => applied_to_json(&applied),
+                None => Ok("null".to_string()),
+            }
+        }
+
+        /// Redo the most recently undone op. Symmetric to `undo`.
+        pub fn redo(&self) -> Result<String, JsError> {
+            match self
+                .project
+                .borrow_mut()
+                .redo()
+                .map_err(|e| JsError::new(&format!("redo: {e}")))?
+            {
+                Some(applied) => applied_to_json(&applied),
+                None => Ok("null".to_string()),
+            }
         }
 
         /// Render a page as PNG bytes. Requires the `render` feature.
@@ -134,9 +123,6 @@ mod wasm {
         }
 
         /// Stub for `renderPage` when the `render` feature is off.
-        /// Returns an empty Vec + logs to the console so the React
-        /// app sees a recognisable "no render" state rather than a
-        /// JS-side TypeError on a missing method.
         #[cfg(not(feature = "render"))]
         #[wasm_bindgen(js_name = renderPage)]
         pub fn render_page(&self, _page_index: usize, _dpi: f32) -> Result<Vec<u8>, JsError> {
@@ -145,6 +131,10 @@ mod wasm {
                  — rebuild with `--features render` once idml-renderer compiles",
             ))
         }
+    }
+
+    fn applied_to_json(applied: &AppliedOperation) -> Result<String, JsError> {
+        serde_json::to_string(applied).map_err(|e| JsError::new(&format!("applied json: {e}")))
     }
 }
 

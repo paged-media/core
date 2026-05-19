@@ -4,13 +4,13 @@
 //! and labels both the value kind (drives widget rendering) and the
 //! authoring source (drives "inherited from" UI affordances).
 
-use idml_mutate::{NodeId, PropertyKey, PropertyValue};
+use idml_mutate::{NodeId, PropertyPath, Value};
 use idml_scene::Document;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PropertyDescriptor {
-    pub key: PropertyKeyJson,
+    pub path: PropertyPathJson,
     pub label: String,
     pub kind: PropertyKind,
     pub authored: AuthoredValue,
@@ -19,30 +19,30 @@ pub struct PropertyDescriptor {
     pub settable: bool,
 }
 
-/// JSON mirror of `idml_mutate::PropertyKey`. Same rationale as
+/// JSON mirror of `idml_mutate::PropertyPath`. Same rationale as
 /// `NodeIdJson` — the wire format stays stable as new property
-/// keys land.
+/// paths land.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum PropertyKeyJson {
+pub enum PropertyPathJson {
     FrameBounds,
     FrameFillColor,
 }
 
-impl From<PropertyKey> for PropertyKeyJson {
-    fn from(value: PropertyKey) -> Self {
+impl From<PropertyPath> for PropertyPathJson {
+    fn from(value: PropertyPath) -> Self {
         match value {
-            PropertyKey::FrameBounds => PropertyKeyJson::FrameBounds,
-            PropertyKey::FrameFillColor => PropertyKeyJson::FrameFillColor,
+            PropertyPath::FrameBounds => PropertyPathJson::FrameBounds,
+            PropertyPath::FrameFillColor => PropertyPathJson::FrameFillColor,
         }
     }
 }
 
-impl From<PropertyKeyJson> for PropertyKey {
-    fn from(value: PropertyKeyJson) -> Self {
+impl From<PropertyPathJson> for PropertyPath {
+    fn from(value: PropertyPathJson) -> Self {
         match value {
-            PropertyKeyJson::FrameBounds => PropertyKey::FrameBounds,
-            PropertyKeyJson::FrameFillColor => PropertyKey::FrameFillColor,
+            PropertyPathJson::FrameBounds => PropertyPath::FrameBounds,
+            PropertyPathJson::FrameFillColor => PropertyPath::FrameFillColor,
         }
     }
 }
@@ -61,8 +61,8 @@ pub enum PropertyKind {
 }
 
 /// JSON form of a property's authored value. Mirrors
-/// `idml_mutate::PropertyValue`; serialises so JS can read without
-/// learning the Rust enum shape.
+/// `idml_mutate::Value`; serialises so JS can read without learning
+/// the Rust enum shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "camelCase")]
 pub enum AuthoredValue {
@@ -85,11 +85,11 @@ pub enum PropertySource {
     Default,
 }
 
-impl From<PropertyValue> for AuthoredValue {
-    fn from(value: PropertyValue) -> Self {
+impl From<Value> for AuthoredValue {
+    fn from(value: Value) -> Self {
         match value {
-            PropertyValue::Bounds(b) => AuthoredValue::Bounds(b),
-            PropertyValue::ColorRef(c) => AuthoredValue::ColorRef(c),
+            Value::Bounds(b) => AuthoredValue::Bounds(b),
+            Value::ColorRef(c) => AuthoredValue::ColorRef(c),
         }
     }
 }
@@ -108,7 +108,7 @@ fn describe_text_frame(document: &Document, self_id: &str) -> Vec<PropertyDescri
     };
     vec![
         PropertyDescriptor {
-            key: PropertyKeyJson::FrameBounds,
+            path: PropertyPathJson::FrameBounds,
             label: "Bounds (pt)".to_string(),
             kind: PropertyKind::Bounds,
             authored: AuthoredValue::Bounds([
@@ -127,7 +127,7 @@ fn describe_text_frame(document: &Document, self_id: &str) -> Vec<PropertyDescri
             settable: true,
         },
         PropertyDescriptor {
-            key: PropertyKeyJson::FrameFillColor,
+            path: PropertyPathJson::FrameFillColor,
             label: "Fill color".to_string(),
             kind: PropertyKind::Color,
             authored: AuthoredValue::ColorRef(frame.fill_color.clone()),
@@ -151,7 +151,7 @@ fn describe_rectangle(document: &Document, self_id: &str) -> Vec<PropertyDescrip
     };
     vec![
         PropertyDescriptor {
-            key: PropertyKeyJson::FrameBounds,
+            path: PropertyPathJson::FrameBounds,
             label: "Bounds (pt)".to_string(),
             kind: PropertyKind::Bounds,
             authored: AuthoredValue::Bounds([
@@ -167,10 +167,10 @@ fn describe_rectangle(document: &Document, self_id: &str) -> Vec<PropertyDescrip
                 rect.bounds.right,
             ]),
             source: PropertySource::Local,
-            settable: false, // Rectangle mutation isn't wired up in idml-mutate yet.
+            settable: true,
         },
         PropertyDescriptor {
-            key: PropertyKeyJson::FrameFillColor,
+            path: PropertyPathJson::FrameFillColor,
             label: "Fill color".to_string(),
             kind: PropertyKind::Color,
             authored: AuthoredValue::ColorRef(rect.fill_color.clone()),
@@ -180,7 +180,7 @@ fn describe_rectangle(document: &Document, self_id: &str) -> Vec<PropertyDescrip
             } else {
                 PropertySource::Default
             },
-            settable: false,
+            settable: true,
         },
     ]
 }

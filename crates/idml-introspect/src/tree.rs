@@ -40,6 +40,10 @@ pub struct FrameEntry {
 /// JSON-friendly mirror of `idml_mutate::NodeId` — wasm-bindgen
 /// serialises this directly rather than reaching into idml-mutate's
 /// enum, so the wire format stays stable as new node kinds land.
+///
+/// `Spread` and `Page` are addressable as parents in `InsertNode`/
+/// `MoveNode` Ops, even though the inspector tree's left pane today
+/// only surfaces the page-item variants as selectable rows.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "id")]
 pub enum NodeIdJson {
@@ -49,6 +53,8 @@ pub enum NodeIdJson {
     Polygon(String),
     GraphicLine(String),
     Group(String),
+    Spread(String),
+    Page(String),
 }
 
 impl From<NodeId> for NodeIdJson {
@@ -60,6 +66,8 @@ impl From<NodeId> for NodeIdJson {
             NodeId::Polygon(s) => NodeIdJson::Polygon(s),
             NodeId::GraphicLine(s) => NodeIdJson::GraphicLine(s),
             NodeId::Group(s) => NodeIdJson::Group(s),
+            NodeId::Spread(s) => NodeIdJson::Spread(s),
+            NodeId::Page(s) => NodeIdJson::Page(s),
         }
     }
 }
@@ -73,6 +81,8 @@ impl From<&NodeIdJson> for NodeId {
             NodeIdJson::Polygon(s) => NodeId::Polygon(s.clone()),
             NodeIdJson::GraphicLine(s) => NodeId::GraphicLine(s.clone()),
             NodeIdJson::Group(s) => NodeId::Group(s.clone()),
+            NodeIdJson::Spread(s) => NodeId::Spread(s.clone()),
+            NodeIdJson::Page(s) => NodeId::Page(s.clone()),
         }
     }
 }
