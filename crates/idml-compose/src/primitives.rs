@@ -235,7 +235,7 @@ pub fn emit_line(
 /// circle. Standard value: 4·(√2 − 1) / 3.
 const ELLIPSE_KAPPA: f32 = 0.552_284_8;
 
-fn unit_ellipse() -> PathData {
+pub fn unit_ellipse() -> PathData {
     // A cubic Bézier approximation of a unit-square inscribed circle
     // (centre 0.5, radius 0.5). Four arcs, each cubic.
     let r = 0.5_f32;

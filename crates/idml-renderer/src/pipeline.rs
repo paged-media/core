@@ -7013,7 +7013,42 @@ fn emit_oval_into(
         outer,
         oval.stroke_drop_shadow.as_ref(),
     );
+    // Q-04: extend GradientFeather / OuterGlow / etc. to Oval. The
+    // host geometry is the unit-ellipse path scaled to `rect` via the
+    // outer affine, mirroring how `emit_ellipse_transformed` builds
+    // the fill itself. `effects_unit_normalize = Some(rect)` flags the
+    // effects module to treat path-local coords as unit-ellipse space.
+    let (effects_path, effects_xform, effects_unit_normalize) =
+        if oval.effects.is_some() {
+            if let Geometry::Oval { rect: r } = &frame.geometry {
+                let (id, _) = page
+                    .list
+                    .paths
+                    .intern(idml_compose::UNIT_ELLIPSE_KEY, idml_compose::unit_ellipse());
+                (Some(id), Transform::for_rect_in(*r, outer), Some(*r))
+            } else {
+                (None, outer, None)
+            }
+        } else {
+            (None, outer, None)
+        };
+    if let (Some(pid), Some(effects)) = (effects_path, oval.effects.as_ref()) {
+        crate::module::emit_effects_pre_fill(
+            page, effects, pid, effects_xform, palette, cmyk_xform,
+        );
+    }
     crate::module::fill_paint_module(&frame, page, palette, cmyk_xform, fallback, outer, None);
+    if let (Some(pid), Some(effects)) = (effects_path, oval.effects.as_ref()) {
+        crate::module::emit_effects_post_fill(
+            page,
+            effects,
+            pid,
+            effects_xform,
+            palette,
+            cmyk_xform,
+            effects_unit_normalize,
+        );
+    }
     crate::module::stroke_paint_module(
         &frame,
         page,
