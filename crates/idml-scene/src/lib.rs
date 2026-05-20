@@ -628,6 +628,12 @@ impl ResolvedParagraphAttrs {
             minimum_word_spacing: None,
             desired_word_spacing: None,
             maximum_word_spacing: None,
+            minimum_letter_spacing: None,
+            desired_letter_spacing: None,
+            maximum_letter_spacing: None,
+            minimum_glyph_scaling: None,
+            desired_glyph_scaling: None,
+            maximum_glyph_scaling: None,
             drop_cap_characters: None,
             drop_cap_lines: None,
             drop_cap_detail: None,
@@ -685,6 +691,19 @@ impl ResolvedParagraphAttrs {
         self.minimum_word_spacing = self.minimum_word_spacing.or(p.minimum_word_spacing);
         self.desired_word_spacing = self.desired_word_spacing.or(p.desired_word_spacing);
         self.maximum_word_spacing = self.maximum_word_spacing.or(p.maximum_word_spacing);
+        // Q-20: letter / glyph spacing per-field inheritance.
+        self.minimum_letter_spacing =
+            self.minimum_letter_spacing.or(p.minimum_letter_spacing);
+        self.desired_letter_spacing =
+            self.desired_letter_spacing.or(p.desired_letter_spacing);
+        self.maximum_letter_spacing =
+            self.maximum_letter_spacing.or(p.maximum_letter_spacing);
+        self.minimum_glyph_scaling =
+            self.minimum_glyph_scaling.or(p.minimum_glyph_scaling);
+        self.desired_glyph_scaling =
+            self.desired_glyph_scaling.or(p.desired_glyph_scaling);
+        self.maximum_glyph_scaling =
+            self.maximum_glyph_scaling.or(p.maximum_glyph_scaling);
         self.drop_cap_characters = self.drop_cap_characters.or(p.drop_cap_characters);
         self.drop_cap_lines = self.drop_cap_lines.or(p.drop_cap_lines);
         self.drop_cap_detail = self.drop_cap_detail.or(p.drop_cap_detail);
@@ -919,6 +938,16 @@ pub struct ResolvedParagraphAttrs {
     pub desired_word_spacing: Option<f32>,
     /// `MaximumWordSpacing` (% of normal). 100 = baseline.
     pub maximum_word_spacing: Option<f32>,
+    /// Q-20: cascaded `MinimumLetterSpacing` pt. Additive signed
+    /// adjustment to the inter-glyph advance budget. None ⇒ 0 pt.
+    pub minimum_letter_spacing: Option<f32>,
+    pub desired_letter_spacing: Option<f32>,
+    pub maximum_letter_spacing: Option<f32>,
+    /// Q-20: cascaded `MinimumGlyphScaling` percent. 100 ⇒ identity.
+    /// Allows the breaker to scale per-glyph x-advance for justification.
+    pub minimum_glyph_scaling: Option<f32>,
+    pub desired_glyph_scaling: Option<f32>,
+    pub maximum_glyph_scaling: Option<f32>,
     /// `DropCapCharacters` from the cascaded paragraph style.
     /// Count of leading characters that drop down across
     /// `drop_cap_lines` lines. 0 / `None` ⇒ no drop cap.

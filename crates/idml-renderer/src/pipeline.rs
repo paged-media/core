@@ -9937,6 +9937,47 @@ fn apply_paragraph_compose_options<'a>(
     // (Max == Desired) yield a zero-stretch budget which Knuth-Plass cannot
     // satisfy on wide columns, collapsing wrap to one word per line (Q-15).
     lopts.compose.stretch_ratio = lopts.compose.stretch_ratio.max(0.1);
+    // Q-20: fold letter-spacing budget into the per-word stretch /
+    // shrink budget so the breaker can lean on inter-glyph space when
+    // word-space alone can't justify a line. IDML's
+    // `Min/Desired/Max LetterSpacing` is in pt and applies *between
+    // glyphs*; we approximate by adding `letter_delta_pt * avg_chars_per_word`
+    // into the existing space stretch / shrink ratios. Default values
+    // (0 pt) are a no-op. Real per-glyph distribution after the
+    // breaker picks breaks is queued.
+    let ls_min = resolved.minimum_letter_spacing.unwrap_or(0.0);
+    let ls_desired = resolved.desired_letter_spacing.unwrap_or(0.0);
+    let ls_max = resolved.maximum_letter_spacing.unwrap_or(0.0);
+    if ls_min != 0.0 || ls_desired != 0.0 || ls_max != 0.0 {
+        // Approximate "average chars per word" at 5 — typical English
+        // word length is 4.7. Multiplied by a 12pt point-size estimate
+        // gives a budget in glyph-advance units (1/64 pt) the breaker
+        // can consume. The exact value matters less than that the
+        // budget exists; the breaker only uses it when KP can't fit
+        // on word spacing alone.
+        const AVG_CHARS_PER_WORD: f32 = 5.0;
+        let space_width = lopts.compose.column_width as f32 / 80.0; // rough natural space
+        let stretch_add = ((ls_max - ls_desired) * AVG_CHARS_PER_WORD / space_width).max(0.0);
+        let shrink_add = ((ls_desired - ls_min) * AVG_CHARS_PER_WORD / space_width).max(0.0);
+        lopts.compose.stretch_ratio = (lopts.compose.stretch_ratio + stretch_add).min(2.0);
+        lopts.compose.shrink_ratio = (lopts.compose.shrink_ratio + shrink_add).min(0.5);
+    }
+    // Q-20: glyph scaling. When `Min/Max GlyphScaling` differ from
+    // 100 the IDML allows the composer to scale per-glyph x-advance
+    // by that percentage. Per-glyph distribution after Knuth-Plass
+    // is the proper implementation; for now we widen the stretch
+    // ratio so the breaker has the budget the IDML implies. None of
+    // the cycle-2 evidence packs vary this from 100, so this is
+    // foundation work that lights up on packs that do customise it.
+    let gs_desired = resolved.desired_glyph_scaling.unwrap_or(100.0);
+    let gs_max = resolved.maximum_glyph_scaling.unwrap_or(gs_desired);
+    let gs_min = resolved.minimum_glyph_scaling.unwrap_or(gs_desired);
+    if (gs_max - gs_desired).abs() > 0.01 || (gs_desired - gs_min).abs() > 0.01 {
+        let extra_stretch = ((gs_max - gs_desired) / 100.0).max(0.0);
+        let extra_shrink = ((gs_desired - gs_min) / 100.0).max(0.0);
+        lopts.compose.stretch_ratio = (lopts.compose.stretch_ratio + extra_stretch).min(2.0);
+        lopts.compose.shrink_ratio = (lopts.compose.shrink_ratio + extra_shrink).min(0.5);
+    }
     // CJK Stage 2: enable hard-kinsoku enforcement whenever the cascade
     // carries any `KinsokuType` ("WordbreakWithJustification" / "PushIn"
     // / "PushOut" / etc). The composer currently keys on presence only;

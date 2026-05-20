@@ -569,6 +569,21 @@ pub struct ParagraphStyleDef {
     /// `MaximumWordSpacing` percentage (`133` = 133% of normal).
     /// Drives the composer's stretch ratio.
     pub maximum_word_spacing: Option<f32>,
+    /// Q-20: `MinimumLetterSpacing` pt (additive, signed). Allows
+    /// the composer to tighten inter-glyph advance up to this much
+    /// when justifying lines.
+    pub minimum_letter_spacing: Option<f32>,
+    /// Q-20: `DesiredLetterSpacing` pt (default 0 = none).
+    pub desired_letter_spacing: Option<f32>,
+    /// Q-20: `MaximumLetterSpacing` pt (additive, signed).
+    pub maximum_letter_spacing: Option<f32>,
+    /// Q-20: `MinimumGlyphScaling` percent (default 100 = identity).
+    /// Allows per-glyph x-advance scaling for justification.
+    pub minimum_glyph_scaling: Option<f32>,
+    /// Q-20: `DesiredGlyphScaling` percent.
+    pub desired_glyph_scaling: Option<f32>,
+    /// Q-20: `MaximumGlyphScaling` percent.
+    pub maximum_glyph_scaling: Option<f32>,
     /// `DropCapCharacters` count. 0 / `None` ⇒ no drop cap.
     pub drop_cap_characters: Option<u32>,
     /// `DropCapLines` — vertical extent of the drop cap.
@@ -699,6 +714,13 @@ pub struct ResolvedParagraph {
     pub minimum_word_spacing: Option<f32>,
     pub desired_word_spacing: Option<f32>,
     pub maximum_word_spacing: Option<f32>,
+    /// Q-20: cascaded letter / glyph spacing knobs.
+    pub minimum_letter_spacing: Option<f32>,
+    pub desired_letter_spacing: Option<f32>,
+    pub maximum_letter_spacing: Option<f32>,
+    pub minimum_glyph_scaling: Option<f32>,
+    pub desired_glyph_scaling: Option<f32>,
+    pub maximum_glyph_scaling: Option<f32>,
     /// `DropCapCharacters` count (number of leading characters that
     /// drop down across `drop_cap_lines` lines). 0 / `None` ⇒ no
     /// drop cap.
@@ -1323,6 +1345,19 @@ impl ResolvedParagraph {
         self.minimum_word_spacing = self.minimum_word_spacing.or(def.minimum_word_spacing);
         self.desired_word_spacing = self.desired_word_spacing.or(def.desired_word_spacing);
         self.maximum_word_spacing = self.maximum_word_spacing.or(def.maximum_word_spacing);
+        // Q-20: letter / glyph spacing per-field inheritance.
+        self.minimum_letter_spacing =
+            self.minimum_letter_spacing.or(def.minimum_letter_spacing);
+        self.desired_letter_spacing =
+            self.desired_letter_spacing.or(def.desired_letter_spacing);
+        self.maximum_letter_spacing =
+            self.maximum_letter_spacing.or(def.maximum_letter_spacing);
+        self.minimum_glyph_scaling =
+            self.minimum_glyph_scaling.or(def.minimum_glyph_scaling);
+        self.desired_glyph_scaling =
+            self.desired_glyph_scaling.or(def.desired_glyph_scaling);
+        self.maximum_glyph_scaling =
+            self.maximum_glyph_scaling.or(def.maximum_glyph_scaling);
         self.drop_cap_characters = self.drop_cap_characters.or(def.drop_cap_characters);
         self.drop_cap_lines = self.drop_cap_lines.or(def.drop_cap_lines);
         self.drop_cap_detail = self.drop_cap_detail.or(def.drop_cap_detail);
@@ -1610,6 +1645,12 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         minimum_word_spacing: attr(e, b"MinimumWordSpacing").and_then(|s| s.parse().ok()),
         desired_word_spacing: attr(e, b"DesiredWordSpacing").and_then(|s| s.parse().ok()),
         maximum_word_spacing: attr(e, b"MaximumWordSpacing").and_then(|s| s.parse().ok()),
+        minimum_letter_spacing: attr(e, b"MinimumLetterSpacing").and_then(|s| s.parse().ok()),
+        desired_letter_spacing: attr(e, b"DesiredLetterSpacing").and_then(|s| s.parse().ok()),
+        maximum_letter_spacing: attr(e, b"MaximumLetterSpacing").and_then(|s| s.parse().ok()),
+        minimum_glyph_scaling: attr(e, b"MinimumGlyphScaling").and_then(|s| s.parse().ok()),
+        desired_glyph_scaling: attr(e, b"DesiredGlyphScaling").and_then(|s| s.parse().ok()),
+        maximum_glyph_scaling: attr(e, b"MaximumGlyphScaling").and_then(|s| s.parse().ok()),
         drop_cap_characters: attr(e, b"DropCapCharacters").and_then(|s| s.parse().ok()),
         drop_cap_lines: attr(e, b"DropCapLines").and_then(|s| s.parse().ok()),
         drop_cap_detail: attr(e, b"DropCapDetail").and_then(|s| s.parse().ok()),
@@ -1796,6 +1837,53 @@ mod tests {
         assert_eq!(r.border.on, Some(true));
         assert_eq!(r.border.color.as_deref(), Some("Color/Brand"));
         assert_eq!(r.border.weight, Some(1.0));
+    }
+
+    #[test]
+    fn q20_parses_letter_glyph_spacing_attrs() {
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootParagraphStyleGroup>
+            <ParagraphStyle Self="ParagraphStyle/Tight"
+                            MinimumLetterSpacing="-5"
+                            DesiredLetterSpacing="0"
+                            MaximumLetterSpacing="10"
+                            MinimumGlyphScaling="95"
+                            DesiredGlyphScaling="100"
+                            MaximumGlyphScaling="105"/>
+          </RootParagraphStyleGroup>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let p = s.paragraph_styles.get("ParagraphStyle/Tight").unwrap();
+        assert_eq!(p.minimum_letter_spacing, Some(-5.0));
+        assert_eq!(p.desired_letter_spacing, Some(0.0));
+        assert_eq!(p.maximum_letter_spacing, Some(10.0));
+        assert_eq!(p.minimum_glyph_scaling, Some(95.0));
+        assert_eq!(p.desired_glyph_scaling, Some(100.0));
+        assert_eq!(p.maximum_glyph_scaling, Some(105.0));
+    }
+
+    #[test]
+    fn q20_letter_glyph_spacing_inherits_from_based_on() {
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootParagraphStyleGroup>
+            <ParagraphStyle Self="ParagraphStyle/Base"
+                            MinimumLetterSpacing="-3"
+                            MaximumLetterSpacing="8"
+                            MinimumGlyphScaling="97"
+                            MaximumGlyphScaling="103"/>
+            <ParagraphStyle Self="ParagraphStyle/Child"
+                            BasedOn="ParagraphStyle/Base"
+                            MaximumLetterSpacing="15"/>
+          </RootParagraphStyleGroup>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let r = s.resolve_paragraph("ParagraphStyle/Child");
+        assert_eq!(r.minimum_letter_spacing, Some(-3.0));   // inherited
+        assert_eq!(r.maximum_letter_spacing, Some(15.0));   // overridden
+        assert_eq!(r.minimum_glyph_scaling, Some(97.0));    // inherited
+        assert_eq!(r.maximum_glyph_scaling, Some(103.0));   // inherited
     }
 
     #[test]
