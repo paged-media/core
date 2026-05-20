@@ -2839,6 +2839,26 @@ fn emit_paragraph_into_chain(
         resolved_paragraph.shading.offset_bottom.unwrap_or(0.0),
         resolved_paragraph.shading.offset_right.unwrap_or(0.0),
     ];
+    // Q-09: resolve RuleAbove / RuleBelow paint + geometry once per
+    // paragraph. The per-line emit below stamps the line above the
+    // first line (RuleAbove) or below the last line (RuleBelow).
+    let resolve_rule_paint = |r: &idml_parse::ParagraphRule| -> Option<Paint> {
+        if r.on != Some(true) {
+            return None;
+        }
+        let id = r.color.as_deref()?;
+        let base = color_id_to_paint(id, em.palette, em.cmyk_xform)?;
+        let tint = r.tint.unwrap_or(100.0);
+        if tint < 0.0 {
+            Some(base)
+        } else {
+            Some(apply_fill_tint(base, Some(tint)))
+        }
+    };
+    let rule_above_paint = resolve_rule_paint(&resolved_paragraph.rule_above);
+    let rule_below_paint = resolve_rule_paint(&resolved_paragraph.rule_below);
+    let last_line_index = laid_out.lines.len().saturating_sub(1);
+    let mut current_line_idx: usize = 0;
     for mut line in laid_out.lines.into_iter() {
         let line_h = idml_text::layout::max_line_height_for_glyphs(&line.glyphs)
             .unwrap_or(lopts.line_height);
@@ -2899,6 +2919,45 @@ fn emit_paragraph_into_chain(
             && ((frame_linear[3] - 1.0).abs() < 1e-5);
 
         let before_cmds = pages[target_page].list.commands.len();
+
+        // Q-09: emit RuleAbove BEFORE the shading rect on the first
+        // line so the rule sits above the shading band.
+        let is_first_line = current_line_idx == 0;
+        let is_last_line = current_line_idx == last_line_index;
+        let line_h_pt_local = line_h as f32 / idml_text::shape::ADVANCE_PRECISION;
+        let baseline_pt_local = line.baseline_y as f32 / idml_text::shape::ADVANCE_PRECISION;
+        if is_first_line {
+            if let Some(paint) = rule_above_paint {
+                let r = &resolved_paragraph.rule_above;
+                let weight = r.weight.unwrap_or(1.0).max(0.01);
+                let offset = r.offset.unwrap_or(0.0);
+                let left = r.left_indent.unwrap_or(0.0);
+                let right = r.right_indent.unwrap_or(0.0);
+                let col_w_pt = em.column_width_pt.unwrap_or(0.0);
+                // Rule y: above the first line's baseline by
+                // (line_h * 0.8 + offset). InDesign's default origin
+                // for RuleAbove is the baseline; we approximate with
+                // ascent ≈ 0.8 line_h.
+                let rule_y = text_origin_pt.1 + baseline_pt_local - line_h_pt_local * 0.8
+                    - offset;
+                let x_left = text_origin_pt.0 + left;
+                let x_right = text_origin_pt.0 + col_w_pt - right;
+                if x_right > x_left {
+                    let rect = idml_compose::Rect {
+                        x: x_left,
+                        y: rule_y - weight * 0.5,
+                        w: x_right - x_left,
+                        h: weight,
+                    };
+                    idml_compose::emit_rect_transformed(
+                        rect,
+                        Transform::IDENTITY,
+                        paint,
+                        &mut pages[target_page].list,
+                    );
+                }
+            }
+        }
 
         // Q-09: paint the shading band BEFORE the line's glyphs so it
         // composites behind the text. Width spans the column (modulo
@@ -3052,6 +3111,41 @@ fn emit_paragraph_into_chain(
 
         em.y_cursor = line.baseline_y + line_h;
         em.prev_line_height_64 = Some(line_h);
+
+        // Q-09: emit RuleBelow AFTER the last line's glyphs so the
+        // rule sits in front of the body text. Mirror of the
+        // RuleAbove emit at the top of the loop. Same column +
+        // indent + weight handling; offset is measured below the
+        // baseline so positive `offset` pushes the rule further down.
+        if is_last_line {
+            if let Some(paint) = rule_below_paint {
+                let r = &resolved_paragraph.rule_below;
+                let weight = r.weight.unwrap_or(1.0).max(0.01);
+                let offset = r.offset.unwrap_or(0.0);
+                let left = r.left_indent.unwrap_or(0.0);
+                let right = r.right_indent.unwrap_or(0.0);
+                let col_w_pt = em.column_width_pt.unwrap_or(0.0);
+                let rule_y = text_origin_pt.1 + baseline_pt_local + line_h_pt_local * 0.2
+                    + offset;
+                let x_left = text_origin_pt.0 + left;
+                let x_right = text_origin_pt.0 + col_w_pt - right;
+                if x_right > x_left {
+                    let rect = idml_compose::Rect {
+                        x: x_left,
+                        y: rule_y - weight * 0.5,
+                        w: x_right - x_left,
+                        h: weight,
+                    };
+                    idml_compose::emit_rect_transformed(
+                        rect,
+                        Transform::IDENTITY,
+                        paint,
+                        &mut pages[target_page].list,
+                    );
+                }
+            }
+        }
+        current_line_idx += 1;
     }
     // Drop-cap glyph emission: now that the body lines have landed,
     // position the dropped run at the paragraph's origin (left edge,

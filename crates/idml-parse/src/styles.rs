@@ -345,6 +345,56 @@ pub struct ParagraphShading {
     pub suppress_printing: Option<bool>,
 }
 
+/// Q-09: `RuleAbove*` / `RuleBelow*` rule-line parameters parsed
+/// off a `<ParagraphStyle>` or `<ParagraphStyleRange>`. The renderer
+/// strokes a horizontal line above the first line (RuleAbove) or
+/// below the last line (RuleBelow) of the paragraph when `on` is
+/// true. Only the fields actually consumed by the renderer are
+/// listed; gap / stroke-style / overprint variants are queued.
+#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+pub struct ParagraphRule {
+    pub on: Option<bool>,
+    pub color: Option<String>,
+    pub tint: Option<f32>,
+    /// Stroke weight in pt.
+    pub weight: Option<f32>,
+    /// Distance from the paragraph's baseline (RuleAbove) or
+    /// descent (RuleBelow) to the rule.
+    pub offset: Option<f32>,
+    pub left_indent: Option<f32>,
+    pub right_indent: Option<f32>,
+    /// `ColumnWidth` | `TextWidth`. None ⇒ ColumnWidth default.
+    pub width: Option<String>,
+}
+
+impl ParagraphRule {
+    /// Parse the `<prefix>*` attrs. `prefix` is either `"RuleAbove"`
+    /// or `"RuleBelow"` to match IDML's two attribute families.
+    pub fn from_attrs(e: &quick_xml::events::BytesStart, prefix: &str) -> Self {
+        // Construct attr names on the fly. quick-xml accepts &[u8] keys
+        // for `attr()`; building owned Vec<u8> per attr is fine — this
+        // runs once per style at parse time.
+        let key = |suffix: &str| -> Vec<u8> {
+            let mut v = Vec::with_capacity(prefix.len() + suffix.len());
+            v.extend_from_slice(prefix.as_bytes());
+            v.extend_from_slice(suffix.as_bytes());
+            v
+        };
+        Self {
+            on: attr(e, &key("")).and_then(|s| s.parse().ok()),
+            color: attr(e, &key("Color")),
+            tint: attr(e, &key("Tint")).and_then(|s| s.parse().ok()),
+            weight: attr(e, &key("LineWeight"))
+                .and_then(|s| s.parse().ok())
+                .or_else(|| attr(e, &key("Weight")).and_then(|s| s.parse().ok())),
+            offset: attr(e, &key("Offset")).and_then(|s| s.parse().ok()),
+            left_indent: attr(e, &key("LeftIndent")).and_then(|s| s.parse().ok()),
+            right_indent: attr(e, &key("RightIndent")).and_then(|s| s.parse().ok()),
+            width: attr(e, &key("Width")),
+        }
+    }
+}
+
 impl ParagraphShading {
     /// Parse the `ParagraphShading*` attrs off a `<ParagraphStyle>`
     /// (or `<ParagraphStyleRange>`) element. Returns a fully-default
@@ -505,6 +555,10 @@ pub struct ParagraphStyleDef {
     /// `BasedOn` cascade can inherit. Renderer emit module is a
     /// separate follow-up.
     pub shading: ParagraphShading,
+    /// Q-09: horizontal rule above the first line of the paragraph.
+    pub rule_above: ParagraphRule,
+    /// Q-09: horizontal rule below the last line of the paragraph.
+    pub rule_below: ParagraphRule,
 }
 
 /// Effective character-level attributes after walking BasedOn.
@@ -627,6 +681,8 @@ pub struct ResolvedParagraph {
     /// Q-09: cascaded paragraph shading. Each field falls through
     /// `BasedOn` only when unset at higher levels.
     pub shading: ParagraphShading,
+    pub rule_above: ParagraphRule,
+    pub rule_below: ParagraphRule,
 }
 
 /// Identifies which kind of style is open while we walk
@@ -1265,6 +1321,24 @@ impl ResolvedParagraph {
         s.clip_to_frame = s.clip_to_frame.or(p.clip_to_frame);
         s.overprint = s.overprint.or(p.overprint);
         s.suppress_printing = s.suppress_printing.or(p.suppress_printing);
+        // Q-09: per-field rule_above / rule_below inheritance.
+        merge_rule(&mut self.rule_above, &def.rule_above);
+        merge_rule(&mut self.rule_below, &def.rule_below);
+    }
+}
+
+fn merge_rule(child: &mut ParagraphRule, parent: &ParagraphRule) {
+    child.on = child.on.or(parent.on);
+    if child.color.is_none() {
+        child.color = parent.color.clone();
+    }
+    child.tint = child.tint.or(parent.tint);
+    child.weight = child.weight.or(parent.weight);
+    child.offset = child.offset.or(parent.offset);
+    child.left_indent = child.left_indent.or(parent.left_indent);
+    child.right_indent = child.right_indent.or(parent.right_indent);
+    if child.width.is_none() {
+        child.width = parent.width.clone();
     }
 }
 
@@ -1483,6 +1557,8 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         mojikumi_table: attr(e, b"MojikumiTable"),
         mojikumi_set: attr(e, b"MojikumiSet"),
         shading: ParagraphShading::from_attrs(e),
+        rule_above: ParagraphRule::from_attrs(e, "RuleAbove"),
+        rule_below: ParagraphRule::from_attrs(e, "RuleBelow"),
     })
 }
 

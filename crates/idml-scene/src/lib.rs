@@ -641,6 +641,8 @@ impl ResolvedParagraphAttrs {
             // override today; the cascade pulls everything from the
             // applied paragraph style.
             shading: Default::default(),
+            rule_above: Default::default(),
+            rule_below: Default::default(),
         }
     }
 
@@ -723,6 +725,24 @@ impl ResolvedParagraphAttrs {
         s.clip_to_frame = s.clip_to_frame.or(ps.clip_to_frame);
         s.overprint = s.overprint.or(ps.overprint);
         s.suppress_printing = s.suppress_printing.or(ps.suppress_printing);
+        // Q-09: per-field rule_above / rule_below inheritance.
+        merge_rule_attrs(&mut self.rule_above, &p.rule_above);
+        merge_rule_attrs(&mut self.rule_below, &p.rule_below);
+    }
+}
+
+fn merge_rule_attrs(c: &mut idml_parse::ParagraphRule, p: &idml_parse::ParagraphRule) {
+    c.on = c.on.or(p.on);
+    if c.color.is_none() {
+        c.color = p.color.clone();
+    }
+    c.tint = c.tint.or(p.tint);
+    c.weight = c.weight.or(p.weight);
+    c.offset = c.offset.or(p.offset);
+    c.left_indent = c.left_indent.or(p.left_indent);
+    c.right_indent = c.right_indent.or(p.right_indent);
+    if c.width.is_none() {
+        c.width = p.width.clone();
     }
 }
 
@@ -914,6 +934,10 @@ pub struct ResolvedParagraphAttrs {
     pub overprint_stroke: Option<bool>,
     /// Q-09: cascaded paragraph-shading parameters.
     pub shading: idml_parse::ParagraphShading,
+    /// Q-09: cascaded horizontal rule above the first line.
+    pub rule_above: idml_parse::ParagraphRule,
+    /// Q-09: cascaded horizontal rule below the last line.
+    pub rule_below: idml_parse::ParagraphRule,
 }
 
 #[derive(Debug, thiserror::Error)]
