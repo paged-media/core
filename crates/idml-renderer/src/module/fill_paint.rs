@@ -71,17 +71,18 @@ pub(crate) fn fill_paint_module(
     // collapses to ~1pt near the spread origin, making the polygon
     // paint flat. Pre-bake the unit→bbox mapping into the stored
     // gradient endpoints so the downstream `outer` lands them in the
-    // polygon's actual page span. Radial gradients on polygons aren't
-    // observed on the cycle-2 packs and are left to a follow-up: the
-    // radius needs a tiny-skia-specific compensation that differs
-    // from the rect / oval `for_rect_in` codepath.
-    let fill = if let (Paint::LinearGradient(gid), Geometry::Polygon { bbox, .. }) =
-        (fill, &frame.geometry)
-    {
-        rebase_gradient_to_bbox(page, gid, *bbox);
-        Paint::LinearGradient(gid)
-    } else {
-        fill
+    // polygon's actual page span. Track 4c extends the same rewrite
+    // to radial gradients (center + radius in unit-rect coords).
+    let fill = match (fill, &frame.geometry) {
+        (Paint::LinearGradient(gid), Geometry::Polygon { bbox, .. }) => {
+            rebase_gradient_to_bbox(page, gid, *bbox);
+            Paint::LinearGradient(gid)
+        }
+        (Paint::RadialGradient(gid), Geometry::Polygon { bbox, .. }) => {
+            rebase_radial_gradient_to_bbox(page, gid, *bbox);
+            Paint::RadialGradient(gid)
+        }
+        _ => fill,
     };
     let start = page.list.commands.len();
     emit_filled(&frame.geometry, page, fill, BlendMode::Normal, outer, fill_path);
@@ -99,5 +100,67 @@ fn rebase_gradient_to_bbox(page: &mut BuiltPage, gid: idml_compose::GradientId, 
     if let Some(g) = page.list.gradients.get_mut(idx) {
         g.start = (bbox.x + g.start.0 * bbox.w, bbox.y + g.start.1 * bbox.h);
         g.end = (bbox.x + g.end.0 * bbox.w, bbox.y + g.end.1 * bbox.h);
+    }
+}
+
+/// Radial counterpart to [`rebase_gradient_to_bbox`]. Maps the
+/// gradient's unit-rect `center` onto `bbox` and scales `radius` by
+/// `min(w, h)` — a unit `0.5` radius then covers exactly the inscribed
+/// circle, matching what `Transform::for_rect_in` produces for rect /
+/// oval radial fills.
+fn rebase_radial_gradient_to_bbox(
+    page: &mut BuiltPage,
+    gid: idml_compose::GradientId,
+    bbox: Rect,
+) {
+    let idx = gid.0 as usize;
+    if let Some(g) = page.list.radial_gradients.get_mut(idx) {
+        g.center = (bbox.x + g.center.0 * bbox.w, bbox.y + g.center.1 * bbox.h);
+        g.radius *= bbox.w.min(bbox.h);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use idml_compose::{DisplayList, GradientStop, RadialGradient};
+
+    fn page_with(list: DisplayList) -> BuiltPage {
+        BuiltPage {
+            width_pt: 0.0,
+            height_pt: 0.0,
+            spread_origin: (0.0, 0.0),
+            list,
+            stats: Default::default(),
+        }
+    }
+
+    #[test]
+    fn radial_gradient_rebases_center_and_radius_to_polygon_bbox() {
+        let mut list = DisplayList::new();
+        let gid = list.push_radial_gradient(RadialGradient {
+            center: (0.5, 0.5),
+            radius: 0.5,
+            stops: vec![
+                GradientStop {
+                    offset: 0.0,
+                    color: idml_compose::Color::WHITE,
+                },
+                GradientStop {
+                    offset: 1.0,
+                    color: idml_compose::Color::BLACK,
+                },
+            ],
+        });
+        let mut page = page_with(list);
+        let bbox = Rect { x: 10.0, y: 20.0, w: 100.0, h: 200.0 };
+
+        rebase_radial_gradient_to_bbox(&mut page, gid, bbox);
+
+        let g = page.list.radial_gradient(gid).expect("gradient survives");
+        // bbox center: (10 + 100/2, 20 + 200/2) = (60, 120).
+        assert_eq!(g.center, (60.0, 120.0));
+        // Inscribed-circle radius: 0.5 * min(w, h) = 0.5 * 100 = 50.
+        assert_eq!(g.radius, 50.0);
     }
 }
