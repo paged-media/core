@@ -27,7 +27,8 @@ pub use graphic::{
     SwatchEntry,
 };
 pub use spread::{
-    Bounds, DirectionalFeatherParams, DropShadowSetting, FirstBaselineOffset, FrameEffects,
+    AutoSizingReferencePoint, AutoSizingType, Bounds, CornerOption, CornerSpec,
+    DirectionalFeatherParams, DropShadowSetting, FirstBaselineOffset, FrameEffects,
     FrameFittingOption, FrameRef, GradientFeatherParams, GradientFeatherStop, GraphicLine, Group,
     GroupTransparency, Oval, Page, PathAnchor, Polygon, Rectangle, Spread, TextFrame, TextPath,
     TextWrap, TextWrapMode, VerticalJustification,

@@ -3393,6 +3393,7 @@ fn emit_anchored_rect_via_pipeline(
         item_layer: None,
         corner_radius: None,
         corner_option: None,
+        corners: Default::default(),
         is_anchored: true,
         opacity: None,
         blend_mode: None,
@@ -3477,6 +3478,7 @@ fn emit_anchored_rect_image(
         item_layer: None,
         corner_radius: None,
         corner_option: None,
+        corners: Default::default(),
         is_anchored: true,
         opacity: None,
         blend_mode: None,
@@ -7456,6 +7458,50 @@ pub(crate) fn corner_radius_from(radius: Option<f32>, option: Option<&str>) -> O
     }
 }
 
+/// Q-16: resolve the 4 per-corner radii for a Rectangle. Per-corner
+/// `CornerSpec` wins when set; otherwise fall back to the legacy
+/// `corner_radius` / `corner_option` pair. Returns `[tl, tr, br, bl]`
+/// — clockwise from top-left to match `rounded_rect_path_per_corner`'s
+/// walk. `None` means "this corner is square" (no rounding); a corner
+/// with positive radius but a `Some(CornerOption::None)` override
+/// also clamps to square.
+pub(crate) fn per_corner_radii(
+    corner_radius: Option<f32>,
+    corner_option: Option<&str>,
+    corners: &[idml_parse::CornerSpec; 4],
+) -> [Option<f32>; 4] {
+    let fallback = corner_radius_from(corner_radius, corner_option);
+    let mut out = [None; 4];
+    for (i, spec) in corners.iter().enumerate() {
+        // Decide rounding-on-off for this corner:
+        //   explicit Some(option) wins; absent option falls through to
+        //   the global `corner_option`.
+        let rounds = match spec.option {
+            Some(opt) => opt.rounds(),
+            None => corner_option
+                .map(|s| !matches!(s, "None" | "Square"))
+                .unwrap_or(false),
+        };
+        if !rounds {
+            continue;
+        }
+        let r = spec
+            .radius
+            .or(corner_radius)
+            .filter(|r| *r > 0.0);
+        // When the per-corner spec carries an option but no explicit
+        // radius, inherit from the global fallback. When no fallback
+        // either, the corner squares back off via `out[i] = None`.
+        out[i] = r.or(fallback);
+    }
+    // Fast path: if no per-corner override touched the array, fall
+    // back to the symmetric fallback for all four corners.
+    if corners.iter().all(|s| s.option.is_none() && s.radius.is_none()) {
+        return [fallback, fallback, fallback, fallback];
+    }
+    out
+}
+
 /// Build a rounded-rect path with cubic-Bezier quarter-circle corners
 /// (control offset = `radius * 0.5523`). The path is emitted in the
 /// rectangle's *inner* coordinate system (same coords as `rect.x` /
@@ -7463,60 +7509,88 @@ pub(crate) fn corner_radius_from(radius: Option<f32>, option: Option<&str>) -> O
 /// and ItemTransform composition the same way it does for polygons.
 /// Walks clockwise from the top edge.
 pub(crate) fn rounded_rect_path(rect: Rect, radius: f32) -> idml_compose::PathData {
+    rounded_rect_path_per_corner(rect, [Some(radius); 4])
+}
+
+/// Q-16: rounded-rect path with per-corner radii. The array order is
+/// `[top_left, top_right, bottom_right, bottom_left]` — matches
+/// `Rectangle::corners` and the clockwise walk this function emits.
+/// `None` (or `Some(0)`) for a corner produces a sharp 90° angle.
+/// Each radius is clamped to `min(width/2, height/2)` independently
+/// so a tall narrow rect with one large corner still fits.
+pub(crate) fn rounded_rect_path_per_corner(
+    rect: Rect,
+    radii: [Option<f32>; 4],
+) -> idml_compose::PathData {
     use idml_compose::PathSegment::*;
-    let r = radius.min(rect.w * 0.5).min(rect.h * 0.5).max(0.0);
+    let max_r = rect.w.min(rect.h) * 0.5;
+    let r = |i: usize| -> f32 {
+        radii[i].map(|v| v.min(max_r).max(0.0)).unwrap_or(0.0)
+    };
+    let (tl, tr, br, bl) = (r(0), r(1), r(2), r(3));
     let l = rect.x;
     let t = rect.y;
     let right = rect.x + rect.w;
     let bot = rect.y + rect.h;
-    // Cubic-Bezier control offset for a quarter-circle of radius r.
+    // Cubic-Bezier control offset for a quarter-circle: KAPPA × radius.
     const KAPPA: f32 = 0.552_284_8;
-    let k = r * KAPPA;
-    idml_compose::PathData {
-        segments: vec![
-            MoveTo { x: l + r, y: t },
-            LineTo { x: right - r, y: t },
-            CubicTo {
-                cx1: right - r + k,
-                cy1: t,
-                cx2: right,
-                cy2: t + r - k,
-                x: right,
-                y: t + r,
-            },
-            LineTo {
-                x: right,
-                y: bot - r,
-            },
-            CubicTo {
-                cx1: right,
-                cy1: bot - r + k,
-                cx2: right - r + k,
-                cy2: bot,
-                x: right - r,
-                y: bot,
-            },
-            LineTo { x: l + r, y: bot },
-            CubicTo {
-                cx1: l + r - k,
-                cy1: bot,
-                cx2: l,
-                cy2: bot - r + k,
-                x: l,
-                y: bot - r,
-            },
-            LineTo { x: l, y: t + r },
-            CubicTo {
-                cx1: l,
-                cy1: t + r - k,
-                cx2: l + r - k,
-                cy2: t,
-                x: l + r,
-                y: t,
-            },
-            Close,
-        ],
+    let mut segments = Vec::with_capacity(13);
+    // Start at the top edge, just past the top-left corner's rounding.
+    segments.push(MoveTo { x: l + tl, y: t });
+    // Top edge → top-right corner.
+    segments.push(LineTo { x: right - tr, y: t });
+    if tr > 0.0 {
+        let k = tr * KAPPA;
+        segments.push(CubicTo {
+            cx1: right - tr + k,
+            cy1: t,
+            cx2: right,
+            cy2: t + tr - k,
+            x: right,
+            y: t + tr,
+        });
     }
+    // Right edge → bottom-right corner.
+    segments.push(LineTo { x: right, y: bot - br });
+    if br > 0.0 {
+        let k = br * KAPPA;
+        segments.push(CubicTo {
+            cx1: right,
+            cy1: bot - br + k,
+            cx2: right - br + k,
+            cy2: bot,
+            x: right - br,
+            y: bot,
+        });
+    }
+    // Bottom edge → bottom-left corner.
+    segments.push(LineTo { x: l + bl, y: bot });
+    if bl > 0.0 {
+        let k = bl * KAPPA;
+        segments.push(CubicTo {
+            cx1: l + bl - k,
+            cy1: bot,
+            cx2: l,
+            cy2: bot - bl + k,
+            x: l,
+            y: bot - bl,
+        });
+    }
+    // Left edge → top-left corner (closes back to MoveTo's point).
+    segments.push(LineTo { x: l, y: t + tl });
+    if tl > 0.0 {
+        let k = tl * KAPPA;
+        segments.push(CubicTo {
+            cx1: l,
+            cy1: t + tl - k,
+            cx2: l + tl - k,
+            cy2: t,
+            x: l + tl,
+            y: t,
+        });
+    }
+    segments.push(Close);
+    idml_compose::PathData { segments }
 }
 
 /// Resolve, decode, and emit a placed image for a rectangle. Skips

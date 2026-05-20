@@ -53,6 +53,11 @@ pub(crate) struct ResolvedFrame<'a> {
     pub miter_limit: Option<f32>,
     pub corner_radius: Option<f32>,
     pub corner_option: Option<&'a str>,
+    /// Q-16: per-corner `(option, radius)` overrides. When any corner
+    /// is non-empty, `corner_path_module` produces a 4-corner path
+    /// instead of the symmetric one driven by `corner_radius` /
+    /// `corner_option`.
+    pub corners: [idml_parse::CornerSpec; 4],
     pub applied_object_style: Option<&'a str>,
     /// `OverprintFill="true"` on the source shape. Flagged at adapter
     /// time so the fill module can route its emit through
@@ -164,6 +169,7 @@ impl<'a> ResolvedFrame<'a> {
             miter_limit: None,
             corner_radius: None,
             corner_option: None,
+            corners: Default::default(),
             applied_object_style: frame.applied_object_style.as_deref(),
             overprint_fill: frame.overprint_fill,
             overprint_stroke: frame.overprint_stroke,
@@ -211,6 +217,7 @@ impl<'a> ResolvedFrame<'a> {
             miter_limit: rect.miter_limit,
             corner_radius: rect.corner_radius,
             corner_option: rect.corner_option.as_deref(),
+            corners: rect.corners,
             applied_object_style: rect.applied_object_style.as_deref(),
             overprint_fill: rect.overprint_fill,
             overprint_stroke: rect.overprint_stroke,
@@ -240,6 +247,7 @@ impl<'a> ResolvedFrame<'a> {
             miter_limit: None,
             corner_radius: None,
             corner_option: None,
+            corners: Default::default(),
             applied_object_style: oval.applied_object_style.as_deref(),
             overprint_fill: oval.overprint_fill,
             overprint_stroke: oval.overprint_stroke,
@@ -284,6 +292,7 @@ impl<'a> ResolvedFrame<'a> {
             miter_limit: None,
             corner_radius: None,
             corner_option: None,
+            corners: Default::default(),
             applied_object_style: poly.applied_object_style.as_deref(),
             overprint_fill: poly.overprint_fill,
             overprint_stroke: poly.overprint_stroke,
@@ -323,6 +332,7 @@ impl<'a> ResolvedFrame<'a> {
             miter_limit: None,
             corner_radius: None,
             corner_option: None,
+            corners: Default::default(),
             applied_object_style: line.applied_object_style.as_deref(),
             overprint_fill: false,
             overprint_stroke: line.overprint_stroke,
@@ -371,6 +381,7 @@ mod tests {
             item_layer: None,
             corner_radius: None,
             corner_option: None,
+            corners: Default::default(),
             is_anchored: false,
             opacity: None,
             blend_mode: None,

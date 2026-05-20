@@ -645,6 +645,7 @@ fn new_rectangle(self_id: String, bounds: Bounds, fill_color: Option<String>) ->
         item_layer: None,
         corner_radius: None,
         corner_option: None,
+        corners: Default::default(),
         is_anchored: false,
         opacity: None,
         blend_mode: None,

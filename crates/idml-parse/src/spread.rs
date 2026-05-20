@@ -21,6 +21,53 @@ use serde::Serialize;
 use crate::util::{attr, parse_f, parse_tint_attr};
 use crate::ParseError;
 
+/// Q-16: per-corner override for `Rectangle::corners`. IDML lists
+/// these on `<Rectangle>` as `TopLeftCornerOption` / `TopLeftCornerRadius`
+/// and the other three corners. When both fields are `None` the
+/// renderer falls back to the legacy single `corner_option` /
+/// `corner_radius` pair (which itself defaults to "no rounding").
+#[derive(Debug, Default, Clone, Copy, Serialize)]
+pub struct CornerSpec {
+    pub option: Option<CornerOption>,
+    pub radius: Option<f32>,
+}
+
+/// IDML `CornerOption` enum (per-corner or document-default). The
+/// renderer treats every non-`None`, non-`Square` variant as
+/// `Rounded` for the time being — the decorative shapes (Fancy,
+/// Bevel, Inset, etc.) need bespoke path generators.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum CornerOption {
+    /// IDML defaults: square corners.
+    None,
+    Rounded,
+    Inverse,
+    Inset,
+    Bevel,
+    Fancy,
+}
+
+impl CornerOption {
+    pub fn from_idml(s: &str) -> Option<Self> {
+        match s {
+            "None" => Some(Self::None),
+            "RoundedCorner" | "Rounded" => Some(Self::Rounded),
+            "InverseRoundedCorner" | "InverseRounded" => Some(Self::Inverse),
+            "InsetCorner" | "Inset" => Some(Self::Inset),
+            "BeveledCorner" | "Beveled" | "Bevel" => Some(Self::Bevel),
+            "FancyCorner" | "Fancy" => Some(Self::Fancy),
+            _ => None,
+        }
+    }
+
+    /// Whether this corner option actually rounds (i.e. produces a
+    /// non-square corner). The decorative variants all fall back to
+    /// `Rounded` shape in the renderer for now, so they all return true.
+    pub fn rounds(self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct Spread {
     pub self_id: Option<String>,
@@ -559,12 +606,21 @@ pub struct Rectangle {
     /// layer is hidden or non-printable.
     pub item_layer: Option<String>,
     /// `CornerRadius` in pt; pairs with `corner_option`. `None`
-    /// inherits from the applied object style.
+    /// inherits from the applied object style. Legacy single-corner
+    /// fallback when none of the per-corner attrs below are set.
     pub corner_radius: Option<f32>,
     /// `CornerOption` (`None`, `Rounded`, etc). The renderer emits a
     /// rounded-rect path for `Rounded` (and the decorative variants
-    /// fall back to `Rounded` for now).
+    /// fall back to `Rounded` for now). Legacy single-corner fallback.
     pub corner_option: Option<String>,
+    /// Q-16: per-corner `(option, radius)` overrides. When *any* corner
+    /// carries an explicit value, the renderer builds a 4-corner path
+    /// with each corner using its own radius (defaulting to the legacy
+    /// `corner_radius` for corners left unspecified). Order:
+    /// `[top_left, top_right, bottom_right, bottom_left]` — matches the
+    /// stroke walk in `rounded_rect_path`. Each entry is `(option,
+    /// radius)`; both default to None.
+    pub corners: [CornerSpec; 4],
     /// Anchored object marker; see `TextFrame::is_anchored`.
     pub is_anchored: bool,
     /// Item-level opacity from `<TransparencySetting>` /
@@ -1284,16 +1340,35 @@ fn read_stroke_style_attrs(e: &quick_xml::events::BytesStart) -> StrokeStyleAttr
     }
 }
 
-/// Rectangle-only corner attributes (`CornerRadius`, `CornerOption`).
+/// Rectangle-only corner attributes (`CornerRadius`, `CornerOption`,
+/// plus the four per-corner overrides Q-16 added). The per-corner
+/// values default to `None`; the renderer falls back to the legacy
+/// global pair when a corner spec is empty.
 struct CornerAttrs {
     corner_radius: Option<f32>,
     corner_option: Option<String>,
+    corners: [CornerSpec; 4],
 }
 
 fn read_corner_attrs(e: &quick_xml::events::BytesStart) -> CornerAttrs {
+    // Order: [top_left, top_right, bottom_right, bottom_left] —
+    // matches the clockwise-from-top-left walk Rectangle::corners
+    // documents.
+    let per = [
+        (b"TopLeftCornerOption".as_ref(), b"TopLeftCornerRadius".as_ref()),
+        (b"TopRightCornerOption".as_ref(), b"TopRightCornerRadius".as_ref()),
+        (b"BottomRightCornerOption".as_ref(), b"BottomRightCornerRadius".as_ref()),
+        (b"BottomLeftCornerOption".as_ref(), b"BottomLeftCornerRadius".as_ref()),
+    ];
+    let mut corners = [CornerSpec::default(); 4];
+    for (i, (oname, rname)) in per.iter().enumerate() {
+        corners[i].option = attr(e, oname).as_deref().and_then(CornerOption::from_idml);
+        corners[i].radius = attr(e, rname).and_then(|s| s.parse().ok());
+    }
     CornerAttrs {
         corner_radius: attr(e, b"CornerRadius").and_then(|s| s.parse().ok()),
         corner_option: attr(e, b"CornerOption"),
+        corners,
     }
 }
 
@@ -1577,6 +1652,7 @@ impl Spread {
                             item_layer: common.item_layer,
                             corner_radius: corner.corner_radius,
                             corner_option: corner.corner_option,
+                            corners: corner.corners,
                             is_anchored: false,
                             opacity: None,
                             blend_mode: None,
@@ -2958,6 +3034,31 @@ mod tests {
         );
         assert_eq!(f.minimum_first_baseline_offset, Some(14.0));
         assert_eq!(f.inset_spacing, Some([6.0, 8.0, 10.0, 12.0]));
+    }
+
+    #[test]
+    fn q16_parses_per_corner_options() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Rectangle Self="r" GeometricBounds="0 0 100 200"
+                       CornerOption="RoundedCorner" CornerRadius="0"
+                       TopLeftCornerOption="None" TopLeftCornerRadius="0"
+                       TopRightCornerOption="None" TopRightCornerRadius="0"
+                       BottomRightCornerOption="None" BottomRightCornerRadius="0"
+                       BottomLeftCornerOption="RoundedCorner" BottomLeftCornerRadius="19.84"/>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        let r = &s.rectangles[0];
+        // Top-left + top-right + bottom-right squared off explicitly.
+        assert_eq!(r.corners[0].option, Some(CornerOption::None));
+        assert_eq!(r.corners[1].option, Some(CornerOption::None));
+        assert_eq!(r.corners[2].option, Some(CornerOption::None));
+        // Bottom-left rounded with explicit radius.
+        assert_eq!(r.corners[3].option, Some(CornerOption::Rounded));
+        assert_eq!(r.corners[3].radius, Some(19.84));
+        assert!(r.corners[3].option.unwrap().rounds());
     }
 
     #[test]
