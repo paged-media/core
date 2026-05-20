@@ -715,6 +715,16 @@ impl Story {
         // the nearest enclosing frame.
         let mut anchored_depth: u32 = 0;
         let mut anchored_stack: Vec<AnchoredFrame> = Vec::new();
+        // Suppressed-subtree depth. IDML uses `<HiddenText>` (authored
+        // but not flowed), `<Note>` (sticky-note annotations), and
+        // `<Index>` / `<IndexEntry>` (index markers — the marker is a
+        // zero-width metadata point; the entry text is metadata, not
+        // body copy). While `suppress_depth > 0` every Start bumps it,
+        // every End decrements it, and Content / inline glyph events
+        // (Br, Tab, TextVariableInstance) are dropped. The wrapper
+        // itself does not insert any character into the host run, so
+        // the surrounding flow is uninterrupted.
+        let mut suppress_depth: u32 = 0;
         // Parallel to `anchored_stack`: tracks whether the top frame's
         // `bounds` were derived from a `<PathPointType>` chain (`true`)
         // or from a `GeometricBounds` attribute (`false`). The
@@ -838,6 +848,19 @@ impl Story {
                             buf.clear();
                             continue;
                         }
+                    }
+                    // Suppressed subtree: enter on the wrapper, bump
+                    // depth on every child so the matching End pairs
+                    // up. Skip the body handlers entirely.
+                    if suppress_depth > 0 {
+                        suppress_depth += 1;
+                        buf.clear();
+                        continue;
+                    }
+                    if matches!(name, b"HiddenText" | b"Note" | b"Index" | b"IndexEntry") {
+                        suppress_depth = 1;
+                        buf.clear();
+                        continue;
                     }
                     match name {
                     // `<Story Self="..." StoryDirection="...">` is the
@@ -1174,6 +1197,11 @@ impl Story {
                         buf.clear();
                         continue;
                     }
+                    if suppress_depth > 0 {
+                        suppress_depth -= 1;
+                        buf.clear();
+                        continue;
+                    }
                     match name {
                     b"Content" => {
                         in_content = false;
@@ -1301,6 +1329,18 @@ impl Story {
                         }
                         // No depth bump — Empty events have no
                         // matching End.
+                        buf.clear();
+                        continue;
+                    }
+                    // Self-closing suppressed wrappers (e.g. an
+                    // `<IndexEntry .../>` marker) carry no flow
+                    // content; drop them. Inline glyph events
+                    // (`<Br/>` / `<Tab/>` / `<TextVariableInstance/>`)
+                    // nested inside an open suppressed subtree are
+                    // also dropped to keep the wrapper truly silent.
+                    if suppress_depth > 0
+                        || matches!(name, b"HiddenText" | b"Note" | b"Index" | b"IndexEntry")
+                    {
                         buf.clear();
                         continue;
                     }
@@ -1670,6 +1710,36 @@ mod tests {
         let p2 = &s.paragraphs[1];
         assert_eq!(p2.runs.len(), 1);
         assert_eq!(p2.runs[0].text, "Second paragraph.");
+    }
+
+    #[test]
+    fn track5c_hidden_text_block_drops_content() {
+        let xml = br#"<Story>
+          <ParagraphStyleRange>
+            <CharacterStyleRange>
+              <HiddenText><Content>secret</Content></HiddenText>
+              <Content>visible</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        assert_eq!(s.paragraphs[0].runs.len(), 1);
+        assert_eq!(s.paragraphs[0].runs[0].text, "visible");
+    }
+
+    #[test]
+    fn track5c_note_skipped() {
+        let xml = br#"<Story>
+          <ParagraphStyleRange>
+            <CharacterStyleRange>
+              <Note><Content>annotation</Content></Note>
+              <Content>visible</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        assert_eq!(s.paragraphs[0].runs.len(), 1);
+        assert_eq!(s.paragraphs[0].runs[0].text, "visible");
     }
 
     #[test]
