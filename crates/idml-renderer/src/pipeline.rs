@@ -1380,7 +1380,43 @@ impl<'a> StoryEmitter<'a> {
         // rotated axis.
         let raw_width = (chain[0].bounds.width() - head_insets[1] - head_insets[3]).max(0.0);
         let wrapped_width = (raw_width - shrink_left - shrink_right).max(0.0);
-        let column_width_pt = options.fallback_column_width_pt.or(Some(wrapped_width));
+        // Q-02: when the head frame's AutoSizingType allows width
+        // growth, the IDML authored an *undersized* column expecting
+        // composition-time growth ("MAGAZINE" headline frame at
+        // ~40-80pt expecting to grow to fit the actual headline).
+        // Knuth-Plass at the authored width clips wrap output to
+        // "MAG" / "MA-/GA-/ZINE". Override the column upward to an
+        // estimate that fits the longest token in the story.
+        //
+        // Conservative estimator: take the longest WORD in the story,
+        // approximate its width as
+        //   point_size × char_count × 0.62
+        // (an average-glyph advance ratio across realistic display
+        // faces; 0.62 hits Inter Bold / Roboto Black / Source Serif
+        // within ~10%). Multiply by a 1.1 slack factor. The renderer
+        // doesn't measure here — that would require shape calls per
+        // word + face resolution — but the estimate is correct enough
+        // to unblock the wrap. Glyphs land where the actual shape
+        // puts them at render time; the column is only the wrap
+        // budget.
+        //
+        // Bound the override by the host page's width when known so
+        // we don't shove headlines off-page on layouts where the
+        // headline frame sits near the right edge.
+        let column_width_pt = {
+            let mut base = options.fallback_column_width_pt.or(Some(wrapped_width));
+            if let Some(at) = chain[0].auto_sizing {
+                if at.grows_width() {
+                    let est = q02_estimate_auto_sizing_width(document, chain[0]);
+                    let floor = chain[0].minimum_width_for_auto_sizing.unwrap_or(0.0);
+                    let target = est.max(floor).max(wrapped_width);
+                    if target > wrapped_width {
+                        base = Some(target);
+                    }
+                }
+            }
+            base
+        };
         let len = chain.len();
         let chain_spread_bounds: Vec<idml_parse::Bounds> = chain
             .iter()
@@ -6842,6 +6878,50 @@ fn page_for_frame(frame: &idml_parse::Bounds, pages: &[PageGeom]) -> Option<usiz
 ///
 /// `None` is treated as "no overlap"; callers fall back to the legacy
 /// `page_for_frame` centroid (or `0`) for backwards compatibility.
+/// Q-02: rough longest-line width estimator for AutoSizing-width
+/// frames. Walks the story's runs, scores each by (char_count ×
+/// point_size × 0.62), and returns the max. Includes a 1.1 slack
+/// factor so the estimator runs a touch wider than the rendered line
+/// to make sure Knuth-Plass doesn't trim a trailing space. Returns 0
+/// when no story / no runs / story is empty so the caller falls back
+/// to the authored width.
+///
+/// The estimator is intentionally cheap (no shape calls) — display
+/// headlines render at one of a handful of weights and the 0.62
+/// advance ratio holds across them within ~10%. The cost of a few %
+/// over-estimate is the breaker has a touch more stretch budget than
+/// it needs; the alternative (under-estimating) collapses wrap back
+/// to "MAG" / "BUSI" because the budget is too tight.
+fn q02_estimate_auto_sizing_width(document: &Document, frame: &TextFrame) -> f32 {
+    let Some(story_id) = frame.parent_story.as_deref() else {
+        return 0.0;
+    };
+    let Some(story) = document.stories.iter().find(|s| s.self_id == story_id) else {
+        return 0.0;
+    };
+    let mut max_line: f32 = 0.0;
+    // Estimate per-paragraph: the longest WORD plus a margin so a
+    // word boundary doesn't force a mid-word break. Iterate runs in
+    // each paragraph, accumulate per-line width as text + spaces, and
+    // reset on hard line breaks (`\n`) — the authoring app wraps each
+    // paragraph independently.
+    for paragraph in &story.story.paragraphs {
+        for run in &paragraph.runs {
+            let point_size = run.point_size.unwrap_or(12.0);
+            // Walk by line so a multi-line run (paragraph break in
+            // the middle) doesn't conflate two lines into one.
+            for line in run.text.split('\n') {
+                let chars = line.chars().count() as f32;
+                let est = chars * point_size * 0.62 * 1.1;
+                if est > max_line {
+                    max_line = est;
+                }
+            }
+        }
+    }
+    max_line
+}
+
 fn pages_overlapping_frame(frame: &idml_parse::Bounds, pages: &[PageGeom]) -> Vec<usize> {
     let mut out: Vec<usize> = Vec::new();
     for (i, p) in pages.iter().enumerate() {
