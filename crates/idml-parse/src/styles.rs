@@ -26,6 +26,7 @@ use std::collections::BTreeMap;
 use quick_xml::events::Event;
 use serde::Serialize;
 
+use crate::spread::{CornerOption, CornerSpec};
 use crate::story::{Justification, TabStop};
 use crate::util::{attr, parse_tint_attr};
 use crate::ParseError;
@@ -397,10 +398,10 @@ impl ParagraphRule {
 
 /// Q-09: `ParagraphBorder*` attributes parsed off a `<ParagraphStyle>`
 /// or `<ParagraphStyleRange>`. The renderer strokes a rectangular
-/// border around the paragraph's content box when `on` is true. Only
-/// the fields actually consumed by the renderer are listed; the
-/// per-corner option / radius attrs are read-but-not-rendered in this
-/// first cut.
+/// border around the paragraph's content box when `on` is true.
+/// Per-corner `CornerOption` / `CornerRadius` attrs are honoured via
+/// `corners` (Track 4d) — order matches `Rectangle::corners`:
+/// `[top_left, top_right, bottom_right, bottom_left]`.
 #[derive(Debug, Default, Clone, PartialEq, Serialize)]
 pub struct ParagraphBorder {
     pub on: Option<bool>,
@@ -415,6 +416,8 @@ pub struct ParagraphBorder {
     pub offset_right: Option<f32>,
     /// `ColumnWidth` | `TextWidth`. None ⇒ ColumnWidth default.
     pub width: Option<String>,
+    /// Per-corner option/radius overrides. `[tl, tr, br, bl]`.
+    pub corners: [CornerSpec; 4],
 }
 
 impl ParagraphBorder {
@@ -423,6 +426,20 @@ impl ParagraphBorder {
     /// instance when no attrs are present; callers can check `on` to
     /// know whether to emit.
     pub fn from_attrs(e: &quick_xml::events::BytesStart) -> Self {
+        // Order matches Rectangle::corners — clockwise from top-left.
+        let per = [
+            ("ParagraphBorderTopLeftCornerOption", "ParagraphBorderTopLeftCornerRadius"),
+            ("ParagraphBorderTopRightCornerOption", "ParagraphBorderTopRightCornerRadius"),
+            ("ParagraphBorderBottomRightCornerOption", "ParagraphBorderBottomRightCornerRadius"),
+            ("ParagraphBorderBottomLeftCornerOption", "ParagraphBorderBottomLeftCornerRadius"),
+        ];
+        let mut corners = [CornerSpec::default(); 4];
+        for (i, (oname, rname)) in per.iter().enumerate() {
+            corners[i].option = attr(e, oname.as_bytes())
+                .as_deref()
+                .and_then(CornerOption::from_idml);
+            corners[i].radius = attr(e, rname.as_bytes()).and_then(|s| s.parse().ok());
+        }
         Self {
             on: attr(e, b"ParagraphBorderOn").and_then(|s| s.parse().ok()),
             color: attr(e, b"ParagraphBorderColor"),
@@ -433,6 +450,7 @@ impl ParagraphBorder {
             offset_bottom: attr(e, b"ParagraphBorderBottomOffset").and_then(|s| s.parse().ok()),
             offset_right: attr(e, b"ParagraphBorderRightOffset").and_then(|s| s.parse().ok()),
             width: attr(e, b"ParagraphBorderWidth"),
+            corners,
         }
     }
 }
@@ -1438,6 +1456,10 @@ fn merge_border(child: &mut ParagraphBorder, parent: &ParagraphBorder) {
     if child.width.is_none() {
         child.width = parent.width.clone();
     }
+    for i in 0..4 {
+        child.corners[i].option = child.corners[i].option.or(parent.corners[i].option);
+        child.corners[i].radius = child.corners[i].radius.or(parent.corners[i].radius);
+    }
 }
 
 fn parse_character_style(e: &quick_xml::events::BytesStart) -> Option<CharacterStyleDef> {
@@ -1837,6 +1859,61 @@ mod tests {
         assert_eq!(r.border.on, Some(true));
         assert_eq!(r.border.color.as_deref(), Some("Color/Brand"));
         assert_eq!(r.border.weight, Some(1.0));
+    }
+
+    #[test]
+    fn q09_paragraph_border_per_corner_attrs_round_trip() {
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootParagraphStyleGroup>
+            <ParagraphStyle Self="ParagraphStyle/Boxed"
+                            ParagraphBorderOn="true"
+                            ParagraphBorderTopLeftCornerOption="RoundedCorner"
+                            ParagraphBorderTopLeftCornerRadius="6"
+                            ParagraphBorderTopRightCornerOption="RoundedCorner"
+                            ParagraphBorderTopRightCornerRadius="7"
+                            ParagraphBorderBottomRightCornerOption="None"
+                            ParagraphBorderBottomRightCornerRadius="0"
+                            ParagraphBorderBottomLeftCornerOption="RoundedCorner"
+                            ParagraphBorderBottomLeftCornerRadius="9"/>
+          </RootParagraphStyleGroup>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let p = s.paragraph_styles.get("ParagraphStyle/Boxed").unwrap();
+        let c = &p.border.corners;
+        assert_eq!(c[0].radius, Some(6.0));
+        assert_eq!(c[0].option, Some(crate::CornerOption::Rounded));
+        assert_eq!(c[1].radius, Some(7.0));
+        assert_eq!(c[2].radius, Some(0.0));
+        assert_eq!(c[2].option, Some(crate::CornerOption::None));
+        assert_eq!(c[3].radius, Some(9.0));
+        assert_eq!(c[3].option, Some(crate::CornerOption::Rounded));
+    }
+
+    #[test]
+    fn q09_paragraph_border_corner_inherits_from_based_on() {
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootParagraphStyleGroup>
+            <ParagraphStyle Self="ParagraphStyle/Base"
+                            ParagraphBorderOn="true"
+                            ParagraphBorderTopLeftCornerOption="RoundedCorner"
+                            ParagraphBorderTopLeftCornerRadius="5"
+                            ParagraphBorderTopRightCornerOption="RoundedCorner"
+                            ParagraphBorderTopRightCornerRadius="5"/>
+            <ParagraphStyle Self="ParagraphStyle/Child"
+                            BasedOn="ParagraphStyle/Base"
+                            ParagraphBorderTopRightCornerRadius="8"/>
+          </RootParagraphStyleGroup>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let r = s.resolve_paragraph("ParagraphStyle/Child");
+        // top-left inherited fully; top-right radius overridden but
+        // option still inherited from parent.
+        assert_eq!(r.border.corners[0].radius, Some(5.0));
+        assert_eq!(r.border.corners[0].option, Some(crate::CornerOption::Rounded));
+        assert_eq!(r.border.corners[1].radius, Some(8.0));
+        assert_eq!(r.border.corners[1].option, Some(crate::CornerOption::Rounded));
     }
 
     #[test]

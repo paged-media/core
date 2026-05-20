@@ -782,6 +782,10 @@ fn merge_border_attrs(c: &mut idml_parse::ParagraphBorder, p: &idml_parse::Parag
     if c.width.is_none() {
         c.width = p.width.clone();
     }
+    for i in 0..4 {
+        c.corners[i].option = c.corners[i].option.or(p.corners[i].option);
+        c.corners[i].radius = c.corners[i].radius.or(p.corners[i].radius);
+    }
 }
 
 /// Derive a Story's `Self` id from its manifest src. Turns

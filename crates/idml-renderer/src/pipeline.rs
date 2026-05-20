@@ -3300,9 +3300,10 @@ fn emit_paragraph_into_chain(
                 }
             }
         }
-        // Q-09: emit ParagraphBorder on the last line as four thin
-        // rects (top / right / bottom / left). Uses first_baseline_pt
-        // captured on the first iteration to anchor the top edge.
+        // Q-09: emit ParagraphBorder on the last line. Sharp corners
+        // (all radii 0) keep the cheap four-fill-rect path; any rounded
+        // corner switches to a single rounded-outline StrokePath
+        // (Track 4d).
         if is_last_line {
             if let (Some(paint), Some(first_baseline)) = (border_paint, first_baseline_pt) {
                 let b = &resolved_paragraph.border;
@@ -3319,37 +3320,58 @@ fn emit_paragraph_into_chain(
                 let y_bot =
                     text_origin_pt.1 + baseline_pt_local + line_h_pt_local * 0.2 + off_bottom;
                 if x_right > x_left && y_bot > y_top {
-                    let top = idml_compose::Rect {
-                        x: x_left - weight * 0.5,
-                        y: y_top - weight * 0.5,
-                        w: (x_right - x_left) + weight,
-                        h: weight,
-                    };
-                    let bottom = idml_compose::Rect {
-                        x: x_left - weight * 0.5,
-                        y: y_bot - weight * 0.5,
-                        w: (x_right - x_left) + weight,
-                        h: weight,
-                    };
-                    let left_edge = idml_compose::Rect {
-                        x: x_left - weight * 0.5,
-                        y: y_top - weight * 0.5,
-                        w: weight,
-                        h: (y_bot - y_top) + weight,
-                    };
-                    let right_edge = idml_compose::Rect {
-                        x: x_right - weight * 0.5,
-                        y: y_top - weight * 0.5,
-                        w: weight,
-                        h: (y_bot - y_top) + weight,
-                    };
-                    for r in [top, right_edge, bottom, left_edge] {
-                        idml_compose::emit_rect_transformed(
-                            r,
-                            Transform::IDENTITY,
-                            paint,
-                            &mut pages[target_page].list,
+                    let radii = per_corner_radii(None, None, &b.corners);
+                    let any_rounded = radii.iter().any(|r| r.map(|v| v > 0.0).unwrap_or(false));
+                    if any_rounded {
+                        let outline_rect = idml_compose::Rect {
+                            x: x_left,
+                            y: y_top,
+                            w: x_right - x_left,
+                            h: y_bot - y_top,
+                        };
+                        let path = rounded_rect_path_per_corner(outline_rect, radii);
+                        let path_id = pages[target_page].list.paths.push_anon(path);
+                        pages[target_page].list.push(
+                            idml_compose::DisplayCommand::StrokePath {
+                                path_id,
+                                paint,
+                                stroke: idml_compose::Stroke::new(weight),
+                                transform: Transform::IDENTITY,
+                            },
                         );
+                    } else {
+                        let top = idml_compose::Rect {
+                            x: x_left - weight * 0.5,
+                            y: y_top - weight * 0.5,
+                            w: (x_right - x_left) + weight,
+                            h: weight,
+                        };
+                        let bottom = idml_compose::Rect {
+                            x: x_left - weight * 0.5,
+                            y: y_bot - weight * 0.5,
+                            w: (x_right - x_left) + weight,
+                            h: weight,
+                        };
+                        let left_edge = idml_compose::Rect {
+                            x: x_left - weight * 0.5,
+                            y: y_top - weight * 0.5,
+                            w: weight,
+                            h: (y_bot - y_top) + weight,
+                        };
+                        let right_edge = idml_compose::Rect {
+                            x: x_right - weight * 0.5,
+                            y: y_top - weight * 0.5,
+                            w: weight,
+                            h: (y_bot - y_top) + weight,
+                        };
+                        for r in [top, right_edge, bottom, left_edge] {
+                            idml_compose::emit_rect_transformed(
+                                r,
+                                Transform::IDENTITY,
+                                paint,
+                                &mut pages[target_page].list,
+                            );
+                        }
                     }
                 }
             }

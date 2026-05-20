@@ -26,7 +26,7 @@ use crate::ParseError;
 /// and the other three corners. When both fields are `None` the
 /// renderer falls back to the legacy single `corner_option` /
 /// `corner_radius` pair (which itself defaults to "no rounding").
-#[derive(Debug, Default, Clone, Copy, Serialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize)]
 pub struct CornerSpec {
     pub option: Option<CornerOption>,
     pub radius: Option<f32>,
