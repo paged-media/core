@@ -2857,8 +2857,31 @@ fn emit_paragraph_into_chain(
     };
     let rule_above_paint = resolve_rule_paint(&resolved_paragraph.rule_above);
     let rule_below_paint = resolve_rule_paint(&resolved_paragraph.rule_below);
+    // Q-09: resolve ParagraphBorder paint once per paragraph. The
+    // four-edge stroke lands at the END of the last line, using the
+    // first line's baseline (captured below) to anchor the top edge.
+    let border_paint = if resolved_paragraph.border.on == Some(true) {
+        resolved_paragraph
+            .border
+            .color
+            .as_deref()
+            .and_then(|id| color_id_to_paint(id, em.palette, em.cmyk_xform))
+            .map(|p| {
+                let tint = resolved_paragraph.border.tint.unwrap_or(100.0);
+                if tint < 0.0 {
+                    p
+                } else {
+                    apply_fill_tint(p, Some(tint))
+                }
+            })
+    } else {
+        None
+    };
     let last_line_index = laid_out.lines.len().saturating_sub(1);
     let mut current_line_idx: usize = 0;
+    // Q-09: capture the first line's baseline so the border's top
+    // edge anchors above it; closed out at the last-line emit.
+    let mut first_baseline_pt: Option<f32> = None;
     for mut line in laid_out.lines.into_iter() {
         let line_h = idml_text::layout::max_line_height_for_glyphs(&line.glyphs)
             .unwrap_or(lopts.line_height);
@@ -2927,6 +2950,7 @@ fn emit_paragraph_into_chain(
         let line_h_pt_local = line_h as f32 / idml_text::shape::ADVANCE_PRECISION;
         let baseline_pt_local = line.baseline_y as f32 / idml_text::shape::ADVANCE_PRECISION;
         if is_first_line {
+            first_baseline_pt = Some(baseline_pt_local);
             if let Some(paint) = rule_above_paint {
                 let r = &resolved_paragraph.rule_above;
                 let weight = r.weight.unwrap_or(1.0).max(0.01);
@@ -3142,6 +3166,60 @@ fn emit_paragraph_into_chain(
                         paint,
                         &mut pages[target_page].list,
                     );
+                }
+            }
+        }
+        // Q-09: emit ParagraphBorder on the last line as four thin
+        // rects (top / right / bottom / left). Uses first_baseline_pt
+        // captured on the first iteration to anchor the top edge.
+        if is_last_line {
+            if let (Some(paint), Some(first_baseline)) = (border_paint, first_baseline_pt) {
+                let b = &resolved_paragraph.border;
+                let weight = b.weight.unwrap_or(1.0).max(0.01);
+                let off_top = b.offset_top.unwrap_or(0.0);
+                let off_left = b.offset_left.unwrap_or(0.0);
+                let off_bottom = b.offset_bottom.unwrap_or(0.0);
+                let off_right = b.offset_right.unwrap_or(0.0);
+                let col_w_pt = em.column_width_pt.unwrap_or(0.0);
+                let x_left = text_origin_pt.0 + off_left;
+                let x_right = text_origin_pt.0 + col_w_pt - off_right;
+                let y_top =
+                    text_origin_pt.1 + first_baseline - line_h_pt_local * 0.8 - off_top;
+                let y_bot =
+                    text_origin_pt.1 + baseline_pt_local + line_h_pt_local * 0.2 + off_bottom;
+                if x_right > x_left && y_bot > y_top {
+                    let top = idml_compose::Rect {
+                        x: x_left - weight * 0.5,
+                        y: y_top - weight * 0.5,
+                        w: (x_right - x_left) + weight,
+                        h: weight,
+                    };
+                    let bottom = idml_compose::Rect {
+                        x: x_left - weight * 0.5,
+                        y: y_bot - weight * 0.5,
+                        w: (x_right - x_left) + weight,
+                        h: weight,
+                    };
+                    let left_edge = idml_compose::Rect {
+                        x: x_left - weight * 0.5,
+                        y: y_top - weight * 0.5,
+                        w: weight,
+                        h: (y_bot - y_top) + weight,
+                    };
+                    let right_edge = idml_compose::Rect {
+                        x: x_right - weight * 0.5,
+                        y: y_top - weight * 0.5,
+                        w: weight,
+                        h: (y_bot - y_top) + weight,
+                    };
+                    for r in [top, right_edge, bottom, left_edge] {
+                        idml_compose::emit_rect_transformed(
+                            r,
+                            Transform::IDENTITY,
+                            paint,
+                            &mut pages[target_page].list,
+                        );
+                    }
                 }
             }
         }

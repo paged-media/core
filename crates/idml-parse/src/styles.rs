@@ -395,6 +395,48 @@ impl ParagraphRule {
     }
 }
 
+/// Q-09: `ParagraphBorder*` attributes parsed off a `<ParagraphStyle>`
+/// or `<ParagraphStyleRange>`. The renderer strokes a rectangular
+/// border around the paragraph's content box when `on` is true. Only
+/// the fields actually consumed by the renderer are listed; the
+/// per-corner option / radius attrs are read-but-not-rendered in this
+/// first cut.
+#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+pub struct ParagraphBorder {
+    pub on: Option<bool>,
+    pub color: Option<String>,
+    pub tint: Option<f32>,
+    /// Stroke weight in pt.
+    pub weight: Option<f32>,
+    /// Inset offsets in pt.
+    pub offset_top: Option<f32>,
+    pub offset_left: Option<f32>,
+    pub offset_bottom: Option<f32>,
+    pub offset_right: Option<f32>,
+    /// `ColumnWidth` | `TextWidth`. None ⇒ ColumnWidth default.
+    pub width: Option<String>,
+}
+
+impl ParagraphBorder {
+    /// Parse the `ParagraphBorder*` attrs off a `<ParagraphStyle>`
+    /// (or `<ParagraphStyleRange>`) element. Returns a fully-default
+    /// instance when no attrs are present; callers can check `on` to
+    /// know whether to emit.
+    pub fn from_attrs(e: &quick_xml::events::BytesStart) -> Self {
+        Self {
+            on: attr(e, b"ParagraphBorderOn").and_then(|s| s.parse().ok()),
+            color: attr(e, b"ParagraphBorderColor"),
+            tint: attr(e, b"ParagraphBorderTint").and_then(|s| s.parse().ok()),
+            weight: attr(e, b"ParagraphBorderWeight").and_then(|s| s.parse().ok()),
+            offset_top: attr(e, b"ParagraphBorderTopOffset").and_then(|s| s.parse().ok()),
+            offset_left: attr(e, b"ParagraphBorderLeftOffset").and_then(|s| s.parse().ok()),
+            offset_bottom: attr(e, b"ParagraphBorderBottomOffset").and_then(|s| s.parse().ok()),
+            offset_right: attr(e, b"ParagraphBorderRightOffset").and_then(|s| s.parse().ok()),
+            width: attr(e, b"ParagraphBorderWidth"),
+        }
+    }
+}
+
 impl ParagraphShading {
     /// Parse the `ParagraphShading*` attrs off a `<ParagraphStyle>`
     /// (or `<ParagraphStyleRange>`) element. Returns a fully-default
@@ -559,6 +601,8 @@ pub struct ParagraphStyleDef {
     pub rule_above: ParagraphRule,
     /// Q-09: horizontal rule below the last line of the paragraph.
     pub rule_below: ParagraphRule,
+    /// Q-09: rectangular border around the paragraph's content box.
+    pub border: ParagraphBorder,
 }
 
 /// Effective character-level attributes after walking BasedOn.
@@ -683,6 +727,7 @@ pub struct ResolvedParagraph {
     pub shading: ParagraphShading,
     pub rule_above: ParagraphRule,
     pub rule_below: ParagraphRule,
+    pub border: ParagraphBorder,
 }
 
 /// Identifies which kind of style is open while we walk
@@ -1324,6 +1369,8 @@ impl ResolvedParagraph {
         // Q-09: per-field rule_above / rule_below inheritance.
         merge_rule(&mut self.rule_above, &def.rule_above);
         merge_rule(&mut self.rule_below, &def.rule_below);
+        // Q-09: per-field border inheritance.
+        merge_border(&mut self.border, &def.border);
     }
 }
 
@@ -1337,6 +1384,22 @@ fn merge_rule(child: &mut ParagraphRule, parent: &ParagraphRule) {
     child.offset = child.offset.or(parent.offset);
     child.left_indent = child.left_indent.or(parent.left_indent);
     child.right_indent = child.right_indent.or(parent.right_indent);
+    if child.width.is_none() {
+        child.width = parent.width.clone();
+    }
+}
+
+fn merge_border(child: &mut ParagraphBorder, parent: &ParagraphBorder) {
+    child.on = child.on.or(parent.on);
+    if child.color.is_none() {
+        child.color = parent.color.clone();
+    }
+    child.tint = child.tint.or(parent.tint);
+    child.weight = child.weight.or(parent.weight);
+    child.offset_top = child.offset_top.or(parent.offset_top);
+    child.offset_left = child.offset_left.or(parent.offset_left);
+    child.offset_bottom = child.offset_bottom.or(parent.offset_bottom);
+    child.offset_right = child.offset_right.or(parent.offset_right);
     if child.width.is_none() {
         child.width = parent.width.clone();
     }
@@ -1559,6 +1622,7 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         shading: ParagraphShading::from_attrs(e),
         rule_above: ParagraphRule::from_attrs(e, "RuleAbove"),
         rule_below: ParagraphRule::from_attrs(e, "RuleBelow"),
+        border: ParagraphBorder::from_attrs(e),
     })
 }
 
@@ -1679,6 +1743,59 @@ mod tests {
         assert_eq!(r.shading.on, Some(true));
         assert_eq!(r.shading.color.as_deref(), Some("Color/Brand"));
         assert_eq!(r.shading.tint, Some(20.0));
+    }
+
+    #[test]
+    fn q09_parses_paragraph_border_attrs() {
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootParagraphStyleGroup>
+            <ParagraphStyle Self="ParagraphStyle/Boxed"
+                            ParagraphBorderOn="true"
+                            ParagraphBorderColor="Color/Brand"
+                            ParagraphBorderTint="40"
+                            ParagraphBorderWeight="1"
+                            ParagraphBorderTopOffset="2"
+                            ParagraphBorderBottomOffset="3"
+                            ParagraphBorderLeftOffset="4"
+                            ParagraphBorderRightOffset="5"
+                            ParagraphBorderWidth="ColumnWidth"/>
+          </RootParagraphStyleGroup>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let p = s.paragraph_styles.get("ParagraphStyle/Boxed").unwrap();
+        let b = &p.border;
+        assert_eq!(b.on, Some(true));
+        assert_eq!(b.color.as_deref(), Some("Color/Brand"));
+        assert_eq!(b.tint, Some(40.0));
+        assert_eq!(b.weight, Some(1.0));
+        assert_eq!(b.offset_top, Some(2.0));
+        assert_eq!(b.offset_bottom, Some(3.0));
+        assert_eq!(b.offset_left, Some(4.0));
+        assert_eq!(b.offset_right, Some(5.0));
+        assert_eq!(b.width.as_deref(), Some("ColumnWidth"));
+    }
+
+    #[test]
+    fn q09_paragraph_border_inherits_from_based_on() {
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootParagraphStyleGroup>
+            <ParagraphStyle Self="ParagraphStyle/Base"
+                            ParagraphBorderOn="true"
+                            ParagraphBorderColor="Color/Brand"
+                            ParagraphBorderWeight="2"/>
+            <ParagraphStyle Self="ParagraphStyle/Child"
+                            BasedOn="ParagraphStyle/Base"
+                            ParagraphBorderWeight="1"/>
+          </RootParagraphStyleGroup>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let r = s.resolve_paragraph("ParagraphStyle/Child");
+        // weight overridden, color + on inherited.
+        assert_eq!(r.border.on, Some(true));
+        assert_eq!(r.border.color.as_deref(), Some("Color/Brand"));
+        assert_eq!(r.border.weight, Some(1.0));
     }
 
     #[test]

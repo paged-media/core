@@ -643,6 +643,7 @@ impl ResolvedParagraphAttrs {
             shading: Default::default(),
             rule_above: Default::default(),
             rule_below: Default::default(),
+            border: Default::default(),
         }
     }
 
@@ -728,6 +729,8 @@ impl ResolvedParagraphAttrs {
         // Q-09: per-field rule_above / rule_below inheritance.
         merge_rule_attrs(&mut self.rule_above, &p.rule_above);
         merge_rule_attrs(&mut self.rule_below, &p.rule_below);
+        // Q-09: per-field paragraph-border inheritance.
+        merge_border_attrs(&mut self.border, &p.border);
     }
 }
 
@@ -741,6 +744,22 @@ fn merge_rule_attrs(c: &mut idml_parse::ParagraphRule, p: &idml_parse::Paragraph
     c.offset = c.offset.or(p.offset);
     c.left_indent = c.left_indent.or(p.left_indent);
     c.right_indent = c.right_indent.or(p.right_indent);
+    if c.width.is_none() {
+        c.width = p.width.clone();
+    }
+}
+
+fn merge_border_attrs(c: &mut idml_parse::ParagraphBorder, p: &idml_parse::ParagraphBorder) {
+    c.on = c.on.or(p.on);
+    if c.color.is_none() {
+        c.color = p.color.clone();
+    }
+    c.tint = c.tint.or(p.tint);
+    c.weight = c.weight.or(p.weight);
+    c.offset_top = c.offset_top.or(p.offset_top);
+    c.offset_left = c.offset_left.or(p.offset_left);
+    c.offset_bottom = c.offset_bottom.or(p.offset_bottom);
+    c.offset_right = c.offset_right.or(p.offset_right);
     if c.width.is_none() {
         c.width = p.width.clone();
     }
@@ -938,6 +957,8 @@ pub struct ResolvedParagraphAttrs {
     pub rule_above: idml_parse::ParagraphRule,
     /// Q-09: cascaded horizontal rule below the last line.
     pub rule_below: idml_parse::ParagraphRule,
+    /// Q-09: cascaded rectangular paragraph border.
+    pub border: idml_parse::ParagraphBorder,
 }
 
 #[derive(Debug, thiserror::Error)]
