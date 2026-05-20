@@ -11568,4 +11568,73 @@ mod tests {
             "placeholder X should read as near-black against the grey fill",
         );
     }
+
+    /// Q-08 (hypothesis check, rect / oval path): for a rotated
+    /// rect / oval the `linear_gradient_endpoints` projection
+    /// (unit-rect coords) is fed through `Transform::for_rect_in(rect,
+    /// outer)` where `outer` already incorporates the shape's
+    /// `ItemTransform`. The composed transform IS what the rasterizer
+    /// uses to push the unit-rect endpoints into page space (see
+    /// `idml_gpu::cpu::build_linear_gradient_shader`), so a 90°-
+    /// vertical gradient on a 90°-rotated frame should produce a
+    /// horizontal page-space gradient line. Asserts that — guards
+    /// against a regression that would re-introduce the protocol's
+    /// hypothesised bug (ItemTransform ignored on gradient projection).
+    #[test]
+    fn q08_gradient_endpoints_rotate_with_item_transform() {
+        let rect = idml_compose::Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 100.0,
+        };
+        let (s_unit, e_unit) = linear_gradient_endpoints(Some(90.0), None, None);
+        approx(s_unit, (0.5, 0.0));
+        approx(e_unit, (0.5, 1.0));
+        // Identity baseline: local vertical = page vertical.
+        let xf_id = Transform::for_rect_in(rect, Transform::IDENTITY);
+        approx(xf_id.apply(s_unit.0, s_unit.1), (50.0, 0.0));
+        approx(xf_id.apply(e_unit.0, e_unit.1), (50.0, 100.0));
+        // ItemTransform `0 1 -1 0 200 0` packs to `[a, b, c, d, tx,
+        // ty] = [0, 1, -1, 0, 200, 0]` — a 90° rotation about the
+        // origin plus translate(+200, 0). Maps frame-local (x, y) to
+        // page (200 - y, x).
+        let outer_rot = Transform([0.0, 1.0, -1.0, 0.0, 200.0, 0.0]);
+        let xf_rot = Transform::for_rect_in(rect, outer_rot);
+        approx(xf_rot.apply(s_unit.0, s_unit.1), (200.0, 50.0));
+        approx(xf_rot.apply(e_unit.0, e_unit.1), (100.0, 50.0));
+    }
+
+    /// Q-08 polygon fix: a Polygon fill emits `FillPath` whose
+    /// rasterizer path_transform IS `outer` directly (the path lives
+    /// in inner-anchor coords). The fill module rewrites the
+    /// gradient's unit-rect endpoints to bbox-local inner coords so
+    /// the rasterizer's subsequent `outer.apply(...)` lands them in
+    /// the polygon's actual page span. Without that step a 90° fill
+    /// on the brochure's full-page background polygon collapses to a
+    /// ~1pt gradient line near the spread origin and renders flat.
+    /// Asserts the inner-coord math the fill module bakes in.
+    #[test]
+    fn q08_polygon_gradient_rebases_to_bbox() {
+        // Brochure page-bg polygon dimensions (approx).
+        let bbox = idml_compose::Rect {
+            x: -8.5,
+            y: -479.0,
+            w: 612.3,
+            h: 672.4,
+        };
+        let (s_unit, e_unit) =
+            linear_gradient_endpoints(Some(90.0), Some(577.7332), Some((bbox.w, bbox.h)));
+        // `rebase_gradient_to_bbox` applies this mapping.
+        let start = (bbox.x + s_unit.0 * bbox.w, bbox.y + s_unit.1 * bbox.h);
+        let end = (bbox.x + e_unit.0 * bbox.w, bbox.y + e_unit.1 * bbox.h);
+        // Vertical line, horizontally centred on the bbox; length
+        // equals the input `length_pt`. Without the rebase the
+        // rasterizer would see (0.5, ~0.07) → (0.5, ~0.93) directly
+        // (sub-pt line near the spread origin → flat polygon).
+        let cx = bbox.x + bbox.w * 0.5;
+        assert!((start.0 - cx).abs() < 1e-3);
+        assert!((end.0 - cx).abs() < 1e-3);
+        assert!(((end.1 - start.1) - 577.7332).abs() < 1e-3);
+    }
 }
