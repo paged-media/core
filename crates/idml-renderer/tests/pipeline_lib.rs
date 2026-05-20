@@ -727,3 +727,177 @@ fn threaded_story_renders_without_panic() {
         "transparent text frames + no font ⇒ zero fills, got {frame_fills}"
     );
 }
+
+/// Build a 1-page IDML with two Rectangles on different layers.
+/// `layerBack` (the bottom-of-z-stack layer) is declared *second* in
+/// designmap.xml so `layers[0]` is the top layer — matching IDML's
+/// top-first convention. The XML order of the Rectangles is reversed
+/// from the desired paint order: the front-layer rect (Blue) comes
+/// first in the spread, the back-layer rect (Red) comes second. A
+/// correct renderer emits Red FIRST (behind) and Blue SECOND (on top),
+/// regardless of XML order.
+fn build_layered_rects_idml() -> Vec<u8> {
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    zip.start_file("designmap.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Layer Self="layerFront" Name="Front" Visible="true" Printable="true"/>
+  <Layer Self="layerBack" Name="Back" Visible="true" Printable="true"/>
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+</Document>"#,
+    )
+    .unwrap();
+    zip.start_file("Resources/Graphic.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic>
+    <Color Self="Color/Red" Name="Red" Space="RGB" ColorValue="255 0 0"/>
+    <Color Self="Color/Blue" Name="Blue" Space="RGB" ColorValue="0 0 255"/>
+  </Graphic>
+</idPkg:Graphic>"#,
+    )
+    .unwrap();
+    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 200"/>
+    <Rectangle Self="rFront" ItemLayer="layerFront" GeometricBounds="0 0 200 200"
+               FillColor="Color/Blue" StrokeWeight="0"/>
+    <Rectangle Self="rBack" ItemLayer="layerBack" GeometricBounds="0 0 200 200"
+               FillColor="Color/Red" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#,
+    )
+    .unwrap();
+    zip.finish().unwrap().into_inner()
+}
+
+/// Same shape as `build_layered_rects_idml` but BOTH rectangles share
+/// the SAME ItemLayer. The Q-10 sort must be a no-op when all items
+/// resolve to a single layer-z; emission preserves XML order
+/// (Blue first, Red second).
+fn build_same_layer_rects_idml() -> Vec<u8> {
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    zip.start_file("designmap.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Layer Self="layerOnly" Name="Only" Visible="true" Printable="true"/>
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+</Document>"#,
+    )
+    .unwrap();
+    zip.start_file("Resources/Graphic.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic>
+    <Color Self="Color/Red" Name="Red" Space="RGB" ColorValue="255 0 0"/>
+    <Color Self="Color/Blue" Name="Blue" Space="RGB" ColorValue="0 0 255"/>
+  </Graphic>
+</idPkg:Graphic>"#,
+    )
+    .unwrap();
+    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 200"/>
+    <Rectangle Self="rBlue" ItemLayer="layerOnly" GeometricBounds="0 0 200 200"
+               FillColor="Color/Blue" StrokeWeight="0"/>
+    <Rectangle Self="rRed" ItemLayer="layerOnly" GeometricBounds="0 0 200 200"
+               FillColor="Color/Red" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#,
+    )
+    .unwrap();
+    zip.finish().unwrap().into_inner()
+}
+
+#[test]
+fn cross_shape_same_layer_preserves_xml_order() {
+    // Q-10 safeguard: with both rects on the same layer the sort
+    // must be a no-op. XML order (Blue first, Red second) wins.
+    let bytes = build_same_layer_rects_idml();
+    let document = Document::open(&bytes).unwrap();
+    let opts = PipelineOptions::default();
+    let built = pipeline::build_document(&document, &opts).unwrap();
+    let fills: Vec<&Paint> = built.pages[0]
+        .list
+        .commands
+        .iter()
+        .filter_map(|c| match c {
+            idml_compose::DisplayCommand::FillPath { paint, .. } => Some(paint),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fills.len(), 2);
+    fn is_blue(p: &Paint) -> bool {
+        matches!(p, Paint::Solid(c) if c.b > c.r && c.b > c.g)
+    }
+    fn is_red(p: &Paint) -> bool {
+        matches!(p, Paint::Solid(c) if c.r > c.b && c.r > c.g)
+    }
+    assert!(is_blue(fills[0]), "XML-first Blue rect emits first");
+    assert!(is_red(fills[1]), "XML-second Red rect emits second");
+}
+
+#[test]
+fn cross_shape_item_layer_z_order_back_emits_before_front() {
+    // Q-10: items on a back layer paint first (behind) regardless of
+    // XML order. The IDML places Blue (front layer) before Red (back
+    // layer) — the renderer must invert that so Red's FillPath comes
+    // first in the page command list and Blue's comes second.
+    let bytes = build_layered_rects_idml();
+    let document = Document::open(&bytes).unwrap();
+    let opts = PipelineOptions::default();
+    let built = pipeline::build_document(&document, &opts).unwrap();
+    assert_eq!(built.pages.len(), 1);
+
+    let fills: Vec<&Paint> = built.pages[0]
+        .list
+        .commands
+        .iter()
+        .filter_map(|c| match c {
+            idml_compose::DisplayCommand::FillPath { paint, .. } => Some(paint),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fills.len(), 2, "two rectangles → two FillPaths");
+
+    // Red ≈ (1,0,0); Blue ≈ (0,0,1). Use the dominant channel to
+    // identify each paint without depending on exact sRGB encoding.
+    fn is_red(p: &Paint) -> bool {
+        matches!(p, Paint::Solid(c) if c.r > c.b && c.r > c.g)
+    }
+    fn is_blue(p: &Paint) -> bool {
+        matches!(p, Paint::Solid(c) if c.b > c.r && c.b > c.g)
+    }
+    assert!(
+        is_red(fills[0]),
+        "back-layer (Red) rect should emit first, got {:?}",
+        fills[0]
+    );
+    assert!(
+        is_blue(fills[1]),
+        "front-layer (Blue) rect should emit second, got {:?}",
+        fills[1]
+    );
+}

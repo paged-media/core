@@ -117,6 +117,14 @@ pub struct Spread {
     /// vec. Child shape indices are recorded in the order the parser
     /// encountered them.
     pub groups: Vec<Group>,
+    /// Top-level page items in XML order. Group members live on the
+    /// corresponding `Group::members` list and are NOT duplicated here
+    /// — instead the outermost group surfaces here as a single
+    /// `FrameRef::Group(idx)`. The renderer uses this flat list to
+    /// drive cross-shape z-ordering (Q-10): items on a back ItemLayer
+    /// paint before items on a front layer regardless of the
+    /// per-shape XML order their backing `Vec<…>` records.
+    pub frames_in_order: Vec<FrameRef>,
 }
 
 /// One `<Group>` page-item record. The renderer walks `members` to
@@ -1449,17 +1457,28 @@ impl Spread {
         // vec — that index is stable for the rest of the parse
         // (frames never get reordered after creation).
         //
+        // Top-level frames (no group active) instead get appended to
+        // `out.frames_in_order`, which feeds the renderer's
+        // cross-shape z-order sort (Q-10).
+        //
         // Registration happens at open time so self-closing
         // `<Rectangle/>` etc. (which fire as `Event::Empty` and
         // never visit the `End` arm) still get recorded. The
         // close handler below unregisters frames that ultimately
         // got dropped for missing bounds.
-        fn register_with_group(group_builders: &mut [GroupBuilder], frame_ref: FrameRef) {
+        fn register_with_group(
+            out: &mut Spread,
+            group_builders: &mut [GroupBuilder],
+            frame_ref: FrameRef,
+        ) {
             if let Some(b) = group_builders.last_mut() {
                 b.members.push(frame_ref);
+            } else {
+                out.frames_in_order.push(frame_ref);
             }
         }
         fn unregister_last_in_group(
+            out: &mut Spread,
             group_builders: &mut [GroupBuilder],
             expected: FrameRef,
         ) {
@@ -1467,6 +1486,8 @@ impl Spread {
                 if b.members.last() == Some(&expected) {
                     b.members.pop();
                 }
+            } else if out.frames_in_order.last() == Some(&expected) {
+                out.frames_in_order.pop();
             }
         }
 
@@ -1598,6 +1619,7 @@ impl Spread {
                         });
                         let idx = out.text_frames.len() - 1;
                         register_with_group(
+                            &mut out,
                             &mut group_builders,
                             FrameRef::TextFrame(idx),
                         );
@@ -1670,6 +1692,7 @@ impl Spread {
                         });
                         let idx = out.rectangles.len() - 1;
                         register_with_group(
+                            &mut out,
                             &mut group_builders,
                             FrameRef::Rectangle(idx),
                         );
@@ -1725,7 +1748,7 @@ impl Spread {
                             overprint_stroke: common.overprint_stroke,
                         });
                         let idx = out.ovals.len() - 1;
-                        register_with_group(&mut group_builders, FrameRef::Oval(idx));
+                        register_with_group(&mut out, &mut group_builders, FrameRef::Oval(idx));
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Oval(idx),
                             needs_bounds: bounds_attr.is_none(),
@@ -2470,6 +2493,7 @@ impl Spread {
                         });
                         let idx = out.graphic_lines.len() - 1;
                         register_with_group(
+                            &mut out,
                             &mut group_builders,
                             FrameRef::GraphicLine(idx),
                         );
@@ -2525,7 +2549,7 @@ impl Spread {
                             overprint_stroke: common.overprint_stroke,
                         });
                         let idx = out.polygons.len() - 1;
-                        register_with_group(&mut group_builders, FrameRef::Polygon(idx));
+                        register_with_group(&mut out, &mut group_builders, FrameRef::Polygon(idx));
                         current_frame = Some(CurrentFrame {
                             kind: CurrentFrameKind::Polygon(idx),
                             needs_bounds: bounds_attr.is_none(),
@@ -2558,9 +2582,15 @@ impl Spread {
                             // Register this sub-group with the
                             // enclosing group, if any, so the
                             // outer's `members` list captures
-                            // sub-groups in document order.
+                            // sub-groups in document order. Top-level
+                            // groups (no outer) surface in
+                            // `frames_in_order` so the renderer's
+                            // cross-shape z-sort sees them once at
+                            // their XML position.
                             if let Some(outer) = group_builders.last_mut() {
                                 outer.members.push(FrameRef::Group(group_idx));
+                            } else {
+                                out.frames_in_order.push(FrameRef::Group(group_idx));
                             }
                         }
                     }
@@ -2589,7 +2619,7 @@ impl Spread {
                                         CurrentFrameKind::Line(i) => FrameRef::GraphicLine(i),
                                         CurrentFrameKind::Polygon(i) => FrameRef::Polygon(i),
                                     };
-                                    unregister_last_in_group(&mut group_builders, frame_ref);
+                                    unregister_last_in_group(&mut out, &mut group_builders, frame_ref);
                                 } else {
                                     set_pending_bounds(
                                         &mut out,
@@ -3651,6 +3681,12 @@ mod tests {
             g.members,
             vec![FrameRef::Rectangle(0), FrameRef::Rectangle(1)]
         );
+        // Top-level surface: the group as a single entry + the
+        // ungrouped r3. Grouped rectangles do NOT appear here.
+        assert_eq!(
+            s.frames_in_order,
+            vec![FrameRef::Group(0), FrameRef::Rectangle(2)]
+        );
     }
 
     #[test]
@@ -3690,6 +3726,9 @@ mod tests {
         assert!(outer.transparency.blend_mode.is_none());
         assert!(outer.transparency.opacity.is_none());
         assert!(outer.transparency.drop_shadow.is_none());
+        // Outer is the only top-level item; inner stays buried in
+        // outer.members and does NOT surface in frames_in_order.
+        assert_eq!(s.frames_in_order, vec![FrameRef::Group(1)]);
     }
 
     #[test]
