@@ -2809,6 +2809,36 @@ fn emit_paragraph_into_chain(
     // pass can shift each paragraph independently.
     let mut active_seg: Option<(usize, usize, usize)> = None; // (frame_idx, cmd_start, cmd_end)
     let mut dropped_overflow_lines: usize = 0;
+    // Q-09: resolve paragraph-shading band once per paragraph. The
+    // per-line emit below stamps the band before each line's glyphs
+    // so multi-line shaded paragraphs span continuously visually.
+    // We bake the resolved (color, tint, offsets) up-front so the
+    // per-line code path stays cheap.
+    let shading_paint = if resolved_paragraph.shading.on == Some(true) {
+        resolved_paragraph
+            .shading
+            .color
+            .as_deref()
+            .and_then(|id| color_id_to_paint(id, em.palette, em.cmyk_xform))
+            .map(|p| {
+                let tint = resolved_paragraph.shading.tint.unwrap_or(100.0);
+                // IDML tint of -1 means "use stop color as-is"; 0..100
+                // scales the swatch toward white.
+                if tint < 0.0 {
+                    p
+                } else {
+                    apply_fill_tint(p, Some(tint))
+                }
+            })
+    } else {
+        None
+    };
+    let shading_offsets = [
+        resolved_paragraph.shading.offset_top.unwrap_or(0.0),
+        resolved_paragraph.shading.offset_left.unwrap_or(0.0),
+        resolved_paragraph.shading.offset_bottom.unwrap_or(0.0),
+        resolved_paragraph.shading.offset_right.unwrap_or(0.0),
+    ];
     for mut line in laid_out.lines.into_iter() {
         let line_h = idml_text::layout::max_line_height_for_glyphs(&line.glyphs)
             .unwrap_or(lopts.line_height);
@@ -2869,6 +2899,40 @@ fn emit_paragraph_into_chain(
             && ((frame_linear[3] - 1.0).abs() < 1e-5);
 
         let before_cmds = pages[target_page].list.commands.len();
+
+        // Q-09: paint the shading band BEFORE the line's glyphs so it
+        // composites behind the text. Width spans the column (modulo
+        // the per-side offsets); vertical extents are line_h above
+        // and a descent-fudge below the baseline. The renderer doesn't
+        // yet differentiate `AscentTopOrigin` vs `BaselineTopOrigin`
+        // etc. — `line_h * 0.8` covers the ascent portion well enough
+        // for the visible band to read correctly for most display
+        // headlines.
+        if let Some(paint) = shading_paint {
+            let line_h_pt = line_h as f32 / idml_text::shape::ADVANCE_PRECISION;
+            let baseline_pt = line.baseline_y as f32 / idml_text::shape::ADVANCE_PRECISION;
+            let col_w_pt = em.column_width_pt.unwrap_or(0.0);
+            let y_top = text_origin_pt.1 + baseline_pt - line_h_pt * 0.8
+                - shading_offsets[0];
+            let y_bot = text_origin_pt.1 + baseline_pt + line_h_pt * 0.2
+                + shading_offsets[2];
+            let x_left = text_origin_pt.0 + shading_offsets[1];
+            let x_right = text_origin_pt.0 + col_w_pt - shading_offsets[3];
+            if x_right > x_left && y_bot > y_top {
+                let rect = idml_compose::Rect {
+                    x: x_left,
+                    y: y_top,
+                    w: x_right - x_left,
+                    h: y_bot - y_top,
+                };
+                idml_compose::emit_rect_transformed(
+                    rect,
+                    Transform::IDENTITY,
+                    paint,
+                    &mut pages[target_page].list,
+                );
+            }
+        }
 
         let mut start = 0;
         while start < line.glyphs.len() {

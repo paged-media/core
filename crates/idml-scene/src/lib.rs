@@ -637,6 +637,10 @@ impl ResolvedParagraphAttrs {
             mojikumi_set: paragraph.mojikumi_set.clone(),
             overprint_fill: paragraph.overprint_fill,
             overprint_stroke: paragraph.overprint_stroke,
+            // Q-09: paragraph carries no per-paragraph shading
+            // override today; the cascade pulls everything from the
+            // applied paragraph style.
+            shading: Default::default(),
         }
     }
 
@@ -695,6 +699,30 @@ impl ResolvedParagraphAttrs {
         }
         self.overprint_fill = self.overprint_fill.or(p.overprint_fill);
         self.overprint_stroke = self.overprint_stroke.or(p.overprint_stroke);
+        // Q-09: paragraph-shading per-field inheritance.
+        let s = &mut self.shading;
+        let ps = &p.shading;
+        s.on = s.on.or(ps.on);
+        if s.color.is_none() {
+            s.color = ps.color.clone();
+        }
+        s.tint = s.tint.or(ps.tint);
+        if s.width.is_none() {
+            s.width = ps.width.clone();
+        }
+        s.offset_top = s.offset_top.or(ps.offset_top);
+        s.offset_left = s.offset_left.or(ps.offset_left);
+        s.offset_bottom = s.offset_bottom.or(ps.offset_bottom);
+        s.offset_right = s.offset_right.or(ps.offset_right);
+        if s.top_origin.is_none() {
+            s.top_origin = ps.top_origin.clone();
+        }
+        if s.bottom_origin.is_none() {
+            s.bottom_origin = ps.bottom_origin.clone();
+        }
+        s.clip_to_frame = s.clip_to_frame.or(ps.clip_to_frame);
+        s.overprint = s.overprint.or(ps.overprint);
+        s.suppress_printing = s.suppress_printing.or(ps.suppress_printing);
     }
 }
 
@@ -884,6 +912,8 @@ pub struct ResolvedParagraphAttrs {
     pub overprint_fill: Option<bool>,
     /// Cascaded `OverprintStroke` flag.
     pub overprint_stroke: Option<bool>,
+    /// Q-09: cascaded paragraph-shading parameters.
+    pub shading: idml_parse::ParagraphShading,
 }
 
 #[derive(Debug, thiserror::Error)]
