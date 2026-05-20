@@ -316,6 +316,60 @@ pub struct CharacterStyleDef {
     pub kenten_font_size: Option<f32>,
 }
 
+/// Q-09: `ParagraphShading*` attributes parsed off a
+/// `<ParagraphStyle>` or `<ParagraphStyleRange>`. The renderer emits
+/// a coloured rectangle behind each line of the paragraph when `on`
+/// is true. `None` for any field means "not set at this level" so the
+/// cascade can inherit from `BasedOn`. The decorative per-corner
+/// options + radii live alongside the bag in case a future cycle
+/// renders rounded shading bands.
+#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+pub struct ParagraphShading {
+    pub on: Option<bool>,
+    pub color: Option<String>,
+    pub tint: Option<f32>,
+    /// `ColumnWidth` | `TextWidth`. None ⇒ ColumnWidth default.
+    pub width: Option<String>,
+    /// Inset offsets in pt, order `[top, left, bottom, right]`.
+    pub offset_top: Option<f32>,
+    pub offset_left: Option<f32>,
+    pub offset_bottom: Option<f32>,
+    pub offset_right: Option<f32>,
+    /// `AscentTopOrigin` | `BaselineTopOrigin` | etc. Drives the
+    /// shading band's top edge: `None` ⇒ AscentTopOrigin default.
+    pub top_origin: Option<String>,
+    /// `DescentBottomOrigin` | `BaselineBottomOrigin` | etc.
+    pub bottom_origin: Option<String>,
+    pub clip_to_frame: Option<bool>,
+    pub overprint: Option<bool>,
+    pub suppress_printing: Option<bool>,
+}
+
+impl ParagraphShading {
+    /// Parse the `ParagraphShading*` attrs off a `<ParagraphStyle>`
+    /// (or `<ParagraphStyleRange>`) element. Returns a fully-default
+    /// instance when no attrs are present; callers can check `on` to
+    /// know whether to emit.
+    pub fn from_attrs(e: &quick_xml::events::BytesStart) -> Self {
+        Self {
+            on: attr(e, b"ParagraphShadingOn").and_then(|s| s.parse().ok()),
+            color: attr(e, b"ParagraphShadingColor"),
+            tint: attr(e, b"ParagraphShadingTint").and_then(|s| s.parse().ok()),
+            width: attr(e, b"ParagraphShadingWidth"),
+            offset_top: attr(e, b"ParagraphShadingTopOffset").and_then(|s| s.parse().ok()),
+            offset_left: attr(e, b"ParagraphShadingLeftOffset").and_then(|s| s.parse().ok()),
+            offset_bottom: attr(e, b"ParagraphShadingBottomOffset").and_then(|s| s.parse().ok()),
+            offset_right: attr(e, b"ParagraphShadingRightOffset").and_then(|s| s.parse().ok()),
+            top_origin: attr(e, b"ParagraphShadingTopOrigin"),
+            bottom_origin: attr(e, b"ParagraphShadingBottomOrigin"),
+            clip_to_frame: attr(e, b"ParagraphShadingClipToFrame").and_then(|s| s.parse().ok()),
+            overprint: attr(e, b"ParagraphShadingOverprint").and_then(|s| s.parse().ok()),
+            suppress_printing: attr(e, b"ParagraphShadingSuppressPrinting")
+                .and_then(|s| s.parse().ok()),
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct ParagraphStyleDef {
     pub self_id: String,
@@ -446,6 +500,11 @@ pub struct ParagraphStyleDef {
     /// `MojikumiSet` (older IDML attribute name; see
     /// [`Paragraph::mojikumi_set`]).
     pub mojikumi_set: Option<String>,
+    /// Q-09: paragraph-level shading band parameters. `on` defaulting
+    /// to `None` means "not declared at this style level" so the
+    /// `BasedOn` cascade can inherit. Renderer emit module is a
+    /// separate follow-up.
+    pub shading: ParagraphShading,
 }
 
 /// Effective character-level attributes after walking BasedOn.
@@ -565,6 +624,9 @@ pub struct ResolvedParagraph {
     pub mojikumi_table: Option<String>,
     /// Cascaded `MojikumiSet` ref.
     pub mojikumi_set: Option<String>,
+    /// Q-09: cascaded paragraph shading. Each field falls through
+    /// `BasedOn` only when unset at higher levels.
+    pub shading: ParagraphShading,
 }
 
 /// Identifies which kind of style is open while we walk
@@ -1177,6 +1239,32 @@ impl ResolvedParagraph {
         if self.mojikumi_set.is_none() {
             self.mojikumi_set = def.mojikumi_set.clone();
         }
+        // Q-09: per-field shading inheritance. Each Option survives
+        // the cascade independently so a child can override `tint`
+        // without dragging in the parent's `width`, etc.
+        let s = &mut self.shading;
+        let p = &def.shading;
+        s.on = s.on.or(p.on);
+        if s.color.is_none() {
+            s.color = p.color.clone();
+        }
+        s.tint = s.tint.or(p.tint);
+        if s.width.is_none() {
+            s.width = p.width.clone();
+        }
+        s.offset_top = s.offset_top.or(p.offset_top);
+        s.offset_left = s.offset_left.or(p.offset_left);
+        s.offset_bottom = s.offset_bottom.or(p.offset_bottom);
+        s.offset_right = s.offset_right.or(p.offset_right);
+        if s.top_origin.is_none() {
+            s.top_origin = p.top_origin.clone();
+        }
+        if s.bottom_origin.is_none() {
+            s.bottom_origin = p.bottom_origin.clone();
+        }
+        s.clip_to_frame = s.clip_to_frame.or(p.clip_to_frame);
+        s.overprint = s.overprint.or(p.overprint);
+        s.suppress_printing = s.suppress_printing.or(p.suppress_printing);
     }
 }
 
@@ -1394,6 +1482,7 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         kinsoku_type: attr(e, b"KinsokuType"),
         mojikumi_table: attr(e, b"MojikumiTable"),
         mojikumi_set: attr(e, b"MojikumiSet"),
+        shading: ParagraphShading::from_attrs(e),
     })
 }
 
@@ -1459,6 +1548,61 @@ mod tests {
         assert_eq!(r.font.as_deref(), Some("Body Font")); // inherited
         assert_eq!(r.justification, Some(Justification::LeftAlign));
         assert_eq!(r.space_after, Some(6.0));
+    }
+
+    #[test]
+    fn q09_parses_paragraph_shading_attrs() {
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootParagraphStyleGroup>
+            <ParagraphStyle Self="ParagraphStyle/Banner"
+                            ParagraphShadingOn="true"
+                            ParagraphShadingColor="Color/Brand"
+                            ParagraphShadingTint="20"
+                            ParagraphShadingWidth="ColumnWidth"
+                            ParagraphShadingTopOffset="2"
+                            ParagraphShadingBottomOffset="2"
+                            ParagraphShadingLeftOffset="6"
+                            ParagraphShadingRightOffset="6"
+                            ParagraphShadingTopOrigin="AscentTopOrigin"
+                            ParagraphShadingClipToFrame="false"/>
+          </RootParagraphStyleGroup>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let p = s.paragraph_styles.get("ParagraphStyle/Banner").unwrap();
+        let sh = &p.shading;
+        assert_eq!(sh.on, Some(true));
+        assert_eq!(sh.color.as_deref(), Some("Color/Brand"));
+        assert_eq!(sh.tint, Some(20.0));
+        assert_eq!(sh.width.as_deref(), Some("ColumnWidth"));
+        assert_eq!(sh.offset_top, Some(2.0));
+        assert_eq!(sh.offset_bottom, Some(2.0));
+        assert_eq!(sh.offset_left, Some(6.0));
+        assert_eq!(sh.offset_right, Some(6.0));
+        assert_eq!(sh.top_origin.as_deref(), Some("AscentTopOrigin"));
+        assert_eq!(sh.clip_to_frame, Some(false));
+    }
+
+    #[test]
+    fn q09_paragraph_shading_inherits_from_based_on() {
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootParagraphStyleGroup>
+            <ParagraphStyle Self="ParagraphStyle/Base"
+                            ParagraphShadingOn="true"
+                            ParagraphShadingColor="Color/Brand"
+                            ParagraphShadingTint="50"/>
+            <ParagraphStyle Self="ParagraphStyle/Child"
+                            BasedOn="ParagraphStyle/Base"
+                            ParagraphShadingTint="20"/>
+          </RootParagraphStyleGroup>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let r = s.resolve_paragraph("ParagraphStyle/Child");
+        // tint overridden, color + on inherited.
+        assert_eq!(r.shading.on, Some(true));
+        assert_eq!(r.shading.color.as_deref(), Some("Color/Brand"));
+        assert_eq!(r.shading.tint, Some(20.0));
     }
 
     #[test]
