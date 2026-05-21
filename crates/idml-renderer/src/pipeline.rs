@@ -9819,21 +9819,49 @@ pub fn color_id_to_paint_with_list_dir(
             return None;
         }
         let stops: Vec<idml_compose::GradientStop> = if cmyk_xform.is_some()
-            && raw_stops.iter().all(|s| s.cmyk.is_some())
+            && raw_stops.iter().any(|s| s.cmyk.is_some())
         {
-            // All stops are CMYK swatches — tessellate the gradient in
-            // CMYK space and convert each tessellated point through
-            // the ICC transform. 16 sub-stops per inter-stop segment is
-            // enough to make even cyan↔yellow mid-tones (the most
-            // visibly non-linear pair) match pdftoppm within ~1 ΔE.
+            // At least one stop carries CMYK (process or spot-with-
+            // CMYK-alternate). Tessellate the gradient in CMYK space
+            // and convert each tessellated point through the ICC
+            // transform. 16 sub-stops per inter-stop segment is enough
+            // to make even cyan↔yellow mid-tones (the most visibly
+            // non-linear pair) match pdftoppm within ~1 ΔE.
+            //
+            // Track 1c: stops without a CMYK alternate (RGB / LAB /
+            // Gray swatches, or spot-with-non-CMYK-alternate) get a
+            // naive sRGB→CMYK approximation. Required for the
+            // boundary case the cycle-2 work missed: an RGB stop
+            // mixed with a CMYK / Pantone stop previously fell out
+            // of the CMYK-space path entirely (because the
+            // `all(|s| s.cmyk.is_some())` guard tripped) and
+            // collapsed to sRGB-linear blending, producing a duller
+            // mid-tone than InDesign's preview CMYK.
+            fn rgb_to_cmyk_naive(c: idml_compose::Color) -> [f32; 4] {
+                let r = c.r.clamp(0.0, 1.0);
+                let g = c.g.clamp(0.0, 1.0);
+                let b = c.b.clamp(0.0, 1.0);
+                let k = 1.0 - r.max(g).max(b);
+                let denom = 1.0 - k;
+                let (cy, m, y) = if denom <= f32::EPSILON {
+                    (0.0, 0.0, 0.0)
+                } else {
+                    (
+                        (1.0 - r - k) / denom,
+                        (1.0 - g - k) / denom,
+                        (1.0 - b - k) / denom,
+                    )
+                };
+                [cy * 100.0, m * 100.0, y * 100.0, k * 100.0]
+            }
             const SUB_STOPS: usize = 16;
             let mut out: Vec<idml_compose::GradientStop> = Vec::new();
             let xform = cmyk_xform.unwrap();
             for win in raw_stops.windows(2) {
                 let a = &win[0];
                 let b = &win[1];
-                let cmyk_a = a.cmyk.unwrap();
-                let cmyk_b = b.cmyk.unwrap();
+                let cmyk_a = a.cmyk.unwrap_or_else(|| rgb_to_cmyk_naive(a.color));
+                let cmyk_b = b.cmyk.unwrap_or_else(|| rgb_to_cmyk_naive(b.color));
                 for i in 0..SUB_STOPS {
                     let t = i as f32 / SUB_STOPS as f32;
                     let interp = idml_color::Cmyk {
