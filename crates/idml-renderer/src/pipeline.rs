@@ -6761,7 +6761,7 @@ fn measure_cell_paragraph(
 /// Self-contained shape → layout → emit; no inter-paragraph state.
 #[allow(clippy::too_many_arguments)]
 fn emit_cell_paragraph(
-    em: &StoryEmitter,
+    em: &mut StoryEmitter,
     paragraph: &idml_parse::Paragraph,
     target_page: usize,
     origin_pt: (f32, f32),
@@ -6937,6 +6937,42 @@ fn emit_cell_paragraph(
     let any_text_stroke = stroke_picker.any_visible();
     let leading_pt = paragraph_size * 1.2;
     let cell_origin = (origin_pt.0, origin_pt.1 + paragraph_y);
+
+    // Cycle-5 Track 4: emit BreakRecords for table-cell paragraphs so
+    // the A/B harness covers `<TableCell>` content the same way it
+    // covers regular body paragraphs. The cell paragraph has no
+    // `paragraph_idx` of its own — the emitter's counter advances
+    // once per body paragraph, not once per cell — so we read the
+    // current value (the host paragraph that holds the table) and
+    // accept the collision. Downstream tooling treats break records
+    // as per-line stream, not per-paragraph indexed.
+    if em.options.collect_breaks {
+        let mut paragraph_text = String::new();
+        for r in &styled_runs {
+            paragraph_text.push_str(r.text);
+        }
+        for (line_idx, line) in laid_out.lines.iter().enumerate() {
+            let start = line.byte_range.start.min(paragraph_text.len());
+            let end = line.byte_range.end.min(paragraph_text.len());
+            let source_text = paragraph_text
+                .get(start..end)
+                .unwrap_or("")
+                .to_string();
+            em.breaks.push(BreakRecord {
+                story_id: em.current_story_id.clone(),
+                paragraph_idx: em.paragraph_idx,
+                line_idx: line_idx as u32,
+                page_idx: target_page as u32,
+                frame_idx: em.frame_idx as u32,
+                first_byte: line.byte_range.start as u32,
+                last_byte: line.byte_range.end as u32,
+                baseline_y_pt: line.baseline_y as f32 / idml_text::shape::ADVANCE_PRECISION,
+                width_pt: line.width as f32 / idml_text::shape::ADVANCE_PRECISION,
+                source_text,
+            });
+        }
+    }
+
     let list = &mut pages[target_page].list;
     let mut max_baseline_pt = 0.0f32;
     for line in &laid_out.lines {
