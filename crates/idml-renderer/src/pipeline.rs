@@ -7809,6 +7809,7 @@ fn emit_rectangle_into(
         resolved.end_cap,
         resolved.end_join,
         resolved.miter_limit,
+        Some(&document.styles.stroke_styles),
     );
     if corner.stroke.is_some() {
         crate::module::stroke_paint_module(
@@ -10281,6 +10282,7 @@ pub(crate) fn stroke_for(
     end_cap: Option<&str>,
     end_join: Option<&str>,
     miter_limit: Option<f32>,
+    stroke_styles: Option<&std::collections::BTreeMap<String, idml_parse::StrokeStyleDef>>,
 ) -> Stroke {
     let mut s = Stroke::new(width);
     if let Some(cap) = end_cap_from(end_cap) {
@@ -10295,8 +10297,21 @@ pub(crate) fn stroke_for(
     let Some(name) = stroke_type else {
         return s;
     };
-    let suffix = name.strip_prefix("StrokeStyle/$ID/").unwrap_or(name);
     let w = width.max(0.1);
+    // Track 4a: a user-defined `<DashedStrokeStyle>` lookup wins over
+    // the built-in name table. The IDML's `Pattern` attribute is
+    // already in absolute pt (unlike the named built-ins, which are
+    // multiples of the line weight), so the pattern feeds the dash
+    // slot directly without the `* w` scaling below.
+    if let Some(styles) = stroke_styles {
+        if let Some(def) = styles.get(name) {
+            if def.kind == idml_parse::StrokeStyleKind::Dashed && !def.pattern.is_empty() {
+                s.dash = idml_compose::DashPattern::from_slice(&def.pattern);
+                return s;
+            }
+        }
+    }
+    let suffix = name.strip_prefix("StrokeStyle/$ID/").unwrap_or(name);
     // IDML's "Canned" prefix denotes built-in user-facing stroke
     // styles InDesign ships in the Stroke panel — InDesign serialises
     // them as `StrokeStyle/$ID/Canned <Name>` references. Map the

@@ -65,6 +65,34 @@ pub struct StyleSheet {
     /// single default empty TOCStyle (no entries) alongside any
     /// user-defined ones.
     pub toc_styles: BTreeMap<String, TOCStyleDef>,
+    /// Track 4a: custom `<DashedStrokeStyle>` / `<DottedStrokeStyle>` /
+    /// `<StripedStrokeStyle>` definitions from `Resources/Styles.xml`.
+    /// Page items reference these via `StrokeType="StrokeStyle/<id>"`;
+    /// without this table the renderer fell back to `Solid` for every
+    /// user-defined stroke (e.g. business-proposal-template's
+    /// diagonal-stripe cover, which is a dense custom dash).
+    pub stroke_styles: BTreeMap<String, StrokeStyleDef>,
+}
+
+/// Custom stroke-style definition. Today the renderer consumes the
+/// `Dashed` variant (the others are captured so we don't lose them
+/// during round-trips and so a future track can grow into them).
+#[derive(Debug, Clone, Serialize)]
+pub struct StrokeStyleDef {
+    pub self_id: String,
+    pub name: Option<String>,
+    pub kind: StrokeStyleKind,
+    /// On/off pattern in pt for `Dashed` (the `Pattern` attribute
+    /// parsed as space-separated floats). Empty for the other kinds.
+    pub pattern: Vec<f32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum StrokeStyleKind {
+    Dashed,
+    Dotted,
+    Striped,
+    Wavy,
 }
 
 /// `<TOCStyle>` — Table of Contents style. Carries the heading text,
@@ -863,6 +891,17 @@ impl StyleSheet {
                             out.toc_styles.insert(s.self_id.clone(), s);
                         }
                     }
+                    b"DashedStrokeStyle"
+                    | b"DottedStrokeStyle"
+                    | b"StripedStrokeStyle"
+                    | b"WavyStrokeStyle" => {
+                        // Real-world IDMLs emit these as self-closing
+                        // (handled in the Empty branch) but the schema
+                        // permits child `<Properties>`; accept either.
+                        if let Some(def) = parse_stroke_style(&e) {
+                            out.stroke_styles.insert(def.self_id.clone(), def);
+                        }
+                    }
                     b"TOCStyleEntry" => {
                         // Element-form `<TOCStyleEntry>...</TOCStyleEntry>`
                         // appears when InDesign attaches `<Properties>`
@@ -1009,6 +1048,14 @@ impl StyleSheet {
                             if let Some(p) = out.paragraph_styles.get_mut(id) {
                                 p.tab_list.push(stop);
                             }
+                        }
+                    }
+                    b"DashedStrokeStyle"
+                    | b"DottedStrokeStyle"
+                    | b"StripedStrokeStyle"
+                    | b"WavyStrokeStyle" => {
+                        if let Some(def) = parse_stroke_style(&e) {
+                            out.stroke_styles.insert(def.self_id.clone(), def);
                         }
                     }
                     b"BulletChar" => {
@@ -1613,6 +1660,35 @@ fn parse_toc_style_entry(e: &quick_xml::events::BytesStart) -> Option<TOCStyleEn
         level: attr(e, b"Level").and_then(|s| s.parse().ok()),
         page_number: attr(e, b"PageNumber"),
         separator: attr(e, b"Separator"),
+    })
+}
+
+/// Track 4a: parse a `<DashedStrokeStyle>` / `<DottedStrokeStyle>` /
+/// `<StripedStrokeStyle>` / `<WavyStrokeStyle>` element. Pulls the
+/// `Self` id and (for dashed) the `Pattern` attribute as a list of
+/// on/off lengths in pt. Returns `None` only when `Self` is missing
+/// — unrecognised element shapes are still useful to remember.
+fn parse_stroke_style(e: &quick_xml::events::BytesStart) -> Option<StrokeStyleDef> {
+    let self_id = attr(e, b"Self")?;
+    let kind = match e.name().as_ref() {
+        b"DashedStrokeStyle" => StrokeStyleKind::Dashed,
+        b"DottedStrokeStyle" => StrokeStyleKind::Dotted,
+        b"StripedStrokeStyle" => StrokeStyleKind::Striped,
+        b"WavyStrokeStyle" => StrokeStyleKind::Wavy,
+        _ => return None,
+    };
+    let pattern = attr(e, b"Pattern")
+        .map(|s| {
+            s.split_ascii_whitespace()
+                .filter_map(|tok| tok.parse::<f32>().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(StrokeStyleDef {
+        self_id,
+        name: attr(e, b"Name"),
+        kind,
+        pattern,
     })
 }
 
@@ -2338,5 +2414,28 @@ mod tests {
             r.mojikumi_table.as_deref(),
             Some("MojikumiTable/$ID/PhotoshopMojikumiSet4")
         );
+    }
+
+    // ---- Track 4a: custom StrokeStyle parsing ----
+
+    #[test]
+    fn dashed_stroke_style_parses_pattern_into_floats() {
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+            <DashedStrokeStyle Self="StrokeStyle/u163" Name="Diag"
+                               StartCap="ButtEndCap" CornerAdjustment="None"
+                               GapColor="Swatch/None" GapTint="100"
+                               Pattern="3.5 2 1 4"/>
+            <DottedStrokeStyle Self="StrokeStyle/u164" Name="Tight"
+                               GapColor="Swatch/None" GapTint="100"/>
+          </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let dash = s.stroke_styles.get("StrokeStyle/u163").unwrap();
+        assert_eq!(dash.kind, StrokeStyleKind::Dashed);
+        assert_eq!(dash.name.as_deref(), Some("Diag"));
+        assert_eq!(dash.pattern, vec![3.5, 2.0, 1.0, 4.0]);
+        let dot = s.stroke_styles.get("StrokeStyle/u164").unwrap();
+        assert_eq!(dot.kind, StrokeStyleKind::Dotted);
+        assert!(dot.pattern.is_empty());
     }
 }
