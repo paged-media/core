@@ -10432,7 +10432,13 @@ fn apply_paragraph_compose_options<'a>(
         // can consume. The exact value matters less than that the
         // budget exists; the breaker only uses it when KP can't fit
         // on word spacing alone.
-        const AVG_CHARS_PER_WORD: f32 = 5.0;
+        // Cycle 5 Track 3 Round 1: English-language average word
+        // length is closer to 4.7 than 5.0 (Norvig 2009 corpus
+        // analysis); cycle 3's 5.0 placeholder was a round number.
+        // Affects how letter-spacing budget folds into the breaker's
+        // per-word stretch / shrink ratios when a paragraph carries
+        // non-zero Min/MaxLetterSpacing.
+        const AVG_CHARS_PER_WORD: f32 = 4.7;
         let space_width = lopts.compose.column_width as f32 / 80.0; // rough natural space
         let stretch_add = ((ls_max - ls_desired) * AVG_CHARS_PER_WORD / space_width).max(0.0);
         let shrink_add = ((ls_desired - ls_min) * AVG_CHARS_PER_WORD / space_width).max(0.0);
