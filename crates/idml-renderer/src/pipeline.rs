@@ -101,6 +101,16 @@ const PLACEHOLDER_FILL_RGB: f32 = 0.5;
 const PLACEHOLDER_X_STROKE_PT: f32 = 1.5;
 const PLACEHOLDER_X_RGB: f32 = 0.0;
 
+/// Track 1a: longest-edge cap for raster decode. JPEGs whose declared
+/// dimensions exceed this on either axis are decoded through
+/// `jpeg-decoder`'s DCT scaling (1/2, 1/4, or 1/8) so we never
+/// materialise the full RGBA8 buffer — the annual-report-template
+/// cover JPEG is 5760×9000 ≈ 198MB at RGBA8, which the previous
+/// `image::load_from_memory` path allocated in one shot. 4096px keeps
+/// us safely under one rasteriser tile target while still hitting
+/// 300dpi for any frame up to ~13.6" on the longest edge.
+const DECODE_MAX_RASTER_PX: u32 = 4096;
+
 impl std::fmt::Debug for PipelineOptions<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PipelineOptions")
@@ -8892,15 +8902,45 @@ fn is_eps_magic(bytes: &[u8]) -> bool {
     bytes.starts_with(b"%!PS")
 }
 
-/// Decode raw image bytes to RGBA8. Format detection is via magic
-/// bytes (`image::load_from_memory`). Returns `None` for any decode
-/// or buffer-shape failure — including EPS / PostScript streams,
-/// which would need a Ghostscript sidecar to rasterise (deferred,
-/// see `docs/plan.md` Phase 4).
+/// Decode raw image bytes to RGBA8. Routes oversized JPEGs through
+/// `jpeg-decoder`'s DCT scaling so we never materialise a multi-
+/// hundred-MB RGBA8 buffer; everything else (PNG / WebP / small JPEGs)
+/// goes through `image::load_from_memory`. Returns `None` for any
+/// decode or buffer-shape failure — including EPS / PostScript
+/// streams, which would need a Ghostscript sidecar to rasterise
+/// (deferred, see `docs/plan.md` Phase 4).
 fn decode_image_bytes(bytes: &[u8]) -> Option<idml_compose::DecodedImage> {
+    decode_image_bytes_with_target_max(bytes, DECODE_MAX_RASTER_PX)
+}
+
+/// Same as [`decode_image_bytes`] but with a caller-supplied
+/// longest-edge cap. Used by the streaming JPEG path and by the
+/// fallback retry on decode failure. JPEGs above the cap are
+/// decoded via `jpeg-decoder` with DCT scaling chosen so the longest
+/// edge ends up ≤ `max_px`; other formats and small JPEGs fall
+/// through to `image::load_from_memory`.
+fn decode_image_bytes_with_target_max(
+    bytes: &[u8],
+    max_px: u32,
+) -> Option<idml_compose::DecodedImage> {
     if is_eps_magic(bytes) {
         tracing::warn!("EPS / PostScript image detected; emitting missing-image placeholder");
         return None;
+    }
+    if is_jpeg_magic(bytes) {
+        if let Some((src_w, src_h)) = peek_jpeg_dimensions(bytes) {
+            if src_w.max(src_h) > max_px {
+                if let Some(d) = decode_jpeg_scaled(bytes, max_px) {
+                    return Some(d);
+                }
+                tracing::debug!(
+                    src_w,
+                    src_h,
+                    max_px,
+                    "streaming JPEG decoder rejected oversized payload; falling back to image crate"
+                );
+            }
+        }
     }
     let img = image::load_from_memory(bytes).ok()?;
     let rgba = img.to_rgba8();
@@ -8910,6 +8950,138 @@ fn decode_image_bytes(bytes: &[u8]) -> Option<idml_compose::DecodedImage> {
         height,
         rgba: rgba.into_raw(),
     })
+}
+
+fn is_jpeg_magic(bytes: &[u8]) -> bool {
+    bytes.len() >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF
+}
+
+/// Cheap pre-flight: read just the JPEG headers via `jpeg-decoder` to
+/// discover declared dimensions without decoding pixel data. Returns
+/// `None` if the headers are malformed or the file isn't a JPEG.
+fn peek_jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let mut decoder = jpeg_decoder::Decoder::new(bytes);
+    decoder.read_info().ok()?;
+    let info = decoder.info()?;
+    Some((info.width as u32, info.height as u32))
+}
+
+/// Decode a JPEG via `jpeg-decoder`, using its DCT-scaled output mode
+/// to land the longest edge ≤ `max_px`. Scaling is restricted to the
+/// JPEG-native factors (1, 1/2, 1/4, 1/8); the decoder picks the
+/// smallest factor whose output is ≥ the requested target.
+fn decode_jpeg_scaled(bytes: &[u8], max_px: u32) -> Option<idml_compose::DecodedImage> {
+    use jpeg_decoder::{Decoder, PixelFormat};
+    let mut decoder = Decoder::new(bytes);
+    decoder.read_info().ok()?;
+    let info = decoder.info()?;
+    let src_w = info.width as u32;
+    let src_h = info.height as u32;
+    if src_w == 0 || src_h == 0 {
+        return None;
+    }
+    let longest = src_w.max(src_h);
+    // jpeg-decoder picks the smallest DCT scale `k` (1..=8 in 1/8ths
+    // of full resolution) whose output ≥ the requested dimensions,
+    // so requesting `max_px` directly would round UP past the cap.
+    // Instead, pick the largest `k` where `longest * k / 8 ≤ max_px`
+    // ourselves and request the resulting size verbatim — the
+    // decoder then returns exactly that scale. When no scale fits
+    // (`max_px` < `longest / 8`) we fall back to `k = 1` (1/8 — the
+    // smallest DCT-supported output) and accept the cap overshoot.
+    let k = if longest <= max_px {
+        8
+    } else {
+        let mut best: u32 = 1;
+        for k in 1..=8u32 {
+            if longest * k / 8 <= max_px {
+                best = k;
+            }
+        }
+        best
+    };
+    let target_w = (src_w * k / 8).max(1).min(u16::MAX as u32) as u16;
+    let target_h = (src_h * k / 8).max(1).min(u16::MAX as u32) as u16;
+    let (final_w, final_h) = decoder.scale(target_w, target_h).ok()?;
+    let pixels = decoder.decode().ok()?;
+    let info_after = decoder.info()?;
+    let w = final_w as u32;
+    let h = final_h as u32;
+    let rgba = match info_after.pixel_format {
+        PixelFormat::L8 => l8_to_rgba(&pixels, w, h)?,
+        PixelFormat::L16 => l16_to_rgba(&pixels, w, h)?,
+        PixelFormat::RGB24 => rgb24_to_rgba(&pixels, w, h)?,
+        PixelFormat::CMYK32 => cmyk32_to_rgba_naive(&pixels, w, h)?,
+    };
+    Some(idml_compose::DecodedImage {
+        width: w,
+        height: h,
+        rgba,
+    })
+}
+
+fn l8_to_rgba(src: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
+    let expected = (w as usize).checked_mul(h as usize)?;
+    if src.len() != expected {
+        return None;
+    }
+    let mut rgba = Vec::with_capacity(expected.checked_mul(4)?);
+    for &g in src {
+        rgba.extend_from_slice(&[g, g, g, 255]);
+    }
+    Some(rgba)
+}
+
+fn l16_to_rgba(src: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
+    let pixels = (w as usize).checked_mul(h as usize)?;
+    if src.len() != pixels.checked_mul(2)? {
+        return None;
+    }
+    let mut rgba = Vec::with_capacity(pixels.checked_mul(4)?);
+    for chunk in src.chunks_exact(2) {
+        // jpeg-decoder writes L16 big-endian.
+        let g16 = u16::from_be_bytes([chunk[0], chunk[1]]);
+        let g8 = (g16 >> 8) as u8;
+        rgba.extend_from_slice(&[g8, g8, g8, 255]);
+    }
+    Some(rgba)
+}
+
+fn rgb24_to_rgba(src: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
+    let pixels = (w as usize).checked_mul(h as usize)?;
+    if src.len() != pixels.checked_mul(3)? {
+        return None;
+    }
+    let mut rgba = Vec::with_capacity(pixels.checked_mul(4)?);
+    for chunk in src.chunks_exact(3) {
+        rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
+    }
+    Some(rgba)
+}
+
+/// Naive Adobe-style CMYK → sRGB. The Adobe CMYK-JPEG convention
+/// stores channels inverted (byte 255 = no ink) so the multiplicative
+/// form simplifies to `R = C_byte * K_byte / 255` etc. Track 1b will
+/// thread the embedded ICC profile through `idml-color` for the
+/// colourimetrically-correct path; until then this matches the
+/// existing CMYK-swatch fallback in `idml-parse::graphic`.
+fn cmyk32_to_rgba_naive(src: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
+    let pixels = (w as usize).checked_mul(h as usize)?;
+    if src.len() != pixels.checked_mul(4)? {
+        return None;
+    }
+    let mut rgba = Vec::with_capacity(pixels.checked_mul(4)?);
+    for chunk in src.chunks_exact(4) {
+        let c = chunk[0] as u32;
+        let m = chunk[1] as u32;
+        let y = chunk[2] as u32;
+        let k = chunk[3] as u32;
+        let r = (c * k / 255) as u8;
+        let g = (m * k / 255) as u8;
+        let b = (y * k / 255) as u8;
+        rgba.extend_from_slice(&[r, g, b, 255]);
+    }
+    Some(rgba)
 }
 
 /// First-baseline y (1/64 pt) for the head frame of a story,
@@ -11699,5 +11871,61 @@ mod tests {
         assert!((start.0 - cx).abs() < 1e-3);
         assert!((end.0 - cx).abs() < 1e-3);
         assert!(((end.1 - start.1) - 577.7332).abs() < 1e-3);
+    }
+
+    /// Track 1a: oversized JPEGs go through `jpeg-decoder`'s
+    /// DCT-scaling path instead of materialising the full RGBA8
+    /// buffer via `image::load_from_memory`. Annual-report-template's
+    /// 5760×9000 cover would otherwise allocate ~198MB in one shot;
+    /// here we use a 4000×4000 synthetic JPEG with a 1024px cap and
+    /// assert the result lands at the largest DCT scale that still
+    /// fits the cap (1/4 → 1000×1000).
+    #[test]
+    fn track_1a_oversized_jpeg_routes_through_streaming_decoder() {
+        use image::{ImageBuffer, ImageFormat, Rgb};
+        use std::io::Cursor;
+        let src: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(4000, 4000, |x, y| {
+            Rgb([
+                (x & 0xFF) as u8,
+                (y & 0xFF) as u8,
+                ((x ^ y) & 0xFF) as u8,
+            ])
+        });
+        let mut buf: Vec<u8> = Vec::new();
+        src.write_to(&mut Cursor::new(&mut buf), ImageFormat::Jpeg)
+            .expect("encode JPEG");
+
+        let decoded =
+            decode_image_bytes_with_target_max(&buf, 1024).expect("streaming JPEG decode");
+        // 4000 * 2/8 = 1000 ≤ 1024 fits; 4000 * 3/8 = 1500 doesn't.
+        assert_eq!(decoded.width, 1000);
+        assert_eq!(decoded.height, 1000);
+        assert_eq!(
+            decoded.rgba.len(),
+            (decoded.width as usize) * (decoded.height as usize) * 4
+        );
+        // Alpha channel filled to opaque — JPEGs carry no alpha.
+        assert!(decoded.rgba.chunks_exact(4).all(|p| p[3] == 255));
+    }
+
+    /// Track 1a: small JPEGs (longest edge ≤ cap) skip the streaming
+    /// path and decode at native size via `image::load_from_memory`.
+    #[test]
+    fn track_1a_small_jpeg_keeps_native_dimensions() {
+        use image::{ImageBuffer, ImageFormat, Rgb};
+        use std::io::Cursor;
+        let src: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(128, 96, |x, y| {
+            Rgb([
+                (x & 0xFF) as u8,
+                (y & 0xFF) as u8,
+                ((x.wrapping_add(y)) & 0xFF) as u8,
+            ])
+        });
+        let mut buf: Vec<u8> = Vec::new();
+        src.write_to(&mut Cursor::new(&mut buf), ImageFormat::Jpeg)
+            .expect("encode JPEG");
+        let decoded = decode_image_bytes_with_target_max(&buf, 4096).expect("small JPEG decode");
+        assert_eq!(decoded.width, 128);
+        assert_eq!(decoded.height, 96);
     }
 }
