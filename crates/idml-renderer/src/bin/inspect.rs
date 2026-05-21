@@ -86,10 +86,27 @@ struct Args {
     /// placeholder visible can opt out via this flag.
     #[arg(long)]
     no_missing_image_placeholder: bool,
+    /// Install a tracing subscriber that prints debug-level events
+    /// from the `idml_renderer::icc` target to stderr. Used to confirm
+    /// the JPEG-embedded-ICC branch fires on a corpus pack — the
+    /// CMYK-decode path emits one event per decoded image (either
+    /// "decoded via embedded ICC" or "no ICC; naive multiplicative").
+    #[arg(long)]
+    trace_icc: bool,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if args.trace_icc {
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("idml_renderer::icc=debug"));
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(std::io::stderr)
+            .with_target(true)
+            .without_time()
+            .init();
+    }
     let bytes =
         std::fs::read(&args.file).with_context(|| format!("read {}", args.file.display()))?;
     let document = Document::open(&bytes).context("open IDML")?;

@@ -9070,6 +9070,13 @@ fn cmyk32_to_rgba(src: &[u8], w: u32, h: u32, icc_profile: Option<&[u8]>) -> Opt
         match idml_color::IccTransform::cmyk_to_linear_rgb(profile) {
             Ok(xform) => {
                 if let Some(rgba) = cmyk32_to_rgba_via_icc(src, w, h, &xform) {
+                    tracing::debug!(
+                        target: "idml_renderer::icc",
+                        profile_bytes = profile.len(),
+                        w,
+                        h,
+                        "CMYK JPEG decoded via embedded ICC profile"
+                    );
                     return Some(rgba);
                 }
                 tracing::warn!("CMYK JPEG ICC transform produced wrong-shape output; using naive");
@@ -9078,6 +9085,13 @@ fn cmyk32_to_rgba(src: &[u8], w: u32, h: u32, icc_profile: Option<&[u8]>) -> Opt
                 tracing::warn!(error = %err, "CMYK JPEG ICC profile rejected; using naive");
             }
         }
+    } else {
+        tracing::debug!(
+            target: "idml_renderer::icc",
+            w,
+            h,
+            "CMYK JPEG carries no embedded ICC profile; naive multiplicative"
+        );
     }
     cmyk32_to_rgba_naive(src, w, h)
 }

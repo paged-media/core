@@ -41,6 +41,7 @@ image = { workspace = true }
 jpeg-decoder = "0.3"
 thiserror = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 idml-fidelity = { path = "../idml-fidelity" }
