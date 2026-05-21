@@ -2360,3 +2360,105 @@ fn per_run_fill_color_on_character_style_range_paints_run_specific_colour() {
         "first run should retain its default (black) fill",
     );
 }
+
+// ─────────────────────────── Q-07 Tracking pin ──────────────────────
+//
+// Cycle 4 Track 5: Q-07 was deferred in cycle 2 because the evidence
+// was tabular-numeral letter spacing drift inside `<Table>` content,
+// and the table renderer was incomplete. ace96e8 closed the table
+// renderer; this test pins the tracking-end-to-end behaviour through
+// the multi-font `layout_runs` path that tables use, so a future
+// composer refactor can't silently drop `apply_tracking` between
+// shape and emit. A regression test now is cheaper than re-auditing
+// the corpus next cycle.
+
+fn build_tracking_idml(tracking_thousandths_em: i32) -> Vec<u8> {
+    let spread = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 612"/>
+    <TextFrame Self="frameA" ParentStory="u10" GeometricBounds="40 40 160 572" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#;
+    let story = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="36" Tracking="{tracking_thousandths_em}">
+        <Content>AAAA</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#
+    );
+    write_zip(|zip| {
+        put(zip, "designmap.xml", DESIGNMAP);
+        put(zip, "Resources/Graphic.xml", GRAPHIC_XML);
+        put(zip, "Spreads/Spread_sp1.xml", spread);
+        put(zip, "Stories/Story_u10.xml", story.as_bytes());
+    })
+}
+
+#[test]
+fn cycle4_q07_positive_tracking_widens_emitted_glyph_advances() {
+    // Render the same 4-A string at Tracking=0 and Tracking=200/1000em.
+    // The wider tracking must push the last glyph further right —
+    // that's `apply_tracking`'s contract surviving the
+    // shape → layout_runs → emit pipeline (the path tables use).
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+
+    let glyphs_at_tracking = |t: i32| -> Vec<(f32, f32, f32)> {
+        let bytes = build_tracking_idml(t);
+        let doc = Document::open(&bytes).unwrap();
+        let built = pipeline::build_document(&doc, &opts).unwrap();
+        glyph_xys(&built.pages[0].list.commands)
+    };
+
+    let base = glyphs_at_tracking(0);
+    let tracked = glyphs_at_tracking(200);
+    assert_eq!(base.len(), 4, "expected 4 'A' glyphs at Tracking=0");
+    assert_eq!(tracked.len(), 4, "expected 4 'A' glyphs at Tracking=200");
+
+    let base_span = base.last().unwrap().0 - base.first().unwrap().0;
+    let tracked_span = tracked.last().unwrap().0 - tracked.first().unwrap().0;
+    // At 36pt, 200/1000em = 7.2pt per glyph gap. 3 inter-glyph gaps =
+    // ~21.6pt extra. Be generous — the precise number depends on
+    // rounding through ADVANCE_PRECISION.
+    let delta = tracked_span - base_span;
+    assert!(
+        delta > 15.0,
+        "Tracking=200 should widen the 4-A span by ~21.6pt; observed Δ={delta} (base_span={base_span}, tracked_span={tracked_span})"
+    );
+}
+
+#[test]
+fn cycle4_q07_negative_tracking_tightens_emitted_glyph_advances() {
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+
+    let bytes_pos = build_tracking_idml(0);
+    let bytes_neg = build_tracking_idml(-100);
+    let doc_pos = Document::open(&bytes_pos).unwrap();
+    let doc_neg = Document::open(&bytes_neg).unwrap();
+    let built_pos = pipeline::build_document(&doc_pos, &opts).unwrap();
+    let built_neg = pipeline::build_document(&doc_neg, &opts).unwrap();
+
+    let base = glyph_xys(&built_pos.pages[0].list.commands);
+    let tightened = glyph_xys(&built_neg.pages[0].list.commands);
+    let base_span = base.last().unwrap().0 - base.first().unwrap().0;
+    let tightened_span = tightened.last().unwrap().0 - tightened.first().unwrap().0;
+    assert!(
+        tightened_span < base_span,
+        "Tracking=-100 should tighten the 4-A span vs Tracking=0; observed base_span={base_span}, tightened_span={tightened_span}"
+    );
+}
