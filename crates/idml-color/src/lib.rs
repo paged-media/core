@@ -143,6 +143,25 @@ impl IccTransform {
         // Unsupported on wasm. Provided for compile parity.
         LinearRgb([0.0, 0.0, 0.0])
     }
+
+    /// Track 1b: batch CMYK-8 → sRGB-8 byte transform. Used by the
+    /// streaming JPEG decoder when a CMYK JPEG carries its own
+    /// embedded ICC profile (annual-report-template / Q-03 newspaper
+    /// packs) — we build a one-shot `IccTransform` from those bytes
+    /// rather than the document-default CMYK profile. The output is
+    /// sRGB-encoded bytes (the lcms2 transform's destination has a
+    /// real sRGB TRC, matching `cmyk_percent_to_linear_rgb`'s
+    /// internal trip), suitable for direct copy into an RGBA8 buffer
+    /// without an extra encode pass.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn cmyk_bytes_to_rgb_bytes(&self, cmyk: &[[u8; 4]], rgb: &mut [[u8; 3]]) {
+        self.inner.transform.transform_pixels(cmyk, rgb);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn cmyk_bytes_to_rgb_bytes(&self, _cmyk: &[[u8; 4]], _rgb: &mut [[u8; 3]]) {
+        // wasm32 falls back to the naive renderer-side conversion.
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

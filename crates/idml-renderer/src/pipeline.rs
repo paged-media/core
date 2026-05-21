@@ -9005,13 +9005,14 @@ fn decode_jpeg_scaled(bytes: &[u8], max_px: u32) -> Option<idml_compose::Decoded
     let (final_w, final_h) = decoder.scale(target_w, target_h).ok()?;
     let pixels = decoder.decode().ok()?;
     let info_after = decoder.info()?;
+    let icc_profile = decoder.icc_profile();
     let w = final_w as u32;
     let h = final_h as u32;
     let rgba = match info_after.pixel_format {
         PixelFormat::L8 => l8_to_rgba(&pixels, w, h)?,
         PixelFormat::L16 => l16_to_rgba(&pixels, w, h)?,
         PixelFormat::RGB24 => rgb24_to_rgba(&pixels, w, h)?,
-        PixelFormat::CMYK32 => cmyk32_to_rgba_naive(&pixels, w, h)?,
+        PixelFormat::CMYK32 => cmyk32_to_rgba(&pixels, w, h, icc_profile.as_deref())?,
     };
     Some(idml_compose::DecodedImage {
         width: w,
@@ -9059,12 +9060,68 @@ fn rgb24_to_rgba(src: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
     Some(rgba)
 }
 
+/// Track 1b dispatcher: route a CMYK JPEG buffer through the embedded
+/// ICC profile when present (and the platform supports lcms2),
+/// falling back to the Adobe-naive multiplicative form on
+/// missing/invalid profiles or wasm32 targets.
+fn cmyk32_to_rgba(src: &[u8], w: u32, h: u32, icc_profile: Option<&[u8]>) -> Option<Vec<u8>> {
+    if let Some(profile) = icc_profile {
+        match idml_color::IccTransform::cmyk_to_linear_rgb(profile) {
+            Ok(xform) => {
+                if let Some(rgba) = cmyk32_to_rgba_via_icc(src, w, h, &xform) {
+                    return Some(rgba);
+                }
+                tracing::warn!("CMYK JPEG ICC transform produced wrong-shape output; using naive");
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "CMYK JPEG ICC profile rejected; using naive");
+            }
+        }
+    }
+    cmyk32_to_rgba_naive(src, w, h)
+}
+
+/// Batch CMYK-8 → sRGB-byte transform via lcms2. Chunked so peak
+/// intermediate memory stays bounded (the largest legal output at
+/// the decode cap is 4096×4096 ≈ 64MB CMYK input + ~48MB lcms2
+/// scratch + 64MB RGBA output; chunking drops the scratch to ~28KB).
+fn cmyk32_to_rgba_via_icc(
+    src: &[u8],
+    w: u32,
+    h: u32,
+    xform: &idml_color::IccTransform,
+) -> Option<Vec<u8>> {
+    let pixels = (w as usize).checked_mul(h as usize)?;
+    if src.len() != pixels.checked_mul(4)? {
+        return None;
+    }
+    const CHUNK: usize = 4096;
+    let mut rgba = Vec::with_capacity(pixels.checked_mul(4)?);
+    let mut cmyk_buf: Vec<[u8; 4]> = vec![[0; 4]; CHUNK];
+    let mut rgb_buf: Vec<[u8; 3]> = vec![[0; 3]; CHUNK];
+    for src_chunk in src.chunks(CHUNK * 4) {
+        let n = src_chunk.len() / 4;
+        for i in 0..n {
+            cmyk_buf[i] = [
+                src_chunk[i * 4],
+                src_chunk[i * 4 + 1],
+                src_chunk[i * 4 + 2],
+                src_chunk[i * 4 + 3],
+            ];
+        }
+        xform.cmyk_bytes_to_rgb_bytes(&cmyk_buf[..n], &mut rgb_buf[..n]);
+        for i in 0..n {
+            rgba.extend_from_slice(&[rgb_buf[i][0], rgb_buf[i][1], rgb_buf[i][2], 255]);
+        }
+    }
+    Some(rgba)
+}
+
 /// Naive Adobe-style CMYK → sRGB. The Adobe CMYK-JPEG convention
 /// stores channels inverted (byte 255 = no ink) so the multiplicative
-/// form simplifies to `R = C_byte * K_byte / 255` etc. Track 1b will
-/// thread the embedded ICC profile through `idml-color` for the
-/// colourimetrically-correct path; until then this matches the
-/// existing CMYK-swatch fallback in `idml-parse::graphic`.
+/// form simplifies to `R = C_byte * K_byte / 255` etc. Used as the
+/// fallback when no ICC profile is present (or on wasm32 where lcms2
+/// is unavailable).
 fn cmyk32_to_rgba_naive(src: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
     let pixels = (w as usize).checked_mul(h as usize)?;
     if src.len() != pixels.checked_mul(4)? {
