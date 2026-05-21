@@ -4004,6 +4004,7 @@ fn emit_anchored_textframe_story<'a>(
         fill_tint: None,
         stroke_color: None,
         stroke_weight: None,
+        stroke_type: None,
         drop_shadow: None,
         stroke_drop_shadow: None,
         next_text_frame: None,
@@ -4280,7 +4281,14 @@ fn emit_polygon_into(
         cmyk_xform,
         outer,
         path_id,
-        Stroke::new(resolved.effective_stroke_weight()),
+        stroke_for(
+            resolved.stroke_type,
+            resolved.effective_stroke_weight(),
+            resolved.end_cap,
+            resolved.end_join,
+            resolved.miter_limit,
+            Some(&document.styles.stroke_styles),
+        ),
     );
     if needs_group {
         pop_blend_group(page);
@@ -7468,7 +7476,14 @@ fn emit_text_frame_into(
         cmyk_xform,
         outer,
         None,
-        Stroke::new(resolved.effective_stroke_weight()),
+        stroke_for(
+            resolved.stroke_type,
+            resolved.effective_stroke_weight(),
+            resolved.end_cap,
+            resolved.end_join,
+            resolved.miter_limit,
+            Some(&document.styles.stroke_styles),
+        ),
     );
     if needs_group {
         pop_blend_group(page);
@@ -7555,7 +7570,14 @@ fn emit_oval_into(
         cmyk_xform,
         outer,
         None,
-        Stroke::new(frame.effective_stroke_weight()),
+        stroke_for(
+            frame.stroke_type,
+            frame.effective_stroke_weight(),
+            frame.end_cap,
+            frame.end_join,
+            frame.miter_limit,
+            Some(&document.styles.stroke_styles),
+        ),
     );
     if needs_group {
         pop_blend_group(page);
@@ -7617,7 +7639,14 @@ fn emit_line_into(
         spread_bounds.top - oy,
         spread_bounds.right - ox,
         spread_bounds.bottom - oy,
-        Stroke::new(stroke_width),
+        stroke_for(
+            resolved.stroke_type,
+            stroke_width,
+            resolved.end_cap,
+            resolved.end_join,
+            resolved.miter_limit,
+            Some(&document.styles.stroke_styles),
+        ),
         stroke_paint,
         &mut page.list,
     );
@@ -7633,6 +7662,7 @@ fn emit_line_into(
 fn emit_rectangle_polygon_path(
     page: &mut BuiltPage,
     resolved: &ResolvedFrame<'_>,
+    document: &Document,
     palette: &Graphic,
     fallback: Paint,
     cmyk_xform: Option<&idml_color::IccTransform>,
@@ -7680,7 +7710,14 @@ fn emit_rectangle_polygon_path(
         cmyk_xform,
         outer,
         path_id,
-        Stroke::new(resolved.effective_stroke_weight()),
+        stroke_for(
+            resolved.stroke_type,
+            resolved.effective_stroke_weight(),
+            resolved.end_cap,
+            resolved.end_join,
+            resolved.miter_limit,
+            Some(&document.styles.stroke_styles),
+        ),
     );
     if needs_group {
         pop_blend_group(page);
@@ -7708,7 +7745,7 @@ fn emit_rectangle_into(
     // route the polygon case through the same path emit
     // `emit_polygon_into` uses, then return.
     if matches!(resolved.geometry, Geometry::Polygon { .. }) {
-        emit_rectangle_polygon_path(page, &resolved, palette, fallback, cmyk_xform);
+        emit_rectangle_polygon_path(page, &resolved, document, palette, fallback, cmyk_xform);
         return;
     }
     let Geometry::Rect { rect: r } = resolved.geometry else {

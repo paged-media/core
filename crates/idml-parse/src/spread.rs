@@ -241,6 +241,8 @@ pub struct TextFrame {
     /// `StrokeWeight` attribute, in points. `None` → document default
     /// (typically 1 pt in InDesign).
     pub stroke_weight: Option<f32>,
+    /// `StrokeType` reference; see [`Rectangle::stroke_type`].
+    pub stroke_type: Option<String>,
     /// `<DropShadowSetting>` parsed from `<Properties><TransparencySetting>`.
     /// `None` when absent or `Mode="None"`.
     pub drop_shadow: Option<DropShadowSetting>,
@@ -885,6 +887,8 @@ pub struct Oval {
     pub fill_tint: Option<f32>,
     pub stroke_color: Option<String>,
     pub stroke_weight: Option<f32>,
+    /// `StrokeType` reference; see [`Rectangle::stroke_type`].
+    pub stroke_type: Option<String>,
     pub drop_shadow: Option<DropShadowSetting>,
     /// See [`TextFrame::stroke_drop_shadow`].
     pub stroke_drop_shadow: Option<DropShadowSetting>,
@@ -938,6 +942,8 @@ pub struct GraphicLine {
     pub item_transform: Option<[f32; 6]>,
     pub stroke_color: Option<String>,
     pub stroke_weight: Option<f32>,
+    /// `StrokeType` reference; see [`Rectangle::stroke_type`].
+    pub stroke_type: Option<String>,
     /// `AppliedObjectStyle` reference; see `TextFrame`.
     pub applied_object_style: Option<String>,
     /// `<TextWrapPreference>` parsed off the line.
@@ -1076,6 +1082,8 @@ pub struct Polygon {
     pub fill_tint: Option<f32>,
     pub stroke_color: Option<String>,
     pub stroke_weight: Option<f32>,
+    /// `StrokeType` reference; see [`Rectangle::stroke_type`].
+    pub stroke_type: Option<String>,
     pub applied_object_style: Option<String>,
     /// Path-point anchors with their Bezier control points, in the
     /// polygon's inner coords. Empty for synthetic IDMLs that
@@ -1295,6 +1303,12 @@ struct CommonAttrs {
     gradient_stroke_length: Option<f32>,
     stroke_color: Option<String>,
     stroke_weight: Option<f32>,
+    /// `StrokeType` reference. Defined by IDML on every page item; the
+    /// renderer consumes it to pick built-in dash names or look up a
+    /// custom `<DashedStrokeStyle>` (cycle-3 4a). Lives on `CommonAttrs`
+    /// rather than `StrokeStyleAttrs` so Oval / Polygon / GraphicLine /
+    /// TextFrame all get it without each shape duplicating the read.
+    stroke_type: Option<String>,
     applied_object_style: Option<String>,
     item_layer: Option<String>,
     /// `OverprintFill="true"` on the IDML element. Absent attribute
@@ -1316,6 +1330,7 @@ fn read_common_attrs(e: &quick_xml::events::BytesStart) -> CommonAttrs {
         gradient_stroke_length: attr(e, b"GradientStrokeLength").and_then(|s| s.parse().ok()),
         stroke_color: attr(e, b"StrokeColor"),
         stroke_weight: attr(e, b"StrokeWeight").and_then(|s| s.parse().ok()),
+        stroke_type: attr(e, b"StrokeType"),
         applied_object_style: attr(e, b"AppliedObjectStyle"),
         item_layer: attr(e, b"ItemLayer"),
         overprint_fill: attr(e, b"OverprintFill")
@@ -1328,11 +1343,11 @@ fn read_common_attrs(e: &quick_xml::events::BytesStart) -> CommonAttrs {
 }
 
 /// Rectangle-only stroke style attributes (`StrokeAlignment`,
-/// `StrokeType`, `EndCap`, `EndJoin`, `MiterLimit`). Kept separate
-/// from [`CommonAttrs`] because no other shape carries these.
+/// `EndCap`, `EndJoin`, `MiterLimit`). `StrokeType` moved to
+/// [`CommonAttrs`] in cycle 4 so non-rectangle shapes can also
+/// honour custom dash patterns.
 struct StrokeStyleAttrs {
     stroke_alignment: Option<String>,
-    stroke_type: Option<String>,
     end_cap: Option<String>,
     end_join: Option<String>,
     miter_limit: Option<f32>,
@@ -1341,7 +1356,6 @@ struct StrokeStyleAttrs {
 fn read_stroke_style_attrs(e: &quick_xml::events::BytesStart) -> StrokeStyleAttrs {
     StrokeStyleAttrs {
         stroke_alignment: attr(e, b"StrokeAlignment"),
-        stroke_type: attr(e, b"StrokeType"),
         end_cap: attr(e, b"EndCap"),
         end_join: attr(e, b"EndJoin"),
         miter_limit: attr(e, b"MiterLimit").and_then(|s| s.parse().ok()),
@@ -1587,6 +1601,7 @@ impl Spread {
                             fill_tint: common.fill_tint,
                             stroke_color: common.stroke_color,
                             stroke_weight: common.stroke_weight,
+                            stroke_type: common.stroke_type,
                             drop_shadow: None,
                             stroke_drop_shadow: None,
                             next_text_frame: attr(&e, b"NextTextFrame"),
@@ -1666,7 +1681,7 @@ impl Spread {
                             applied_object_style: common.applied_object_style,
                             text_wrap: None,
                             frame_fitting: None,
-                            stroke_type: stroke.stroke_type,
+                            stroke_type: common.stroke_type,
                             stroke_alignment: stroke.stroke_alignment,
                             end_cap: stroke.end_cap,
                             end_join: stroke.end_join,
@@ -1727,6 +1742,7 @@ impl Spread {
                             fill_tint: common.fill_tint,
                             stroke_color: common.stroke_color,
                             stroke_weight: common.stroke_weight,
+                            stroke_type: common.stroke_type,
                             drop_shadow: None,
                             stroke_drop_shadow: None,
                             applied_object_style: common.applied_object_style,
@@ -2481,6 +2497,7 @@ impl Spread {
                             item_transform,
                             stroke_color: common.stroke_color,
                             stroke_weight: common.stroke_weight,
+                            stroke_type: common.stroke_type,
                             applied_object_style: common.applied_object_style,
                             text_wrap: None,
                             item_layer: common.item_layer,
@@ -2526,6 +2543,7 @@ impl Spread {
                             fill_tint: common.fill_tint,
                             stroke_color: common.stroke_color,
                             stroke_weight: common.stroke_weight,
+                            stroke_type: common.stroke_type,
                             applied_object_style: common.applied_object_style,
                             text_wrap: None,
                             anchors: Vec::new(),

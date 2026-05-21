@@ -16,6 +16,7 @@ pub fn empty_text_frame(self_id: &str, bounds: Bounds) -> TextFrame {
         fill_tint: None,
         stroke_color: None,
         stroke_weight: None,
+        stroke_type: None,
         drop_shadow: None,
         stroke_drop_shadow: None,
         next_text_frame: None,

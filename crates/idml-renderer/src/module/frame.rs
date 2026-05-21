@@ -163,7 +163,7 @@ impl<'a> ResolvedFrame<'a> {
             gradient_stroke_length: frame.gradient_stroke_length,
             drop_shadow: frame.drop_shadow.as_ref(),
             stroke_alignment: None,
-            stroke_type: None,
+            stroke_type: frame.stroke_type.as_deref(),
             end_cap: None,
             end_join: None,
             miter_limit: None,
@@ -241,7 +241,7 @@ impl<'a> ResolvedFrame<'a> {
             gradient_stroke_length: oval.gradient_stroke_length,
             drop_shadow: oval.drop_shadow.as_ref(),
             stroke_alignment: None,
-            stroke_type: None,
+            stroke_type: oval.stroke_type.as_deref(),
             end_cap: None,
             end_join: None,
             miter_limit: None,
@@ -286,7 +286,7 @@ impl<'a> ResolvedFrame<'a> {
             gradient_stroke_length: poly.gradient_stroke_length,
             drop_shadow: None,
             stroke_alignment: None,
-            stroke_type: None,
+            stroke_type: poly.stroke_type.as_deref(),
             end_cap: None,
             end_join: None,
             miter_limit: None,
@@ -326,7 +326,7 @@ impl<'a> ResolvedFrame<'a> {
             gradient_stroke_length: None,
             drop_shadow: None,
             stroke_alignment: None,
-            stroke_type: None,
+            stroke_type: line.stroke_type.as_deref(),
             end_cap: None,
             end_join: None,
             miter_limit: None,
@@ -445,5 +445,103 @@ mod tests {
             }
             _ => panic!("multi-anchor Rectangle must lift to Polygon geometry"),
         }
+    }
+
+    #[test]
+    fn cycle4_track3_stroke_type_threads_from_oval_into_resolved_frame() {
+        use idml_parse::Oval;
+        let oval = Oval {
+            self_id: None,
+            bounds: Bounds { top: 0.0, left: 0.0, bottom: 10.0, right: 10.0 },
+            item_transform: None,
+            fill_color: None,
+            fill_tint: None,
+            stroke_color: None,
+            stroke_weight: None,
+            stroke_type: Some("StrokeStyle/$ID/Dashed".to_string()),
+            drop_shadow: None,
+            stroke_drop_shadow: None,
+            applied_object_style: None,
+            text_wrap: None,
+            item_layer: None,
+            effects: None,
+            gradient_fill_angle: None,
+            gradient_fill_length: None,
+            gradient_stroke_angle: None,
+            gradient_stroke_length: None,
+            opacity: None,
+            blend_mode: None,
+            image_link: None,
+            image_bytes: None,
+            has_image_element: false,
+            has_inline_pdf: false,
+            image_item_transform: None,
+            overprint_fill: false,
+            overprint_stroke: false,
+        };
+        let frame = ResolvedFrame::from_oval(&oval);
+        assert_eq!(frame.stroke_type, Some("StrokeStyle/$ID/Dashed"));
+    }
+
+    #[test]
+    fn cycle4_track3_stroke_type_threads_from_polygon_into_resolved_frame() {
+        use idml_parse::Polygon;
+        let poly = Polygon {
+            self_id: None,
+            bounds: Bounds { top: 0.0, left: 0.0, bottom: 10.0, right: 10.0 },
+            item_transform: None,
+            fill_color: None,
+            fill_tint: None,
+            stroke_color: None,
+            stroke_weight: None,
+            stroke_type: Some("StrokeStyle/$ID/Dotted".to_string()),
+            applied_object_style: None,
+            anchors: Vec::new(),
+            subpath_starts: Vec::new(),
+            subpath_open: Vec::new(),
+            text_wrap: None,
+            item_layer: None,
+            effects: None,
+            gradient_fill_angle: None,
+            gradient_fill_length: None,
+            gradient_stroke_angle: None,
+            gradient_stroke_length: None,
+            opacity: None,
+            blend_mode: None,
+            text_paths: Vec::new(),
+            image_link: None,
+            has_image_element: false,
+            has_inline_pdf: false,
+            image_item_transform: None,
+            image_bytes: None,
+            overprint_fill: false,
+            overprint_stroke: false,
+        };
+        let frame = ResolvedFrame::from_polygon(&poly);
+        assert_eq!(frame.stroke_type, Some("StrokeStyle/$ID/Dotted"));
+    }
+
+    #[test]
+    fn cycle4_track3_stroke_type_threads_from_graphic_line_into_resolved_frame() {
+        use idml_parse::GraphicLine;
+        let line = GraphicLine {
+            self_id: None,
+            bounds: Bounds { top: 0.0, left: 0.0, bottom: 10.0, right: 10.0 },
+            item_transform: None,
+            stroke_color: None,
+            stroke_weight: None,
+            stroke_type: Some("CustomDashStyle".to_string()),
+            applied_object_style: None,
+            text_wrap: None,
+            item_layer: None,
+            anchors: Vec::new(),
+            subpath_starts: Vec::new(),
+            subpath_open: Vec::new(),
+            text_paths: Vec::new(),
+            effects: None,
+            overprint_stroke: false,
+        };
+        let frame = ResolvedFrame::from_graphic_line(&line);
+        assert_eq!(frame.stroke_type, Some("CustomDashStyle"));
     }
 }

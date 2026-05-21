@@ -586,6 +586,7 @@ fn new_text_frame(self_id: String, bounds: Bounds, fill_color: Option<String>) -
         fill_tint: None,
         stroke_color: None,
         stroke_weight: None,
+        stroke_type: None,
         drop_shadow: None,
         stroke_drop_shadow: None,
         next_text_frame: None,
