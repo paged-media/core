@@ -93,6 +93,14 @@ struct Args {
     /// "decoded via embedded ICC" or "no ICC; naive multiplicative").
     #[arg(long)]
     trace_icc: bool,
+    /// Track 2 A/B harness candidate side: write one JSON record per
+    /// laid-out line to this file (JSONL). Each record carries
+    /// `story_id`, `paragraph_idx`, `line_idx`, `page_idx`,
+    /// `frame_idx`, `first_byte`, `last_byte`, `baseline_y_pt`,
+    /// `width_pt`. The reference side (`corpus/envato/breaks-extract.py`)
+    /// reconstructs the same shape from PDF word geometry.
+    #[arg(long, value_name = "PATH")]
+    emit_breaks: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -326,6 +334,7 @@ fn main() -> Result<()> {
         fallback_column_width_pt: args.column_width_pt,
         font_metrics_overrides: &metric_overrides,
         missing_image_placeholder: !args.no_missing_image_placeholder,
+        collect_breaks: args.emit_breaks.is_some(),
         ..PipelineOptions::default()
     };
     // Explicit for clarity; default already matches.
@@ -335,6 +344,21 @@ fn main() -> Result<()> {
     let built = pipeline::build_document(&document, &opts)?;
     let total_cmds: usize = built.pages.iter().map(|p| p.list.commands.len()).sum();
     let total_paths: usize = built.pages.iter().map(|p| p.list.paths.len()).sum();
+
+    if let Some(path) = args.emit_breaks.as_deref() {
+        use std::io::Write;
+        let file = std::fs::File::create(path)
+            .with_context(|| format!("create {}", path.display()))?;
+        let mut w = std::io::BufWriter::new(file);
+        for rec in &built.breaks {
+            serde_json::to_writer(&mut w, rec)?;
+            w.write_all(b"\n")?;
+        }
+        w.flush()?;
+        if !args.json {
+            eprintln!("breaks        {} record(s) → {}", built.breaks.len(), path.display());
+        }
+    }
 
     let mut rendered_paths: Vec<(usize, std::path::PathBuf, u32, u32)> = Vec::new();
     if let Some(out) = args.render.as_deref() {

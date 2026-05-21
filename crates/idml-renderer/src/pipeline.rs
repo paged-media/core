@@ -90,6 +90,10 @@ pub struct PipelineOptions<'a> {
     /// IDML's reference PDF instead of falling back to the frame's raw
     /// fill.
     pub missing_image_placeholder: bool,
+    /// Track 2: when true, the renderer records one [`BreakRecord`] per
+    /// laid-out line into [`BuiltDocument::breaks`]. Cheap (Vec push
+    /// per line) and gated so production renders pay zero cost.
+    pub collect_breaks: bool,
 }
 
 /// Missing-image placeholder calibration (Q-22). Originally P-02
@@ -137,6 +141,7 @@ impl Default for PipelineOptions<'_> {
             frame_drop_shadow: None,
             font_metrics_overrides: &[],
             missing_image_placeholder: true,
+            collect_breaks: false,
         }
     }
 }
@@ -162,6 +167,29 @@ pub struct BuiltPage {
 pub struct BuiltDocument {
     pub pages: Vec<BuiltPage>,
     pub stats: PipelineStats,
+    /// Track 2: per-laid-out-line break records, when collection was
+    /// enabled via [`PipelineOptions::collect_breaks`]. Empty when
+    /// the flag was off (the default). Used by the A/B harness to
+    /// compare candidate-side break decisions against PDF-derived
+    /// references.
+    pub breaks: Vec<BreakRecord>,
+}
+
+/// One laid-out line, captured by the renderer when
+/// [`PipelineOptions::collect_breaks`] is set. Coordinates are in pt
+/// (1 pt = 1/72 in); byte offsets are paragraph-local.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BreakRecord {
+    pub story_id: String,
+    pub paragraph_idx: u32,
+    pub line_idx: u32,
+    pub page_idx: u32,
+    pub frame_idx: u32,
+    pub first_byte: u32,
+    /// Exclusive upper bound (matches `Range`'s `end`).
+    pub last_byte: u32,
+    pub baseline_y_pt: f32,
+    pub width_pt: f32,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -213,6 +241,7 @@ pub fn build_document(
     });
     let mut pages: Vec<BuiltPage> = Vec::new();
     let mut total_stats = PipelineStats::default();
+    let mut breaks: Vec<BreakRecord> = Vec::new();
 
     // Walk every page in every spread. We capture each page's bounds,
     // origin, and applied-master reference so the next passes can
@@ -1040,7 +1069,8 @@ pub fn build_document(
         .with_optical_margin(
             parsed.story.optical_margin_alignment,
             parsed.story.optical_margin_size,
-        );
+        )
+        .with_story_id(&parsed.self_id);
         for paragraph in &parsed.story.paragraphs {
             emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
         }
@@ -1048,6 +1078,7 @@ pub fn build_document(
         emitter.apply_polygon_clip(&mut pages);
         emitter.apply_blend_groups(&mut pages);
         anchored_image_queue.extend(emitter.take_anchored_image_queue());
+        breaks.extend(emitter.take_breaks());
     }
 
     // Text-on-path pass: walk every spread's shapes and emit any
@@ -1248,7 +1279,8 @@ pub fn build_document(
         .with_optical_margin(
             parsed.story.optical_margin_alignment,
             parsed.story.optical_margin_size,
-        );
+        )
+        .with_story_id(&parsed.self_id);
         if let Some(paragraphs) = toc_paragraphs.as_ref() {
             for paragraph in paragraphs {
                 emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
@@ -1262,6 +1294,7 @@ pub fn build_document(
         emitter.apply_polygon_clip(&mut pages);
         emitter.apply_blend_groups(&mut pages);
         anchored_image_queue.extend(emitter.take_anchored_image_queue());
+        breaks.extend(emitter.take_breaks());
     }
 
     // Anchored-rectangle image post-pass. Each entry was captured
@@ -1290,6 +1323,7 @@ pub fn build_document(
     Ok(BuiltDocument {
         pages,
         stats: total_stats,
+        breaks,
     })
 }
 
@@ -1422,6 +1456,18 @@ struct StoryEmitter<'a> {
     /// clone) tuples here lets the post-pass run with the caches in
     /// hand without re-doing placement.
     anchored_image_queue: Vec<AnchoredImageEmit>,
+    /// Track 2: per-line records collected when
+    /// `options.collect_breaks` is set. Drained by `take_breaks` once
+    /// the story finishes emitting.
+    breaks: Vec<BreakRecord>,
+    /// Track 2: identifies which story this emitter is processing.
+    /// Set by `StoryEmitter::with_story_id` before emit; included in
+    /// every pushed `BreakRecord`. Empty string when collection isn't
+    /// enabled.
+    current_story_id: String,
+    /// Track 2: monotonically incremented as `emit_paragraph` fires.
+    /// Resets to 0 per emitter (i.e. per story).
+    paragraph_idx: u32,
 }
 
 /// One image-bearing anchored Rectangle captured during the body /
@@ -1593,7 +1639,19 @@ impl<'a> StoryEmitter<'a> {
             optical_margin_size_pt: 0.0,
             anchored_recursion_depth: 0,
             anchored_image_queue: Vec::new(),
+            breaks: Vec::new(),
+            current_story_id: String::new(),
+            paragraph_idx: 0,
         }
+    }
+
+    fn with_story_id(mut self, story_id: &str) -> Self {
+        self.current_story_id = story_id.to_string();
+        self
+    }
+
+    fn take_breaks(&mut self) -> Vec<BreakRecord> {
+        std::mem::take(&mut self.breaks)
     }
 
     /// Mark this emitter as a `depth`-deep anchored-story sub-emitter.
@@ -1631,6 +1689,7 @@ impl<'a> StoryEmitter<'a> {
         total_stats: &mut PipelineStats,
     ) {
         emit_paragraph_into_chain(self, paragraph, pages, total_stats);
+        self.paragraph_idx = self.paragraph_idx.saturating_add(1);
     }
 
     fn apply_vertical_justification(&self, pages: &mut [BuiltPage]) {
@@ -3056,6 +3115,25 @@ fn emit_paragraph_into_chain(
         pages[target_page].stats.lines += 1;
         total_stats.glyphs += line.glyphs.len();
         total_stats.lines += 1;
+
+        // Track 2: A/B-harness break record. Cheap when disabled; the
+        // collector flag is checked once per line. baseline_y / width
+        // live in idml_text's 1/64-pt units (ADVANCE_PRECISION) so we
+        // divide back to pt here so downstream tooling (the Python
+        // reference-side extractor) reads natural units.
+        if em.options.collect_breaks {
+            em.breaks.push(BreakRecord {
+                story_id: em.current_story_id.clone(),
+                paragraph_idx: em.paragraph_idx,
+                line_idx: current_line_idx as u32,
+                page_idx: target_page as u32,
+                frame_idx: em.frame_idx as u32,
+                first_byte: line.byte_range.start as u32,
+                last_byte: line.byte_range.end as u32,
+                baseline_y_pt: line.baseline_y as f32 / idml_text::shape::ADVANCE_PRECISION,
+                width_pt: line.width as f32 / idml_text::shape::ADVANCE_PRECISION,
+            });
+        }
 
         let frame = em.chain[em.frame_idx];
         let (ox, oy) = pages[target_page].spread_origin;
