@@ -190,6 +190,12 @@ pub struct BreakRecord {
     pub last_byte: u32,
     pub baseline_y_pt: f32,
     pub width_pt: f32,
+    /// Cycle-5 Track 1: the line's source text, sliced from the
+    /// paragraph's concatenated bytes by `[first_byte..last_byte]`.
+    /// Newlines / forced-break characters preserved as-is. Empty
+    /// when collection wasn't enabled; populated only when
+    /// `PipelineOptions::collect_breaks` is set.
+    pub source_text: String,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -3082,6 +3088,19 @@ fn emit_paragraph_into_chain(
     // Q-09: capture the first line's baseline so the border's top
     // edge anchors above it; closed out at the last-line emit.
     let mut first_baseline_pt: Option<f32> = None;
+    // Cycle-5 Track 1: pre-concatenate the paragraph text once so the
+    // Track-2 BreakRecord can slice per-line `[first_byte..last_byte]`
+    // without re-walking the run vec. Only built when break collection
+    // is enabled — production renders skip the allocation entirely.
+    let paragraph_text_for_breaks: Option<String> = if em.options.collect_breaks {
+        let mut buf = String::new();
+        for r in styled_runs_ref {
+            buf.push_str(r.text);
+        }
+        Some(buf)
+    } else {
+        None
+    };
     for mut line in laid_out.lines.into_iter() {
         let line_h = idml_text::layout::max_line_height_for_glyphs(&line.glyphs)
             .unwrap_or(lopts.line_height);
@@ -3122,6 +3141,18 @@ fn emit_paragraph_into_chain(
         // divide back to pt here so downstream tooling (the Python
         // reference-side extractor) reads natural units.
         if em.options.collect_breaks {
+            // Slice the line's source text from the paragraph buffer
+            // we pre-built above. byte_range is a half-open
+            // `[start..end)` of bytes; clamp to the buffer length so
+            // a malformed breaker output can't out-of-bounds.
+            let source_text = paragraph_text_for_breaks
+                .as_deref()
+                .map(|pt| {
+                    let start = line.byte_range.start.min(pt.len());
+                    let end = line.byte_range.end.min(pt.len());
+                    pt.get(start..end).unwrap_or("").to_string()
+                })
+                .unwrap_or_default();
             em.breaks.push(BreakRecord {
                 story_id: em.current_story_id.clone(),
                 paragraph_idx: em.paragraph_idx,
@@ -3132,6 +3163,7 @@ fn emit_paragraph_into_chain(
                 last_byte: line.byte_range.end as u32,
                 baseline_y_pt: line.baseline_y as f32 / idml_text::shape::ADVANCE_PRECISION,
                 width_pt: line.width as f32 / idml_text::shape::ADVANCE_PRECISION,
+                source_text,
             });
         }
 
