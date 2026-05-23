@@ -729,13 +729,15 @@ fn threaded_story_renders_without_panic() {
 }
 
 /// Build a 1-page IDML with two Rectangles on different layers.
-/// `layerBack` (the bottom-of-z-stack layer) is declared *second* in
-/// designmap.xml so `layers[0]` is the top layer — matching IDML's
-/// top-first convention. The XML order of the Rectangles is reversed
-/// from the desired paint order: the front-layer rect (Blue) comes
-/// first in the spread, the back-layer rect (Red) comes second. A
-/// correct renderer emits Red FIRST (behind) and Blue SECOND (on top),
-/// regardless of XML order.
+/// Cycle-8 correction: `layerBack` (the bottom-of-z-stack layer) is
+/// declared *first* in designmap.xml. Real-world IDMLs we've inspected
+/// (e.g. company-profile-template, where Bg/Image/Text layers list
+/// Bg first and Bg renders at the bottom of the canvas) use
+/// designmap ordering where layers[0] = bottom of z-stack. The XML
+/// order of the Rectangles is reversed from the desired paint order:
+/// the front-layer rect (Blue) comes first in the spread, the
+/// back-layer rect (Red) comes second. A correct renderer emits Red
+/// FIRST (behind) and Blue SECOND (on top), regardless of XML order.
 fn build_layered_rects_idml() -> Vec<u8> {
     let buf = std::io::Cursor::new(Vec::new());
     let mut zip = ZipWriter::new(buf);
@@ -748,8 +750,8 @@ fn build_layered_rects_idml() -> Vec<u8> {
     zip.write_all(
         br#"<?xml version="1.0" encoding="UTF-8"?>
 <Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
-  <Layer Self="layerFront" Name="Front" Visible="true" Printable="true"/>
   <Layer Self="layerBack" Name="Back" Visible="true" Printable="true"/>
+  <Layer Self="layerFront" Name="Front" Visible="true" Printable="true"/>
   <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
 </Document>"#,
     )

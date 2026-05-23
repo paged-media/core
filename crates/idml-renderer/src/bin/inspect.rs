@@ -93,6 +93,15 @@ struct Args {
     /// "decoded via embedded ICC" or "no ICC; naive multiplicative").
     #[arg(long)]
     trace_icc: bool,
+    /// Cycle-8 Track 1: install a tracing subscriber for the
+    /// `idml_renderer::routing` target. Emits one debug event per
+    /// Rectangle / Oval / GraphicLine / Polygon whose page-routing
+    /// is decided, with the rect's inner bounds, item transform,
+    /// computed spread-coord bounds, each page's spread-coord
+    /// bounds, and the chosen page indices. Diagnoses image-rect
+    /// off-page routing bugs (cycle-7 Track 3 finding).
+    #[arg(long)]
+    trace_routing: bool,
     /// Track 2 A/B harness candidate side: write one JSON record per
     /// laid-out line to this file (JSONL). Each record carries
     /// `story_id`, `paragraph_idx`, `line_idx`, `page_idx`,
@@ -116,9 +125,16 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    if args.trace_icc {
+    if args.trace_icc || args.trace_routing {
+        let mut targets: Vec<&str> = Vec::new();
+        if args.trace_icc {
+            targets.push("idml_renderer::icc=debug");
+        }
+        if args.trace_routing {
+            targets.push("idml_renderer::routing=debug");
+        }
         let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("idml_renderer::icc=debug"));
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(targets.join(",")));
         tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_writer(std::io::stderr)

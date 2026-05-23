@@ -724,10 +724,18 @@ pub fn build_document(
             let first = zs.next();
             let multi_layer = first.map_or(false, |f| zs.any(|z| z != f));
             if multi_layer {
-                // Descending layer-z (high index = bottom layer →
-                // paint first). Stable sort keeps XML order as the
-                // tiebreaker within a layer.
-                keyed.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+                // Cycle-8: IDML's designmap lists layers in the order
+                // matching InDesign's layer panel from BOTTOM to TOP
+                // (designmap[0] = bottom layer, paints first; the
+                // cycle-2 Q-10 commit's assumption of top-first was
+                // inverted, manifesting on company-profile-template
+                // page 20 where the Bg layer covered the image
+                // instead of sitting beneath it). Sort ascending
+                // by layer-z so low-index (bottom) layers paint first
+                // and high-index (top) layers paint last. Stable
+                // sort preserves XML order as the tiebreaker within
+                // a layer.
+                keyed.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
             }
             keyed.into_iter().map(|(_, _, fr)| fr).collect()
         };
@@ -808,6 +816,20 @@ pub fn build_document(
                     } else {
                         overlaps
                     };
+                    // Cycle-8 Track 1: page-routing diagnostic. Emit
+                    // one record per Rectangle when --trace-routing
+                    // is on; downstream callers filter by self_id.
+                    // Note: kept narrow so the trace is useful for
+                    // future routing investigations without poking at
+                    // every shape kind.
+                    tracing::debug!(
+                        target: "idml_renderer::routing",
+                        kind = "rect",
+                        self_id = rect.self_id.as_deref().unwrap_or("?"),
+                        spread_bounds = ?spread_bounds,
+                        chosen_local = ?local_indices,
+                        "rect page-routing"
+                    );
                     for &local_idx in &local_indices {
                         let page_idx = range.start + local_idx;
                         let before = pages[page_idx].list.commands.len();
