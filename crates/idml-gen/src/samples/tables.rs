@@ -261,6 +261,9 @@ fn variants() -> Vec<Variant> {
                             bullets_list_type: None,
                             bullet_character: None,
                             table: None,
+                            minimum_letter_spacing: None,
+                            desired_letter_spacing: None,
+                            maximum_letter_spacing: None,
                             runs: vec![Run {
                                 text: s.to_string(),
                                 point_size: None,
@@ -403,6 +406,9 @@ pub fn build() -> Sample {
             tab_list: Vec::new(),
             table: Some(table),
             runs: Vec::new(),
+            minimum_letter_spacing: None,
+            desired_letter_spacing: None,
+            maximum_letter_spacing: None,
         };
         stories.push((
             story_id.clone(),

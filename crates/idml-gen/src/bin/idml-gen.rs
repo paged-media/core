@@ -39,6 +39,7 @@ fn emit_sample(name: &str, out_dir: &std::path::Path) -> Result<()> {
         "strokes-fills" => idml_gen::samples::strokes_fills::build(),
         "text" => idml_gen::samples::text::build(),
         "text-advanced" => idml_gen::samples::text_advanced::build(),
+        "text-letterspacing" => idml_gen::samples::text_letterspacing::build(),
         "text-wrap" => idml_gen::samples::text_wrap::build(),
         "effects" => idml_gen::samples::effects::build(),
         "gradients" => idml_gen::samples::gradients::build(),
@@ -48,7 +49,7 @@ fn emit_sample(name: &str, out_dir: &std::path::Path) -> Result<()> {
         "transparency" => idml_gen::samples::transparency::build(),
         other => {
             anyhow::bail!(
-                "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, text-wrap, effects, gradients, tables, images, anchored, transparency"
+                "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, text-letterspacing, text-wrap, effects, gradients, tables, images, anchored, transparency"
             )
         }
     };

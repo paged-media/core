@@ -63,6 +63,14 @@ pub struct Paragraph {
     /// their own paragraph content; the surrounding paragraph's runs
     /// remain (typically empty) for the parser's sake.
     pub table: Option<Table>,
+    /// `MinimumLetterSpacing` (pt) on the paragraph style range —
+    /// cycle-7 Track 1, used to seed Q-20 calibration fixtures.
+    /// `None` ⇒ omit (renderer uses 0).
+    pub minimum_letter_spacing: Option<f32>,
+    /// `DesiredLetterSpacing` (pt). `None` ⇒ omit.
+    pub desired_letter_spacing: Option<f32>,
+    /// `MaximumLetterSpacing` (pt). `None` ⇒ omit.
+    pub maximum_letter_spacing: Option<f32>,
 }
 
 /// One stop in a paragraph's `<TabList>`. Position is in pt from
@@ -223,6 +231,9 @@ impl Paragraph {
                 anchored_frame: None,
             }],
             table: None,
+            minimum_letter_spacing: None,
+            desired_letter_spacing: None,
+            maximum_letter_spacing: None,
         }
     }
 }
@@ -240,6 +251,9 @@ pub fn write_story(s: &Story) -> Vec<u8> {
         let right_indent_str: String;
         let drop_cap_chars_str: String;
         let drop_cap_lines_str: String;
+        let min_ls_str: String;
+        let desired_ls_str: String;
+        let max_ls_str: String;
         let mut p_attrs: Vec<(&str, &str)> = vec![(
             "AppliedParagraphStyle",
             "ParagraphStyle/$ID/[No paragraph style]",
@@ -277,6 +291,18 @@ pub fn write_story(s: &Story) -> Vec<u8> {
         }
         if let Some(blt) = paragraph.bullets_list_type {
             p_attrs.push(("BulletsAndNumberingListType", blt));
+        }
+        if let Some(v) = paragraph.minimum_letter_spacing {
+            min_ls_str = crate::xml::format_f32(v);
+            p_attrs.push(("MinimumLetterSpacing", min_ls_str.as_str()));
+        }
+        if let Some(v) = paragraph.desired_letter_spacing {
+            desired_ls_str = crate::xml::format_f32(v);
+            p_attrs.push(("DesiredLetterSpacing", desired_ls_str.as_str()));
+        }
+        if let Some(v) = paragraph.maximum_letter_spacing {
+            max_ls_str = crate::xml::format_f32(v);
+            p_attrs.push(("MaximumLetterSpacing", max_ls_str.as_str()));
         }
         b.start("ParagraphStyleRange", &p_attrs);
         // Bullet/tab Properties container — combines the inline

@@ -224,6 +224,9 @@ fn host_paragraphs(anchor_frame: Rect) -> Vec<Paragraph> {
             },
         ],
         table: None,
+        minimum_letter_spacing: None,
+        desired_letter_spacing: None,
+        maximum_letter_spacing: None,
     };
     let p3 = Paragraph::plain(
         "Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia \

@@ -77,6 +77,9 @@ fn variants() -> Vec<Variant> {
                     anchored_frame: None,
                 }],
                 table: None,
+                minimum_letter_spacing: None,
+                desired_letter_spacing: None,
+                maximum_letter_spacing: None,
             }],
         },
         // 2. First-line indent (positive) — first line shifts right.
@@ -107,6 +110,9 @@ fn variants() -> Vec<Variant> {
                     anchored_frame: None,
                 }],
                 table: None,
+                minimum_letter_spacing: None,
+                desired_letter_spacing: None,
+                maximum_letter_spacing: None,
             }],
         },
         // 3. Hanging indent — negative first-line indent paired with
@@ -139,6 +145,9 @@ fn variants() -> Vec<Variant> {
                     anchored_frame: None,
                 }],
                 table: None,
+                minimum_letter_spacing: None,
+                desired_letter_spacing: None,
+                maximum_letter_spacing: None,
             }],
         },
         // 4. Symmetric column narrowing — LeftIndent + RightIndent.
@@ -169,6 +178,9 @@ fn variants() -> Vec<Variant> {
                     anchored_frame: None,
                 }],
                 table: None,
+                minimum_letter_spacing: None,
+                desired_letter_spacing: None,
+                maximum_letter_spacing: None,
             }],
         },
         // 5. Tab stops with a dotted leader. Left-aligned label,
@@ -219,6 +231,9 @@ fn variants() -> Vec<Variant> {
                         anchored_frame: None,
                     }],
                     table: None,
+                    minimum_letter_spacing: None,
+                    desired_letter_spacing: None,
+                    maximum_letter_spacing: None,
                 },
                 Paragraph {
                     justification: None,
@@ -261,6 +276,9 @@ fn variants() -> Vec<Variant> {
                         anchored_frame: None,
                     }],
                     table: None,
+                    minimum_letter_spacing: None,
+                    desired_letter_spacing: None,
+                    maximum_letter_spacing: None,
                 },
                 Paragraph {
                     justification: None,
@@ -303,6 +321,9 @@ fn variants() -> Vec<Variant> {
                         anchored_frame: None,
                     }],
                     table: None,
+                    minimum_letter_spacing: None,
+                    desired_letter_spacing: None,
+                    maximum_letter_spacing: None,
                 },
             ],
         },
@@ -337,6 +358,9 @@ fn variants() -> Vec<Variant> {
                         anchored_frame: None,
                     }],
                     table: None,
+                    minimum_letter_spacing: None,
+                    desired_letter_spacing: None,
+                    maximum_letter_spacing: None,
                 })
                 .collect(),
         },
@@ -369,6 +393,9 @@ fn variants() -> Vec<Variant> {
                         anchored_frame: None,
                     }],
                     table: None,
+                    minimum_letter_spacing: None,
+                    desired_letter_spacing: None,
+                    maximum_letter_spacing: None,
                 })
                 .collect(),
         },
@@ -401,6 +428,9 @@ fn variants() -> Vec<Variant> {
                         anchored_frame: None,
                     }],
                     table: None,
+                    minimum_letter_spacing: None,
+                    desired_letter_spacing: None,
+                    maximum_letter_spacing: None,
                 })
                 .collect(),
         },
@@ -434,6 +464,9 @@ fn variants() -> Vec<Variant> {
                     anchored_frame: None,
                 }],
                 table: None,
+                minimum_letter_spacing: None,
+                desired_letter_spacing: None,
+                maximum_letter_spacing: None,
             }],
         },
     ]
@@ -524,6 +557,9 @@ pub fn build() -> Sample {
                     })
                     .collect(),
                 table: None,
+                minimum_letter_spacing: None,
+                desired_letter_spacing: None,
+                maximum_letter_spacing: None,
             })
             .collect();
 

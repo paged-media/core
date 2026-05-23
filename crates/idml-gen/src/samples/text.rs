@@ -106,6 +106,9 @@ fn variants() -> Vec<Variant> {
                 bullets_list_type: None,
                 bullet_character: None,
                 table: None,
+                minimum_letter_spacing: None,
+                desired_letter_spacing: None,
+                maximum_letter_spacing: None,
                 runs: vec![Run {
                     text: lorem.to_string(),
                     point_size: Some(12.0),
@@ -139,6 +142,9 @@ fn variants() -> Vec<Variant> {
                     bullets_list_type: None,
                     bullet_character: None,
                     table: None,
+                    minimum_letter_spacing: None,
+                    desired_letter_spacing: None,
+                    maximum_letter_spacing: None,
                     runs: vec![Run {
                         text: format!("Paragraph {} of three", i + 1),
                         point_size: Some(14.0),
@@ -172,6 +178,9 @@ fn variants() -> Vec<Variant> {
                 bullets_list_type: None,
                 bullet_character: None,
                 table: None,
+                minimum_letter_spacing: None,
+                desired_letter_spacing: None,
+                maximum_letter_spacing: None,
                 runs: vec![
                     Run {
                         text: "Black ".to_string(),
@@ -226,6 +235,9 @@ fn variants() -> Vec<Variant> {
                 bullets_list_type: None,
                 bullet_character: None,
                 table: None,
+                minimum_letter_spacing: None,
+                desired_letter_spacing: None,
+                maximum_letter_spacing: None,
                 runs: vec![Run {
                     text: "wide-tracked headline".to_string(),
                     point_size: Some(18.0),
@@ -256,6 +268,9 @@ fn variants() -> Vec<Variant> {
                 bullets_list_type: None,
                 bullet_character: None,
                 table: None,
+                minimum_letter_spacing: None,
+                desired_letter_spacing: None,
+                maximum_letter_spacing: None,
                 runs: vec![Run {
                     text: "underlined run".to_string(),
                     point_size: Some(18.0),
@@ -286,6 +301,9 @@ fn variants() -> Vec<Variant> {
                 bullets_list_type: None,
                 bullet_character: None,
                 table: None,
+                minimum_letter_spacing: None,
+                desired_letter_spacing: None,
+                maximum_letter_spacing: None,
                 runs: vec![
                     Run {
                         text: "x".to_string(),
@@ -332,6 +350,9 @@ fn variants() -> Vec<Variant> {
                 bullets_list_type: None,
                 bullet_character: None,
                 table: None,
+                minimum_letter_spacing: None,
+                desired_letter_spacing: None,
+                maximum_letter_spacing: None,
                 runs: vec![Run {
                     text: "italic Open Sans run".to_string(),
                     point_size: Some(18.0),
@@ -369,6 +390,9 @@ fn one_run(
         bullets_list_type: None,
         bullet_character: None,
         table: None,
+        minimum_letter_spacing: None,
+        desired_letter_spacing: None,
+        maximum_letter_spacing: None,
         runs: vec![Run {
             text: text.to_string(),
             point_size: Some(point_size),
@@ -447,6 +471,9 @@ pub fn build() -> Sample {
                         bullets_list_type: p.bullets_list_type,
                         bullet_character: p.bullet_character,
                         table: None,
+                        minimum_letter_spacing: None,
+                        desired_letter_spacing: None,
+                        maximum_letter_spacing: None,
                         runs: p
                             .runs
                             .iter()
