@@ -53,6 +53,10 @@ pub use cpu::rasterize;
 pub use cpu::CpuRasterizer;
 #[cfg(all(feature = "vello-backend", target_arch = "wasm32"))]
 pub use surface::{SurfaceError, SurfacePresenter, Viewport};
+// Re-export vello::Scene so consumers (idml-canvas-wasm) don't need
+// vello as a direct dependency to hold cached scenes.
+#[cfg(all(feature = "vello-backend", target_arch = "wasm32"))]
+pub use vello::Scene as VelloScene;
 #[cfg(feature = "vello-backend")]
 pub use vello_rs::VelloRasterizer;
 

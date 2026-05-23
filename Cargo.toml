@@ -14,6 +14,8 @@ members = [
     "crates/idml-introspect",
     "crates/idml-introspect-wasm",
     "crates/idml-gen",
+    "crates/idml-canvas",
+    "crates/idml-canvas-wasm",
     "spikes/vello-eval",
     "spikes/composer-calibration",
     "spikes/wasm-size",

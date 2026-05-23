@@ -21,9 +21,10 @@
 #![cfg(target_arch = "wasm32")]
 
 use idml_compose::{Color, DisplayList};
-use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions};
+use vello::kurbo;
+use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene};
 
-use crate::vello_rs::{build_scene_for_surface, linear_to_peniko};
+use crate::vello_rs::{build_scene_for_surface, build_scene_with_transform, linear_to_peniko};
 
 /// Viewport transform applied on top of the page → px scale before
 /// presenting. The editor uses this for zoom/pan/dpr — the renderer
@@ -102,8 +103,9 @@ pub struct SurfacePresenter {
 }
 
 impl SurfacePresenter {
-    /// Create a presenter bound to `canvas`. Async because adapter
-    /// + device requests are Promise-based on wasm.
+    /// Create a presenter bound to a main-thread `HtmlCanvasElement`.
+    /// Async because adapter + device requests are Promise-based on
+    /// wasm.
     ///
     /// `width` / `height` are device-pixel dimensions — pass
     /// `canvas.width()` / `canvas.height()`, not the CSS size.
@@ -112,10 +114,29 @@ impl SurfacePresenter {
         width: u32,
         height: u32,
     ) -> Result<Self, SurfaceError> {
+        Self::new_inner(wgpu::SurfaceTarget::Canvas(canvas), width, height).await
+    }
+
+    /// Worker-side variant: takes an `OffscreenCanvas` that has been
+    /// transferred from the main thread. The canvas worker uses this
+    /// path because it owns the OffscreenCanvas, not the main thread.
+    pub async fn new_offscreen(
+        canvas: web_sys::OffscreenCanvas,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, SurfaceError> {
+        Self::new_inner(wgpu::SurfaceTarget::OffscreenCanvas(canvas), width, height).await
+    }
+
+    async fn new_inner(
+        target: wgpu::SurfaceTarget<'static>,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, SurfaceError> {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let surface = instance
-            .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
+            .create_surface(target)
             .map_err(|e| SurfaceError::CreateSurface(format!("{e:?}")))?;
 
         let adapter = instance
@@ -201,6 +222,15 @@ impl SurfacePresenter {
         Ok(presenter)
     }
 
+    /// Surface dimensions in device pixels. Read at any time by the
+    /// worker to drive visibility-culling math.
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
     /// Re-configure the surface after a resize. The editor calls this
     /// in a ResizeObserver and after dpr changes.
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -229,6 +259,182 @@ impl SurfacePresenter {
                 desired_maximum_frame_latency: 2,
             },
         );
+    }
+
+    /// Build a Vello `Scene` from a display list in page-document
+    /// space (identity transform). The result can be cached and
+    /// composed via `present_scenes` each frame, avoiding the
+    /// per-frame display-list traversal.
+    ///
+    /// `width_pt` / `height_pt` are the page's dimensions in points;
+    /// the scene is prefixed with a white background rect + 1pt
+    /// grey border so the page chrome stays consistent across the
+    /// CPU and GPU paths.
+    pub fn build_page_scene(list: &DisplayList, width_pt: f32, height_pt: f32) -> Scene {
+        use vello::peniko;
+
+        let mut scene = Scene::new();
+        // White page body.
+        scene.fill(
+            peniko::Fill::NonZero,
+            kurbo::Affine::IDENTITY,
+            peniko::Color::from_rgba8(255, 255, 255, 255),
+            None,
+            &kurbo::Rect::new(0.0, 0.0, width_pt as f64, height_pt as f64),
+        );
+        // 1pt grey border around the page edge.
+        scene.stroke(
+            &kurbo::Stroke::new(1.0),
+            kurbo::Affine::IDENTITY,
+            peniko::Color::from_rgba8(180, 180, 180, 255),
+            None,
+            &kurbo::Rect::new(0.0, 0.0, width_pt as f64, height_pt as f64),
+        );
+        // Append the page's content on top.
+        let content = build_scene_with_transform(list, kurbo::Affine::IDENTITY);
+        scene.append(&content, None);
+        scene
+    }
+
+    /// Compose previously-built per-page scenes onto the surface,
+    /// each at its own affine transform. The transform parallels
+    /// `present_multi`'s `[a, b, c, d, e, f]` convention.
+    ///
+    /// This is the sub-phase D hot path: cached scenes mean per-frame
+    /// cost is just `Scene::append` (a memcpy + transform composition)
+    /// per visible page, not a full display-list walk.
+    pub fn present_scenes(
+        &mut self,
+        pages: &[(&Scene, [f32; 6])],
+        background: Color,
+    ) -> Result<(), SurfaceError> {
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(t)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+            other => {
+                return Err(SurfaceError::GetTexture(format!("{other:?}")));
+            }
+        };
+
+        let mut combined = Scene::new();
+        for (scene, t) in pages {
+            let affine = kurbo::Affine::new([
+                t[0] as f64,
+                t[1] as f64,
+                t[2] as f64,
+                t[3] as f64,
+                t[4] as f64,
+                t[5] as f64,
+            ]);
+            combined.append(scene, Some(affine));
+        }
+
+        self.renderer
+            .render_to_texture(
+                &self.device,
+                &self.queue,
+                &combined,
+                &self.target_view,
+                &RenderParams {
+                    base_color: linear_to_peniko(background),
+                    width: self.width,
+                    height: self.height,
+                    antialiasing_method: AaConfig::Area,
+                },
+            )
+            .map_err(|e| SurfaceError::Render(format!("{e:?}")))?;
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("idml-gpu surface blit scenes"),
+            });
+        let surface_view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.blitter.copy(
+            &self.device,
+            &mut encoder,
+            &self.target_view,
+            &surface_view,
+        );
+        self.queue.submit([encoder.finish()]);
+        frame.present();
+        Ok(())
+    }
+
+    /// Present multiple display lists in one frame, each with its
+    /// own page-to-surface transform (the `[a, b, c, d, e, f]` affine
+    /// matrix from `idml_compose::Transform`). The canvas worker
+    /// uses this to lay out all visible pages under the camera
+    /// transform without merging per-page resource pools.
+    pub fn present_multi(
+        &mut self,
+        pages: &[(&DisplayList, [f32; 6])],
+        background: Color,
+    ) -> Result<(), SurfaceError> {
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(t)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+            other => {
+                return Err(SurfaceError::GetTexture(format!("{other:?}")));
+            }
+        };
+
+        // Compose one scene from many per-page scenes. `Scene::append`
+        // copies the appended scene's draws into the target with the
+        // supplied transform — Vello handles resource id rewriting
+        // internally so we don't have to merge path / gradient pools
+        // by hand.
+        let mut combined = Scene::new();
+        for (list, t) in pages {
+            // Per-page transform comes in as the row-major affine
+            // [a, b, c, d, e, f]; kurbo::Affine takes [a, b, c, d, e, f]
+            // in the same order, so the cast is direct.
+            let affine = kurbo::Affine::new([
+                t[0] as f64,
+                t[1] as f64,
+                t[2] as f64,
+                t[3] as f64,
+                t[4] as f64,
+                t[5] as f64,
+            ]);
+            let scene = build_scene_with_transform(list, kurbo::Affine::IDENTITY);
+            combined.append(&scene, Some(affine));
+        }
+
+        self.renderer
+            .render_to_texture(
+                &self.device,
+                &self.queue,
+                &combined,
+                &self.target_view,
+                &RenderParams {
+                    base_color: linear_to_peniko(background),
+                    width: self.width,
+                    height: self.height,
+                    antialiasing_method: AaConfig::Area,
+                },
+            )
+            .map_err(|e| SurfaceError::Render(format!("{e:?}")))?;
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("idml-gpu surface blit multi"),
+            });
+        let surface_view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.blitter.copy(
+            &self.device,
+            &mut encoder,
+            &self.target_view,
+            &surface_view,
+        );
+        self.queue.submit([encoder.finish()]);
+        frame.present();
+        Ok(())
     }
 
     /// Render `list` and present onto the bound canvas. The viewport

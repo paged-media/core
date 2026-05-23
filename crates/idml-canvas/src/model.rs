@@ -1,0 +1,336 @@
+//! Worker-side canvas data model.
+//!
+//! `CanvasModel` is the single owner of parsed document state, the
+//! built display lists, and (in later phases) the salsa database
+//! that memoises Tiers 2–4. Phase-1 implementation is intentionally
+//! synchronous and non-incremental: `load()` parses + builds the
+//! whole document, and every mutation triggers a fresh rebuild.
+//! The point of this phase is to nail down the **API surface** the
+//! main thread depends on; incrementality is Phase 3's problem.
+
+use std::collections::HashMap;
+
+use idml_renderer::{
+    pipeline, BuiltDocument, BuiltPage, DisplayList, Document, PageId, PipelineOptions,
+};
+use serde::{Deserialize, Serialize};
+
+use crate::channel::{LoadError, Mutation};
+
+/// Options that flow through to `idml-renderer::PipelineOptions`.
+/// Mirrors the subset of the renderer's options the worker needs
+/// to surface to the main thread on `LoadDocument`. Phase 1 honours
+/// the first font (matching the renderer's single-`font` slot) and
+/// the CMYK ICC profile.
+#[derive(Debug, Clone, Default)]
+pub struct CanvasOptions {
+    /// Font bytes the renderer should consult during composition.
+    /// Phase 1 honours the first entry only; the multi-font roadmap
+    /// joins in Phase 4 alongside `idml-text` advanced typography.
+    pub fonts: Vec<Vec<u8>>,
+    /// CMYK ICC profile bytes for accurate colour. Optional; the
+    /// renderer falls back to naive conversion when absent.
+    pub cmyk_icc_profile: Option<Vec<u8>>,
+}
+
+/// One-time facts about a loaded document. Sent to the main thread
+/// on a successful `LoadDocument` so the navigator + page count UI
+/// can render before the first page is rasterised.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentHandle {
+    /// Stable id assigned by the worker; used by the main thread when
+    /// addressing operations to a specific document (the worker may
+    /// hold more than one document open in the future).
+    pub doc_id: String,
+    /// Total page count. Stable for the life of the document unless
+    /// a mutation explicitly inserts / deletes pages.
+    pub page_count: usize,
+    /// Page ids in document order. The navigator displays them as
+    /// "page N" with `N = 1 + index`; the canvas uses the ids
+    /// directly for cache keys.
+    pub page_ids: Vec<PageId>,
+    /// Per-page dimensions in points. Same length as `page_ids`.
+    /// The navigator needs these to size thumbnails before any
+    /// rasterisation has happened.
+    pub page_sizes_pt: Vec<(f32, f32)>,
+    /// Aggregate counts for debugging / UI badges.
+    pub stats: DocumentStats,
+}
+
+/// Structural counts. The main thread surfaces these in the debug
+/// HUD. Mirrors `idml-renderer::PipelineStats` but lives in serde-
+/// friendly form so it can cross the message channel.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DocumentStats {
+    pub spreads: usize,
+    pub pages: usize,
+    pub frames: usize,
+    pub stories: usize,
+    pub paragraphs: usize,
+    pub runs: usize,
+    pub glyphs: usize,
+    pub lines: usize,
+}
+
+impl From<&pipeline::PipelineStats> for DocumentStats {
+    fn from(s: &pipeline::PipelineStats) -> Self {
+        Self {
+            spreads: s.spreads,
+            pages: s.pages,
+            frames: s.frames,
+            stories: s.stories,
+            paragraphs: s.paragraphs,
+            runs: s.runs,
+            glyphs: s.glyphs,
+            lines: s.lines,
+        }
+    }
+}
+
+/// The worker's view of a single loaded document plus all derived
+/// canvas state.
+///
+/// Today this is a thin wrapper: store the parsed scene + the most
+/// recent `BuiltDocument`. Tomorrow (Phase 3) the `BuiltDocument`
+/// becomes a salsa-tracked derived value and incremental Tier 2
+/// runs against checkpoints stored alongside `scene`.
+pub struct CanvasModel {
+    doc_id: String,
+    scene: Document,
+    built: BuiltDocument,
+    /// Index from `PageId` to `BuiltDocument::pages` position. Built
+    /// once at load and refreshed after every rebuild. Worker callers
+    /// (display-list-for-page, snapshot rendering, hit-test) all key
+    /// by id; the linear-scan fallback on `BuiltDocument::page` is
+    /// fine in absolute terms but salsa-shaped lookups should be O(1).
+    page_index: HashMap<PageId, usize>,
+    /// Owned option inputs. `PipelineOptions` borrows from these on
+    /// every rebuild; storing them owned keeps the worker self-contained.
+    font_bytes: Option<Vec<u8>>,
+    icc_bytes: Option<Vec<u8>>,
+}
+
+impl CanvasModel {
+    /// Parse `bytes` and run the renderer pipeline to produce the
+    /// initial `BuiltDocument`. Returns a `CanvasModel` the worker
+    /// uses to serve all subsequent queries.
+    pub fn load(
+        doc_id: impl Into<String>,
+        bytes: &[u8],
+        opts: CanvasOptions,
+    ) -> Result<Self, LoadError> {
+        let doc_id = doc_id.into();
+        let scene = Document::open(bytes).map_err(|e| LoadError::Parse(e.to_string()))?;
+
+        // Honour the first font and the ICC profile. Take ownership
+        // up-front so the model is self-contained — no caller-managed
+        // lifetimes leaking through.
+        let font_bytes = opts.fonts.into_iter().next();
+        let icc_bytes = opts.cmyk_icc_profile;
+
+        let built = {
+            let options = PipelineOptions {
+                font: font_bytes.as_deref(),
+                cmyk_icc_profile: icc_bytes.as_deref(),
+                ..PipelineOptions::default()
+            };
+            pipeline::build_document(&scene, &options)
+                .map_err(|e| LoadError::Build(e.to_string()))?
+        };
+
+        let page_index = built
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (p.id.clone(), i))
+            .collect();
+
+        Ok(Self {
+            doc_id,
+            scene,
+            built,
+            page_index,
+            font_bytes,
+            icc_bytes,
+        })
+    }
+
+    pub fn doc_id(&self) -> &str {
+        &self.doc_id
+    }
+
+    pub fn handle(&self) -> DocumentHandle {
+        let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
+        let page_sizes_pt: Vec<(f32, f32)> = self
+            .built
+            .pages
+            .iter()
+            .map(|p| (p.width_pt, p.height_pt))
+            .collect();
+        DocumentHandle {
+            doc_id: self.doc_id.clone(),
+            page_count: self.built.pages.len(),
+            page_ids,
+            page_sizes_pt,
+            stats: DocumentStats::from(&self.built.stats),
+        }
+    }
+
+    pub fn page_count(&self) -> usize {
+        self.built.pages.len()
+    }
+
+    pub fn page_ids(&self) -> impl Iterator<Item = &PageId> {
+        self.built.page_ids()
+    }
+
+    pub fn page(&self, id: &PageId) -> Option<&BuiltPage> {
+        self.page_index.get(id).map(|&i| &self.built.pages[i])
+    }
+
+    /// Tier 4 seam: the per-page display list the worker hands to
+    /// the GPU rasterizer (Vello in `apps/canvas/`, tiny-skia in
+    /// headless tests).
+    pub fn display_list_for_page(&self, id: &PageId) -> Option<&DisplayList> {
+        self.page(id).map(|p| &p.list)
+    }
+
+    /// Apply a `Mutation` from the main thread. Phase 1 stub: every
+    /// variant returns `Err(WorkerError::NotImplemented)` since the
+    /// mutation API arrives in Phase 3. We keep the entry point so
+    /// the message channel can be wired up end-to-end now; downstream
+    /// code can plumb `Mutation` values through without conditional
+    /// branches that would later need ripping out.
+    pub fn apply_mutation(
+        &mut self,
+        mutation: &Mutation,
+    ) -> Result<(), crate::channel::WorkerError> {
+        Err(crate::channel::WorkerError::NotImplemented {
+            what: format!("Mutation::{}", mutation.discriminant()),
+        })
+    }
+
+    /// Expose the inner scene for read-only inspection. Used by the
+    /// inspector devtools wasm + tests. Mutating consumers should
+    /// route through `apply_mutation`.
+    pub fn scene(&self) -> &Document {
+        &self.scene
+    }
+
+    /// Expose the inner built document for tests and the wasm
+    /// renderer-on-demand path that needs to read display lists.
+    pub fn built(&self) -> &BuiltDocument {
+        &self.built
+    }
+
+    pub fn font_bytes(&self) -> Option<&[u8]> {
+        self.font_bytes.as_deref()
+    }
+
+    pub fn icc_bytes(&self) -> Option<&[u8]> {
+        self.icc_bytes.as_deref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A minimum-viable IDML the canvas can load. Hand-rolled so the
+    // model test stays independent of the heavier `idml-gen` fixture
+    // generator. Single Letter-sized page, no stories, no styles —
+    // just the package files `Document::open` needs to parse.
+    fn minimal_idml_bytes() -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts: zip::write::SimpleFileOptions =
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored);
+
+            // mimetype must be the first file, stored uncompressed.
+            zip.start_file("mimetype", opts).unwrap();
+            zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+                .unwrap();
+
+            // META-INF/container.xml
+            zip.start_file("META-INF/container.xml", opts).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+<rootfiles><rootfile full-path="designmap.xml" media-type="text/xml"/></rootfiles></container>"#,
+            )
+            .unwrap();
+
+            // designmap.xml — references one spread.
+            zip.start_file("designmap.xml", opts).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?aid style="50" type="document" readerVersion="13.0" featureSet="513" product="13.1(255)"?>
+<Document DOMVersion="13.1" Self="d1">
+<idPkg:Spread src="Spreads/Spread_s1.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/>
+</Document>"#,
+            )
+            .unwrap();
+
+            // Spreads/Spread_s1.xml — one Letter-sized page.
+            zip.start_file("Spreads/Spread_s1.xml", opts).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="13.1">
+<Spread Self="s1" PageCount="1">
+<Page Self="p1" Name="1" GeometricBounds="0 0 792 612" ItemTransform="1 0 0 1 0 0"/>
+</Spread></idPkg:Spread>"#,
+            )
+            .unwrap();
+
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn load_minimal_document_produces_one_page_with_stable_id() {
+        let bytes = minimal_idml_bytes();
+        let model = CanvasModel::load("doc-1", &bytes, CanvasOptions::default())
+            .expect("minimal IDML parses + builds");
+        assert_eq!(model.page_count(), 1);
+        let ids: Vec<PageId> = model.page_ids().cloned().collect();
+        assert_eq!(ids.len(), 1);
+        // The page carried Self="p1" in the IDML — the renderer
+        // surfaces that directly as PageId. If parsing falls back to
+        // a synthetic id, the spec contract is broken.
+        assert_eq!(ids[0].as_str(), "p1");
+        // Display list seam is reachable.
+        let list = model
+            .display_list_for_page(&ids[0])
+            .expect("page exists, display list returns Some");
+        // No stories or frames yet => no commands. Just confirm we
+        // returned a borrow on the in-place list, not a clone.
+        assert!(list.commands.is_empty());
+    }
+
+    #[test]
+    fn handle_exposes_page_dimensions() {
+        let bytes = minimal_idml_bytes();
+        let model = CanvasModel::load("doc-1", &bytes, CanvasOptions::default()).unwrap();
+        let handle = model.handle();
+        assert_eq!(handle.page_count, 1);
+        assert_eq!(handle.page_sizes_pt.len(), 1);
+        let (w, h) = handle.page_sizes_pt[0];
+        assert!((w - 612.0).abs() < 0.01, "expected Letter width, got {w}");
+        assert!((h - 792.0).abs() < 0.01, "expected Letter height, got {h}");
+    }
+
+    #[test]
+    fn unknown_page_id_returns_none() {
+        let bytes = minimal_idml_bytes();
+        let model = CanvasModel::load("doc-1", &bytes, CanvasOptions::default()).unwrap();
+        assert!(model.page(&PageId("does-not-exist".into())).is_none());
+        assert!(model
+            .display_list_for_page(&PageId("nope".into()))
+            .is_none());
+    }
+}

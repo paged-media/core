@@ -127,10 +127,13 @@ mod tests {
 
     fn page_with(list: DisplayList) -> BuiltPage {
         BuiltPage {
+            id: crate::pipeline::PageId::synthetic(0, 0),
             width_pt: 0.0,
             height_pt: 0.0,
             spread_origin: (0.0, 0.0),
             list,
+            layout_generation: 0,
+            numbering_generation: 0,
             stats: Default::default(),
         }
     }

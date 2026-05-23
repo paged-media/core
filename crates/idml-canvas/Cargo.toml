@@ -1,0 +1,36 @@
+[package]
+name = "idml-canvas"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Pure-Rust facade for the IDML Web Canvas worker model. No wasm-bindgen — testable headlessly via `cargo test`. Orchestrates Tiers 1–4 (content, layout, resolution, output) on top of idml-renderer."
+
+[lints]
+workspace = true
+
+[features]
+default = ["cpu"]
+# Enables the CPU rasterizer end-to-end through idml-renderer. Disable
+# when the canvas is rendered by an out-of-process / out-of-thread
+# rasterizer (e.g. the canvas-wasm crate compiled with WebGPU).
+cpu = ["idml-renderer/cpu"]
+
+[dependencies]
+idml-renderer = { path = "../idml-renderer", default-features = false }
+idml-parse = { path = "../idml-parse" }
+idml-scene = { path = "../idml-scene" }
+idml-compose = { path = "../idml-compose" }
+serde = { workspace = true }
+serde_json = "1"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+bytes = { workspace = true }
+# Snapshot tier encodes its output as PNG; the upstream renderer
+# already produces `image::RgbaImage` so we use the same crate.
+image = { workspace = true }
+
+[dev-dependencies]
+zip = { workspace = true }
+

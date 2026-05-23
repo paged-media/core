@@ -158,9 +158,43 @@ impl Default for PipelineOptions<'_> {
     }
 }
 
+/// Stable page identity, independent of position in the page vector.
+///
+/// Derived from the IDML `<Page Self="...">` attribute where present;
+/// synthesised as `"page-<spread_idx>-<local_idx>"` when missing
+/// (older / synthetic fixtures without `Self`). The canvas keys
+/// display-list caches and LOD tiles by `PageId`, so the value must
+/// stay stable across re-layouts — only document-structural edits
+/// (insert/delete page) should ever change the set of `PageId`s.
+#[derive(
+    Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub struct PageId(pub String);
+
+impl PageId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn synthetic(spread_idx: usize, local_idx: usize) -> Self {
+        Self(format!("page-{spread_idx}-{local_idx}"))
+    }
+}
+
+impl std::fmt::Display for PageId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// Page bounding box and display-list built from a `Document`.
 #[derive(Debug)]
 pub struct BuiltPage {
+    /// Stable identity for cache keys (LOD tiers, salsa queries, the
+    /// canvas worker's `display_list_for_page` lookups). Today every
+    /// page in `BuiltDocument::pages` has a unique `id`; we don't
+    /// rely on positional indexing in callers.
+    pub id: PageId,
     pub width_pt: f32,
     pub height_pt: f32,
     /// Page origin in spread coordinates (top-left). The display list's
@@ -169,6 +203,16 @@ pub struct BuiltPage {
     /// its parent spread.
     pub spread_origin: (f32, f32),
     pub list: DisplayList,
+    /// Bumped whenever any frame on this page is re-laid-out. The
+    /// canvas combines `(id, layout_generation, numbering_generation)`
+    /// as the cache key for display-list-derived artifacts (snapshot,
+    /// mid-res, live tiles). Today the whole pipeline is one-shot, so
+    /// every build starts every page at 0; Tier 3 (Phase 2) and
+    /// incremental Tier 2 (Phase 3) populate this for real.
+    pub layout_generation: u64,
+    /// Bumped whenever any resolved field on this page changes value.
+    /// Reserved for Phase 2 resolution work — today always 0.
+    pub numbering_generation: u64,
     /// Aggregated counts, useful for logging / CI reporting.
     pub stats: PipelineStats,
 }
@@ -185,6 +229,33 @@ pub struct BuiltDocument {
     /// compare candidate-side break decisions against PDF-derived
     /// references.
     pub breaks: Vec<BreakRecord>,
+}
+
+impl BuiltDocument {
+    /// Look up a page by stable id. Linear scan — `pages` typically
+    /// fits in cache, and the canvas worker calls this once per
+    /// viewport-visible page per dirty event. If a future profile
+    /// shows this in hot paths, swap to an `IndexMap` keyed by
+    /// `PageId` without changing the public signature.
+    pub fn page(&self, id: &PageId) -> Option<&BuiltPage> {
+        self.pages.iter().find(|p| &p.id == id)
+    }
+
+    /// Convenience for the canvas Tier 4: hand back just the slice
+    /// of render commands for one page. Mirrors the
+    /// `display_list_for_page(page_id)` accessor named in the
+    /// canvas concept (docs/verso/canvas.md §4.4).
+    pub fn display_list_for_page(&self, id: &PageId) -> Option<&DisplayList> {
+        self.page(id).map(|p| &p.list)
+    }
+
+    /// All page ids in document order. The canvas's page navigator
+    /// and minimap consume this to drive the snapshot atlas. Returns
+    /// an iterator so callers don't pay for the `Vec` allocation when
+    /// they only want a count or a prefix.
+    pub fn page_ids(&self) -> impl Iterator<Item = &PageId> {
+        self.pages.iter().map(|p| &p.id)
+    }
 }
 
 /// One laid-out line, captured by the renderer when
@@ -298,11 +369,19 @@ pub fn build_document(
                     .clone()
                     .unwrap_or_else(|| (pages.len() + 1).to_string()),
             );
+            let page_id = p
+                .self_id
+                .clone()
+                .map(PageId)
+                .unwrap_or_else(|| PageId::synthetic(spread_idx, local_idx));
             pages.push(BuiltPage {
+                id: page_id,
                 width_pt: bounds_in_spread.width(),
                 height_pt: bounds_in_spread.height(),
                 spread_origin: (bounds_in_spread.left, bounds_in_spread.top),
                 list: DisplayList::new(),
+                layout_generation: 0,
+                numbering_generation: 0,
                 stats: PipelineStats::default(),
             });
         }
@@ -313,10 +392,13 @@ pub fn build_document(
         // Documents without a page (rare but valid) get a single
         // letter-sized canvas so callers always see a renderable output.
         pages.push(BuiltPage {
+            id: PageId::synthetic(0, 0),
             width_pt: 612.0,
             height_pt: 792.0,
             spread_origin: (0.0, 0.0),
             list: DisplayList::new(),
+            layout_generation: 0,
+            numbering_generation: 0,
             stats: PipelineStats::default(),
         });
         page_geometries.push(PageGeom {
@@ -9814,12 +9896,29 @@ pub fn build(document: &Document, options: &PipelineOptions) -> anyhow::Result<B
     }
 
     Ok(BuiltPage {
+        id: PageId::synthetic(0, 0),
         width_pt: page_w,
         height_pt: page_h,
         spread_origin: (0.0, 0.0),
         list,
+        layout_generation: 0,
+        numbering_generation: 0,
         stats,
     })
+}
+
+/// Rasterise a single already-built page at a target DPI. Shared by
+/// `render_document` and the canvas LOD cache, which wants to
+/// produce low-resolution snapshots (page navigator / minimap) and
+/// per-page bitmaps at viewport zoom without re-running
+/// `build_document`. `background` is composited under transparent
+/// regions of the display list.
+#[cfg(feature = "cpu")]
+pub fn render_built_page(page: &BuiltPage, dpi: f32, background: Color) -> image::RgbaImage {
+    let mut raster_opts = idml_gpu::RasterOptions::new(page.width_pt, page.height_pt);
+    raster_opts.dpi = dpi;
+    raster_opts.background = background;
+    idml_gpu::rasterize(&page.list, &raster_opts)
 }
 
 /// Build + rasterise every page. Returns one `RgbaImage` per page in
@@ -9834,10 +9933,7 @@ pub fn render_document(
     let built = build_document(document, options)?;
     let mut images = Vec::with_capacity(built.pages.len());
     for page in &built.pages {
-        let mut raster_opts = idml_gpu::RasterOptions::new(page.width_pt, page.height_pt);
-        raster_opts.dpi = dpi;
-        raster_opts.background = background;
-        images.push(idml_gpu::rasterize(&page.list, &raster_opts));
+        images.push(render_built_page(page, dpi, background));
     }
     Ok((built, images))
 }

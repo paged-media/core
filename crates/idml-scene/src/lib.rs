@@ -17,7 +17,9 @@ use idml_parse::{
     StyleSheet, TOCStyleDef, TextFrame,
 };
 
+pub mod anchors;
 pub mod value;
+pub use anchors::{Anchor, AnchorId, AnchorKind, Field, FieldKind};
 pub use value::Value;
 
 /// Owned, parsed representation of an IDML document.
@@ -43,6 +45,11 @@ pub struct Document {
     /// `Resources/Styles.xml`. Empty when the archive has no styles
     /// resource (rare; typically only synthetic test docs).
     pub styles: StyleSheet,
+    /// Anchor table — heading paragraphs detected at parse time
+    /// (Phase G of the canvas plan). Other anchor kinds (footnotes,
+    /// cross-ref targets, bookmarks) join in subsequent Phase 2
+    /// work as the parser emits the corresponding markers.
+    pub anchors: Vec<Anchor>,
 }
 
 /// A spread plus the path it came from in the container.
@@ -150,6 +157,29 @@ impl Document {
             });
         }
 
+        // Build the heading-anchor table from every story. This is
+        // Phase G of the canvas plan: heading paragraphs become
+        // anchors so the Tier 3 resolver can populate the
+        // numbering map for cross-references and TOC entries.
+        let mut anchors: Vec<Anchor> = Vec::new();
+        for parsed_story in &stories {
+            for (paragraph_index, paragraph) in parsed_story.story.paragraphs.iter().enumerate() {
+                let Some(style_name) = paragraph.paragraph_style.as_deref() else {
+                    continue;
+                };
+                if !anchors::paragraph_style_is_heading(style_name) {
+                    continue;
+                }
+                let level = anchors::heading_level_from_style(style_name);
+                anchors.push(Anchor {
+                    id: AnchorId::heading(&parsed_story.self_id, paragraph_index),
+                    story_id: parsed_story.self_id.clone(),
+                    paragraph_index,
+                    kind: AnchorKind::HeadingParagraph { level },
+                });
+            }
+        }
+
         Ok(Document {
             container,
             palette,
@@ -159,6 +189,7 @@ impl Document {
             frame_for_story,
             text_frame_index,
             styles,
+            anchors,
         })
     }
 

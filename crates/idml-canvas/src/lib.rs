@@ -1,0 +1,56 @@
+//! IDML Web Canvas — worker-side data model and facade.
+//!
+//! Pure Rust. No wasm-bindgen — that lives in `idml-canvas-wasm`,
+//! a thin binding layer on top of this crate. Unit-testable via
+//! `cargo test`.
+//!
+//! What this crate owns (per `docs/verso/canvas.md`):
+//!
+//! - The worker-side `CanvasModel` that wraps a parsed IDML document
+//!   and the four-tier pipeline state (content, layout, resolution,
+//!   output).
+//! - Stable identifiers (`PageId`, `StoryId`, `FrameId`) re-exported
+//!   from upstream crates so consumers depend on one surface.
+//! - The typed message channel envelopes (`MainToWorker`,
+//!   `WorkerToMain`) — versioned serde structs that the wasm crate
+//!   wires up to `postMessage`.
+//! - The `SharedArrayBuffer` camera contract (`camera::Camera`,
+//!   `camera::CameraLayout`) shared between main and worker.
+//!
+//! Phase 1 (this crate at first landing) provides:
+//!
+//! - `CanvasModel::load(bytes)` — parses + builds a `BuiltDocument`
+//!   in one shot. Replays of `mutate(...)` rebuild from scratch (no
+//!   incremental Tier 2 yet — that's Phase 3).
+//! - `CanvasModel::display_list_for_page(page_id)` — Tier 4 seam.
+//! - `CanvasModel::page_ids()` / `page_count()` — used by the page
+//!   navigator + snapshot atlas.
+//!
+//! Later phases extend this with: anchor + field model (Phase 2),
+//! incremental Tier 2 with checkpoints (Phase 3), salsa retrofit
+//! (Phase 3).
+
+pub mod camera;
+pub mod channel;
+pub mod hit;
+pub mod model;
+pub mod resolve;
+pub mod snapshot;
+
+pub use camera::{Camera, CameraLayout, CAMERA_SAB_BYTES};
+pub use channel::{
+    HitFilter, HitResult, LoadError, MainToWorker, MainToWorkerKind, Mutation, ProtocolVersion,
+    WorkerError, WorkerToMain, WorkerToMainKind, PROTOCOL_VERSION,
+};
+pub use hit::HitTestResult;
+pub use model::{CanvasModel, CanvasOptions, DocumentHandle, DocumentStats};
+pub use resolve::{
+    resolve, AnchorPosition, FieldChange, NumberingMap, ResolutionResult, ResolveOptions,
+};
+pub use snapshot::{SnapshotError, SnapshotPng};
+#[cfg(feature = "cpu")]
+pub use snapshot::{render_snapshot, render_snapshot_png, Snapshot};
+
+// Re-export upstream identifiers + the display-list IR so consumers
+// depend on a single root crate.
+pub use idml_renderer::{BuiltDocument, BuiltPage, DisplayCommand, DisplayList, PageId};

@@ -32,13 +32,18 @@ pollster = "0.4"
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
-vello = { git = "https://github.com/linebender/vello.git", branch = "main", optional = true, default-features = false, features = ["wgpu"] }
+vello = { git = "https://github.com/linebender/vello.git", tag = "v0.9.0", optional = true, default-features = false, features = ["wgpu"] }
 tiny-skia = { version = "0.12", optional = true }
 image = { workspace = true, optional = true }
 wgpu = { version = "29.0.1", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { version = "0.3", features = ["HtmlCanvasElement"] }
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "OffscreenCanvas"] }
+# The browser WebGPU backend is gated behind wgpu's `webgpu` feature.
+# On wasm32 we always want it on so the worker can talk to
+# `navigator.gpu`. Native targets continue using Vulkan / Metal /
+# DX12 (wgpu's default features).
+wgpu = { version = "29.0.1", optional = true, features = ["webgpu"] }
 
 # Build-time WGSL validation for the Vello CMYK-parity compute
 # shaders. The cmyk_compute module is gated behind `vello-backend`,
