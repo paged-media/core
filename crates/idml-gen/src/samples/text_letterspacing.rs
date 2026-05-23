@@ -32,7 +32,13 @@ use crate::package::Sample;
 const SAMPLE: &str = "text-letterspacing";
 const PAGE_W_PT: f32 = 595.276; // A4 portrait
 const PAGE_H_PT: f32 = 841.890;
-const FRAME_W_PT: f32 = 200.0; // narrow column — wraps frequently
+// Cycle-8 Track 4: tightened from 200pt to 110pt — at 12pt Open Sans
+// (~6pt/char average) a 110pt column fits ~2-3 words per line with
+// natural-break widths sitting close to the column edge. That's the
+// regime where the Q-20 LS stretch/shrink budget actually decides
+// whether a candidate break point is feasible; the original 200pt
+// column had too much slack for any knob change to matter.
+const FRAME_W_PT: f32 = 150.0;
 const FRAME_H_PT: f32 = 720.0;
 
 /// Real-English filler so the breaker has real word choices to make.
