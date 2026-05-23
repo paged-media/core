@@ -10461,22 +10461,24 @@ fn apply_paragraph_compose_options<'a>(
     let ls_desired = resolved.desired_letter_spacing.unwrap_or(0.0);
     let ls_max = resolved.maximum_letter_spacing.unwrap_or(0.0);
     if ls_min != 0.0 || ls_desired != 0.0 || ls_max != 0.0 {
-        // Approximate "average chars per word" at 5 — typical English
-        // word length is 4.7. Multiplied by a 12pt point-size estimate
-        // gives a budget in glyph-advance units (1/64 pt) the breaker
-        // can consume. The exact value matters less than that the
-        // budget exists; the breaker only uses it when KP can't fit
-        // on word spacing alone.
-        // Cycle 5 Track 3 Round 1: English-language average word
-        // length is closer to 4.7 than 5.0 (Norvig 2009 corpus
-        // analysis); cycle 3's 5.0 placeholder was a round number.
-        // Affects how letter-spacing budget folds into the breaker's
-        // per-word stretch / shrink ratios when a paragraph carries
-        // non-zero Min/MaxLetterSpacing.
-        const AVG_CHARS_PER_WORD: f32 = 4.7;
-        let space_width = lopts.compose.column_width as f32 / 80.0; // rough natural space
-        let stretch_add = ((ls_max - ls_desired) * AVG_CHARS_PER_WORD / space_width).max(0.0);
-        let shrink_add = ((ls_desired - ls_min) * AVG_CHARS_PER_WORD / space_width).max(0.0);
+        // Cycle-6 Track 3: bounded mapping from LS budget (pt) to
+        // stretch_add / shrink_add. The cycle-5 formula
+        // `(ls_max - ls_desired) * AVG_CHARS_PER_WORD / space_width`
+        // saturated `.min(2.0)` on typical IDML LS values (e.g.
+        // newspaper's body MaximumLetterSpacing=25 ⇒ stretch_add ≈ 78
+        // clamped to 2.0), making any AVG_CHARS_PER_WORD-style tweak
+        // invisible to the harness. The new mapping caps the
+        // contribution at 0.5 / 0.25 (half of the legacy ceiling) so
+        // the breaker has letter-spacing budget without overwhelming
+        // word-spacing budget. `LS_BUDGET_PT_FOR_FULL_STRETCH = 24.0`
+        // calibrates from the InDesign default 25pt-vs-0 spread
+        // mapping to ~full contribution; smaller spreads fall below
+        // proportionally and remain unsaturated.
+        const LS_BUDGET_PT_FOR_FULL_STRETCH: f32 = 24.0;
+        let stretch_budget = (ls_max - ls_desired).max(0.0);
+        let shrink_budget = (ls_desired - ls_min).max(0.0);
+        let stretch_add = (stretch_budget / LS_BUDGET_PT_FOR_FULL_STRETCH).clamp(0.0, 0.5);
+        let shrink_add = (shrink_budget / LS_BUDGET_PT_FOR_FULL_STRETCH).clamp(0.0, 0.25);
         lopts.compose.stretch_ratio = (lopts.compose.stretch_ratio + stretch_add).min(2.0);
         lopts.compose.shrink_ratio = (lopts.compose.shrink_ratio + shrink_add).min(0.5);
     }
