@@ -94,6 +94,16 @@ pub struct PipelineOptions<'a> {
     /// laid-out line into [`BuiltDocument::breaks`]. Cheap (Vec push
     /// per line) and gated so production renders pay zero cost.
     pub collect_breaks: bool,
+    /// Cycle 6 Track 1: when `collect_breaks` is on, restrict
+    /// collection to lines whose `story_id` matches. `None` ⇒ collect
+    /// from every story (cycle-5 behaviour). Used by the A/B harness
+    /// to isolate a single body story from pack-wide structural
+    /// divergence noise.
+    pub break_story_filter: Option<String>,
+    /// Cycle 6 Track 1: half-open `[start, end)` page-index filter
+    /// for break collection. `None` ⇒ no filter. ANDs with
+    /// `break_story_filter` when both are set.
+    pub break_page_range: Option<std::ops::Range<u32>>,
 }
 
 /// Missing-image placeholder calibration (Q-22). Originally P-02
@@ -142,6 +152,8 @@ impl Default for PipelineOptions<'_> {
             font_metrics_overrides: &[],
             missing_image_placeholder: true,
             collect_breaks: false,
+            break_story_filter: None,
+            break_page_range: None,
         }
     }
 }
@@ -1660,6 +1672,27 @@ impl<'a> StoryEmitter<'a> {
         std::mem::take(&mut self.breaks)
     }
 
+    /// Cycle 6 Track 1: gate per-line break collection on the
+    /// optional story / page filters. Returns true when the current
+    /// emitter context is selected by both filters (each `None`
+    /// filter passes anything).
+    fn break_filter_passes(&self, target_page: u32) -> bool {
+        if !self.options.collect_breaks {
+            return false;
+        }
+        if let Some(want) = self.options.break_story_filter.as_deref() {
+            if self.current_story_id != want {
+                return false;
+            }
+        }
+        if let Some(range) = self.options.break_page_range.as_ref() {
+            if !range.contains(&target_page) {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Mark this emitter as a `depth`-deep anchored-story sub-emitter.
     /// The body/master pass leaves the default of 0; the anchored
     /// recursion path bumps the value before constructing each nested
@@ -3139,8 +3172,9 @@ fn emit_paragraph_into_chain(
         // collector flag is checked once per line. baseline_y / width
         // live in idml_text's 1/64-pt units (ADVANCE_PRECISION) so we
         // divide back to pt here so downstream tooling (the Python
-        // reference-side extractor) reads natural units.
-        if em.options.collect_breaks {
+        // reference-side extractor) reads natural units. Cycle-6
+        // Track 1: also gated on optional story / page-range filters.
+        if em.break_filter_passes(target_page as u32) {
             // Slice the line's source text from the paragraph buffer
             // we pre-built above. byte_range is a half-open
             // `[start..end)` of bytes; clamp to the buffer length so
@@ -6945,8 +6979,9 @@ fn emit_cell_paragraph(
     // once per body paragraph, not once per cell — so we read the
     // current value (the host paragraph that holds the table) and
     // accept the collision. Downstream tooling treats break records
-    // as per-line stream, not per-paragraph indexed.
-    if em.options.collect_breaks {
+    // as per-line stream, not per-paragraph indexed. Cycle-6 Track 1:
+    // also gated on optional story / page-range filters.
+    if em.break_filter_passes(target_page as u32) {
         let mut paragraph_text = String::new();
         for r in &styled_runs {
             paragraph_text.push_str(r.text);

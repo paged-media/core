@@ -101,6 +101,17 @@ struct Args {
     /// reconstructs the same shape from PDF word geometry.
     #[arg(long, value_name = "PATH")]
     emit_breaks: Option<PathBuf>,
+    /// Cycle-6 Track 1: restrict `--emit-breaks` collection to a
+    /// single story by its `Self` id (e.g. `u10`). Without this flag
+    /// every story's lines are emitted (cycle-5 behaviour). Combines
+    /// with `--break-page-range`.
+    #[arg(long, value_name = "STORY_ID")]
+    break_story_id: Option<String>,
+    /// Cycle-6 Track 1: restrict `--emit-breaks` collection to a
+    /// half-open page-index range, written as `START:END` (e.g.
+    /// `0:4` covers pages 0..3). Combines with `--break-story-id`.
+    #[arg(long, value_name = "START:END")]
+    break_page_range: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -324,6 +335,21 @@ fn main() -> Result<()> {
         None
     };
 
+    let break_page_range = match args.break_page_range.as_deref() {
+        Some(s) => {
+            let (lo, hi) = s
+                .split_once(':')
+                .with_context(|| format!("--break-page-range must be START:END (got {s:?})"))?;
+            let lo: u32 = lo
+                .parse()
+                .with_context(|| format!("--break-page-range start: {lo:?}"))?;
+            let hi: u32 = hi
+                .parse()
+                .with_context(|| format!("--break-page-range end: {hi:?}"))?;
+            Some(lo..hi)
+        }
+        None => None,
+    };
     let mut opts = PipelineOptions {
         font: font_bytes.as_deref(),
         assets: resolver
@@ -335,6 +361,8 @@ fn main() -> Result<()> {
         font_metrics_overrides: &metric_overrides,
         missing_image_placeholder: !args.no_missing_image_placeholder,
         collect_breaks: args.emit_breaks.is_some(),
+        break_story_filter: args.break_story_id.clone(),
+        break_page_range,
         ..PipelineOptions::default()
     };
     // Explicit for clarity; default already matches.
