@@ -2706,6 +2706,20 @@ fn emit_paragraph_into_chain(
         None
     };
 
+    // Cycle-7 Track 2: capture the dropped slice text so the first
+    // line's BreakRecord source_text can include it. pdftotext sees
+    // the drop-cap glyph as part of the line's first word; without
+    // this, word_match_rate stays 0.0 on drop-cap-bearing fixtures
+    // like text-advanced.
+    let dropped_text_for_breaks: Option<String> =
+        if em.options.collect_breaks && drop_cap_spec_emit.is_some() {
+            let head = styled_runs[0].text;
+            let split = drop_cap_spec_emit.as_ref().map(|t| t.0).unwrap_or(0);
+            Some(head[..split].to_string())
+        } else {
+            None
+        };
+
     // If we have a drop cap, splice the body-run text past the
     // dropped slice. We can't mutate `styled_runs` in place because
     // its `text` field borrows the source string; build a fresh
@@ -3179,12 +3193,32 @@ fn emit_paragraph_into_chain(
             // we pre-built above. byte_range is a half-open
             // `[start..end)` of bytes; clamp to the buffer length so
             // a malformed breaker output can't out-of-bounds.
+            // For the first line of a drop-cap paragraph, prepend the
+            // dropped characters PLUS any paragraph-text bytes the
+            // breaker skipped before the line's first_byte (typically
+            // a leading space — InDesign's content "In a hole..." with
+            // DropCapCharacters="2" leaves the body as " a hole..."
+            // and the breaker starts line 0 at the 'a', skipping the
+            // space). pdftotext sees the contiguous "In a" so we
+            // reconstruct that here for word-match parity.
             let source_text = paragraph_text_for_breaks
                 .as_deref()
                 .map(|pt| {
-                    let start = line.byte_range.start.min(pt.len());
+                    let start = if current_line_idx == 0
+                        && dropped_text_for_breaks.is_some()
+                    {
+                        0
+                    } else {
+                        line.byte_range.start.min(pt.len())
+                    };
                     let end = line.byte_range.end.min(pt.len());
-                    pt.get(start..end).unwrap_or("").to_string()
+                    let body = pt.get(start..end).unwrap_or("");
+                    if current_line_idx == 0 {
+                        if let Some(dropped) = dropped_text_for_breaks.as_deref() {
+                            return format!("{dropped}{body}");
+                        }
+                    }
+                    body.to_string()
                 })
                 .unwrap_or_default();
             em.breaks.push(BreakRecord {
