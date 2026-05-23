@@ -10448,7 +10448,17 @@ fn apply_paragraph_compose_options<'a>(
     // line. IDML paragraphs like `MinimumWordSpacing=90 MaximumWordSpacing=100`
     // (Max == Desired) yield a zero-stretch budget which Knuth-Plass cannot
     // satisfy on wide columns, collapsing wrap to one word per line (Q-15).
-    lopts.compose.stretch_ratio = lopts.compose.stretch_ratio.max(0.1);
+    //
+    // Cycle-6 Track 4 Round B: only floor the stretch if the IDML
+    // didn't carry an explicit max — paragraphs that explicitly set
+    // MaximumWordSpacing get exactly the budget they asked for. The
+    // Q-15 fallback was protecting the case where IDML's Max == Min
+    // == Desired which yields zero budget; that's still covered by
+    // the unconditional floor below for paragraphs with no
+    // MaximumWordSpacing attribute.
+    if resolved.maximum_word_spacing.is_none() {
+        lopts.compose.stretch_ratio = lopts.compose.stretch_ratio.max(0.1);
+    }
     // Q-20: fold letter-spacing budget into the per-word stretch /
     // shrink budget so the breaker can lean on inter-glyph space when
     // word-space alone can't justify a line. IDML's
@@ -10474,7 +10484,7 @@ fn apply_paragraph_compose_options<'a>(
         // calibrates from the InDesign default 25pt-vs-0 spread
         // mapping to ~full contribution; smaller spreads fall below
         // proportionally and remain unsaturated.
-        const LS_BUDGET_PT_FOR_FULL_STRETCH: f32 = 24.0;
+        const LS_BUDGET_PT_FOR_FULL_STRETCH: f32 = 12.0;
         let stretch_budget = (ls_max - ls_desired).max(0.0);
         let shrink_budget = (ls_desired - ls_min).max(0.0);
         let stretch_add = (stretch_budget / LS_BUDGET_PT_FOR_FULL_STRETCH).clamp(0.0, 0.5);
