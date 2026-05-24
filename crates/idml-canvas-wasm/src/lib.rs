@@ -194,6 +194,32 @@ mod wasm {
             self.model.as_ref().map(|m| m.page_count()).unwrap_or(0)
         }
 
+        /// Phase 3 — caret geometry for a JSON-encoded
+        /// `ContentSelection`. Returns a JSON-encoded `CaretGeometry`
+        /// or `null` when the selection's story has no captured
+        /// layout. The Overlay calls this on selection change to
+        /// position the caret.
+        #[wasm_bindgen(js_name = caretGeometryJson)]
+        pub fn caret_geometry_json(&self, selection_json: &str) -> Option<String> {
+            let sel: idml_canvas::ContentSelection =
+                serde_json::from_str(selection_json).ok()?;
+            let model = self.model.as_ref()?;
+            let geom = idml_canvas::caret_geometry(model.built(), &sel)?;
+            serde_json::to_string(&geom).ok()
+        }
+
+        /// Phase 3 — selection geometry (rect-per-line) for a
+        /// JSON-encoded `ContentSelection`. Returns a JSON array of
+        /// `SelectionRect`. Empty array for caret selections.
+        #[wasm_bindgen(js_name = selectionGeometryJson)]
+        pub fn selection_geometry_json(&self, selection_json: &str) -> Option<String> {
+            let sel: idml_canvas::ContentSelection =
+                serde_json::from_str(selection_json).ok()?;
+            let model = self.model.as_ref()?;
+            let rects = idml_canvas::selection_geometry(model.built(), &sel);
+            serde_json::to_string(&rects).ok()
+        }
+
         /// Run the Tier 3 resolver against the current model.
         /// Returns the result as a JSON string the JS side can
         /// parse via `JSON.parse`. `null` when no document is loaded.
@@ -422,13 +448,21 @@ mod wasm {
                         };
                     };
                     match model.apply_mutation(&m) {
-                        Ok(()) => WorkerToMainKind::PagesDirty {
-                            // Phase 3 stub: apply_mutation always
-                            // returns NotImplemented today; this OK
-                            // arm is unreachable until the Phase 3
-                            // correctness layer lands.
-                            page_ids: vec![],
-                        },
+                        Ok(outcome) => {
+                            // Phase 3 correctness — text mutations
+                            // succeed; invalidate the entire scene
+                            // cache (we don't yet track per-page
+                            // dirty ranges) and post MutationApplied.
+                            #[cfg(feature = "gpu")]
+                            {
+                                self.scene_cache.clear();
+                            }
+                            WorkerToMainKind::MutationApplied {
+                                client_seq: msg.seq,
+                                applied_seq: outcome.applied_seq,
+                                page_ids: outcome.page_ids,
+                            }
+                        }
                         Err(error) => WorkerToMainKind::MutationFailed { error },
                     }
                 }
@@ -497,6 +531,100 @@ mod wasm {
                     match idml_canvas::render_snapshot_png(model, &page_id, target_width_px) {
                         Ok(snap) => WorkerToMainKind::SnapshotReady(snap),
                         Err(error) => WorkerToMainKind::SnapshotFailed { error },
+                    }
+                }
+                MainToWorkerKind::SetSelection { selection } => {
+                    if let Some(model) = self.model.as_mut() {
+                        model.current_selection = selection;
+                        WorkerToMainKind::Stats(model.handle().stats)
+                    } else {
+                        WorkerToMainKind::MutationFailed {
+                            error: WorkerError::NoDocument,
+                        }
+                    }
+                }
+                MainToWorkerKind::RequestSelectionGeometry { selection } => {
+                    let Some(model) = self.model.as_ref() else {
+                        return WorkerToMain {
+                            seq,
+                            protocol: PROTOCOL_VERSION,
+                            kind: WorkerToMainKind::MutationFailed {
+                                error: WorkerError::NoDocument,
+                            },
+                        };
+                    };
+                    let rects = idml_canvas::selection_geometry(model.built(), &selection);
+                    WorkerToMainKind::SelectionGeometry { rects }
+                }
+                MainToWorkerKind::RequestCaretGeometry { selection } => {
+                    let Some(model) = self.model.as_ref() else {
+                        return WorkerToMain {
+                            seq,
+                            protocol: PROTOCOL_VERSION,
+                            kind: WorkerToMainKind::MutationFailed {
+                                error: WorkerError::NoDocument,
+                            },
+                        };
+                    };
+                    let caret = idml_canvas::caret_geometry(model.built(), &selection);
+                    WorkerToMainKind::CaretGeometry { caret }
+                }
+                MainToWorkerKind::Undo => {
+                    let Some(model) = self.model.as_mut() else {
+                        return WorkerToMain {
+                            seq,
+                            protocol: PROTOCOL_VERSION,
+                            kind: WorkerToMainKind::MutationFailed {
+                                error: WorkerError::NoDocument,
+                            },
+                        };
+                    };
+                    match model.undo() {
+                        Some(outcome) => {
+                            #[cfg(feature = "gpu")]
+                            {
+                                self.scene_cache.clear();
+                            }
+                            WorkerToMainKind::UndoApplied {
+                                undone_seq: outcome.undone_seq,
+                                applied_seq: outcome.applied_seq,
+                                page_ids: outcome.page_ids,
+                            }
+                        }
+                        None => WorkerToMainKind::MutationFailed {
+                            error: WorkerError::NotImplemented {
+                                what: "undo log empty".into(),
+                            },
+                        },
+                    }
+                }
+                MainToWorkerKind::Redo => {
+                    let Some(model) = self.model.as_mut() else {
+                        return WorkerToMain {
+                            seq,
+                            protocol: PROTOCOL_VERSION,
+                            kind: WorkerToMainKind::MutationFailed {
+                                error: WorkerError::NoDocument,
+                            },
+                        };
+                    };
+                    match model.redo() {
+                        Some(outcome) => {
+                            #[cfg(feature = "gpu")]
+                            {
+                                self.scene_cache.clear();
+                            }
+                            WorkerToMainKind::RedoApplied {
+                                redone_seq: outcome.undone_seq,
+                                applied_seq: outcome.applied_seq,
+                                page_ids: outcome.page_ids,
+                            }
+                        }
+                        None => WorkerToMainKind::MutationFailed {
+                            error: WorkerError::NotImplemented {
+                                what: "redo log empty".into(),
+                            },
+                        },
                     }
                 }
             };

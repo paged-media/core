@@ -102,6 +102,11 @@ pub enum MainToWorkerKind {
     RequestSelectionGeometry {
         selection: crate::selection::ContentSelection,
     },
+    /// Compute caret geometry for a selection. Reply:
+    /// `CaretGeometry`.
+    RequestCaretGeometry {
+        selection: crate::selection::ContentSelection,
+    },
     /// Undo the most recent applied mutation. Reply: `UndoApplied`
     /// or `MutationFailed` (when the log is empty).
     Undo,
@@ -228,6 +233,10 @@ pub enum WorkerToMainKind {
     /// Phase 3 Item 4 — rect-per-line geometry for a selection range.
     SelectionGeometry {
         rects: Vec<crate::SelectionRect>,
+    },
+    /// Phase 3 Item 3 — caret position for a selection.
+    CaretGeometry {
+        caret: Option<crate::geometry::CaretGeometry>,
     },
     /// Phase 3 Item 7 — undo applied. `undone_seq` is the
     /// `applied_seq` of the mutation that was reversed.
