@@ -165,6 +165,7 @@ mod tests {
             layout_generation: 0,
             numbering_generation: 0,
             stats: Default::default(),
+            story_layout: Vec::new(),
         }
     }
 

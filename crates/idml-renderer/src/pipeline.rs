@@ -224,6 +224,63 @@ pub struct BuiltPage {
     pub numbering_generation: u64,
     /// Aggregated counts, useful for logging / CI reporting.
     pub stats: PipelineStats,
+    /// Phase 3 (correctness layer) — per-line layout index for every
+    /// laid-out paragraph whose visible glyphs land on this page.
+    /// Carries the per-cluster page-local positions the canvas needs
+    /// to (a) hit-test by character offset, (b) place the caret, and
+    /// (c) compute selection geometry (rect-per-line). Empty when no
+    /// text emitted on the page (e.g. graphic-only pages). Captured
+    /// unconditionally at emit time; cost is O(visible glyphs).
+    pub story_layout: Vec<LineLayout>,
+}
+
+/// One laid-out line of a story, in page-local pt coordinates.
+///
+/// Captured at emit time and stored on the hosting `BuiltPage`. The
+/// canvas reconstructs whole-story layouts via
+/// [`BuiltDocument::story_layout`], which walks every page and
+/// gathers lines whose `story_id` matches.
+///
+/// Page-local means: `(0, 0)` is the page's top-left in spread
+/// coordinates; subtract the page's `spread_origin` from spread-space
+/// values to land here. Y grows downward.
+#[derive(Debug, Clone)]
+pub struct LineLayout {
+    /// IDML `<Story Self="...">` of the source story.
+    pub story_id: String,
+    /// Paragraph index within the story.
+    pub paragraph_idx: u32,
+    /// Line index within the paragraph.
+    pub line_idx: u32,
+    /// Frame's IDML `Self` id when present (synthetic frames may have
+    /// none). Lets the overlay attribute selections to specific
+    /// frames within a chain.
+    pub frame_id: Option<String>,
+    /// Page-local baseline y in pt.
+    pub baseline_y_pt: f32,
+    /// Approximate ascent above the baseline in pt. Phase 3 first cut
+    /// derives this as `0.8 × line_height`; real font metrics arrive
+    /// alongside the main-thread fast composer.
+    pub ascent_pt: f32,
+    /// Approximate descent below the baseline in pt (`0.2 × line_height`).
+    pub descent_pt: f32,
+    /// Paragraph-local byte range covered by this visible line.
+    pub byte_range: std::ops::Range<u32>,
+    /// Per-glyph-cluster page-local positions, in left-to-right order.
+    /// The hit-tester bisects on `x_pt`; the caret rule keys on
+    /// `byte` for an exact-offset lookup.
+    pub clusters: Vec<ClusterPos>,
+}
+
+/// One glyph cluster's page-local position. Cluster bytes are
+/// paragraph-local so they compose with `LineLayout::byte_range`.
+#[derive(Debug, Clone, Copy)]
+pub struct ClusterPos {
+    pub byte: u32,
+    /// Left edge in page-local pt.
+    pub x_pt: f32,
+    /// Cluster's horizontal advance in page-local pt.
+    pub advance_pt: f32,
 }
 
 /// Multi-page render output. Each entry is a fully populated
@@ -264,6 +321,29 @@ impl BuiltDocument {
     /// they only want a count or a prefix.
     pub fn page_ids(&self) -> impl Iterator<Item = &PageId> {
         self.pages.iter().map(|p| &p.id)
+    }
+
+    /// Lines belonging to `story_id`, gathered from every page that
+    /// hosts part of the story (chained text spans pages). Sorted by
+    /// `(paragraph_idx, line_idx)` so the canvas can walk the story
+    /// in document order without re-sorting. Empty when the story is
+    /// unplaced or unparsed.
+    ///
+    /// Phase 3 correctness layer (Item A) — selection, caret, and
+    /// selection geometry all key off this index.
+    pub fn story_layout(&self, story_id: &str) -> Vec<&LineLayout> {
+        let mut out: Vec<&LineLayout> = Vec::new();
+        for page in &self.pages {
+            for line in &page.story_layout {
+                if line.story_id == story_id {
+                    out.push(line);
+                }
+            }
+        }
+        out.sort_by(|a, b| {
+            (a.paragraph_idx, a.line_idx).cmp(&(b.paragraph_idx, b.line_idx))
+        });
+        out
     }
 }
 
@@ -392,6 +472,7 @@ pub fn build_document(
                 layout_generation: 0,
                 numbering_generation: 0,
                 stats: PipelineStats::default(),
+                story_layout: Vec::new(),
             });
         }
         spread_page_ranges.push(start..pages.len());
@@ -409,6 +490,7 @@ pub fn build_document(
             layout_generation: 0,
             numbering_generation: 0,
             stats: PipelineStats::default(),
+            story_layout: Vec::new(),
         });
         page_geometries.push(PageGeom {
             bounds_in_spread: idml_parse::Bounds {
@@ -3359,6 +3441,59 @@ fn emit_paragraph_into_chain(
         // intrudes from the head frame's left side.
         let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
         let text_origin_pt = (sx - ox + frame_insets[1] + em.column_x_shift_pt, sy - oy);
+
+        // Phase 3 Item A — capture per-cluster page-local positions.
+        // Lets the canvas hit-test by character offset, place the
+        // caret, and compute selection geometry. Captured
+        // unconditionally; cost is O(glyphs on this line). The
+        // captured baseline / x_pt are in page-local pt — already
+        // includes the frame's spread→page→origin offset. Rotated
+        // frames receive their visual rotation via the post-emit
+        // pass that follows; the captured positions here are the
+        // upright pre-rotation values, suitable for content-side
+        // selection math (rotation only affects how we *render* the
+        // caret, not which character it points at).
+        {
+            let baseline_pt_local =
+                line.baseline_y as f32 / idml_text::shape::ADVANCE_PRECISION;
+            let line_h_pt = line_h as f32 / idml_text::shape::ADVANCE_PRECISION;
+            let mut clusters: Vec<ClusterPos> = Vec::with_capacity(line.glyphs.len());
+            // Coalesce glyphs that share a source cluster (ligatures,
+            // multi-glyph clusters) into one ClusterPos entry.
+            let mut last_cluster: Option<u32> = None;
+            for g in &line.glyphs {
+                let adv = g.x_advance as f32 / idml_text::shape::ADVANCE_PRECISION;
+                if last_cluster == Some(g.cluster) {
+                    if let Some(c) = clusters.last_mut() {
+                        c.advance_pt += adv;
+                    }
+                    continue;
+                }
+                last_cluster = Some(g.cluster);
+                let x_pt_page =
+                    text_origin_pt.0 + g.x as f32 / idml_text::shape::ADVANCE_PRECISION;
+                clusters.push(ClusterPos {
+                    byte: g.cluster,
+                    x_pt: x_pt_page,
+                    advance_pt: adv,
+                });
+            }
+            pages[target_page].story_layout.push(LineLayout {
+                story_id: em.current_story_id.clone(),
+                paragraph_idx: em.paragraph_idx,
+                line_idx: current_line_idx as u32,
+                frame_id: frame.self_id.clone(),
+                baseline_y_pt: text_origin_pt.1 + baseline_pt_local,
+                // Phase 3 first cut: line-height heuristic for ascent
+                // / descent. Real font metrics arrive alongside the
+                // main-thread fast composer.
+                ascent_pt: 0.8 * line_h_pt,
+                descent_pt: 0.2 * line_h_pt,
+                byte_range: line.byte_range.start as u32..line.byte_range.end as u32,
+                clusters,
+            });
+        }
+
         // Pull just the rotation/scale 2×2 from the frame's
         // ItemTransform. emit_glyph_slice positions glyphs in upright
         // page coords offset by `text_origin_pt`; the post-emit pass
@@ -9913,6 +10048,7 @@ pub fn build(document: &Document, options: &PipelineOptions) -> anyhow::Result<B
         layout_generation: 0,
         numbering_generation: 0,
         stats,
+        story_layout: Vec::new(),
     })
 }
 
