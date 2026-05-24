@@ -196,12 +196,12 @@ impl CanvasModel {
         self.page(id).map(|p| &p.list)
     }
 
-    /// Apply a `Mutation` from the main thread. Phase 1 stub: every
-    /// variant returns `Err(WorkerError::NotImplemented)` since the
-    /// mutation API arrives in Phase 3. We keep the entry point so
-    /// the message channel can be wired up end-to-end now; downstream
-    /// code can plumb `Mutation` values through without conditional
-    /// branches that would later need ripping out.
+    /// Apply a `Mutation` from the main thread. Phase 3 stub today —
+    /// every variant returns `Err(WorkerError::NotImplemented)`.
+    /// The real implementation lands as part of Phase 3 (content-
+    /// addressed selection, incremental composition, salsa retrofit,
+    /// undo log). See `docs/verso/canvas.md` §6 for the propagation
+    /// cascade the implementation must satisfy.
     pub fn apply_mutation(
         &mut self,
         mutation: &Mutation,

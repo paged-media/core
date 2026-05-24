@@ -167,7 +167,16 @@ impl Default for PipelineOptions<'_> {
 /// stay stable across re-layouts — only document-structural edits
 /// (insert/delete page) should ever change the set of `PageId`s.
 #[derive(
-    Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+    Debug,
+    Default,
+    Clone,
+    Hash,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
 )]
 pub struct PageId(pub String);
 

@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 #[derive(
     Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
 )]
+#[serde(transparent)]
 pub struct AnchorId(pub String);
 
 impl AnchorId {

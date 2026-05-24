@@ -194,6 +194,24 @@ mod wasm {
             self.model.as_ref().map(|m| m.page_count()).unwrap_or(0)
         }
 
+        /// Run the Tier 3 resolver against the current model.
+        /// Returns the result as a JSON string the JS side can
+        /// parse via `JSON.parse`. `null` when no document is loaded.
+        /// The worker invokes this after `LoadDocument` succeeds and
+        /// posts the parsed result as an unsolicited `resolutionDone`
+        /// message to the main thread. Phase 2 — heading anchors and
+        /// their assigned page numbers become visible in the UI.
+        #[wasm_bindgen(js_name = runResolveJson)]
+        pub fn run_resolve_json(&self) -> Option<String> {
+            let model = self.model.as_ref()?;
+            let result = idml_canvas::resolve(
+                model.scene(),
+                model.built(),
+                &idml_canvas::ResolveOptions::default(),
+            );
+            serde_json::to_string(&result).ok()
+        }
+
         /// Initialise the WebGPU + Vello surface presenter against
         /// `canvas`. Async because the browser's adapter and device
         /// requests are Promise-based. On success the worker can call
@@ -405,8 +423,10 @@ mod wasm {
                     };
                     match model.apply_mutation(&m) {
                         Ok(()) => WorkerToMainKind::PagesDirty {
-                            // Phase 1 stub: mutations always error;
-                            // never reached today.
+                            // Phase 3 stub: apply_mutation always
+                            // returns NotImplemented today; this OK
+                            // arm is unreachable until the Phase 3
+                            // correctness layer lands.
                             page_ids: vec![],
                         },
                         Err(error) => WorkerToMainKind::MutationFailed { error },
