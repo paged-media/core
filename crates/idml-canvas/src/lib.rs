@@ -32,9 +32,12 @@
 
 pub mod camera;
 pub mod channel;
+pub mod geometry;
 pub mod hit;
 pub mod model;
+pub mod mutate;
 pub mod resolve;
+pub mod selection;
 pub mod snapshot;
 
 pub use camera::{Camera, CameraLayout, CAMERA_SAB_BYTES};
@@ -43,6 +46,24 @@ pub use channel::{
     WorkerError, WorkerToMain, WorkerToMainKind, PROTOCOL_VERSION,
 };
 pub use hit::HitTestResult;
+pub use geometry::{caret_geometry, selection_geometry, CaretGeometry};
+pub use mutate::{AppliedText, TextOp, TextOpError};
+pub use selection::{ContentSelection, Side};
+
+/// Phase 3 Item 4 — one rect-per-line in page-local coords for a
+/// content selection range. Defined in the root so the channel
+/// (Item 6) can reference it without depending on a yet-to-land
+/// `geometry` module.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectionRect {
+    pub page_id: PageId,
+    pub frame_id: Option<String>,
+    pub left_pt: f32,
+    pub top_pt: f32,
+    pub width_pt: f32,
+    pub height_pt: f32,
+}
 pub use model::{CanvasModel, CanvasOptions, DocumentHandle, DocumentStats};
 pub use resolve::{
     resolve, AnchorPosition, FieldChange, NumberingMap, ResolutionResult, ResolveOptions,

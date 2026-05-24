@@ -73,6 +73,29 @@ pub struct DocumentStats {
     pub lines: usize,
 }
 
+/// What `CanvasModel::apply_mutation` returns on success. The
+/// `applied_seq` is the monotone id the worker assigns; `page_ids`
+/// lists pages the caller must invalidate in its LOD cache; the
+/// `inverse` is the op to push onto the undo log.
+#[derive(Debug, Clone)]
+pub struct MutationOutcome {
+    pub applied_seq: u64,
+    pub page_ids: Vec<PageId>,
+    pub inverse: crate::mutate::TextOp,
+}
+
+/// What `CanvasModel::undo` / `redo` return.
+#[derive(Debug, Clone)]
+pub struct UndoOutcome {
+    /// `applied_seq` of the mutation being reversed (undo) or
+    /// re-applied (redo).
+    pub undone_seq: u64,
+    /// Newly assigned `applied_seq` for the undo/redo operation
+    /// itself.
+    pub applied_seq: u64,
+    pub page_ids: Vec<PageId>,
+}
+
 impl From<&pipeline::PipelineStats> for DocumentStats {
     fn from(s: &pipeline::PipelineStats) -> Self {
         Self {
@@ -109,6 +132,32 @@ pub struct CanvasModel {
     /// every rebuild; storing them owned keeps the worker self-contained.
     font_bytes: Option<Vec<u8>>,
     icc_bytes: Option<Vec<u8>>,
+    /// Phase 3 Item 6 — content hash of the scene at load time.
+    /// Drives determinism tests: replaying the recorded mutation log
+    /// against the same `initial_state_hash` must produce a matching
+    /// post-state hash.
+    initial_state_hash: [u8; 32],
+    /// Monotone counter assigned by the worker for each successfully
+    /// applied mutation. The main thread matches against its own
+    /// `client_seq` via the `MutationApplied` reply.
+    last_applied_seq: u64,
+    /// Active selection mirrored from the main thread.
+    pub current_selection: Option<crate::selection::ContentSelection>,
+    /// Phase 3 Item 7 — undo log. Each entry holds the op + inverse
+    /// + the applied_seq that was assigned at apply time.
+    applied_log: Vec<AppliedRecord>,
+    /// Phase 3 Item 7 — redo stack. Populated by `undo()`; consumed
+    /// by `redo()`. Cleared when a new mutation lands (standard
+    /// editor convention).
+    redo_log: Vec<AppliedRecord>,
+}
+
+/// One entry in the applied / redo logs.
+#[derive(Debug, Clone)]
+pub struct AppliedRecord {
+    pub applied_seq: u64,
+    pub op: crate::mutate::TextOp,
+    pub inverse: crate::mutate::TextOp,
 }
 
 impl CanvasModel {
@@ -146,6 +195,7 @@ impl CanvasModel {
             .map(|(i, p)| (p.id.clone(), i))
             .collect();
 
+        let initial_state_hash = scene.canonical_hash();
         Ok(Self {
             doc_id,
             scene,
@@ -153,7 +203,39 @@ impl CanvasModel {
             page_index,
             font_bytes,
             icc_bytes,
+            initial_state_hash,
+            last_applied_seq: 0,
+            current_selection: None,
+            applied_log: Vec::new(),
+            redo_log: Vec::new(),
         })
+    }
+
+    /// Initial canonical hash captured at load. Phase 3 Item 6 —
+    /// determinism tests assert that replaying the mutation log
+    /// against the same `initial_state_hash` reproduces a known
+    /// post-state hash.
+    pub fn initial_state_hash(&self) -> [u8; 32] {
+        self.initial_state_hash
+    }
+
+    /// Current canonical hash of the (possibly-mutated) scene.
+    pub fn current_state_hash(&self) -> [u8; 32] {
+        self.scene.canonical_hash()
+    }
+
+    /// Most-recently-assigned `applied_seq`. 0 if no mutations have
+    /// landed.
+    pub fn last_applied_seq(&self) -> u64 {
+        self.last_applied_seq
+    }
+
+    /// Increment + return the next applied_seq. Worker calls this
+    /// when assigning ordering to a mutation that successfully
+    /// applied.
+    pub fn bump_applied_seq(&mut self) -> u64 {
+        self.last_applied_seq += 1;
+        self.last_applied_seq
     }
 
     pub fn doc_id(&self) -> &str {
@@ -196,19 +278,139 @@ impl CanvasModel {
         self.page(id).map(|p| &p.list)
     }
 
-    /// Apply a `Mutation` from the main thread. Phase 3 stub today —
-    /// every variant returns `Err(WorkerError::NotImplemented)`.
-    /// The real implementation lands as part of Phase 3 (content-
-    /// addressed selection, incremental composition, salsa retrofit,
-    /// undo log). See `docs/verso/canvas.md` §6 for the propagation
-    /// cascade the implementation must satisfy.
+    /// Apply a `Mutation` from the main thread. Phase 3 — InsertText
+    /// and DeleteRange route through `crate::mutate`; other variants
+    /// (style, frame, page, structural) still return `NotImplemented`
+    /// until Items 5b/c + 8 land.
+    ///
+    /// On success: bumps `last_applied_seq`, returns the
+    /// `applied_seq` + the inverse op (for the caller's undo log) +
+    /// the list of affected page ids (caller invalidates the LOD
+    /// cache for them). Rebuild is full + synchronous —
+    /// "correctness, not pessimisation" (see plan §Item 5).
     pub fn apply_mutation(
         &mut self,
         mutation: &Mutation,
-    ) -> Result<(), crate::channel::WorkerError> {
-        Err(crate::channel::WorkerError::NotImplemented {
-            what: format!("Mutation::{}", mutation.discriminant()),
+    ) -> Result<MutationOutcome, crate::channel::WorkerError> {
+        let text_op: crate::mutate::TextOp = match mutation {
+            Mutation::InsertText {
+                story_id,
+                offset,
+                text,
+            } => crate::mutate::TextOp::InsertText {
+                story_id: story_id.clone(),
+                offset: *offset,
+                text: text.clone(),
+            },
+            Mutation::DeleteRange {
+                story_id,
+                start,
+                end,
+            } => crate::mutate::TextOp::DeleteRange {
+                story_id: story_id.clone(),
+                start: *start,
+                end: *end,
+                recovered: String::new(),
+            },
+            other => {
+                return Err(crate::channel::WorkerError::NotImplemented {
+                    what: format!("Mutation::{}", other.discriminant()),
+                })
+            }
+        };
+        let applied = crate::mutate::apply(&mut self.scene, &text_op).map_err(|e| {
+            crate::channel::WorkerError::NotImplemented {
+                what: format!("text mutation failed: {e}"),
+            }
+        })?;
+        self.rebuild_after_mutation().map_err(|e| {
+            crate::channel::WorkerError::NotImplemented {
+                what: format!("rebuild after mutation: {e}"),
+            }
+        })?;
+        let applied_seq = self.bump_applied_seq();
+        let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
+        // Shift the active selection through the mutation so caret
+        // tracking survives the edit (AC-E-9).
+        if let Some(sel) = self.current_selection.take() {
+            let shifted = match &text_op {
+                crate::mutate::TextOp::InsertText { story_id, offset, text } => sel
+                    .shift_for_insert(story_id, *offset, text.chars().count() as u32),
+                crate::mutate::TextOp::DeleteRange {
+                    story_id,
+                    start,
+                    end,
+                    ..
+                } => sel.shift_for_delete(story_id, *start, *end),
+            };
+            self.current_selection = Some(shifted);
+        }
+        // Phase 3 Item 7 — push to undo log; clear redo log (any
+        // pending redo is invalidated by a fresh mutation).
+        self.applied_log.push(AppliedRecord {
+            applied_seq,
+            op: text_op,
+            inverse: applied.inverse.clone(),
+        });
+        self.redo_log.clear();
+        Ok(MutationOutcome {
+            applied_seq,
+            page_ids,
+            inverse: applied.inverse,
         })
+    }
+
+    /// Undo the most recent applied mutation. Phase 3 Item 7 —
+    /// applies the cached inverse + rebuilds + pushes onto the redo
+    /// stack. Returns the affected page ids on success; `None` when
+    /// the undo log is empty.
+    pub fn undo(&mut self) -> Option<UndoOutcome> {
+        let rec = self.applied_log.pop()?;
+        // Apply the inverse against the current scene.
+        let _ = crate::mutate::apply(&mut self.scene, &rec.inverse).ok()?;
+        self.rebuild_after_mutation().ok()?;
+        let undone_seq = rec.applied_seq;
+        let applied_seq = self.bump_applied_seq();
+        let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
+        // Push the original op onto the redo stack (so a future
+        // `redo()` re-applies it).
+        self.redo_log.push(rec);
+        Some(UndoOutcome {
+            undone_seq,
+            applied_seq,
+            page_ids,
+        })
+    }
+
+    /// Redo the most-recently-undone mutation. Phase 3 Item 7.
+    pub fn redo(&mut self) -> Option<UndoOutcome> {
+        let rec = self.redo_log.pop()?;
+        let applied = crate::mutate::apply(&mut self.scene, &rec.op).ok()?;
+        self.rebuild_after_mutation().ok()?;
+        let redone_seq = rec.applied_seq;
+        let applied_seq = self.bump_applied_seq();
+        let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
+        // The new inverse may differ from the cached one if the
+        // intervening state mattered; recompute via `apply`'s return.
+        self.applied_log.push(AppliedRecord {
+            applied_seq: redone_seq,
+            op: rec.op,
+            inverse: applied.inverse,
+        });
+        Some(UndoOutcome {
+            undone_seq: redone_seq,
+            applied_seq,
+            page_ids,
+        })
+    }
+
+    /// Number of mutations in the undo log (read-only inspection
+    /// for debug UI + tests).
+    pub fn applied_log_len(&self) -> usize {
+        self.applied_log.len()
+    }
+    pub fn redo_log_len(&self) -> usize {
+        self.redo_log.len()
     }
 
     /// Expose the inner scene for read-only inspection. Used by the
@@ -216,6 +418,37 @@ impl CanvasModel {
     /// route through `apply_mutation`.
     pub fn scene(&self) -> &Document {
         &self.scene
+    }
+
+    /// Mutable accessor for the parsed scene. Phase 3 — used by the
+    /// `mutate` module to apply text edits in place. Callers must
+    /// follow up with `rebuild_after_mutation` so the `BuiltDocument`
+    /// and page index stay in sync; bypassing the rebuild leaves the
+    /// canvas painting stale pixels.
+    pub fn scene_mut(&mut self) -> &mut Document {
+        &mut self.scene
+    }
+
+    /// Rebuild the `BuiltDocument` from the (possibly-mutated) scene.
+    /// Phase 3 first cut: full rebuild every time. Per the
+    /// correctness-layer plan, incremental composition lands later
+    /// alongside AC-E-1 latency work.
+    pub fn rebuild_after_mutation(&mut self) -> Result<(), crate::channel::LoadError> {
+        let options = PipelineOptions {
+            font: self.font_bytes.as_deref(),
+            cmyk_icc_profile: self.icc_bytes.as_deref(),
+            ..PipelineOptions::default()
+        };
+        let built = pipeline::build_document(&self.scene, &options)
+            .map_err(|e| crate::channel::LoadError::Build(e.to_string()))?;
+        self.page_index = built
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (p.id.clone(), i))
+            .collect();
+        self.built = built;
+        Ok(())
     }
 
     /// Expose the inner built document for tests and the wasm
@@ -332,5 +565,28 @@ mod tests {
         assert!(model
             .display_list_for_page(&PageId("nope".into()))
             .is_none());
+    }
+
+    #[test]
+    fn canonical_hash_is_stable_across_loads() {
+        let bytes = minimal_idml_bytes();
+        let a = CanvasModel::load("a", &bytes, CanvasOptions::default()).unwrap();
+        let b = CanvasModel::load("b", &bytes, CanvasOptions::default()).unwrap();
+        assert_eq!(
+            a.initial_state_hash(),
+            b.initial_state_hash(),
+            "same bytes → same canonical hash (doc_id is not part of content)"
+        );
+        assert_eq!(a.initial_state_hash(), a.current_state_hash());
+    }
+
+    #[test]
+    fn applied_seq_starts_at_zero_and_bumps() {
+        let bytes = minimal_idml_bytes();
+        let mut m = CanvasModel::load("a", &bytes, CanvasOptions::default()).unwrap();
+        assert_eq!(m.last_applied_seq(), 0);
+        assert_eq!(m.bump_applied_seq(), 1);
+        assert_eq!(m.bump_applied_seq(), 2);
+        assert_eq!(m.last_applied_seq(), 2);
     }
 }

@@ -248,6 +248,9 @@ pub struct BuiltPage {
 pub struct LineLayout {
     /// IDML `<Story Self="...">` of the source story.
     pub story_id: String,
+    /// Page hosting this visible line. Threaded text spans pages, so
+    /// every line records its host independently.
+    pub page_id: PageId,
     /// Paragraph index within the story.
     pub paragraph_idx: u32,
     /// Line index within the paragraph.
@@ -3478,8 +3481,10 @@ fn emit_paragraph_into_chain(
                     advance_pt: adv,
                 });
             }
+            let host_page_id = pages[target_page].id.clone();
             pages[target_page].story_layout.push(LineLayout {
                 story_id: em.current_story_id.clone(),
+                page_id: host_page_id,
                 paragraph_idx: em.paragraph_idx,
                 line_idx: current_line_idx as u32,
                 frame_id: frame.self_id.clone(),

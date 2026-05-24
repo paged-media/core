@@ -90,6 +90,24 @@ pub enum MainToWorkerKind {
         page_id: PageId,
         target_width_px: u32,
     },
+    /// Replace the worker's current selection. Phase 3 Item 1 — the
+    /// worker mirrors the main thread's `ContentSelection` so the
+    /// caret / selection geometry queries have a stable state to
+    /// read.
+    SetSelection {
+        selection: Option<crate::selection::ContentSelection>,
+    },
+    /// Compute selection geometry (rect-per-line). Reply:
+    /// `SelectionGeometry`.
+    RequestSelectionGeometry {
+        selection: crate::selection::ContentSelection,
+    },
+    /// Undo the most recent applied mutation. Reply: `UndoApplied`
+    /// or `MutationFailed` (when the log is empty).
+    Undo,
+    /// Re-apply the most recently undone mutation. Reply:
+    /// `RedoApplied` or `MutationFailed`.
+    Redo,
 }
 
 /// Coarse LOD tiers requested by the navigator + canvas (per spec §4.4).
@@ -197,6 +215,33 @@ pub enum WorkerToMainKind {
     SnapshotReady(crate::snapshot::SnapshotPng),
     /// `RequestSnapshot` failed (e.g. unknown page id).
     SnapshotFailed { error: crate::snapshot::SnapshotError },
+    /// Phase 3 Item 6 — a mutation was successfully applied. The
+    /// worker assigns `applied_seq` (monotone); the main thread
+    /// matches against its own `client_seq` to ack pending sends.
+    MutationApplied {
+        client_seq: u64,
+        applied_seq: u64,
+        /// Pages whose display lists need re-rendering. The canvas
+        /// invalidates their entries in the LOD cache.
+        page_ids: Vec<PageId>,
+    },
+    /// Phase 3 Item 4 — rect-per-line geometry for a selection range.
+    SelectionGeometry {
+        rects: Vec<crate::SelectionRect>,
+    },
+    /// Phase 3 Item 7 — undo applied. `undone_seq` is the
+    /// `applied_seq` of the mutation that was reversed.
+    UndoApplied {
+        undone_seq: u64,
+        applied_seq: u64,
+        page_ids: Vec<PageId>,
+    },
+    /// Phase 3 Item 7 — redo applied.
+    RedoApplied {
+        redone_seq: u64,
+        applied_seq: u64,
+        page_ids: Vec<PageId>,
+    },
 }
 
 /// A content-space mutation. Phase 1 carries the *envelope* only —

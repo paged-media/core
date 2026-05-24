@@ -326,6 +326,87 @@ impl Document {
         &self.container.designmap.stories
     }
 
+    /// Stable 256-bit content hash of the editable parts of the
+    /// document (stories, spreads' frame definitions, anchor table).
+    /// Phase 3 Item 6 — drives determinism tests for the mutation
+    /// pipeline: applying the same mutation log to the same source
+    /// bytes twice must produce identical hashes (AC-E-7).
+    ///
+    /// Walks the document in **stable order** (parser-order Vecs;
+    /// sorted-key HashMaps) and feeds bytes into blake3. Skips
+    /// derived caches (`frame_for_story`, `text_frame_index`) since
+    /// they're functions of the underlying data. The hash is *not*
+    /// guaranteed equal across renderer versions — only across runs
+    /// of the same binary.
+    pub fn canonical_hash(&self) -> [u8; 32] {
+        let mut h = blake3::Hasher::new();
+        h.update(b"idml-scene-canonical-v1");
+
+        // Stories — text + style names, in document order.
+        h.update(b"stories:");
+        for s in &self.stories {
+            h.update(b"\0story\0");
+            h.update(s.self_id.as_bytes());
+            for (pi, p) in s.story.paragraphs.iter().enumerate() {
+                h.update(b"\0p");
+                h.update(&(pi as u32).to_le_bytes());
+                if let Some(style) = p.paragraph_style.as_deref() {
+                    h.update(b"\0ps\0");
+                    h.update(style.as_bytes());
+                }
+                for (ri, r) in p.runs.iter().enumerate() {
+                    h.update(b"\0r");
+                    h.update(&(ri as u32).to_le_bytes());
+                    h.update(b"\0t\0");
+                    h.update(r.text.as_bytes());
+                    if let Some(font) = r.font.as_deref() {
+                        h.update(b"\0f\0");
+                        h.update(font.as_bytes());
+                    }
+                    if let Some(size) = r.point_size {
+                        h.update(b"\0sz\0");
+                        h.update(&size.to_le_bytes());
+                    }
+                }
+            }
+        }
+
+        // Spreads — frame bounds + transforms, in document order.
+        h.update(b"spreads:");
+        for ps in &self.spreads {
+            h.update(b"\0spread\0");
+            h.update(ps.src.as_bytes());
+            for f in &ps.spread.text_frames {
+                h.update(b"\0tf\0");
+                if let Some(id) = f.self_id.as_deref() {
+                    h.update(id.as_bytes());
+                }
+                hash_bounds(&mut h, &f.bounds);
+                hash_transform(&mut h, f.item_transform.as_ref());
+            }
+            for r in &ps.spread.rectangles {
+                h.update(b"\0rc\0");
+                if let Some(id) = r.self_id.as_deref() {
+                    h.update(id.as_bytes());
+                }
+                hash_bounds(&mut h, &r.bounds);
+                hash_transform(&mut h, r.item_transform.as_ref());
+            }
+        }
+
+        // Anchors — count + ids in stable order.
+        h.update(b"anchors:");
+        for a in &self.anchors {
+            h.update(b"\0a\0");
+            h.update(a.id.as_str().as_bytes());
+            h.update(b"\0s\0");
+            h.update(a.story_id.as_bytes());
+            h.update(&a.paragraph_index.to_le_bytes());
+        }
+
+        *h.finalize().as_bytes()
+    }
+
     /// Resolve a `<TOCStyle>` into a flat ordered list of TOC entries.
     ///
     /// Walks every story's paragraphs in document order; whenever a
@@ -821,6 +902,24 @@ fn merge_border_attrs(c: &mut idml_parse::ParagraphBorder, p: &idml_parse::Parag
 
 /// Derive a Story's `Self` id from its manifest src. Turns
 /// "Stories/Story_uXX.xml" → "uXX"; returns the stem otherwise.
+fn hash_bounds(h: &mut blake3::Hasher, b: &idml_parse::Bounds) {
+    h.update(&b.top.to_le_bytes());
+    h.update(&b.left.to_le_bytes());
+    h.update(&b.bottom.to_le_bytes());
+    h.update(&b.right.to_le_bytes());
+}
+
+fn hash_transform(h: &mut blake3::Hasher, m: Option<&[f32; 6]>) {
+    if let Some(arr) = m {
+        h.update(b"\0t1\0");
+        for v in arr {
+            h.update(&v.to_le_bytes());
+        }
+    } else {
+        h.update(b"\0t0\0");
+    }
+}
+
 pub fn derive_story_id(src: &str) -> String {
     let stem = src.rsplit_once('/').map(|(_, t)| t).unwrap_or(src);
     let without_ext = stem.strip_suffix(".xml").unwrap_or(stem);

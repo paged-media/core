@@ -11,7 +11,8 @@ mod module;
 pub use asset::{AssetResolver, BytesResolver};
 pub use pipeline::{
     build, build_document, build_run_paint_picker, resolve_fill, resolve_stroke, BuiltDocument,
-    BuiltPage, FontMetricsOverride, PageId, PipelineOptions, PipelineStats, RunPaintPicker,
+    BuiltPage, ClusterPos, FontMetricsOverride, LineLayout, PageId, PipelineOptions,
+    PipelineStats, RunPaintPicker,
 };
 
 #[cfg(feature = "cpu")]

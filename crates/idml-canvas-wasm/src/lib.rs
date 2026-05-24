@@ -470,7 +470,7 @@ mod wasm {
                     WorkerToMainKind::HitResult(idml_canvas::HitResult {
                         frame_id: result.frame_id,
                         story_id: result.story_id,
-                        offset_within_story: None,
+                        offset_within_story: result.offset_within_story,
                         frame_bounds: result.frame_bounds.map(|b| {
                             idml_canvas::channel::FrameBounds {
                                 left: b[0],
