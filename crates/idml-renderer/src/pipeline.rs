@@ -7295,6 +7295,56 @@ fn emit_cell_paragraph(
         }
     }
 
+    // Phase 3 Item A (table-cell path) — capture StoryLayout for
+    // table-cell paragraphs so the canvas's caret + selection can
+    // address text inside tables. Cell text shares the host story
+    // id; for paragraph_idx we use the emitter's current value
+    // (matches BreakRecord semantics for cells above). Phase 3 v1
+    // limit: nested table-cell selection isn't separately
+    // addressable from cell text on the same paragraph_idx —
+    // multiple cells on the same table row would collide on
+    // line_idx. Acceptable until we add a cell-coordinate axis to
+    // LineLayout (Phase 3 v2).
+    {
+        let host_page_id = pages[target_page].id.clone();
+        for (line_idx, line) in laid_out.lines.iter().enumerate() {
+            let baseline_pt_local =
+                line.baseline_y as f32 / idml_text::shape::ADVANCE_PRECISION;
+            let line_h_pt = leading_pt; // cell paragraphs use 1.2 × point size
+            let mut clusters: Vec<ClusterPos> = Vec::with_capacity(line.glyphs.len());
+            let mut last_cluster: Option<u32> = None;
+            for g in &line.glyphs {
+                let adv = g.x_advance as f32 / idml_text::shape::ADVANCE_PRECISION;
+                if last_cluster == Some(g.cluster) {
+                    if let Some(c) = clusters.last_mut() {
+                        c.advance_pt += adv;
+                    }
+                    continue;
+                }
+                last_cluster = Some(g.cluster);
+                let x_pt_page =
+                    cell_origin.0 + g.x as f32 / idml_text::shape::ADVANCE_PRECISION;
+                clusters.push(ClusterPos {
+                    byte: g.cluster,
+                    x_pt: x_pt_page,
+                    advance_pt: adv,
+                });
+            }
+            pages[target_page].story_layout.push(LineLayout {
+                story_id: em.current_story_id.clone(),
+                page_id: host_page_id.clone(),
+                paragraph_idx: em.paragraph_idx,
+                line_idx: line_idx as u32,
+                frame_id: em.chain.get(em.frame_idx).and_then(|f| f.self_id.clone()),
+                baseline_y_pt: cell_origin.1 + baseline_pt_local,
+                ascent_pt: 0.8 * line_h_pt,
+                descent_pt: 0.2 * line_h_pt,
+                byte_range: line.byte_range.start as u32..line.byte_range.end as u32,
+                clusters,
+            });
+        }
+    }
+
     let list = &mut pages[target_page].list;
     let mut max_baseline_pt = 0.0f32;
     for line in &laid_out.lines {

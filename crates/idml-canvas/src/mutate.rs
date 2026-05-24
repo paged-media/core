@@ -69,10 +69,6 @@ pub enum TextOpError {
     },
     #[error("delete range start={start} end={end} is invalid (start > end)")]
     InvalidRange { start: u32, end: u32 },
-    #[error("delete range crosses a paragraph boundary; not supported in Phase 3 v1")]
-    CrossParagraphDelete,
-    #[error("insert of `\\n` (paragraph split) not supported in Phase 3 v1")]
-    ParagraphSplittingInsert,
 }
 
 /// Apply a `TextOp` to the document. Returns the inverse op + the
@@ -100,9 +96,6 @@ fn apply_insert_text(
     offset: u32,
     text: &str,
 ) -> Result<AppliedText, TextOpError> {
-    if text.contains('\n') {
-        return Err(TextOpError::ParagraphSplittingInsert);
-    }
     let story = find_story_mut(doc, story_id)?;
     let len = story_byte_len(&*story);
     if offset > len {
@@ -112,45 +105,38 @@ fn apply_insert_text(
             len,
         });
     }
-    // Locate target paragraph + run + intra-run byte position.
-    let target = locate(&*story, offset);
-    match target {
-        Locate::InRun {
-            paragraph_idx,
-            run_idx,
-            byte_in_run,
-        } => {
-            let para = &mut story.paragraphs[paragraph_idx];
-            let run = &mut para.runs[run_idx];
-            run.text.insert_str(byte_in_run, text);
-        }
-        Locate::EndOfStory { paragraph_idx } => {
-            let para = &mut story.paragraphs[paragraph_idx];
-            // Append to last run if one exists; otherwise create one.
-            if let Some(run) = para.runs.last_mut() {
-                run.text.push_str(text);
-            } else {
-                let mut run = CharacterRun::default();
-                run.text = text.into();
-                para.runs.push(run);
-            }
-        }
-        Locate::AtParagraphBreak {
-            after_paragraph_idx,
-        } => {
-            // Insert at the synthetic \n between paragraph N and N+1.
-            // The story-offset contract puts the insertion at the START
-            // of paragraph N+1's first run (matches Cocoa convention:
-            // text typed at a line break appears on the next line).
-            let next_idx = after_paragraph_idx + 1;
-            let next_para = &mut story.paragraphs[next_idx];
-            if let Some(run) = next_para.runs.first_mut() {
-                run.text.insert_str(0, text);
-            } else {
-                let mut run = CharacterRun::default();
-                run.text = text.into();
-                next_para.runs.push(run);
-            }
+
+    // Phase 3 Gap-D: split text on `\n`. Each segment becomes a
+    // contiguous insert within a (possibly new) paragraph. Multiple
+    // `\n`s in the source split into multiple paragraphs.
+    //
+    // The text "abc\ndef" inserted at offset O produces:
+    //   - "abc" inserted at O in the original paragraph
+    //   - a paragraph split at O+3 (tail of original paragraph moves
+    //     to a new paragraph below)
+    //   - "def" inserted at the head of the new paragraph
+    //
+    // The implementation walks segments and splits as needed,
+    // chaining the resulting locate() to the next insertion point.
+    let segments: Vec<&str> = text.split('\n').collect();
+    if segments.len() == 1 {
+        insert_one_segment(story, offset, segments[0]);
+    } else {
+        // First segment: insert in place.
+        insert_one_segment(story, offset, segments[0]);
+        let mut next_offset = offset + segments[0].len() as u32;
+        // For each remaining segment: split the paragraph at
+        // next_offset (creating a new paragraph), then insert the
+        // segment at the head of the new paragraph.
+        for seg in &segments[1..] {
+            split_paragraph_at(story, next_offset);
+            // The split inserts a paragraph break at next_offset;
+            // the new paragraph starts at next_offset + 1 (per the
+            // story-offset contract: synthetic \n between paragraphs
+            // consumes 1 byte of story-local offset).
+            next_offset += 1;
+            insert_one_segment(story, next_offset, seg);
+            next_offset += seg.len() as u32;
         }
     }
     merge_adjacent_runs_in_target(story, offset);
@@ -159,10 +145,110 @@ fn apply_insert_text(
         inverse: TextOp::DeleteRange {
             story_id: story_id.into(),
             start: offset,
-            end: offset + text.chars().count() as u32,
+            // Use byte length (which includes synthetic \n bytes for
+            // any inter-paragraph boundaries inserted) so the inverse
+            // covers the exact stretch we just inserted.
+            end: offset + text.len() as u32,
             recovered: String::new(),
         },
     })
+}
+
+/// Insert plain (no-newline) text at `offset`. Internal helper —
+/// caller guarantees no `\n` in `seg`.
+fn insert_one_segment(story: &mut idml_parse::Story, offset: u32, seg: &str) {
+    if seg.is_empty() {
+        return;
+    }
+    let target = locate(story, offset);
+    match target {
+        Locate::InRun {
+            paragraph_idx,
+            run_idx,
+            byte_in_run,
+        } => {
+            let para = &mut story.paragraphs[paragraph_idx];
+            let run = &mut para.runs[run_idx];
+            run.text.insert_str(byte_in_run, seg);
+        }
+        Locate::EndOfStory { paragraph_idx } => {
+            let para = &mut story.paragraphs[paragraph_idx];
+            if let Some(run) = para.runs.last_mut() {
+                run.text.push_str(seg);
+            } else {
+                let mut run = CharacterRun::default();
+                run.text = seg.into();
+                para.runs.push(run);
+            }
+        }
+        Locate::AtParagraphBreak {
+            after_paragraph_idx,
+        } => {
+            let next_idx = after_paragraph_idx + 1;
+            let next_para = &mut story.paragraphs[next_idx];
+            if let Some(run) = next_para.runs.first_mut() {
+                run.text.insert_str(0, seg);
+            } else {
+                let mut run = CharacterRun::default();
+                run.text = seg.into();
+                next_para.runs.push(run);
+            }
+        }
+    }
+}
+
+/// Split a paragraph at `offset`. The bytes at/after `offset` move
+/// into a new paragraph inserted immediately after the original.
+/// Inherits the original paragraph's style attributes (the only
+/// thing IDML's paragraph carries that's level-affecting — runs keep
+/// their own character styles intact).
+fn split_paragraph_at(story: &mut idml_parse::Story, offset: u32) {
+    let target = locate(story, offset);
+    let (paragraph_idx, run_idx, byte_in_run) = match target {
+        Locate::InRun {
+            paragraph_idx,
+            run_idx,
+            byte_in_run,
+        } => (paragraph_idx, run_idx, byte_in_run),
+        Locate::EndOfStory { paragraph_idx } => {
+            // Split at the end of the paragraph — the new paragraph
+            // is empty.
+            let para = &story.paragraphs[paragraph_idx];
+            let new_para = idml_parse::Paragraph {
+                paragraph_style: para.paragraph_style.clone(),
+                ..Default::default()
+            };
+            story.paragraphs.insert(paragraph_idx + 1, new_para);
+            return;
+        }
+        Locate::AtParagraphBreak { .. } => {
+            // Already on a paragraph break — splitting here is a no-op.
+            return;
+        }
+    };
+    let para = &mut story.paragraphs[paragraph_idx];
+    // Tail runs that come AFTER the split point move to the new
+    // paragraph. The split-point run itself is split into two halves;
+    // the right half becomes the first run of the new paragraph.
+    let mut tail_runs: Vec<CharacterRun> = para.runs.split_off(run_idx + 1);
+    let split_run = &mut para.runs[run_idx];
+    if byte_in_run < split_run.text.len() {
+        let right_text: String = split_run.text.split_off(byte_in_run);
+        let mut right_run = split_run.clone();
+        right_run.text = right_text;
+        tail_runs.insert(0, right_run);
+    }
+    // If the split-point run is now empty, drop it.
+    if para.runs.last().map(|r| r.text.is_empty()).unwrap_or(false) {
+        para.runs.pop();
+    }
+    let style = para.paragraph_style.clone();
+    let new_para = idml_parse::Paragraph {
+        paragraph_style: style,
+        runs: tail_runs,
+        ..Default::default()
+    };
+    story.paragraphs.insert(paragraph_idx + 1, new_para);
 }
 
 fn apply_delete_range(
@@ -193,35 +279,84 @@ fn apply_delete_range(
             len,
         });
     }
-    let start_loc = locate(&*story, start);
-    let end_loc = locate(&*story, end);
 
-    // Phase 3 v1: same-paragraph deletes only.
-    let para_idx = match (&start_loc, &end_loc) {
-        (
-            Locate::InRun {
-                paragraph_idx: a, ..
-            },
-            Locate::InRun {
-                paragraph_idx: b, ..
-            },
-        ) if a == b => *a,
-        (
-            Locate::InRun {
-                paragraph_idx: a, ..
-            },
-            Locate::EndOfStory { paragraph_idx: b },
-        ) if a == b => *a,
-        _ => return Err(TextOpError::CrossParagraphDelete),
-    };
+    // Phase 3 Gap-D — full cross-paragraph delete support.
+    //
+    // Strategy:
+    //   1. Find (start_para, start_local) and (end_para, end_local)
+    //      via locate(); EndOfStory and AtParagraphBreak collapse to
+    //      same logical positions.
+    //   2. If same paragraph: splice within it (the existing fast
+    //      path).
+    //   3. Otherwise:
+    //      a. Capture the deleted text into `recovered` by walking
+    //         start_para's tail + each whole middle paragraph
+    //         (joined with synthetic `\n` per the story-offset
+    //         contract) + end_para's head.
+    //      b. Splice start_para's runs to keep only bytes 0..start_local.
+    //      c. Append end_para's tail-runs (runs from end_local onward)
+    //         to start_para.
+    //      d. Drop paragraphs (start_para+1..=end_para).
+    let (start_para, start_local) = locate_para_local(&*story, start);
+    let (end_para, end_local) = locate_para_local(&*story, end);
 
-    // Pre-compute the paragraph-start offset before the &mut borrow.
-    let para_start_byte = paragraph_start_byte_in_story(&*story, para_idx);
-    let para = &mut story.paragraphs[para_idx];
-    let local_start = (start - para_start_byte) as usize;
-    let local_end = (end - para_start_byte) as usize;
-    let mut recovered = String::with_capacity(local_end - local_start);
-    splice_paragraph(para, local_start, local_end, &mut recovered);
+    let mut recovered = String::with_capacity((end - start) as usize);
+    if start_para == end_para {
+        // Same-paragraph fast path.
+        let para = &mut story.paragraphs[start_para];
+        splice_paragraph(para, start_local, end_local, &mut recovered);
+    } else {
+        // Capture tail of start_para.
+        {
+            let para = &story.paragraphs[start_para];
+            for run in &para.runs {
+                let already: usize = run_text_total_before(para, run);
+                let run_end_in_para = already + run.text.len();
+                if start_local < run_end_in_para && already < usize::MAX {
+                    let lo = start_local.max(already) - already;
+                    let hi = run.text.len();
+                    if hi > lo {
+                        recovered.push_str(&run.text[lo..hi]);
+                    }
+                }
+            }
+            // Synthetic \n joining start_para to whatever's next.
+            recovered.push('\n');
+        }
+        // Capture whole middle paragraphs + the head of end_para.
+        for p in (start_para + 1)..end_para {
+            let para = &story.paragraphs[p];
+            for run in &para.runs {
+                recovered.push_str(&run.text);
+            }
+            recovered.push('\n');
+        }
+        {
+            let para = &story.paragraphs[end_para];
+            let mut acc: usize = 0;
+            for run in &para.runs {
+                let rlen = run.text.len();
+                let lo = 0;
+                let hi = end_local.min(acc + rlen).saturating_sub(acc);
+                if hi > lo {
+                    recovered.push_str(&run.text[lo..hi]);
+                }
+                acc += rlen;
+                if acc >= end_local {
+                    break;
+                }
+            }
+        }
+
+        // Now mutate: trim start_para to its [0..start_local] runs,
+        // then append end_para's tail.
+        let end_tail_runs = capture_tail_runs(&story.paragraphs[end_para], end_local);
+        let start_para_ref = &mut story.paragraphs[start_para];
+        truncate_paragraph_to(start_para_ref, start_local);
+        start_para_ref.runs.extend(end_tail_runs);
+        // Drop paragraphs (start_para+1 ..= end_para).
+        story.paragraphs.drain((start_para + 1)..=end_para);
+    }
 
     merge_adjacent_runs_in_target(story, start);
     Ok(AppliedText {
@@ -232,6 +367,92 @@ fn apply_delete_range(
             text: recovered,
         },
     })
+}
+
+/// Convert a story-local offset to (paragraph_idx, byte-within-paragraph).
+/// `AtParagraphBreak` resolves to the START of the next paragraph
+/// (which matches the offset's logical position past the break).
+fn locate_para_local(story: &idml_parse::Story, offset: u32) -> (usize, usize) {
+    match locate(story, offset) {
+        Locate::InRun {
+            paragraph_idx,
+            run_idx,
+            byte_in_run,
+        } => {
+            let para = &story.paragraphs[paragraph_idx];
+            let head: usize = para.runs[..run_idx]
+                .iter()
+                .map(|r| r.text.len())
+                .sum();
+            (paragraph_idx, head + byte_in_run)
+        }
+        Locate::EndOfStory { paragraph_idx } => {
+            let para = &story.paragraphs[paragraph_idx];
+            let total: usize = para.runs.iter().map(|r| r.text.len()).sum();
+            (paragraph_idx, total)
+        }
+        Locate::AtParagraphBreak {
+            after_paragraph_idx,
+        } => (after_paragraph_idx + 1, 0),
+    }
+}
+
+/// Sum of run text bytes that precede `target_run` in `para`'s run
+/// list. Returns `usize::MAX` if `target_run` isn't in the list
+/// (defensive — shouldn't happen since the caller iterates `para.runs`).
+fn run_text_total_before(para: &idml_parse::Paragraph, target_run: &CharacterRun) -> usize {
+    let mut total: usize = 0;
+    for r in &para.runs {
+        if std::ptr::eq(r, target_run) {
+            return total;
+        }
+        total += r.text.len();
+    }
+    usize::MAX
+}
+
+/// Take the tail of `para`'s runs starting at byte `from`. The
+/// returned vec is freshly allocated; the source paragraph is read
+/// only.
+fn capture_tail_runs(para: &idml_parse::Paragraph, from: usize) -> Vec<CharacterRun> {
+    let mut out: Vec<CharacterRun> = Vec::new();
+    let mut acc: usize = 0;
+    for run in &para.runs {
+        let rlen = run.text.len();
+        if acc >= from {
+            out.push(run.clone());
+        } else if acc + rlen > from {
+            let lo = from - acc;
+            let mut tail = run.clone();
+            tail.text = run.text[lo..].to_string();
+            out.push(tail);
+        }
+        acc += rlen;
+    }
+    out
+}
+
+/// Truncate `para`'s runs to keep only bytes `[0..keep)`.
+fn truncate_paragraph_to(para: &mut idml_parse::Paragraph, keep: usize) {
+    let mut acc: usize = 0;
+    let mut split_at: Option<(usize, usize)> = None; // (run_idx, local)
+    for (i, run) in para.runs.iter().enumerate() {
+        let rlen = run.text.len();
+        if acc + rlen >= keep {
+            split_at = Some((i, keep - acc));
+            break;
+        }
+        acc += rlen;
+    }
+    let Some((i, local)) = split_at else {
+        return;
+    };
+    para.runs.truncate(i + 1);
+    let run = &mut para.runs[i];
+    run.text.truncate(local);
+    if run.text.is_empty() {
+        para.runs.pop();
+    }
 }
 
 // ---- helpers ---------------------------------------------------------
@@ -273,18 +494,6 @@ fn story_byte_len(story: &idml_parse::Story) -> u32 {
         for r in &p.runs {
             total += r.text.len() as u32;
         }
-    }
-    total
-}
-
-fn paragraph_start_byte_in_story(story: &idml_parse::Story, paragraph_idx: usize) -> u32 {
-    let mut total: u32 = 0;
-    for (i, p) in story.paragraphs.iter().enumerate() {
-        if i == paragraph_idx {
-            return total;
-        }
-        total += p.runs.iter().map(|r| r.text.len() as u32).sum::<u32>();
-        total += 1; // synthetic \n
     }
     total
 }
@@ -528,17 +737,86 @@ mod tests {
     }
 
     #[test]
-    fn insert_text_with_newline_returns_unsupported() {
+    fn insert_newline_splits_paragraph() {
         let mut model = CanvasModel::load("d", &small_idml(), CanvasOptions::default()).unwrap();
-        let err = apply(
+        // Insert "\n" at offset 5 of "Hello world" → splits into
+        // "Hello" / " world".
+        apply(
             model.scene_mut(),
             &TextOp::InsertText {
                 story_id: "story1".into(),
-                offset: 0,
+                offset: 5,
                 text: "\n".into(),
             },
         )
-        .unwrap_err();
-        assert!(matches!(err, TextOpError::ParagraphSplittingInsert));
+        .unwrap();
+        let paragraphs = &model.scene().stories[0].story.paragraphs;
+        assert_eq!(paragraphs.len(), 2, "should have split into two paragraphs");
+        let head: String = paragraphs[0].runs.iter().map(|r| r.text.clone()).collect();
+        let tail: String = paragraphs[1].runs.iter().map(|r| r.text.clone()).collect();
+        assert_eq!(head, "Hello");
+        assert_eq!(tail, " world");
+    }
+
+    #[test]
+    fn insert_with_internal_newline_splits_and_inserts() {
+        let mut model = CanvasModel::load("d", &small_idml(), CanvasOptions::default()).unwrap();
+        // "X\nY" at offset 5: head paragraph gets "X" appended ("HelloX"),
+        // a paragraph break is inserted, "Y" prefixes the new paragraph
+        // which then contains the original tail " world".
+        apply(
+            model.scene_mut(),
+            &TextOp::InsertText {
+                story_id: "story1".into(),
+                offset: 5,
+                text: "X\nY".into(),
+            },
+        )
+        .unwrap();
+        let ps = &model.scene().stories[0].story.paragraphs;
+        assert_eq!(ps.len(), 2);
+        let head: String = ps[0].runs.iter().map(|r| r.text.clone()).collect();
+        let tail: String = ps[1].runs.iter().map(|r| r.text.clone()).collect();
+        assert_eq!(head, "HelloX");
+        assert_eq!(tail, "Y world");
+    }
+
+    #[test]
+    fn delete_across_paragraph_boundary_merges_paragraphs() {
+        let mut model = CanvasModel::load("d", &small_idml(), CanvasOptions::default()).unwrap();
+        // First split at offset 5 so we have "Hello" / " world".
+        apply(
+            model.scene_mut(),
+            &TextOp::InsertText {
+                story_id: "story1".into(),
+                offset: 5,
+                text: "\n".into(),
+            },
+        )
+        .unwrap();
+        // Story is now "Hello" + \n (5) + " world" (6) — total 12.
+        // Delete [3, 8) — covers "lo" (from para 0) + "\n" + " w" (from para 1).
+        let applied = apply(
+            model.scene_mut(),
+            &TextOp::DeleteRange {
+                story_id: "story1".into(),
+                start: 3,
+                end: 8,
+                recovered: String::new(),
+            },
+        )
+        .unwrap();
+        let ps = &model.scene().stories[0].story.paragraphs;
+        assert_eq!(ps.len(), 1, "cross-paragraph delete must merge");
+        let merged: String = ps[0].runs.iter().map(|r| r.text.clone()).collect();
+        assert_eq!(merged, "Helorld");
+        // Inverse should let us recover the original split structure.
+        match applied.inverse {
+            TextOp::InsertText { text, offset, .. } => {
+                assert_eq!(offset, 3);
+                assert_eq!(text, "lo\n w");
+            }
+            other => panic!("unexpected inverse: {other:?}"),
+        }
     }
 }
