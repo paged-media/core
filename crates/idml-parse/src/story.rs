@@ -688,6 +688,27 @@ pub struct CharacterRun {
     pub text: String,
 }
 
+/// Phase 5 — one stack frame of in-progress table parsing. Holds the
+/// `Table` being assembled plus parker slots for the parser's three
+/// "current" pieces of state at each nesting level:
+///
+/// - `outer_paragraph` / `outer_run`: the paragraph / run inside the
+///   *cell currently being parsed within this table*. The flat parser
+///   used a single pair for these; per-table parking lets a nested
+///   table's `<Cell>` boundaries stash their own cell-paragraph /
+///   cell-run without trampling the outer table's parked state.
+/// - `outer_cell`: the `current_cell` captured at this table's
+///   `<Table>` open. When this is the outer table, that's `None`;
+///   when this is a nested table inside another cell, that's the
+///   outer cell. Restored at `</Table>` close so the outer cell
+///   continues to accept further content.
+struct TableContext {
+    table: Table,
+    outer_paragraph: Option<Paragraph>,
+    outer_run: Option<CharacterRun>,
+    outer_cell: Option<TableCell>,
+}
+
 impl Story {
     pub fn parse(xml: &[u8]) -> Result<Self, ParseError> {
         let mut reader = quick_xml::Reader::from_reader(xml);
@@ -696,14 +717,18 @@ impl Story {
         let mut out = Story::default();
         let mut current_paragraph: Option<Paragraph> = None;
         let mut current_run: Option<CharacterRun> = None;
-        let mut current_table: Option<Table> = None;
+        // Phase 5 — table context stack. Each `<Table>` push, each
+        // `</Table>` pop. Nested tables (a table inside a `<Cell>`'s
+        // `<Paragraph>`) stack their contexts so the inner table's
+        // rows / columns / cells don't bleed into the outer table,
+        // and so the outer cell's saved paragraph / run state survives
+        // the inner table's `<Cell>` boundaries. Each frame carries
+        // the table itself plus the parked outer-paragraph / outer-run
+        // for the cell *being parsed inside this table* (the same
+        // slots the flat parser used as `outer_paragraph` /
+        // `outer_run`, but now per-table instead of global).
+        let mut table_stack: Vec<TableContext> = Vec::new();
         let mut current_cell: Option<TableCell> = None;
-        // While parsing inside a Cell, the outer-paragraph state
-        // (the paragraph that *hosts* the table) is parked here so
-        // cell paragraphs can use the same `current_paragraph` slot
-        // without losing the outer's accumulated metadata.
-        let mut outer_paragraph: Option<Paragraph> = None;
-        let mut outer_run: Option<CharacterRun> = None;
         let mut in_content = false;
         let mut buf = Vec::new();
         // `<Properties>` child elements appear *inside* a CharacterStyleRange
@@ -959,7 +984,17 @@ impl Story {
                         // Tables nest inside a CharacterStyleRange; the
                         // run that hosts the table is typically
                         // contentless, so we let it pass through as-is.
-                        current_table = Some(Table {
+                        // Push a fresh frame; an outer table already
+                        // on the stack stays untouched. Save the
+                        // current `current_cell` (Some when this
+                        // table opens inside an outer cell, None at
+                        // the story level) so we can restore it after
+                        // the inner table closes.
+                        table_stack.push(TableContext {
+                            outer_paragraph: None,
+                            outer_run: None,
+                            outer_cell: current_cell.take(),
+                            table: Table {
                             self_id: attr(&e, b"Self"),
                             header_row_count: attr(&e, b"HeaderRowCount")
                                 .and_then(|s| s.parse().ok())
@@ -1057,13 +1092,18 @@ impl Story {
                                 end_gap_color: attr(&e, b"EndColumnStrokeGapColor"),
                                 end_gap_tint: parse_tint_attr(&e, b"EndColumnStrokeGapTint"),
                             },
+                            },
                         });
                     }
                     b"Cell" => {
-                        // Park outer paragraph/run so cell content
-                        // can re-use the same slots without leaking.
-                        outer_paragraph = current_paragraph.take();
-                        outer_run = current_run.take();
+                        // Park outer paragraph/run on the active
+                        // table frame so cell content can re-use the
+                        // same slots without leaking, and so nested
+                        // tables get their own slot.
+                        if let Some(ctx) = table_stack.last_mut() {
+                            ctx.outer_paragraph = current_paragraph.take();
+                            ctx.outer_run = current_run.take();
+                        }
                         current_cell = Some(TableCell {
                             self_id: attr(&e, b"Self"),
                             name: attr(&e, b"Name"),
@@ -1311,25 +1351,40 @@ impl Story {
                         }
                     }
                     b"Cell" => {
-                        if let (Some(cell), Some(table)) =
-                            (current_cell.take(), current_table.as_mut())
+                        if let (Some(cell), Some(ctx)) =
+                            (current_cell.take(), table_stack.last_mut())
                         {
-                            table.cells.push(cell);
+                            ctx.table.cells.push(cell);
                         }
-                        // Restore the outer paragraph/run state so
-                        // the next Cell or the closing Table sees
-                        // the host paragraph again.
-                        current_paragraph = outer_paragraph.take();
-                        current_run = outer_run.take();
+                        // Restore the outer paragraph/run state from
+                        // the active table frame so the next Cell or
+                        // the closing Table sees the host paragraph
+                        // again. Nested tables: the inner cell's
+                        // close restores the inner table's outer
+                        // state (which is the inner-table's host
+                        // paragraph, i.e. a paragraph inside the
+                        // outer table's cell).
+                        if let Some(ctx) = table_stack.last_mut() {
+                            current_paragraph = ctx.outer_paragraph.take();
+                            current_run = ctx.outer_run.take();
+                        }
                     }
                     b"Table" => {
-                        // Attach the parsed table to its host
-                        // paragraph. The host's runs are typically
-                        // empty; the ParagraphStyleRange close
-                        // above keeps it because table.is_some().
-                        if let Some(table) = current_table.take() {
+                        // Pop the active table frame and attach its
+                        // table to the current host paragraph. For
+                        // nested tables, the host paragraph is one of
+                        // the OUTER table's cell paragraphs (which
+                        // were restored by the inner table's last
+                        // `</Cell>` close — both sat on the inner
+                        // frame's `outer_paragraph` slot). Restore the
+                        // outer `current_cell` so the outer cell
+                        // continues to accept further content.
+                        if let Some(ctx) = table_stack.pop() {
                             if let Some(p) = current_paragraph.as_mut() {
-                                p.table = Some(table);
+                                p.table = Some(ctx.table);
+                            }
+                            if ctx.outer_cell.is_some() {
+                                current_cell = ctx.outer_cell;
                             }
                         }
                     }
@@ -1478,8 +1533,8 @@ impl Story {
                     }
                     // <Row Self="..." Name="..." SingleRowHeight="..."/>
                     b"Row" => {
-                        if let Some(table) = current_table.as_mut() {
-                            table.rows.push(TableRow {
+                        if let Some(ctx) = table_stack.last_mut() {
+                            ctx.table.rows.push(TableRow {
                                 self_id: attr(&e, b"Self"),
                                 name: attr(&e, b"Name"),
                                 single_row_height: attr(&e, b"SingleRowHeight")
@@ -1493,8 +1548,8 @@ impl Story {
                     }
                     // <Column Self="..." Name="..." SingleColumnWidth="..."/>
                     b"Column" => {
-                        if let Some(table) = current_table.as_mut() {
-                            table.columns.push(TableColumn {
+                        if let Some(ctx) = table_stack.last_mut() {
+                            ctx.table.columns.push(TableColumn {
                                 self_id: attr(&e, b"Self"),
                                 name: attr(&e, b"Name"),
                                 single_column_width: attr(&e, b"SingleColumnWidth")
@@ -2652,6 +2707,71 @@ mod tests {
         assert!(r.kenten_kind.is_none());
         assert!(r.kenten_character.is_none());
         assert!(r.kenten_font_size.is_none());
+    }
+
+    #[test]
+    fn nested_table_inside_cell_paragraph_round_trips() {
+        // A 1-row 1-col outer table whose single cell holds a
+        // paragraph that itself hosts a 2-row 2-col inner table.
+        // The parser's table-context stack must preserve the outer
+        // table state across the inner table's open/close.
+        let xml = br#"<Story Self="story1">
+          <ParagraphStyleRange>
+            <CharacterStyleRange>
+              <Table Self="t1" HeaderRowCount="0" FooterRowCount="0"
+                     BodyRowCount="1" ColumnCount="1">
+                <Row Self="t1r0" Name="0" SingleRowHeight="40"/>
+                <Column Self="t1c0" Name="0" SingleColumnWidth="100"/>
+                <Cell Self="t1.0.0" Name="0:0" RowSpan="1" ColumnSpan="1">
+                  <ParagraphStyleRange>
+                    <CharacterStyleRange>
+                      <Table Self="t2" HeaderRowCount="0" FooterRowCount="0"
+                             BodyRowCount="2" ColumnCount="2">
+                        <Row Self="t2r0" Name="0" SingleRowHeight="20"/>
+                        <Row Self="t2r1" Name="1" SingleRowHeight="20"/>
+                        <Column Self="t2c0" Name="0" SingleColumnWidth="50"/>
+                        <Column Self="t2c1" Name="1" SingleColumnWidth="50"/>
+                        <Cell Self="t2.0.0" Name="0:0">
+                          <ParagraphStyleRange>
+                            <CharacterStyleRange>
+                              <Content>inner-cell-text</Content>
+                            </CharacterStyleRange>
+                          </ParagraphStyleRange>
+                        </Cell>
+                      </Table>
+                    </CharacterStyleRange>
+                  </ParagraphStyleRange>
+                </Cell>
+              </Table>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let outer = s.paragraphs[0]
+            .table
+            .as_ref()
+            .expect("outer table attached");
+        assert_eq!(outer.self_id.as_deref(), Some("t1"));
+        assert_eq!(outer.cells.len(), 1);
+        assert_eq!(outer.rows.len(), 1);
+        assert_eq!(outer.columns.len(), 1);
+
+        // The outer cell's first paragraph hosts the inner table.
+        let outer_cell = &outer.cells[0];
+        let host_para = outer_cell
+            .paragraphs
+            .iter()
+            .find(|p| p.table.is_some())
+            .expect("inner table should be attached to a cell paragraph");
+        let inner = host_para.table.as_ref().unwrap();
+        assert_eq!(inner.self_id.as_deref(), Some("t2"));
+        assert_eq!(inner.rows.len(), 2, "inner rows preserved");
+        assert_eq!(inner.columns.len(), 2, "inner columns preserved");
+        assert_eq!(inner.cells.len(), 1);
+
+        // The inner cell content survives the round-trip.
+        let inner_cell = &inner.cells[0];
+        assert_eq!(inner_cell.paragraphs[0].runs[0].text, "inner-cell-text");
     }
 
     #[test]
