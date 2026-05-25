@@ -94,6 +94,18 @@ pub struct UndoOutcome {
     /// itself.
     pub applied_seq: u64,
     pub page_ids: Vec<PageId>,
+    /// Phase 4 Step 3 — story id touched by the undo/redo, used by
+    /// the wasm dispatch to scope GPU cache invalidation. None when
+    /// the op carries no story id (frame moves, page inserts) —
+    /// reserved for later mutation types.
+    pub affected_story_id: Option<String>,
+}
+
+fn story_id_of_text_op(op: &crate::mutate::TextOp) -> &str {
+    match op {
+        crate::mutate::TextOp::InsertText { story_id, .. } => story_id,
+        crate::mutate::TextOp::DeleteRange { story_id, .. } => story_id,
+    }
 }
 
 impl From<&pipeline::PipelineStats> for DocumentStats {
@@ -155,6 +167,11 @@ pub struct CanvasModel {
     /// so unchanged paragraphs short-circuit Knuth-Plass on
     /// mutation-driven rebuilds. Survives across mutations.
     layout_cache: idml_text::LayoutCache,
+    /// Phase 4 Step 3 — map of story id → page ids the story's
+    /// frame chain touches. Built after every rebuild. Used by
+    /// `apply_mutation` to compute the dirty page set for the GPU
+    /// scene cache invalidation hint.
+    story_pages: HashMap<String, Vec<PageId>>,
 }
 
 /// One entry in the applied / redo logs.
@@ -206,6 +223,7 @@ impl CanvasModel {
             .collect();
 
         let initial_state_hash = scene.canonical_hash();
+        let story_pages = compute_story_pages(&built);
         Ok(Self {
             doc_id,
             scene,
@@ -219,6 +237,7 @@ impl CanvasModel {
             applied_log: Vec::new(),
             redo_log: Vec::new(),
             layout_cache,
+            story_pages,
         })
     }
 
@@ -383,6 +402,7 @@ impl CanvasModel {
         let undone_seq = rec.applied_seq;
         let applied_seq = self.bump_applied_seq();
         let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
+        let affected_story_id = Some(story_id_of_text_op(&rec.inverse).to_string());
         // Push the original op onto the redo stack (so a future
         // `redo()` re-applies it).
         self.redo_log.push(rec);
@@ -390,6 +410,7 @@ impl CanvasModel {
             undone_seq,
             applied_seq,
             page_ids,
+            affected_story_id,
         })
     }
 
@@ -401,6 +422,7 @@ impl CanvasModel {
         let redone_seq = rec.applied_seq;
         let applied_seq = self.bump_applied_seq();
         let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
+        let affected_story_id = Some(story_id_of_text_op(&rec.op).to_string());
         // The new inverse may differ from the cached one if the
         // intervening state mattered; recompute via `apply`'s return.
         self.applied_log.push(AppliedRecord {
@@ -412,6 +434,7 @@ impl CanvasModel {
             undone_seq: redone_seq,
             applied_seq,
             page_ids,
+            affected_story_id,
         })
     }
 
@@ -440,6 +463,30 @@ impl CanvasModel {
         &mut self.scene
     }
 
+    /// Phase 4 Step 3 — return the pages whose frame chains touch
+    /// `story_id`. Used by the wasm dispatch to scope GPU scene-cache
+    /// invalidation after a mutation: instead of clearing every page's
+    /// cached Vello scene, only invalidate the affected ones. Returns
+    /// an empty slice when the story id is unknown (e.g. the mutation
+    /// failed validation, or the story has no on-page frames).
+    pub fn pages_for_story(&self, story_id: &str) -> &[PageId] {
+        self.story_pages
+            .get(story_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Same as `pages_for_story` but returns page *indices* into
+    /// `built().pages`. Convenient for the GPU scene cache which
+    /// keys by index. Indices not currently in `page_index` (stale
+    /// after a rebuild that removed pages) are skipped.
+    pub fn page_indices_for_story(&self, story_id: &str) -> Vec<usize> {
+        self.pages_for_story(story_id)
+            .iter()
+            .filter_map(|id| self.page_index.get(id).copied())
+            .collect()
+    }
+
     /// Rebuild the `BuiltDocument` from the (possibly-mutated) scene.
     /// Phase 4 Step 1 — installs the persistent `layout_cache` so
     /// paragraphs whose `(text, style, width, font)` signature didn't
@@ -452,11 +499,6 @@ impl CanvasModel {
             cmyk_icc_profile: self.icc_bytes.as_deref(),
             ..PipelineOptions::default()
         };
-        // Take the cache out, install it for the duration of the
-        // build, then take it back so it survives to the next rebuild.
-        // `with_layout_cache` clears its stats counters implicitly via
-        // the explicit reset below so the post-rebuild stats reflect
-        // only this rebuild's hits/misses.
         let mut cache = std::mem::take(&mut self.layout_cache);
         cache.reset_stats();
         let (build_result, cache) =
@@ -472,6 +514,7 @@ impl CanvasModel {
             .enumerate()
             .map(|(i, p)| (p.id.clone(), i))
             .collect();
+        self.story_pages = compute_story_pages(&built);
         self.built = built;
         Ok(())
     }
@@ -497,6 +540,24 @@ impl CanvasModel {
     pub fn icc_bytes(&self) -> Option<&[u8]> {
         self.icc_bytes.as_deref()
     }
+}
+
+/// Phase 4 Step 3 — build `story_id → Vec<PageId>` from the freshly
+/// built document by walking every page's `story_layout` and grouping
+/// LineLayout entries by story. Pages preserve their order; each
+/// story's `Vec<PageId>` is in first-appearance order without
+/// duplicates.
+fn compute_story_pages(built: &BuiltDocument) -> HashMap<String, Vec<PageId>> {
+    let mut out: HashMap<String, Vec<PageId>> = HashMap::new();
+    for page in &built.pages {
+        for line in &page.story_layout {
+            let entry = out.entry(line.story_id.clone()).or_default();
+            if entry.last().map(|p| p != &page.id).unwrap_or(true) {
+                entry.push(page.id.clone());
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]

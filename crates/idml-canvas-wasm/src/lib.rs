@@ -74,6 +74,20 @@ mod wasm {
             self.order.clear();
         }
 
+        /// Phase 4 Step 3 — drop the cached scenes for `pages` only.
+        /// Other pages keep their cached Vello scene so the next
+        /// `presentFrame` skips rebuilding them. Empty `pages` is a
+        /// no-op (the caller already knows there's nothing to dirty).
+        fn invalidate_pages(&mut self, pages: &[usize]) {
+            for &p in pages {
+                if self.entries.remove(&p).is_some() {
+                    if let Some(pos) = self.order.iter().position(|&k| k == p) {
+                        self.order.remove(pos);
+                    }
+                }
+            }
+        }
+
         fn touch(&mut self, key: usize) {
             if let Some(pos) = self.order.iter().position(|&k| k == key) {
                 self.order.remove(pos);
@@ -107,6 +121,22 @@ mod wasm {
 
         fn len(&self) -> usize {
             self.entries.len()
+        }
+    }
+
+    /// Phase 4 Step 3 — pluck the story id out of a `Mutation` so the
+    /// caller can scope GPU cache invalidation. Variants without a
+    /// story id (frame moves, page inserts) return None; the caller
+    /// falls back to a full cache clear because page-touched-by-frame
+    /// hasn't been wired through yet.
+    fn story_id_for_mutation(m: &idml_canvas::channel::Mutation) -> Option<String> {
+        use idml_canvas::channel::Mutation as M;
+        match m {
+            M::InsertText { story_id, .. } => Some(story_id.clone()),
+            M::DeleteRange { story_id, .. } => Some(story_id.clone()),
+            M::ApplyStyle { story_id, .. } => Some(story_id.clone()),
+            M::InsertField { story_id, .. } => Some(story_id.clone()),
+            _ => None,
         }
     }
 
@@ -448,16 +478,36 @@ mod wasm {
                             },
                         };
                     };
+                    // Phase 4 Step 3 — capture the affected story id
+                    // BEFORE applying the mutation; the post-rebuild
+                    // story_pages map is the right authority for which
+                    // pages the story touches, so we read it after.
+                    #[cfg(feature = "gpu")]
+                    let affected_story = story_id_for_mutation(&m);
                     let t0 = js_sys::Date::now();
                     match model.apply_mutation(&m) {
                         Ok(outcome) => {
-                            // Phase 3 correctness — text mutations
-                            // succeed; invalidate the entire scene
-                            // cache (we don't yet track per-page
-                            // dirty ranges) and post MutationApplied.
+                            // Phase 4 Step 3 — invalidate only the
+                            // pages that contain the affected story.
+                            // Other pages keep their cached Vello
+                            // scenes so `presentFrame` after this
+                            // mutation skips a per-page scene rebuild
+                            // for every page in the document.
                             #[cfg(feature = "gpu")]
                             {
-                                self.scene_cache.clear();
+                                if let Some(sid) = affected_story.as_deref() {
+                                    let dirty = model.page_indices_for_story(sid);
+                                    if dirty.is_empty() {
+                                        // Story has no on-page frames
+                                        // (rare — e.g. overflowed
+                                        // chain). Fall back to clear.
+                                        self.scene_cache.clear();
+                                    } else {
+                                        self.scene_cache.invalidate_pages(&dirty);
+                                    }
+                                } else {
+                                    self.scene_cache.clear();
+                                }
                             }
                             let mut stats: LayoutCacheStats =
                                 model.layout_cache_stats().into();
@@ -590,7 +640,16 @@ mod wasm {
                         Some(outcome) => {
                             #[cfg(feature = "gpu")]
                             {
-                                self.scene_cache.clear();
+                                if let Some(sid) = outcome.affected_story_id.as_deref() {
+                                    let dirty = model.page_indices_for_story(sid);
+                                    if dirty.is_empty() {
+                                        self.scene_cache.clear();
+                                    } else {
+                                        self.scene_cache.invalidate_pages(&dirty);
+                                    }
+                                } else {
+                                    self.scene_cache.clear();
+                                }
                             }
                             let mut stats: LayoutCacheStats =
                                 model.layout_cache_stats().into();
@@ -624,7 +683,16 @@ mod wasm {
                         Some(outcome) => {
                             #[cfg(feature = "gpu")]
                             {
-                                self.scene_cache.clear();
+                                if let Some(sid) = outcome.affected_story_id.as_deref() {
+                                    let dirty = model.page_indices_for_story(sid);
+                                    if dirty.is_empty() {
+                                        self.scene_cache.clear();
+                                    } else {
+                                        self.scene_cache.invalidate_pages(&dirty);
+                                    }
+                                } else {
+                                    self.scene_cache.clear();
+                                }
                             }
                             let mut stats: LayoutCacheStats =
                                 model.layout_cache_stats().into();

@@ -142,6 +142,41 @@ fn mutation_rebuild_hits_unchanged_paragraphs() {
 }
 
 #[test]
+fn pages_for_story_returns_chain_pages() {
+    // The fixture's single story `u10` lives on page `p1` (only one
+    // frame, no chaining). `pages_for_story` should report exactly
+    // that page.
+    let model = load_model(3);
+    let pages = model.pages_for_story("u10");
+    assert_eq!(pages.len(), 1, "story u10 has one frame on one page");
+    assert_eq!(pages[0].0, "p1");
+
+    // Unknown story → empty.
+    assert!(model.pages_for_story("does-not-exist").is_empty());
+
+    // Page-index variant agrees.
+    let indices = model.page_indices_for_story("u10");
+    assert_eq!(indices, vec![0]);
+}
+
+#[test]
+fn pages_for_story_updates_after_mutation() {
+    // The InsertText mutation doesn't add new frames or pages, so
+    // the story's page set is identical before and after.
+    let mut model = load_model(3);
+    let before = model.pages_for_story("u10").to_vec();
+    model
+        .apply_mutation(&Mutation::InsertText {
+            story_id: "u10".into(),
+            offset: 0,
+            text: "Z".into(),
+        })
+        .unwrap();
+    let after = model.pages_for_story("u10").to_vec();
+    assert_eq!(before, after, "story-pages map should survive a same-page edit");
+}
+
+#[test]
 fn second_identical_rebuild_is_all_hits() {
     // Apply a mutation, then apply its inverse: scene returns to its
     // initial state. The cache should serve every paragraph (including
