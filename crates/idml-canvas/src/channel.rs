@@ -257,7 +257,7 @@ pub enum WorkerToMainKind {
 /// the worker rejects each variant with `WorkerError::NotImplemented`.
 /// Phase 3 lights these up incrementally.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "op", content = "args")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "op", content = "args")]
 pub enum Mutation {
     InsertText {
         story_id: String,
@@ -354,7 +354,7 @@ pub enum LoadError {
 /// hit-tests, page requests all report through this. Variants are
 /// kept stable across protocol versions.
 #[derive(Debug, Clone, Error, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "kind", content = "details")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind", content = "details")]
 pub enum WorkerError {
     /// Feature not yet implemented in this phase. `what` carries a
     /// short identifier (e.g. `"Mutation::InsertText"`).
