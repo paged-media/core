@@ -1,16 +1,21 @@
 //! Color management.
 //!
-//! Wraps Little CMS 2 for ICC-based transforms. All document paints are
-//! resolved to a linear RGB working space before being shipped to the
-//! GPU; the final sRGB (or proof-profile) conversion happens in a
-//! fragment shader so blending remains physically meaningful.
+//! Wraps Little CMS 2 (native) and qcms (wasm32) for ICC-based
+//! transforms. All document paints are resolved to a linear RGB
+//! working space before being shipped to the GPU; the final sRGB
+//! (or proof-profile) conversion happens in a fragment shader so
+//! blending remains physically meaningful.
 //!
-//! WASM build strategy is deferred until `spikes/wasm-size` concludes
-//! whether `lcms2-sys` compiles cleanly to `wasm32-unknown-unknown` or
-//! we need to bundle a separate lcms-wasm module. Today the
-//! `IccTransform` API exists on every target; on wasm32 the
-//! constructor returns `Err(IccError::Unsupported)` so callers fall
-//! back to the naive math in `idml-parse::graphic`.
+//! Backend selection by target_arch:
+//! - native (lcms2): full ICC transforms, BPC, gamma, all rendering
+//!   intents. Output matches what `pdftoppm` produces on the same
+//!   PDF (poppler also uses lcms2 internally).
+//! - wasm32 (qcms): Mozilla's pure-Rust ICC library, the same one
+//!   Firefox ships. Supports CMYK with iccv4 profiles + relative-
+//!   colorimetric intent. The wasm path used to no-op here — the
+//!   canvas painted with a naive CMYK→RGB mapping while the native
+//!   gate matched the PDF via lcms2, producing a uniform ~9 ΔE gap
+//!   on every CMYK pack. Routing through qcms closes that gap.
 
 #[derive(Debug, thiserror::Error)]
 pub enum IccError {
@@ -19,6 +24,8 @@ pub enum IccError {
     Lcms(#[from] lcms2::Error),
     #[error("ICC profile bytes invalid")]
     Invalid,
+    /// Retained for any remaining no-op paths but unreachable on
+    /// the supported targets.
     #[error("ICC transforms not supported on this target")]
     Unsupported,
 }
@@ -43,14 +50,22 @@ pub struct LinearRgb(pub [f32; 3]);
 pub struct IccTransform {
     #[cfg(not(target_arch = "wasm32"))]
     inner: TransformInner,
-    /// Holds whatever lifetime extension the inner transform needs.
     #[cfg(target_arch = "wasm32")]
-    _phantom: std::marker::PhantomData<()>,
+    inner: QcmsTransform,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 struct TransformInner {
     transform: lcms2::Transform<[u8; 4], [u8; 3]>,
+}
+
+#[cfg(target_arch = "wasm32")]
+struct QcmsTransform {
+    // qcms returns 8-bit sRGB-encoded bytes after the CMYK→sRGB
+    // transform. We hold the transform handle and convert single
+    // pixels / byte blocks on demand. Source format is qcms-side
+    // CMYK4, output is qcms-side RGB8.
+    transform: qcms::Transform,
 }
 
 impl IccTransform {
@@ -100,8 +115,29 @@ impl IccTransform {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub fn cmyk_to_linear_rgb(_cmyk_profile: &[u8]) -> Result<Self, IccError> {
-        Err(IccError::Unsupported)
+    pub fn cmyk_to_linear_rgb(cmyk_profile: &[u8]) -> Result<Self, IccError> {
+        // Mirror the lcms2 path's destination choice: sRGB with the
+        // standard TRC, decode-to-linear after the trip. qcms's
+        // `Transform::new` builds an sRGB destination internally; we
+        // request 8-bit CMYK in, 8-bit RGB out, RelativeColorimetric.
+        let src =
+            qcms::Profile::new_from_slice(cmyk_profile, true).ok_or(IccError::Invalid)?;
+        let mut dst = qcms::Profile::new_sRGB();
+        // qcms requires `precache_output_transform` for non-trivial
+        // CMYK lookups; without it the transform LUT stays unpopulated
+        // and `transform_pixels` returns black.
+        dst.precache_output_transform();
+        let transform = qcms::Transform::new_to(
+            &src,
+            &dst,
+            qcms::DataType::CMYK,
+            qcms::DataType::RGB8,
+            qcms::Intent::Perceptual,
+        )
+        .ok_or(IccError::Invalid)?;
+        Ok(IccTransform {
+            inner: QcmsTransform { transform },
+        })
     }
 
     /// Convert a single CMYK percentage triple to linear RGB.
@@ -138,10 +174,22 @@ impl IccTransform {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub fn cmyk_percent_to_linear_rgb(&self, _cmyk: Cmyk) -> LinearRgb {
-        // Should never be called — `cmyk_to_linear_rgb` returns
-        // Unsupported on wasm. Provided for compile parity.
-        LinearRgb([0.0, 0.0, 0.0])
+    pub fn cmyk_percent_to_linear_rgb(&self, cmyk: Cmyk) -> LinearRgb {
+        // Same byte quantisation as the lcms2 path so the two
+        // backends produce matching outputs for the same input.
+        let to_byte = |pct: f32| (pct * 2.55).round().clamp(0.0, 255.0) as u8;
+        let input = [to_byte(cmyk.c), to_byte(cmyk.m), to_byte(cmyk.y), to_byte(cmyk.k)];
+        let mut output = [0u8; 3];
+        self.inner.transform.convert(&input, &mut output);
+        let to_linear = |b: u8| -> f32 {
+            let s = b as f32 / 255.0;
+            if s <= 0.040_45 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        LinearRgb([to_linear(output[0]), to_linear(output[1]), to_linear(output[2])])
     }
 
     /// Track 1b: batch CMYK-8 → sRGB-8 byte transform. Used by the
@@ -159,8 +207,10 @@ impl IccTransform {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub fn cmyk_bytes_to_rgb_bytes(&self, _cmyk: &[[u8; 4]], _rgb: &mut [[u8; 3]]) {
-        // wasm32 falls back to the naive renderer-side conversion.
+    pub fn cmyk_bytes_to_rgb_bytes(&self, cmyk: &[[u8; 4]], rgb: &mut [[u8; 3]]) {
+        for (src, dst) in cmyk.iter().zip(rgb.iter_mut()) {
+            self.inner.transform.convert(src, dst);
+        }
     }
 }
 

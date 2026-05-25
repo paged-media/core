@@ -64,13 +64,16 @@ pub struct SelectionRect {
     pub width_pt: f32,
     pub height_pt: f32,
 }
-pub use model::{CanvasModel, CanvasOptions, DocumentHandle, DocumentStats};
+pub use model::{CanvasModel, CanvasOptions, DocumentHandle, DocumentStats, FontEntry};
 pub use resolve::{
     resolve, AnchorPosition, FieldChange, NumberingMap, ResolutionResult, ResolveOptions,
 };
 pub use snapshot::{SnapshotError, SnapshotPng};
 #[cfg(feature = "cpu")]
-pub use snapshot::{render_snapshot, render_snapshot_png, Snapshot};
+pub use snapshot::{
+    render_snapshot, render_snapshot_at_dpi, render_snapshot_png, render_snapshot_png_at_dpi,
+    Snapshot,
+};
 
 // Re-export upstream identifiers + the display-list IR so consumers
 // depend on a single root crate.

@@ -57,6 +57,8 @@ pub use surface::{SurfaceError, SurfacePresenter, Viewport};
 // vello as a direct dependency to hold cached scenes.
 #[cfg(all(feature = "vello-backend", target_arch = "wasm32"))]
 pub use vello::Scene as VelloScene;
+#[cfg(all(feature = "vello-backend", target_arch = "wasm32"))]
+pub use vello::kurbo as vello_kurbo;
 #[cfg(feature = "vello-backend")]
 pub use vello_rs::VelloRasterizer;
 

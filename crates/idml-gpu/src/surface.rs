@@ -21,6 +21,7 @@
 #![cfg(target_arch = "wasm32")]
 
 use idml_compose::{Color, DisplayList};
+use image::ImageEncoder;
 use vello::kurbo;
 use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene};
 
@@ -81,6 +82,10 @@ pub enum SurfaceError {
     GetTexture(String),
     #[error("render failed: {0}")]
     Render(String),
+    #[error("texture readback failed: {0}")]
+    Readback(String),
+    #[error("PNG encode failed: {0}")]
+    PngEncode(String),
 }
 
 /// Long-lived presenter bound to one canvas. Constructed once at
@@ -495,6 +500,132 @@ impl SurfacePresenter {
 
         frame.present();
         Ok(())
+    }
+
+    /// Sub-phase D — render a pre-built Vello `Scene` off-surface to
+    /// a PNG. The caller is responsible for building the scene
+    /// (typically via `SurfacePresenter::build_page_scene` + an
+    /// optional pt→px scale transform), so this method can run with
+    /// only a mutable borrow on the presenter — no second borrow on
+    /// the document model.
+    ///
+    /// Reuses the presenter's device + queue + renderer; the wgpu
+    /// adapter init isn't paid per call.
+    pub async fn render_scene_to_png(
+        &mut self,
+        scene: &Scene,
+        width_px: u32,
+        height_px: u32,
+    ) -> Result<Vec<u8>, SurfaceError> {
+        let width_px = width_px.max(1);
+        let height_px = height_px.max(1);
+
+        // Render target: separate from the presenter's surface-bound
+        // intermediate so concurrent surface presents (live editor) and
+        // offscreen renders (fidelity test) don't trample each other.
+        let target = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("idml-gpu vello readback target"),
+            size: wgpu::Extent3d {
+                width: width_px,
+                height: height_px,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            view_formats: &[],
+        });
+        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+
+        self.renderer
+            .render_to_texture(
+                &self.device,
+                &self.queue,
+                scene,
+                &target_view,
+                &RenderParams {
+                    base_color: linear_to_peniko(Color::WHITE),
+                    width: width_px,
+                    height: height_px,
+                    antialiasing_method: AaConfig::Area,
+                },
+            )
+            .map_err(|e| SurfaceError::Render(format!("{e:?}")))?;
+
+        // `copy_texture_to_buffer` requires the row stride to be a
+        // multiple of 256 bytes. Allocate a padded buffer, then strip
+        // the padding row-by-row when we copy out the RGBA bytes.
+        let bytes_per_pixel: u32 = 4;
+        let row_bytes = width_px * bytes_per_pixel;
+        let padded_row_bytes = row_bytes.div_ceil(256) * 256;
+        let buffer_size = (padded_row_bytes as u64) * (height_px as u64);
+        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("idml-gpu vello readback buffer"),
+            size: buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("idml-gpu vello readback encoder"),
+            });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_row_bytes),
+                    rows_per_image: Some(height_px),
+                },
+            },
+            wgpu::Extent3d {
+                width: width_px,
+                height: height_px,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+
+        // Async map: on wasm32 we use a oneshot channel + a poll loop.
+        let slice = readback.slice(..);
+        let (tx, rx) = futures_channel::oneshot::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        // Trigger the map by polling — on web targets, polling is a
+        // no-op (the browser drives the GPU queue), but we still need
+        // to flush our submit and wait for the callback.
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        rx.await
+            .map_err(|_| SurfaceError::Readback("map callback dropped".into()))?
+            .map_err(|e| SurfaceError::Readback(format!("map_async: {e:?}")))?;
+
+        let mut rgba = Vec::with_capacity((row_bytes as usize) * (height_px as usize));
+        {
+            let data = slice.get_mapped_range();
+            for row in 0..height_px {
+                let start = (row as usize) * (padded_row_bytes as usize);
+                let end = start + (row_bytes as usize);
+                rgba.extend_from_slice(&data[start..end]);
+            }
+        }
+        readback.unmap();
+
+        let mut png_bytes = Vec::with_capacity(rgba.len() / 4);
+        image::codecs::png::PngEncoder::new(&mut png_bytes)
+            .write_image(&rgba, width_px, height_px, image::ExtendedColorType::Rgba8)
+            .map_err(|e| SurfaceError::PngEncode(e.to_string()))?;
+        Ok(png_bytes)
     }
 }
 

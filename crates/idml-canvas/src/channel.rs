@@ -63,6 +63,20 @@ pub enum MainToWorkerKind {
         #[serde(default)]
         cmyk_icc_profile: Option<ByteBuf>,
     },
+    /// Register a named font with the worker's family resolver. Sent
+    /// any time before `LoadDocument` (and persists across loads so a
+    /// fidelity test can preload Poppins/Roboto/etc once per worker).
+    /// Reply: `FontRegistered`.
+    RegisterFont {
+        family: String,
+        #[serde(default)]
+        style: Option<String>,
+        bytes: ByteBuf,
+    },
+    /// Drop every font previously registered via `RegisterFont`. Reply:
+    /// `FontRegistryCleared`. Useful between two consecutive packs in a
+    /// long-running worker.
+    ClearFontRegistry,
     /// Apply a content mutation. Phase 1 returns `MutationFailed`
     /// (NotImplemented). The message exists so the JS side can plumb
     /// it end-to-end now.
@@ -85,10 +99,15 @@ pub enum MainToWorkerKind {
     },
     /// Render a snapshot (low-resolution thumbnail) of a page.
     /// Reply: `SnapshotReady` with PNG bytes. Used by the navigator
-    /// and the canvas at overview zoom.
+    /// and the canvas at overview zoom. `dpi` is optional and wins
+    /// over `target_width_px` when both are provided (the fidelity
+    /// suite uses DPI directly so the resulting PNG matches
+    /// `pdftoppm -r <dpi>` byte-for-byte at the dimension boundary).
     RequestSnapshot {
         page_id: PageId,
         target_width_px: u32,
+        #[serde(default)]
+        dpi: Option<f32>,
     },
     /// Replace the worker's current selection. Phase 3 Item 1 — the
     /// worker mirrors the main thread's `ContentSelection` so the
@@ -257,6 +276,11 @@ pub enum WorkerToMainKind {
         page_ids: Vec<PageId>,
         cache_stats: LayoutCacheStats,
     },
+    /// `RegisterFont` reply: the font is now part of the worker's
+    /// asset resolver.
+    FontRegistered { family: String },
+    /// `ClearFontRegistry` reply.
+    FontRegistryCleared,
 }
 
 /// Phase 4 Step 2 — per-rebuild layout cache statistics.

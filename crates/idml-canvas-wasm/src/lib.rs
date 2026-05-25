@@ -13,8 +13,8 @@
 mod wasm {
     use idml_canvas::{
         channel::LayoutCacheStats,
-        CanvasModel, CanvasOptions, LoadError, MainToWorker, MainToWorkerKind, ProtocolVersion,
-        WorkerError, WorkerToMain, WorkerToMainKind, PROTOCOL_VERSION,
+        CanvasModel, CanvasOptions, FontEntry, LoadError, MainToWorker, MainToWorkerKind,
+        ProtocolVersion, WorkerError, WorkerToMain, WorkerToMainKind, PROTOCOL_VERSION,
     };
     use wasm_bindgen::prelude::*;
 
@@ -30,6 +30,11 @@ mod wasm {
     #[wasm_bindgen]
     pub struct CanvasWorker {
         model: Option<CanvasModel>,
+        /// Per-family font payloads accumulated via `RegisterFont`.
+        /// Survives across `LoadDocument` calls so a Playwright suite
+        /// can preload Inter / Poppins / Roboto once per worker, then
+        /// step through every pack without re-uploading bytes.
+        font_registry: Vec<FontEntry>,
         #[cfg(feature = "gpu")]
         presenter: Option<idml_gpu::SurfacePresenter>,
         /// Per-page Vello scene cache (sub-phase D). LRU-bounded so
@@ -146,6 +151,7 @@ mod wasm {
         pub fn new() -> Self {
             Self {
                 model: None,
+                font_registry: Vec::new(),
                 #[cfg(feature = "gpu")]
                 presenter: None,
                 #[cfg(feature = "gpu")]
@@ -409,6 +415,49 @@ mod wasm {
             self.presenter.is_some()
         }
 
+        /// Sub-phase D — render `page_id` to a PNG via the Vello GPU
+        /// path (off-surface). Returns `None` if GPU is not
+        /// initialised, the page id is unknown, or the underlying
+        /// readback fails. The fidelity suite calls this with
+        /// `BACKEND=gpu` to test the production hot path; the CPU
+        /// path (`renderTilePng`) stays as the deterministic
+        /// fallback used in CI.
+        #[cfg(feature = "gpu")]
+        #[wasm_bindgen(js_name = renderPageVelloPng)]
+        pub async fn render_page_vello_png(
+            &mut self,
+            page_id: String,
+            dpi: f32,
+        ) -> Option<Vec<u8>> {
+            let pid = idml_canvas::PageId(page_id);
+            // Build the Vello scene while we still have the model
+            // borrow; immediately drop the borrow so the presenter
+            // can take `&mut self` next.
+            let (scene, width_px, height_px) = {
+                let model = self.model.as_ref()?;
+                let page = model.page(&pid)?;
+                let page_scene = idml_gpu::SurfacePresenter::build_page_scene(
+                    &page.list,
+                    page.width_pt,
+                    page.height_pt,
+                );
+                let scale = (dpi / 72.0) as f64;
+                let mut scene = idml_gpu::VelloScene::new();
+                scene.append(
+                    &page_scene,
+                    Some(idml_gpu::vello_kurbo::Affine::scale(scale)),
+                );
+                let width_px = ((page.width_pt * dpi / 72.0).ceil() as u32).max(1);
+                let height_px = ((page.height_pt * dpi / 72.0).ceil() as u32).max(1);
+                (scene, width_px, height_px)
+            };
+            let presenter = self.presenter.as_mut()?;
+            presenter
+                .render_scene_to_png(&scene, width_px, height_px)
+                .await
+                .ok()
+        }
+
         /// Handle one main-thread message. Input is the JSON string
         /// the JS side produced via `JSON.stringify(msg)`. Output is
         /// the JSON string the JS side should `JSON.parse` and post
@@ -449,6 +498,7 @@ mod wasm {
                 } => {
                     let opts = CanvasOptions {
                         fonts: font.map(|b| vec![b.into_vec()]).unwrap_or_default(),
+                        font_registry: self.font_registry.clone(),
                         cmyk_icc_profile: cmyk_icc_profile.map(|b| b.into_vec()),
                     };
                     let doc_id = format!("doc-{}", msg.seq);
@@ -574,6 +624,7 @@ mod wasm {
                 MainToWorkerKind::RequestSnapshot {
                     page_id,
                     target_width_px,
+                    dpi,
                 } => {
                     let Some(model) = self.model.as_ref() else {
                         return WorkerToMain {
@@ -584,7 +635,13 @@ mod wasm {
                             },
                         };
                     };
-                    match idml_canvas::render_snapshot_png(model, &page_id, target_width_px) {
+                    let res = match dpi {
+                        Some(d) if d > 0.0 => {
+                            idml_canvas::render_snapshot_png_at_dpi(model, &page_id, d)
+                        }
+                        _ => idml_canvas::render_snapshot_png(model, &page_id, target_width_px),
+                    };
+                    match res {
                         Ok(snap) => WorkerToMainKind::SnapshotReady(snap),
                         Err(error) => WorkerToMainKind::SnapshotFailed { error },
                     }
@@ -667,6 +724,22 @@ mod wasm {
                             },
                         },
                     }
+                }
+                MainToWorkerKind::RegisterFont {
+                    family,
+                    style,
+                    bytes,
+                } => {
+                    self.font_registry.push(FontEntry {
+                        family: family.clone(),
+                        style,
+                        bytes: bytes.into_vec(),
+                    });
+                    WorkerToMainKind::FontRegistered { family }
+                }
+                MainToWorkerKind::ClearFontRegistry => {
+                    self.font_registry.clear();
+                    WorkerToMainKind::FontRegistryCleared
                 }
                 MainToWorkerKind::Redo => {
                     let Some(model) = self.model.as_mut() else {

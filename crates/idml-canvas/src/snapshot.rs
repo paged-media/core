@@ -81,20 +81,47 @@ pub fn render_snapshot(
     page_id: &PageId,
     target_width_px: u32,
 ) -> Result<Snapshot, SnapshotError> {
-    if target_width_px == 0 {
-        return Err(SnapshotError::InvalidWidth(target_width_px));
+    render_snapshot_inner(model, page_id, SnapshotSize::WidthPx(target_width_px))
+}
+
+/// Render `page_id` at a specific DPI. Both width and height fall out
+/// of the renderer's `RasterOptions` rounding (`ceil(width_pt × dpi / 72)`),
+/// so the resulting PNG matches `idml-inspect --dpi <dpi>` exactly —
+/// crucial for fidelity diffs against `pdftoppm -r <dpi>`.
+#[cfg(feature = "cpu")]
+pub fn render_snapshot_at_dpi(
+    model: &CanvasModel,
+    page_id: &PageId,
+    dpi: f32,
+) -> Result<Snapshot, SnapshotError> {
+    if !(dpi.is_finite() && dpi > 0.0) {
+        return Err(SnapshotError::InvalidWidth(0));
     }
+    render_snapshot_inner(model, page_id, SnapshotSize::Dpi(dpi))
+}
+
+#[cfg(feature = "cpu")]
+enum SnapshotSize {
+    WidthPx(u32),
+    Dpi(f32),
+}
+
+#[cfg(feature = "cpu")]
+fn render_snapshot_inner(
+    model: &CanvasModel,
+    page_id: &PageId,
+    size: SnapshotSize,
+) -> Result<Snapshot, SnapshotError> {
     let page = model
         .page(page_id)
         .ok_or_else(|| SnapshotError::UnknownPage {
             page_id: page_id.clone(),
         })?;
-    // DPI to produce exactly `target_width_px` columns. A Letter
-    // page (612 pt) at 256 px wide gives ~30 dpi; the spec calls
-    // for 256–512 px snapshots, which lands in the 30–60 dpi
-    // range — well below print resolutions, just enough for a
-    // recognisable thumbnail.
-    let dpi = (target_width_px as f32) / page.width_pt * 72.0;
+    let dpi = match size {
+        SnapshotSize::WidthPx(0) => return Err(SnapshotError::InvalidWidth(0)),
+        SnapshotSize::WidthPx(w) => (w as f32) / page.width_pt * 72.0,
+        SnapshotSize::Dpi(d) => d,
+    };
     let img = render_built_page(page, dpi, idml_compose::Color::WHITE);
 
     Ok(Snapshot {
@@ -117,6 +144,25 @@ pub fn render_snapshot_png(
     target_width_px: u32,
 ) -> Result<SnapshotPng, SnapshotError> {
     let snap = render_snapshot(model, page_id, target_width_px)?;
+    encode_snapshot_png(snap)
+}
+
+/// Same as `render_snapshot_png` but takes DPI directly. Use this
+/// when the caller already has an explicit DPI (e.g. a fidelity
+/// suite matching `pdftoppm -r <dpi>` output) and wants to avoid the
+/// round-trip through `target_width_px` that drifts by sub-pixel.
+#[cfg(feature = "cpu")]
+pub fn render_snapshot_png_at_dpi(
+    model: &CanvasModel,
+    page_id: &PageId,
+    dpi: f32,
+) -> Result<SnapshotPng, SnapshotError> {
+    let snap = render_snapshot_at_dpi(model, page_id, dpi)?;
+    encode_snapshot_png(snap)
+}
+
+#[cfg(feature = "cpu")]
+fn encode_snapshot_png(snap: Snapshot) -> Result<SnapshotPng, SnapshotError> {
     let mut png_bytes = Vec::with_capacity((snap.width_px * snap.height_px) as usize);
     PngEncoder::new(&mut png_bytes)
         .write_image(

@@ -44,6 +44,12 @@ web-sys = { version = "0.3", features = ["HtmlCanvasElement", "OffscreenCanvas"]
 # `navigator.gpu`. Native targets continue using Vulkan / Metal /
 # DX12 (wgpu's default features).
 wgpu = { version = "29.0.1", optional = true, features = ["webgpu"] }
+# Sub-phase D — PNG-readback for offscreen Vello renders (used by the
+# fidelity test driver to compare Vello's GPU output against the
+# reference PDF). image + futures-channel are wasm-only because
+# `surface.rs` is wasm-only.
+image = { workspace = true }
+futures-channel = { version = "0.3" }
 
 # Build-time WGSL validation for the Vello CMYK-parity compute
 # shaders. The cmyk_compute module is gated behind `vello-backend`,

@@ -1,0 +1,6 @@
+# Auto-downloaded fonts from Google Fonts CSS API. Gitignored because
+# the cache is rebuildable (`apps/canvas: npm run fonts:resolve`) and
+# Google Fonts subsets are OFL but we don't want to redistribute them
+# via this repo. Only license-clear TTFs committed at the corpus/fonts
+# root are tracked.
+.cache/

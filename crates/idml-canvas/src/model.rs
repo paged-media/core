@@ -11,7 +11,8 @@
 use std::collections::HashMap;
 
 use idml_renderer::{
-    pipeline, BuiltDocument, BuiltPage, DisplayList, Document, PageId, PipelineOptions,
+    pipeline, BuiltDocument, BuiltPage, BytesResolver, DisplayList, Document, PageId,
+    PipelineOptions,
 };
 use serde::{Deserialize, Serialize};
 
@@ -19,18 +20,38 @@ use crate::channel::{LoadError, Mutation};
 
 /// Options that flow through to `idml-renderer::PipelineOptions`.
 /// Mirrors the subset of the renderer's options the worker needs
-/// to surface to the main thread on `LoadDocument`. Phase 1 honours
-/// the first font (matching the renderer's single-`font` slot) and
-/// the CMYK ICC profile.
+/// to surface to the main thread on `LoadDocument`.
 #[derive(Debug, Clone, Default)]
 pub struct CanvasOptions {
-    /// Font bytes the renderer should consult during composition.
-    /// Phase 1 honours the first entry only; the multi-font roadmap
-    /// joins in Phase 4 alongside `idml-text` advanced typography.
+    /// Default-font fallback. First-entry-still-wins semantics: the
+    /// renderer's `PipelineOptions::font` receives this byte slice and
+    /// uses it for any `AppliedFont` that doesn't resolve via the
+    /// family registry. Kept as a `Vec<Vec<u8>>` so callers that don't
+    /// know about the registry (e.g. the dev shell auto-loading
+    /// Inter.ttf) can still drop bytes in here without naming them.
     pub fonts: Vec<Vec<u8>>,
+    /// Named font registry. Each entry binds an `AppliedFont` family
+    /// (and optionally a style like "Bold") to a font payload, mirroring
+    /// `idml-inspect --font-family "Family=path"`. Translates 1:1 to
+    /// `BytesResolver::add_font` entries on every build/rebuild.
+    pub font_registry: Vec<FontEntry>,
     /// CMYK ICC profile bytes for accurate colour. Optional; the
     /// renderer falls back to naive conversion when absent.
     pub cmyk_icc_profile: Option<Vec<u8>>,
+}
+
+/// Named font payload used to populate the renderer's per-family
+/// asset resolver.
+#[derive(Debug, Clone)]
+pub struct FontEntry {
+    /// IDML family name as it appears in `AppliedFont` (e.g.
+    /// `"Poppins"`).
+    pub family: String,
+    /// IDML style string when known (`"Regular"`, `"Bold Italic"`).
+    /// `None` registers the family bare and matches every style via
+    /// the bare-family fall-through in `BytesResolver::resolve_font`.
+    pub style: Option<String>,
+    pub bytes: Vec<u8>,
 }
 
 /// One-time facts about a loaded document. Sent to the main thread
@@ -143,6 +164,10 @@ pub struct CanvasModel {
     /// Owned option inputs. `PipelineOptions` borrows from these on
     /// every rebuild; storing them owned keeps the worker self-contained.
     font_bytes: Option<Vec<u8>>,
+    /// Named per-family payloads consulted via `BytesResolver` during
+    /// every (re)build. Owned by the model so the assets resolver
+    /// borrowed in `PipelineOptions` doesn't need lifetimes leaking out.
+    font_registry: Vec<FontEntry>,
     icc_bytes: Option<Vec<u8>>,
     /// Phase 3 Item 6 — content hash of the scene at load time.
     /// Drives determinism tests: replaying the recorded mutation log
@@ -199,10 +224,13 @@ impl CanvasModel {
         // lifetimes leaking through.
         let font_bytes = opts.fonts.into_iter().next();
         let icc_bytes = opts.cmyk_icc_profile;
+        let font_registry = opts.font_registry;
+        let resolver = build_font_resolver(&font_registry, font_bytes.as_deref());
 
         let (built_result, layout_cache) = {
             let options = PipelineOptions {
                 font: font_bytes.as_deref(),
+                assets: resolver.as_ref().map(|r| r as &dyn idml_renderer::AssetResolver),
                 cmyk_icc_profile: icc_bytes.as_deref(),
                 ..PipelineOptions::default()
             };
@@ -230,6 +258,7 @@ impl CanvasModel {
             built,
             page_index,
             font_bytes,
+            font_registry,
             icc_bytes,
             initial_state_hash,
             last_applied_seq: 0,
@@ -494,8 +523,10 @@ impl CanvasModel {
     /// pays the full layout cost; subsequent mutation rebuilds only
     /// recompose the touched paragraph(s).
     pub fn rebuild_after_mutation(&mut self) -> Result<(), crate::channel::LoadError> {
+        let resolver = build_font_resolver(&self.font_registry, self.font_bytes.as_deref());
         let options = PipelineOptions {
             font: self.font_bytes.as_deref(),
+            assets: resolver.as_ref().map(|r| r as &dyn idml_renderer::AssetResolver),
             cmyk_icc_profile: self.icc_bytes.as_deref(),
             ..PipelineOptions::default()
         };
@@ -547,6 +578,27 @@ impl CanvasModel {
 /// LineLayout entries by story. Pages preserve their order; each
 /// story's `Vec<PageId>` is in first-appearance order without
 /// duplicates.
+/// Build a `BytesResolver` from a font registry. Returns `None` when
+/// the registry is empty AND no default font is provided — the
+/// pipeline already handles `assets: None` cleanly, so we save the
+/// allocation in the common single-font dev path.
+fn build_font_resolver(
+    registry: &[FontEntry],
+    default_font: Option<&[u8]>,
+) -> Option<BytesResolver> {
+    if registry.is_empty() && default_font.is_none() {
+        return None;
+    }
+    let mut r = BytesResolver::new();
+    for entry in registry {
+        r.add_font(&entry.family, entry.style.as_deref(), entry.bytes.clone());
+    }
+    if let Some(bytes) = default_font {
+        r.default_font = Some(bytes.to_vec().into());
+    }
+    Some(r)
+}
+
 fn compute_story_pages(built: &BuiltDocument) -> HashMap<String, Vec<PageId>> {
     let mut out: HashMap<String, Vec<PageId>> = HashMap::new();
     for page in &built.pages {

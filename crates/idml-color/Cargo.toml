@@ -14,11 +14,14 @@ workspace = true
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
-# lcms2 is native-only here; the WASM story is spiked in spikes/wasm-size.
-# We feature-gate so the workspace builds on wasm32 without pulling in the
-# C dependency until the spike concludes.
+# lcms2 is native-only here (C lib via lcms2-sys). On wasm32 we use
+# qcms — Mozilla's pure-Rust ICC library that ships in Firefox.
+# Carries CMYK + iccv4 behind feature flags.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 lcms2 = "6"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+qcms = { version = "0.3", default-features = false, features = ["cmyk", "iccv4-enabled"] }
 
 [dev-dependencies]
 # Used in tests once a redistributable CMYK profile lands in

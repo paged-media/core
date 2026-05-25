@@ -11251,12 +11251,13 @@ pub fn color_id_to_paint(
     // Tint scales each channel toward paper white (0,0,0,0) linearly
     // in CMYK space, which is what InDesign does in preview.
     if let (Some(xform), Some([c, m, y, k])) = (cmyk_xform, entry.effective_cmyk()) {
-        #[cfg(not(target_arch = "wasm32"))]
         {
             // ICC-resolve once at compose time and bake the result into
             // the paint. The rasterizer uses `rgb` for ordinary draws
             // (bit-identical to the pre-Stage-A path) and the
             // C/M/Y/K channels for overprint composition.
+            // Backend: lcms2 on native, qcms on wasm32 (both behind
+            // the `idml_color::IccTransform` shim).
             let cmyk = idml_color::Cmyk { c, m, y, k };
             let idml_color::LinearRgb([r, g, b]) = xform.cmyk_percent_to_linear_rgb(cmyk);
             return Some(Paint::Cmyk {
@@ -11273,10 +11274,6 @@ pub fn color_id_to_paint(
                 // Stage A/B output).
                 spot: None,
             });
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = (c, m, y, k);
         }
     }
     let [r, g, b] = graphic::to_linear_rgb(entry)?;
