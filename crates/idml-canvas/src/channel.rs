@@ -229,6 +229,10 @@ pub enum WorkerToMainKind {
         /// Pages whose display lists need re-rendering. The canvas
         /// invalidates their entries in the LOD cache.
         page_ids: Vec<PageId>,
+        /// Phase 4 Step 2 instrumentation — layout-cache stats for
+        /// the rebuild that just finished. `hits + misses` equals the
+        /// number of paragraphs that ran through the layout pass.
+        cache_stats: LayoutCacheStats,
     },
     /// Phase 3 Item 4 — rect-per-line geometry for a selection range.
     SelectionGeometry {
@@ -244,13 +248,39 @@ pub enum WorkerToMainKind {
         undone_seq: u64,
         applied_seq: u64,
         page_ids: Vec<PageId>,
+        cache_stats: LayoutCacheStats,
     },
     /// Phase 3 Item 7 — redo applied.
     RedoApplied {
         redone_seq: u64,
         applied_seq: u64,
         page_ids: Vec<PageId>,
+        cache_stats: LayoutCacheStats,
     },
+}
+
+/// Phase 4 Step 2 — per-rebuild layout cache statistics.
+///
+/// Sent piggyback on `MutationApplied` / `UndoApplied` / `RedoApplied`
+/// so the main thread's HUD can show the incremental-layout win.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutCacheStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub len: usize,
+    pub capacity: usize,
+}
+
+impl From<idml_text::CacheStats> for LayoutCacheStats {
+    fn from(s: idml_text::CacheStats) -> Self {
+        Self {
+            hits: s.hits,
+            misses: s.misses,
+            len: s.len,
+            capacity: s.capacity,
+        }
+    }
 }
 
 /// A content-space mutation. Phase 1 carries the *envelope* only —

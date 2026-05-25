@@ -461,6 +461,7 @@ mod wasm {
                                 client_seq: msg.seq,
                                 applied_seq: outcome.applied_seq,
                                 page_ids: outcome.page_ids,
+                                cache_stats: model.layout_cache_stats().into(),
                             }
                         }
                         Err(error) => WorkerToMainKind::MutationFailed { error },
@@ -589,6 +590,7 @@ mod wasm {
                                 undone_seq: outcome.undone_seq,
                                 applied_seq: outcome.applied_seq,
                                 page_ids: outcome.page_ids,
+                                cache_stats: model.layout_cache_stats().into(),
                             }
                         }
                         None => WorkerToMainKind::MutationFailed {
@@ -618,6 +620,7 @@ mod wasm {
                                 redone_seq: outcome.undone_seq,
                                 applied_seq: outcome.applied_seq,
                                 page_ids: outcome.page_ids,
+                                cache_stats: model.layout_cache_stats().into(),
                             }
                         }
                         None => WorkerToMainKind::MutationFailed {
