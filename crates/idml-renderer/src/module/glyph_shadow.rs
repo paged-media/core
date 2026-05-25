@@ -166,6 +166,7 @@ mod tests {
             numbering_generation: 0,
             stats: Default::default(),
             story_layout: Vec::new(),
+            footnotes: Vec::new(),
         }
     }
 

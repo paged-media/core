@@ -10,7 +10,7 @@
 //! as it matures. For the current slice it's a thin owning wrapper
 //! that removes the duplicated parsing code from `idml-renderer`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use idml_parse::{
     Bounds, CharacterRun, Container, Graphic, Paragraph, ParseError, Spread, Story, StoryRef,
@@ -407,6 +407,85 @@ impl Document {
         *h.finalize().as_bytes()
     }
 
+    /// Phase 5 — resolve every `<PageReference>` / `<IndexEntry>` /
+    /// `<Index>` marker in the document into a sorted, deduplicated
+    /// index. Each `IndexEntry` carries a topic plus the (body)
+    /// page-index list of every paragraph that anchors a marker for
+    /// that topic.
+    ///
+    /// Topics are grouped case-insensitively by their `topic_name`
+    /// (the field the parser populates from `TopicName` directly, or
+    /// from `AppliedTopic` when only the topic id is given). Page
+    /// lists are deduplicated then sorted ascending so the renderer
+    /// can emit "Apple ............. 12, 23, 41" rows without
+    /// further processing.
+    ///
+    /// Like `resolve_toc`, the page-index assignment uses the head
+    /// frame of the paragraph's parent story. Threaded stories that
+    /// break across multiple frames resolve every marker to the
+    /// chain head — the conservative choice. Frames with no host
+    /// (orphan stories) drop the marker silently.
+    pub fn resolve_index(&self) -> Vec<IndexEntry> {
+        let mut by_topic: BTreeMap<String, IndexEntry> = BTreeMap::new();
+        let body_page_index = self.body_page_index_map();
+        for parsed in &self.stories {
+            let host_page = body_page_index.get(&parsed.self_id).copied();
+            for paragraph in &parsed.story.paragraphs {
+                Self::collect_index_markers_from_paragraph(
+                    paragraph,
+                    host_page,
+                    &mut by_topic,
+                );
+                // Markers can also appear inside table cells.
+                if let Some(table) = paragraph.table.as_ref() {
+                    for cell in &table.cells {
+                        for cell_para in &cell.paragraphs {
+                            Self::collect_index_markers_from_paragraph(
+                                cell_para,
+                                host_page,
+                                &mut by_topic,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        // Sort each entry's page list + deduplicate. Topics are
+        // already in sorted order via BTreeMap.
+        let mut out: Vec<IndexEntry> = by_topic.into_values().collect();
+        for entry in &mut out {
+            entry.pages.sort();
+            entry.pages.dedup();
+        }
+        out
+    }
+
+    /// Internal — walk one paragraph's `index_markers` and fold them
+    /// into the topic accumulator. Pulled out so the table-cell
+    /// loop can reuse it.
+    fn collect_index_markers_from_paragraph(
+        paragraph: &idml_parse::Paragraph,
+        host_page: Option<usize>,
+        by_topic: &mut BTreeMap<String, IndexEntry>,
+    ) {
+        for marker in &paragraph.index_markers {
+            let key = marker.topic_name.to_lowercase();
+            let entry = by_topic
+                .entry(key)
+                .or_insert_with(|| IndexEntry {
+                    topic: marker.topic_name.clone(),
+                    sort_key: marker
+                        .sort_order
+                        .clone()
+                        .unwrap_or_else(|| marker.topic_name.to_lowercase()),
+                    pages: Vec::new(),
+                });
+            if let Some(p) = host_page {
+                entry.pages.push(p);
+            }
+        }
+    }
+
     /// Resolve a `<TOCStyle>` into a flat ordered list of TOC entries.
     ///
     /// Walks every story's paragraphs in document order; whenever a
@@ -593,6 +672,29 @@ pub struct TOCEntry {
     /// number (`PageNumber="Off"` / `NoPageNumber"`). The renderer
     /// should drop the separator + number for these rows.
     pub page_number_visible: bool,
+}
+
+/// Phase 5 — one resolved row of a generated index.
+///
+/// Each entry represents a single topic with the (body) page-index
+/// list of every paragraph that anchors a marker for that topic.
+/// The renderer composes one paragraph per entry, applying the
+/// referenced index style; the page list renders as a
+/// comma-separated string (`"12, 23, 41"`) appended after the topic.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexEntry {
+    /// The indexed term, in its display form (preserving the IDML's
+    /// original casing). Comparison + grouping happen on the
+    /// lowercase form via `sort_key`.
+    pub topic: String,
+    /// Sort key — either the explicit `SortOrder` IDML attribute
+    /// from the first marker for this topic, or `topic.to_lowercase()`
+    /// when none was declared.
+    pub sort_key: String,
+    /// Body-page indices of every paragraph that anchors a marker
+    /// for this topic. Deduplicated + ascending. May be empty when
+    /// every host story is orphan (no on-page frames).
+    pub pages: Vec<usize>,
 }
 
 impl ResolvedRunAttrs {
@@ -1356,6 +1458,132 @@ mod tests {
         toc.entries[0].separator = None;
         let entries = doc.resolve_toc(&toc);
         assert_eq!(entries[0].separator, "^t");
+    }
+
+    #[test]
+    fn resolve_index_groups_by_topic_and_sorts() {
+        // Build a small IDML: three body pages, each with a frame
+        // hosting one story. Each story carries a single paragraph
+        // with `<PageReference>` markers. The resolver should group
+        // by topic, deduplicate pages, and return entries sorted
+        // alphabetically by lowercase topic.
+        let xml = pack_index_idml(&[
+            ("apple-1", "Apple", 0),
+            ("apple-2", "Apple", 1),
+            ("banana", "Banana", 2),
+            ("apple-3", "Apple", 0), // duplicate page → dedup
+        ]);
+        let doc = Document::open(&xml).expect("open IDML");
+        let entries = doc.resolve_index();
+        // Two topics; Apple sorts before Banana case-insensitively.
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].topic, "Apple");
+        assert_eq!(entries[0].pages, vec![0, 1]); // 0 deduped
+        assert_eq!(entries[1].topic, "Banana");
+        assert_eq!(entries[1].pages, vec![2]);
+    }
+
+    /// Pack an IDML with a single spread, one story per (story_id,
+    /// topic, body-page) triple. Pages are arranged vertically so
+    /// each frame's centroid lands on a distinct page; the resolver's
+    /// `body_page_index_map` then assigns each story to its own page.
+    fn pack_index_idml(markers: &[(&str, &str, usize)]) -> Vec<u8> {
+        let buf = std::io::Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+        zip.start_file("mimetype", stored).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+
+        // Pages are 200pt tall stacked top-to-bottom. Each frame
+        // sits inside one page's bounds (10..190 vertical extent).
+        let n_pages = markers.iter().map(|(_, _, p)| *p).max().unwrap_or(0) + 1;
+        let mut pages_xml = String::new();
+        for p in 0..n_pages {
+            pages_xml.push_str(&format!(
+                "<Page Self=\"p{p}\" GeometricBounds=\"{} 0 {} 200\"/>",
+                p * 200,
+                p * 200 + 200,
+            ));
+        }
+        // Group stories by their host page so we get one frame per
+        // page (whose centroid falls inside that page's bounds).
+        let mut frames_xml = String::new();
+        let mut by_page: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (i, m) in markers.iter().enumerate() {
+            by_page.entry(m.2).or_default().push(i);
+        }
+        // One frame per (story_id, page) tuple. We use synthetic
+        // story ids to avoid collisions.
+        for (i, (sid, _topic, page)) in markers.iter().enumerate() {
+            let top = page * 200 + 20;
+            let bottom = page * 200 + 180;
+            frames_xml.push_str(&format!(
+                "<TextFrame Self=\"frame-{i}\" ParentStory=\"{sid}\" \
+                 GeometricBounds=\"{top} 10 {bottom} 190\"/>",
+            ));
+        }
+
+        zip.start_file("designmap.xml", deflated).unwrap();
+        // Each marker becomes its own Story file.
+        let mut story_refs = String::new();
+        for (sid, _topic, _page) in markers {
+            story_refs.push_str(&format!(
+                "<idPkg:Story src=\"Stories/Story_{sid}.xml\"/>"
+            ));
+        }
+        zip.write_all(
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  {story_refs}
+</Document>"#
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+
+        zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+        zip.write_all(
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    {pages_xml}
+    {frames_xml}
+  </Spread>
+</idPkg:Spread>"#
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+
+        for (sid, topic, _page) in markers {
+            zip.start_file(format!("Stories/Story_{sid}.xml"), deflated)
+                .unwrap();
+            zip.write_all(
+                format!(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="{sid}">
+    <ParagraphStyleRange>
+      <CharacterStyleRange>
+        <Content>body for {topic}</Content>
+        <PageReference Self="PR-{sid}" TopicName="{topic}"/>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        }
+
+        zip.finish().unwrap().into_inner()
     }
 
     #[test]

@@ -232,6 +232,37 @@ pub struct BuiltPage {
     /// text emitted on the page (e.g. graphic-only pages). Captured
     /// unconditionally at emit time; cost is O(visible glyphs).
     pub story_layout: Vec<LineLayout>,
+    /// Phase 5 — footnotes anchored on paragraphs that landed on this
+    /// page. Each entry preserves the host paragraph's identity and
+    /// the footnote body. Today the renderer doesn't yet draw the
+    /// footnote bodies into the page's display list (that's queued —
+    /// it needs a per-frame bottom-pool layout pass); however
+    /// surfacing the captures here lets downstream tools observe
+    /// footnote distribution and lets a future per-page pass plug
+    /// in without re-walking the source paragraphs.
+    pub footnotes: Vec<EmittedFootnote>,
+}
+
+/// Phase 5 — a footnote captured at emit time on the page where its
+/// host paragraph landed. The `number` is a per-page running counter
+/// (1-based) and is the value the host paragraph's anchor character
+/// should display once anchor-substitution lands. Renderer doesn't
+/// yet write footnote bodies into the page display list; this
+/// struct's `paragraphs` are the source body verbatim, untouched.
+#[derive(Debug, Clone)]
+pub struct EmittedFootnote {
+    /// Per-page running number, 1-based. Resets at every page.
+    pub number: u32,
+    /// `<Story Self="...">` id of the host story (the one carrying
+    /// the anchor character, not the footnote story itself).
+    pub host_story_id: String,
+    /// Index of the host paragraph within the host story. Lets
+    /// downstream tools cross-reference back to the source AST.
+    pub host_paragraph_idx: u32,
+    /// `<Footnote Self="...">` id, when present.
+    pub footnote_self_id: Option<String>,
+    /// Footnote body paragraphs, exactly as parsed.
+    pub paragraphs: Vec<idml_parse::Paragraph>,
 }
 
 /// One laid-out line of a story, in page-local pt coordinates.
@@ -476,6 +507,7 @@ pub fn build_document(
                 numbering_generation: 0,
                 stats: PipelineStats::default(),
                 story_layout: Vec::new(),
+                footnotes: Vec::new(),
             });
         }
         spread_page_ranges.push(start..pages.len());
@@ -494,6 +526,7 @@ pub fn build_document(
             numbering_generation: 0,
             stats: PipelineStats::default(),
             story_layout: Vec::new(),
+            footnotes: Vec::new(),
         });
         page_geometries.push(PageGeom {
             bounds_in_spread: idml_parse::Bounds {
@@ -2252,6 +2285,59 @@ impl<'a> StoryEmitter<'a> {
     }
 }
 
+/// Phase 5 — build a synthetic `Paragraph` sequence for an index
+/// story. Walks `Document::resolve_index()` and emits one paragraph
+/// per topic:
+///
+///   "Apple\t12, 23, 41"
+///   "Banana\t7"
+///
+/// Each paragraph carries the topic text, a tab separator (the IDML
+/// `^t` convention; renderer's tab-stop pass snaps it to the next
+/// tab stop), then a comma-separated string of page labels resolved
+/// from `page_labels`. Page-label resolution mirrors `build_toc_paragraphs`
+/// so Section overrides (Roman numerals etc.) flow through.
+///
+/// Returns an empty vec when the document has no markers.
+///
+/// Today the renderer doesn't yet trigger this automatically — there's
+/// no frame attribute that says "this is the index host" the way
+/// `AppliedTOCStyle` triggers the TOC swap-in. Callers that want to
+/// emit a generated index point this at a target story and overwrite
+/// its paragraphs.
+pub fn build_index_paragraphs(
+    document: &Document,
+    page_labels: &[String],
+) -> Vec<idml_parse::Paragraph> {
+    let entries = document.resolve_index();
+    let mut out: Vec<idml_parse::Paragraph> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let mut text = entry.topic.clone();
+        if !entry.pages.is_empty() {
+            // Resolve page indices to labels. Missing labels
+            // (out-of-bounds — shouldn't happen, defensive) skip.
+            let labels: Vec<String> = entry
+                .pages
+                .iter()
+                .filter_map(|i| page_labels.get(*i).cloned())
+                .collect();
+            if !labels.is_empty() {
+                text.push('\t');
+                text.push_str(&labels.join(", "));
+            }
+        }
+        let run = idml_parse::CharacterRun {
+            text,
+            ..idml_parse::CharacterRun::default()
+        };
+        out.push(idml_parse::Paragraph {
+            runs: vec![run],
+            ..idml_parse::Paragraph::default()
+        });
+    }
+    out
+}
+
 /// Build the synthetic `Paragraph` sequence for an unresolved TOC
 /// story. Walks `Document::resolve_toc(toc_style)` and turns every
 /// `TOCEntry` into a single `Paragraph` whose:
@@ -2400,6 +2486,28 @@ fn emit_paragraph_into_chain(
             emit_paragraph_into_chain(em, &sub, pages, total_stats);
         }
         return;
+    }
+
+    // Phase 5 — capture any `<Footnote>` anchors on this paragraph
+    // onto the page where the anchor character is going to land.
+    // The anchor's page is the paragraph's *starting* frame's page
+    // (em.chain_pages[em.frame_idx] at this point in the emit
+    // sequence); per-page numbering restarts at 1.
+    if !paragraph.footnotes.is_empty() {
+        let anchor_page = em.chain_pages[em.frame_idx];
+        let host_story = em.current_story_id.clone();
+        let host_para_idx = em.paragraph_idx;
+        let pool = &mut pages[anchor_page].footnotes;
+        for fn_body in &paragraph.footnotes {
+            let next_number = pool.len() as u32 + 1;
+            pool.push(EmittedFootnote {
+                number: next_number,
+                host_story_id: host_story.clone(),
+                host_paragraph_idx: host_para_idx,
+                footnote_self_id: fn_body.self_id.clone(),
+                paragraphs: fn_body.paragraphs.clone(),
+            });
+        }
     }
     // Empty paragraph: a sub-paragraph produced by `<Br/><Br/>` and
     // similar patterns. Advance the baseline cursor by one line of
@@ -10331,6 +10439,7 @@ pub fn build(document: &Document, options: &PipelineOptions) -> anyhow::Result<B
         numbering_generation: 0,
         stats,
         story_layout: Vec::new(),
+        footnotes: Vec::new(),
     })
 }
 
@@ -13433,6 +13542,165 @@ mod tests {
         );
         assert_eq!(ov.len(), 1);
         assert_eq!(&"a1b2c3d4"[ov[0].byte_range.clone()], "a1b2c3");
+    }
+
+    // ── Phase 5 renderer — index paragraph builder ────────────────
+
+    #[test]
+    fn footnotes_are_captured_onto_their_host_page() {
+        // Build an IDML with a body paragraph that anchors two
+        // footnotes. After running the pipeline, the page that
+        // hosts the body paragraph should carry both footnotes with
+        // per-page running numbers 1 and 2.
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+        let buf = std::io::Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+        zip.start_file("mimetype", stored).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+        zip.start_file("designmap.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_s1.xml"/>
+</Document>"#,
+        )
+        .unwrap();
+        zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 400 612"/>
+    <TextFrame Self="frameA" ParentStory="s1" GeometricBounds="40 40 380 572"/>
+  </Spread>
+</idPkg:Spread>"#,
+        )
+        .unwrap();
+        zip.start_file("Stories/Story_s1.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="s1">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="12">
+        <Content>Anchor host body.</Content>
+        <Footnote Self="Footnote/fn1">
+          <ParagraphStyleRange>
+            <CharacterStyleRange>
+              <Content>First footnote.</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Footnote>
+        <Footnote Self="Footnote/fn2">
+          <ParagraphStyleRange>
+            <CharacterStyleRange>
+              <Content>Second footnote.</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Footnote>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+        )
+        .unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let doc = idml_scene::Document::open(&bytes).expect("open IDML");
+
+        let font_bytes = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../corpus/fonts/Inter.ttf"),
+        )
+        .expect("Inter.ttf fixture");
+        let options = PipelineOptions {
+            font: Some(&font_bytes),
+            ..PipelineOptions::default()
+        };
+        let built = build_document(&doc, &options).expect("build");
+        assert_eq!(built.pages.len(), 1);
+        let footnotes = &built.pages[0].footnotes;
+        assert_eq!(footnotes.len(), 2);
+        assert_eq!(footnotes[0].number, 1);
+        assert_eq!(footnotes[0].footnote_self_id.as_deref(), Some("Footnote/fn1"));
+        assert_eq!(footnotes[1].number, 2);
+        assert_eq!(footnotes[1].footnote_self_id.as_deref(), Some("Footnote/fn2"));
+        // Footnote bodies preserved verbatim.
+        assert_eq!(
+            footnotes[0].paragraphs[0].runs[0].text,
+            "First footnote."
+        );
+        assert_eq!(
+            footnotes[1].paragraphs[0].runs[0].text,
+            "Second footnote."
+        );
+    }
+
+    #[test]
+    fn build_index_paragraphs_emits_topic_tab_pages() {
+        // Construct a Document by parsing a small IDML so we exercise
+        // the full resolve_index → build path. Reusing the parser
+        // here is far cheaper than a hand-rolled Document.
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+        let buf = std::io::Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+        zip.start_file("mimetype", stored).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+        zip.start_file("designmap.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_s1.xml"/>
+</Document>"#,
+        )
+        .unwrap();
+        zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 200"/>
+    <TextFrame Self="f1" ParentStory="s1" GeometricBounds="10 10 190 190"/>
+  </Spread>
+</idPkg:Spread>"#,
+        )
+        .unwrap();
+        zip.start_file("Stories/Story_s1.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="s1">
+    <ParagraphStyleRange>
+      <CharacterStyleRange>
+        <Content>The apple is red.</Content>
+        <PageReference Self="PR1" TopicName="Apple"/>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+        )
+        .unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let doc = idml_scene::Document::open(&bytes).expect("open IDML");
+
+        let page_labels = vec!["1".to_string()];
+        let paragraphs = build_index_paragraphs(&doc, &page_labels);
+        assert_eq!(paragraphs.len(), 1);
+        assert_eq!(paragraphs[0].runs.len(), 1);
+        assert_eq!(paragraphs[0].runs[0].text, "Apple\t1");
     }
 
     /// path and decode at native size via `image::load_from_memory`.
