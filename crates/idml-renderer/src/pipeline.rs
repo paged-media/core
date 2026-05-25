@@ -4100,13 +4100,32 @@ fn emit_anchored_frames_for_paragraph(
                 para_origin_x + offset_x,
                 para_origin_y + offset_y - vertical_corner_dy,
             ),
-            // `Custom` / `Anchored` honour the offsets verbatim from
-            // the anchor character's baseline. IDML 14+ uses
-            // `Anchored` in place of `Custom`; treat them as synonyms.
-            "Custom" | "Anchored" => (
-                para_origin_x + offset_x,
-                baseline_y_pt + offset_y - vertical_corner_dy,
-            ),
+            // `Custom` / `Anchored` — honour HorizontalReferencePoint
+            // and VerticalReferencePoint with their alignments so the
+            // frame anchors against the column / text-frame / page-
+            // edge rectangles the IDML declares. IDML 14+ writes
+            // `Anchored`; older docs write `Custom`. Treat both the
+            // same.
+            "Custom" | "Anchored" => {
+                let ref_x = horizontal_reference_x(
+                    setting,
+                    para_origin_x,
+                    frame,
+                    &pages[target_page],
+                    em.column_x_shift_pt,
+                );
+                let ref_y = vertical_reference_y(
+                    setting,
+                    baseline_y_pt,
+                    frame,
+                    &pages[target_page],
+                    para_origin_y,
+                );
+                (
+                    ref_x + offset_x,
+                    ref_y + offset_y - vertical_corner_dy,
+                )
+            }
             _ => {
                 tracing::debug!(
                     target: "idml_renderer::pipeline",
@@ -4120,6 +4139,119 @@ fn emit_anchored_frames_for_paragraph(
             }
         };
         emit_one_anchored_frame(em, af, target_page, place_x, place_y, pages);
+    }
+}
+
+/// Phase 5 — resolve the horizontal reference x for a `Custom`-
+/// positioned anchored frame, accounting for `HorizontalReferencePoint`
+/// + `HorizontalAlignment`. Returns the page-local pt x that the
+/// frame's anchor corner attaches to BEFORE the AnchoredObjectSetting
+/// offset and the corner-of-frame correction are applied.
+///
+/// Supported references:
+/// - `AnchorLocation` (default): the anchor character's x. Today we
+///   approximate this as the paragraph origin x (the composer doesn't
+///   yet surface per-glyph advance; same limitation as InlinePosition).
+/// - `ColumnEdge`: the paragraph's column left edge.
+/// - `TextFrame`: the host text frame's spread-projected left edge,
+///   page-local.
+/// - `PageMargins` / `PageEdge`: the page bounds (margins not yet
+///   surfaced through the geometry pipeline; both resolve to the page
+///   edge for now).
+///
+/// `HorizontalAlignment` shifts the resolved x by the reference
+/// rectangle's width: `LeftAlign` keeps the left, `CenterAlign`
+/// centers, `RightAlign` snaps to the right.
+fn horizontal_reference_x(
+    setting: Option<&idml_parse::AnchoredObjectSetting>,
+    para_origin_x: f32,
+    frame: &idml_parse::TextFrame,
+    page: &BuiltPage,
+    column_x_shift_pt: f32,
+) -> f32 {
+    let _ = column_x_shift_pt;
+    let reference = setting
+        .and_then(|s| s.horizontal_reference_point.as_deref())
+        .unwrap_or("AnchorLocation");
+    let alignment = setting
+        .and_then(|s| s.horizontal_alignment.as_deref())
+        .unwrap_or("LeftAlign");
+    let frame_spread_bounds = transform_bounds(frame.bounds, frame.item_transform);
+    let (ref_left, ref_right) = match reference {
+        "AnchorLocation" => (para_origin_x, para_origin_x),
+        "ColumnEdge" => {
+            // Column edges = the paragraph's effective text box; for
+            // single-column frames that's the inset-adjusted frame.
+            let insets = frame.inset_spacing.unwrap_or([0.0; 4]);
+            let (sx, _sy) = (frame_spread_bounds.left, frame_spread_bounds.top);
+            let left_page = sx - page.spread_origin.0 + insets[1];
+            let width = (frame_spread_bounds.right - frame_spread_bounds.left)
+                .max(0.0)
+                - insets[1]
+                - insets[3];
+            (left_page, left_page + width)
+        }
+        "TextFrame" => {
+            let left = frame_spread_bounds.left - page.spread_origin.0;
+            let right = frame_spread_bounds.right - page.spread_origin.0;
+            (left, right)
+        }
+        // PageMargins falls through to PageEdge until margins are
+        // surfaced through the geometry pipeline.
+        "PageMargins" | "PageEdge" => (0.0, page.width_pt),
+        _ => (para_origin_x, para_origin_x),
+    };
+    match alignment {
+        "CenterAlign" => (ref_left + ref_right) * 0.5,
+        "RightAlign" | "AwayFromBindingSide" => ref_right,
+        // LeftAlign / TextAlign / ToBindingSide / unknown ⇒ left.
+        _ => ref_left,
+    }
+}
+
+/// Phase 5 — vertical analogue of [`horizontal_reference_x`]. Maps
+/// `VerticalReferencePoint` + `VerticalAlignment` to the y the frame's
+/// anchor corner sits against.
+///
+/// Supported references:
+/// - `LineBaseline` (default): the anchor line's baseline.
+/// - `LineXHeight` / `LineCapHeight` / `TopOfLeading`: degenerate to
+///   the baseline today; the per-line metric isn't surfaced.
+/// - `Column`: the host text frame's top (≈ column top).
+/// - `TextFrame`: the host text frame's top.
+/// - `PageMargins` / `PageEdge`: page bounds.
+fn vertical_reference_y(
+    setting: Option<&idml_parse::AnchoredObjectSetting>,
+    baseline_y_pt: f32,
+    frame: &idml_parse::TextFrame,
+    page: &BuiltPage,
+    para_origin_y: f32,
+) -> f32 {
+    let _ = para_origin_y;
+    let reference = setting
+        .and_then(|s| s.vertical_reference_point.as_deref())
+        .unwrap_or("LineBaseline");
+    let alignment = setting
+        .and_then(|s| s.vertical_alignment.as_deref())
+        .unwrap_or("TopAlign");
+    let frame_spread_bounds = transform_bounds(frame.bounds, frame.item_transform);
+    let (ref_top, ref_bottom) = match reference {
+        "LineBaseline" | "LineXHeight" | "LineCapHeight" | "TopOfLeading" => {
+            (baseline_y_pt, baseline_y_pt)
+        }
+        "Column" | "TextFrame" => {
+            let top = frame_spread_bounds.top - page.spread_origin.1;
+            let bottom = frame_spread_bounds.bottom - page.spread_origin.1;
+            (top, bottom)
+        }
+        "PageMargins" | "PageEdge" => (0.0, page.height_pt),
+        _ => (baseline_y_pt, baseline_y_pt),
+    };
+    match alignment {
+        "CenterAlign" => (ref_top + ref_bottom) * 0.5,
+        "BottomAlign" => ref_bottom,
+        // TopAlign / unknown ⇒ top.
+        _ => ref_top,
     }
 }
 

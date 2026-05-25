@@ -348,6 +348,21 @@ pub struct AnchoredObjectSetting {
     /// `LockPosition="true"` pins the anchored frame to its current
     /// page position; the user can't drag it.
     pub lock_position: bool,
+    /// Phase 5 — `HorizontalReferencePoint` for Custom positioning:
+    /// `AnchorLocation` (default), `ColumnEdge`, `TextFrame`,
+    /// `PageMargins`, `PageEdge`. None ⇒ AnchorLocation.
+    pub horizontal_reference_point: Option<String>,
+    /// `HorizontalAlignment` — `LeftAlign` (default), `CenterAlign`,
+    /// `RightAlign`. Describes which side of the chosen reference
+    /// rectangle the anchor sits against.
+    pub horizontal_alignment: Option<String>,
+    /// `VerticalReferencePoint` for Custom positioning:
+    /// `LineBaseline` (default), `LineXHeight`, `LineCapHeight`,
+    /// `TopOfLeading`, `Column`, `TextFrame`, `PageMargins`,
+    /// `PageEdge`.
+    pub vertical_reference_point: Option<String>,
+    /// `VerticalAlignment` — `TopAlign`, `CenterAlign`, `BottomAlign`.
+    pub vertical_alignment: Option<String>,
 }
 
 /// `<Table>` element parsed from a Story. Cells reference rows /
@@ -1679,6 +1694,10 @@ fn parse_anchored_object_setting(
         lock_position: attr(e, b"LockPosition")
             .and_then(|s| s.parse::<bool>().ok())
             .unwrap_or(false),
+        horizontal_reference_point: attr(e, b"HorizontalReferencePoint"),
+        horizontal_alignment: attr(e, b"HorizontalAlignment"),
+        vertical_reference_point: attr(e, b"VerticalReferencePoint"),
+        vertical_alignment: attr(e, b"VerticalAlignment"),
     }
 }
 
