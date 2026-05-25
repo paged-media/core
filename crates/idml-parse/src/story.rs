@@ -663,6 +663,13 @@ pub struct CharacterRun {
     /// `<CharacterStyleRange>`. None ⇒ inherit. Default at the
     /// bottom of the cascade is `Metrics`.
     pub kerning_method: Option<String>,
+    /// Phase 5 — `AppliedConditions="Condition/A Condition/B"`.
+    /// Space-separated list of `<Condition>` references. Empty
+    /// means "no condition gating" (always visible). A run with
+    /// non-empty conditions is rendered iff every referenced
+    /// condition resolves to `Visible="true"` in the document's
+    /// `<Condition>` table.
+    pub applied_conditions: Vec<String>,
     pub text: String,
 }
 
@@ -1157,6 +1164,13 @@ impl Story {
                             ligatures_on: attr(&e, b"Ligatures")
                                 .and_then(|s| s.parse::<bool>().ok()),
                             kerning_method: attr(&e, b"KerningMethod"),
+                            applied_conditions: attr(&e, b"AppliedConditions")
+                                .map(|s| {
+                                    s.split_whitespace()
+                                        .map(|t| t.to_string())
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
                             text: String::new(),
                         });
                     }

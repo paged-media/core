@@ -72,6 +72,28 @@ pub struct StyleSheet {
     /// user-defined stroke (e.g. business-proposal-template's
     /// diagonal-stripe cover, which is a dense custom dash).
     pub stroke_styles: BTreeMap<String, StrokeStyleDef>,
+    /// Phase 5 — `<Condition>` definitions from `Resources/Styles.xml`.
+    /// A `<CharacterStyleRange AppliedConditions="Condition/A Condition/B">`
+    /// is rendered iff every referenced condition has `Visible="true"`
+    /// at the document level. Empty when the IDML declares no
+    /// conditional text.
+    pub conditions: BTreeMap<String, ConditionDef>,
+}
+
+/// IDML `<Condition>` — a named visibility toggle that can be applied
+/// to a `<CharacterStyleRange>` (and other text-marker elements). The
+/// document carries the current `Visible` setting per condition. A
+/// run whose `AppliedConditions` reference one or more conditions is
+/// rendered only when every referenced condition resolves to `Visible="true"`.
+#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+pub struct ConditionDef {
+    pub self_id: String,
+    pub name: Option<String>,
+    /// `Visible="true|false"`. Default: true (`None` ⇒ visible).
+    pub visible: Option<bool>,
+    /// `IndicatorMethod` — `Underline` / `Highlight` / `None`. The
+    /// renderer ignores indicators today; captured for round-trip.
+    pub indicator_method: Option<String>,
 }
 
 /// Custom stroke-style definition. Today the renderer consumes the
@@ -985,6 +1007,11 @@ impl StyleSheet {
                             out.stroke_styles.insert(def.self_id.clone(), def);
                         }
                     }
+                    b"Condition" => {
+                        if let Some(def) = parse_condition(&e) {
+                            out.conditions.insert(def.self_id.clone(), def);
+                        }
+                    }
                     b"TOCStyleEntry" => {
                         // Element-form `<TOCStyleEntry>...</TOCStyleEntry>`
                         // appears when InDesign attaches `<Properties>`
@@ -1149,6 +1176,11 @@ impl StyleSheet {
                     | b"WavyStrokeStyle" => {
                         if let Some(def) = parse_stroke_style(&e) {
                             out.stroke_styles.insert(def.self_id.clone(), def);
+                        }
+                    }
+                    b"Condition" => {
+                        if let Some(def) = parse_condition(&e) {
+                            out.conditions.insert(def.self_id.clone(), def);
                         }
                     }
                     b"BulletChar" => {
@@ -1704,6 +1736,17 @@ fn parse_nested_delimiter(s: &str) -> NestedDelimiter {
             _ => NestedDelimiter::Unknown,
         },
     }
+}
+
+/// Phase 5 — parse one `<Condition>` element from Resources/Styles.xml.
+/// Returns `None` when `Self` is missing (the element is unaddressable).
+fn parse_condition(e: &quick_xml::events::BytesStart) -> Option<ConditionDef> {
+    Some(ConditionDef {
+        self_id: attr(e, b"Self")?,
+        name: attr(e, b"Name"),
+        visible: attr(e, b"Visible").and_then(|s| s.parse().ok()),
+        indicator_method: attr(e, b"IndicatorMethod"),
+    })
 }
 
 fn parse_table_style(e: &quick_xml::events::BytesStart) -> Option<TableStyleDef> {

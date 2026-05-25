@@ -39,7 +39,7 @@ pub use story::{
     TableLineStrokes, TableRow, AUTO_PAGE_NUMBER_MARKER, NEXT_PAGE_NUMBER_MARKER,
 };
 pub use styles::{
-    CellStyleDef, CharacterStyleDef, NestedDelimiter, NestedStyle, ObjectStyleDef,
+    CellStyleDef, CharacterStyleDef, ConditionDef, NestedDelimiter, NestedStyle, ObjectStyleDef,
     ParagraphBorder, ParagraphRule, ParagraphShading, ParagraphStyleDef, ResolvedCell,
     ResolvedCharacter, ResolvedObject, ResolvedParagraph, ResolvedTable, StrokeStyleDef,
     StrokeStyleKind, StyleSheet, TOCStyleDef, TOCStyleEntryDef, TableStyleDef,

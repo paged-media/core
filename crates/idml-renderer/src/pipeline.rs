@@ -2326,6 +2326,39 @@ fn emit_paragraph_into_chain(
         emit_table_into_chain(em, table, pages, total_stats);
         return;
     }
+    // Phase 5 — conditional text. Drop runs whose `AppliedConditions`
+    // include any `<Condition Visible="false">`. Empty conditions list
+    // means "always visible"; the filter pass is a no-op when no run
+    // carries any conditions (almost every paragraph).
+    let paragraph_filtered_owned;
+    let paragraph: &idml_parse::Paragraph = {
+        let has_conditions =
+            paragraph.runs.iter().any(|r| !r.applied_conditions.is_empty());
+        if !has_conditions {
+            paragraph
+        } else {
+            let conditions = &em.document.styles.conditions;
+            let filtered: Vec<idml_parse::CharacterRun> = paragraph
+                .runs
+                .iter()
+                .filter(|r| {
+                    r.applied_conditions.iter().all(|cid| {
+                        conditions
+                            .get(cid)
+                            .and_then(|c| c.visible)
+                            .unwrap_or(true)
+                    })
+                })
+                .cloned()
+                .collect();
+            paragraph_filtered_owned = idml_parse::Paragraph {
+                runs: filtered,
+                ..paragraph.clone()
+            };
+            &paragraph_filtered_owned
+        }
+    };
+
     // Phase 4 typography — nested character styles. If the paragraph
     // style declares `<NestedStyle>` children, splice the runs at
     // overlay boundaries and override the `character_style` field on
@@ -13140,6 +13173,95 @@ mod tests {
         assert_eq!(out[2].character_style.as_deref(), Some("S/Lead"));
         assert_eq!(out[3].text, "gh");
         assert_eq!(out[3].character_style.as_deref(), Some("S/Base"));
+    }
+
+    // ── Phase 5 — conditional text filter ─────────────────────────
+
+    fn cond_run(text: &str, conditions: &[&str]) -> idml_parse::CharacterRun {
+        idml_parse::CharacterRun {
+            text: text.into(),
+            applied_conditions: conditions.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    fn cond(id: &str, visible: bool) -> idml_parse::ConditionDef {
+        idml_parse::ConditionDef {
+            self_id: id.into(),
+            visible: Some(visible),
+            ..Default::default()
+        }
+    }
+
+    /// Tiny smoke that mirrors the filter logic inline in
+    /// `emit_paragraph_into_chain`. Keeps the test independent of
+    /// constructing a full Document, while still exercising the
+    /// "all conditions visible ⇒ keep; any invisible ⇒ drop" rule.
+    fn filter_by_conditions(
+        runs: &[idml_parse::CharacterRun],
+        table: &std::collections::BTreeMap<String, idml_parse::ConditionDef>,
+    ) -> Vec<idml_parse::CharacterRun> {
+        runs.iter()
+            .filter(|r| {
+                r.applied_conditions
+                    .iter()
+                    .all(|cid| table.get(cid).and_then(|c| c.visible).unwrap_or(true))
+            })
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn conditions_no_applied_keeps_run() {
+        let runs = vec![cond_run("body", &[])];
+        let table = std::collections::BTreeMap::new();
+        let out = filter_by_conditions(&runs, &table);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].text, "body");
+    }
+
+    #[test]
+    fn conditions_visible_keeps_run() {
+        let runs = vec![cond_run("draft text", &["Condition/Draft"])];
+        let mut table = std::collections::BTreeMap::new();
+        table.insert("Condition/Draft".to_string(), cond("Condition/Draft", true));
+        let out = filter_by_conditions(&runs, &table);
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn conditions_invisible_drops_run() {
+        let runs = vec![
+            cond_run("keep", &[]),
+            cond_run("hide", &["Condition/Draft"]),
+        ];
+        let mut table = std::collections::BTreeMap::new();
+        table.insert("Condition/Draft".to_string(), cond("Condition/Draft", false));
+        let out = filter_by_conditions(&runs, &table);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].text, "keep");
+    }
+
+    #[test]
+    fn conditions_multiple_all_must_be_visible() {
+        // Two conditions on one run; one is hidden ⇒ drop.
+        let runs = vec![cond_run("dual", &["Condition/A", "Condition/B"])];
+        let mut table = std::collections::BTreeMap::new();
+        table.insert("Condition/A".to_string(), cond("Condition/A", true));
+        table.insert("Condition/B".to_string(), cond("Condition/B", false));
+        let out = filter_by_conditions(&runs, &table);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn conditions_unknown_id_treated_as_visible() {
+        // A reference to a condition not in the document's table
+        // shouldn't silently hide content. InDesign treats unknown
+        // condition refs as visible.
+        let runs = vec![cond_run("orphan", &["Condition/Missing"])];
+        let table = std::collections::BTreeMap::new();
+        let out = filter_by_conditions(&runs, &table);
+        assert_eq!(out.len(), 1);
     }
 
     #[test]
