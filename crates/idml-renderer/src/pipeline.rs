@@ -2326,6 +2326,32 @@ fn emit_paragraph_into_chain(
         emit_table_into_chain(em, table, pages, total_stats);
         return;
     }
+    // Phase 4 typography — nested character styles. If the paragraph
+    // style declares `<NestedStyle>` children, splice the runs at
+    // overlay boundaries and override the `character_style` field on
+    // each sliced fragment. The rest of the function then sees a run
+    // list whose applied character styles already reflect the nested
+    // overrides; no other code path needs to know about nested styles.
+    let paragraph_owned;
+    let paragraph: &idml_parse::Paragraph = {
+        let nested = &em.document.resolved_paragraph_attrs(paragraph).nested_styles;
+        if nested.is_empty() {
+            paragraph
+        } else {
+            let paragraph_text: String =
+                paragraph.runs.iter().map(|r| r.text.as_str()).collect();
+            let overlay = compute_nested_style_overlay(&paragraph_text, nested);
+            if overlay.is_empty() {
+                paragraph
+            } else {
+                paragraph_owned = idml_parse::Paragraph {
+                    runs: split_runs_for_nested_styles(&paragraph.runs, &overlay),
+                    ..paragraph.clone()
+                };
+                &paragraph_owned
+            }
+        }
+    };
     // IDML <Br/> serialises as `\n` inside run text; it's a forced
     // line break, not a paragraph break. paragraph_breaker treats
     // it as ordinary whitespace, which would let it merge into a
@@ -11110,6 +11136,285 @@ fn emit_line_decorations(
 /// resolve to `Left` / `Right` respectively — matches the historical
 /// stringly-typed behaviour, which fell through to `Left` for any
 /// unrecognised string.
+/// Phase 4 typography — one nested-style application: the half-open
+/// byte range of the paragraph text that the override character style
+/// should apply to. `byte_range.start` is inclusive; `byte_range.end`
+/// is exclusive. `applied_character_style` mirrors
+/// [`idml_parse::NestedStyle::applied_character_style`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct NestedStyleApplication {
+    pub byte_range: std::ops::Range<usize>,
+    pub applied_character_style: String,
+}
+
+/// Phase 4 typography — walk a paragraph's text against its cascaded
+/// `<NestedStyle>` list, producing the half-open byte ranges each
+/// override should apply to. The first entry's range starts at byte 0;
+/// each subsequent entry starts where the previous one ended. Returns
+/// an empty vec when `nested_styles` is empty or when every entry has
+/// an unsupported delimiter / zero repetition.
+///
+/// The walker handles every `NestedDelimiter` variant. Single-paragraph
+/// scope: the walker stops when the cursor reaches the end of
+/// `paragraph_text`, even if some entries are unconsumed (their range
+/// would extend past the text). This matches InDesign's behaviour for
+/// short paragraphs.
+pub fn compute_nested_style_overlay(
+    paragraph_text: &str,
+    nested_styles: &[idml_parse::NestedStyle],
+) -> Vec<NestedStyleApplication> {
+    if nested_styles.is_empty() || paragraph_text.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<NestedStyleApplication> = Vec::new();
+    let mut cursor: usize = 0;
+    for ns in nested_styles {
+        if cursor >= paragraph_text.len() {
+            break;
+        }
+        if ns.repetition <= 0 {
+            continue;
+        }
+        let end =
+            find_nested_end(paragraph_text, cursor, &ns.delimiter, ns.repetition, ns.inclusive);
+        if end > cursor {
+            out.push(NestedStyleApplication {
+                byte_range: cursor..end,
+                applied_character_style: ns.applied_character_style.clone(),
+            });
+            cursor = end;
+        }
+    }
+    out
+}
+
+/// Internal — locate the byte offset where a nested-style range ends,
+/// scanning `text[start..]` for `repetition` occurrences of
+/// `delimiter`. Returns `text.len()` when fewer than `repetition`
+/// matches are found (the range stretches to the paragraph's end).
+fn find_nested_end(
+    text: &str,
+    start: usize,
+    delimiter: &idml_parse::NestedDelimiter,
+    repetition: i32,
+    inclusive: bool,
+) -> usize {
+    use idml_parse::NestedDelimiter as D;
+    let bytes = text.as_bytes();
+    let slice = &text[start..];
+    // For Words / Sentences / Characters the count is the number of
+    // logical units to traverse, INCLUDING the trailing boundary.
+    // For class matchers (AnyDigit / AnyLetter / quote pairs / Char /
+    // Tab) it's the count of matches.
+    match delimiter {
+        D::Characters => {
+            // Walk `repetition` Unicode scalar values (≠ bytes).
+            let mut indices = slice.char_indices();
+            for _ in 0..repetition {
+                if indices.next().is_none() {
+                    return text.len();
+                }
+            }
+            // `indices.offset()` is unstable; reconstruct via next().
+            match indices.next() {
+                Some((off, _)) => start + off,
+                None => text.len(),
+            }
+        }
+        D::Words => {
+            // Walk `repetition` words. A word is a maximal run of
+            // non-whitespace chars; the boundary after a word is its
+            // trailing whitespace.
+            let mut idx = 0usize;
+            let mut words_seen = 0;
+            let mut in_word = false;
+            // Skip leading whitespace so word 1 starts at the first
+            // non-space char (matches InDesign).
+            while idx < slice.len() && slice.as_bytes()[idx].is_ascii_whitespace() {
+                idx += 1;
+            }
+            while idx < slice.len() {
+                let b = slice.as_bytes()[idx];
+                if b.is_ascii_whitespace() {
+                    if in_word {
+                        words_seen += 1;
+                        in_word = false;
+                        if words_seen >= repetition {
+                            // Boundary candidate is the trailing space.
+                            if inclusive {
+                                // Consume whitespace run; range ends
+                                // after the last whitespace byte.
+                                while idx < slice.len()
+                                    && slice.as_bytes()[idx].is_ascii_whitespace()
+                                {
+                                    idx += 1;
+                                }
+                            }
+                            return start + idx;
+                        }
+                    }
+                } else {
+                    in_word = true;
+                }
+                idx += 1;
+            }
+            // If text ended mid-word, count that word.
+            if in_word {
+                words_seen += 1;
+            }
+            if words_seen >= repetition {
+                text.len()
+            } else {
+                text.len()
+            }
+        }
+        D::Sentences => {
+            // A sentence boundary is `.`, `!`, or `?` followed by
+            // optional whitespace.
+            let mut idx = 0usize;
+            let mut sentences_seen = 0;
+            while idx < slice.len() {
+                let b = slice.as_bytes()[idx];
+                if matches!(b, b'.' | b'!' | b'?') {
+                    sentences_seen += 1;
+                    if sentences_seen >= repetition {
+                        if inclusive {
+                            idx += 1;
+                            // Consume the trailing whitespace run too.
+                            while idx < slice.len()
+                                && slice.as_bytes()[idx].is_ascii_whitespace()
+                            {
+                                idx += 1;
+                            }
+                        }
+                        return start + idx;
+                    }
+                }
+                idx += 1;
+            }
+            text.len()
+        }
+        D::AnyDigit => find_class_end(text, start, repetition, inclusive, |c| c.is_ascii_digit()),
+        D::AnyLetter => find_class_end(text, start, repetition, inclusive, |c| c.is_alphabetic()),
+        D::AnyDoubleQuotes => find_class_end(text, start, repetition, inclusive, |c| {
+            matches!(c, '"' | '\u{201C}' | '\u{201D}')
+        }),
+        D::AnySingleQuotes => find_class_end(text, start, repetition, inclusive, |c| {
+            matches!(c, '\'' | '\u{2018}' | '\u{2019}')
+        }),
+        D::Tab => find_class_end(text, start, repetition, inclusive, |c| c == '\t'),
+        D::ForcedLineBreak => find_class_end(text, start, repetition, inclusive, |c| {
+            // U+2028 LINE SEPARATOR; IDML serialises forced line
+            // breaks as `<Br/>` which the parser materialises as `\n`
+            // in run text.
+            c == '\n' || c == '\u{2028}'
+        }),
+        D::EndNestedStyle => {
+            // U+0003 END OF TEXT — InDesign's "End Nested Style Here"
+            // marker. Inserted by the user via a special character.
+            find_class_end(text, start, repetition, inclusive, |c| c == '\u{0003}')
+        }
+        D::Char(target) => {
+            find_class_end(text, start, repetition, inclusive, |c| c == *target)
+        }
+        D::Unknown => start,
+    }
+    .min(bytes.len())
+}
+
+fn find_class_end<F: Fn(char) -> bool>(
+    text: &str,
+    start: usize,
+    repetition: i32,
+    inclusive: bool,
+    is_match: F,
+) -> usize {
+    let mut matches = 0;
+    for (off, c) in text[start..].char_indices() {
+        if is_match(c) {
+            matches += 1;
+            if matches >= repetition {
+                let abs = start + off;
+                let end = if inclusive {
+                    abs + c.len_utf8()
+                } else {
+                    abs
+                };
+                return end;
+            }
+        }
+    }
+    text.len()
+}
+
+/// Phase 4 typography — apply a nested-style overlay to a paragraph's
+/// character runs. Returns a new run vec where each run that overlaps
+/// a `<NestedStyle>` range has been split so its `character_style`
+/// field carries the override id. Runs that don't touch any overlay
+/// range pass through unchanged.
+///
+/// Empty overlay → returns `runs.to_vec()`. The walker preserves run
+/// ordering: any run produced by splitting one source run appears in
+/// the same paragraph-byte-order position. All non-text fields on a
+/// split run are cloned from the source run — only the override
+/// `character_style` differs.
+pub fn split_runs_for_nested_styles(
+    runs: &[idml_parse::CharacterRun],
+    overlay: &[NestedStyleApplication],
+) -> Vec<idml_parse::CharacterRun> {
+    if overlay.is_empty() {
+        return runs.to_vec();
+    }
+    // Build a per-byte map of "what character style overrides this
+    // position?" Sparse: only the bytes covered by some overlay range
+    // are touched. We build it as a sorted Vec of (range, style) and
+    // do binary search per-run-byte during splitting.
+    let mut out: Vec<idml_parse::CharacterRun> = Vec::with_capacity(runs.len());
+    let mut cursor: usize = 0; // paragraph-byte position of the next run.
+    for run in runs {
+        let run_start = cursor;
+        let run_end = cursor + run.text.len();
+        cursor = run_end;
+        // Compute the set of overlay-defined boundaries inside this
+        // run, plus the run's own start and end. Then walk the sorted
+        // boundaries and emit a fragment per (start, end) pair.
+        let mut boundaries: Vec<usize> = vec![run_start, run_end];
+        for ov in overlay {
+            if ov.byte_range.start > run_start && ov.byte_range.start < run_end {
+                boundaries.push(ov.byte_range.start);
+            }
+            if ov.byte_range.end > run_start && ov.byte_range.end < run_end {
+                boundaries.push(ov.byte_range.end);
+            }
+        }
+        boundaries.sort_unstable();
+        boundaries.dedup();
+        for window in boundaries.windows(2) {
+            let frag_start = window[0];
+            let frag_end = window[1];
+            if frag_start >= frag_end {
+                continue;
+            }
+            // Find an overlay whose range covers frag_start (any
+            // byte inside the fragment maps to the same override
+            // because we split at every overlay boundary).
+            let override_style = overlay
+                .iter()
+                .find(|ov| frag_start >= ov.byte_range.start && frag_start < ov.byte_range.end)
+                .map(|ov| ov.applied_character_style.clone());
+            let local_lo = frag_start - run_start;
+            let local_hi = frag_end - run_start;
+            let mut frag = run.clone();
+            frag.text = run.text[local_lo..local_hi].to_string();
+            if let Some(s) = override_style {
+                frag.character_style = Some(s);
+            }
+            out.push(frag);
+        }
+    }
+    out
+}
+
 /// Phase 4 typography — translate a `ResolvedRunAttrs`'s `Ligatures` /
 /// `KerningMethod` into the shaper's [`idml_text::ShapingFeatures`].
 /// Inputs are `None`-tolerant: missing `ligatures_on` defaults to true
@@ -12648,6 +12953,211 @@ mod tests {
     }
 
     /// Track 1a: small JPEGs (longest edge ≤ cap) skip the streaming
+    // ── Phase 4 typography — nested-style overlay walker ──────────
+
+    fn ns(style: &str, delim: idml_parse::NestedDelimiter, rep: i32, inc: bool)
+        -> idml_parse::NestedStyle
+    {
+        idml_parse::NestedStyle {
+            applied_character_style: style.into(),
+            delimiter: delim,
+            repetition: rep,
+            inclusive: inc,
+        }
+    }
+
+    #[test]
+    fn nested_overlay_empty_when_no_entries() {
+        assert!(compute_nested_style_overlay("hello world", &[]).is_empty());
+    }
+
+    #[test]
+    fn nested_overlay_characters_simple() {
+        let ov = compute_nested_style_overlay(
+            "abcdef",
+            &[ns("S/Bold", idml_parse::NestedDelimiter::Characters, 3, true)],
+        );
+        assert_eq!(ov.len(), 1);
+        assert_eq!(ov[0].byte_range, 0..3);
+        assert_eq!(ov[0].applied_character_style, "S/Bold");
+    }
+
+    #[test]
+    fn nested_overlay_words_inclusive_captures_trailing_space() {
+        // "the quick brown" — Words=1 inclusive should cover "the ".
+        let ov = compute_nested_style_overlay(
+            "the quick brown",
+            &[ns("S/Lead", idml_parse::NestedDelimiter::Words, 1, true)],
+        );
+        assert_eq!(ov.len(), 1);
+        assert_eq!(&"the quick brown"[ov[0].byte_range.clone()], "the ");
+    }
+
+    #[test]
+    fn nested_overlay_words_exclusive_excludes_space() {
+        let ov = compute_nested_style_overlay(
+            "the quick brown",
+            &[ns("S/Lead", idml_parse::NestedDelimiter::Words, 1, false)],
+        );
+        assert_eq!(ov.len(), 1);
+        assert_eq!(&"the quick brown"[ov[0].byte_range.clone()], "the");
+    }
+
+    #[test]
+    fn nested_overlay_char_delimiter_until_colon() {
+        let ov = compute_nested_style_overlay(
+            "Heading: body copy",
+            &[ns(
+                "S/Bold",
+                idml_parse::NestedDelimiter::Char(':'),
+                1,
+                true,
+            )],
+        );
+        assert_eq!(ov.len(), 1);
+        assert_eq!(&"Heading: body copy"[ov[0].byte_range.clone()], "Heading:");
+    }
+
+    #[test]
+    fn nested_overlay_chained_entries_consume_in_order() {
+        // First entry: 3 chars styled S/A. Second entry: 5 chars
+        // starting where the first ended.
+        let ov = compute_nested_style_overlay(
+            "abcdefghijk",
+            &[
+                ns("S/A", idml_parse::NestedDelimiter::Characters, 3, true),
+                ns("S/B", idml_parse::NestedDelimiter::Characters, 5, true),
+            ],
+        );
+        assert_eq!(ov.len(), 2);
+        assert_eq!(ov[0].byte_range, 0..3);
+        assert_eq!(ov[0].applied_character_style, "S/A");
+        assert_eq!(ov[1].byte_range, 3..8);
+        assert_eq!(ov[1].applied_character_style, "S/B");
+    }
+
+    #[test]
+    fn nested_overlay_stops_at_end_of_text() {
+        let ov = compute_nested_style_overlay(
+            "abc",
+            &[ns("S/X", idml_parse::NestedDelimiter::Characters, 100, true)],
+        );
+        // Repetition exceeds text length → range extends to end.
+        assert_eq!(ov.len(), 1);
+        assert_eq!(ov[0].byte_range, 0..3);
+    }
+
+    #[test]
+    fn nested_overlay_skips_unknown_delimiter() {
+        let ov = compute_nested_style_overlay(
+            "hello",
+            &[ns("S/X", idml_parse::NestedDelimiter::Unknown, 1, true)],
+        );
+        // Unknown delimiter yields a zero-length match → no override
+        // emitted, no cursor advance.
+        assert!(ov.is_empty());
+    }
+
+    #[test]
+    fn nested_overlay_zero_repetition_is_noop() {
+        let ov = compute_nested_style_overlay(
+            "hello world",
+            &[ns("S/X", idml_parse::NestedDelimiter::Words, 0, true)],
+        );
+        assert!(ov.is_empty());
+    }
+
+    fn mk_run(text: &str, style: Option<&str>) -> idml_parse::CharacterRun {
+        idml_parse::CharacterRun {
+            character_style: style.map(String::from),
+            text: text.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn split_runs_no_overlay_passes_through() {
+        let runs = vec![mk_run("hello", None), mk_run(" world", Some("S/Base"))];
+        let out = split_runs_for_nested_styles(&runs, &[]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].text, "hello");
+        assert_eq!(out[1].text, " world");
+        assert_eq!(out[1].character_style.as_deref(), Some("S/Base"));
+    }
+
+    #[test]
+    fn split_runs_overlay_inside_single_run_splits_into_three() {
+        // Run "the quick brown" (15 bytes). Overlay [4..9) = "quick".
+        let runs = vec![mk_run("the quick brown", None)];
+        let overlay = vec![NestedStyleApplication {
+            byte_range: 4..9,
+            applied_character_style: "S/Bold".into(),
+        }];
+        let out = split_runs_for_nested_styles(&runs, &overlay);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].text, "the ");
+        assert_eq!(out[0].character_style, None);
+        assert_eq!(out[1].text, "quick");
+        assert_eq!(out[1].character_style.as_deref(), Some("S/Bold"));
+        assert_eq!(out[2].text, " brown");
+        assert_eq!(out[2].character_style, None);
+    }
+
+    #[test]
+    fn split_runs_overlay_at_run_start_no_pre_fragment() {
+        // Run "Heading text", overlay [0..7) = "Heading".
+        let runs = vec![mk_run("Heading text", None)];
+        let overlay = vec![NestedStyleApplication {
+            byte_range: 0..7,
+            applied_character_style: "S/H".into(),
+        }];
+        let out = split_runs_for_nested_styles(&runs, &overlay);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].text, "Heading");
+        assert_eq!(out[0].character_style.as_deref(), Some("S/H"));
+        assert_eq!(out[1].text, " text");
+        assert_eq!(out[1].character_style, None);
+    }
+
+    #[test]
+    fn split_runs_overlay_spanning_two_runs_splits_both() {
+        // Runs: "abc" + "defgh" (paragraph bytes 0..8). Overlay [2..6) =
+        // "cdef" — covers tail of run0 and head of run1.
+        let runs = vec![mk_run("abc", None), mk_run("defgh", Some("S/Base"))];
+        let overlay = vec![NestedStyleApplication {
+            byte_range: 2..6,
+            applied_character_style: "S/Lead".into(),
+        }];
+        let out = split_runs_for_nested_styles(&runs, &overlay);
+        // Expected fragments: "ab" (no override), "c" (S/Lead from
+        // run0), "def" (S/Lead from run1), "gh" (S/Base from run1).
+        assert_eq!(out.len(), 4);
+        assert_eq!(out[0].text, "ab");
+        assert_eq!(out[0].character_style, None);
+        assert_eq!(out[1].text, "c");
+        assert_eq!(out[1].character_style.as_deref(), Some("S/Lead"));
+        assert_eq!(out[2].text, "def");
+        assert_eq!(out[2].character_style.as_deref(), Some("S/Lead"));
+        assert_eq!(out[3].text, "gh");
+        assert_eq!(out[3].character_style.as_deref(), Some("S/Base"));
+    }
+
+    #[test]
+    fn nested_overlay_digit_class() {
+        // First 3 digits in mixed text.
+        let ov = compute_nested_style_overlay(
+            "a1b2c3d4",
+            &[ns(
+                "S/Num",
+                idml_parse::NestedDelimiter::AnyDigit,
+                3,
+                true,
+            )],
+        );
+        assert_eq!(ov.len(), 1);
+        assert_eq!(&"a1b2c3d4"[ov[0].byte_range.clone()], "a1b2c3");
+    }
+
     /// path and decode at native size via `image::load_from_memory`.
     #[test]
     fn track_1a_small_jpeg_keeps_native_dimensions() {

@@ -674,6 +674,69 @@ pub struct ParagraphStyleDef {
     pub rule_below: ParagraphRule,
     /// Q-09: rectangular border around the paragraph's content box.
     pub border: ParagraphBorder,
+    /// Phase 4 typography — nested character styles applied to the
+    /// paragraph's leading characters. Each entry restyles a prefix
+    /// range; successive entries chain (the previous entry's end is
+    /// the next entry's start). Empty when the IDML declares no
+    /// `<NestedStyle>` children. Always replaces (no cascade merge)
+    /// because the IDML serialiser writes the full list per style.
+    pub nested_styles: Vec<NestedStyle>,
+}
+
+/// IDML `<NestedStyle>` — a CharacterStyle applied to a leading
+/// portion of a paragraph, bounded by a delimiter (count of
+/// words / sentences / characters, a literal char, or a special
+/// "any digit / letter / quote" matcher).
+#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+pub struct NestedStyle {
+    /// `AppliedCharacterStyle="CharacterStyle/<id>"`. The named style
+    /// applies to the entry's range. Resolved by the renderer
+    /// against `Styles::character_styles`.
+    pub applied_character_style: String,
+    /// `Delimiter` — what marks the boundary. See [`NestedDelimiter`].
+    pub delimiter: NestedDelimiter,
+    /// `Repetition` — how many of the delimiter unit this range
+    /// covers. Default 1. Negative / zero ⇒ no application.
+    pub repetition: i32,
+    /// `Inclusive` — when true the delimiter character itself sits
+    /// inside the styled range; when false the range ends just
+    /// before it. InDesign default: true.
+    pub inclusive: bool,
+}
+
+/// What delimits the end of a `<NestedStyle>` range.
+#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+pub enum NestedDelimiter {
+    /// `Words` — N whitespace-delimited words.
+    Words,
+    /// `Sentences` — N sentences (terminated by `.!?`).
+    Sentences,
+    /// `Characters` — N source characters.
+    Characters,
+    /// `AnyDigit` — N digit characters.
+    AnyDigit,
+    /// `AnyLetter` — N letter characters (Unicode `is_alphabetic`).
+    AnyLetter,
+    /// `AnyDoubleQuotes` — N occurrences of `"`, U+201C, U+201D.
+    AnyDoubleQuotes,
+    /// `AnySingleQuotes` — N occurrences of `'`, U+2018, U+2019.
+    AnySingleQuotes,
+    /// `Tab` — N tab characters (`\t`).
+    Tab,
+    /// `ForcedLineBreak` — N forced line breaks (rare in paragraph
+    /// styles; mirrors IDML's enumerated value).
+    ForcedLineBreak,
+    /// `EndNestedStyle` — InDesign's "End Nested Style Here" marker
+    /// (U+0003). Often inserted manually in the source text.
+    EndNestedStyle,
+    /// Literal character delimiter, e.g. `:` or `;` from an
+    /// `Delimiter="ANY_CHARACTER"` + explicit char on the style.
+    Char(char),
+    /// Fallback for unsupported / unparseable delimiter values —
+    /// the nested style entry is effectively a no-op (matches
+    /// nothing).
+    #[default]
+    Unknown,
 }
 
 /// Effective character-level attributes after walking BasedOn.
@@ -812,6 +875,10 @@ pub struct ResolvedParagraph {
     pub rule_above: ParagraphRule,
     pub rule_below: ParagraphRule,
     pub border: ParagraphBorder,
+    /// Phase 4 typography — cascaded `<NestedStyle>` entries.
+    /// Replaces rather than merges (the IDML serialiser writes the
+    /// full list per ParagraphStyle).
+    pub nested_styles: Vec<NestedStyle>,
 }
 
 /// Identifies which kind of style is open while we walk
@@ -1063,6 +1130,16 @@ impl StyleSheet {
                         ) {
                             if let Some(p) = out.paragraph_styles.get_mut(id) {
                                 p.tab_list.push(stop);
+                            }
+                        }
+                    }
+                    b"NestedStyle" => {
+                        if let (Some(id), Some(ns)) = (
+                            current_paragraph_style.as_deref(),
+                            parse_nested_style(&e),
+                        ) {
+                            if let Some(p) = out.paragraph_styles.get_mut(id) {
+                                p.nested_styles.push(ns);
                             }
                         }
                     }
@@ -1491,6 +1568,12 @@ impl ResolvedParagraph {
         merge_rule(&mut self.rule_below, &def.rule_below);
         // Q-09: per-field border inheritance.
         merge_border(&mut self.border, &def.border);
+        // Phase 4 — nested styles replace as a whole list. The IDML
+        // serialiser writes the full list per style; cascade through
+        // BasedOn only when the lower style has none of its own.
+        if self.nested_styles.is_empty() && !def.nested_styles.is_empty() {
+            self.nested_styles = def.nested_styles.clone();
+        }
     }
 }
 
@@ -1577,6 +1660,50 @@ fn parse_tab_stop_styles(e: &quick_xml::events::BytesStart) -> Option<TabStop> {
         alignment_character: attr(e, b"AlignmentCharacter"),
         leader: attr(e, b"Leader"),
     })
+}
+
+/// Phase 4 — parse one `<NestedStyle>` child of a `<ParagraphStyle>`.
+/// Returns None when `AppliedCharacterStyle` is missing (the entry
+/// becomes a no-op without an override style).
+fn parse_nested_style(e: &quick_xml::events::BytesStart) -> Option<NestedStyle> {
+    let applied = attr(e, b"AppliedCharacterStyle")?;
+    let delim_str = attr(e, b"Delimiter").unwrap_or_default();
+    let delimiter = parse_nested_delimiter(&delim_str);
+    let repetition = attr(e, b"Repetition")
+        .and_then(|s| s.parse::<i32>().ok())
+        .unwrap_or(1);
+    let inclusive = attr(e, b"Inclusive")
+        .and_then(|s| s.parse::<bool>().ok())
+        .unwrap_or(true);
+    Some(NestedStyle {
+        applied_character_style: applied,
+        delimiter,
+        repetition,
+        inclusive,
+    })
+}
+
+fn parse_nested_delimiter(s: &str) -> NestedDelimiter {
+    // IDML serialises a small enum of named delimiters and falls back
+    // to literal Unicode codepoints for "single char" cases. Names
+    // come from the `Delimiter` attribute in the ParagraphStyle XML.
+    match s {
+        "Words" => NestedDelimiter::Words,
+        "Sentences" => NestedDelimiter::Sentences,
+        "Characters" => NestedDelimiter::Characters,
+        "ANY_DIGIT" | "AnyDigit" => NestedDelimiter::AnyDigit,
+        "ANY_LETTER" | "AnyLetter" => NestedDelimiter::AnyLetter,
+        "ANY_DOUBLE_QUOTES" | "AnyDoubleQuotes" => NestedDelimiter::AnyDoubleQuotes,
+        "ANY_SINGLE_QUOTES" | "AnySingleQuotes" => NestedDelimiter::AnySingleQuotes,
+        "Tab" | "tab" => NestedDelimiter::Tab,
+        "ForcedLineBreak" => NestedDelimiter::ForcedLineBreak,
+        "EndNestedStyle" => NestedDelimiter::EndNestedStyle,
+        // Bare Unicode codepoint string, e.g. ":" or "".
+        _ => match s.chars().next() {
+            Some(c) if s.chars().count() == 1 => NestedDelimiter::Char(c),
+            _ => NestedDelimiter::Unknown,
+        },
+    }
 }
 
 fn parse_table_style(e: &quick_xml::events::BytesStart) -> Option<TableStyleDef> {
@@ -1784,6 +1911,8 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         rule_above: ParagraphRule::from_attrs(e, "RuleAbove"),
         rule_below: ParagraphRule::from_attrs(e, "RuleBelow"),
         border: ParagraphBorder::from_attrs(e),
+        // Populated later by the `<NestedStyle>` start-tag handler.
+        nested_styles: Vec::new(),
     })
 }
 

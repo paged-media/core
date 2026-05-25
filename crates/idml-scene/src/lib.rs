@@ -768,6 +768,10 @@ impl ResolvedParagraphAttrs {
             rule_above: Default::default(),
             rule_below: Default::default(),
             border: Default::default(),
+            // Nested styles are not declared inline on a
+            // ParagraphStyleRange in normal IDML; `merge_below` pulls
+            // them from the applied ParagraphStyle.
+            nested_styles: Vec::new(),
         }
     }
 
@@ -868,6 +872,11 @@ impl ResolvedParagraphAttrs {
         merge_rule_attrs(&mut self.rule_below, &p.rule_below);
         // Q-09: per-field paragraph-border inheritance.
         merge_border_attrs(&mut self.border, &p.border);
+        // Phase 4 — nested styles replace as a list when the lower
+        // attrs have none of their own (mirrors styles.rs cascade).
+        if self.nested_styles.is_empty() && !p.nested_styles.is_empty() {
+            self.nested_styles = p.nested_styles.clone();
+        }
     }
 }
 
@@ -1135,6 +1144,11 @@ pub struct ResolvedParagraphAttrs {
     pub rule_below: idml_parse::ParagraphRule,
     /// Q-09: cascaded rectangular paragraph border.
     pub border: idml_parse::ParagraphBorder,
+    /// Phase 4 typography — cascaded `<NestedStyle>` entries from the
+    /// applied paragraph style. The renderer walks the paragraph
+    /// text against this list to override the character style on
+    /// leading byte ranges.
+    pub nested_styles: Vec<idml_parse::NestedStyle>,
 }
 
 #[derive(Debug, thiserror::Error)]
