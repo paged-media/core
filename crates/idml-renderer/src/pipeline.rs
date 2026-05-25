@@ -1516,6 +1516,11 @@ pub fn build_document(
                     .unwrap_or(&[])
             })
             .collect();
+        // Phase 7 — clone chain refs + page indices BEFORE moving them
+        // into the StoryEmitter so the vertical-writing post-pass can
+        // resolve the host frame for each page.
+        let chain_for_post = chain.clone();
+        let chain_pages_for_post = chain_pages.clone();
         let mut emitter = StoryEmitter::new(
             document,
             options,
@@ -1534,6 +1539,11 @@ pub fn build_document(
             parsed.story.optical_margin_size,
         )
         .with_story_id(&parsed.self_id);
+        // Phase 7 — capture each page's command count BEFORE this
+        // story's emit so a post-pass can rotate the story's commands
+        // when StoryDirection="VerticalWritingDirection".
+        let pre_story_cmd_counts: Vec<usize> =
+            pages.iter().map(|p| p.list.commands.len()).collect();
         if let Some(paragraphs) = toc_paragraphs.as_ref() {
             for paragraph in paragraphs {
                 emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
@@ -1546,6 +1556,29 @@ pub fn build_document(
         emitter.apply_vertical_justification(&mut pages);
         emitter.apply_polygon_clip(&mut pages);
         emitter.apply_blend_groups(&mut pages);
+        // Phase 7 — vertical writing post-rotation. When the source
+        // story declares `StoryDirection="VerticalWritingDirection"`,
+        // rotate every command this story emitted by 90° CW around
+        // each host frame's top-left corner, then translate right
+        // by the frame's width. This maps the horizontal layout
+        // (lines top-to-bottom, chars left-to-right within a line)
+        // to CJK vertical convention (columns right-to-left, chars
+        // top-to-bottom within a column). Latin glyphs render
+        // sideways — full per-glyph upright counter-rotation
+        // (matched to InDesign's `<RotateSingleByteCharacters>` flag)
+        // is queued.
+        let is_vertical = matches!(
+            parsed.story.story_direction,
+            Some(idml_parse::story::StoryDirection::VerticalWritingDirection)
+        );
+        if is_vertical {
+            apply_vertical_writing_rotation(
+                &mut pages,
+                &pre_story_cmd_counts,
+                &chain_for_post,
+                &chain_pages_for_post,
+            );
+        }
         anchored_image_queue.extend(emitter.take_anchored_image_queue());
         breaks.extend(emitter.take_breaks());
     }
@@ -10666,6 +10699,74 @@ fn first_baseline_for_frame(
 /// Used by the text-emission path so glyph commands inside a
 /// rotated/sheared TextFrame inherit the frame's ItemTransform
 /// rotation around the frame's top-left.
+/// Phase 7 — vertical writing post-rotation. Walks the per-page
+/// command ranges this story emitted and rotates each command 90°
+/// clockwise around its host frame's top-left, then translates +x
+/// by the frame's width. The result: horizontal content layouts
+/// flip into CJK vertical convention — columns advance right-to-
+/// left and characters within a column read top-to-bottom.
+///
+/// `pre_counts[i]` is the number of commands on `pages[i]` before
+/// this story's emit; commands at index ≥ pre_counts[i] are this
+/// story's contributions and get rotated. `chain` + `chain_pages`
+/// are parallel slices — `chain[i]` is the host frame whose page
+/// is `chain_pages[i]`. For each page that hosted at least one
+/// chain frame, the FIRST matching chain frame's geometry is used
+/// as the rotation pivot (typical CJK doesn't thread vertical
+/// stories across pages anyway).
+///
+/// Limitations:
+/// - Latin glyphs end up sideways. Upright Latin in CJK vertical
+///   would require per-glyph counter-rotation around each glyph's
+///   centre (`<RotateSingleByteCharacters>` IDML attribute).
+/// - Rotated content overflows the frame's geometric bounds when
+///   the original layout was wider than the frame is tall (the
+///   common case for tall frames flipped from wide layouts).
+/// - Frame-inset axes don't swap (a 12pt TextTopInset stays in y,
+///   not x). The right fix moves to a layout-time axis swap.
+fn apply_vertical_writing_rotation(
+    pages: &mut [BuiltPage],
+    pre_counts: &[usize],
+    chain: &[&idml_parse::TextFrame],
+    chain_pages: &[usize],
+) {
+    use std::collections::BTreeMap;
+    // For each page that hosted this story, look up the first
+    // chain frame on that page. We pivot around that frame's
+    // top-left and translate by the frame's width.
+    let mut frame_for_page: BTreeMap<usize, &idml_parse::TextFrame> = BTreeMap::new();
+    for (i, &page_idx) in chain_pages.iter().enumerate() {
+        frame_for_page.entry(page_idx).or_insert(chain[i]);
+    }
+    // 90° CW rotation in screen coords (Y down): cos=0, sin=1.
+    // Matrix linear part [a, b, c, d] = [0, 1, -1, 0].
+    let linear = [0.0_f32, 1.0, -1.0, 0.0];
+    for (page_idx, frame) in frame_for_page {
+        if page_idx >= pages.len() {
+            continue;
+        }
+        let pre = pre_counts.get(page_idx).copied().unwrap_or(0);
+        let total = pages[page_idx].list.commands.len();
+        if pre >= total {
+            continue;
+        }
+        let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
+        let (ox, oy) = pages[page_idx].spread_origin;
+        let pivot_x = sx - ox;
+        let pivot_y = sy - oy;
+        let frame_w = frame.bounds.width();
+        for cmd in &mut pages[page_idx].list.commands[pre..total] {
+            let xf = cmd.transform_mut();
+            rotate_transform_around(xf, linear, pivot_x, pivot_y);
+            // After rotation around the frame's top-left, rotated
+            // content lives in x ∈ [pivot_x - h, pivot_x], y ∈
+            // [pivot_y, pivot_y + w]. Shift +frame_w on x to bring
+            // it into the right half of the frame.
+            xf.0[4] += frame_w;
+        }
+    }
+}
+
 fn rotate_transform_around(
     xf: &mut Transform,
     linear: [f32; 4],
@@ -14534,6 +14635,101 @@ mod tests {
             cmd_count >= 20,
             "expected nested-table cmds (≥20 for grid + INNER-A + INNER-B), \
              got {cmd_count}"
+        );
+    }
+
+    #[test]
+    fn vertical_writing_rotates_emitted_commands() {
+        // Build a story with StoryDirection="VerticalWritingDirection".
+        // After build, every command that landed on the host page
+        // should have a rotated transform (90° CW). We detect this
+        // by checking the `b` and `c` cells of the transform — for
+        // upright transforms b=0; after a 90° CW rotation b=1 (the
+        // first column becomes [0, 1]). Identity → rotated proves
+        // the post-pass fired.
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+        let buf = std::io::Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+        zip.start_file("mimetype", stored).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+        zip.start_file("designmap.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_s1.xml"/>
+</Document>"#,
+        )
+        .unwrap();
+        zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 200"/>
+    <TextFrame Self="frameA" ParentStory="s1" GeometricBounds="20 20 180 180"/>
+  </Spread>
+</idPkg:Spread>"#,
+        )
+        .unwrap();
+        zip.start_file("Stories/Story_s1.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="s1" StoryDirection="VerticalWritingDirection">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="12">
+        <Content>ABC</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+        )
+        .unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let doc = idml_scene::Document::open(&bytes).expect("open IDML");
+
+        let font_bytes = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../corpus/fonts/Inter.ttf"),
+        )
+        .expect("Inter.ttf fixture");
+        let options = PipelineOptions {
+            font: Some(&font_bytes),
+            ..PipelineOptions::default()
+        };
+        let built = build_document(&doc, &options).expect("build");
+
+        // At least one command on the page should have a rotated
+        // transform. Identity transform = [1, 0, 0, 1, tx, ty];
+        // after 90° CW the linear part becomes [0, 1, -1, 0, ...].
+        // Glyph FillPath commands have transforms like
+        // [scale, 0, 0, scale, tx, ty] with scale ≈ 12/units_per_em.
+        // After 90° CW rotation: new linear = [0, scale, -scale, 0].
+        // The test detects "a became zero" + "b became non-zero" —
+        // any threshold > 0 catches it.
+        let mut owned = built.pages[0].list.commands.clone();
+        let mut saw_any = false;
+        let mut saw_rotated = false;
+        for cmd in owned.iter_mut() {
+            let xf = cmd.transform_mut();
+            saw_any = true;
+            // Rotated: a near 0, b non-zero. Pre-rotation: a non-zero, b near 0.
+            if xf.0[0].abs() < 1e-3 && xf.0[1].abs() > 1e-4 {
+                saw_rotated = true;
+                break;
+            }
+        }
+        assert!(saw_any, "expected at least one command on the page");
+        assert!(
+            saw_rotated,
+            "vertical-writing post-rotation should have rotated at least one command"
         );
     }
 
