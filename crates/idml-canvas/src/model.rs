@@ -217,7 +217,9 @@ impl CanvasModel {
         opts: CanvasOptions,
     ) -> Result<Self, LoadError> {
         let doc_id = doc_id.into();
+        let t_parse = phase_now();
         let scene = Document::open(bytes).map_err(|e| LoadError::Parse(e.to_string()))?;
+        phase_log("CanvasModel::load parse", t_parse);
 
         // Honour the first font and the ICC profile. Take ownership
         // up-front so the model is self-contained — no caller-managed
@@ -227,6 +229,7 @@ impl CanvasModel {
         let font_registry = opts.font_registry;
         let resolver = build_font_resolver(&font_registry, font_bytes.as_deref());
 
+        let t_build = phase_now();
         let (built_result, layout_cache) = {
             let options = PipelineOptions {
                 font: font_bytes.as_deref(),
@@ -242,7 +245,9 @@ impl CanvasModel {
             })
         };
         let built = built_result.map_err(|e| LoadError::Build(e.to_string()))?;
+        phase_log("CanvasModel::load build", t_build);
 
+        let t_post = phase_now();
         let page_index = built
             .pages
             .iter()
@@ -252,6 +257,7 @@ impl CanvasModel {
 
         let initial_state_hash = scene.canonical_hash();
         let story_pages = compute_story_pages(&built);
+        phase_log("CanvasModel::load post (index+hash+story_pages)", t_post);
         Ok(Self {
             doc_id,
             scene,
@@ -578,6 +584,31 @@ impl CanvasModel {
 /// LineLayout entries by story. Pages preserve their order; each
 /// story's `Vec<PageId>` is in first-appearance order without
 /// duplicates.
+/// Cheap-but-coarse perf instrumentation. On wasm32 we use
+/// `js_sys::Date::now()` because std::time::Instant panics. On native
+/// we use Instant. Output goes to `tracing::info!` (web console on
+/// wasm via `tracing-subscriber`'s wasm hook) and to a `console.log`
+/// fallback so the line is also visible in DevTools.
+#[cfg(target_arch = "wasm32")]
+fn phase_now() -> f64 {
+    js_sys::Date::now()
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn phase_now() -> std::time::Instant {
+    std::time::Instant::now()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn phase_log(label: &str, start: f64) {
+    let ms = js_sys::Date::now() - start;
+    web_sys::console::log_1(&format!("[idml-canvas perf] {label}: {ms:.0} ms").into());
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn phase_log(label: &str, start: std::time::Instant) {
+    let ms = start.elapsed().as_secs_f64() * 1000.0;
+    tracing::info!("[idml-canvas perf] {label}: {ms:.0} ms");
+}
+
 /// Build a `BytesResolver` from a font registry. Returns `None` when
 /// the registry is empty AND no default font is provided — the
 /// pipeline already handles `assets: None` cleanly, so we save the
