@@ -12438,12 +12438,69 @@ fn format_number(n: u32, format: Option<&str>) -> String {
         "i" => to_roman(n, true),
         "A" => to_alpha(n, false),
         "a" => to_alpha(n, true),
+        // Phase 7 — CJK numerals. IDML serialises these as the sample
+        // first-glyph (the same convention as Latin formats). 一 is
+        // the Han numeral 1; 壹 is the formal "financial" variant.
+        // Numbers above the implemented ceiling fall back to Arabic
+        // (matches InDesign's behaviour for numbers it can't represent
+        // in the chosen system).
+        "一" => to_hanzi(n, false),
+        "壹" => to_hanzi(n, true),
         s if s.starts_with('0') && s.chars().all(|c| c.is_ascii_digit()) => {
             // Zero-padded Arabic; width = head's length.
             format!("{:0>width$}", n, width = s.len())
         }
         _ => n.to_string(),
     }
+}
+
+/// Phase 7 — Chinese / Japanese numeral conversion. `formal` selects
+/// the "financial" character set (壹, 貳, 參, …) over the everyday
+/// set (一, 二, 三, …). Both share the same digit shape for numbers
+/// ≥ 10 (十, 百, 千, 萬) since the financial variant only applies to
+/// the unit digits.
+///
+/// Implemented for 1..=999. Larger values fall through to Arabic to
+/// avoid emitting partial/incorrect strings for very long
+/// documents — matches the spirit of Adobe's fallback when a chosen
+/// numbering system can't represent the actual page number.
+fn to_hanzi(n: u32, formal: bool) -> String {
+    if n == 0 || n > 999 {
+        return n.to_string();
+    }
+    // Digit tables. Index 0 is empty so digit[n] is the glyph for n.
+    let digits_everyday = ["", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+    let digits_formal = ["", "壹", "貳", "參", "肆", "伍", "陸", "柒", "捌", "玖"];
+    let digits = if formal { &digits_formal } else { &digits_everyday };
+
+    let hundreds = (n / 100) as usize;
+    let tens = ((n / 10) % 10) as usize;
+    let units = (n % 10) as usize;
+
+    let mut out = String::new();
+    if hundreds > 0 {
+        out.push_str(digits[hundreds]);
+        out.push('百');
+    }
+    if tens > 0 {
+        // The "一十" prefix is suppressed for n in 10..=19 in
+        // everyday Chinese (which writes 10 as 十 not 一十), but the
+        // formal financial form keeps the 壹 prefix. We follow
+        // everyday-Chinese convention for the unformal case.
+        if !(tens == 1 && !formal && hundreds == 0) {
+            out.push_str(digits[tens]);
+        }
+        out.push('十');
+    } else if hundreds > 0 && units > 0 {
+        // "Zero gap" — e.g. 101 = 一百零一. Chinese inserts 零 to
+        // signal the missing tens place. Both everyday and formal
+        // conventions agree here.
+        out.push('零');
+    }
+    if units > 0 {
+        out.push_str(digits[units]);
+    }
+    out
 }
 
 /// Roman numeral conversion. `n` must be ≥ 1; `n == 0` returns
@@ -13228,6 +13285,43 @@ mod tests {
     fn format_number_unknown_falls_back_to_arabic() {
         assert_eq!(format_number(5, Some("Q, R, S, ...")), "5");
         assert_eq!(format_number(5, Some("not a format")), "5");
+    }
+
+    #[test]
+    fn format_number_hanzi_everyday() {
+        let f = |n| format_number(n, Some("一, 二, 三..."));
+        assert_eq!(f(1), "一");
+        assert_eq!(f(5), "五");
+        assert_eq!(f(9), "九");
+        // 10..=19: leading 十 without 一 prefix.
+        assert_eq!(f(10), "十");
+        assert_eq!(f(11), "十一");
+        assert_eq!(f(15), "十五");
+        // 20..=99: digit + 十 + units.
+        assert_eq!(f(20), "二十");
+        assert_eq!(f(25), "二十五");
+        assert_eq!(f(99), "九十九");
+        // 100..=999: hundreds digit + 百 + tens + units.
+        assert_eq!(f(100), "一百");
+        // 零 gap-marker when tens=0 but units>0 (e.g. 101 = 一百零一).
+        assert_eq!(f(101), "一百零一");
+        // 110 = hundreds + 一 + 十 (no 零, tens is non-zero).
+        assert_eq!(f(110), "一百一十");
+        assert_eq!(f(125), "一百二十五");
+        assert_eq!(f(999), "九百九十九");
+        // ≥ 1000: fallback to Arabic.
+        assert_eq!(f(1000), "1000");
+    }
+
+    #[test]
+    fn format_number_hanzi_formal() {
+        let f = |n| format_number(n, Some("壹, 貳, 參..."));
+        // Formal/financial digit set.
+        assert_eq!(f(1), "壹");
+        assert_eq!(f(5), "伍");
+        assert_eq!(f(9), "玖");
+        // 10..=19: formal keeps 壹十 prefix (unlike everyday).
+        assert_eq!(f(11), "壹十壹");
     }
 
     #[test]
