@@ -224,6 +224,55 @@ mod wasm {
             Some(arr)
         }
 
+        /// Direct binary entry point for `loadDocument`. Bypasses the
+        /// JSON channel so multi-MB IDMLs don't have to ride as a
+        /// 8×-inflated `number[]` array (which on wasm32 trips the
+        /// 2 GB `Vec::with_capacity` cap during serde parse — the
+        /// megapacks ≥100 MB panic with "capacity overflow" through
+        /// the JSON path). Returns a JSON string that the JS side
+        /// parses with the same `WorkerToMain` shape `handleMessage`
+        /// would produce — `documentLoaded` on success, `loadFailed`
+        /// otherwise.
+        #[wasm_bindgen(js_name = loadDocumentDirect)]
+        pub fn load_document_direct(
+            &mut self,
+            seq: u32,
+            bytes: &[u8],
+            font: Option<Vec<u8>>,
+            cmyk_icc_profile: Option<Vec<u8>>,
+        ) -> String {
+            let opts = CanvasOptions {
+                fonts: font.map(|b| vec![b]).unwrap_or_default(),
+                font_registry: self.font_registry.clone(),
+                cmyk_icc_profile,
+            };
+            let doc_id = format!("doc-{}", seq);
+            // u64 because `WorkerToMain.seq` is u64 to match the
+            // JSON-channel envelope's existing sequence width.
+            let seq_u64 = seq as u64;
+            let reply = match CanvasModel::load(doc_id, bytes, opts) {
+                Ok(model) => {
+                    let handle = model.handle();
+                    self.model = Some(model);
+                    #[cfg(feature = "gpu")]
+                    {
+                        self.scene_cache.clear();
+                    }
+                    WorkerToMain {
+                        seq: Some(seq_u64),
+                        protocol: PROTOCOL_VERSION,
+                        kind: WorkerToMainKind::DocumentLoaded(handle),
+                    }
+                }
+                Err(e) => WorkerToMain {
+                    seq: Some(seq_u64),
+                    protocol: PROTOCOL_VERSION,
+                    kind: WorkerToMainKind::LoadFailed { error: e },
+                },
+            };
+            serde_json::to_string(&reply).unwrap_or_default()
+        }
+
         /// Number of pages in the loaded document, or 0 if no
         /// document is loaded.
         #[wasm_bindgen(js_name = pageCount)]
