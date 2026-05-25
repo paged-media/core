@@ -10,11 +10,13 @@
 //! `spikes/composer-calibration` before this crate takes a hard dependency
 //! on any specific penalty configuration.
 
+pub mod cache;
 pub mod compose;
 pub mod hyphenate;
 pub mod layout;
 pub mod shape;
 
+pub use cache::{CacheStats, LayoutCache, LayoutKeyHasher};
 pub use compose::{
     compose_paragraph, compose_paragraph_with_drop_cap, drop_cap_column_widths,
     drop_cap_column_widths_with_min, drop_cap_point_size, AdvanceMeasurer, ComposeOptions,

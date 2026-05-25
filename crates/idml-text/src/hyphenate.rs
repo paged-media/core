@@ -59,6 +59,22 @@ impl Hyphenator {
         }
     }
 
+    /// Stable byte id of the underlying language. Used by the layout
+    /// cache to fold the hyphenator's contribution into a cache key
+    /// without depending on Debug-format stability.
+    pub fn lang_id(&self) -> u8 {
+        match self.lang {
+            Lang::English => 1,
+            Lang::German => 2,
+            Lang::French => 3,
+            Lang::Spanish => 4,
+            Lang::Italian => 5,
+            Lang::Dutch => 6,
+            Lang::Portuguese => 7,
+            _ => 0,
+        }
+    }
+
     /// Return a list of byte indices inside `word` where a hyphen
     /// could be inserted. Indices are relative to the slice — so for
     /// "computer" the result is [3, 6] (com-put-er). The list never

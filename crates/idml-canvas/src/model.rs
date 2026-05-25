@@ -150,6 +150,11 @@ pub struct CanvasModel {
     /// by `redo()`. Cleared when a new mutation lands (standard
     /// editor convention).
     redo_log: Vec<AppliedRecord>,
+    /// Phase 4 Step 1 — persistent per-paragraph layout cache.
+    /// Installed on every rebuild via `idml_text::cache::with_layout_cache`
+    /// so unchanged paragraphs short-circuit Knuth-Plass on
+    /// mutation-driven rebuilds. Survives across mutations.
+    layout_cache: idml_text::LayoutCache,
 }
 
 /// One entry in the applied / redo logs.
@@ -178,15 +183,20 @@ impl CanvasModel {
         let font_bytes = opts.fonts.into_iter().next();
         let icc_bytes = opts.cmyk_icc_profile;
 
-        let built = {
+        let (built_result, layout_cache) = {
             let options = PipelineOptions {
                 font: font_bytes.as_deref(),
                 cmyk_icc_profile: icc_bytes.as_deref(),
                 ..PipelineOptions::default()
             };
-            pipeline::build_document(&scene, &options)
-                .map_err(|e| LoadError::Build(e.to_string()))?
+            // Phase 4 Step 1 — install an empty cache for the initial
+            // build. Every paragraph misses; the cache fills up so
+            // subsequent mutation-driven rebuilds can hit.
+            idml_text::cache::with_layout_cache(idml_text::LayoutCache::default(), || {
+                pipeline::build_document(&scene, &options)
+            })
         };
+        let built = built_result.map_err(|e| LoadError::Build(e.to_string()))?;
 
         let page_index = built
             .pages
@@ -208,6 +218,7 @@ impl CanvasModel {
             current_selection: None,
             applied_log: Vec::new(),
             redo_log: Vec::new(),
+            layout_cache,
         })
     }
 
@@ -430,16 +441,30 @@ impl CanvasModel {
     }
 
     /// Rebuild the `BuiltDocument` from the (possibly-mutated) scene.
-    /// Phase 3 first cut: full rebuild every time. Per the
-    /// correctness-layer plan, incremental composition lands later
-    /// alongside AC-E-1 latency work.
+    /// Phase 4 Step 1 — installs the persistent `layout_cache` so
+    /// paragraphs whose `(text, style, width, font)` signature didn't
+    /// change short-circuit Knuth-Plass. The first build (cold cache)
+    /// pays the full layout cost; subsequent mutation rebuilds only
+    /// recompose the touched paragraph(s).
     pub fn rebuild_after_mutation(&mut self) -> Result<(), crate::channel::LoadError> {
         let options = PipelineOptions {
             font: self.font_bytes.as_deref(),
             cmyk_icc_profile: self.icc_bytes.as_deref(),
             ..PipelineOptions::default()
         };
-        let built = pipeline::build_document(&self.scene, &options)
+        // Take the cache out, install it for the duration of the
+        // build, then take it back so it survives to the next rebuild.
+        // `with_layout_cache` clears its stats counters implicitly via
+        // the explicit reset below so the post-rebuild stats reflect
+        // only this rebuild's hits/misses.
+        let mut cache = std::mem::take(&mut self.layout_cache);
+        cache.reset_stats();
+        let (build_result, cache) =
+            idml_text::cache::with_layout_cache(cache, || {
+                pipeline::build_document(&self.scene, &options)
+            });
+        self.layout_cache = cache;
+        let built = build_result
             .map_err(|e| crate::channel::LoadError::Build(e.to_string()))?;
         self.page_index = built
             .pages
@@ -449,6 +474,14 @@ impl CanvasModel {
             .collect();
         self.built = built;
         Ok(())
+    }
+
+    /// Phase 4 instrumentation — last rebuild's layout cache stats.
+    /// Hits / misses reflect the most recent `rebuild_after_mutation`
+    /// (or initial `load`) so callers can verify incremental wins on
+    /// a typing test.
+    pub fn layout_cache_stats(&self) -> idml_text::CacheStats {
+        self.layout_cache.stats()
     }
 
     /// Expose the inner built document for tests and the wasm

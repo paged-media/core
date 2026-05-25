@@ -2981,7 +2981,7 @@ fn emit_paragraph_into_chain(
         lopts.compose.stretch_ratio = lopts.compose.stretch_ratio.max(0.5);
     }
 
-    let mut laid_out = idml_text::layout_runs(styled_runs_ref, &lopts);
+    let mut laid_out = idml_text::cache::layout_runs_cached(styled_runs_ref, &lopts);
 
     // Optical margin alignment: when the story carries
     // `<StoryPreference OpticalMarginAlignment="true" />`, nudge the
@@ -7062,7 +7062,7 @@ fn measure_cell_paragraph(
     apply_paragraph_compose_options(&mut lopts, em.hyphenator, &resolved_paragraph);
     lopts.first_baseline =
         ((paragraph_size * 0.8) * idml_text::shape::ADVANCE_PRECISION).round() as i32;
-    let laid_out = idml_text::layout_runs(&styled_runs, &lopts);
+    let laid_out = idml_text::cache::layout_runs_cached(&styled_runs, &lopts);
     if laid_out.lines.is_empty() {
         return 0.0;
     }
@@ -7235,7 +7235,7 @@ fn emit_cell_paragraph(
     lopts.first_baseline =
         ((paragraph_size * 0.8) * idml_text::shape::ADVANCE_PRECISION).round() as i32;
 
-    let laid_out = idml_text::layout_runs(&styled_runs, &lopts);
+    let laid_out = idml_text::cache::layout_runs_cached(&styled_runs, &lopts);
     if laid_out.lines.is_empty() {
         return 0.0;
     }

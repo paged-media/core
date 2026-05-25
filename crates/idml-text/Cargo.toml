@@ -20,3 +20,4 @@ unicode-bidi = "0.3"
 unicode-segmentation = "1"
 thiserror = { workspace = true }
 tracing = { workspace = true }
+blake3 = "1"
