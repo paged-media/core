@@ -270,6 +270,11 @@ pub struct LayoutCacheStats {
     pub misses: u64,
     pub len: usize,
     pub capacity: usize,
+    /// Phase 4 instrumentation — wall-clock duration of the rebuild
+    /// that produced these stats, in milliseconds. Lets the HUD
+    /// compare cache wins against the underlying budget (AC-E-1
+    /// requires < 32 ms).
+    pub rebuild_ms: f32,
 }
 
 impl From<idml_text::CacheStats> for LayoutCacheStats {
@@ -279,6 +284,7 @@ impl From<idml_text::CacheStats> for LayoutCacheStats {
             misses: s.misses,
             len: s.len,
             capacity: s.capacity,
+            rebuild_ms: 0.0,
         }
     }
 }

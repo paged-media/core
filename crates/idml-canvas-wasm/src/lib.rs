@@ -12,6 +12,7 @@
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use idml_canvas::{
+        channel::LayoutCacheStats,
         CanvasModel, CanvasOptions, LoadError, MainToWorker, MainToWorkerKind, ProtocolVersion,
         WorkerError, WorkerToMain, WorkerToMainKind, PROTOCOL_VERSION,
     };
@@ -447,6 +448,7 @@ mod wasm {
                             },
                         };
                     };
+                    let t0 = js_sys::Date::now();
                     match model.apply_mutation(&m) {
                         Ok(outcome) => {
                             // Phase 3 correctness — text mutations
@@ -457,11 +459,14 @@ mod wasm {
                             {
                                 self.scene_cache.clear();
                             }
+                            let mut stats: LayoutCacheStats =
+                                model.layout_cache_stats().into();
+                            stats.rebuild_ms = (js_sys::Date::now() - t0) as f32;
                             WorkerToMainKind::MutationApplied {
                                 client_seq: msg.seq,
                                 applied_seq: outcome.applied_seq,
                                 page_ids: outcome.page_ids,
-                                cache_stats: model.layout_cache_stats().into(),
+                                cache_stats: stats,
                             }
                         }
                         Err(error) => WorkerToMainKind::MutationFailed { error },
@@ -580,17 +585,21 @@ mod wasm {
                             },
                         };
                     };
+                    let t0 = js_sys::Date::now();
                     match model.undo() {
                         Some(outcome) => {
                             #[cfg(feature = "gpu")]
                             {
                                 self.scene_cache.clear();
                             }
+                            let mut stats: LayoutCacheStats =
+                                model.layout_cache_stats().into();
+                            stats.rebuild_ms = (js_sys::Date::now() - t0) as f32;
                             WorkerToMainKind::UndoApplied {
                                 undone_seq: outcome.undone_seq,
                                 applied_seq: outcome.applied_seq,
                                 page_ids: outcome.page_ids,
-                                cache_stats: model.layout_cache_stats().into(),
+                                cache_stats: stats,
                             }
                         }
                         None => WorkerToMainKind::MutationFailed {
@@ -610,17 +619,21 @@ mod wasm {
                             },
                         };
                     };
+                    let t0 = js_sys::Date::now();
                     match model.redo() {
                         Some(outcome) => {
                             #[cfg(feature = "gpu")]
                             {
                                 self.scene_cache.clear();
                             }
+                            let mut stats: LayoutCacheStats =
+                                model.layout_cache_stats().into();
+                            stats.rebuild_ms = (js_sys::Date::now() - t0) as f32;
                             WorkerToMainKind::RedoApplied {
                                 redone_seq: outcome.undone_seq,
                                 applied_seq: outcome.applied_seq,
                                 page_ids: outcome.page_ids,
-                                cache_stats: model.layout_cache_stats().into(),
+                                cache_stats: stats,
                             }
                         }
                         None => WorkerToMainKind::MutationFailed {
