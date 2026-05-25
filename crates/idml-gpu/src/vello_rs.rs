@@ -176,6 +176,27 @@ impl PathRasterizer for VelloRasterizer {
 /// list is in-memory and the match is one branch per command). Drives
 /// the policy decision in `rasterize` between unchanged / CPU-finisher /
 /// GPU-compute paths.
+/// Materialise an RGBA8 buffer from encoded image bytes at the
+/// dimensions the build phase recorded. Used by the wasm32 lazy
+/// path (`DecodedImage.rgba` empty, `encoded` populated) so peak
+/// heap stays at one decoded image at a time. Mirror of cpu.rs's
+/// helper of the same name; duplicated to avoid cross-feature
+/// visibility issues.
+fn decode_image_for_render(bytes: &[u8], expected_w: u32, expected_h: u32) -> Option<Vec<u8>> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let raw = if img.width() == expected_w && img.height() == expected_h {
+        img.to_rgba8()
+    } else {
+        image::imageops::resize(
+            &img.to_rgba8(),
+            expected_w,
+            expected_h,
+            image::imageops::FilterType::Triangle,
+        )
+    };
+    Some(raw.into_raw())
+}
+
 fn count_overprints(list: &DisplayList) -> usize {
     list.commands
         .iter()
@@ -523,21 +544,32 @@ fn build_scene_with_transform_filtered(
                 let Some(img) = list.image(*image_id) else {
                     continue;
                 };
-                if img.width == 0
-                    || img.height == 0
-                    || img.rgba.len() != (img.width as usize * img.height as usize * 4)
-                {
+                if img.width == 0 || img.height == 0 {
                     continue;
                 }
+                // Two paths: eager (rgba pre-decoded; native build)
+                // and lazy (rgba empty; wasm32 build defers decode
+                // to here to keep peak heap bounded). The lazy buf
+                // is owned + dropped after the scene closes.
+                let expected_len = img.width as usize * img.height as usize * 4;
+                let lazy: Option<Vec<u8>> = if img.rgba.len() == expected_len {
+                    None
+                } else if !img.encoded.is_empty() {
+                    match decode_image_for_render(&img.encoded, img.width, img.height) {
+                        Some(buf) => Some(buf),
+                        None => continue,
+                    }
+                } else {
+                    continue;
+                };
                 // peniko 0.6+ replaced `Image::new(...)` with
                 // `ImageData { ... }` + `ImageBrush::new(data)`. We
                 // hand the decoded RGBA8 buffer over via a peniko
-                // Blob (boxed into an Arc). The display list keeps
-                // the canonical buffer alive for the duration of the
-                // scene, but Blob wants its own Arc — clone bytes
-                // out per command. Image dedup happens upstream so
-                // each ImageId only appears in the buffer once.
-                let bytes: Box<[u8]> = img.rgba.clone().into_boxed_slice();
+                // Blob (boxed into an Arc).
+                let bytes: Box<[u8]> = match lazy {
+                    Some(v) => v.into_boxed_slice(),
+                    None => img.rgba.as_ref().to_vec().into_boxed_slice(),
+                };
                 let blob = Blob::new(Arc::new(bytes));
                 let image_data = ImageData {
                     data: blob,

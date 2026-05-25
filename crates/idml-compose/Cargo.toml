@@ -17,3 +17,4 @@ idml-color = { path = "../idml-color" }
 ttf-parser = "0.24"
 thiserror = { workspace = true }
 tracing = { workspace = true }
+bytes = { workspace = true }

@@ -956,13 +956,31 @@ pub struct ImageId(pub u32);
 /// One placed image's decoded RGBA8 pixels. The pipeline decodes
 /// once per (uri, dpi) and stores the result here so repeat
 /// placements share the buffer.
+///
+/// Cloning is cheap (both `encoded` and `rgba` are `Bytes` — refcount
+/// bumps, not memcpys), so the renderer can dedup an image across
+/// many `Image` commands without bloating the heap.
+///
+/// Lazy decoding: when `rgba.is_empty()` the rasterizer must decode
+/// `encoded` on demand and discard the result after composition. This
+/// is the path the wasm32 build takes for envato megapacks (~50MB
+/// embedded images) where decoded RGBA would blow the 4GB
+/// address-space cap. `encoded` may be empty for synthetic images
+/// built directly from RGBA — in that case the rasterizer falls
+/// through to the pre-decoded `rgba`.
 #[derive(Debug, Clone)]
 pub struct DecodedImage {
     pub width: u32,
     pub height: u32,
+    /// Original encoded bytes (PNG / JPEG / WebP / …). Held so a
+    /// lazy rasterizer can decode + drop on demand. Empty when the
+    /// image was constructed directly from a pre-decoded RGBA8 buffer
+    /// (e.g. synthetic placeholders, tests).
+    pub encoded: bytes::Bytes,
     /// Tightly packed RGBA8 (4 bytes per pixel, row-major). Length
-    /// must equal `width * height * 4`.
-    pub rgba: Vec<u8>,
+    /// must equal `width * height * 4` when populated. Empty when
+    /// the rasterizer is expected to decode `encoded` lazily.
+    pub rgba: bytes::Bytes,
 }
 
 /// Stroke parameters. Widths are in pt.

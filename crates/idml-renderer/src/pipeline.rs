@@ -10391,7 +10391,76 @@ fn is_eps_magic(bytes: &[u8]) -> bool {
 /// streams, which would need a Ghostscript sidecar to rasterise
 /// (deferred, see `docs/plan.md` Phase 4).
 fn decode_image_bytes(bytes: &[u8]) -> Option<idml_compose::DecodedImage> {
-    decode_image_bytes_with_target_max(bytes, DECODE_MAX_RASTER_PX)
+    // wasm32 has a hard 4 GB address-space cap. Eagerly decoding
+    // every embedded image to RGBA8 during `build_document` bloats
+    // the heap (envato megapacks ship 50+ MB of images that expand
+    // to 1-2 GB decoded). Defer the decode to render time — the
+    // rasterizer materialises one image at a time and drops after.
+    //
+    // Native targets have 64-bit addressing; eager decode is cheap
+    // there and avoids decoding the same image twice when a page
+    // re-renders.
+    #[cfg(target_arch = "wasm32")]
+    {
+        peek_image_lazy(bytes, DECODE_MAX_RASTER_PX)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        decode_image_bytes_with_target_max(bytes, DECODE_MAX_RASTER_PX)
+    }
+}
+
+/// Lazy variant: returns a `DecodedImage` whose `rgba` is empty and
+/// whose `encoded` carries the original bytes. The rasterizer
+/// detects the empty `rgba` and runs the full decoder on demand.
+/// Width / height come from header peeks where possible (PNG, JPEG)
+/// so the display-list transform stays accurate without paying for
+/// the pixel decode.
+fn peek_image_lazy(bytes: &[u8], max_px: u32) -> Option<idml_compose::DecodedImage> {
+    if is_eps_magic(bytes) {
+        return None;
+    }
+    let (width, height) = peek_image_dimensions(bytes, max_px)?;
+    Some(idml_compose::DecodedImage {
+        width,
+        height,
+        encoded: bytes::Bytes::copy_from_slice(bytes),
+        rgba: bytes::Bytes::new(),
+    })
+}
+
+/// Read width / height from the image header without materialising
+/// the pixel buffer. For JPEGs we apply the same DCT-scale logic as
+/// the eager decoder so the displayed dimensions match what the
+/// rasterizer will actually produce.
+fn peek_image_dimensions(bytes: &[u8], max_px: u32) -> Option<(u32, u32)> {
+    if is_jpeg_magic(bytes) {
+        let (src_w, src_h) = peek_jpeg_dimensions(bytes)?;
+        if src_w == 0 || src_h == 0 {
+            return None;
+        }
+        let longest = src_w.max(src_h);
+        // Mirror decode_jpeg_scaled's DCT-factor pick (1..8 / 8).
+        let k = if longest <= max_px {
+            8u32
+        } else {
+            let mut best: u32 = 1;
+            for k in 1..=8u32 {
+                if longest * k / 8 <= max_px {
+                    best = k;
+                }
+            }
+            best
+        };
+        let w = (src_w * k / 8).max(1);
+        let h = (src_h * k / 8).max(1);
+        return Some((w, h));
+    }
+    // PNG / WebP / etc — header read via the image crate's lazy
+    // dimension probe, which doesn't materialise pixels.
+    let cursor = std::io::Cursor::new(bytes);
+    let reader = image::ImageReader::new(cursor).with_guessed_format().ok()?;
+    reader.into_dimensions().ok()
 }
 
 /// Same as [`decode_image_bytes`] but with a caller-supplied
@@ -10429,7 +10498,8 @@ fn decode_image_bytes_with_target_max(
     Some(idml_compose::DecodedImage {
         width,
         height,
-        rgba: rgba.into_raw(),
+        encoded: bytes::Bytes::copy_from_slice(bytes),
+        rgba: bytes::Bytes::from(rgba.into_raw()),
     })
 }
 
@@ -10498,7 +10568,8 @@ fn decode_jpeg_scaled(bytes: &[u8], max_px: u32) -> Option<idml_compose::Decoded
     Some(idml_compose::DecodedImage {
         width: w,
         height: h,
-        rgba,
+        encoded: bytes::Bytes::copy_from_slice(bytes),
+        rgba: bytes::Bytes::from(rgba),
     })
 }
 

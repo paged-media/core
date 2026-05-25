@@ -804,6 +804,38 @@ fn rasterize_cmyk_scratch_stroke(
     Some((scratch, off_x_px, off_y_px))
 }
 
+/// Materialise an RGBA8 buffer from a `DecodedImage`'s `encoded`
+/// bytes at the dimensions the build phase recorded. Sub-set of the
+/// `idml_renderer::pipeline::decode_image_bytes` logic — duplicated
+/// here to avoid pulling the renderer crate as a dep. Skips EPS,
+/// handles PNG/JPEG/WebP via the `image` crate. Returns `None` on
+/// any decode failure; the caller treats that the same as a missing
+/// image (skips the command).
+///
+/// Heavy by design — the wasm32 lazy path uses this once per
+/// `Image` command and drops the returned `Vec` immediately, so
+/// peak heap during a page render stays at one image at a time.
+fn decode_image_for_render(bytes: &[u8], expected_w: u32, expected_h: u32) -> Option<Vec<u8>> {
+    let img = image::load_from_memory(bytes).ok()?;
+    // Some JPEGs were DCT-scaled at build time; we requested the
+    // build dimensions (expected_w/expected_h) which match the
+    // source's full resolution for non-JPEG images. Resize if the
+    // pixel dimensions don't match (rare; only when the build path
+    // applied a DCT-scale factor that the image crate's eager path
+    // can't replicate by header alone).
+    let raw = if img.width() == expected_w && img.height() == expected_h {
+        img.to_rgba8()
+    } else {
+        image::imageops::resize(
+            &img.to_rgba8(),
+            expected_w,
+            expected_h,
+            image::imageops::FilterType::Triangle,
+        )
+    };
+    Some(raw.into_raw())
+}
+
 /// Rasterise `list` to an 8-bit sRGB RGBA image at the configured DPI.
 /// Free-function form retained for callers that already use it (the
 /// `idml-renderer::pipeline::render_document` path).
@@ -1380,18 +1412,36 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 let Some(img) = list.image(*image_id) else {
                     continue;
                 };
-                if img.width == 0
-                    || img.height == 0
-                    || img.rgba.len() != (img.width as usize * img.height as usize * 4)
-                {
+                if img.width == 0 || img.height == 0 {
                     continue;
                 }
+                // Two paths: eager (rgba pre-decoded at build time on
+                // native) and lazy (rgba empty, rasterizer must decode
+                // `encoded` on demand). Lazy is the wasm32 path —
+                // peak heap stays at one decoded image at a time
+                // because `lazy_rgba` is dropped before the next
+                // Image command runs.
+                let expected_len = img.width as usize * img.height as usize * 4;
+                let lazy_rgba: Option<Vec<u8>> = if img.rgba.len() == expected_len {
+                    None
+                } else if !img.encoded.is_empty() {
+                    match decode_image_for_render(&img.encoded, img.width, img.height) {
+                        Some(buf) => Some(buf),
+                        None => continue,
+                    }
+                } else {
+                    continue;
+                };
+                let rgba_slice: &[u8] = lazy_rgba
+                    .as_deref()
+                    .unwrap_or_else(|| img.rgba.as_ref());
                 // Build a tiny_skia source pixmap from the decoded
                 // RGBA8 buffer. This is one alloc + memcpy per
                 // command; image dedup happens upstream when the
                 // pipeline pushes into the list.
                 let mut src = Pixmap::new(img.width, img.height).expect("non-zero image pixmap");
-                src.data_mut().copy_from_slice(&img.rgba);
+                src.data_mut().copy_from_slice(rgba_slice);
+                drop(lazy_rgba);
                 let (target, target_xform, target_mask) =
                     resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
                 // Compose the placement transform: the display-list

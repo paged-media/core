@@ -15,7 +15,7 @@ default = ["cpu"]
 # Selects the active rasterizer. Only one may be enabled at a time; the
 # default (none) means the crate exposes only the trait surface. The
 # concrete choice is made after Spike A concludes.
-vello-backend = ["dep:vello", "dep:wgpu"]
+vello-backend = ["dep:vello", "dep:wgpu", "dep:image"]
 # CPU rasterizer via tiny-skia — always buildable, exercises the full
 # pipeline in environments without a GPU. Primarily used by tests and
 # the fidelity harness.
