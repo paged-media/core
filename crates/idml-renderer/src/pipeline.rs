@@ -3853,6 +3853,44 @@ fn emit_paragraph_into_chain(
             &mut pages[target_page].list,
         );
 
+        // Phase 7 — Kenten emphasis marks. For each glyph whose
+        // source run has `kenten_kind` resolved to something other
+        // than "None", stamp a small mark above the glyph centre.
+        // Mark = a black-filled circle at ~10% of base point size
+        // (matches InDesign's default visual density for the
+        // common "Black Circle" / "Sesame Dot" presets); position
+        // = above the line's baseline by ~1.1 × base point size.
+        // Per-character `KentenKind` variants (Dot / Sesame /
+        // White / Custom) all stamp the same simple filled circle
+        // today; richer glyphs (the actual ・ / ﹅ shapes) are a
+        // follow-up.
+        emit_kenten_for_line(
+            &line,
+            paragraph,
+            &resolved_runs,
+            (sx - ox, sy - oy),
+            &mut pages[target_page].list,
+        );
+
+        // Phase 7 — Ruby annotations. For each run with
+        // `ruby_flag = true` and a non-empty `ruby_string`, shape
+        // the ruby text at half the run's point size using the
+        // document's fallback font and emit it centered above the
+        // base run's glyphs. Per-character vs. group alignment is
+        // collapsed to "group centered" in the MVP — distributing
+        // ruby chars per base char (`PerCharacter` mode) requires
+        // a more involved layout pass and is queued.
+        if em.options.font.is_some() {
+            emit_ruby_for_line(
+                &line,
+                paragraph,
+                &resolved_runs,
+                em.options.font.unwrap(),
+                (sx - ox, sy - oy),
+                &mut pages[target_page].list,
+            );
+        }
+
         // For rotated/sheared TextFrames, post-multiply each glyph
         // command's transform by the frame's linear 2×2, pivoting
         // around the frame's page-space top-left so glyphs end up
@@ -11720,6 +11758,13 @@ fn apply_paragraph_compose_options<'a>(
     // / "PushOut" / etc). The composer currently keys on presence only;
     // flavour-specific behaviour is queued under CJK Stage 4.
     lopts.compose.kinsoku_enforce = resolved.kinsoku_type.is_some();
+    // Phase 7 — enable Mojikumi half-width tightening when the
+    // cascade resolves a `MojikumiTable` or `MojikumiSet` reference.
+    // The MVP applies a uniform "halve CJK punctuation advance"
+    // rule rather than per-table per-adjacency lookups; richer
+    // table-driven behaviour is queued.
+    lopts.compose.mojikumi_half_width =
+        resolved.mojikumi_table.is_some() || resolved.mojikumi_set.is_some();
 }
 
 /// Map an IDML `StrokeType` reference to a [`Stroke`] of the given
@@ -11876,6 +11921,223 @@ pub(crate) fn apply_fill_tint(paint: Paint, tint_pct: Option<f32>) -> Paint {
             spot,
         },
         other => other,
+    }
+}
+
+/// Phase 7 — emit Kenten emphasis marks above glyphs whose source
+/// run carries a `KentenKind` other than `"None"`. The mark is a
+/// small filled black circle stamped above the base glyph's centre
+/// at a fixed fraction of the run's point size. Per-glyph cluster
+/// → run lookup is done inline so we don't need to thread a picker
+/// or build a side index.
+///
+/// Position: mark sits ~0.4 × point_size above the line's baseline
+/// (above the cap line of typical CJK fonts). Mark diameter =
+/// 0.18 × point_size (slightly smaller than ideographic full-
+/// width). The mark scales with the run's point size so kenten
+/// over headlines vs. body text reads at proportional weight.
+fn emit_kenten_for_line(
+    line: &idml_text::layout::LaidOutLine,
+    paragraph: &idml_parse::Paragraph,
+    resolved_runs: &[idml_scene::ResolvedRunAttrs],
+    frame_origin_pt: (f32, f32),
+    list: &mut DisplayList,
+) {
+    use idml_text::shape::ADVANCE_PRECISION;
+    if line.glyphs.is_empty() || paragraph.runs.is_empty() {
+        return;
+    }
+    // Build a tiny cluster → run index. Linear walk over
+    // paragraph.runs accumulating byte lengths.
+    let mut run_byte_ends: Vec<usize> = Vec::with_capacity(paragraph.runs.len());
+    let mut acc = 0usize;
+    for r in &paragraph.runs {
+        acc += r.text.len();
+        run_byte_ends.push(acc);
+    }
+    // Fast bail when no run has a Kenten mark to render.
+    let any_kenten = resolved_runs.iter().any(|r| {
+        r.kenten_kind
+            .as_deref()
+            .map(|k| !k.eq_ignore_ascii_case("None"))
+            .unwrap_or(false)
+    });
+    if !any_kenten {
+        return;
+    }
+    let (ox, oy) = frame_origin_pt;
+    let mark_paint = Paint::Solid(Color {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    });
+    for g in &line.glyphs {
+        let cluster = g.cluster as usize;
+        // Find the run that owns this cluster.
+        let run_idx = run_byte_ends
+            .iter()
+            .position(|&end| cluster < end)
+            .unwrap_or(run_byte_ends.len() - 1);
+        let Some(resolved) = resolved_runs.get(run_idx) else {
+            continue;
+        };
+        let kind = match resolved.kenten_kind.as_deref() {
+            Some(k) if !k.eq_ignore_ascii_case("None") => k,
+            _ => continue,
+        };
+        let point_size = g.point_size.max(1.0);
+        let mark_diameter = point_size * 0.18;
+        // Centre of mark = centre of glyph's advance, sitting
+        // 0.4 × point_size above the baseline. Mark fill colour
+        // currently follows a fixed black (KentenKind variants
+        // map to the same simple dot today).
+        let _ = kind; // variants share the simple-dot shape MVP.
+        let glyph_x_pt = g.x as f32 / ADVANCE_PRECISION;
+        let glyph_adv_pt = g.x_advance as f32 / ADVANCE_PRECISION;
+        let centre_x = ox + glyph_x_pt + glyph_adv_pt * 0.5;
+        let baseline_y_pt = g.y as f32 / ADVANCE_PRECISION;
+        let centre_y = oy + baseline_y_pt - point_size * 0.95;
+        let rect = Rect {
+            x: centre_x - mark_diameter * 0.5,
+            y: centre_y - mark_diameter * 0.5,
+            w: mark_diameter,
+            h: mark_diameter,
+        };
+        emit_ellipse(rect, mark_paint, list);
+    }
+}
+
+/// Phase 7 — emit ruby annotations above runs whose `ruby_flag` is
+/// set. The MVP shapes `ruby_string` once per ruby-tagged run via
+/// the document's fallback font at 0.5 × base point size, centers
+/// the result horizontally over the base run's glyph span, and
+/// places it 1.05 × base point size above the line's baseline (i.e.
+/// just above the cap line).
+///
+/// Limitations called out:
+/// - Uses the fallback font for shaping (the run's own font may
+///   carry better glyphs for Japanese kana but the fallback at
+///   least always has SOME glyph). This is good enough for visible
+///   confirmation; replacing it with the run's resolved face is a
+///   follow-up.
+/// - `PerCharacter` ruby (one ruby char per base char) collapses to
+///   the same "centered group" placement as `GroupRuby`. Per-
+///   character distribution requires aligning ruby char N over
+///   base char N which the MVP skips.
+fn emit_ruby_for_line(
+    line: &idml_text::layout::LaidOutLine,
+    paragraph: &idml_parse::Paragraph,
+    resolved_runs: &[idml_scene::ResolvedRunAttrs],
+    font_bytes: &[u8],
+    frame_origin_pt: (f32, f32),
+    list: &mut DisplayList,
+) {
+    use idml_text::shape::ADVANCE_PRECISION;
+    if line.glyphs.is_empty() || paragraph.runs.is_empty() {
+        return;
+    }
+    // Fast bail when no run has ruby.
+    let any_ruby = resolved_runs.iter().any(|r| r.ruby_flag.unwrap_or(false));
+    if !any_ruby {
+        return;
+    }
+    // Construct a shaping + outlining face for the ruby text.
+    let Some(rb_face) = rustybuzz::Face::from_slice(font_bytes, 0) else {
+        return;
+    };
+    let Ok(ttf_face) = ttf_parser::Face::parse(font_bytes, 0) else {
+        return;
+    };
+    let outliner = TtfOutliner::new(&ttf_face);
+    // Build cluster → run index lookup.
+    let mut run_byte_ends: Vec<usize> = Vec::with_capacity(paragraph.runs.len());
+    let mut acc = 0usize;
+    for r in &paragraph.runs {
+        acc += r.text.len();
+        run_byte_ends.push(acc);
+    }
+    let (ox, oy) = frame_origin_pt;
+    let ruby_paint = Paint::Solid(Color {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    });
+    // For each run with ruby, find its glyph span in the line and
+    // emit centered ruby. We do per-run independently so multiple
+    // ruby runs in one line work.
+    for (run_idx, resolved) in resolved_runs.iter().enumerate() {
+        if !resolved.ruby_flag.unwrap_or(false) {
+            continue;
+        }
+        let ruby_text = match resolved.ruby_string.as_deref() {
+            Some(s) if !s.is_empty() => s,
+            _ => continue,
+        };
+        let run_start = if run_idx == 0 { 0 } else { run_byte_ends[run_idx - 1] };
+        let run_end = run_byte_ends[run_idx];
+        // Find min/max x among glyphs in this run's cluster range.
+        let mut x_min = i32::MAX;
+        let mut x_max = i32::MIN;
+        let mut base_point_size: f32 = 0.0;
+        let mut baseline_y_64: i32 = 0;
+        for g in &line.glyphs {
+            let c = g.cluster as usize;
+            if c < run_start || c >= run_end {
+                continue;
+            }
+            x_min = x_min.min(g.x);
+            x_max = x_max.max(g.x + g.x_advance);
+            base_point_size = base_point_size.max(g.point_size);
+            baseline_y_64 = g.y; // last wins; all glyphs on a line share baseline
+        }
+        if x_min == i32::MAX || base_point_size <= 0.0 {
+            continue;
+        }
+        // Shape the ruby string at half the base point size.
+        let ruby_pt = base_point_size * 0.5;
+        let shaped = idml_text::shape_run(&rb_face, ruby_text, ruby_pt);
+        if shaped.glyphs.is_empty() {
+            continue;
+        }
+        // Centre the shaped advance over the base x span.
+        let base_x_left_pt = x_min as f32 / ADVANCE_PRECISION;
+        let base_x_right_pt = x_max as f32 / ADVANCE_PRECISION;
+        let base_centre_pt = (base_x_left_pt + base_x_right_pt) * 0.5;
+        let ruby_advance_pt = shaped.total_advance as f32 / ADVANCE_PRECISION;
+        let ruby_origin_x_pt = base_centre_pt - ruby_advance_pt * 0.5;
+        // Position above the baseline by 1.05 × base point size.
+        let baseline_y_pt = baseline_y_64 as f32 / ADVANCE_PRECISION;
+        let ruby_origin_y_pt = baseline_y_pt - base_point_size * 1.05;
+        // Convert shape glyphs to PositionedGlyph at the ruby
+        // origin. Each glyph's x is the running advance sum.
+        let mut positioned: Vec<idml_text::PositionedGlyph> = Vec::with_capacity(shaped.glyphs.len());
+        let mut cursor = 0i32;
+        for g in &shaped.glyphs {
+            positioned.push(idml_text::PositionedGlyph {
+                glyph_id: g.glyph_id,
+                cluster: g.cluster,
+                x: cursor + g.x_offset,
+                y: g.y_offset,
+                x_advance: g.x_advance,
+                font_id: u32::MAX, // sentinel: ruby uses the fallback face directly via outliner
+                point_size: ruby_pt,
+                underline: false,
+                strikethru: false,
+                x_scale: 1.0,
+            });
+            cursor = cursor.saturating_add(g.x_advance);
+        }
+        emit_glyph_slice(
+            &positioned,
+            u32::MAX,
+            ruby_pt,
+            |_| ruby_paint,
+            (ox + ruby_origin_x_pt, oy + ruby_origin_y_pt),
+            &outliner,
+            list,
+        );
     }
 }
 
@@ -14272,6 +14534,159 @@ mod tests {
             cmd_count >= 20,
             "expected nested-table cmds (≥20 for grid + INNER-A + INNER-B), \
              got {cmd_count}"
+        );
+    }
+
+    #[test]
+    fn ruby_annotation_emits_above_base_run() {
+        // Paragraph with RubyFlag="true" + RubyString="ruby". The
+        // renderer should shape the ruby text at half point size and
+        // emit it above the base run. Base ABC at 12pt + ruby
+        // "ruby" at 6pt = ~7 extra glyph commands (ruby has up to 4
+        // glyphs depending on shaper output).
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+        let buf = std::io::Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+        zip.start_file("mimetype", stored).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+        zip.start_file("designmap.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_s1.xml"/>
+</Document>"#,
+        )
+        .unwrap();
+        zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 612"/>
+    <TextFrame Self="frameA" ParentStory="s1" GeometricBounds="40 40 180 572"/>
+  </Spread>
+</idPkg:Spread>"#,
+        )
+        .unwrap();
+        zip.start_file("Stories/Story_s1.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="s1">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="12" RubyFlag="true" RubyString="abc">
+        <Content>ABC</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+        )
+        .unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let doc = idml_scene::Document::open(&bytes).expect("open IDML");
+
+        let font_bytes = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../corpus/fonts/Inter.ttf"),
+        )
+        .expect("Inter.ttf fixture");
+        let options = PipelineOptions {
+            font: Some(&font_bytes),
+            ..PipelineOptions::default()
+        };
+        let built = build_document(&doc, &options).expect("build");
+
+        // Body "ABC" = 3 glyphs; ruby "abc" at 6pt = 3 more.
+        // Expect ≥ 6 commands.
+        let cmd_count = built.pages[0].list.commands.len();
+        assert!(
+            cmd_count >= 6,
+            "expected base + ruby glyphs (≥6 cmds), got {cmd_count}"
+        );
+    }
+
+    #[test]
+    fn kenten_marks_emit_above_each_glyph() {
+        // A paragraph with `KentenKind="Dot"` on its CharacterStyleRange.
+        // The renderer should stamp an emphasis mark (small filled
+        // ellipse) above every glyph of that run. Pre-fix: zero
+        // ellipse commands. Post-fix: one ellipse per character
+        // glyph plus any frame chrome.
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+        let buf = std::io::Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+        zip.start_file("mimetype", stored).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+        zip.start_file("designmap.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_s1.xml"/>
+</Document>"#,
+        )
+        .unwrap();
+        zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 612"/>
+    <TextFrame Self="frameA" ParentStory="s1" GeometricBounds="40 40 180 572"/>
+  </Spread>
+</idPkg:Spread>"#,
+        )
+        .unwrap();
+        zip.start_file("Stories/Story_s1.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="s1">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="12" KentenKind="Dot">
+        <Content>ABC</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+        )
+        .unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let doc = idml_scene::Document::open(&bytes).expect("open IDML");
+
+        let font_bytes = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../corpus/fonts/Inter.ttf"),
+        )
+        .expect("Inter.ttf fixture");
+        let options = PipelineOptions {
+            font: Some(&font_bytes),
+            ..PipelineOptions::default()
+        };
+        let built = build_document(&doc, &options).expect("build");
+
+        // The kenten pass emits one ellipse command per glyph in
+        // the kenten-tagged run. "ABC" is 3 chars → 3 ellipse
+        // commands. The body text alone contributes ~3 glyph
+        // FillPath commands; with kenten we add ~3 more ellipses
+        // (each rendered as a FillPath of an ellipse path).
+        let cmd_count = built.pages[0].list.commands.len();
+        assert!(
+            cmd_count >= 6,
+            "expected glyphs + 3 kenten marks (≥6 cmds), got {cmd_count}"
         );
     }
 

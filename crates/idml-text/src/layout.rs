@@ -444,6 +444,44 @@ fn shape_with_per_cluster_fallback(
     }
 }
 
+/// Phase 7 — Mojikumi half-width pass. Halves the `x_advance` of
+/// shaped glyphs whose source cluster lies on a CJK punctuation
+/// character (opening / closing brackets, comma, period, ideographic
+/// space). Updates `total_advance` to keep the run's running width
+/// consistent.
+///
+/// The MVP applies a single uniform "trim to half" rule rather than
+/// implementing InDesign's full Mojikumi table machinery (per-
+/// adjacency rules across ~20 character classes). It produces
+/// visibly tighter CJK composition that doesn't regress for
+/// non-CJK text (the rule only fires on the explicit punctuation
+/// set below).
+pub fn apply_mojikumi_half_width(shape: &mut ShapedRun, text: &str) {
+    use crate::compose::kinsoku;
+    let bytes = text.as_bytes();
+    let mut total: i32 = 0;
+    for g in shape.glyphs.iter_mut() {
+        let cluster = g.cluster as usize;
+        // Resolve the leading char at this cluster's byte offset.
+        let ch = bytes
+            .get(cluster..)
+            .and_then(|s| std::str::from_utf8(s).ok())
+            .and_then(|s| s.chars().next());
+        if let Some(c) = ch {
+            // Halve when char is either a no-start (closing) or
+            // no-end (opening) CJK punctuation. The kinsoku tables
+            // already enumerate the JIS-derived set we want; reuse
+            // them so the same characters drive both kinsoku break
+            // suppression and mojikumi width tightening.
+            if kinsoku::is_no_start(c) || kinsoku::is_no_end(c) {
+                g.x_advance = g.x_advance / 2;
+            }
+        }
+        total = total.saturating_add(g.x_advance);
+    }
+    shape.total_advance = total;
+}
+
 pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagraph {
     if runs.is_empty() {
         return LaidOutParagraph { lines: Vec::new() };
@@ -496,6 +534,17 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             s.total_advance = total;
         }
         run_shapes.push(s);
+    }
+
+    // Phase 7 — Mojikumi half-width. When the composer is asked to
+    // apply mojikumi, halve the x_advance of CJK opening / closing
+    // punctuation glyphs in each shaped run. The narrowing
+    // propagates through paragraph-breaker and into the laid-out
+    // line widths automatically.
+    if options.compose.mojikumi_half_width {
+        for (run_i, shape) in run_shapes.iter_mut().enumerate() {
+            apply_mojikumi_half_width(shape, runs[run_i].text);
+        }
     }
 
     // 2. Build a flat array of (paragraph-cluster, run_index, glyph)
@@ -1417,6 +1466,7 @@ mod tests {
                 hyphenator: None,
                 hyphen_penalty: 50,
                 kinsoku_enforce: false,
+                mojikumi_half_width: false,
             },
             line_height: 20,
             first_baseline: 15,
@@ -1850,6 +1900,70 @@ mod tests {
             ratio: 0.0,
             glyphs,
         }
+    }
+
+    // ── Phase 7 Mojikumi half-width ────────────────────────────────
+
+    #[test]
+    fn mojikumi_halves_cjk_punctuation_advances() {
+        // Build a ShapedRun by hand carrying three glyphs:
+        //   '本' (CJK ideograph — not punctuation, unaffected)
+        //   '、' (ideographic comma — halved)
+        //   '本' (unaffected)
+        // Verify the punctuation glyph's advance halves but the
+        // ideographs stay unchanged.
+        use crate::shape::ShapedGlyph;
+        let text = "本、本";
+        let mut shape = ShapedRun {
+            glyphs: vec![
+                ShapedGlyph {
+                    glyph_id: 1,
+                    cluster: 0,
+                    x_advance: 100,
+                    y_offset: 0,
+                    x_offset: 0,
+                },
+                ShapedGlyph {
+                    glyph_id: 2,
+                    // U+3001 is at byte offset 3 in "本、本"
+                    // ('本' is 3 bytes in UTF-8).
+                    cluster: 3,
+                    x_advance: 100,
+                    y_offset: 0,
+                    x_offset: 0,
+                },
+                ShapedGlyph {
+                    glyph_id: 3,
+                    cluster: 6,
+                    x_advance: 100,
+                    y_offset: 0,
+                    x_offset: 0,
+                },
+            ],
+            total_advance: 300,
+        };
+        apply_mojikumi_half_width(&mut shape, text);
+        assert_eq!(shape.glyphs[0].x_advance, 100, "ideograph unchanged");
+        assert_eq!(shape.glyphs[1].x_advance, 50, "comma halved");
+        assert_eq!(shape.glyphs[2].x_advance, 100, "ideograph unchanged");
+        assert_eq!(shape.total_advance, 250, "total updated");
+    }
+
+    #[test]
+    fn mojikumi_no_op_on_pure_ascii() {
+        use crate::shape::ShapedGlyph;
+        let text = "abc";
+        let mut shape = ShapedRun {
+            glyphs: vec![
+                ShapedGlyph { glyph_id: 1, cluster: 0, x_advance: 100, y_offset: 0, x_offset: 0 },
+                ShapedGlyph { glyph_id: 2, cluster: 1, x_advance: 100, y_offset: 0, x_offset: 0 },
+                ShapedGlyph { glyph_id: 3, cluster: 2, x_advance: 100, y_offset: 0, x_offset: 0 },
+            ],
+            total_advance: 300,
+        };
+        apply_mojikumi_half_width(&mut shape, text);
+        assert_eq!(shape.glyphs.iter().map(|g| g.x_advance).collect::<Vec<_>>(), vec![100, 100, 100]);
+        assert_eq!(shape.total_advance, 300);
     }
 
     #[test]

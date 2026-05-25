@@ -210,6 +210,16 @@ pub struct ComposeOptions<'a> {
     /// offending char" which paragraph-breaker honours by picking a
     /// non-violating break candidate.
     pub kinsoku_enforce: bool,
+    /// Phase 7 — when `true`, halve the x_advance of CJK
+    /// half-width punctuation (opening / closing brackets, comma,
+    /// period). InDesign's full Mojikumi tables are richer (per-
+    /// adjacency rules across ~20 character classes); the MVP
+    /// applies a single uniform "trim CJK punct to half width"
+    /// transformation that produces noticeably tighter CJK
+    /// composition without the full table machinery. Drive from
+    /// the paragraph's resolved `mojikumi_table` / `mojikumi_set`
+    /// (any non-None value ⇒ apply).
+    pub mojikumi_half_width: bool,
 }
 
 impl ComposeOptions<'_> {
@@ -246,6 +256,7 @@ impl ComposeOptions<'_> {
             hyphenator: None,
             hyphen_penalty: 50,
             kinsoku_enforce: false,
+            mojikumi_half_width: false,
         }
     }
 }
