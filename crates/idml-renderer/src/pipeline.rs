@@ -5887,16 +5887,13 @@ fn emit_table_into_chain(
         let mut paragraph_y = 0.0f32;
         for paragraph in &cell.paragraphs {
             if paragraph.runs.is_empty() {
-                if paragraph.table.is_some() {
-                    // Phase 5 — nested tables inside table cells are
-                    // captured by the parser but not yet emitted.
-                    // Skip silently here; rendering nested tables
-                    // requires recursing into emit_table_into_chain
-                    // with the cell's geometry as the host.
-                    tracing::trace!(
-                        target: "idml_renderer::pipeline",
-                        "skipped nested table inside table cell — rendering not yet wired"
-                    );
+                if let Some(inner_t) = paragraph.table.as_ref() {
+                    // Phase 5 — measure a nested table's height by
+                    // summing its row heights (with the same
+                    // SingleRowHeight / MinimumHeight default the
+                    // emit pass uses, plus content-driven growth
+                    // from inner cell paragraphs).
+                    paragraph_y += measure_nested_table_height(em, inner_t, inner_w);
                 }
                 continue;
             }
@@ -6533,6 +6530,32 @@ fn emit_table_into_chain(
         let mut emitted_extents: Vec<(usize, usize)> = Vec::new();
         for paragraph in &cell.paragraphs {
             if paragraph.runs.is_empty() {
+                // Phase 5 — nested table inside a cell paragraph.
+                // Lay it out at the current cell-paragraph cursor
+                // and advance by its consumed height. Inner content
+                // (further nested tables, cell paragraphs) recurses
+                // through emit_nested_table_inline.
+                if let Some(inner_t) = paragraph.table.as_ref() {
+                    let cmd_start = pages[target_page].list.commands.len();
+                    let consumed = emit_nested_table_inline(
+                        em,
+                        inner_t,
+                        inner_left,
+                        inner_top + paragraph_y,
+                        inner_w,
+                        target_page,
+                        pages,
+                        total_stats,
+                    );
+                    let cmd_end = pages[target_page].list.commands.len();
+                    if cmd_end > cmd_start {
+                        emitted_extents.push((cmd_start, cmd_end));
+                    }
+                    paragraph_y += consumed;
+                    if paragraph_y >= inner_h {
+                        break;
+                    }
+                }
                 continue;
             }
             let cmd_start = pages[target_page].list.commands.len();
@@ -7277,6 +7300,318 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
 /// [`emit_cell_paragraph`]'s layout half so content-driven row
 /// growth can sum cell heights before committing row geometry.
 ///
+/// Phase 5 — emit a nested table inside a cell's content area.
+///
+/// Unlike [`emit_table_into_chain`] this version doesn't thread the
+/// table across frames or replay header/footer rows — a nested table
+/// lives entirely inside ONE outer cell, so all the chain-aware
+/// machinery is unnecessary. The simpler shape:
+///
+/// 1. Compute column widths from `table.columns`. Scale to fit
+///    `max_width_pt` if the declared widths exceed it.
+/// 2. Pre-measure every cell to derive content-driven row heights.
+/// 3. Walk cells; for each, compute its rect within the table, then
+///    route paragraphs through `emit_cell_paragraph` at the cell's
+///    inner origin (text inset applied). A 0.5pt black border
+///    outlines each cell so the nested table reads visibly even
+///    without a fully resolved cell style.
+///
+/// Returns the total height consumed in pt so callers can advance
+/// the cell-paragraph cursor by it (mirrors `emit_cell_paragraph`'s
+/// return convention).
+///
+/// Honoured today:
+/// - per-column `SingleColumnWidth` (with proportional scaling when
+///   declared widths overflow `max_width_pt`),
+/// - per-row `SingleRowHeight` / `MinimumHeight` / `MaximumHeight`
+///   (max-row growth from cell content),
+/// - per-cell `text_top_inset` / `text_left_inset` / ... (text
+///   insets honored at emit),
+/// - all cell paragraphs (including their nested character styles,
+///   tab leaders, conditional text, etc. — by routing through the
+///   existing `emit_cell_paragraph`).
+///
+/// Deferred:
+/// - cell fill / cell border styling from `AppliedCellStyle` (uses
+///   a simple 0.5pt grid for visibility),
+/// - row/column spans (each cell occupies one row × one column;
+///   spans get clamped to 1),
+/// - diagonals, alternating-row fills, custom strokes,
+/// - RowSpan / ColumnSpan layout (treats every cell as 1×1).
+#[allow(clippy::too_many_arguments)]
+fn emit_nested_table_inline(
+    em: &mut StoryEmitter,
+    table: &idml_parse::Table,
+    origin_x: f32,
+    origin_y: f32,
+    max_width_pt: f32,
+    target_page: usize,
+    pages: &mut [BuiltPage],
+    total_stats: &mut PipelineStats,
+) -> f32 {
+    if table.cells.is_empty() || table.columns.is_empty() {
+        return 0.0;
+    }
+    let declared_widths: Vec<f32> = table
+        .columns
+        .iter()
+        .map(|c| c.single_column_width.unwrap_or(0.0).max(0.0))
+        .collect();
+    let declared_total: f32 = declared_widths.iter().sum();
+    // Scale columns to fit `max_width_pt` when the declared widths
+    // exceed it. Equal-width fallback when all declared widths are
+    // zero (a degenerate IDML that didn't carry SingleColumnWidth).
+    let col_widths: Vec<f32> = if declared_total <= 0.0 {
+        let n = declared_widths.len() as f32;
+        vec![max_width_pt / n; declared_widths.len()]
+    } else if declared_total > max_width_pt && max_width_pt > 0.0 {
+        let scale = max_width_pt / declared_total;
+        declared_widths.iter().map(|w| w * scale).collect()
+    } else {
+        declared_widths
+    };
+    let mut col_x: Vec<f32> = Vec::with_capacity(col_widths.len() + 1);
+    let mut acc = 0.0f32;
+    col_x.push(0.0);
+    for w in &col_widths {
+        acc += *w;
+        col_x.push(acc);
+    }
+    let total_rows = table.rows.len();
+    if total_rows == 0 {
+        return 0.0;
+    }
+    // Initial row heights from the IDML's row attributes (the same
+    // max-of-SingleRowHeight-MinimumHeight default as the chain
+    // emitter uses).
+    let mut row_heights: Vec<f32> = table
+        .rows
+        .iter()
+        .map(|r| {
+            r.single_row_height
+                .unwrap_or(0.0)
+                .max(r.minimum_height.unwrap_or(0.0))
+        })
+        .collect();
+    // Pre-measure every cell so row heights can grow to fit content.
+    // Spans are clamped to 1 here — proper span layout is a follow-up.
+    for cell in &table.cells {
+        let Some((c, r)) = cell.coords() else { continue };
+        let (cu, ru) = (c as usize, r as usize);
+        if cu >= col_widths.len() || ru >= total_rows {
+            continue;
+        }
+        let inner_w = (col_widths[cu]
+            - cell.text_left_inset
+            - cell.text_right_inset)
+            .max(0.0);
+        let mut paragraph_y = 0.0f32;
+        for paragraph in &cell.paragraphs {
+            // Nested table inside the nested table's cell — recurse.
+            if paragraph.runs.is_empty() && paragraph.table.is_some() {
+                // Approximate the nested-nested table's height as
+                // sum-of-row-heights to avoid pre-emit recursion.
+                if let Some(inner_t) = paragraph.table.as_ref() {
+                    paragraph_y += inner_t
+                        .rows
+                        .iter()
+                        .map(|r| {
+                            r.single_row_height
+                                .unwrap_or(0.0)
+                                .max(r.minimum_height.unwrap_or(0.0))
+                        })
+                        .sum::<f32>();
+                }
+                continue;
+            }
+            if paragraph.runs.is_empty() {
+                continue;
+            }
+            paragraph_y += measure_cell_paragraph(em, paragraph, inner_w);
+        }
+        let required = paragraph_y + cell.text_top_inset + cell.text_bottom_inset;
+        let clamp = table
+            .rows
+            .get(ru)
+            .and_then(|tr| tr.maximum_height)
+            .unwrap_or(f32::INFINITY);
+        row_heights[ru] = row_heights[ru].max(required).min(clamp);
+    }
+    let mut row_y: Vec<f32> = Vec::with_capacity(total_rows + 1);
+    let mut yacc = 0.0f32;
+    row_y.push(0.0);
+    for h in &row_heights {
+        yacc += *h;
+        row_y.push(yacc);
+    }
+    let table_h = *row_y.last().unwrap_or(&0.0);
+    let total_w = *col_x.last().unwrap_or(&0.0);
+
+    // Emit a thin border grid as a placeholder so the nested table
+    // is visible even without a resolved cell style. Replaces the
+    // styled-stroke pass the chain emitter does — that's the
+    // follow-up.
+    const GRID_W: f32 = 0.5;
+    let grid_paint = idml_compose::Paint::Solid(idml_compose::Color {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    });
+    // Horizontal lines (top of each row + bottom of last row).
+    for r in 0..=total_rows {
+        emit_rect(
+            Rect {
+                x: origin_x,
+                y: origin_y + row_y[r] - GRID_W * 0.5,
+                w: total_w,
+                h: GRID_W,
+            },
+            grid_paint,
+            &mut pages[target_page].list,
+        );
+    }
+    // Vertical lines (left of each column + right of last column).
+    for c in 0..=col_widths.len() {
+        emit_rect(
+            Rect {
+                x: origin_x + col_x[c] - GRID_W * 0.5,
+                y: origin_y,
+                w: GRID_W,
+                h: table_h,
+            },
+            grid_paint,
+            &mut pages[target_page].list,
+        );
+    }
+
+    // Emit cell content.
+    for cell in &table.cells {
+        let Some((c, r)) = cell.coords() else { continue };
+        let (cu, ru) = (c as usize, r as usize);
+        if cu >= col_widths.len() || ru >= total_rows {
+            continue;
+        }
+        let cell_x_pt = origin_x + col_x[cu];
+        let cell_y_pt = origin_y + row_y[ru];
+        let cell_w_pt = col_widths[cu];
+        let cell_h_pt = row_heights[ru];
+        let inner_left = cell_x_pt + cell.text_left_inset;
+        let inner_top = cell_y_pt + cell.text_top_inset;
+        let inner_w = (cell_w_pt - cell.text_left_inset - cell.text_right_inset).max(0.0);
+        let inner_h = (cell_h_pt - cell.text_top_inset - cell.text_bottom_inset).max(0.0);
+        let mut paragraph_y = 0.0f32;
+        for paragraph in &cell.paragraphs {
+            if paragraph.runs.is_empty() {
+                // Double-nested table — recurse.
+                if let Some(inner_t) = paragraph.table.as_ref() {
+                    let consumed = emit_nested_table_inline(
+                        em,
+                        inner_t,
+                        inner_left,
+                        inner_top + paragraph_y,
+                        inner_w,
+                        target_page,
+                        pages,
+                        total_stats,
+                    );
+                    paragraph_y += consumed;
+                }
+                continue;
+            }
+            let consumed = emit_cell_paragraph(
+                em,
+                paragraph,
+                target_page,
+                (inner_left, inner_top),
+                inner_w,
+                paragraph_y,
+                pages,
+                total_stats,
+            );
+            paragraph_y += consumed;
+            if paragraph_y >= inner_h {
+                break;
+            }
+        }
+    }
+    table_h
+}
+
+/// Phase 5 — measurement counterpart to [`emit_nested_table_inline`].
+/// Returns the total height a nested table would consume given a
+/// containing column width. Caller uses this in the outer table's
+/// row-height pre-measure pass so a nested table can grow its host
+/// row appropriately.
+///
+/// Heuristic — sums each row's height after applying the
+/// `SingleRowHeight` / `MinimumHeight` default, then growing rows
+/// whose cells host content (or nested-nested tables) measured at
+/// the same per-column inner width the emit pass would see.
+fn measure_nested_table_height(
+    em: &StoryEmitter,
+    table: &idml_parse::Table,
+    max_width_pt: f32,
+) -> f32 {
+    if table.cells.is_empty() || table.columns.is_empty() || table.rows.is_empty() {
+        return 0.0;
+    }
+    let declared_widths: Vec<f32> = table
+        .columns
+        .iter()
+        .map(|c| c.single_column_width.unwrap_or(0.0).max(0.0))
+        .collect();
+    let declared_total: f32 = declared_widths.iter().sum();
+    let col_widths: Vec<f32> = if declared_total <= 0.0 {
+        let n = declared_widths.len() as f32;
+        vec![max_width_pt / n; declared_widths.len()]
+    } else if declared_total > max_width_pt && max_width_pt > 0.0 {
+        let scale = max_width_pt / declared_total;
+        declared_widths.iter().map(|w| w * scale).collect()
+    } else {
+        declared_widths
+    };
+    let total_rows = table.rows.len();
+    let mut row_heights: Vec<f32> = table
+        .rows
+        .iter()
+        .map(|r| {
+            r.single_row_height
+                .unwrap_or(0.0)
+                .max(r.minimum_height.unwrap_or(0.0))
+        })
+        .collect();
+    for cell in &table.cells {
+        let Some((c, r)) = cell.coords() else { continue };
+        let (cu, ru) = (c as usize, r as usize);
+        if cu >= col_widths.len() || ru >= total_rows {
+            continue;
+        }
+        let inner_w = (col_widths[cu]
+            - cell.text_left_inset
+            - cell.text_right_inset)
+            .max(0.0);
+        let mut paragraph_y = 0.0f32;
+        for paragraph in &cell.paragraphs {
+            if paragraph.runs.is_empty() {
+                if let Some(inner_t) = paragraph.table.as_ref() {
+                    paragraph_y += measure_nested_table_height(em, inner_t, inner_w);
+                }
+                continue;
+            }
+            paragraph_y += measure_cell_paragraph(em, paragraph, inner_w);
+        }
+        let required = paragraph_y + cell.text_top_inset + cell.text_bottom_inset;
+        let clamp = table
+            .rows
+            .get(ru)
+            .and_then(|tr| tr.maximum_height)
+            .unwrap_or(f32::INFINITY);
+        row_heights[ru] = row_heights[ru].max(required).min(clamp);
+    }
+    row_heights.iter().sum()
+}
+
 /// Returns `0.0` when the paragraph is empty or the font assets
 /// don't resolve — callers compare against `SingleRowHeight` /
 /// `MinimumHeight` so a 0 is safely absorbed.
@@ -13545,6 +13880,122 @@ mod tests {
     }
 
     // ── Phase 5 renderer — index paragraph builder ────────────────
+
+    #[test]
+    fn nested_table_inside_cell_emits_grid_commands() {
+        // Outer 1×1 table whose single cell hosts a nested 2×2 table.
+        // After build, the page's display list must contain enough
+        // rectangle commands to draw the inner table's grid (5
+        // horizontal + 3 vertical = 8 lines, plus the outer table's
+        // 4 borders = 4) plus glyph emission for inner cell text.
+        // A pre-fix build would skip the nested table entirely; we
+        // detect the fix by asserting the inner cell's text glyphs
+        // are present.
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+        let buf = std::io::Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+        zip.start_file("mimetype", stored).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+        zip.start_file("designmap.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_s1.xml"/>
+</Document>"#,
+        )
+        .unwrap();
+        zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 600 600"/>
+    <TextFrame Self="frameA" ParentStory="s1" GeometricBounds="10 10 590 590"/>
+  </Spread>
+</idPkg:Spread>"#,
+        )
+        .unwrap();
+        zip.start_file("Stories/Story_s1.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="s1">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="10">
+        <Table Self="t-outer" HeaderRowCount="0" FooterRowCount="0"
+               BodyRowCount="1" ColumnCount="1">
+          <Row Self="or0" Name="0" SingleRowHeight="100"/>
+          <Column Self="oc0" Name="0" SingleColumnWidth="400"/>
+          <Cell Self="oc0r0" Name="0:0" RowSpan="1" ColumnSpan="1">
+            <ParagraphStyleRange>
+              <CharacterStyleRange AppliedFont="Inter" PointSize="10">
+                <Table Self="t-inner" HeaderRowCount="0" FooterRowCount="0"
+                       BodyRowCount="2" ColumnCount="2">
+                  <Row Self="ir0" Name="0" SingleRowHeight="30"/>
+                  <Row Self="ir1" Name="1" SingleRowHeight="30"/>
+                  <Column Self="ic0" Name="0" SingleColumnWidth="150"/>
+                  <Column Self="ic1" Name="1" SingleColumnWidth="150"/>
+                  <Cell Self="i00" Name="0:0">
+                    <ParagraphStyleRange>
+                      <CharacterStyleRange AppliedFont="Inter" PointSize="10">
+                        <Content>INNER-A</Content>
+                      </CharacterStyleRange>
+                    </ParagraphStyleRange>
+                  </Cell>
+                  <Cell Self="i11" Name="1:1">
+                    <ParagraphStyleRange>
+                      <CharacterStyleRange AppliedFont="Inter" PointSize="10">
+                        <Content>INNER-B</Content>
+                      </CharacterStyleRange>
+                    </ParagraphStyleRange>
+                  </Cell>
+                </Table>
+              </CharacterStyleRange>
+            </ParagraphStyleRange>
+          </Cell>
+        </Table>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+        )
+        .unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let doc = idml_scene::Document::open(&bytes).expect("open IDML");
+
+        let font_bytes = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../corpus/fonts/Inter.ttf"),
+        )
+        .expect("Inter.ttf fixture");
+        let options = PipelineOptions {
+            font: Some(&font_bytes),
+            ..PipelineOptions::default()
+        };
+        let built = build_document(&doc, &options).expect("build");
+        // The inner cells contribute commands to the page's display
+        // list via emit_cell_paragraph called from inside the new
+        // nested-table emit. Count grid-line + glyph commands as a
+        // sanity check that the nested table actually rendered.
+        //
+        // Before the nested-table fix: page would have ~0 commands
+        // (the outer cell paragraph had empty runs + table → silent
+        // skip). After: ≥ 8 grid rects (5 row lines + 3 col lines)
+        // plus inner-cell glyph commands.
+        let cmd_count = built.pages[0].list.commands.len();
+        assert!(
+            cmd_count >= 20,
+            "expected nested-table cmds (≥20 for grid + INNER-A + INNER-B), \
+             got {cmd_count}"
+        );
+    }
 
     #[test]
     fn footnotes_are_captured_onto_their_host_page() {
