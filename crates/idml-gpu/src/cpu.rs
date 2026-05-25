@@ -4625,6 +4625,59 @@ mod tests {
     }
 
     #[test]
+    fn directional_feather_on_ellipse_softens_left_more_than_right() {
+        // Phase 6 — directional feather on an ELLIPSE (non-rectangle
+        // shape). The per-edge widths apply to the path's bounding
+        // box, so a left-only feather softens the left half of the
+        // ellipse interior while the right half stays opaque.
+        use idml_compose::{
+            DirectionalFeather, DisplayCommand as Cmd, FeatherCornerType, Transform as XF,
+        };
+        let mut list = DisplayList::new();
+        let (path_id, _) =
+            list.paths.intern(idml_compose::UNIT_ELLIPSE_KEY, idml_compose::unit_ellipse());
+        let xform = XF([20.0, 0.0, 0.0, 20.0, 10.0, 10.0]);
+        let params = DirectionalFeather {
+            left_width: 8.0,
+            right_width: 0.0,
+            top_width: 0.0,
+            bottom_width: 0.0,
+            angle_deg: 0.0,
+            noise: 0.0,
+            choke: 0.0,
+            corner_type: FeatherCornerType::Sharp,
+        };
+        list.commands.push(Cmd::FillPath {
+            path_id,
+            paint: idml_compose::Paint::Solid(idml_compose::Color::rgba(0.5, 0.5, 0.5, 1.0)),
+            transform: xform,
+        });
+        list.commands.push(Cmd::DirectionalFeather {
+            path_id,
+            transform: xform,
+            params,
+        });
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        // The ellipse fills the unit-square mapped to (10..30, 10..30).
+        // Vertical centre = y=20. Sample interior pixels along that
+        // row; "near left" is heavily feathered, "mid"/"near right"
+        // is opaque grey.
+        let near_left = at(&img, 12, 20);
+        let mid = at(&img, 20, 20);
+        let near_right = at(&img, 27, 20);
+        assert!(
+            near_left[0] > mid[0],
+            "ellipse: left edge should be less tinted than mid; near_left={near_left:?} mid={mid:?}"
+        );
+        assert!(
+            near_right[0] <= mid[0] + 15,
+            "ellipse: right edge shouldn't fade; near_right={near_right:?} mid={mid:?}"
+        );
+    }
+
+    #[test]
     fn directional_feather_softens_left_edge_more_than_right() {
         // 20x20 rect at (10, 10), feather 8pt on the left edge only.
         // The interior next to the left edge should fade out (ramp);

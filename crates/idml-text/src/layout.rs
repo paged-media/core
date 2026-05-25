@@ -83,6 +83,23 @@ pub enum Alignment {
     Justify,
 }
 
+/// Phase 7 — paragraph base writing direction. Drives the Unicode
+/// Bidirectional Algorithm (UAX #9). `Auto` lets `unicode-bidi`
+/// infer from the first strong character; `Ltr` / `Rtl` force a
+/// base direction even when the text has no strong characters.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum BidiDirection {
+    /// Force left-to-right base direction. Today's pre-BiDi
+    /// implicit behaviour.
+    #[default]
+    Ltr,
+    /// Force right-to-left base direction. Paragraph-level RTL
+    /// mark; glyphs flip their visual order on each line.
+    Rtl,
+    /// Infer from the first strong character (LRE / RLE per UAX #9).
+    Auto,
+}
+
 #[derive(Debug, Clone)]
 pub struct LayoutOptions<'a> {
     pub compose: ComposeOptions<'a>,
@@ -793,6 +810,26 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         baseline += line_height;
         byte_cursor = end;
     }
+    // Phase 7 — opportunistic BiDi reorder. When the paragraph
+    // contains any RTL character, run unicode-bidi over each laid-
+    // out line to put glyphs in visual order. Pure-LTR paragraphs
+    // skip via the fast-path inside `apply_bidi_reorder` (a single
+    // `BidiInfo::has_rtl()` check).
+    if paragraph_text.chars().any(|c| {
+        // Hebrew, Arabic, Syriac, Thaana, NKo, Samaritan, Mandaic
+        // — quick "has any RTL char" pre-check that avoids
+        // building a BidiInfo for pure-LTR paragraphs (the common
+        // case). The full unicode-bidi pass runs anyway when this
+        // returns true; this is just a fast bail.
+        matches!(
+            c as u32,
+            0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF
+        )
+    }) {
+        for line in lines.iter_mut() {
+            apply_bidi_reorder(line, &paragraph_text, BidiDirection::Auto);
+        }
+    }
     LaidOutParagraph { lines }
 }
 
@@ -1244,6 +1281,105 @@ fn run_index_for_word(flat: &[FlatGlyph], start: u32, end: u32) -> Option<usize>
     run
 }
 
+/// Phase 7 — apply the Unicode Bidirectional Algorithm (UAX #9) to
+/// a laid-out line, reordering its glyphs to visual order.
+///
+/// `text` is the original (logical-order) source paragraph text;
+/// glyphs in `line.glyphs` carry `cluster` byte offsets into it.
+/// `base` selects the paragraph's base direction.
+///
+/// Algorithm:
+/// 1. Run `unicode_bidi::BidiInfo` over `text`.
+/// 2. For each glyph cluster in the line, look up its BiDi level.
+/// 3. Use `unicode_bidi::ParagraphInfo::visual_runs` to get the
+///    visual ordering of byte-runs.
+/// 4. Rebuild `line.glyphs` in visual order. Within each visual
+///    run, glyphs keep their original sequence; RTL runs have their
+///    cluster order reversed.
+/// 5. Recompute glyph `x` positions: walk visual-order glyphs and
+///    accumulate `x_advance`, starting from the line's original
+///    leftmost x.
+///
+/// No-op when `base = Ltr` and `text` has no RTL characters
+/// (cheap fast path for the typical case).
+pub fn apply_bidi_reorder(line: &mut LaidOutLine, text: &str, base: BidiDirection) {
+    let default_level = match base {
+        BidiDirection::Ltr => Some(unicode_bidi::Level::ltr()),
+        BidiDirection::Rtl => Some(unicode_bidi::Level::rtl()),
+        BidiDirection::Auto => None,
+    };
+    let bidi = unicode_bidi::BidiInfo::new(text, default_level);
+    // Fast path — no RTL anywhere in the paragraph; nothing to do.
+    if !bidi.has_rtl() && matches!(base, BidiDirection::Ltr | BidiDirection::Auto) {
+        return;
+    }
+    // Locate the paragraph containing this line's first cluster.
+    let line_start = line.byte_range.start;
+    let line_end = line.byte_range.end.min(text.len());
+    if line_start >= line_end {
+        return;
+    }
+    let Some(para_info) = bidi
+        .paragraphs
+        .iter()
+        .find(|p| p.range.start <= line_start && p.range.end >= line_end)
+    else {
+        return;
+    };
+    // visual_runs returns (per-char levels, runs in visual order).
+    let line_range = line_start..line_end;
+    let (_levels, visual_runs) = bidi.visual_runs(para_info, line_range);
+
+    // Group glyphs by their source-byte run. For each visual run,
+    // pull the glyphs whose clusters fall inside the run's byte
+    // range, sort by cluster within the run (RTL runs already have
+    // their bytes in visual order via visual_runs; we just walk
+    // glyphs by ascending cluster and reverse for odd levels).
+    let mut new_glyphs: Vec<PositionedGlyph> = Vec::with_capacity(line.glyphs.len());
+    for run in &visual_runs {
+        let run_level = bidi.levels.get(run.start).copied().unwrap_or(para_info.level);
+        // Collect this run's glyphs in source order (ascending cluster).
+        let mut run_glyphs: Vec<PositionedGlyph> = line
+            .glyphs
+            .iter()
+            .copied()
+            .filter(|g| {
+                let c = g.cluster as usize;
+                c >= run.start && c < run.end
+            })
+            .collect();
+        // Stable-sort by cluster to put them in source order.
+        run_glyphs.sort_by_key(|g| g.cluster);
+        // RTL run: reverse cluster groups (preserving intra-cluster
+        // glyph order, which shapers produce in mark order).
+        if run_level.is_rtl() {
+            // Group consecutive same-cluster glyphs, reverse the
+            // group order, keep within-group order intact.
+            let mut groups: Vec<Vec<PositionedGlyph>> = Vec::new();
+            for g in run_glyphs {
+                match groups.last_mut() {
+                    Some(last) if last.first().map(|h| h.cluster) == Some(g.cluster) => {
+                        last.push(g);
+                    }
+                    _ => groups.push(vec![g]),
+                }
+            }
+            groups.reverse();
+            run_glyphs = groups.into_iter().flatten().collect();
+        }
+        new_glyphs.extend(run_glyphs);
+    }
+    // Recompute x positions by walking visual-order glyphs from
+    // the line's original leftmost x. Each glyph's advance is the
+    // same as before; only the order changes.
+    let mut cursor_x = line.glyphs.first().map(|g| g.x).unwrap_or(0);
+    for g in &mut new_glyphs {
+        g.x = cursor_x;
+        cursor_x = cursor_x.saturating_add(g.x_advance);
+    }
+    line.glyphs = new_glyphs;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1675,6 +1811,92 @@ mod tests {
         );
         // Same outcome as Left at 36pt: tab widens so 'b' starts at 2304.
         assert_eq!(line.glyphs[2].x, 2304);
+    }
+
+    // ── Phase 7 BiDi reorder ───────────────────────────────────────
+
+    /// Build a `LaidOutLine` from manually-positioned monospace
+    /// glyphs covering `text[byte_range]`. Each char is one cluster.
+    /// Glyphs are LTR-positioned (ascending x in cluster order).
+    fn line_for_bidi(text: &str, glyphs_for: &str) -> LaidOutLine {
+        let mut glyphs = Vec::new();
+        let mut x = 0i32;
+        let advance = 100i32;
+        for (i, c) in glyphs_for.char_indices() {
+            // Map glyphs_for byte-i back into text's byte offset by
+            // assuming they correspond 1:1. Caller passes
+            // glyphs_for = &text[start..end] which preserves offsets.
+            let cluster = (text.find(glyphs_for).unwrap_or(0) + i) as u32;
+            glyphs.push(PositionedGlyph {
+                glyph_id: c as u32,
+                cluster,
+                x,
+                y: 0,
+                x_advance: advance,
+                font_id: 0,
+                point_size: 12.0,
+                underline: false,
+                strikethru: false,
+                x_scale: 1.0,
+            });
+            x += advance;
+        }
+        let start = text.find(glyphs_for).unwrap_or(0);
+        let end = start + glyphs_for.len();
+        LaidOutLine {
+            byte_range: start..end,
+            baseline_y: 0,
+            width: x,
+            ratio: 0.0,
+            glyphs,
+        }
+    }
+
+    #[test]
+    fn bidi_reorder_pure_ltr_is_noop() {
+        let text = "hello";
+        let mut line = line_for_bidi(text, text);
+        let before: Vec<u32> = line.glyphs.iter().map(|g| g.glyph_id).collect();
+        apply_bidi_reorder(&mut line, text, BidiDirection::Ltr);
+        let after: Vec<u32> = line.glyphs.iter().map(|g| g.glyph_id).collect();
+        assert_eq!(before, after, "LTR text must not be reordered");
+    }
+
+    #[test]
+    fn bidi_reorder_pure_rtl_reverses_glyphs() {
+        // U+05D0..U+05D5 = Hebrew letters Alef..Vav.
+        let text = "\u{5D0}\u{5D1}\u{5D2}";
+        let mut line = line_for_bidi(text, text);
+        let logical: Vec<u32> = line.glyphs.iter().map(|g| g.glyph_id).collect();
+        apply_bidi_reorder(&mut line, text, BidiDirection::Rtl);
+        let visual: Vec<u32> = line.glyphs.iter().map(|g| g.glyph_id).collect();
+        let mut want: Vec<u32> = logical.clone();
+        want.reverse();
+        assert_eq!(visual, want, "RTL paragraph glyphs reverse visually");
+        // X positions still increase left-to-right.
+        for w in line.glyphs.windows(2) {
+            assert!(w[0].x < w[1].x);
+        }
+    }
+
+    #[test]
+    fn bidi_reorder_mixed_ltr_rtl_segments() {
+        // English "AB" then Hebrew "אב" (Alef-Bet) then English "CD".
+        // Visual order in an LTR paragraph: "AB" + "בא" + "CD".
+        let text = "AB\u{5D0}\u{5D1}CD";
+        let mut line = line_for_bidi(text, text);
+        apply_bidi_reorder(&mut line, text, BidiDirection::Ltr);
+        let visual: Vec<char> = line.glyphs.iter().map(|g| g.glyph_id as u8 as char).collect();
+        // First two glyphs are A, B (LTR).
+        assert_eq!(visual[0], 'A');
+        assert_eq!(visual[1], 'B');
+        // Then Bet, Alef (RTL reversed) — but glyph_id was set from
+        // the char codepoint, so we compare codepoints directly.
+        assert_eq!(line.glyphs[2].glyph_id, 0x5D1); // Bet first
+        assert_eq!(line.glyphs[3].glyph_id, 0x5D0); // Alef second
+        // Then C, D (LTR).
+        assert_eq!(line.glyphs[4].glyph_id, 'C' as u32);
+        assert_eq!(line.glyphs[5].glyph_id, 'D' as u32);
     }
 
     #[test]

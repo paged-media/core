@@ -25,8 +25,8 @@ pub use compose::{
 };
 pub use hyphenate::{Hyphenator, Language};
 pub use layout::{
-    layout_paragraph, layout_runs, position_line, Alignment, LaidOutLine, LaidOutParagraph,
-    LayoutOptions, PositionedGlyph, StyledRun,
+    apply_bidi_reorder, layout_paragraph, layout_runs, position_line, Alignment, BidiDirection,
+    LaidOutLine, LaidOutParagraph, LayoutOptions, PositionedGlyph, StyledRun,
 };
 pub use shape::{
     apply_optical_margin, apply_tracking, optical_margin_offset, shape_run,
