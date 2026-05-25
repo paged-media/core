@@ -913,7 +913,7 @@ impl Story {
                         buf.clear();
                         continue;
                     }
-                    if matches!(name, b"HiddenText" | b"Note" | b"Index" | b"IndexEntry") {
+                    if matches!(name, b"HiddenText" | b"Note" | b"Index" | b"IndexEntry" | b"Footnote") {
                         suppress_depth = 1;
                         buf.clear();
                         continue;
@@ -1435,7 +1435,7 @@ impl Story {
                     // nested inside an open suppressed subtree are
                     // also dropped to keep the wrapper truly silent.
                     if suppress_depth > 0
-                        || matches!(name, b"HiddenText" | b"Note" | b"Index" | b"IndexEntry")
+                        || matches!(name, b"HiddenText" | b"Note" | b"Index" | b"IndexEntry" | b"Footnote")
                     {
                         buf.clear();
                         continue;
@@ -2772,6 +2772,47 @@ mod tests {
         // The inner cell content survives the round-trip.
         let inner_cell = &inner.cells[0];
         assert_eq!(inner_cell.paragraphs[0].runs[0].text, "inner-cell-text");
+    }
+
+    #[test]
+    fn footnote_is_suppressed_from_body_text() {
+        // A `<Footnote>` element nested inside a CharacterStyleRange
+        // carries its own paragraphs (the footnote body). Today the
+        // renderer doesn't place footnotes at all, so the parser
+        // suppresses the footnote subtree so its content doesn't
+        // leak into the host story's body text. Once footnote
+        // placement is implemented, this test will pivot to assert
+        // the captured footnote.
+        let xml = br#"<Story>
+          <ParagraphStyleRange>
+            <CharacterStyleRange>
+              <Content>before</Content>
+              <Footnote Self="Footnote/u1">
+                <ParagraphStyleRange>
+                  <CharacterStyleRange>
+                    <Content>FOOTNOTE BODY THAT MUST NOT LEAK</Content>
+                  </CharacterStyleRange>
+                </ParagraphStyleRange>
+              </Footnote>
+              <Content>after</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        // Footnote anchor splits the surrounding text into two runs;
+        // both keep their content, and crucially the footnote body
+        // text doesn't appear anywhere in the body story.
+        let all_text: String = s.paragraphs[0]
+            .runs
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect();
+        assert!(
+            !all_text.contains("FOOTNOTE BODY"),
+            "footnote body leaked into host story: {all_text:?}"
+        );
+        assert!(all_text.contains("before"));
+        assert!(all_text.contains("after"));
     }
 
     #[test]
