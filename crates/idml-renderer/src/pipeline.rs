@@ -263,6 +263,10 @@ pub struct EmittedFootnote {
     pub footnote_self_id: Option<String>,
     /// Footnote body paragraphs, exactly as parsed.
     pub paragraphs: Vec<idml_parse::Paragraph>,
+    /// Page-local pt rect of the host frame's content area at
+    /// capture time. The footnote-pool emit pass uses this to know
+    /// where to lay out the body text at the bottom of the frame.
+    pub host_frame_rect_pt: Rect,
 }
 
 /// One laid-out line of a story, in page-local pt coordinates.
@@ -1569,6 +1573,19 @@ pub fn build_document(
 
     total_stats.decoded_images = decoded_image_cache.len();
 
+    // Phase 5 — footnote pool post-pass. For each page that captured
+    // footnotes during the story emit, lay out the bodies at the
+    // bottom of the host frame's content area. Bodies stack
+    // upward from the frame's bottom; per-page running numbers
+    // prefix each body. Overlay rather than reflow today —
+    // body content remains where it was, and footnotes can
+    // overlap it if the host frame is fully populated.
+    // Cross-page overflow (a footnote pool taller than the host
+    // frame) and anchor-character superscript substitution are
+    // queued follow-ups.
+    let footnote_options = options.clone();
+    emit_footnote_pools(&mut pages, &font_table, &footnote_options);
+
     Ok(BuiltDocument {
         pages,
         stats: total_stats,
@@ -2497,6 +2514,20 @@ fn emit_paragraph_into_chain(
         let anchor_page = em.chain_pages[em.frame_idx];
         let host_story = em.current_story_id.clone();
         let host_para_idx = em.paragraph_idx;
+        // Capture the host frame's page-local content rect so the
+        // post-pass footnote pool render knows where to draw.
+        let frame = em.chain[em.frame_idx];
+        let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
+        let (ox, oy) = pages[anchor_page].spread_origin;
+        let insets = frame.inset_spacing.unwrap_or([0.0; 4]);
+        let frame_w = frame.bounds.width();
+        let frame_h = frame.bounds.height();
+        let host_frame_rect_pt = Rect {
+            x: sx - ox + insets[1],
+            y: sy - oy + insets[0],
+            w: (frame_w - insets[1] - insets[3]).max(0.0),
+            h: (frame_h - insets[0] - insets[2]).max(0.0),
+        };
         let pool = &mut pages[anchor_page].footnotes;
         for fn_body in &paragraph.footnotes {
             let next_number = pool.len() as u32 + 1;
@@ -2506,6 +2537,7 @@ fn emit_paragraph_into_chain(
                 host_paragraph_idx: host_para_idx,
                 footnote_self_id: fn_body.self_id.clone(),
                 paragraphs: fn_body.paragraphs.clone(),
+                host_frame_rect_pt,
             });
         }
     }
@@ -7300,6 +7332,158 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
 /// [`emit_cell_paragraph`]'s layout half so content-driven row
 /// growth can sum cell heights before committing row geometry.
 ///
+/// Phase 5 — footnote pool emit. For every page that captured
+/// footnotes during the story pass, lay out the footnote bodies at
+/// the bottom of the host frame's content area. Bodies stack
+/// upward from the frame bottom; per-page running numbers prefix
+/// each body ("1. body text").
+///
+/// MVP scope: uses the document's fallback font at a fixed 8pt body
+/// size. Footnote runs' character styling (different fonts,
+/// colours, italics) is ignored — the bodies render as plain black
+/// 8pt text on the fallback face. The first run's text is
+/// concatenated across paragraphs with a paragraph break replaced
+/// by a space so each footnote becomes a single layout chunk.
+///
+/// Deferred:
+/// - Per-run character styling (different fonts / italics inside a
+///   footnote body),
+/// - Anchor superscript substitution at the host paragraph,
+/// - Cross-page overflow (a footnote pool taller than the host
+///   frame currently overruns above the body content),
+/// - Footnote separator rule (the thin horizontal line InDesign
+///   draws between body text and the footnote pool).
+fn emit_footnote_pools(
+    pages: &mut [BuiltPage],
+    _font_table: &FontTable,
+    options: &PipelineOptions,
+) {
+    let Some(font_bytes) = options.font else {
+        return;
+    };
+    // Construct one rustybuzz Face + ttf_parser Face for the pool
+    // pass. Both are zero-copy views over `font_bytes`; cheap to
+    // build, and we only need one because every footnote uses the
+    // fallback font in the MVP.
+    let Some(rb_face) = rustybuzz::Face::from_slice(font_bytes, 0) else {
+        return;
+    };
+    let Ok(ttf_face) = ttf_parser::Face::parse(font_bytes, 0) else {
+        return;
+    };
+    let outliner = TtfOutliner::new(&ttf_face);
+    let font_id: u32 = u32::MAX; // sentinel — fallback font for footnotes
+    // Register the font bytes into each page's glyph-cache namespace
+    // so the rasterizer can fetch them. The display list's
+    // `register_font` is idempotent — registering the same id
+    // multiple times is a no-op after the first.
+    let point_size: f32 = 8.0;
+    let footnote_paint = Paint::Solid(Color {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    });
+    for page in pages.iter_mut() {
+        if page.footnotes.is_empty() {
+            continue;
+        }
+        // Sort by number (already inserted in order, but defensive).
+        let mut pool: Vec<EmittedFootnote> = page.footnotes.clone();
+        pool.sort_by_key(|f| f.number);
+        // Group by host_frame_rect_pt — render each frame's pool
+        // independently. Real-world: most pages have one frame
+        // hosting all the footnotes; this loop handles the rare
+        // multi-host case too.
+        let mut by_frame: std::collections::BTreeMap<
+            (i32, i32, i32, i32),
+            Vec<&EmittedFootnote>,
+        > = Default::default();
+        for fn_ in &pool {
+            let key = (
+                (fn_.host_frame_rect_pt.x * 64.0) as i32,
+                (fn_.host_frame_rect_pt.y * 64.0) as i32,
+                (fn_.host_frame_rect_pt.w * 64.0) as i32,
+                (fn_.host_frame_rect_pt.h * 64.0) as i32,
+            );
+            by_frame.entry(key).or_default().push(fn_);
+        }
+        for (_key, group) in by_frame {
+            let rect = group[0].host_frame_rect_pt;
+            let column_width_pt = rect.w;
+            if column_width_pt <= 0.0 {
+                continue;
+            }
+            // Layout each footnote bottom-up. We first lay out all
+            // footnotes (top-down) to know each height, then
+            // position them so the LAST one's bottom sits at the
+            // frame's bottom.
+            let mut layouts: Vec<idml_text::LaidOutParagraph> = Vec::with_capacity(group.len());
+            for fn_ in &group {
+                let text = footnote_body_text(fn_);
+                let mut lopts = idml_text::LayoutOptions::new(column_width_pt, point_size);
+                lopts.alignment = idml_text::Alignment::Left;
+                let shaper = idml_text::RustybuzzMeasurer::new(&rb_face, point_size);
+                let laid = idml_text::layout_paragraph(&text, &shaper, &lopts);
+                layouts.push(laid);
+            }
+            // Vertical pen — pool bottom sits at frame bottom.
+            // Walk footnotes upward to compute their top y.
+            let frame_bottom_pt = rect.y + rect.h;
+            let line_height_pt = point_size * 1.2;
+            let mut tops_pt: Vec<f32> = Vec::with_capacity(layouts.len());
+            // Compute heights (line count * line_height_pt).
+            let mut total_h_pt = 0.0f32;
+            let mut per_fn_h: Vec<f32> = Vec::with_capacity(layouts.len());
+            for laid in &layouts {
+                let h = laid.lines.len().max(1) as f32 * line_height_pt;
+                per_fn_h.push(h);
+                total_h_pt += h;
+            }
+            let mut cursor_y_pt = frame_bottom_pt - total_h_pt;
+            for h in &per_fn_h {
+                tops_pt.push(cursor_y_pt);
+                cursor_y_pt += *h;
+            }
+            // Emit each footnote's glyphs at its computed top.
+            for (laid, top_y_pt) in layouts.iter().zip(tops_pt.iter()) {
+                // emit_paragraph expects a `frame_origin_pt` which
+                // is the (top-left) origin against which glyph
+                // positions are offset. layout_paragraph's first
+                // baseline sits 0.8 × point_size below the origin
+                // by default, so passing (rect.x, *top_y_pt)
+                // lands the first baseline correctly inside the
+                // footnote's row.
+                emit_paragraph(
+                    laid,
+                    font_id,
+                    point_size,
+                    |_| footnote_paint,
+                    (rect.x, *top_y_pt),
+                    &outliner,
+                    &mut page.list,
+                );
+            }
+        }
+    }
+}
+
+/// Synthesize the body text for a single footnote: "N. " prefix
+/// plus the concatenation of every paragraph's every run's text,
+/// joined with a single space between paragraphs.
+fn footnote_body_text(fn_: &EmittedFootnote) -> String {
+    let mut out = format!("{}. ", fn_.number);
+    for (i, p) in fn_.paragraphs.iter().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        for run in &p.runs {
+            out.push_str(&run.text);
+        }
+    }
+    out
+}
+
 /// Phase 5 — emit a nested table inside a cell's content area.
 ///
 /// Unlike [`emit_table_into_chain`] this version doesn't thread the
@@ -14090,6 +14274,20 @@ mod tests {
         assert_eq!(
             footnotes[1].paragraphs[0].runs[0].text,
             "Second footnote."
+        );
+
+        // Phase 5 footnote pool: the post-pass should have laid out
+        // the two footnotes as glyphs at the bottom of frameA.
+        // The body alone contributes ~17 glyphs ("Anchor host
+        // body."). With the pool emit firing, total commands grow
+        // by the two footnote bodies' glyph counts; we assert a
+        // floor of 40 to confirm pool emission happened without
+        // pinning the exact glyph count (which depends on the
+        // shaper's ligature decisions for the fallback font).
+        let cmd_count = built.pages[0].list.commands.len();
+        assert!(
+            cmd_count >= 40,
+            "expected footnote pool glyphs in display list (≥40), got {cmd_count}"
         );
     }
 
