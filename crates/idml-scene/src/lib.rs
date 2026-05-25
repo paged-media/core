@@ -626,6 +626,8 @@ impl ResolvedRunAttrs {
             kenten_font_size: run.kenten_font_size,
             overprint_fill: run.overprint_fill,
             overprint_stroke: run.overprint_stroke,
+            ligatures_on: run.ligatures_on,
+            kerning_method: run.kerning_method.clone(),
         }
     }
 
@@ -675,6 +677,10 @@ impl ResolvedRunAttrs {
         self.kenten_font_size = self.kenten_font_size.or(c.kenten_font_size);
         self.overprint_fill = self.overprint_fill.or(c.overprint_fill);
         self.overprint_stroke = self.overprint_stroke.or(c.overprint_stroke);
+        self.ligatures_on = self.ligatures_on.or(c.ligatures_on);
+        if self.kerning_method.is_none() {
+            self.kerning_method = c.kerning_method.clone();
+        }
     }
 
     /// Fill any unset field from a resolved paragraph style.
@@ -1011,6 +1017,13 @@ pub struct ResolvedRunAttrs {
     /// Cascaded `OverprintStroke` flag (rare on text — only outlined
     /// text strokes).
     pub overprint_stroke: Option<bool>,
+    /// Phase 4 typography — cascaded `Ligatures` flag. `None` ⇒
+    /// inherits / the default (true) wins at the bottom of the
+    /// cascade.
+    pub ligatures_on: Option<bool>,
+    /// Cascaded `KerningMethod` string. `None` ⇒ default
+    /// (`"Metrics"`) at the bottom of the cascade.
+    pub kerning_method: Option<String>,
 }
 
 /// Effective paragraph-level attributes after walking the cascade

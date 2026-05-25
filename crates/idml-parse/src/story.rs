@@ -654,6 +654,15 @@ pub struct CharacterRun {
     /// back to 1pt at emit time when `stroke_color` resolves but
     /// `stroke_weight` doesn't.
     pub stroke_weight: Option<f32>,
+    /// Phase 4 typography — `Ligatures="true|false"` on the
+    /// `<CharacterStyleRange>`. None ⇒ inherit. Default at the
+    /// bottom of the cascade is `true` (InDesign's CharacterStyle
+    /// default).
+    pub ligatures_on: Option<bool>,
+    /// `KerningMethod="Metrics|Optical|None"` on the
+    /// `<CharacterStyleRange>`. None ⇒ inherit. Default at the
+    /// bottom of the cascade is `Metrics`.
+    pub kerning_method: Option<String>,
     pub text: String,
 }
 
@@ -1145,6 +1154,9 @@ impl Story {
                             }),
                             stroke_weight: attr(&e, b"StrokeWeight")
                                 .and_then(|s| s.parse::<f32>().ok()),
+                            ligatures_on: attr(&e, b"Ligatures")
+                                .and_then(|s| s.parse::<bool>().ok()),
+                            kerning_method: attr(&e, b"KerningMethod"),
                             text: String::new(),
                         });
                     }

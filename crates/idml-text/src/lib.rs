@@ -29,6 +29,6 @@ pub use layout::{
     LayoutOptions, PositionedGlyph, StyledRun,
 };
 pub use shape::{
-    apply_optical_margin, apply_tracking, optical_margin_offset, shape_run, MarginSide,
-    ShapedGlyph, ShapedRun,
+    apply_optical_margin, apply_tracking, optical_margin_offset, shape_run,
+    shape_run_with_features, KerningMethod, MarginSide, ShapedGlyph, ShapedRun, ShapingFeatures,
 };

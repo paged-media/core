@@ -2684,6 +2684,10 @@ fn emit_paragraph_into_chain(
             baseline_shift_pt: resolved_runs[i].baseline_shift.unwrap_or(0.0),
             horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
             fallback_faces: &fallback_faces_pool,
+            shaping_features: shaping_features_from(
+                resolved_runs[i].ligatures_on,
+                resolved_runs[i].kerning_method.as_deref(),
+            ),
         })
         .collect();
 
@@ -2941,6 +2945,7 @@ fn emit_paragraph_into_chain(
                 baseline_shift_pt: r.baseline_shift_pt,
                 horizontal_scale_pct: r.horizontal_scale_pct,
                 fallback_faces: r.fallback_faces,
+                shaping_features: r.shaping_features,
             });
         }
         styled_runs_storage = adjusted;
@@ -7053,6 +7058,10 @@ fn measure_cell_paragraph(
             baseline_shift_pt: resolved_runs[i].baseline_shift.unwrap_or(0.0),
             horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
             fallback_faces: &[],
+            shaping_features: shaping_features_from(
+                resolved_runs[i].ligatures_on,
+                resolved_runs[i].kerning_method.as_deref(),
+            ),
         })
         .collect();
     let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
@@ -7225,6 +7234,10 @@ fn emit_cell_paragraph(
             baseline_shift_pt: resolved_runs[i].baseline_shift.unwrap_or(0.0),
             horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
             fallback_faces: &[],
+            shaping_features: shaping_features_from(
+                resolved_runs[i].ligatures_on,
+                resolved_runs[i].kerning_method.as_deref(),
+            ),
         })
         .collect();
     let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
@@ -11097,6 +11110,30 @@ fn emit_line_decorations(
 /// resolve to `Left` / `Right` respectively — matches the historical
 /// stringly-typed behaviour, which fell through to `Left` for any
 /// unrecognised string.
+/// Phase 4 typography — translate a `ResolvedRunAttrs`'s `Ligatures` /
+/// `KerningMethod` into the shaper's [`idml_text::ShapingFeatures`].
+/// Inputs are `None`-tolerant: missing `ligatures_on` defaults to true
+/// (InDesign's CharacterStyle default); unrecognised `kerning_method`
+/// strings fall through to `Metrics`. `"Optical"` falls through to
+/// `Optical` even though the renderer currently shapes it the same as
+/// `Metrics` — the cache key still distinguishes the two so the
+/// optical-kerning pass can land later without invalidating the cache.
+pub fn shaping_features_from(
+    ligatures_on: Option<bool>,
+    kerning_method: Option<&str>,
+) -> idml_text::ShapingFeatures {
+    use idml_text::KerningMethod as K;
+    idml_text::ShapingFeatures {
+        ligatures_on: ligatures_on.unwrap_or(true),
+        kerning: match kerning_method {
+            Some("None") => K::Off,
+            Some("Optical") => K::Optical,
+            // "Metrics" or anything else (incl. None) → default.
+            _ => K::Metrics,
+        },
+    }
+}
+
 pub fn map_justification(j: Option<idml_parse::Justification>) -> idml_text::Alignment {
     use idml_parse::Justification as J;
     match j {

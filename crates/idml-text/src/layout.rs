@@ -15,7 +15,7 @@ use paragraph_breaker::{Breakpoint, Item};
 use rustybuzz::Face;
 
 use crate::compose::{compose_paragraph, ComposeOptions, TextShaper};
-use crate::shape::{apply_tracking, shape_run, ShapedRun, ADVANCE_PRECISION};
+use crate::shape::{apply_tracking, shape_run, shape_run_with_features, ShapedRun, ADVANCE_PRECISION};
 
 /// A glyph positioned in frame space, ready for rasterization.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -316,6 +316,12 @@ pub struct StyledRun<'a> {
     /// shape whose glyphs are all non-notdef (P-20). Empty slice =
     /// no per-cluster fallback (the legacy behaviour).
     pub fallback_faces: &'a [&'a Face<'a>],
+    /// Phase 4 typography — OpenType feature toggles. Default
+    /// (`ShapingFeatures::default()`) means rustybuzz's standard
+    /// behaviour (kern + liga on). When the IDML carries
+    /// `LigaturesOn="false"` or `KerningMethod="None"`, callers set
+    /// the relevant fields so `shape_run` opts out of those features.
+    pub shaping_features: crate::shape::ShapingFeatures,
 }
 
 /// Multi-font flavour of [`layout_paragraph`].
@@ -435,7 +441,12 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     for r in runs {
         run_starts.push(paragraph_text.len());
         paragraph_text.push_str(r.text);
-        let mut s = shape_run(r.face, r.text, r.point_size);
+        let mut s = shape_run_with_features(
+            r.face,
+            r.text,
+            r.point_size,
+            r.shaping_features,
+        );
         // P-20: per-cluster glyph fallback. When the primary face
         // shapes a cluster to `.notdef` (glyph id 0), retry that
         // cluster's source bytes against each fallback face in turn

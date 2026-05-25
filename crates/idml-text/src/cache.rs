@@ -30,6 +30,7 @@ use std::collections::HashMap;
 
 use crate::compose::ComposeOptions;
 use crate::layout::{layout_runs, Alignment, LaidOutParagraph, LayoutOptions, StyledRun};
+use crate::shape::{KerningMethod, ShapingFeatures};
 
 /// Bounded per-paragraph layout cache.
 #[derive(Debug)]
@@ -296,6 +297,12 @@ pub fn layout_runs_key(runs: &[StyledRun], options: &LayoutOptions) -> [u8; 32] 
         h.add_f32(r.baseline_shift_pt);
         h.add_f32(r.horizontal_scale_pct);
         h.add_u32(r.fallback_faces.len() as u32);
+        h.add_bool(r.shaping_features.ligatures_on);
+        h.add_u32(match r.shaping_features.kerning {
+            KerningMethod::Metrics => 0,
+            KerningMethod::Optical => 1,
+            KerningMethod::Off => 2,
+        });
         h.sep();
     }
     fold_layout_options(&mut h, options);

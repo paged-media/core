@@ -343,6 +343,16 @@ pub struct CharacterStyleDef {
     pub kenten_character: Option<String>,
     /// `KentenFontSize` — emphasis-mark size as a % of base size.
     pub kenten_font_size: Option<f32>,
+    /// Phase 4 typography — IDML `Ligatures="true|false"`. Standard
+    /// + contextual OpenType ligatures (`liga`, `clig`). Default
+    /// (when None and bottom of cascade) is `true`, matching
+    /// InDesign's CharacterStyle default.
+    pub ligatures_on: Option<bool>,
+    /// IDML `KerningMethod="Metrics|Optical|None"`. Default
+    /// (when None and bottom of cascade) is `Metrics`. `Optical`
+    /// falls back to `Metrics` at the renderer until the outline-
+    /// driven pass lands.
+    pub kerning_method: Option<String>,
 }
 
 /// Q-09: `ParagraphShading*` attributes parsed off a
@@ -706,6 +716,12 @@ pub struct ResolvedCharacter {
     pub kenten_character: Option<String>,
     /// Cascaded `KentenFontSize`.
     pub kenten_font_size: Option<f32>,
+    /// Phase 4 typography — cascaded `Ligatures` flag. See
+    /// [`CharacterStyleDef::ligatures_on`].
+    pub ligatures_on: Option<bool>,
+    /// Cascaded `KerningMethod` string. See
+    /// [`CharacterStyleDef::kerning_method`].
+    pub kerning_method: Option<String>,
 }
 
 /// Effective paragraph-level attributes after walking BasedOn.
@@ -1338,6 +1354,10 @@ impl ResolvedCharacter {
             self.kenten_character = def.kenten_character.clone();
         }
         self.kenten_font_size = self.kenten_font_size.or(def.kenten_font_size);
+        self.ligatures_on = self.ligatures_on.or(def.ligatures_on);
+        if self.kerning_method.is_none() {
+            self.kerning_method = def.kerning_method.clone();
+        }
     }
 }
 
@@ -1544,6 +1564,8 @@ fn parse_character_style(e: &quick_xml::events::BytesStart) -> Option<CharacterS
         kenten_kind: attr(e, b"KentenKind"),
         kenten_character: attr(e, b"KentenCharacter"),
         kenten_font_size: attr(e, b"KentenFontSize").and_then(|s| s.parse().ok()),
+        ligatures_on: attr(e, b"Ligatures").and_then(|s| s.parse().ok()),
+        kerning_method: attr(e, b"KerningMethod"),
     })
 }
 

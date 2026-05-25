@@ -34,10 +34,105 @@ pub struct ShapedRun {
 /// `text` must already be a single homogeneous run (one font, one size,
 /// one language, one direction); the caller is responsible for segmenting
 /// paragraphs into such runs.
+///
+/// Equivalent to [`shape_run_with_features`] with `features` =
+/// [`ShapingFeatures::default()`] (rustybuzz's defaults: kerning + standard
+/// ligatures on, discretionary ligatures off — the same set the OpenType
+/// spec says fonts opt into by default). Kept as a no-features wrapper
+/// because the calibration spike, the optical-margin pass, and several
+/// tests want the simplest possible call site.
 pub fn shape_run(face: &Face, text: &str, point_size: f32) -> ShapedRun {
+    shape_run_with_features(face, text, point_size, ShapingFeatures::default())
+}
+
+/// Phase 4 typography — OpenType feature toggles. Currently exposes
+/// the two that ship in InDesign's character-style UI today: standard
+/// ligatures (`liga` / `clig`) and kerning (`kern`). Other features
+/// (discretionary ligatures, contextual alternates, swashes,
+/// stylistic sets) can be added as needed.
+///
+/// The default is "shape exactly like the bare `shape_run` did before
+/// Phase 4 landed" so existing call sites change behaviour only when
+/// they explicitly opt in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShapingFeatures {
+    /// `LigaturesOn`. When false, standard + contextual ligatures
+    /// (`liga`, `clig`) are disabled. Discretionary ligatures stay
+    /// off either way (separate IDML attribute, not yet wired).
+    pub ligatures_on: bool,
+    /// `KerningMethod`. When `Off`, the `kern` OpenType feature is
+    /// disabled and shape advances reflect the font's bare metrics.
+    /// `Metrics` (default) lets rustybuzz apply OpenType kerning;
+    /// `Optical` falls through to Metrics for now — InDesign's
+    /// optical kerning would need a separate pass over glyph
+    /// outlines and is queued.
+    pub kerning: KerningMethod,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KerningMethod {
+    /// OpenType `kern` feature on. InDesign default.
+    #[default]
+    Metrics,
+    /// Optical kerning — fall back to Metrics until the outline-
+    /// driven pass lands.
+    Optical,
+    /// Disable kerning entirely.
+    Off,
+}
+
+impl Default for ShapingFeatures {
+    fn default() -> Self {
+        Self {
+            ligatures_on: true,
+            kerning: KerningMethod::Metrics,
+        }
+    }
+}
+
+impl ShapingFeatures {
+    fn to_rustybuzz(self) -> Vec<rustybuzz::Feature> {
+        let mut out: Vec<rustybuzz::Feature> = Vec::new();
+        if !self.ligatures_on {
+            // Tag = `liga`, value 0 = off. Same for `clig`.
+            out.push(rustybuzz::Feature::new(
+                ttf_parser::Tag::from_bytes(b"liga"),
+                0,
+                ..,
+            ));
+            out.push(rustybuzz::Feature::new(
+                ttf_parser::Tag::from_bytes(b"clig"),
+                0,
+                ..,
+            ));
+        }
+        if matches!(self.kerning, KerningMethod::Off) {
+            out.push(rustybuzz::Feature::new(
+                ttf_parser::Tag::from_bytes(b"kern"),
+                0,
+                ..,
+            ));
+        }
+        out
+    }
+}
+
+/// Shape `text` with explicit OpenType feature toggles.
+///
+/// The base call is identical to [`shape_run`]; this entry exists so the
+/// pipeline can pass the resolved `LigaturesOn` / `KerningMethod` from a
+/// `CharacterRun` without every call site having to construct a
+/// `ShapingFeatures` when the defaults are fine.
+pub fn shape_run_with_features(
+    face: &Face,
+    text: &str,
+    point_size: f32,
+    features: ShapingFeatures,
+) -> ShapedRun {
     let mut buf = UnicodeBuffer::new();
     buf.push_str(text);
-    let shaped = rustybuzz::shape(face, &[], buf);
+    let rb_features = features.to_rustybuzz();
+    let shaped = rustybuzz::shape(face, &rb_features, buf);
 
     let units_per_em = face.units_per_em() as f32;
     let scale = point_size * ADVANCE_PRECISION / units_per_em;
@@ -386,5 +481,68 @@ mod tests {
         assert_eq!(r.total_advance, total);
         assert_eq!(r.glyphs[0].x_offset, 0);
         assert_eq!(r.glyphs[2].x_advance, 120);
+    }
+
+    #[test]
+    fn shaping_features_default_passes_empty_feature_list() {
+        let f = ShapingFeatures::default();
+        assert_eq!(f.to_rustybuzz().len(), 0);
+    }
+
+    #[test]
+    fn shaping_features_disable_ligatures_adds_two_off_tags() {
+        let f = ShapingFeatures {
+            ligatures_on: false,
+            ..Default::default()
+        };
+        let fs = f.to_rustybuzz();
+        assert_eq!(fs.len(), 2, "expect liga + clig off entries");
+        // Both should have value 0.
+        for feat in &fs {
+            assert_eq!(feat.value, 0);
+        }
+    }
+
+    #[test]
+    fn shaping_features_kerning_off_adds_kern_off() {
+        let f = ShapingFeatures {
+            kerning: KerningMethod::Off,
+            ..Default::default()
+        };
+        let fs = f.to_rustybuzz();
+        assert_eq!(fs.len(), 1);
+        assert_eq!(fs[0].value, 0);
+    }
+
+    #[test]
+    fn shaping_features_metrics_kerning_does_nothing_extra() {
+        let f = ShapingFeatures {
+            kerning: KerningMethod::Metrics,
+            ..Default::default()
+        };
+        assert!(f.to_rustybuzz().is_empty());
+    }
+
+    #[test]
+    fn shape_run_with_features_handles_empty_text() {
+        // Sanity smoke — the function should produce an empty result
+        // when fed empty text, regardless of features.
+        let bytes = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../corpus/fonts/Inter.ttf"),
+        )
+        .expect("Inter.ttf fixture");
+        let face = rustybuzz::Face::from_slice(&bytes, 0).expect("parse Inter");
+        let r = shape_run_with_features(
+            &face,
+            "",
+            12.0,
+            ShapingFeatures {
+                ligatures_on: false,
+                kerning: KerningMethod::Off,
+            },
+        );
+        assert!(r.glyphs.is_empty());
+        assert_eq!(r.total_advance, 0);
     }
 }
