@@ -10413,12 +10413,19 @@ fn decode_image_bytes(bytes: &[u8]) -> Option<idml_compose::DecodedImage> {
 /// Lazy variant: returns a `DecodedImage` whose `rgba` is empty and
 /// whose `encoded` carries the original bytes. The rasterizer
 /// detects the empty `rgba` and runs the full decoder on demand.
-/// Width / height come from header peeks where possible (PNG, JPEG)
-/// so the display-list transform stays accurate without paying for
-/// the pixel decode.
+/// Width / height come from header peeks where possible (PNG, JPEG,
+/// SVG) so the display-list transform stays accurate without paying
+/// for the pixel decode.
 fn peek_image_lazy(bytes: &[u8], max_px: u32) -> Option<idml_compose::DecodedImage> {
     if is_eps_magic(bytes) {
         return None;
+    }
+    // SVGs always go through the eager path even on wasm32: usvg's
+    // parse is fast (XML-only, no pixel buffer) and we'd parse twice
+    // anyway in lazy mode. The cost of the actual rasterize stays
+    // bounded — vector → bitmap at the configured max_px.
+    if is_svg_magic(bytes) {
+        return decode_svg_bytes(bytes, max_px);
     }
     let (width, height) = peek_image_dimensions(bytes, max_px)?;
     Some(idml_compose::DecodedImage {
@@ -10426,6 +10433,44 @@ fn peek_image_lazy(bytes: &[u8], max_px: u32) -> Option<idml_compose::DecodedIma
         height,
         encoded: bytes::Bytes::copy_from_slice(bytes),
         rgba: bytes::Bytes::new(),
+    })
+}
+
+/// Sniff for SVG: skip BOM + leading whitespace, then look for the
+/// XML preamble or a bare `<svg` root. Adobe-embedded SVGs always
+/// carry the XML declaration; loose-format SVGs in arbitrary IDMLs
+/// may not.
+fn is_svg_magic(bytes: &[u8]) -> bool {
+    let head = &bytes[..bytes.len().min(512)];
+    let Ok(s) = std::str::from_utf8(head) else { return false; };
+    let s = s.trim_start_matches('\u{FEFF}').trim_start();
+    s.starts_with("<?xml") || s.starts_with("<svg") || s.starts_with("<!DOCTYPE svg")
+}
+
+/// Decode an SVG via resvg → tiny-skia → RGBA8. The image is scaled
+/// so its longest edge lands at most `max_px` (matching the DCT-scale
+/// cap for raster images), preserving aspect.
+fn decode_svg_bytes(bytes: &[u8], max_px: u32) -> Option<idml_compose::DecodedImage> {
+    let opt = resvg::usvg::Options::default();
+    let tree = resvg::usvg::Tree::from_data(bytes, &opt).ok()?;
+    let svg_w: f32 = tree.size().width().ceil().max(1.0);
+    let svg_h: f32 = tree.size().height().ceil().max(1.0);
+    let longest = svg_w.max(svg_h);
+    let scale: f32 = if (longest as u32) > max_px {
+        (max_px as f32) / longest
+    } else {
+        1.0
+    };
+    let w = ((svg_w * scale).ceil() as u32).max(1);
+    let h = ((svg_h * scale).ceil() as u32).max(1);
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h)?;
+    let transform = resvg::tiny_skia::Transform::from_scale(scale, scale);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    Some(idml_compose::DecodedImage {
+        width: w,
+        height: h,
+        encoded: bytes::Bytes::copy_from_slice(bytes),
+        rgba: bytes::Bytes::from(pixmap.take()),
     })
 }
 
@@ -10476,6 +10521,9 @@ fn decode_image_bytes_with_target_max(
     if is_eps_magic(bytes) {
         tracing::warn!("EPS / PostScript image detected; emitting missing-image placeholder");
         return None;
+    }
+    if is_svg_magic(bytes) {
+        return decode_svg_bytes(bytes, max_px);
     }
     if is_jpeg_magic(bytes) {
         if let Some((src_w, src_h)) = peek_jpeg_dimensions(bytes) {
