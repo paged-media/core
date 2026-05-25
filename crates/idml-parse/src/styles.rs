@@ -1040,7 +1040,10 @@ impl StyleSheet {
                     _ => {}
                 },
                 Event::Text(t) if pending_property.is_some() => {
-                    let text = t.unescape().map(|c| c.into_owned()).unwrap_or_default();
+                    let text = t
+                        .xml_content(quick_xml::XmlVersion::Implicit1_0)
+                        .map(|c| c.into_owned())
+                        .unwrap_or_default();
                     if text.is_empty() {
                         pending_property = None;
                     } else {

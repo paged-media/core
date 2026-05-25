@@ -1694,7 +1694,9 @@ impl Story {
                             // Without this normalisation the shaper
                             // filters `\u{2028}` as a control glyph
                             // and the visual gap collapses.
-                            let raw = t.unescape().unwrap_or_default();
+                            let raw = t
+                                .xml_content(quick_xml::XmlVersion::Implicit1_0)
+                                .unwrap_or_default();
                             for ch in raw.chars() {
                                 if matches!(ch, '\u{2028}' | '\u{2029}') {
                                     run.text.push('\n');
@@ -1704,7 +1706,10 @@ impl Story {
                             }
                         }
                     } else if properties_field.is_some() {
-                        properties_text.push_str(&t.unescape().unwrap_or_default());
+                        properties_text.push_str(
+                            &t.xml_content(quick_xml::XmlVersion::Implicit1_0)
+                                .unwrap_or_default(),
+                        );
                     }
                 }
                 Event::PI(pi) => {
