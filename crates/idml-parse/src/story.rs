@@ -273,6 +273,49 @@ pub struct Paragraph {
     pub overprint_fill: Option<bool>,
     /// `OverprintStroke="true"` analogue.
     pub overprint_stroke: Option<bool>,
+    /// Phase 5 — `<Footnote>` elements anchored on this paragraph.
+    /// Each footnote carries its own self-contained paragraph stream
+    /// (the footnote body). The renderer's footnote placement pass
+    /// reads this to populate the per-page footnote pool. Empty for
+    /// the overwhelming majority of paragraphs (only the paragraphs
+    /// that host a `<Footnote>` anchor have entries).
+    pub footnotes: Vec<Footnote>,
+    /// Phase 5 — `<Topic>` references on this paragraph from
+    /// `<PageReference>` or `<IndexEntry>` markers. Each entry maps
+    /// to one place where this paragraph contributes to the index.
+    /// The renderer's index pass collects these across all
+    /// paragraphs and emits an alphabetized index story.
+    pub index_markers: Vec<IndexMarker>,
+}
+
+/// IDML `<Footnote>` — a self-contained paragraph stream anchored at
+/// a point inside a host paragraph. The renderer places footnotes in
+/// a per-page footnote pool at the bottom of the host frame.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct Footnote {
+    pub self_id: Option<String>,
+    /// The footnote body, parsed identically to top-level story
+    /// paragraphs. Inherits the host story's character / paragraph
+    /// style cascade just like any other paragraph stream.
+    pub paragraphs: Vec<Paragraph>,
+}
+
+/// IDML index marker — a `<PageReference>` or `<IndexEntry>` element
+/// that records "this paragraph contributes to the index entry for
+/// `topic_name`". The renderer's resolution pass collects all
+/// markers, groups by topic, alphabetises, and emits an index story.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct IndexMarker {
+    /// The indexed term. From the marker's `TopicName` attribute,
+    /// or — when only `AppliedTopic="Topic/<id>"` is present — the
+    /// resolver looks up the Topic table on the document and pulls
+    /// the topic's `Name` from there.
+    pub topic_name: String,
+    /// `AppliedTopic` reference (`Topic/<id>`) when present. Empty
+    /// when the marker carried only the inline `TopicName`.
+    pub applied_topic: Option<String>,
+    /// Optional sort override. IDML's `SortOrder` attribute.
+    pub sort_order: Option<String>,
 }
 
 /// One anchored frame declared inside a `<CharacterStyleRange>`. The
@@ -688,6 +731,22 @@ pub struct CharacterRun {
     pub text: String,
 }
 
+/// Phase 5 — one stack frame of in-progress footnote parsing. Holds
+/// the `Footnote` being assembled plus the parked `current_paragraph`
+/// / `current_run` from the host context (the body paragraph
+/// containing the footnote anchor). When the footnote closes, the
+/// parker is drained back into the parser's current slots so the
+/// host paragraph continues to accept further runs.
+///
+/// Why a stack? Footnotes inside footnotes are exotic but legal in
+/// IDML; treating the parser state as a stack makes each nesting
+/// level self-contained and matches the existing TableContext idiom.
+struct FootnoteContext {
+    footnote: Footnote,
+    outer_paragraph: Option<Paragraph>,
+    outer_run: Option<CharacterRun>,
+}
+
 /// Phase 5 — one stack frame of in-progress table parsing. Holds the
 /// `Table` being assembled plus parker slots for the parser's three
 /// "current" pieces of state at each nesting level:
@@ -729,6 +788,11 @@ impl Story {
         // `outer_run`, but now per-table instead of global).
         let mut table_stack: Vec<TableContext> = Vec::new();
         let mut current_cell: Option<TableCell> = None;
+        // Phase 5 — footnote context stack. Each `<Footnote>` open
+        // pushes; `</Footnote>` close pops, attaches the captured
+        // body to the host paragraph, and restores the parker state.
+        // Nesting is rare but handled.
+        let mut footnote_stack: Vec<FootnoteContext> = Vec::new();
         let mut in_content = false;
         let mut buf = Vec::new();
         // `<Properties>` child elements appear *inside* a CharacterStyleRange
@@ -913,7 +977,7 @@ impl Story {
                         buf.clear();
                         continue;
                     }
-                    if matches!(name, b"HiddenText" | b"Note" | b"Index" | b"IndexEntry" | b"Footnote") {
+                    if matches!(name, b"HiddenText" | b"Note") {
                         suppress_depth = 1;
                         buf.clear();
                         continue;
@@ -978,6 +1042,8 @@ impl Story {
                                 .and_then(|s| s.parse::<bool>().ok()),
                             overprint_stroke: attr(&e, b"OverprintStroke")
                                 .and_then(|s| s.parse::<bool>().ok()),
+                            footnotes: Vec::new(),
+                            index_markers: Vec::new(),
                         });
                     }
                     b"Table" => {
@@ -1093,6 +1159,21 @@ impl Story {
                                 end_gap_tint: parse_tint_attr(&e, b"EndColumnStrokeGapTint"),
                             },
                             },
+                        });
+                    }
+                    b"Footnote" => {
+                        // Park the host-paragraph/run state on the
+                        // new footnote frame; the next
+                        // `<ParagraphStyleRange>` will start the
+                        // footnote body in a fresh `current_paragraph`.
+                        // On `</Footnote>` we restore and attach.
+                        footnote_stack.push(FootnoteContext {
+                            footnote: Footnote {
+                                self_id: attr(&e, b"Self"),
+                                paragraphs: Vec::new(),
+                            },
+                            outer_paragraph: current_paragraph.take(),
+                            outer_run: current_run.take(),
                         });
                     }
                     b"Cell" => {
@@ -1342,7 +1423,16 @@ impl Story {
                             // shaped run or a hosted table; drop
                             // truly empty ones.
                             if !para.runs.is_empty() || para.table.is_some() {
-                                if let Some(cell) = current_cell.as_mut() {
+                                // Route by parser nesting: footnote
+                                // wins over cell wins over story root.
+                                // The footnote check has to come
+                                // first because a footnote anchored
+                                // inside a cell paragraph still wants
+                                // its body paragraphs to live on the
+                                // footnote, not on the cell.
+                                if let Some(ctx) = footnote_stack.last_mut() {
+                                    ctx.footnote.paragraphs.push(para);
+                                } else if let Some(cell) = current_cell.as_mut() {
                                     cell.paragraphs.push(para);
                                 } else {
                                     out.paragraphs.push(para);
@@ -1388,6 +1478,20 @@ impl Story {
                             }
                         }
                     }
+                    b"Footnote" => {
+                        // Pop the active footnote frame, restore the
+                        // host-paragraph / host-run state, then
+                        // attach the captured footnote to the host
+                        // paragraph. The host paragraph keeps
+                        // accumulating runs after this point.
+                        if let Some(ctx) = footnote_stack.pop() {
+                            current_paragraph = ctx.outer_paragraph;
+                            current_run = ctx.outer_run;
+                            if let Some(p) = current_paragraph.as_mut() {
+                                p.footnotes.push(ctx.footnote);
+                            }
+                        }
+                    }
                     _ => {}
                     } // close inner `match name { ... }`
                 }
@@ -1428,15 +1532,30 @@ impl Story {
                         buf.clear();
                         continue;
                     }
-                    // Self-closing suppressed wrappers (e.g. an
-                    // `<IndexEntry .../>` marker) carry no flow
+                    // Self-closing suppressed wrappers carry no flow
                     // content; drop them. Inline glyph events
                     // (`<Br/>` / `<Tab/>` / `<TextVariableInstance/>`)
                     // nested inside an open suppressed subtree are
                     // also dropped to keep the wrapper truly silent.
                     if suppress_depth > 0
-                        || matches!(name, b"HiddenText" | b"Note" | b"Index" | b"IndexEntry" | b"Footnote")
+                        || matches!(name, b"HiddenText" | b"Note")
                     {
+                        buf.clear();
+                        continue;
+                    }
+                    // Phase 5 — `<PageReference>` / `<IndexEntry>` /
+                    // `<Index>` self-closing markers. Capture the
+                    // indexed term onto the current paragraph so the
+                    // index-resolution pass can collect entries.
+                    // IDML serialises both element-only (`<Index ...>`
+                    // wrapping) and self-closing (`<IndexEntry ...>`
+                    // marker) forms; both carry the same attributes.
+                    if matches!(name, b"PageReference" | b"IndexEntry" | b"Index") {
+                        if let Some(marker) = parse_index_marker(&e) {
+                            if let Some(p) = current_paragraph.as_mut() {
+                                p.index_markers.push(marker);
+                            }
+                        }
                         buf.clear();
                         continue;
                     }
@@ -1754,6 +1873,31 @@ fn parse_anchored_object_setting(
         vertical_reference_point: attr(e, b"VerticalReferencePoint"),
         vertical_alignment: attr(e, b"VerticalAlignment"),
     }
+}
+
+/// Phase 5 — extract an [`IndexMarker`] from a `<PageReference>` /
+/// `<IndexEntry>` / `<Index>` self-closing marker element. Returns
+/// `None` when the element carries neither `TopicName` nor
+/// `AppliedTopic` — without one of those there's nothing to index.
+fn parse_index_marker(e: &quick_xml::events::BytesStart) -> Option<IndexMarker> {
+    let topic_name = attr(e, b"TopicName");
+    let applied_topic = attr(e, b"AppliedTopic");
+    // At least one of the two is required for the marker to mean
+    // something. When both are absent the element is a structural
+    // placeholder we can safely drop.
+    if topic_name.is_none() && applied_topic.is_none() {
+        return None;
+    }
+    Some(IndexMarker {
+        // Prefer the inline `TopicName`; fall back to the topic id
+        // (the renderer's index-resolution pass dereferences this
+        // via the document-level Topic table).
+        topic_name: topic_name.clone().unwrap_or_else(|| {
+            applied_topic.clone().unwrap_or_default()
+        }),
+        applied_topic,
+        sort_order: attr(e, b"SortOrder"),
+    })
 }
 
 fn parse_tab_stop(e: &quick_xml::events::BytesStart) -> Option<TabStop> {
@@ -2775,14 +2919,44 @@ mod tests {
     }
 
     #[test]
-    fn footnote_is_suppressed_from_body_text() {
+    fn index_markers_are_captured_on_host_paragraph() {
+        // `<PageReference>` and `<IndexEntry>` self-closing markers
+        // inside body runs surface as IndexMarker entries on the
+        // host paragraph. The renderer's index-resolution pass
+        // collects these, groups by topic, alphabetises, and emits.
+        let xml = br#"<Story>
+          <ParagraphStyleRange>
+            <CharacterStyleRange>
+              <Content>The apple is a fruit</Content>
+              <PageReference Self="PR1" TopicName="Apple" SortOrder="apple"/>
+              <Content>. The banana also.</Content>
+              <IndexEntry Self="IE1" AppliedTopic="Topic/u42"/>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let para = &s.paragraphs[0];
+        assert_eq!(para.index_markers.len(), 2);
+        // First marker: explicit topic name.
+        assert_eq!(para.index_markers[0].topic_name, "Apple");
+        assert_eq!(para.index_markers[0].sort_order.as_deref(), Some("apple"));
+        // Second marker: AppliedTopic ref, topic_name falls back to
+        // the id (renderer dereferences via the document-level
+        // Topic table at resolution time).
+        assert_eq!(para.index_markers[1].topic_name, "Topic/u42");
+        assert_eq!(
+            para.index_markers[1].applied_topic.as_deref(),
+            Some("Topic/u42")
+        );
+    }
+
+    #[test]
+    fn footnote_body_is_captured_on_host_paragraph() {
         // A `<Footnote>` element nested inside a CharacterStyleRange
-        // carries its own paragraphs (the footnote body). Today the
-        // renderer doesn't place footnotes at all, so the parser
-        // suppresses the footnote subtree so its content doesn't
-        // leak into the host story's body text. Once footnote
-        // placement is implemented, this test will pivot to assert
-        // the captured footnote.
+        // carries its own paragraphs (the footnote body). The parser
+        // captures it onto the host paragraph's `footnotes` field,
+        // and crucially the footnote body text does NOT leak into
+        // the host story's runs.
         let xml = br#"<Story>
           <ParagraphStyleRange>
             <CharacterStyleRange>
@@ -2790,7 +2964,7 @@ mod tests {
               <Footnote Self="Footnote/u1">
                 <ParagraphStyleRange>
                   <CharacterStyleRange>
-                    <Content>FOOTNOTE BODY THAT MUST NOT LEAK</Content>
+                    <Content>This is the footnote body.</Content>
                   </CharacterStyleRange>
                 </ParagraphStyleRange>
               </Footnote>
@@ -2799,20 +2973,28 @@ mod tests {
           </ParagraphStyleRange>
         </Story>"#;
         let s = Story::parse(xml).unwrap();
-        // Footnote anchor splits the surrounding text into two runs;
-        // both keep their content, and crucially the footnote body
-        // text doesn't appear anywhere in the body story.
-        let all_text: String = s.paragraphs[0]
-            .runs
-            .iter()
-            .map(|r| r.text.as_str())
-            .collect();
+        let host = &s.paragraphs[0];
+
+        // Host runs preserve their content; the footnote body does
+        // NOT appear anywhere in the host paragraph's body text.
+        let host_text: String = host.runs.iter().map(|r| r.text.as_str()).collect();
+        assert!(host_text.contains("before"));
+        assert!(host_text.contains("after"));
         assert!(
-            !all_text.contains("FOOTNOTE BODY"),
-            "footnote body leaked into host story: {all_text:?}"
+            !host_text.contains("footnote body"),
+            "footnote body leaked into host story: {host_text:?}"
         );
-        assert!(all_text.contains("before"));
-        assert!(all_text.contains("after"));
+
+        // The footnote was captured onto the host paragraph with its
+        // body paragraphs intact.
+        assert_eq!(host.footnotes.len(), 1);
+        let fn0 = &host.footnotes[0];
+        assert_eq!(fn0.self_id.as_deref(), Some("Footnote/u1"));
+        assert_eq!(fn0.paragraphs.len(), 1);
+        assert_eq!(
+            fn0.paragraphs[0].runs[0].text,
+            "This is the footnote body."
+        );
     }
 
     #[test]

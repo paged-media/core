@@ -5779,6 +5779,17 @@ fn emit_table_into_chain(
         let mut paragraph_y = 0.0f32;
         for paragraph in &cell.paragraphs {
             if paragraph.runs.is_empty() {
+                if paragraph.table.is_some() {
+                    // Phase 5 — nested tables inside table cells are
+                    // captured by the parser but not yet emitted.
+                    // Skip silently here; rendering nested tables
+                    // requires recursing into emit_table_into_chain
+                    // with the cell's geometry as the host.
+                    tracing::trace!(
+                        target: "idml_renderer::pipeline",
+                        "skipped nested table inside table cell — rendering not yet wired"
+                    );
+                }
                 continue;
             }
             paragraph_y += measure_cell_paragraph(em, paragraph, inner_w);
@@ -7006,6 +7017,12 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
         anchored_frames: paragraph.anchored_frames.clone(),
         runs: Vec::new(),
         table: None,
+        // Phase 5 — footnotes / index markers ride the FIRST
+        // sub-paragraph only (matches the anchored-frame +
+        // drop-cap convention above); subsequent splits start with
+        // empty vecs so the markers don't duplicate.
+        footnotes: paragraph.footnotes.clone(),
+        index_markers: paragraph.index_markers.clone(),
     };
     for run in &paragraph.runs {
         if !run.text.contains('\n') {
@@ -7061,6 +7078,10 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
                     anchored_frames: Vec::new(),
                     runs: Vec::new(),
                     table: None,
+                    // Sub-paragraphs after a `\n` reset markers too
+                    // (matches anchored-frame convention above).
+                    footnotes: Vec::new(),
+                    index_markers: Vec::new(),
                 };
                 std::mem::swap(&mut current, &mut next);
                 // Keep empty sub-paragraphs — `<Br/><Br/>` and similar
@@ -7135,6 +7156,8 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
             anchored_frames: Vec::new(),
             runs: Vec::new(),
             table: None,
+            footnotes: Vec::new(),
+            index_markers: Vec::new(),
         });
     }
     subs
