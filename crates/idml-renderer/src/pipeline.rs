@@ -10803,7 +10803,30 @@ fn first_baseline_for_frame(
             .map(|m| em_fraction_to_64(m.ascender))
             .unwrap_or(default_64),
     };
-    top_inset_64 + policy_offset_64
+    // Display-headline clamp: when the frame is sized to the visual
+    // letterform (cap height) rather than the typo ascent — common
+    // on Envato cover-style templates where designers tight-fit
+    // 60-100pt headlines into ~half-em-tall boxes — `AscentOffset`'s
+    // baseline lands past the frame bottom and the renderer drops
+    // the line. InDesign keeps the text by treating the baseline as
+    // if cap-height were the ascent. Mirror that: if the resolved
+    // offset would exceed the frame's inner height, fall back to a
+    // cap-height-based offset (which fits inside any box at least
+    // ~0.7×pt tall, matching real-world headline frame sizing).
+    let bottom_inset_64 = frame
+        .inset_spacing
+        .map(|i| (i[2] * idml_text::shape::ADVANCE_PRECISION).round() as i32)
+        .unwrap_or(0);
+    let inner_height_64 = pt_to_64(frame.bounds.height()) - top_inset_64 - bottom_inset_64;
+    let baseline_offset_in_frame = top_inset_64 + policy_offset_64;
+    if inner_height_64 > 0 && baseline_offset_in_frame > top_inset_64 + inner_height_64 {
+        let cap_height = metrics
+            .and_then(|m| m.cap_height)
+            .unwrap_or(CAP_HEIGHT_FALLBACK);
+        let clamped = em_fraction_to_64(cap_height);
+        return top_inset_64 + clamped.min(inner_height_64);
+    }
+    baseline_offset_in_frame
 }
 
 /// Build the outer affine that maps a frame's local-space rect into
