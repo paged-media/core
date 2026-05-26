@@ -122,6 +122,91 @@ fn apply_set_property(
                 },
             )
         }
+        // ---- Inspector M1 Phase A: stroke + opacity --------------
+        (NodeId::TextFrame(id), PropertyPath::FrameStrokeColor) => {
+            let new_color = expect_color_ref(path, value)?;
+            let frame = find_text_frame_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = frame.stroke_color.clone();
+            frame.stroke_color = new_color;
+            (
+                Value::ColorRef(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Rectangle(id), PropertyPath::FrameStrokeColor) => {
+            let new_color = expect_color_ref(path, value)?;
+            let rect = find_rectangle_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = rect.stroke_color.clone();
+            rect.stroke_color = new_color;
+            (
+                Value::ColorRef(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::TextFrame(id), PropertyPath::FrameStrokeWeight) => {
+            let new_weight = expect_length(path, value)?;
+            let frame = find_text_frame_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = frame.stroke_weight;
+            frame.stroke_weight = new_weight;
+            (
+                Value::Length(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Rectangle(id), PropertyPath::FrameStrokeWeight) => {
+            let new_weight = expect_length(path, value)?;
+            let rect = find_rectangle_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = rect.stroke_weight;
+            rect.stroke_weight = new_weight;
+            (
+                Value::Length(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::TextFrame(id), PropertyPath::FrameOpacity) => {
+            let new_opacity = expect_length(path, value)?;
+            let frame = find_text_frame_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = frame.opacity;
+            frame.opacity = new_opacity;
+            (
+                Value::Length(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Rectangle(id), PropertyPath::FrameOpacity) => {
+            let new_opacity = expect_length(path, value)?;
+            let rect = find_rectangle_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = rect.opacity;
+            rect.opacity = new_opacity;
+            (
+                Value::Length(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         _ => {
             return Err(OperationError::UnsupportedProperty {
                 node: node.clone(),
@@ -554,6 +639,16 @@ fn expect_color_ref(path: PropertyPath, value: &Value) -> Result<Option<String>,
         _ => Err(OperationError::TypeMismatch {
             path,
             expected: "ColorRef".to_string(),
+        }),
+    }
+}
+
+fn expect_length(path: PropertyPath, value: &Value) -> Result<Option<f32>, OperationError> {
+    match value {
+        Value::Length(v) => Ok(*v),
+        _ => Err(OperationError::TypeMismatch {
+            path,
+            expected: "Length".to_string(),
         }),
     }
 }

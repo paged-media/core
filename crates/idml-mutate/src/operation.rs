@@ -84,6 +84,17 @@ pub enum PropertyPath {
     /// Frame fill-colour reference (a swatch self_id, e.g.
     /// `"Color/Red"`). `None` ⇒ no fill.
     FrameFillColor,
+    /// Frame stroke-colour reference (analogous to fill).
+    FrameStrokeColor,
+    /// Frame stroke weight in points. `None` ⇒ inherit document default
+    /// (typically 1pt). Setting to a non-None value pins the per-frame
+    /// override.
+    FrameStrokeWeight,
+    /// Frame opacity percent (0..=100). `None` ⇒ inherit document
+    /// default (100% fully opaque). Stored as a plain `f32` in
+    /// `Length`-tagged `Value` since IDML carries the value in `%`
+    /// units already.
+    FrameOpacity,
 }
 
 impl PropertyPath {
@@ -92,6 +103,9 @@ impl PropertyPath {
         match self {
             PropertyPath::FrameBounds => "frame.bounds",
             PropertyPath::FrameFillColor => "frame.fillColor",
+            PropertyPath::FrameStrokeColor => "frame.strokeColor",
+            PropertyPath::FrameStrokeWeight => "frame.strokeWeight",
+            PropertyPath::FrameOpacity => "frame.opacity",
         }
     }
 }
@@ -104,6 +118,12 @@ impl PropertyPath {
 pub enum Value {
     Bounds([f32; 4]),
     ColorRef(Option<String>),
+    /// Inspector M1 Phase A: a single floating-point number with an
+    /// implicit unit (the property's documentation says which — pt
+    /// for stroke weight, % for opacity, etc.). `None` represents
+    /// "unset / inherit document default" on properties that allow
+    /// the absence; a present `Some(_)` is a per-frame override.
+    Length(Option<f32>),
 }
 
 /// Description of a node about to be inserted. Carries the minimal
