@@ -1,0 +1,63 @@
+name: protocol-version
+
+# Guards the WASM/TS type contract. Runs only on PRs that could
+# affect it — saves CI time for docs-only / corpus-only changes.
+on:
+  pull_request:
+    paths:
+      - "crates/idml-canvas/**"
+      - "crates/idml-canvas-wasm/**"
+      - "crates/idml-mutate/**"
+      - "crates/idml-renderer/**"
+      - "apps/canvas/src/wasm/idml_canvas_wasm.d.ts"
+      - "apps/canvas/build-wasm.sh"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: vendored .d.ts + PROTOCOL_VERSION
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # We diff against the PR base ref; full history isn't
+          # needed but a couple of commits is.
+          fetch-depth: 2
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: install wasm-bindgen-cli
+        run: |
+          # Match the version pinned in Cargo.lock so the generated
+          # bindings are byte-identical to what local developers see.
+          WB_VER=$(awk '/^name = "wasm-bindgen"$/{getline; gsub(/version = "|"/,""); print; exit}' Cargo.lock)
+          cargo install wasm-bindgen-cli --version "$WB_VER" --locked
+
+      - name: install binaryen (wasm-opt)
+        run: sudo apt-get update && sudo apt-get install -y binaryen
+
+      - name: regenerate wasm artifacts
+        run: |
+          cd apps/canvas
+          bash build-wasm.sh
+
+      - name: vendored .d.ts must match regenerated output
+        run: |
+          if ! git diff --exit-code apps/canvas/src/wasm/idml_canvas_wasm.d.ts; then
+            echo "::error::Vendored .d.ts is out of date. Run 'pnpm wasm' locally and commit the result."
+            exit 1
+          fi
+
+      - name: PROTOCOL_VERSION must bump on structural .d.ts changes
+        env:
+          BASE_REF: origin/${{ github.event.pull_request.base.ref }}
+        run: |
+          # Make sure we have the base ref available for the diff.
+          git fetch --depth=2 origin "${{ github.event.pull_request.base.ref }}"
+          bash scripts/check-protocol-version.sh
