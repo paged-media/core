@@ -841,6 +841,115 @@ impl CanvasModel {
         out
     }
 
+    /// Step 5 — `RequestPathAnchors` accessor. Returns the anchor
+    /// list + subpath markers for a single Polygon / Rectangle / Oval
+    /// / TextFrame, alongside its page and composed transform.
+    /// Rectangles / Ovals declared via `GeometricBounds` only (no
+    /// `<PathGeometry>`) come back with an empty `anchors` vector —
+    /// callers treat that as "nothing to draw".
+    pub fn path_anchors(
+        &self,
+        id: &crate::element_selection::ElementId,
+    ) -> Option<crate::channel::PathAnchorsResult> {
+        use crate::channel::{PathAnchorTriple, PathAnchorsResult};
+        use crate::element_selection::ElementId;
+        use idml_parse::PathAnchor;
+
+        let raw = id.raw_id();
+        for parsed in &self.scene().spreads {
+            let spread = &parsed.spread;
+            let resolved: Option<(
+                idml_parse::Bounds,
+                Option<[f32; 6]>,
+                &[PathAnchor],
+                &[usize],
+            )> = match id {
+                ElementId::TextFrame(_) => spread
+                    .text_frames
+                    .iter()
+                    .find(|f| f.self_id.as_deref() == Some(raw))
+                    .map(|f| {
+                        (
+                            f.bounds,
+                            f.item_transform,
+                            f.anchors.as_slice(),
+                            f.subpath_starts.as_slice(),
+                        )
+                    }),
+                ElementId::Rectangle(_) => spread
+                    .rectangles
+                    .iter()
+                    .find(|f| f.self_id.as_deref() == Some(raw))
+                    .map(|f| {
+                        (
+                            f.bounds,
+                            f.item_transform,
+                            f.anchors.as_slice(),
+                            f.subpath_starts.as_slice(),
+                        )
+                    }),
+                // Ovals don't carry a parsed PathGeometry — they're
+                // declared by GeometricBounds; render shows them as
+                // ellipses. Drop them silently rather than synthesise
+                // 4 fake anchors.
+                ElementId::Oval(_) => None,
+                ElementId::Polygon(_) => spread
+                    .polygons
+                    .iter()
+                    .find(|f| f.self_id.as_deref() == Some(raw))
+                    .map(|f| {
+                        (
+                            f.bounds,
+                            f.item_transform,
+                            f.anchors.as_slice(),
+                            f.subpath_starts.as_slice(),
+                        )
+                    }),
+                ElementId::GraphicLine(_) => spread
+                    .graphic_lines
+                    .iter()
+                    .find(|f| f.self_id.as_deref() == Some(raw))
+                    .map(|f| {
+                        (
+                            f.bounds,
+                            f.item_transform,
+                            f.anchors.as_slice(),
+                            f.subpath_starts.as_slice(),
+                        )
+                    }),
+                ElementId::Group(_) => None,
+            };
+            let Some((bounds, item_transform, anchors, subpath_starts)) = resolved else {
+                continue;
+            };
+            // Same page-resolution as element_geometry: transform the
+            // bounds centroid and look up the containing built page.
+            let aabb = crate::hit::transform_bbox(bounds, item_transform);
+            let cx = (aabb.left + aabb.right) * 0.5;
+            let cy = (aabb.top + aabb.bottom) * 0.5;
+            let page = self.built().pages.iter().find(|bp| {
+                let (ox, oy) = bp.spread_origin;
+                cx >= ox && cx <= ox + bp.width_pt && cy >= oy && cy <= oy + bp.height_pt
+            })?;
+            let anchors_out: Vec<PathAnchorTriple> = anchors
+                .iter()
+                .map(|a| PathAnchorTriple {
+                    anchor: [a.anchor.0, a.anchor.1],
+                    left: [a.left.0, a.left.1],
+                    right: [a.right.0, a.right.1],
+                })
+                .collect();
+            return Some(PathAnchorsResult {
+                id: id.clone(),
+                page_id: page.id.clone(),
+                anchors: anchors_out,
+                subpath_starts: subpath_starts.iter().map(|&n| n as u32).collect(),
+                item_transform,
+            });
+        }
+        None
+    }
+
     /// Same as `pages_for_story` but returns page *indices* into
     /// `built().pages`. Convenient for the GPU scene cache which
     /// keys by index. Indices not currently in `page_index` (stale

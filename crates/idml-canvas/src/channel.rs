@@ -49,7 +49,7 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(2);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(3);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -192,6 +192,15 @@ pub enum MainToWorkerKind {
     /// Reply: `GroupLeaves`.
     RequestGroupLeaves {
         group_id: String,
+    },
+    /// Step 5 — request the path-anchor table for a single Polygon /
+    /// Rectangle / Oval / TextFrame so the path-edit overlay can draw
+    /// one dot per anchor + Bezier-handle pair. Reply: `PathAnchors`.
+    /// Elements that don't carry an `anchors` array (rectangles
+    /// declared via `GeometricBounds` only) come back with `anchors`
+    /// empty.
+    RequestPathAnchors {
+        id: crate::element_selection::ElementId,
     },
     /// Phase B — start a gesture against the listed elements. Reply
     /// `GestureBegun { handle }` carrying the opaque handle the main
@@ -428,6 +437,13 @@ pub enum WorkerToMainKind {
     GroupLeaves {
         ids: Vec<crate::element_selection::ElementId>,
     },
+    /// Step 5 — `RequestPathAnchors` reply. `None` when the id doesn't
+    /// resolve or sits on a master spread; `Some` even when the
+    /// element's anchor list is empty (lets the caller distinguish
+    /// "no path data" from "didn't resolve").
+    PathAnchors {
+        result: Option<PathAnchorsResult>,
+    },
     /// Phase B — `BeginGesture` succeeded.
     GestureBegun {
         handle: crate::gesture::GestureHandle,
@@ -539,6 +555,38 @@ pub struct ElementGeometryItem {
     /// of `Translate`.
     #[serde(default)]
     pub has_image: bool,
+}
+
+/// Step 5 — one anchor's three control points, in the polygon's
+/// inner coords (before `item_transform` + page-origin shift). The
+/// overlay applies the same affine chain it already uses for selection
+/// chrome.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct PathAnchorTriple {
+    pub anchor: [f32; 2],
+    pub left: [f32; 2],
+    pub right: [f32; 2],
+}
+
+/// Step 5 — `RequestPathAnchors` reply payload. `anchors.len()` may
+/// be zero (e.g. a Rectangle with no `<PathGeometry>`); the overlay
+/// treats that as "nothing to draw" without surfacing an error.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct PathAnchorsResult {
+    pub id: crate::element_selection::ElementId,
+    pub page_id: PageId,
+    pub anchors: Vec<PathAnchorTriple>,
+    /// Per-contour boundaries. Empty for the common single-contour
+    /// case so callers can iterate a single subpath without special-
+    /// casing the empty `subpath_starts` vector.
+    pub subpath_starts: Vec<u32>,
+    /// `[a, b, c, d, tx, ty]`. None ⇒ identity.
+    #[serde(default)]
+    pub item_transform: Option<[f32; 6]>,
 }
 
 /// Phase 4 Step 2 — per-rebuild layout cache statistics.

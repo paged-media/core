@@ -502,6 +502,52 @@ pub(crate) fn apply_matrix(m: &[f32; 6], x: f32, y: f32) -> (f32, f32) {
     (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5])
 }
 
+/// Step 5 — closest anchor / Bezier-handle hit for path-edit mode.
+///
+/// `point_in_page` is page-local pt (the caller already shifted by
+/// the page origin). `tol_pt` is the hit radius in doc-space pt —
+/// the caller typically passes `tol_px / camera_scale` so the
+/// effective hit area stays a constant screen size at any zoom.
+///
+/// Walks every anchor's three points (the anchor itself and its two
+/// Bezier handles), projects them through the polygon's
+/// `item_transform`, and returns the closest within `tol_pt`. Ties
+/// break by role priority (anchor > right > left) so dragging on
+/// top of an anchor doesn't accidentally grab a handle.
+pub fn hit_path_anchor(
+    anchors: &[(f32, f32, f32, f32, f32, f32)],
+    item_transform: Option<[f32; 6]>,
+    point_in_page: (f32, f32),
+    tol_pt: f32,
+) -> Option<idml_mutate::PathPointAddress> {
+    let tol_sq = tol_pt * tol_pt;
+    let identity = [1.0_f32, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let m = item_transform.unwrap_or(identity);
+    let mut best: Option<(f32, idml_mutate::PathPointAddress, u8)> = None;
+    for (i, &(ax, ay, lx, ly, rx, ry)) in anchors.iter().enumerate() {
+        let cands = [
+            // (role, world-x, world-y, role-priority — higher wins on tie)
+            (idml_mutate::PathPointRole::Anchor, apply_matrix(&m, ax, ay), 2_u8),
+            (idml_mutate::PathPointRole::Right, apply_matrix(&m, rx, ry), 1_u8),
+            (idml_mutate::PathPointRole::Left, apply_matrix(&m, lx, ly), 0_u8),
+        ];
+        for (role, (wx, wy), prio) in cands {
+            let dx = wx - point_in_page.0;
+            let dy = wy - point_in_page.1;
+            let d2 = dx * dx + dy * dy;
+            if d2 > tol_sq {
+                continue;
+            }
+            let addr = idml_mutate::PathPointAddress { index: i, role };
+            match best {
+                Some((bd, _, bp)) if bd < d2 || (bd == d2 && bp >= prio) => {}
+                _ => best = Some((d2, addr, prio)),
+            }
+        }
+    }
+    best.map(|(_, addr, _)| addr)
+}
+
 /// Separating Axis Theorem: do the OBB defined by (`bounds`,
 /// `item_transform`) and the AABB `aabb = [top, left, bottom, right]`
 /// (both in the same coordinate space) intersect? Catches edge-only
@@ -819,5 +865,35 @@ mod tests {
         let m = [c, s, -s, c, 0.0, 0.0];
         // Tiny marquee centered at origin — fully inside the OBB.
         assert!(obb_intersects_aabb(bounds, Some(m), [-5.0, -5.0, 5.0, 5.0]));
+    }
+
+    #[test]
+    fn path_anchor_picks_closest_role() {
+        // One anchor at (0,0) with handles at (-10,0) and (10,0).
+        let anchors = [(0.0_f32, 0.0, -10.0, 0.0, 10.0, 0.0)];
+        // Click right on the anchor.
+        let hit =
+            super::hit_path_anchor(&anchors, None, (0.0, 0.0), 4.0).expect("anchor hit");
+        assert_eq!(hit.index, 0);
+        assert_eq!(hit.role, idml_mutate::PathPointRole::Anchor);
+        // Click near the left handle.
+        let hit =
+            super::hit_path_anchor(&anchors, None, (-10.5, 0.0), 4.0).expect("left hit");
+        assert_eq!(hit.role, idml_mutate::PathPointRole::Left);
+        // Click far away — no hit.
+        assert!(super::hit_path_anchor(&anchors, None, (50.0, 50.0), 4.0).is_none());
+    }
+
+    #[test]
+    fn path_anchor_respects_item_transform() {
+        // Anchor at (10, 0) in inner coords; transform shifts +5 in x.
+        let anchors = [(10.0_f32, 0.0, 0.0, 0.0, 20.0, 0.0)];
+        let m = [1.0, 0.0, 0.0, 1.0, 5.0, 0.0]; // translate +5x
+        // World position of the anchor is (15, 0); the click must
+        // land there, not at (10, 0).
+        assert!(super::hit_path_anchor(&anchors, Some(m), (10.0, 0.0), 1.0).is_none());
+        let hit = super::hit_path_anchor(&anchors, Some(m), (15.0, 0.0), 1.0)
+            .expect("hit after transform");
+        assert_eq!(hit.role, idml_mutate::PathPointRole::Anchor);
     }
 }

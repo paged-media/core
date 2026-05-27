@@ -832,6 +832,10 @@ mod wasm {
                         .unwrap_or_default();
                     WorkerToMainKind::GroupLeaves { ids }
                 }
+                MainToWorkerKind::RequestPathAnchors { id } => {
+                    let result = self.model.as_ref().and_then(|m| m.path_anchors(&id));
+                    WorkerToMainKind::PathAnchors { result }
+                }
                 MainToWorkerKind::BeginGesture {
                     nodes,
                     gesture,
