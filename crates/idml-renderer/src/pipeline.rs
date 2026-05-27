@@ -177,7 +177,9 @@ impl Default for PipelineOptions<'_> {
     Ord,
     serde::Serialize,
     serde::Deserialize,
+    tsify_next::Tsify,
 )]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 pub struct PageId(pub String);
 
 impl PageId {

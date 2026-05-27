@@ -16,8 +16,34 @@
 use idml_renderer::PageId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tsify_next::Tsify;
+use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::model::{DocumentHandle, DocumentStats};
+
+// MainToWorker / WorkerToMain are `#[serde(flatten)]`-style structs
+// over a discriminated union (`MainToWorkerKind` / `WorkerToMainKind`).
+// Tsify-next emits these as `interface MainToWorker extends
+// MainToWorkerKind` which is invalid TypeScript — TS interfaces
+// can't extend a type-alias union. Manual TS type aliases via
+// intersection give consumers the discriminated-union view they need.
+//
+// Tsify derives stay off both outer envelope structs; they're
+// JSON-serialized through `handleMessage(string) -> string`, so the
+// only consumer of their TS shape is the worker-message marshalling
+// on the main thread.
+#[wasm_bindgen(typescript_custom_section)]
+const TS_ENVELOPES: &'static str = r#"
+export type MainToWorker = MainToWorkerKind & {
+  seq: number;
+  protocol: ProtocolVersion;
+};
+
+export type WorkerToMain = WorkerToMainKind & {
+  seq: number | null;
+  protocol: ProtocolVersion;
+};
+"#;
 
 /// Bumped on any incompatible change to the channel envelopes.
 /// Main thread compares this against its bundled value at worker
@@ -25,10 +51,12 @@ use crate::model::{DocumentHandle, DocumentStats};
 /// loud than to silently desync.
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(2);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 pub struct ProtocolVersion(pub u32);
 
-/// One message from main → worker.
+/// One message from main → worker. (Tsify derive intentionally
+/// omitted; see `TS_ENVELOPES` above for the TS-side declaration.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MainToWorker {
     pub seq: u64,
@@ -42,7 +70,8 @@ pub struct MainToWorker {
 /// camelCase field names. `rename_all_fields` cascades to struct
 /// variants so e.g. `cmyk_icc_profile` becomes `cmykIccProfile` on
 /// the wire — the TS protocol mirror locks the camelCase contract.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(
     rename_all = "camelCase",
     rename_all_fields = "camelCase",
@@ -57,10 +86,13 @@ pub enum MainToWorkerKind {
     /// Replace the active document with `bytes`. Returns
     /// `DocumentLoaded` (success) or `LoadFailed`.
     LoadDocument {
+        #[tsify(type = "number[]")]
         bytes: ByteBuf,
         #[serde(default)]
+        #[tsify(type = "number[] | null")]
         font: Option<ByteBuf>,
         #[serde(default)]
+        #[tsify(type = "number[] | null")]
         cmyk_icc_profile: Option<ByteBuf>,
     },
     /// Register a named font with the worker's family resolver. Sent
@@ -71,6 +103,7 @@ pub enum MainToWorkerKind {
         family: String,
         #[serde(default)]
         style: Option<String>,
+        #[tsify(type = "number[]")]
         bytes: ByteBuf,
     },
     /// Drop every font previously registered via `RegisterFont`. Reply:
@@ -203,7 +236,8 @@ pub enum MainToWorkerKind {
 }
 
 /// Coarse LOD tiers requested by the navigator + canvas (per spec §4.4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub enum LodTier {
     /// Atlas thumbnail. Used by the navigator and overview zoom.
@@ -216,7 +250,8 @@ pub enum LodTier {
 
 /// What to consider when hit-testing. The inspector + editor route
 /// pointer events through this. Phase 1 only implements `Frame`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub enum HitFilter {
     Frame,
@@ -225,7 +260,8 @@ pub enum HitFilter {
 }
 
 /// Hit-test result.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct HitResult {
     pub frame_id: Option<String>,
@@ -256,7 +292,8 @@ pub struct HitResult {
     pub group_chain: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct FrameBounds {
     pub left: f32,
@@ -278,7 +315,8 @@ pub struct WorkerToMain {
 }
 
 /// Discriminated payload of a `WorkerToMain` message.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(
     rename_all = "camelCase",
     rename_all_fields = "camelCase",
@@ -424,12 +462,27 @@ pub enum WorkerToMainKind {
     /// `CancelGesture` that the worker can't fulfil (stale handle,
     /// rotated frame, already-active gesture).
     GestureFailed { error: GestureFailure },
+    /// Sent by the JS-side worker glue (not by Rust) after the
+    /// renderer attaches to the host canvas. Carries the GPU
+    /// readiness flag + the configured scene-cache budget. The Rust
+    /// variant exists so the TS contract is unified — emitting code
+    /// lives in `apps/canvas/src/worker/worker.ts`.
+    AttachReady {
+        gpu_active: bool,
+        scene_cache_budget: u32,
+    },
+    /// Sent by the JS-side worker glue (not by Rust) after `LoadDocument`
+    /// succeeds, carrying the Tier 3 resolution result. The Rust variant
+    /// exists so the TS contract is unified — emitting code lives in
+    /// `apps/canvas/src/worker/worker.ts`.
+    ResolutionDone(crate::resolve::ResolutionResult),
 }
 
 /// Wire-format errors for the gesture envelope. Mirrors the variants
 /// of `crate::gesture::GestureError` so the channel doesn't expose the
 /// internal `thiserror` representation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase", tag = "kind", content = "details")]
 pub enum GestureFailure {
     NoDocument,
@@ -468,7 +521,8 @@ impl From<crate::gesture::GestureError> for GestureFailure {
 /// `GeometricBounds` (content-box space); `item_transform` is the
 /// composed affine. The overlay layer multiplies bounds corners by
 /// the transform to draw the oriented selection chrome.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct ElementGeometryItem {
     pub id: crate::element_selection::ElementId,
@@ -491,7 +545,8 @@ pub struct ElementGeometryItem {
 ///
 /// Sent piggyback on `MutationApplied` / `UndoApplied` / `RedoApplied`
 /// so the main thread's HUD can show the incremental-layout win.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct LayoutCacheStats {
     pub hits: u64,
@@ -520,7 +575,8 @@ impl From<idml_text::CacheStats> for LayoutCacheStats {
 /// A content-space mutation. Phase 1 carries the *envelope* only —
 /// the worker rejects each variant with `WorkerError::NotImplemented`.
 /// Phase 3 lights these up incrementally.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "op", content = "args")]
 pub enum Mutation {
     InsertText {
@@ -599,7 +655,8 @@ impl Mutation {
 /// Typed `LoadDocument` failure. Each variant maps to a specific UI
 /// recovery in the main thread (corrupted file → "try another file";
 /// missing font → "install or substitute"; etc.).
-#[derive(Debug, Clone, Error, Serialize, Deserialize)]
+#[derive(Debug, Clone, Error, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase", tag = "kind", content = "message")]
 pub enum LoadError {
     /// idml-parse failed (zip / xml structural problem).
@@ -617,7 +674,8 @@ pub enum LoadError {
 /// Typed worker-side error for non-load operations. Mutations,
 /// hit-tests, page requests all report through this. Variants are
 /// kept stable across protocol versions.
-#[derive(Debug, Clone, Error, Serialize, Deserialize)]
+#[derive(Debug, Clone, Error, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind", content = "details")]
 pub enum WorkerError {
     /// Feature not yet implemented in this phase. `what` carries a
@@ -640,7 +698,8 @@ pub enum WorkerError {
 /// `Vec`. The wire form is whatever serde produces for `Vec<u8>` —
 /// JSON renders an array of numbers; future binary protocols (CBOR
 /// / messagepack) render a real bytes blob without code change.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(transparent)]
 pub struct ByteBuf(pub Vec<u8>);
 

@@ -13,10 +13,12 @@
 //! mutate-log bridge.
 
 use serde::{Deserialize, Serialize};
+use tsify_next::Tsify;
 
 /// Page item identifier the user can select. The String payload is the
 /// item's `Self` id from the IDML XML.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(tag = "kind", content = "id", rename_all = "camelCase")]
 pub enum ElementId {
     TextFrame(String),
@@ -48,7 +50,8 @@ impl ElementId {
 /// - `Add` — Shift-click; union (already-selected ids stay).
 /// - `Toggle` — Cmd/Ctrl-click; ids already in the set are removed,
 ///   ids not in the set are added.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub enum SelectionMode {
     Replace,

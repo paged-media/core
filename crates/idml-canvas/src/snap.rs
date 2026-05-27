@@ -20,12 +20,14 @@
 
 use idml_renderer::PageId;
 use serde::{Deserialize, Serialize};
+use tsify_next::Tsify;
 
 use crate::gesture::GestureSession;
 
 /// Axis the snap line guides. `X` is a vertical guide (snaps the x
 /// coordinate); `Y` is a horizontal guide (snaps the y coordinate).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub enum SnapAxis {
     X,
@@ -34,7 +36,8 @@ pub enum SnapAxis {
 
 /// One active snap line surfaced to the overlay. `position` is in
 /// page-local pt on `page_id`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct SnapLine {
     pub axis: SnapAxis,

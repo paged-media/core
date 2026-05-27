@@ -15,6 +15,7 @@ use idml_renderer::{
     PipelineOptions,
 };
 use serde::{Deserialize, Serialize};
+use tsify_next::Tsify;
 
 use crate::channel::{LoadError, Mutation};
 
@@ -57,7 +58,8 @@ pub struct FontEntry {
 /// One-time facts about a loaded document. Sent to the main thread
 /// on a successful `LoadDocument` so the navigator + page count UI
 /// can render before the first page is rasterised.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentHandle {
     /// Stable id assigned by the worker; used by the main thread when
@@ -82,7 +84,8 @@ pub struct DocumentHandle {
 /// Structural counts. The main thread surfaces these in the debug
 /// HUD. Mirrors `idml-renderer::PipelineStats` but lives in serde-
 /// friendly form so it can cross the message channel.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 pub struct DocumentStats {
     pub spreads: usize,
     pub pages: usize,

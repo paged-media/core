@@ -14,12 +14,14 @@
 
 use idml_renderer::{BuiltDocument, LineLayout, PageId};
 use serde::{Deserialize, Serialize};
+use tsify_next::Tsify;
 
 use crate::hit::paragraph_byte_offset;
 use crate::selection::ContentSelection;
 use crate::SelectionRect;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct CaretGeometry {
     pub page_id: PageId,

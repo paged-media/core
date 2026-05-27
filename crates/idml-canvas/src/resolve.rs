@@ -29,10 +29,19 @@ use std::collections::HashMap;
 use idml_renderer::{BuiltDocument, BuiltPage, PageId};
 use idml_scene::{Anchor, AnchorId, AnchorKind, Document};
 use serde::{Deserialize, Serialize};
+use tsify_next::Tsify;
+use wasm_bindgen::prelude::wasm_bindgen;
+
+// AnchorId is a transparent newtype around String in idml-scene. We
+// inject the TS alias here so tsify-derived references resolve without
+// pulling tsify into the foundation crate.
+#[wasm_bindgen(typescript_custom_section)]
+const TS_ANCHOR_ID: &'static str = r#"export type AnchorId = string;"#;
 
 /// Numeric facts about an anchor's position. Phase H ships only
 /// `page_number`; later phases populate the rest.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct AnchorPosition {
     /// 1-based page number, formatted via the section's numbering
@@ -59,7 +68,8 @@ pub struct AnchorPosition {
 
 /// Resolution map keyed by anchor id. The `numbering_map()`
 /// accessor on `ResolutionResult` exposes a borrow of this.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, hashmap_as_object, missing_as_null)]
 #[serde(transparent)]
 pub struct NumberingMap(pub HashMap<AnchorId, AnchorPosition>);
 
@@ -81,7 +91,8 @@ impl NumberingMap {
 /// changed between resolution iterations. The caller (Tier 3 →
 /// Tier 2 feedback loop) marks the field's containing story as
 /// content-dirty and re-runs Tier 2.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct FieldChange {
     pub field_id: String,
@@ -95,7 +106,8 @@ pub struct FieldChange {
 /// rendering, walks `field_diff` to feed the Tier 2 re-layout
 /// queue, and walks `dirty_pages` to bump per-page
 /// `numbering_generation` counters.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolutionResult {
     pub numbering: NumberingMap,
@@ -122,7 +134,8 @@ pub struct ResolutionResult {
     pub footnote_count: usize,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct RunningHeader {
     pub page_id: PageId,
@@ -133,7 +146,8 @@ pub struct RunningHeader {
     pub level: u8,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct TocEntry {
     pub level: u8,

@@ -15,6 +15,7 @@
 //! variant at apply time. For Stage 1 only literal values exist.
 
 use serde::{Deserialize, Serialize};
+use tsify_next::Tsify;
 
 /// Stable identifier for a scene-graph node. The string payload is the
 /// IDML `Self` attribute (e.g. `"TextFrame/u14"`) — stable for the
@@ -25,7 +26,8 @@ use serde::{Deserialize, Serialize};
 /// Variants today cover the page-item kinds the inspector mutates plus
 /// the structural containers an `InsertNode`/`MoveNode` Op can target
 /// as a parent.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(tag = "kind", content = "id")]
 pub enum NodeId {
     // Page items.
@@ -76,7 +78,8 @@ impl NodeId {
 /// wire format read like the dotted path the briefing illustrates
 /// (`"fill.color"`) — so JS callers don't need to learn the Rust
 /// enum shape.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub enum PropertyPath {
     /// Frame geometric bounds: `[top, left, bottom, right]`.
@@ -116,7 +119,8 @@ pub enum PropertyPath {
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
 /// targets: the anchor itself or one of its two Bezier handles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub enum PathPointRole {
     Anchor,
@@ -129,7 +133,8 @@ pub enum PathPointRole {
 /// subpaths (compound polygons concatenate subpaths into one
 /// `anchors` Vec; `subpath_starts` marks each contour's first
 /// index).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct PathPointAddress {
     pub index: usize,
@@ -155,7 +160,8 @@ impl PropertyPath {
 /// Typed payload for a `SetProperty` Op. Each variant carries a value
 /// of a specific kind; the apply layer's `TypeMismatch` error fires if
 /// the variant doesn't match what the path expects.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(tag = "type", content = "value", rename_all = "camelCase")]
 pub enum Value {
     Bounds([f32; 4]),
@@ -186,7 +192,8 @@ pub enum Value {
 /// drop_shadow, anchors, …) default on re-insertion; this is a known
 /// Stage 1 limitation flagged in the plan and will tighten in later
 /// stages.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum NodeSpec {
     TextFrame {
@@ -235,7 +242,8 @@ impl NodeSpec {
 
 /// The canonical mutation primitive. Five variants, closed set,
 /// extended only with deliberation.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(tag = "kind")]
 pub enum Operation {
     SetProperty {
@@ -266,7 +274,8 @@ pub enum Operation {
 /// losing per-node detail. Consumers (renderer, glyph cache, layout
 /// cache) decide which lists to honour. Stays advisory — nothing in
 /// `idml-mutate` invalidates anything itself.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct InvalidationHint {
     pub frame_geometry: Vec<NodeId>,
@@ -288,7 +297,8 @@ impl InvalidationHint {
 /// Result of a successful `apply`. Holds the original op, the
 /// pre-computed inverse op (ready to push onto an undo stack), and
 /// the invalidation hint.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 pub struct AppliedOperation {
     pub op: Operation,
     pub inverse: Operation,

@@ -35,12 +35,14 @@
 //! `Selection.modify("extend", "forward", "character")` rule.
 
 use serde::{Deserialize, Serialize};
+use tsify_next::Tsify;
 
 /// Canonical selection / caret. `start == end` is a caret;
 /// `start < end` is a range. Endpoints are normalised so `start ≤
 /// end` always holds (use `Side` to recover direction information
 /// elsewhere if needed).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct ContentSelection {
     pub story_id: String,

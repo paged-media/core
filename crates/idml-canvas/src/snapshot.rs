@@ -21,6 +21,7 @@
 use idml_renderer::PageId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tsify_next::Tsify;
 
 #[cfg(feature = "cpu")]
 use crate::model::CanvasModel;
@@ -50,7 +51,8 @@ pub struct Snapshot {
 /// (encoded as a `WorkerToMain` message) to the main thread. The
 /// `rgba` payload becomes a PNG so the main thread can stash it in
 /// an `<img>` or `ImageBitmap` without per-byte serialisation cost.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct SnapshotPng {
     pub page_id: PageId,
@@ -58,10 +60,12 @@ pub struct SnapshotPng {
     pub height_px: u32,
     pub layout_generation: u64,
     pub numbering_generation: u64,
+    #[tsify(type = "number[]")]
     pub png_bytes: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Error, Serialize, Deserialize)]
+#[derive(Debug, Clone, Error, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase", tag = "kind", content = "details")]
 pub enum SnapshotError {
     #[error("unknown page id: {page_id}")]

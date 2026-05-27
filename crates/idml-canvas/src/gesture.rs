@@ -24,18 +24,21 @@ use idml_parse::Bounds;
 use idml_renderer::PageId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tsify_next::Tsify;
 
 use crate::element_selection::ElementId;
 use crate::model::{CanvasModel, FrameMutationOutcome};
 
 /// Opaque, monotone handle returned by `begin_gesture`. Callers pass
 /// it back to `update_gesture` / `commit_gesture` / `cancel_gesture`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 pub struct GestureHandle(pub u64);
 
 /// Phase A→F gesture taxonomy. Translate ships in Phase B, Resize in
 /// Phase C; Rotate / Scale stay reserved for Phase D.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum GestureType {
     /// Drag the node(s) by the pointer delta. Un-rotated frames edit
@@ -79,7 +82,8 @@ pub enum GestureType {
 /// handles move two edges at once. Naming follows the compass
 /// convention every creative tool uses (NW / N / NE / W / E / SW /
 /// S / SE).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub enum ResizeHandle {
     North,
@@ -119,7 +123,8 @@ impl ResizeHandle {
 /// Modifier state captured on each pointer event. `shift` constrains
 /// the gesture (snap rotation to 15°, lock aspect on resize / scale).
 /// `alt` resizes from centre.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct GestureModifiers {
     pub shift: bool,
@@ -131,7 +136,8 @@ pub struct GestureModifiers {
 /// rotated-frame translate to support world-space delta math).
 /// Page-local coords + the page id; the model converts to spread
 /// coords by adding the page's spread origin.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct GestureAnchor {
     pub page_id: PageId,

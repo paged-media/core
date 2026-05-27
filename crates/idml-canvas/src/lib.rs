@@ -62,7 +62,8 @@ pub use selection::{ContentSelection, Side};
 /// content selection range. Defined in the root so the channel
 /// (Item 6) can reference it without depending on a yet-to-land
 /// `geometry` module.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, tsify_next::Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct SelectionRect {
     pub page_id: PageId,
