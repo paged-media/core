@@ -512,6 +512,45 @@ mod wasm {
         /// the JSON string the JS side should `JSON.parse` and post
         /// back to the main thread. Returning a string (rather than
         /// a wasm-bindgen-serialised object) keeps the boundary
+        /// Step 5d — raw-arg update-gesture entry. The worker drains
+        /// the gesture SAB every tick and calls this without going
+        /// through `handleMessage`'s JSON envelope. Returns `true` on
+        /// success; `false` when no document is loaded or the gesture
+        /// has gone stale. The worker silently drops the latter.
+        ///
+        /// The 64-bit handle arrives split into low/high words because
+        /// JS Numbers can't represent the full u64 range cleanly.
+        /// `modifier_bits`: bit 0 = shift, bit 1 = alt — matches the
+        /// SAB layout in `packages/shell/src/gestures/gesture-sab.ts`.
+        #[wasm_bindgen(js_name = updateGestureRaw)]
+        pub fn update_gesture_raw(
+            &mut self,
+            handle_lo: u32,
+            handle_hi: u32,
+            dx: f32,
+            dy: f32,
+            modifier_bits: u32,
+        ) -> bool {
+            let Some(model) = self.model.as_mut() else {
+                return false;
+            };
+            let handle = idml_canvas::gesture::GestureHandle(
+                ((handle_hi as u64) << 32) | (handle_lo as u64),
+            );
+            let modifiers = idml_canvas::gesture::GestureModifiers {
+                shift: (modifier_bits & 0b01) != 0,
+                alt: (modifier_bits & 0b10) != 0,
+            };
+            match model.update_gesture(handle, (dx, dy), modifiers) {
+                Ok(_) => {
+                    #[cfg(feature = "gpu")]
+                    self.scene_cache.clear();
+                    true
+                }
+                Err(_) => false,
+            }
+        }
+
         /// simple — no nested serde-wasm-bindgen conversions, just
         /// `Vec<u8>` bytes in and bytes out.
         #[wasm_bindgen(js_name = handleMessage)]
