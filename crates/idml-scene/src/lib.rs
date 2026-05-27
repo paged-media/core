@@ -18,8 +18,13 @@ use idml_parse::{
 };
 
 pub mod anchors;
+pub mod layer;
 pub mod value;
 pub use anchors::{Anchor, AnchorId, AnchorKind, Field, FieldKind};
+pub use layer::{
+    build_layer_locked_map, build_layer_render_map, layer_locked, layer_render_visible, layer_z,
+    layer_z_index, lookup_layer_locked, lookup_layer_render_visible,
+};
 pub use value::Value;
 
 /// Owned, parsed representation of an IDML document.

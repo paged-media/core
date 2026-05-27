@@ -95,6 +95,45 @@ pub enum PropertyPath {
     /// `Length`-tagged `Value` since IDML carries the value in `%`
     /// units already.
     FrameOpacity,
+    /// Phase D — frame `ItemTransform` (2D affine `[a, b, c, d, tx, ty]`).
+    /// The IDML wire shape is the same matrix; the renderer applies it
+    /// to the frame's content-box coordinates. Phase D's rotate, scale,
+    /// and rotated-frame translate gestures all commit through this
+    /// path.
+    FrameTransform,
+    /// Phase F — Rectangle's inner image transform (the `ItemTransform`
+    /// on the nested `<Image>` element). Maps the image's pixel-grid
+    /// origin into the frame's inner coordinate system. The
+    /// content-grabber gesture edits this matrix to translate / scale
+    /// the placed image inside an unchanged frame.
+    ImageContentTransform,
+    /// Phase H — one Bezier control point on a `Polygon`'s
+    /// `PathPointArray`. Addressed via `PathPointAddress { index,
+    /// role }` carried in the `Value::PathPoint` payload. The role
+    /// picks between the anchor and its two direction handles.
+    FramePathPoint,
+}
+
+/// Phase H — which corner of a `PathAnchor` the path-point edit
+/// targets: the anchor itself or one of its two Bezier handles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PathPointRole {
+    Anchor,
+    Left,
+    Right,
+}
+
+/// Phase H — address of one Bezier handle inside a `Polygon`'s
+/// `PathPointArray`. `index` is the flat anchor index across all
+/// subpaths (compound polygons concatenate subpaths into one
+/// `anchors` Vec; `subpath_starts` marks each contour's first
+/// index).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathPointAddress {
+    pub index: usize,
+    pub role: PathPointRole,
 }
 
 impl PropertyPath {
@@ -106,6 +145,9 @@ impl PropertyPath {
             PropertyPath::FrameStrokeColor => "frame.strokeColor",
             PropertyPath::FrameStrokeWeight => "frame.strokeWeight",
             PropertyPath::FrameOpacity => "frame.opacity",
+            PropertyPath::FrameTransform => "frame.transform",
+            PropertyPath::ImageContentTransform => "frame.imageContentTransform",
+            PropertyPath::FramePathPoint => "frame.pathPoint",
         }
     }
 }
@@ -124,6 +166,18 @@ pub enum Value {
     /// "unset / inherit document default" on properties that allow
     /// the absence; a present `Some(_)` is a per-frame override.
     Length(Option<f32>),
+    /// Phase D — 2D affine matrix `[a, b, c, d, tx, ty]` (IDML
+    /// `ItemTransform` packing: a point `(x, y)` maps to
+    /// `(a*x + c*y + tx, b*x + d*y + ty)`). `None` represents
+    /// "no `ItemTransform`" — the renderer falls back to identity.
+    Transform(Option<[f32; 6]>),
+    /// Phase H — addressed 2D point on a `Polygon`'s `PathPointArray`.
+    /// `position` is the new (x, y) in the frame's inner coordinate
+    /// system; `address` picks which handle of which anchor.
+    PathPoint {
+        address: PathPointAddress,
+        position: [f32; 2],
+    },
 }
 
 /// Description of a node about to be inserted. Carries the minimal
@@ -147,6 +201,20 @@ pub enum NodeSpec {
         #[serde(default)]
         fill_color: Option<String>,
     },
+    /// Phase H — deep-clone the `source` node into a new node with
+    /// `self_id`, shifting its bounds (or its item_transform's tx/ty
+    /// for rotated frames) by `(dx, dy)`. The clone preserves every
+    /// other field — fill, stroke, image link/bytes, item transform,
+    /// the inner `image_item_transform`, etc. — so the duplicate
+    /// looks identical to the original at the new position. Used by
+    /// the canvas's Alt-drag-to-duplicate gesture; never serialised
+    /// from a script.
+    CloneTranslate {
+        self_id: String,
+        source: NodeId,
+        dx: f32,
+        dy: f32,
+    },
 }
 
 impl NodeSpec {
@@ -154,6 +222,13 @@ impl NodeSpec {
         match self {
             NodeSpec::TextFrame { self_id, .. } => NodeId::TextFrame(self_id.clone()),
             NodeSpec::Rectangle { self_id, .. } => NodeId::Rectangle(self_id.clone()),
+            NodeSpec::CloneTranslate { self_id, source, .. } => match source {
+                NodeId::TextFrame(_) => NodeId::TextFrame(self_id.clone()),
+                NodeId::Rectangle(_) => NodeId::Rectangle(self_id.clone()),
+                // Other shape kinds aren't supported yet — apply.rs
+                // raises UnsupportedProperty on them.
+                _ => source.clone(),
+            },
         }
     }
 }

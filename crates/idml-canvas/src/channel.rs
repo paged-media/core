@@ -23,7 +23,7 @@ use crate::model::{DocumentHandle, DocumentStats};
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(1);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ProtocolVersion(pub u32);
@@ -132,6 +132,74 @@ pub enum MainToWorkerKind {
     /// Re-apply the most recently undone mutation. Reply:
     /// `RedoApplied` or `MutationFailed`.
     Redo,
+    /// Phase A — replace the worker's element selection. Selection is
+    /// application state (not in the Operation log); the worker
+    /// mirrors it so geometry queries have a stable read.
+    /// Reply: `ElementSelectionApplied`.
+    SetElementSelection {
+        ids: Vec<crate::element_selection::ElementId>,
+        mode: crate::element_selection::SelectionMode,
+    },
+    /// Phase A — return every selectable element whose oriented bounds
+    /// intersect `rect` (page-local `[top, left, bottom, right]`).
+    /// Reply: `MarqueeHits`.
+    RequestMarqueeHits {
+        page_id: PageId,
+        rect: [f32; 4],
+    },
+    /// Phase A — fetch oriented geometry (raw bounds + composed
+    /// transform) for one or more elements so the overlay can draw
+    /// selection chrome without re-deriving the math in TS.
+    /// Reply: `ElementGeometry`.
+    RequestElementGeometry {
+        ids: Vec<crate::element_selection::ElementId>,
+    },
+    /// Phase H — return every leaf descendant of the named group.
+    /// Used by the canvas's double-click-to-enter-group gesture.
+    /// Reply: `GroupLeaves`.
+    RequestGroupLeaves {
+        group_id: String,
+    },
+    /// Phase B — start a gesture against the listed elements. Reply
+    /// `GestureBegun { handle }` carrying the opaque handle the main
+    /// thread sends back on every subsequent update / commit / cancel.
+    /// Errors with `MutationFailed` when a gesture is already active.
+    ///
+    /// Phase D — `anchor` is required for Rotate / Scale (the pointer
+    /// position at gesture start, in page-local coords + the page id).
+    /// Optional for Translate / Resize. Phase G — `camera_scale`
+    /// (px/pt) lets the snap pass keep its tolerance constant in
+    /// screen px. Omitting it falls back to a 4 doc-space-pt
+    /// tolerance.
+    BeginGesture {
+        nodes: Vec<crate::element_selection::ElementId>,
+        gesture: crate::gesture::GestureType,
+        #[serde(default)]
+        anchor: Option<crate::gesture::GestureAnchor>,
+        #[serde(default)]
+        camera_scale: Option<f32>,
+    },
+    /// Phase B — push a pointer-delta + modifier state into the
+    /// active gesture. Worker rewrites the preview and replies
+    /// `GestureUpdated { handle, page_ids }`.
+    UpdateGesture {
+        handle: crate::gesture::GestureHandle,
+        /// Cumulative pointer delta since `BeginGesture`, in doc pt.
+        delta: (f32, f32),
+        modifiers: crate::gesture::GestureModifiers,
+    },
+    /// Phase B — commit the active gesture. Reply
+    /// `GestureCommitted { handle, applied_seq, page_ids }`. The
+    /// committed mutation lands on the unified undo log.
+    CommitGesture {
+        handle: crate::gesture::GestureHandle,
+    },
+    /// Phase B — discard the active gesture. Reply
+    /// `GestureCancelled { handle, page_ids }`; scene reverts to the
+    /// pre-`BeginGesture` snapshot.
+    CancelGesture {
+        handle: crate::gesture::GestureHandle,
+    },
 }
 
 /// Coarse LOD tiers requested by the navigator + canvas (per spec §4.4).
@@ -164,9 +232,28 @@ pub struct HitResult {
     pub story_id: Option<String>,
     pub offset_within_story: Option<u32>,
     /// Selected frame's bounding box in page-local coordinates.
-    /// Returned alongside `frame_id` so the main thread can draw a
-    /// selection outline without a second round-trip.
+    /// AABB of the transformed corners. Returned for back-compat with
+    /// callers that only want a quick rectangle.
     pub frame_bounds: Option<FrameBounds>,
+    /// Phase A — typed element identifier, the new canonical handle.
+    /// `frame_id` is kept as the raw-id alias for back-compat with
+    /// callers that haven't migrated.
+    #[serde(default)]
+    pub element: Option<crate::element_selection::ElementId>,
+    /// Phase A — the element's raw `GeometricBounds` (content-box
+    /// space). Combine with `item_transform` to draw an oriented
+    /// selection chrome on the main thread without re-deriving the
+    /// math. `[top, left, bottom, right]`.
+    #[serde(default)]
+    pub bounds: Option<[f32; 4]>,
+    /// Phase A — composed affine `[a, b, c, d, tx, ty]` on the hit
+    /// element. `None` for items with no `ItemTransform`.
+    #[serde(default)]
+    pub item_transform: Option<[f32; 6]>,
+    /// Phase A — containing group ancestry, outer-most first. Empty
+    /// when the hit element is not nested in any group.
+    #[serde(default)]
+    pub group_chain: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,6 +368,123 @@ pub enum WorkerToMainKind {
     FontRegistered { family: String },
     /// `ClearFontRegistry` reply.
     FontRegistryCleared,
+    /// Phase A — `SetElementSelection` reply. Echoes the post-update
+    /// selection so the main thread can reconcile if its optimistic
+    /// update drifted.
+    ElementSelectionApplied {
+        ids: Vec<crate::element_selection::ElementId>,
+    },
+    /// Phase A — `RequestMarqueeHits` reply. Element ids in paint
+    /// order, top-first.
+    MarqueeHits {
+        ids: Vec<crate::element_selection::ElementId>,
+    },
+    /// Phase A — `RequestElementGeometry` reply. One entry per id;
+    /// elements that don't resolve (id missing or not on a body page)
+    /// are dropped silently.
+    ElementGeometry {
+        items: Vec<ElementGeometryItem>,
+    },
+    /// Phase H — `RequestGroupLeaves` reply. Empty when the group id
+    /// doesn't resolve.
+    GroupLeaves {
+        ids: Vec<crate::element_selection::ElementId>,
+    },
+    /// Phase B — `BeginGesture` succeeded.
+    GestureBegun {
+        handle: crate::gesture::GestureHandle,
+    },
+    /// Phase B — `UpdateGesture` applied. `page_ids` is the dirty set
+    /// so the canvas can scope its LOD-cache invalidation. Phase E —
+    /// `snap_lines` is the active set of snap guides the overlay
+    /// should render (one entry per axis that snapped this update).
+    GestureUpdated {
+        handle: crate::gesture::GestureHandle,
+        page_ids: Vec<PageId>,
+        #[serde(default)]
+        snap_lines: Vec<crate::snap::SnapLine>,
+    },
+    /// Phase B — `CommitGesture` succeeded. Mirrors
+    /// `MutationApplied`'s payload: the new applied_seq + dirty pages
+    /// + layout-cache stats so the main thread can update its HUD.
+    GestureCommitted {
+        handle: crate::gesture::GestureHandle,
+        applied_seq: u64,
+        page_ids: Vec<PageId>,
+        cache_stats: LayoutCacheStats,
+    },
+    /// Phase B — `CancelGesture` complete; scene was restored from the
+    /// snapshot. `page_ids` covers the restored pages.
+    GestureCancelled {
+        handle: crate::gesture::GestureHandle,
+        page_ids: Vec<PageId>,
+    },
+    /// Phase B — gesture-lifecycle error. Sent for any of
+    /// `BeginGesture` / `UpdateGesture` / `CommitGesture` /
+    /// `CancelGesture` that the worker can't fulfil (stale handle,
+    /// rotated frame, already-active gesture).
+    GestureFailed { error: GestureFailure },
+}
+
+/// Wire-format errors for the gesture envelope. Mirrors the variants
+/// of `crate::gesture::GestureError` so the channel doesn't expose the
+/// internal `thiserror` representation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind", content = "details")]
+pub enum GestureFailure {
+    NoDocument,
+    UnsupportedGesture { reason: String },
+    AlreadyActive { handle: crate::gesture::GestureHandle },
+    HandleMismatch,
+    ElementNotFound { id: crate::element_selection::ElementId },
+    RotatedFrameUnsupported,
+    EmptySelection,
+    MissingAnchor,
+    UnknownAnchorPage { page_id: PageId },
+    Other { message: String },
+}
+
+impl From<crate::gesture::GestureError> for GestureFailure {
+    fn from(e: crate::gesture::GestureError) -> Self {
+        use crate::gesture::GestureError::*;
+        match e {
+            NoDocument => GestureFailure::NoDocument,
+            UnsupportedGesture(g) => GestureFailure::UnsupportedGesture {
+                reason: format!("{g:?}"),
+            },
+            AlreadyActive(h) => GestureFailure::AlreadyActive { handle: h },
+            HandleMismatch => GestureFailure::HandleMismatch,
+            ElementNotFound(id) => GestureFailure::ElementNotFound { id },
+            RotatedFrameUnsupported => GestureFailure::RotatedFrameUnsupported,
+            EmptySelection => GestureFailure::EmptySelection,
+            Mutate(msg) => GestureFailure::Other { message: msg },
+            MissingAnchor => GestureFailure::MissingAnchor,
+            UnknownAnchorPage(page_id) => GestureFailure::UnknownAnchorPage { page_id },
+        }
+    }
+}
+
+/// Oriented geometry for one selected element. `bounds` is the raw
+/// `GeometricBounds` (content-box space); `item_transform` is the
+/// composed affine. The overlay layer multiplies bounds corners by
+/// the transform to draw the oriented selection chrome.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElementGeometryItem {
+    pub id: crate::element_selection::ElementId,
+    pub page_id: PageId,
+    /// `[top, left, bottom, right]`.
+    pub bounds: [f32; 4],
+    /// `[a, b, c, d, tx, ty]`.
+    #[serde(default)]
+    pub item_transform: Option<[f32; 6]>,
+    /// Phase F — `true` when this element hosts a placed image
+    /// (`Rectangle` with `<Image>` / `<EPSImage>` / `<PDF>` /
+    /// `<ImportedPage>` nested). The TS overlay uses this to decide
+    /// whether a Cmd-drag should kick off `TranslateContent` instead
+    /// of `Translate`.
+    #[serde(default)]
+    pub has_image: bool,
 }
 
 /// Phase 4 Step 2 — per-rebuild layout cache statistics.
@@ -535,6 +739,7 @@ mod tests {
             kind: MainToWorkerKind::RequestSnapshot {
                 page_id: PageId("p1".into()),
                 target_width_px: 256,
+                dpi: None,
             },
         };
         let json = serde_json::to_string(&msg).unwrap();

@@ -649,12 +649,14 @@ mod wasm {
                     }
                 }
                 MainToWorkerKind::HitTest {
-                    page_id, doc_point, ..
+                    page_id,
+                    doc_point,
+                    filter,
                 } => {
                     let result = self
                         .model
                         .as_ref()
-                        .map(|m| m.hit_test(&page_id, doc_point))
+                        .map(|m| m.hit_test_filtered(&page_id, doc_point, filter))
                         .unwrap_or_default();
                     WorkerToMainKind::HitResult(idml_canvas::HitResult {
                         frame_id: result.frame_id,
@@ -668,6 +670,10 @@ mod wasm {
                                 bottom: b[3],
                             }
                         }),
+                        element: result.element,
+                        bounds: result.bounds,
+                        item_transform: result.item_transform,
+                        group_chain: result.group_chain,
                     })
                 }
                 MainToWorkerKind::RequestSnapshot {
@@ -789,6 +795,140 @@ mod wasm {
                 MainToWorkerKind::ClearFontRegistry => {
                     self.font_registry.clear();
                     WorkerToMainKind::FontRegistryCleared
+                }
+                MainToWorkerKind::SetElementSelection { ids, mode } => {
+                    if let Some(model) = self.model.as_mut() {
+                        model.element_selection.apply_mode(&ids, mode);
+                        WorkerToMainKind::ElementSelectionApplied {
+                            ids: model.element_selection.ids.clone(),
+                        }
+                    } else {
+                        WorkerToMainKind::MutationFailed {
+                            error: WorkerError::NoDocument,
+                        }
+                    }
+                }
+                MainToWorkerKind::RequestMarqueeHits { page_id, rect } => {
+                    let ids = self
+                        .model
+                        .as_ref()
+                        .map(|m| m.marquee_hits(&page_id, rect))
+                        .unwrap_or_default();
+                    WorkerToMainKind::MarqueeHits { ids }
+                }
+                MainToWorkerKind::RequestElementGeometry { ids } => {
+                    let items = self
+                        .model
+                        .as_ref()
+                        .map(|m| m.element_geometry(&ids))
+                        .unwrap_or_default();
+                    WorkerToMainKind::ElementGeometry { items }
+                }
+                MainToWorkerKind::RequestGroupLeaves { group_id } => {
+                    let ids = self
+                        .model
+                        .as_ref()
+                        .map(|m| m.group_leaves(&group_id))
+                        .unwrap_or_default();
+                    WorkerToMainKind::GroupLeaves { ids }
+                }
+                MainToWorkerKind::BeginGesture {
+                    nodes,
+                    gesture,
+                    anchor,
+                    camera_scale,
+                } => {
+                    let Some(model) = self.model.as_mut() else {
+                        return WorkerToMain {
+                            seq,
+                            protocol: PROTOCOL_VERSION,
+                            kind: WorkerToMainKind::GestureFailed {
+                                error: idml_canvas::channel::GestureFailure::NoDocument,
+                            },
+                        };
+                    };
+                    match model.begin_gesture_with_scale(nodes, gesture, anchor, camera_scale) {
+                        Ok(handle) => WorkerToMainKind::GestureBegun { handle },
+                        Err(e) => WorkerToMainKind::GestureFailed { error: e.into() },
+                    }
+                }
+                MainToWorkerKind::UpdateGesture {
+                    handle,
+                    delta,
+                    modifiers,
+                } => {
+                    let Some(model) = self.model.as_mut() else {
+                        return WorkerToMain {
+                            seq,
+                            protocol: PROTOCOL_VERSION,
+                            kind: WorkerToMainKind::GestureFailed {
+                                error: idml_canvas::channel::GestureFailure::NoDocument,
+                            },
+                        };
+                    };
+                    match model.update_gesture(handle, delta, modifiers) {
+                        Ok(result) => {
+                            // Phase B v1 — clear the GPU scene cache
+                            // wholesale on every update. Per-page
+                            // invalidation is a Phase B v2 perf knob
+                            // once the rebuild path stops dominating.
+                            #[cfg(feature = "gpu")]
+                            self.scene_cache.clear();
+                            WorkerToMainKind::GestureUpdated {
+                                handle,
+                                page_ids: result.page_ids,
+                                snap_lines: result.snap_lines,
+                            }
+                        }
+                        Err(e) => WorkerToMainKind::GestureFailed { error: e.into() },
+                    }
+                }
+                MainToWorkerKind::CommitGesture { handle } => {
+                    let Some(model) = self.model.as_mut() else {
+                        return WorkerToMain {
+                            seq,
+                            protocol: PROTOCOL_VERSION,
+                            kind: WorkerToMainKind::GestureFailed {
+                                error: idml_canvas::channel::GestureFailure::NoDocument,
+                            },
+                        };
+                    };
+                    let t0 = js_sys::Date::now();
+                    match model.commit_gesture(handle) {
+                        Ok(outcome) => {
+                            #[cfg(feature = "gpu")]
+                            self.scene_cache.clear();
+                            let mut stats: LayoutCacheStats =
+                                model.layout_cache_stats().into();
+                            stats.rebuild_ms = (js_sys::Date::now() - t0) as f32;
+                            WorkerToMainKind::GestureCommitted {
+                                handle,
+                                applied_seq: outcome.applied_seq,
+                                page_ids: outcome.page_ids,
+                                cache_stats: stats,
+                            }
+                        }
+                        Err(e) => WorkerToMainKind::GestureFailed { error: e.into() },
+                    }
+                }
+                MainToWorkerKind::CancelGesture { handle } => {
+                    let Some(model) = self.model.as_mut() else {
+                        return WorkerToMain {
+                            seq,
+                            protocol: PROTOCOL_VERSION,
+                            kind: WorkerToMainKind::GestureFailed {
+                                error: idml_canvas::channel::GestureFailure::NoDocument,
+                            },
+                        };
+                    };
+                    match model.cancel_gesture(handle) {
+                        Ok(page_ids) => {
+                            #[cfg(feature = "gpu")]
+                            self.scene_cache.clear();
+                            WorkerToMainKind::GestureCancelled { handle, page_ids }
+                        }
+                        Err(e) => WorkerToMainKind::GestureFailed { error: e.into() },
+                    }
                 }
                 MainToWorkerKind::Redo => {
                     let Some(model) = self.model.as_mut() else {

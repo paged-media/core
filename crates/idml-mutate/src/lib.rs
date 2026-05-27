@@ -42,7 +42,8 @@ pub use error::OperationError;
 pub use history::{History, DEFAULT_HISTORY_CAPACITY};
 pub use notify::Notifier;
 pub use operation::{
-    AppliedOperation, InvalidationHint, NodeId, NodeSpec, Operation, PropertyPath, Value,
+    AppliedOperation, InvalidationHint, NodeId, NodeSpec, Operation, PathPointAddress,
+    PathPointRole, PropertyPath, Value,
 };
 
 /// Holds a [`Document`] plus the Operation surface, undo/redo
@@ -220,6 +221,7 @@ mod tests {
             frame_for_story: HashMap::new(),
             text_frame_index: HashMap::new(),
             styles: StyleSheet::default(),
+            anchors: Vec::new(),
         }
     }
 
@@ -260,6 +262,152 @@ mod tests {
         assert_eq!(frame.bounds.left, 20.0);
         assert_eq!(frame.bounds.bottom, 110.0);
         assert_eq!(frame.bounds.right, 220.0);
+    }
+
+    #[test]
+    fn set_frame_transform_sets_matrix_and_inverse_carries_previous() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let m = [
+            0.7071, 0.7071, -0.7071, 0.7071, 50.0, 100.0,
+        ];
+        let applied = project
+            .apply(Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FrameTransform,
+                value: Value::Transform(Some(m)),
+            })
+            .expect("apply");
+        // Inverse carries the previous transform — `None` since the
+        // freshly-built fixture has no ItemTransform.
+        assert_eq!(
+            applied.inverse,
+            Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FrameTransform,
+                value: Value::Transform(None),
+            }
+        );
+        assert_eq!(applied.invalidation.frame_geometry.len(), 1);
+        let frame = &project.document().spreads[0].spread.text_frames[0];
+        assert_eq!(frame.item_transform, Some(m));
+    }
+
+    #[test]
+    fn frame_transform_apply_inverse_restores() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        project
+            .apply(Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FrameTransform,
+                value: Value::Transform(Some([1.0, 0.0, 0.0, 1.0, 5.0, 10.0])),
+            })
+            .unwrap();
+        project.undo().expect("undo");
+        let frame = &project.document().spreads[0].spread.text_frames[0];
+        assert_eq!(frame.item_transform, None);
+    }
+
+    #[test]
+    fn clone_translate_duplicates_source_with_shifted_bounds_and_unique_id() {
+        // Phase H — Alt-duplicate translate. Source: TextFrame/u1.
+        // The freshly-built fixture has u1 at bounds [0,0,100,200].
+        // Insert a clone at bounds + (10, 20).
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let applied = project
+            .apply(Operation::InsertNode {
+                parent: NodeId::Spread("Spread/u_main".to_string()),
+                position: 1,
+                node: NodeSpec::CloneTranslate {
+                    self_id: "TextFrame/u1_dup".to_string(),
+                    source: NodeId::TextFrame("TextFrame/u1".to_string()),
+                    dx: 10.0,
+                    dy: 20.0,
+                },
+            })
+            .expect("apply clone translate");
+        assert!(applied.invalidation.structural);
+        // Original stays put.
+        let orig = project.document().spreads[0]
+            .spread
+            .text_frames
+            .iter()
+            .find(|f| f.self_id.as_deref() == Some("TextFrame/u1"))
+            .expect("original still there");
+        assert_eq!(orig.bounds.top, 0.0);
+        // Duplicate shifted by (10, 20).
+        let dup = project.document().spreads[0]
+            .spread
+            .text_frames
+            .iter()
+            .find(|f| f.self_id.as_deref() == Some("TextFrame/u1_dup"))
+            .expect("duplicate exists");
+        assert_eq!(dup.bounds.top, 20.0);
+        assert_eq!(dup.bounds.left, 10.0);
+        assert_eq!(dup.bounds.bottom, 120.0);
+        assert_eq!(dup.bounds.right, 210.0);
+        // Undo removes the duplicate; original stays.
+        project.undo().expect("undo");
+        let after_undo = &project.document().spreads[0].spread.text_frames;
+        assert_eq!(after_undo.len(), 1);
+        assert_eq!(after_undo[0].self_id.as_deref(), Some("TextFrame/u1"));
+    }
+
+    #[test]
+    fn set_image_content_transform_routes_to_rectangle_image_transform() {
+        // Phase F — Rectangles host the image and carry the inner
+        // image_item_transform. The fixture starts with no rectangle,
+        // so insert one first via the existing InsertNode path, then
+        // exercise the new property.
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        // Insert a Rectangle into the spread.
+        project
+            .apply(Operation::InsertNode {
+                parent: NodeId::Spread("Spread/u_main".to_string()),
+                position: 0,
+                node: NodeSpec::Rectangle {
+                    self_id: "Rectangle/r1".to_string(),
+                    bounds: [0.0, 0.0, 100.0, 100.0],
+                    fill_color: None,
+                },
+            })
+            .expect("insert rect");
+        // Apply the new transform.
+        let m = [1.5, 0.0, 0.0, 1.5, 25.0, -10.0];
+        let applied = project
+            .apply(Operation::SetProperty {
+                node: NodeId::Rectangle("Rectangle/r1".to_string()),
+                path: PropertyPath::ImageContentTransform,
+                value: Value::Transform(Some(m)),
+            })
+            .expect("apply");
+        assert_eq!(
+            applied.inverse,
+            Operation::SetProperty {
+                node: NodeId::Rectangle("Rectangle/r1".to_string()),
+                path: PropertyPath::ImageContentTransform,
+                value: Value::Transform(None),
+            }
+        );
+        assert_eq!(applied.invalidation.frame_geometry.len(), 1);
+        let rect = &project.document().spreads[0].spread.rectangles[0];
+        assert_eq!(rect.image_item_transform, Some(m));
+        // Undo restores to None.
+        project.undo().expect("undo");
+        let rect = &project.document().spreads[0].spread.rectangles[0];
+        assert_eq!(rect.image_item_transform, None);
+    }
+
+    #[test]
+    fn frame_transform_type_mismatch_errors_cleanly() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let err = project
+            .apply(Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FrameTransform,
+                value: Value::Bounds([0.0, 0.0, 1.0, 1.0]),
+            })
+            .expect_err("must reject mismatched value");
+        assert!(matches!(err, OperationError::TypeMismatch { .. }));
     }
 
     #[test]
@@ -605,6 +753,17 @@ mod tests {
                     set_bounds_op("TextFrame/u1", [5.0, 6.0, 7.0, 8.0]),
                     set_fill_op("TextFrame/u1", None),
                 ],
+            },
+            // Phase D — FrameTransform + Value::Transform variants.
+            Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FrameTransform,
+                value: Value::Transform(Some([1.5, 0.0, 0.0, 1.5, 12.5, -3.0])),
+            },
+            Operation::SetProperty {
+                node: NodeId::Rectangle("Rectangle/u1".to_string()),
+                path: PropertyPath::FrameTransform,
+                value: Value::Transform(None),
             },
         ];
 

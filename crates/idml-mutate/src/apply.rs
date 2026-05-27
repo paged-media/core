@@ -207,6 +207,98 @@ fn apply_set_property(
                 },
             )
         }
+        // ---- Phase D: FrameTransform ------------------------------
+        (NodeId::TextFrame(id), PropertyPath::FrameTransform) => {
+            let new_transform = expect_transform(path, value)?;
+            let frame = find_text_frame_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = frame.item_transform;
+            frame.item_transform = new_transform;
+            (
+                Value::Transform(prev),
+                InvalidationHint {
+                    frame_geometry: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Rectangle(id), PropertyPath::FrameTransform) => {
+            let new_transform = expect_transform(path, value)?;
+            let rect = find_rectangle_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = rect.item_transform;
+            rect.item_transform = new_transform;
+            (
+                Value::Transform(prev),
+                InvalidationHint {
+                    frame_geometry: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        // ---- Phase H: FramePathPoint (Polygon) --------------------
+        (NodeId::Polygon(id), PropertyPath::FramePathPoint) => {
+            let (address, position) = expect_path_point(path, value)?;
+            // Find the polygon globally (any spread, not bound to a
+            // parent like the SetProperty arms above).
+            let polygon = doc
+                .spreads
+                .iter_mut()
+                .flat_map(|s| s.spread.polygons.iter_mut())
+                .find(|p| p.self_id.as_deref() == Some(id.as_str()))
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let Some(anchor) = polygon.anchors.get_mut(address.index) else {
+                return Err(OperationError::NodeNotFound(node.clone()));
+            };
+            let prev_pos = match address.role {
+                crate::operation::PathPointRole::Anchor => anchor.anchor,
+                crate::operation::PathPointRole::Left => anchor.left,
+                crate::operation::PathPointRole::Right => anchor.right,
+            };
+            match address.role {
+                crate::operation::PathPointRole::Anchor => {
+                    // Moving the anchor drags both handles by the same
+                    // delta so the curve shape stays put relative to
+                    // the anchor (industry convention).
+                    let dx = position[0] - anchor.anchor.0;
+                    let dy = position[1] - anchor.anchor.1;
+                    anchor.anchor = (position[0], position[1]);
+                    anchor.left = (anchor.left.0 + dx, anchor.left.1 + dy);
+                    anchor.right = (anchor.right.0 + dx, anchor.right.1 + dy);
+                }
+                crate::operation::PathPointRole::Left => {
+                    anchor.left = (position[0], position[1]);
+                }
+                crate::operation::PathPointRole::Right => {
+                    anchor.right = (position[0], position[1]);
+                }
+            }
+            (
+                Value::PathPoint {
+                    address,
+                    position: [prev_pos.0, prev_pos.1],
+                },
+                InvalidationHint {
+                    frame_geometry: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        // ---- Phase F: ImageContentTransform -----------------------
+        (NodeId::Rectangle(id), PropertyPath::ImageContentTransform) => {
+            let new_transform = expect_transform(path, value)?;
+            let rect = find_rectangle_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = rect.image_item_transform;
+            rect.image_item_transform = new_transform;
+            (
+                Value::Transform(prev),
+                InvalidationHint {
+                    frame_geometry: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         _ => {
             return Err(OperationError::UnsupportedProperty {
                 node: node.clone(),
@@ -237,6 +329,13 @@ fn apply_insert_node(
     position: usize,
     spec: &NodeSpec,
 ) -> Result<AppliedOperation, OperationError> {
+    // Phase H — CloneTranslate is a special "find the source, copy
+    // it into its own spread" path. It ignores `parent` and uses the
+    // source's host spread, so the gesture-spine caller doesn't have
+    // to discover the spread itself.
+    if let NodeSpec::CloneTranslate { .. } = spec {
+        return apply_insert_clone_translate(doc, position, spec);
+    }
     let parent_id = match parent {
         NodeId::Spread(id) => id,
         _ => {
@@ -299,6 +398,10 @@ fn apply_insert_node(
                 position,
                 new_rectangle(self_id.clone(), bounds_from_array(*bounds), fill_color.clone()),
             );
+        }
+        NodeSpec::CloneTranslate { .. } => {
+            // Handled by `apply_insert_clone_translate` above.
+            unreachable!("CloneTranslate routed via the early-return");
         }
     }
 
@@ -419,6 +522,13 @@ fn apply_move_node(
         Some(dest) => match &captured {
             NodeSpec::TextFrame { .. } => dest.spread.text_frames.len(),
             NodeSpec::Rectangle { .. } => dest.spread.rectangles.len(),
+            // CloneTranslate is never captured from the doc — it's
+            // an input-only spec for Phase H's Alt-duplicate. Treat
+            // as a programmer error if it ever surfaces here.
+            NodeSpec::CloneTranslate { .. } => {
+                restore_capture(doc, &previous_parent, previous_position, captured);
+                return Err(OperationError::NodeNotFound(node.clone()));
+            }
         },
         None => {
             restore_capture(doc, &previous_parent, previous_position, captured);
@@ -487,6 +597,11 @@ fn insert_captured(
                 .spread
                 .rectangles
                 .insert(position, new_rectangle(self_id, bounds_from_array(bounds), fill_color));
+        }
+        // Same rationale as in apply_move_node: CloneTranslate is
+        // never re-inserted via this path.
+        NodeSpec::CloneTranslate { source, .. } => {
+            return Err(OperationError::NodeNotFound(source));
         }
     }
     Ok(())
@@ -650,6 +765,177 @@ fn expect_length(path: PropertyPath, value: &Value) -> Result<Option<f32>, Opera
             path,
             expected: "Length".to_string(),
         }),
+    }
+}
+
+fn expect_transform(
+    path: PropertyPath,
+    value: &Value,
+) -> Result<Option<[f32; 6]>, OperationError> {
+    match value {
+        Value::Transform(m) => Ok(*m),
+        _ => Err(OperationError::TypeMismatch {
+            path,
+            expected: "Transform".to_string(),
+        }),
+    }
+}
+
+fn expect_path_point(
+    path: PropertyPath,
+    value: &Value,
+) -> Result<(crate::operation::PathPointAddress, [f32; 2]), OperationError> {
+    match value {
+        Value::PathPoint { address, position } => Ok((*address, *position)),
+        _ => Err(OperationError::TypeMismatch {
+            path,
+            expected: "PathPoint".to_string(),
+        }),
+    }
+}
+
+/// Phase H — dedicated apply path for `NodeSpec::CloneTranslate`.
+/// Ignores `parent` (the gesture-spine caller doesn't carry it) and
+/// finds the source's host spread globally. Inserts the clone there,
+/// shifted by `(dx, dy)` in bounds (un-rotated) or
+/// `item_transform.tx/ty` (rotated).
+fn apply_insert_clone_translate(
+    doc: &mut Document,
+    position: usize,
+    spec: &NodeSpec,
+) -> Result<AppliedOperation, OperationError> {
+    let NodeSpec::CloneTranslate {
+        self_id,
+        source,
+        dx,
+        dy,
+    } = spec
+    else {
+        unreachable!("apply_insert_clone_translate called with non-clone spec");
+    };
+    let new_node_id = spec.node_id();
+    if node_exists(doc, &new_node_id) {
+        return Err(OperationError::DuplicateNodeId {
+            id: self_id.clone(),
+        });
+    }
+    // Find the spread containing the source frame.
+    let source_spread_idx = match source {
+        NodeId::TextFrame(src_id) => doc.spreads.iter().position(|s| {
+            s.spread
+                .text_frames
+                .iter()
+                .any(|f| f.self_id.as_deref() == Some(src_id.as_str()))
+        }),
+        NodeId::Rectangle(src_id) => doc.spreads.iter().position(|s| {
+            s.spread
+                .rectangles
+                .iter()
+                .any(|r| r.self_id.as_deref() == Some(src_id.as_str()))
+        }),
+        _ => None,
+    };
+    let Some(idx) = source_spread_idx else {
+        return Err(OperationError::NodeNotFound(source.clone()));
+    };
+    let spread = &mut doc.spreads[idx];
+    let parent_spread_id = spread.spread.self_id.clone().unwrap_or_default();
+    match source {
+        NodeId::TextFrame(src_id) => {
+            let src_frame: TextFrame = spread
+                .spread
+                .text_frames
+                .iter()
+                .find(|f| f.self_id.as_deref() == Some(src_id.as_str()))
+                .cloned()
+                .ok_or_else(|| OperationError::NodeNotFound(source.clone()))?;
+            let mut clone = src_frame;
+            clone.self_id = Some(self_id.clone());
+            apply_translate_in_place(
+                &mut clone.bounds,
+                &mut clone.item_transform,
+                *dx,
+                *dy,
+            );
+            let len = spread.spread.text_frames.len();
+            let pos = position.min(len);
+            spread.spread.text_frames.insert(pos, clone);
+        }
+        NodeId::Rectangle(src_id) => {
+            let src_rect: Rectangle = spread
+                .spread
+                .rectangles
+                .iter()
+                .find(|r| r.self_id.as_deref() == Some(src_id.as_str()))
+                .cloned()
+                .ok_or_else(|| OperationError::NodeNotFound(source.clone()))?;
+            let mut clone = src_rect;
+            clone.self_id = Some(self_id.clone());
+            apply_translate_in_place(
+                &mut clone.bounds,
+                &mut clone.item_transform,
+                *dx,
+                *dy,
+            );
+            let len = spread.spread.rectangles.len();
+            let pos = position.min(len);
+            spread.spread.rectangles.insert(pos, clone);
+        }
+        other => {
+            return Err(OperationError::UnsupportedProperty {
+                node: other.clone(),
+                path: PropertyPath::FrameBounds,
+            });
+        }
+    }
+    let invalidation = InvalidationHint {
+        structural: true,
+        ..Default::default()
+    };
+    let inverse = invert_insert_node(spec);
+    Ok(AppliedOperation {
+        op: Operation::InsertNode {
+            parent: NodeId::Spread(parent_spread_id),
+            position,
+            node: spec.clone(),
+        },
+        inverse,
+        invalidation,
+    })
+}
+
+/// Phase H — shift either the bounds (un-rotated frame) or the
+/// `item_transform`'s tx/ty (rotated frame) so the cloned frame
+/// lands at the user's drop position regardless of frame rotation.
+fn apply_translate_in_place(
+    bounds: &mut Bounds,
+    item_transform: &mut Option<[f32; 6]>,
+    dx: f32,
+    dy: f32,
+) {
+    let rotated = match item_transform {
+        None => false,
+        Some(m) => {
+            let a = m[0];
+            let b = m[1];
+            let c = m[2];
+            let d = m[3];
+            !((a - 1.0).abs() < 1e-4
+                && (d - 1.0).abs() < 1e-4
+                && b.abs() < 1e-4
+                && c.abs() < 1e-4)
+        }
+    };
+    if rotated {
+        if let Some(m) = item_transform.as_mut() {
+            m[4] += dx;
+            m[5] += dy;
+        }
+    } else {
+        bounds.top += dy;
+        bounds.left += dx;
+        bounds.bottom += dy;
+        bounds.right += dx;
     }
 }
 

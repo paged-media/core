@@ -828,19 +828,11 @@ pub fn build_document(
     // Build a layer-visibility map once: any item whose `ItemLayer`
     // points at a hidden or non-printable layer is suppressed. Items
     // without an explicit ItemLayer always render — matches InDesign's
-    // single-layer-by-default behaviour.
-    let layer_renders: std::collections::HashMap<&str, bool> = document
-        .container
-        .designmap
-        .layers
-        .iter()
-        .map(|l| (l.self_id.as_str(), l.visible && l.printable))
-        .collect();
+    // single-layer-by-default behaviour. The same predicate is consumed
+    // by the canvas hit-tester so selection cannot disagree with paint.
+    let layer_renders = idml_scene::build_layer_render_map(&document.container.designmap);
     let layer_visible = |layer_ref: Option<&str>| -> bool {
-        match layer_ref {
-            Some(id) => layer_renders.get(id).copied().unwrap_or(true),
-            None => true,
-        }
+        idml_scene::lookup_layer_render_visible(&layer_renders, layer_ref)
     };
 
     let mut decoded_image_cache: HashMap<String, idml_compose::DecodedImage> = HashMap::new();
@@ -858,17 +850,11 @@ pub fn build_document(
     // it brackets with `BeginBlendGroup` / `EndBlendGroup`.
     let mut spread_frame_spans: Vec<crate::module::SpreadFrameSpans> =
         Vec::with_capacity(document.spreads.len());
-    // Q-10: IDML lists layers top-first (layers[0] = topmost). Build a
-    // map so cross-shape iteration can paint back-to-front regardless
-    // of the per-vec XML order the legacy loop walked.
-    let layer_z_index: std::collections::HashMap<&str, usize> = document
-        .container
-        .designmap
-        .layers
-        .iter()
-        .enumerate()
-        .map(|(i, l)| (l.self_id.as_str(), i))
-        .collect();
+    // Q-10: IDML lists layers top-first (layers[0] = topmost). Shared
+    // helper so the canvas hit-tester walks items in the same paint
+    // order — divergence here would break selection on multi-layer
+    // documents.
+    let layer_z_index = idml_scene::layer_z_index(&document.container.designmap);
     for (spread_idx, parsed) in document.spreads.iter().enumerate() {
         let spread = &parsed.spread;
         let range = spread_page_ranges[spread_idx].clone();

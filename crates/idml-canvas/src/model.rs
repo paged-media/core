@@ -105,6 +105,17 @@ pub struct MutationOutcome {
     pub inverse: crate::mutate::TextOp,
 }
 
+/// Phase B — frame-mutation analogue of [`MutationOutcome`]. Carries
+/// the full `AppliedOperation` (op + inverse + invalidation hint)
+/// rather than just the inverse text op, since frame mutations come
+/// from the canonical `idml_mutate` log.
+#[derive(Debug, Clone)]
+pub struct FrameMutationOutcome {
+    pub applied_seq: u64,
+    pub page_ids: Vec<PageId>,
+    pub applied: idml_mutate::AppliedOperation,
+}
+
 /// What `CanvasModel::undo` / `redo` return.
 #[derive(Debug, Clone)]
 pub struct UndoOutcome {
@@ -153,8 +164,8 @@ impl From<&pipeline::PipelineStats> for DocumentStats {
 /// runs against checkpoints stored alongside `scene`.
 pub struct CanvasModel {
     doc_id: String,
-    scene: Document,
-    built: BuiltDocument,
+    pub(crate) scene: Document,
+    pub(crate) built: BuiltDocument,
     /// Index from `PageId` to `BuiltDocument::pages` position. Built
     /// once at load and refreshed after every rebuild. Worker callers
     /// (display-list-for-page, snapshot rendering, hit-test) all key
@@ -178,8 +189,22 @@ pub struct CanvasModel {
     /// applied mutation. The main thread matches against its own
     /// `client_seq` via the `MutationApplied` reply.
     last_applied_seq: u64,
-    /// Active selection mirrored from the main thread.
+    /// Active text selection mirrored from the main thread.
     pub current_selection: Option<crate::selection::ContentSelection>,
+    /// Phase A — active element selection (frames, images, vectors).
+    /// Mirrored from the main thread, never enters the Operation log.
+    /// Survives mutations and re-layout; the main thread is responsible
+    /// for clearing entries whose target was removed.
+    pub element_selection: crate::element_selection::ElementSelection,
+    /// Phase B — in-flight gesture (translate / future resize / rotate).
+    /// Only one gesture is active at a time; `begin_gesture` errors on
+    /// re-entry. None when no drag is happening.
+    pub(crate) active_gesture: Option<crate::gesture::GestureSession>,
+    /// Monotone counter for `GestureHandle` allocation. Bumped on
+    /// every successful `begin_gesture`. Persists across cancels so a
+    /// stale handle from a previous gesture can never collide with a
+    /// fresh one.
+    pub(crate) next_gesture_handle: u64,
     /// Phase 3 Item 7 — undo log. Each entry holds the op + inverse
     /// + the applied_seq that was assigned at apply time.
     applied_log: Vec<AppliedRecord>,
@@ -200,11 +225,30 @@ pub struct CanvasModel {
 }
 
 /// One entry in the applied / redo logs.
+///
+/// Phase B — generalized to hold both text edits (legacy `TextOp`
+/// path) and frame mutations (canonical `idml_mutate::AppliedOperation`)
+/// so a single Cmd-Z timeline covers both. The full convergence
+/// (folding `TextOp` into `idml_mutate::Operation`) is tracked
+/// separately and is **out of scope** for Phase B per the plan §3.5.
 #[derive(Debug, Clone)]
 pub struct AppliedRecord {
     pub applied_seq: u64,
-    pub op: crate::mutate::TextOp,
-    pub inverse: crate::mutate::TextOp,
+    pub kind: LoggedMutation,
+}
+
+#[derive(Debug, Clone)]
+pub enum LoggedMutation {
+    /// Legacy text edit. `op` is the forward action; `inverse` is the
+    /// pre-captured `TextOp` that reverses it. Both live in
+    /// `crate::mutate`.
+    Text {
+        op: crate::mutate::TextOp,
+        inverse: crate::mutate::TextOp,
+    },
+    /// Frame / structural mutation routed through `idml_mutate::apply`.
+    /// The `AppliedOperation` already pairs op + inverse + invalidation.
+    Frame(idml_mutate::AppliedOperation),
 }
 
 impl CanvasModel {
@@ -269,6 +313,9 @@ impl CanvasModel {
             initial_state_hash,
             last_applied_seq: 0,
             current_selection: None,
+            element_selection: crate::element_selection::ElementSelection::new(),
+            active_gesture: None,
+            next_gesture_handle: 0,
             applied_log: Vec::new(),
             redo_log: Vec::new(),
             layout_cache,
@@ -357,6 +404,26 @@ impl CanvasModel {
         &mut self,
         mutation: &Mutation,
     ) -> Result<MutationOutcome, crate::channel::WorkerError> {
+        // Phase B — route frame-shape mutations through the canonical
+        // `idml_mutate::apply` path; only the text mutations stay on
+        // the legacy `TextOp` log. The `MutationOutcome` is text-only
+        // (carries an inverse `TextOp`), so frame-shape mutations
+        // synthesise an empty text op into the response. Future
+        // convergence folds both into one shape.
+        if let Some(op) = self.try_translate_frame_mutation_to_operation(mutation) {
+            let outcome = self.apply_operation(op)?;
+            return Ok(MutationOutcome {
+                applied_seq: outcome.applied_seq,
+                page_ids: outcome.page_ids,
+                // No text op to send back — frame mutations carry their
+                // inverse in the AppliedOperation stored on the log.
+                inverse: crate::mutate::TextOp::InsertText {
+                    story_id: String::new(),
+                    offset: 0,
+                    text: String::new(),
+                },
+            });
+        }
         let text_op: crate::mutate::TextOp = match mutation {
             Mutation::InsertText {
                 story_id,
@@ -414,8 +481,10 @@ impl CanvasModel {
         // pending redo is invalidated by a fresh mutation).
         self.applied_log.push(AppliedRecord {
             applied_seq,
-            op: text_op,
-            inverse: applied.inverse.clone(),
+            kind: LoggedMutation::Text {
+                op: text_op,
+                inverse: applied.inverse.clone(),
+            },
         });
         self.redo_log.clear();
         Ok(MutationOutcome {
@@ -425,21 +494,104 @@ impl CanvasModel {
         })
     }
 
+    /// Phase B — convert a channel `Mutation` into an
+    /// `idml_mutate::Operation` when the mutation is a frame-shape
+    /// edit. Returns `None` for text edits + any mutation kind not yet
+    /// bridged (MoveFrame, InsertFrame, etc.).
+    fn try_translate_frame_mutation_to_operation(
+        &self,
+        mutation: &Mutation,
+    ) -> Option<idml_mutate::Operation> {
+        use idml_mutate::{Operation, PropertyPath, Value};
+        match mutation {
+            Mutation::ResizeFrame { frame_id, bounds } => {
+                let node = self.resolve_frame_node_id(frame_id)?;
+                Some(Operation::SetProperty {
+                    node,
+                    path: PropertyPath::FrameBounds,
+                    // Channel carries `(top, left, bottom, right)`;
+                    // `Value::Bounds` is `[top, left, bottom, right]`.
+                    value: Value::Bounds([bounds.0, bounds.1, bounds.2, bounds.3]),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Phase B — look up a frame's `NodeId` by its raw `Self` id.
+    /// Searches text frames first, then rectangles. Phase D extends
+    /// to ovals / polygons / graphic lines as `apply.rs` graduates.
+    pub(crate) fn resolve_frame_node_id(
+        &self,
+        frame_id: &str,
+    ) -> Option<idml_mutate::NodeId> {
+        for parsed in &self.scene.spreads {
+            let s = &parsed.spread;
+            if s.text_frames.iter().any(|f| f.self_id.as_deref() == Some(frame_id)) {
+                return Some(idml_mutate::NodeId::TextFrame(frame_id.to_string()));
+            }
+            if s.rectangles.iter().any(|f| f.self_id.as_deref() == Some(frame_id)) {
+                return Some(idml_mutate::NodeId::Rectangle(frame_id.to_string()));
+            }
+        }
+        None
+    }
+
+    /// Phase B — apply a canonical `idml_mutate::Operation` (frame
+    /// mutation, fill, etc.), rebuild, push to the unified undo log.
+    /// The bridge from `Mutation::MoveFrame` / `ResizeFrame` (channel
+    /// envelope) lands here.
+    ///
+    /// Returns the dirty page set + the underlying `AppliedOperation`
+    /// so the caller can also feed the LOD-cache invalidation hint.
+    pub fn apply_operation(
+        &mut self,
+        op: idml_mutate::Operation,
+    ) -> Result<FrameMutationOutcome, crate::channel::WorkerError> {
+        let applied = idml_mutate::apply(&mut self.scene, &op).map_err(|e| {
+            crate::channel::WorkerError::NotImplemented {
+                what: format!("frame mutation failed: {e}"),
+            }
+        })?;
+        self.rebuild_after_mutation().map_err(|e| {
+            crate::channel::WorkerError::NotImplemented {
+                what: format!("rebuild after frame mutation: {e}"),
+            }
+        })?;
+        let applied_seq = self.bump_applied_seq();
+        let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
+        self.applied_log.push(AppliedRecord {
+            applied_seq,
+            kind: LoggedMutation::Frame(applied.clone()),
+        });
+        self.redo_log.clear();
+        Ok(FrameMutationOutcome {
+            applied_seq,
+            page_ids,
+            applied,
+        })
+    }
+
     /// Undo the most recent applied mutation. Phase 3 Item 7 —
     /// applies the cached inverse + rebuilds + pushes onto the redo
-    /// stack. Returns the affected page ids on success; `None` when
-    /// the undo log is empty.
+    /// stack. Phase B — handles both text and frame variants of the
+    /// unified log.
     pub fn undo(&mut self) -> Option<UndoOutcome> {
         let rec = self.applied_log.pop()?;
-        // Apply the inverse against the current scene.
-        let _ = crate::mutate::apply(&mut self.scene, &rec.inverse).ok()?;
+        let affected_story_id = match &rec.kind {
+            LoggedMutation::Text { op: _, inverse } => {
+                let _ = crate::mutate::apply(&mut self.scene, inverse).ok()?;
+                Some(story_id_of_text_op(inverse).to_string())
+            }
+            LoggedMutation::Frame(applied) => {
+                let _ = idml_mutate::apply(&mut self.scene, &applied.inverse).ok()?;
+                None
+            }
+        };
         self.rebuild_after_mutation().ok()?;
         let undone_seq = rec.applied_seq;
         let applied_seq = self.bump_applied_seq();
         let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
-        let affected_story_id = Some(story_id_of_text_op(&rec.inverse).to_string());
-        // Push the original op onto the redo stack (so a future
-        // `redo()` re-applies it).
         self.redo_log.push(rec);
         Some(UndoOutcome {
             undone_seq,
@@ -449,21 +601,34 @@ impl CanvasModel {
         })
     }
 
-    /// Redo the most-recently-undone mutation. Phase 3 Item 7.
+    /// Redo the most-recently-undone mutation. Phase 3 Item 7. Phase B
+    /// — handles both text and frame variants.
     pub fn redo(&mut self) -> Option<UndoOutcome> {
         let rec = self.redo_log.pop()?;
-        let applied = crate::mutate::apply(&mut self.scene, &rec.op).ok()?;
+        let (new_kind, affected_story_id) = match &rec.kind {
+            LoggedMutation::Text { op, inverse: _ } => {
+                let applied = crate::mutate::apply(&mut self.scene, op).ok()?;
+                let sid = Some(story_id_of_text_op(op).to_string());
+                (
+                    LoggedMutation::Text {
+                        op: op.clone(),
+                        inverse: applied.inverse,
+                    },
+                    sid,
+                )
+            }
+            LoggedMutation::Frame(prev_applied) => {
+                let applied = idml_mutate::apply(&mut self.scene, &prev_applied.op).ok()?;
+                (LoggedMutation::Frame(applied), None)
+            }
+        };
         self.rebuild_after_mutation().ok()?;
         let redone_seq = rec.applied_seq;
         let applied_seq = self.bump_applied_seq();
         let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
-        let affected_story_id = Some(story_id_of_text_op(&rec.op).to_string());
-        // The new inverse may differ from the cached one if the
-        // intervening state mattered; recompute via `apply`'s return.
         self.applied_log.push(AppliedRecord {
             applied_seq: redone_seq,
-            op: rec.op,
-            inverse: applied.inverse,
+            kind: new_kind,
         });
         Some(UndoOutcome {
             undone_seq: redone_seq,
@@ -480,6 +645,14 @@ impl CanvasModel {
     }
     pub fn redo_log_len(&self) -> usize {
         self.redo_log.len()
+    }
+
+    /// Read-only inspection of the most recently logged mutation.
+    /// Used by Phase B integration tests to confirm the bridge routed
+    /// a frame mutation onto the canonical `LoggedMutation::Frame`
+    /// variant rather than the legacy text path.
+    pub fn applied_log_back(&self) -> Option<&AppliedRecord> {
+        self.applied_log.last()
     }
 
     /// Expose the inner scene for read-only inspection. Used by the
@@ -509,6 +682,160 @@ impl CanvasModel {
             .get(story_id)
             .map(|v| v.as_slice())
             .unwrap_or(&[])
+    }
+
+    /// Phase A — oriented geometry for the requested element ids.
+    /// Skips ids that don't resolve (unknown / removed / not on a body
+    /// page). Used by the overlay layer to draw element-selection
+    /// chrome without re-deriving the affine math in TS.
+    /// Phase H — return every leaf `ElementId` (no groups) reachable
+    /// from the named group, descending through nested groups. Used
+    /// by the canvas's double-click-to-enter-group gesture so the
+    /// user can select a whole group as a unit and translate / scale
+    /// it via the existing union handles.
+    pub fn group_leaves(
+        &self,
+        group_self_id: &str,
+    ) -> Vec<crate::element_selection::ElementId> {
+        use crate::element_selection::ElementId;
+        let mut out = Vec::new();
+        for parsed in &self.scene.spreads {
+            let spread = &parsed.spread;
+            let Some(group) = spread.groups.iter().find(|g| {
+                g.self_id.as_deref() == Some(group_self_id)
+            }) else {
+                continue;
+            };
+            // Recurse via a worklist instead of true recursion so we
+            // don't blow the stack on pathological group nesting.
+            let mut stack: Vec<&idml_parse::Group> = vec![group];
+            while let Some(g) = stack.pop() {
+                for member in &g.members {
+                    match *member {
+                        idml_parse::FrameRef::TextFrame(i) => {
+                            if let Some(f) = spread.text_frames.get(i) {
+                                if let Some(id) = f.self_id.as_deref() {
+                                    out.push(ElementId::TextFrame(id.to_string()));
+                                }
+                            }
+                        }
+                        idml_parse::FrameRef::Rectangle(i) => {
+                            if let Some(f) = spread.rectangles.get(i) {
+                                if let Some(id) = f.self_id.as_deref() {
+                                    out.push(ElementId::Rectangle(id.to_string()));
+                                }
+                            }
+                        }
+                        idml_parse::FrameRef::Oval(i) => {
+                            if let Some(f) = spread.ovals.get(i) {
+                                if let Some(id) = f.self_id.as_deref() {
+                                    out.push(ElementId::Oval(id.to_string()));
+                                }
+                            }
+                        }
+                        idml_parse::FrameRef::Polygon(i) => {
+                            if let Some(f) = spread.polygons.get(i) {
+                                if let Some(id) = f.self_id.as_deref() {
+                                    out.push(ElementId::Polygon(id.to_string()));
+                                }
+                            }
+                        }
+                        idml_parse::FrameRef::GraphicLine(i) => {
+                            if let Some(f) = spread.graphic_lines.get(i) {
+                                if let Some(id) = f.self_id.as_deref() {
+                                    out.push(ElementId::GraphicLine(id.to_string()));
+                                }
+                            }
+                        }
+                        idml_parse::FrameRef::Group(i) => {
+                            if let Some(nested) = spread.groups.get(i) {
+                                stack.push(nested);
+                            }
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        out
+    }
+
+    pub fn element_geometry(
+        &self,
+        ids: &[crate::element_selection::ElementId],
+    ) -> Vec<crate::channel::ElementGeometryItem> {
+        use crate::element_selection::ElementId;
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            let raw = id.raw_id();
+            for parsed in &self.scene().spreads {
+                let spread = &parsed.spread;
+                let resolved: Option<(
+                    idml_parse::Bounds,
+                    Option<[f32; 6]>,
+                    bool,
+                )> = match id {
+                    ElementId::TextFrame(_) => spread
+                        .text_frames
+                        .iter()
+                        .find(|f| f.self_id.as_deref() == Some(raw))
+                        .map(|f| (f.bounds, f.item_transform, false)),
+                    ElementId::Rectangle(_) => spread
+                        .rectangles
+                        .iter()
+                        .find(|f| f.self_id.as_deref() == Some(raw))
+                        .map(|f| (f.bounds, f.item_transform, f.has_image_element)),
+                    ElementId::Oval(_) => spread
+                        .ovals
+                        .iter()
+                        .find(|f| f.self_id.as_deref() == Some(raw))
+                        .map(|f| (f.bounds, f.item_transform, false)),
+                    ElementId::Polygon(_) => spread
+                        .polygons
+                        .iter()
+                        .find(|f| f.self_id.as_deref() == Some(raw))
+                        .map(|f| (f.bounds, f.item_transform, false)),
+                    ElementId::GraphicLine(_) => spread
+                        .graphic_lines
+                        .iter()
+                        .find(|f| f.self_id.as_deref() == Some(raw))
+                        .map(|f| (f.bounds, f.item_transform, false)),
+                    // Groups themselves are not directly addressable
+                    // through geometry today — the overlay draws the
+                    // leaves. A future revision can compute the group's
+                    // union bbox once Phase B introduces "enter group".
+                    ElementId::Group(_) => None,
+                };
+                let Some((bounds, item_transform, has_image)) = resolved else {
+                    continue;
+                };
+                // Locate the page the element sits on by checking
+                // which built page's spread-coord rect contains the
+                // transformed centroid. Walks self.built().pages so
+                // off-page items (master-spread leftovers) get dropped.
+                let aabb = crate::hit::transform_bbox(bounds, item_transform);
+                let cx = (aabb.left + aabb.right) * 0.5;
+                let cy = (aabb.top + aabb.bottom) * 0.5;
+                let page = self.built().pages.iter().find(|bp| {
+                    let (ox, oy) = bp.spread_origin;
+                    cx >= ox
+                        && cx <= ox + bp.width_pt
+                        && cy >= oy
+                        && cy <= oy + bp.height_pt
+                });
+                if let Some(bp) = page {
+                    out.push(crate::channel::ElementGeometryItem {
+                        id: id.clone(),
+                        page_id: bp.id.clone(),
+                        bounds: [bounds.top, bounds.left, bounds.bottom, bounds.right],
+                        item_transform,
+                        has_image,
+                    });
+                }
+                break;
+            }
+        }
+        out
     }
 
     /// Same as `pages_for_story` but returns page *indices* into

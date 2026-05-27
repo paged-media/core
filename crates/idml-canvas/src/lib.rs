@@ -32,19 +32,27 @@
 
 pub mod camera;
 pub mod channel;
+pub mod element_selection;
+pub mod gesture;
 pub mod geometry;
 pub mod hit;
 pub mod model;
 pub mod mutate;
 pub mod resolve;
 pub mod selection;
+pub mod snap;
 pub mod snapshot;
 
 pub use camera::{Camera, CameraLayout, CAMERA_SAB_BYTES};
 pub use channel::{
-    HitFilter, HitResult, LoadError, MainToWorker, MainToWorkerKind, Mutation, ProtocolVersion,
-    WorkerError, WorkerToMain, WorkerToMainKind, PROTOCOL_VERSION,
+    ElementGeometryItem, HitFilter, HitResult, LoadError, MainToWorker, MainToWorkerKind, Mutation,
+    ProtocolVersion, WorkerError, WorkerToMain, WorkerToMainKind, PROTOCOL_VERSION,
 };
+pub use element_selection::{ElementId, ElementSelection, SelectionMode};
+pub use gesture::{
+    GestureAnchor, GestureError, GestureHandle, GestureModifiers, GestureType, ResizeHandle,
+};
+pub use snap::{SnapAxis, SnapLine};
 pub use hit::HitTestResult;
 pub use geometry::{caret_geometry, selection_geometry, CaretGeometry};
 pub use mutate::{AppliedText, TextOp, TextOpError};
@@ -64,7 +72,10 @@ pub struct SelectionRect {
     pub width_pt: f32,
     pub height_pt: f32,
 }
-pub use model::{CanvasModel, CanvasOptions, DocumentHandle, DocumentStats, FontEntry};
+pub use model::{
+    AppliedRecord, CanvasModel, CanvasOptions, DocumentHandle, DocumentStats, FontEntry,
+    FrameMutationOutcome, LoggedMutation,
+};
 pub use resolve::{
     resolve, AnchorPosition, FieldChange, NumberingMap, ResolutionResult, ResolveOptions,
 };
