@@ -986,20 +986,28 @@ impl CanvasModel {
                     continue;
                 };
                 // Locate the page the element sits on by checking
-                // which built page's spread-coord rect contains the
-                // transformed centroid. Walks self.built().pages so
-                // off-page items (master-spread leftovers) get dropped.
+                // which of its PARENT SPREAD's pages contains the
+                // transformed centroid, then resolve the BuiltPage by
+                // matching self_id. Restricting the search to the
+                // parent spread is what makes cross-spread duplicates
+                // route correctly: a clone in spread B's `text_frames`
+                // vec carries bounds in spread-B-local coords, and
+                // those coords would alias spread-A's page-bounds
+                // rectangles in a flat all-pages search (Track K
+                // open follow-up).
                 let aabb = crate::hit::transform_bbox(bounds, item_transform);
                 let cx = (aabb.left + aabb.right) * 0.5;
                 let cy = (aabb.top + aabb.bottom) * 0.5;
-                let page = self.built().pages.iter().find(|bp| {
-                    let (ox, oy) = bp.spread_origin;
-                    cx >= ox
-                        && cx <= ox + bp.width_pt
-                        && cy >= oy
-                        && cy <= oy + bp.height_pt
+                let host_page = parsed.spread.pages.iter().find(|p| {
+                    let pb = crate::hit::transform_bbox(p.bounds, p.item_transform);
+                    cx >= pb.left && cx <= pb.right && cy >= pb.top && cy <= pb.bottom
                 });
-                if let Some(bp) = page {
+                let built_page = host_page
+                    .and_then(|p| p.self_id.as_deref())
+                    .and_then(|sid| {
+                        self.built().pages.iter().find(|bp| bp.id.as_str() == sid)
+                    });
+                if let Some(bp) = built_page {
                     out.push(crate::channel::ElementGeometryItem {
                         id: id.clone(),
                         page_id: bp.id.clone(),
@@ -1101,15 +1109,22 @@ impl CanvasModel {
             else {
                 continue;
             };
-            // Same page-resolution as element_geometry: transform the
-            // bounds centroid and look up the containing built page.
+            // Same spread-scoped page-resolution as element_geometry:
+            // search the PARENT spread's pages so a clone in another
+            // spread's vec doesn't alias the source spread's page
+            // bounds (Track K cross-spread fix).
             let aabb = crate::hit::transform_bbox(bounds, item_transform);
             let cx = (aabb.left + aabb.right) * 0.5;
             let cy = (aabb.top + aabb.bottom) * 0.5;
-            let page = self.built().pages.iter().find(|bp| {
-                let (ox, oy) = bp.spread_origin;
-                cx >= ox && cx <= ox + bp.width_pt && cy >= oy && cy <= oy + bp.height_pt
+            let host_page = parsed.spread.pages.iter().find(|p| {
+                let pb = crate::hit::transform_bbox(p.bounds, p.item_transform);
+                cx >= pb.left && cx <= pb.right && cy >= pb.top && cy <= pb.bottom
             })?;
+            let page = self
+                .built()
+                .pages
+                .iter()
+                .find(|bp| Some(bp.id.as_str()) == host_page.self_id.as_deref())?;
             let anchors_out: Vec<PathAnchorTriple> = anchors
                 .iter()
                 .map(|a| PathAnchorTriple {
