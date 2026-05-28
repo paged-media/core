@@ -123,6 +123,45 @@ pub struct PipelineOptions<'a> {
     /// should pre-build once and pass `&self.font_table` here on
     /// every subsequent rebuild. `None` ⇒ build fresh per call.
     pub pre_built_font_table: Option<&'a FontTable>,
+    /// Perf-MasterText — per-(master_frame_self_id, page_idx) cache
+    /// of the DisplayList delta produced by the master-text pass.
+    /// Master stories (page-number footers, running headers) are
+    /// stable across gesture-driven rebuilds — they depend only on
+    /// the master frame's content + page index + page label.
+    /// The cache stores path entries + commands with path_ids
+    /// RELATIVE to the path-buffer state at emit-start, so on hit
+    /// we can splice the delta into a different per-build state
+    /// without renumbering pre-existing references. Entries that
+    /// touched the gradient or image pools during emission are
+    /// marked uncacheable and skip the cache — covers rare master
+    /// frames with gradient fills or embedded images. ~161ms
+    /// savings per rebuild on a multi-spread fixture.
+    pub master_text_emit_cache: Option<
+        &'a std::cell::RefCell<
+            HashMap<(String, usize), MasterTextEmitDelta>,
+        >,
+    >,
+}
+
+/// Perf-MasterText — captured DisplayList delta for one
+/// `(master_frame_self_id, page_idx)` emission, used by
+/// `PipelineOptions::master_text_emit_cache`. The `paths` and
+/// `commands` vectors are produced by snapshotting the page's
+/// PathBuffer + commands vec around the emit, then extracting
+/// the new entries. Path_ids in `commands` are RELATIVE — i.e.
+/// `0` means the first new path; replay adds the current
+/// `page.list.paths.len()` to remap.
+#[derive(Debug, Clone)]
+pub struct MasterTextEmitDelta {
+    /// Raw path geometries appended by emit (no intern dedup);
+    /// replay pushes them via `PathBuffer::push_anon` so the IDs
+    /// stay sequential and the relative offsets in `commands`
+    /// resolve correctly.
+    pub paths: Vec<idml_compose::PathData>,
+    /// Commands appended by emit, with path-id fields rebased to
+    /// `0..paths.len()`. Replay adds the current path-buffer
+    /// size to each id before pushing.
+    pub commands: Vec<idml_compose::DisplayCommand>,
 }
 
 /// Missing-image placeholder calibration (Q-22). Originally P-02
@@ -175,6 +214,7 @@ impl Default for PipelineOptions<'_> {
             break_page_range: None,
             image_decode_cache: None,
             pre_built_font_table: None,
+            master_text_emit_cache: None,
         }
     }
 }
@@ -1336,6 +1376,32 @@ pub fn build_document(
         let Some(parsed) = document.stories.iter().find(|s| s.self_id == story_id) else {
             continue;
         };
+
+        // Perf-MasterText — try the cache before running the emit.
+        // Key is (master_frame_self_id, page_idx). On hit we splice
+        // the cached delta into the page's display list, renumbering
+        // path-ids relative to the page's current path-buffer size.
+        // The cache is populated below on emit-miss; structural
+        // mutations clear it via `CanvasModel::apply_operation`.
+        let cache_key = master_frame
+            .self_id
+            .as_deref()
+            .map(|id| (id.to_string(), *page_idx));
+        if let (Some(ref key), Some(rc)) = (&cache_key, options.master_text_emit_cache) {
+            if let Some(delta) = rc.borrow().get(key) {
+                splice_master_text_delta(&mut pages[*page_idx].list, delta);
+                continue;
+            }
+        }
+
+        // Snapshot path-buffer + commands + side-effect pools BEFORE
+        // emit so the post-emit extraction can compute deltas.
+        let path_base = pages[*page_idx].list.paths.len();
+        let cmd_base = pages[*page_idx].list.commands.len();
+        let grad_base = pages[*page_idx].list.gradients.len();
+        let rad_grad_base = pages[*page_idx].list.radial_gradients.len();
+        let image_base = pages[*page_idx].list.images.len();
+
         let chain: Vec<&TextFrame> = vec![master_frame];
         let chain_pages: Vec<usize> = vec![*page_idx];
         let head_wrap_rects: &[WrapShape] = &[];
@@ -1345,7 +1411,7 @@ pub fn build_document(
             options,
             palette,
             cmyk_xform.as_ref(),
-            &font_table,
+            font_table,
             chain,
             chain_pages,
             &page_labels,
@@ -1364,8 +1430,41 @@ pub fn build_document(
         emitter.apply_vertical_justification(&mut pages);
         emitter.apply_polygon_clip(&mut pages);
         emitter.apply_blend_groups(&mut pages);
-        anchored_image_queue.extend(emitter.take_anchored_image_queue());
-        breaks.extend(emitter.take_breaks());
+        let anchored_q = emitter.take_anchored_image_queue();
+        let new_breaks = emitter.take_breaks();
+        anchored_image_queue.extend(anchored_q.iter().cloned());
+        breaks.extend(new_breaks.iter().cloned());
+
+        // Perf-MasterText — capture the delta if the emit didn't
+        // touch the gradient / image / anchored / breaks side
+        // channels (the common case for footers + running headers,
+        // which are pure text with solid paints). Skipping the
+        // cache on the uncacheable cases keeps the splice path
+        // pure-path; gradient/image renumbering is a follow-up.
+        let list = &pages[*page_idx].list;
+        let uncacheable = list.gradients.len() != grad_base
+            || list.radial_gradients.len() != rad_grad_base
+            || list.images.len() != image_base
+            || !anchored_q.is_empty()
+            || !new_breaks.is_empty();
+        if let (Some(ref key), Some(rc), false) = (&cache_key, options.master_text_emit_cache, uncacheable) {
+            let new_paths: Vec<idml_compose::PathData> =
+                list.paths.slice(path_base, list.paths.len()).to_vec();
+            let mut new_commands: Vec<idml_compose::DisplayCommand> =
+                list.commands[cmd_base..list.commands.len()].to_vec();
+            // Rebase path-ids in the captured commands so they're
+            // relative to the start of the captured paths slice.
+            for cmd in new_commands.iter_mut() {
+                rebase_path_ids(cmd, -(path_base as i64));
+            }
+            rc.borrow_mut().insert(
+                key.clone(),
+                MasterTextEmitDelta {
+                    paths: new_paths,
+                    commands: new_commands,
+                },
+            );
+        }
     }
 
     // Text-on-path pass: walk every spread's shapes and emit any
@@ -7458,6 +7557,67 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
 ///   frame currently overruns above the body content),
 /// - Footnote separator rule (the thin horizontal line InDesign
 ///   draws between body text and the footnote pool).
+/// Perf-MasterText — splice a cached delta into a page's display
+/// list. Appends the delta's path entries (via `push_anon`, no
+/// intern dedup — the rebuild's master+frame pass may have already
+/// interned the same glyph outlines under different ids, but that
+/// wastes a few path slots and not correctness), then pushes the
+/// cached commands with their relative path-ids rebased to the
+/// page's NEW path-buffer base.
+fn splice_master_text_delta(
+    list: &mut idml_compose::DisplayList,
+    delta: &MasterTextEmitDelta,
+) {
+    let new_base = list.paths.len() as i64;
+    for path in &delta.paths {
+        list.paths.push_anon(path.clone());
+    }
+    for cmd in &delta.commands {
+        let mut c = cmd.clone();
+        rebase_path_ids(&mut c, new_base);
+        list.commands.push(c);
+    }
+}
+
+/// Perf-MasterText — adds `offset` to every PathId field on a
+/// DisplayCommand. Used (1) at capture-time with `offset = -base`
+/// to rebase to relative ids, and (2) at replay-time with
+/// `offset = new_base` to rebase the cached relative ids to the
+/// active path-buffer position. Variants without a path_id field
+/// are no-ops.
+fn rebase_path_ids(cmd: &mut idml_compose::DisplayCommand, offset: i64) {
+    use idml_compose::DisplayCommand::*;
+    let add = |pid: &mut idml_compose::PathId| {
+        let v = pid.0 as i64 + offset;
+        pid.0 = v as u32;
+    };
+    match cmd {
+        FillPath { path_id, .. } => add(path_id),
+        FillPathBlend { path_id, .. } => add(path_id),
+        StrokePath { path_id, .. } => add(path_id),
+        DropShadow { path_id, .. } => add(path_id),
+        PathShadow { path_id, .. } => add(path_id),
+        PushClip { path_id, .. } => add(path_id),
+        InnerShadow { path_id, .. } => add(path_id),
+        OuterGlow { path_id, .. } => add(path_id),
+        InnerGlow { path_id, .. } => add(path_id),
+        BevelEmboss { path_id, .. } => add(path_id),
+        Satin { path_id, .. } => add(path_id),
+        Feather { path_id, .. } => add(path_id),
+        DirectionalFeather { path_id, .. } => add(path_id),
+        GradientFeather { path_id, .. } => add(path_id),
+        FillPathOverprint { path_id, .. } => add(path_id),
+        StrokePathOverprint { path_id, .. } => add(path_id),
+        // Variants without a path_id field — no-op.
+        Image { .. }
+        | PopClip(_)
+        | BeginBlendGroup { .. }
+        | EndBlendGroup(_)
+        | PushLayer { .. }
+        | PopLayer(_) => {}
+    }
+}
+
 fn emit_footnote_pools(
     pages: &mut [BuiltPage],
     _font_table: &FontTable,

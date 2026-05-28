@@ -301,6 +301,14 @@ impl PathBuffer {
         self.paths.get(id.0 as usize)
     }
 
+    /// Extract a slice of the underlying path vec for caching /
+    /// snapshotting (Perf-MasterText). Returns the path-buffer's
+    /// raw storage between `[start, end)`. Read-only access; the
+    /// caller is responsible for not feeding stale indices.
+    pub fn slice(&self, start: usize, end: usize) -> &[PathData] {
+        &self.paths[start.min(self.paths.len())..end.min(self.paths.len())]
+    }
+
     pub fn len(&self) -> usize {
         self.paths.len()
     }
