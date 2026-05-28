@@ -36,6 +36,7 @@ pub mod history;
 pub mod invert;
 pub mod notify;
 pub mod operation;
+pub mod path_math;
 
 pub use apply::apply;
 pub use error::OperationError;
@@ -142,9 +143,12 @@ mod tests {
 
     use bytes::Bytes;
     use idml_parse::{
-        Bounds, Container, DesignMap, Graphic, Spread, StyleSheet, TextFrame as ParsedTextFrame,
+        Bounds, Container, DesignMap, Graphic, PathAnchor, Polygon, Spread, StyleSheet,
+        TextFrame as ParsedTextFrame,
     };
     use idml_scene::ParsedSpread;
+    use crate::operation::PathAnchorSpec;
+    use crate::path_math::smooth_handles_from_neighbours;
 
     // ---- Fixtures ---------------------------------------------------------
 
@@ -771,6 +775,380 @@ mod tests {
             let json = serde_json::to_string(&op).expect("serialize");
             let parsed: Operation = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(parsed, op, "round-trip failed for: {json}");
+        }
+    }
+
+    // ---- Track J — path topology ----------------------------------------
+
+    /// Build a fresh Polygon fixture with the given anchors +
+    /// subpath_starts (subpath_open mirrors length). Other fields
+    /// default to "none" — these tests only exercise the anchor
+    /// table.
+    fn polygon_with_anchors(
+        self_id: &str,
+        anchors: Vec<PathAnchor>,
+        subpath_starts: Vec<usize>,
+    ) -> Polygon {
+        let open_flags = vec![false; subpath_starts.len().max(1)];
+        Polygon {
+            self_id: Some(self_id.to_string()),
+            bounds: Bounds {
+                top: 0.0,
+                left: 0.0,
+                bottom: 100.0,
+                right: 100.0,
+            },
+            item_transform: None,
+            fill_color: None,
+            fill_tint: None,
+            stroke_color: None,
+            stroke_weight: None,
+            stroke_type: None,
+            applied_object_style: None,
+            anchors,
+            subpath_starts,
+            subpath_open: open_flags,
+            text_wrap: None,
+            item_layer: None,
+            effects: None,
+            gradient_fill_angle: None,
+            gradient_fill_length: None,
+            gradient_stroke_angle: None,
+            gradient_stroke_length: None,
+            opacity: None,
+            blend_mode: None,
+            text_paths: Vec::new(),
+            image_link: None,
+            image_bytes: None,
+            has_image_element: false,
+            has_inline_pdf: false,
+            image_item_transform: None,
+            overprint_fill: false,
+            overprint_stroke: false,
+        }
+    }
+
+    fn anchor_at(x: f32, y: f32) -> PathAnchor {
+        PathAnchor {
+            anchor: (x, y),
+            left: (x, y),
+            right: (x, y),
+        }
+    }
+
+    /// Project hosting a single Polygon with the given anchors +
+    /// subpath_starts. Caller picks the polygon's self_id.
+    fn project_with_polygon(
+        self_id: &str,
+        anchors: Vec<PathAnchor>,
+        subpath_starts: Vec<usize>,
+    ) -> Project {
+        let mut spread = Spread::default();
+        spread.self_id = Some("Spread/u_main".to_string());
+        spread
+            .polygons
+            .push(polygon_with_anchors(self_id, anchors, subpath_starts));
+        let doc = Document {
+            container: Container {
+                mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
+                designmap_raw: Bytes::new(),
+                designmap: DesignMap::default(),
+                entries: BTreeMap::new(),
+            },
+            palette: Graphic::default(),
+            spreads: vec![ParsedSpread {
+                src: "Spreads/syn.xml".to_string(),
+                spread,
+            }],
+            stories: Vec::new(),
+            master_spreads: HashMap::new(),
+            frame_for_story: HashMap::new(),
+            text_frame_index: HashMap::new(),
+            styles: StyleSheet::default(),
+            anchors: Vec::new(),
+        };
+        Project::new(doc)
+    }
+
+    fn polygon_of<'a>(project: &'a Project) -> &'a Polygon {
+        &project.document().spreads[0].spread.polygons[0]
+    }
+
+    fn anchor_positions(p: &Polygon) -> Vec<(f32, f32)> {
+        p.anchors.iter().map(|a| a.anchor).collect()
+    }
+
+    fn insert_op(self_id: &str, index: usize, anchor: PathAnchorSpec) -> Operation {
+        Operation::SetProperty {
+            node: NodeId::Polygon(self_id.to_string()),
+            path: PropertyPath::PathPointInsert,
+            value: Value::PathPointInsert {
+                index,
+                anchor,
+                prev_subpath_starts: None,
+            },
+        }
+    }
+
+    fn remove_op(self_id: &str, index: usize) -> Operation {
+        Operation::SetProperty {
+            node: NodeId::Polygon(self_id.to_string()),
+            path: PropertyPath::PathPointRemove,
+            value: Value::PathPointRemove {
+                index,
+                prev_subpath_starts: None,
+            },
+        }
+    }
+
+    fn curve_op(self_id: &str, index: usize, smooth: bool) -> Operation {
+        Operation::SetProperty {
+            node: NodeId::Polygon(self_id.to_string()),
+            path: PropertyPath::PathPointCurveType,
+            value: Value::PathPointCurveType {
+                index,
+                smooth,
+                prev: None,
+            },
+        }
+    }
+
+    #[test]
+    fn insert_grows_anchors_and_returns_remove_inverse() {
+        let mut project = project_with_polygon(
+            "Polygon/p1",
+            vec![anchor_at(0.0, 0.0), anchor_at(10.0, 0.0)],
+            vec![],
+        );
+        let new_anchor = PathAnchorSpec {
+            anchor: [5.0, 0.0],
+            left: [3.0, 0.0],
+            right: [7.0, 0.0],
+        };
+        let applied = project
+            .apply(insert_op("Polygon/p1", 1, new_anchor))
+            .expect("insert");
+        // Anchor count grew.
+        assert_eq!(polygon_of(&project).anchors.len(), 3);
+        assert_eq!(anchor_positions(polygon_of(&project))[1], (5.0, 0.0));
+        // Inverse is a Remove at the same index (no prev_subpath_starts
+        // because the forward op's increment rule was non-collapsing).
+        assert_eq!(
+            applied.inverse,
+            Operation::SetProperty {
+                node: NodeId::Polygon("Polygon/p1".to_string()),
+                path: PropertyPath::PathPointRemove,
+                value: Value::PathPointRemove {
+                    index: 1,
+                    prev_subpath_starts: None,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn insert_shifts_subpath_starts_above_index() {
+        // Two subpaths, starts at [0, 2]. Insert at index 1 (inside
+        // subpath 0) → starts becomes [0, 3].
+        let mut project = project_with_polygon(
+            "Polygon/p1",
+            vec![
+                anchor_at(0.0, 0.0),
+                anchor_at(1.0, 0.0),
+                anchor_at(2.0, 2.0),
+                anchor_at(3.0, 2.0),
+            ],
+            vec![0, 2],
+        );
+        project
+            .apply(insert_op(
+                "Polygon/p1",
+                1,
+                PathAnchorSpec {
+                    anchor: [0.5, 0.0],
+                    left: [0.5, 0.0],
+                    right: [0.5, 0.0],
+                },
+            ))
+            .unwrap();
+        assert_eq!(polygon_of(&project).subpath_starts, vec![0, 3]);
+    }
+
+    #[test]
+    fn remove_shrinks_anchors_and_round_trips_through_inverse() {
+        let mut project = project_with_polygon(
+            "Polygon/p1",
+            vec![
+                anchor_at(0.0, 0.0),
+                anchor_at(5.0, 1.0),
+                anchor_at(10.0, 0.0),
+            ],
+            vec![],
+        );
+        let before = polygon_of(&project).anchors.clone();
+        let applied = project.apply(remove_op("Polygon/p1", 1)).expect("remove");
+        // Anchor count shrunk; middle anchor gone.
+        assert_eq!(polygon_of(&project).anchors.len(), 2);
+        assert_eq!(anchor_positions(polygon_of(&project)), vec![(0.0, 0.0), (10.0, 0.0)]);
+        // Inverse re-inserts the captured anchor at the same index
+        // and restores subpath_starts verbatim.
+        match &applied.inverse {
+            Operation::SetProperty {
+                path: PropertyPath::PathPointInsert,
+                value: Value::PathPointInsert { index, anchor, prev_subpath_starts },
+                ..
+            } => {
+                assert_eq!(*index, 1);
+                assert_eq!(anchor.anchor, [5.0, 1.0]);
+                assert!(prev_subpath_starts.is_some());
+            }
+            other => panic!("unexpected inverse shape: {:?}", other),
+        }
+        // Apply the inverse and confirm bytewise restore.
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        assert_eq!(polygon_of(&project).anchors.len(), 3);
+        for (a, b) in polygon_of(&project).anchors.iter().zip(before.iter()) {
+            assert_eq!(a.anchor, b.anchor);
+            assert_eq!(a.left, b.left);
+            assert_eq!(a.right, b.right);
+        }
+    }
+
+    #[test]
+    fn remove_that_collapses_degenerate_subpath_round_trips() {
+        // anchors=[A, B, C], starts=[0, 2] — subpath 1 has the lone
+        // anchor C. Remove index 2: anchors=[A, B], subpath 1 should
+        // disappear. Undo must restore both anchors AND starts=[0, 2].
+        let mut project = project_with_polygon(
+            "Polygon/p1",
+            vec![
+                anchor_at(0.0, 0.0),
+                anchor_at(5.0, 0.0),
+                anchor_at(10.0, 10.0),
+            ],
+            vec![0, 2],
+        );
+        let applied = project.apply(remove_op("Polygon/p1", 2)).expect("remove");
+        assert_eq!(polygon_of(&project).anchors.len(), 2);
+        assert_eq!(polygon_of(&project).subpath_starts, vec![0]);
+        // Inverse restores anchors AND starts.
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        assert_eq!(polygon_of(&project).anchors.len(), 3);
+        assert_eq!(polygon_of(&project).subpath_starts, vec![0, 2]);
+    }
+
+    #[test]
+    fn curve_type_smooth_derives_handles_from_neighbours() {
+        // Three collinear anchors with corner handles. Toggle index
+        // 1 to smooth → handles should land on the 1/3 / 1/3 tangent.
+        let mut project = project_with_polygon(
+            "Polygon/p1",
+            vec![
+                anchor_at(0.0, 0.0),
+                anchor_at(5.0, 0.0),
+                anchor_at(15.0, 0.0),
+            ],
+            vec![],
+        );
+        project
+            .apply(curve_op("Polygon/p1", 1, true))
+            .expect("smooth");
+        let (l_expected, r_expected) =
+            smooth_handles_from_neighbours([0.0, 0.0], [5.0, 0.0], [15.0, 0.0]);
+        let a = &polygon_of(&project).anchors[1];
+        assert!((a.left.0 - l_expected[0]).abs() < 1e-4);
+        assert!((a.right.0 - r_expected[0]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn curve_type_corner_collapses_handles_to_anchor() {
+        let mut project = project_with_polygon(
+            "Polygon/p1",
+            vec![PathAnchor {
+                anchor: (5.0, 5.0),
+                left: (3.0, 5.0),
+                right: (7.0, 5.0),
+            }],
+            vec![],
+        );
+        project
+            .apply(curve_op("Polygon/p1", 0, false))
+            .expect("corner");
+        let a = &polygon_of(&project).anchors[0];
+        assert_eq!(a.left, (5.0, 5.0));
+        assert_eq!(a.right, (5.0, 5.0));
+    }
+
+    #[test]
+    fn curve_type_round_trip_restores_exact_handles() {
+        // Set non-trivial handles, then smooth-toggle, then undo —
+        // handles must come back exactly. The plan-2 default of
+        // "inverse: previous flag" would silently re-derive on undo
+        // and lose the original handles; the `prev: Some(...)` capture
+        // exists to honour AC-J-5.
+        let original = PathAnchor {
+            anchor: (5.0, 0.0),
+            left: (2.7, -1.1),
+            right: (7.3, 1.1),
+        };
+        let mut project = project_with_polygon(
+            "Polygon/p1",
+            vec![anchor_at(0.0, 0.0), original, anchor_at(10.0, 0.0)],
+            vec![],
+        );
+        let applied = project
+            .apply(curve_op("Polygon/p1", 1, true))
+            .expect("smooth");
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        let a = &polygon_of(&project).anchors[1];
+        assert_eq!(a.anchor, original.anchor);
+        assert_eq!(a.left, original.left);
+        assert_eq!(a.right, original.right);
+    }
+
+    #[test]
+    fn arbitrary_path_topology_sequence_round_trips_bytewise() {
+        // Mix insert + remove + curve-type, then apply each inverse in
+        // reverse order. The polygon must equal its initial state
+        // anchor-by-anchor (including handles) and subpath_starts.
+        let initial_anchors = vec![
+            anchor_at(0.0, 0.0),
+            anchor_at(5.0, 0.0),
+            anchor_at(10.0, 0.0),
+            anchor_at(20.0, 5.0),
+            anchor_at(25.0, 5.0),
+        ];
+        let initial_starts = vec![0, 3];
+        let mut project = project_with_polygon(
+            "Polygon/p1",
+            initial_anchors.clone(),
+            initial_starts.clone(),
+        );
+
+        let mid_anchor = PathAnchorSpec {
+            anchor: [22.5, 5.0],
+            left: [21.0, 5.0],
+            right: [24.0, 5.0],
+        };
+        let ops = vec![
+            insert_op("Polygon/p1", 4, mid_anchor),    // inside subpath 1
+            curve_op("Polygon/p1", 1, true),           // smooth-derive interior of subpath 0
+            remove_op("Polygon/p1", 2),                // collapses nothing (subpath 0 still has 2 anchors)
+        ];
+        let mut applied_stack = Vec::new();
+        for op in ops {
+            applied_stack.push(project.apply(op).unwrap());
+        }
+        for entry in applied_stack.iter().rev() {
+            crate::apply(project.document_mut(), &entry.inverse).unwrap();
+        }
+        let p = polygon_of(&project);
+        assert_eq!(p.subpath_starts, initial_starts);
+        assert_eq!(p.anchors.len(), initial_anchors.len());
+        for (a, b) in p.anchors.iter().zip(initial_anchors.iter()) {
+            assert_eq!(a.anchor, b.anchor);
+            assert_eq!(a.left, b.left);
+            assert_eq!(a.right, b.right);
         }
     }
 

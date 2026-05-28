@@ -65,6 +65,23 @@ fn apply_set_property(
     path: PropertyPath,
     value: &Value,
 ) -> Result<AppliedOperation, OperationError> {
+    // Track J — path-topology ops construct their inverse on a
+    // different `PropertyPath` than the forward op (Insert ↔ Remove,
+    // CurveType ↔ CurveType-with-restore), so they can't share the
+    // bottom-of-function `invert_set_property` path. Each helper
+    // returns a fully-formed AppliedOperation.
+    match (node, path) {
+        (NodeId::Polygon(id), PropertyPath::PathPointInsert) => {
+            return apply_path_point_insert(doc, node, id, value);
+        }
+        (NodeId::Polygon(id), PropertyPath::PathPointRemove) => {
+            return apply_path_point_remove(doc, node, id, value);
+        }
+        (NodeId::Polygon(id), PropertyPath::PathPointCurveType) => {
+            return apply_path_point_curve_type(doc, node, id, value);
+        }
+        _ => {}
+    }
     let (previous, invalidation) = match (node, path) {
         (NodeId::TextFrame(id), PropertyPath::FrameBounds) => {
             let new_bounds = expect_bounds(path, value)?;
@@ -792,6 +809,285 @@ fn expect_path_point(
             expected: "PathPoint".to_string(),
         }),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Track J — path topology helpers
+// ---------------------------------------------------------------------------
+
+/// Apply rule for `subpath_starts` on Insert at flat index `n`. Each
+/// entry strictly greater than `n` increments by one — entries equal
+/// to or below `n` stay put, so the inserted anchor naturally joins
+/// the subpath whose start index sits at-or-just-below `n`. The
+/// real-world dispatch path (segment-click between two anchors of the
+/// same subpath) never inserts AT a subpath boundary, so this rule is
+/// sufficient. Edge cases that need a verbatim restore are handled
+/// via `prev_subpath_starts` on the inverse.
+fn increment_subpath_starts(starts: &mut Vec<usize>, n: usize) {
+    for s in starts.iter_mut() {
+        if *s > n {
+            *s += 1;
+        }
+    }
+}
+
+/// Apply rule for `subpath_starts` on Remove at flat index `n`. Each
+/// entry strictly greater than `n` decrements by one. After the
+/// shift, two adjustments keep the invariant intact:
+///   - any entry == `anchors.len()` (now off the end) is trimmed,
+///   - adjacent equal entries are de-duped (a subpath collapsed
+///     because its single anchor was the one we removed).
+fn decrement_subpath_starts(starts: &mut Vec<usize>, n: usize, new_anchors_len: usize) {
+    for s in starts.iter_mut() {
+        if *s > n {
+            *s -= 1;
+        }
+    }
+    starts.retain(|s| *s < new_anchors_len);
+    starts.dedup();
+}
+
+fn apply_path_point_insert(
+    doc: &mut idml_scene::Document,
+    node: &NodeId,
+    polygon_id: &str,
+    value: &Value,
+) -> Result<AppliedOperation, OperationError> {
+    let (index, anchor_spec, prev_subpath_starts) = match value {
+        Value::PathPointInsert {
+            index,
+            anchor,
+            prev_subpath_starts,
+        } => (*index, *anchor, prev_subpath_starts.clone()),
+        _ => {
+            return Err(OperationError::TypeMismatch {
+                path: PropertyPath::PathPointInsert,
+                expected: "PathPointInsert".to_string(),
+            })
+        }
+    };
+    let polygon = doc
+        .spreads
+        .iter_mut()
+        .flat_map(|s| s.spread.polygons.iter_mut())
+        .find(|p| p.self_id.as_deref() == Some(polygon_id))
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    // Insert is allowed at end (index == len), not past it.
+    if index > polygon.anchors.len() {
+        return Err(OperationError::NodeNotFound(node.clone()));
+    }
+    polygon.anchors.insert(index, anchor_spec.to_parse());
+    if let Some(restore) = prev_subpath_starts {
+        // Inverse-of-Remove case: restore the pre-Remove starts
+        // verbatim. The starts captured at Remove time pointed into
+        // an anchors vec one element smaller; inserting brings the
+        // length back, so the snapshot is valid as-is.
+        polygon.subpath_starts = restore;
+    } else {
+        increment_subpath_starts(&mut polygon.subpath_starts, index);
+    }
+    // Inverse: remove the just-inserted anchor at the same index.
+    // No prev_subpath_starts on the inverse — the forward Insert's
+    // increment rule was non-collapsing, so the decrement rule
+    // reverses it exactly.
+    let inverse = Operation::SetProperty {
+        node: node.clone(),
+        path: PropertyPath::PathPointRemove,
+        value: Value::PathPointRemove {
+            index,
+            prev_subpath_starts: None,
+        },
+    };
+    Ok(AppliedOperation {
+        op: Operation::SetProperty {
+            node: node.clone(),
+            path: PropertyPath::PathPointInsert,
+            value: value.clone(),
+        },
+        inverse,
+        invalidation: InvalidationHint {
+            frame_geometry: vec![node.clone()],
+            ..Default::default()
+        },
+    })
+}
+
+fn apply_path_point_remove(
+    doc: &mut idml_scene::Document,
+    node: &NodeId,
+    polygon_id: &str,
+    value: &Value,
+) -> Result<AppliedOperation, OperationError> {
+    let index = match value {
+        Value::PathPointRemove { index, .. } => *index,
+        _ => {
+            return Err(OperationError::TypeMismatch {
+                path: PropertyPath::PathPointRemove,
+                expected: "PathPointRemove".to_string(),
+            })
+        }
+    };
+    let polygon = doc
+        .spreads
+        .iter_mut()
+        .flat_map(|s| s.spread.polygons.iter_mut())
+        .find(|p| p.self_id.as_deref() == Some(polygon_id))
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    if index >= polygon.anchors.len() {
+        return Err(OperationError::NodeNotFound(node.clone()));
+    }
+    // Capture for the inverse BEFORE mutating.
+    let captured = crate::operation::PathAnchorSpec::from_parse(&polygon.anchors[index]);
+    let prev_starts = polygon.subpath_starts.clone();
+    // Remove + adjust subpath_starts.
+    polygon.anchors.remove(index);
+    let new_len = polygon.anchors.len();
+    decrement_subpath_starts(&mut polygon.subpath_starts, index, new_len);
+    // Inverse: re-insert the captured anchor at the same index, and
+    // restore subpath_starts verbatim so a Remove that collapsed a
+    // degenerate single-anchor subpath round-trips bytewise.
+    let inverse = Operation::SetProperty {
+        node: node.clone(),
+        path: PropertyPath::PathPointInsert,
+        value: Value::PathPointInsert {
+            index,
+            anchor: captured,
+            prev_subpath_starts: Some(prev_starts),
+        },
+    };
+    Ok(AppliedOperation {
+        op: Operation::SetProperty {
+            node: node.clone(),
+            path: PropertyPath::PathPointRemove,
+            value: value.clone(),
+        },
+        inverse,
+        invalidation: InvalidationHint {
+            frame_geometry: vec![node.clone()],
+            ..Default::default()
+        },
+    })
+}
+
+fn apply_path_point_curve_type(
+    doc: &mut idml_scene::Document,
+    node: &NodeId,
+    polygon_id: &str,
+    value: &Value,
+) -> Result<AppliedOperation, OperationError> {
+    let (index, smooth, prev_override) = match value {
+        Value::PathPointCurveType {
+            index,
+            smooth,
+            prev,
+        } => (*index, *smooth, *prev),
+        _ => {
+            return Err(OperationError::TypeMismatch {
+                path: PropertyPath::PathPointCurveType,
+                expected: "PathPointCurveType".to_string(),
+            })
+        }
+    };
+    // Find polygon + bounds-check + collect neighbour anchor
+    // positions before grabbing the mutable borrow for the anchor.
+    let polygon = doc
+        .spreads
+        .iter_mut()
+        .flat_map(|s| s.spread.polygons.iter_mut())
+        .find(|p| p.self_id.as_deref() == Some(polygon_id))
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    if index >= polygon.anchors.len() {
+        return Err(OperationError::NodeNotFound(node.clone()));
+    }
+    // Neighbour positions for the smooth derivation, restricted to
+    // the same subpath. (Crossing subpath boundaries would derive a
+    // tangent against an anchor on a different contour, which is
+    // nonsensical.)
+    let (sub_start, sub_end) = subpath_bounds_for(&polygon.subpath_starts, polygon.anchors.len(), index);
+    let prev_neighbour = if index > sub_start {
+        Some(polygon.anchors[index - 1].anchor)
+    } else {
+        None
+    };
+    let next_neighbour = if index + 1 < sub_end {
+        Some(polygon.anchors[index + 1].anchor)
+    } else {
+        None
+    };
+    let captured = crate::operation::PathAnchorSpec::from_parse(&polygon.anchors[index]);
+    let anchor = &mut polygon.anchors[index];
+    if let Some(restore) = prev_override {
+        // Inverse-application path: restore the carried anchor.
+        anchor.left = (restore.left[0], restore.left[1]);
+        anchor.right = (restore.right[0], restore.right[1]);
+        // anchor.anchor (on-curve point) is preserved on a curve-type
+        // toggle, but restore it too for safety against any edge
+        // case where neighbour-derivation rounded it.
+        anchor.anchor = (restore.anchor[0], restore.anchor[1]);
+    } else if smooth {
+        let curr = [anchor.anchor.0, anchor.anchor.1];
+        // Need both neighbours; fall back to corner if either is
+        // missing (open-path endpoint).
+        match (prev_neighbour, next_neighbour) {
+            (Some(p), Some(n)) => {
+                let p = [p.0, p.1];
+                let n = [n.0, n.1];
+                let (l, r) = crate::path_math::smooth_handles_from_neighbours(p, curr, n);
+                anchor.left = (l[0], l[1]);
+                anchor.right = (r[0], r[1]);
+            }
+            _ => {
+                anchor.left = anchor.anchor;
+                anchor.right = anchor.anchor;
+            }
+        }
+    } else {
+        // Corner: collapse handles onto the anchor.
+        anchor.left = anchor.anchor;
+        anchor.right = anchor.anchor;
+    }
+    // Inverse: CurveType with `prev: Some(captured)` so undo
+    // restores the exact prior handles regardless of what the
+    // smooth-derivation produced.
+    let inverse = Operation::SetProperty {
+        node: node.clone(),
+        path: PropertyPath::PathPointCurveType,
+        value: Value::PathPointCurveType {
+            index,
+            smooth: !smooth,
+            prev: Some(captured),
+        },
+    };
+    Ok(AppliedOperation {
+        op: Operation::SetProperty {
+            node: node.clone(),
+            path: PropertyPath::PathPointCurveType,
+            value: value.clone(),
+        },
+        inverse,
+        invalidation: InvalidationHint {
+            frame_geometry: vec![node.clone()],
+            ..Default::default()
+        },
+    })
+}
+
+/// Return the half-open `[start, end)` index range of the subpath
+/// containing `index`. The end is either the next subpath's start or
+/// `anchors_len` for the last subpath. An empty `subpath_starts`
+/// represents a single implicit subpath covering all anchors.
+fn subpath_bounds_for(starts: &[usize], anchors_len: usize, index: usize) -> (usize, usize) {
+    if starts.is_empty() {
+        return (0, anchors_len);
+    }
+    // Find the largest start <= index.
+    let pos = match starts.binary_search(&index) {
+        Ok(p) => p,
+        Err(p) => p.saturating_sub(1),
+    };
+    let start = starts[pos];
+    let end = starts.get(pos + 1).copied().unwrap_or(anchors_len);
+    (start, end)
 }
 
 /// Phase H — dedicated apply path for `NodeSpec::CloneTranslate`.
