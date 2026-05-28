@@ -104,6 +104,17 @@ pub struct PipelineOptions<'a> {
     /// for break collection. `None` ⇒ no filter. ANDs with
     /// `break_story_filter` when both are set.
     pub break_page_range: Option<std::ops::Range<u32>>,
+    /// Perf-S — persistent `URI → DecodedImage` cache. When `Some`,
+    /// `build_document` reuses entries instead of re-decoding every
+    /// image on every call. The same `RefCell` shared across multiple
+    /// `build_document` calls amortises decode cost — critical for
+    /// gesture rebuilds on image-heavy fixtures, where the per-call
+    /// scratch cache otherwise dominates the rebuild time (5e perf
+    /// finding: ~1s per `update_gesture` on `brand-guidelines`, 99%
+    /// of which is image decoding). `None` falls back to the v0
+    /// behaviour: a fresh local cache per call.
+    pub image_decode_cache:
+        Option<&'a std::cell::RefCell<HashMap<String, idml_compose::DecodedImage>>>,
 }
 
 /// Missing-image placeholder calibration (Q-22). Originally P-02
@@ -154,6 +165,7 @@ impl Default for PipelineOptions<'_> {
             collect_breaks: false,
             break_story_filter: None,
             break_page_range: None,
+            image_decode_cache: None,
         }
     }
 }
@@ -837,7 +849,21 @@ pub fn build_document(
         idml_scene::lookup_layer_render_visible(&layer_renders, layer_ref)
     };
 
-    let mut decoded_image_cache: HashMap<String, idml_compose::DecodedImage> = HashMap::new();
+    // Perf-S — when the caller supplies a persistent cache, decode
+    // results survive across `build_document` calls; otherwise fall
+    // back to a per-call scratch. The match holds the RefMut alive
+    // for the duration of the build via the `_owned_borrow` binding
+    // — dropping it would invalidate the `&mut HashMap` reference.
+    let mut local_image_cache: HashMap<String, idml_compose::DecodedImage> = HashMap::new();
+    let mut _owned_borrow: Option<std::cell::RefMut<'_, HashMap<String, idml_compose::DecodedImage>>> = None;
+    let mut decoded_image_cache: &mut HashMap<String, idml_compose::DecodedImage> =
+        match options.image_decode_cache {
+            Some(rc) => {
+                _owned_borrow = Some(rc.borrow_mut());
+                _owned_borrow.as_mut().unwrap()
+            }
+            None => &mut local_image_cache,
+        };
     // Aggregated queue of image-bearing anchored Rectangles captured
     // during the master + body story passes. Drained after both
     // passes complete so `emit_rectangle_image` can route the

@@ -225,6 +225,14 @@ pub struct CanvasModel {
     /// `apply_mutation` to compute the dirty page set for the GPU
     /// scene cache invalidation hint.
     story_pages: HashMap<String, Vec<PageId>>,
+    /// Perf-S — persistent `URI → DecodedImage` cache shared across
+    /// rebuilds. Threaded into `PipelineOptions::image_decode_cache`
+    /// on every `rebuild_after_mutation` so gesture-driven rebuilds
+    /// don't re-decode placed images. Per the 5e perf investigation
+    /// (memory: project_gesture_rebuild_perf), image decoding
+    /// dominates ~99% of update_gesture cost on heavy fixtures.
+    image_decode_cache:
+        std::cell::RefCell<HashMap<String, idml_compose::DecodedImage>>,
 }
 
 /// One entry in the applied / redo logs.
@@ -277,11 +285,19 @@ impl CanvasModel {
         let resolver = build_font_resolver(&font_registry, font_bytes.as_deref());
 
         let t_build = phase_now();
+        // Perf-S — image-decode cache populated by the initial
+        // build_document then stored on Self below for subsequent
+        // rebuilds. The cold load pays the full decode cost; every
+        // mutation-driven rebuild after that reuses.
+        let image_decode_cache: std::cell::RefCell<
+            HashMap<String, idml_compose::DecodedImage>,
+        > = std::cell::RefCell::new(HashMap::new());
         let (built_result, layout_cache) = {
             let options = PipelineOptions {
                 font: font_bytes.as_deref(),
                 assets: resolver.as_ref().map(|r| r as &dyn idml_renderer::AssetResolver),
                 cmyk_icc_profile: icc_bytes.as_deref(),
+                image_decode_cache: Some(&image_decode_cache),
                 ..PipelineOptions::default()
             };
             // Phase 4 Step 1 — install an empty cache for the initial
@@ -323,6 +339,10 @@ impl CanvasModel {
             redo_log: Vec::new(),
             layout_cache,
             story_pages,
+            // Perf-S — cache populated by the initial build_document
+            // above; subsequent rebuild_after_mutation calls share
+            // this RefCell so decode cost amortises.
+            image_decode_cache,
         })
     }
 
@@ -1036,6 +1056,9 @@ impl CanvasModel {
             font: self.font_bytes.as_deref(),
             assets: resolver.as_ref().map(|r| r as &dyn idml_renderer::AssetResolver),
             cmyk_icc_profile: self.icc_bytes.as_deref(),
+            // Perf-S — reuse the persistent image-decode cache so
+            // placed images don't re-decode on every gesture rebuild.
+            image_decode_cache: Some(&self.image_decode_cache),
             ..PipelineOptions::default()
         };
         let mut cache = std::mem::take(&mut self.layout_cache);
