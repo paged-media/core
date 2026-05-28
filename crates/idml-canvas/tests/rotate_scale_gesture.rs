@@ -137,7 +137,7 @@ fn rotate_shift_snaps_to_nearest_15_degrees() {
         (0.0, -30.0),
         GestureModifiers {
             shift: true,
-            alt: false,
+            alt: false, disable_snap: false,
         },
     )
     .unwrap();
@@ -361,7 +361,7 @@ fn scale_with_shift_locks_aspect() {
         (50.0, 50.0),
         GestureModifiers {
             shift: true,
-            alt: false,
+            alt: false, disable_snap: false,
         },
     )
     .unwrap();

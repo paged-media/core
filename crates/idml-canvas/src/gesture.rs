@@ -123,12 +123,20 @@ impl ResizeHandle {
 /// Modifier state captured on each pointer event. `shift` constrains
 /// the gesture (snap rotation to 15°, lock aspect on resize / scale).
 /// `alt` resizes from centre.
+///
+/// `disable_snap` (Ctrl) makes the snap pass an identity transform on
+/// the delta — InDesign-style "temporarily disable snap" affordance
+/// per plan-2 §8.4. Optional on the wire so older callers keep
+/// compiling (defaults to `false`).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct GestureModifiers {
     pub shift: bool,
     pub alt: bool,
+    #[serde(default)]
+    #[tsify(optional)]
+    pub disable_snap: bool,
 }
 
 /// Phase D — anchor point passed at `begin_gesture` for gestures that
@@ -1774,9 +1782,21 @@ mod tests {
         );
     }
 
-    const NONE: GestureModifiers = GestureModifiers { shift: false, alt: false };
-    const ALT: GestureModifiers = GestureModifiers { shift: false, alt: true };
-    const SHIFT: GestureModifiers = GestureModifiers { shift: true, alt: false };
+    const NONE: GestureModifiers = GestureModifiers {
+        shift: false,
+        alt: false,
+        disable_snap: false,
+    };
+    const ALT: GestureModifiers = GestureModifiers {
+        shift: false,
+        alt: true,
+        disable_snap: false,
+    };
+    const SHIFT: GestureModifiers = GestureModifiers {
+        shift: true,
+        alt: false,
+        disable_snap: false,
+    };
 
     #[test]
     fn inverse_rotate_delta_passes_through_identity() {
@@ -1805,7 +1825,7 @@ mod tests {
             snap,
             GestureType::Translate,
             (30.0, 5.0),
-            GestureModifiers { shift: true, alt: false },
+            GestureModifiers { shift: true, alt: false, disable_snap: false },
         );
         assert_close(out, b(0.0, 30.0, 100.0, 130.0));
         // |dy| > |dx| → x is dropped.
@@ -1813,7 +1833,7 @@ mod tests {
             snap,
             GestureType::Translate,
             (3.0, -40.0),
-            GestureModifiers { shift: true, alt: false },
+            GestureModifiers { shift: true, alt: false, disable_snap: false },
         );
         assert_close(out, b(-40.0, 0.0, 60.0, 100.0));
     }
@@ -1945,7 +1965,7 @@ mod tests {
             snap,
             GestureType::Resize { handle: ResizeHandle::SouthEast },
             (50.0, 30.0),
-            GestureModifiers { shift: true, alt: true },
+            GestureModifiers { shift: true, alt: true, disable_snap: false },
         );
         // Centre stays at (50, 50); dominant scale_w = 1.5 → 150×150.
         // Centre-anchored: bounds = (-25, -25, 125, 125).

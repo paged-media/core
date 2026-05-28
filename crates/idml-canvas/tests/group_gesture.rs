@@ -154,7 +154,7 @@ fn translate_group_shifts_group_transform_and_each_member() {
             (10.0, 20.0),
             GestureModifiers {
                 shift: false,
-                alt: false,
+                alt: false, disable_snap: false,
             },
         )
         .expect("update");
@@ -200,7 +200,7 @@ fn translate_group_undo_restores_group_and_members() {
             (33.0, -17.5),
             GestureModifiers {
                 shift: false,
-                alt: false,
+                alt: false, disable_snap: false,
             },
         )
         .expect("update");
@@ -242,7 +242,7 @@ fn translate_group_dispatches_a_single_undo_entry() {
             (5.0, 5.0),
             GestureModifiers {
                 shift: false,
-                alt: false,
+                alt: false, disable_snap: false,
             },
         )
         .expect("update");
@@ -281,7 +281,7 @@ fn rotate_group_composes_same_rotation_onto_group_and_members() {
             (0.0, 30.0),
             GestureModifiers {
                 shift: false,
-                alt: false,
+                alt: false, disable_snap: false,
             },
         )
         .expect("update");
@@ -340,7 +340,7 @@ fn scale_group_composes_same_scale_onto_group_and_members() {
             (40.0, 0.0),
             GestureModifiers {
                 shift: false,
-                alt: false,
+                alt: false, disable_snap: false,
             },
         )
         .expect("update");

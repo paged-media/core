@@ -537,8 +537,9 @@ mod wasm {
         ///
         /// The 64-bit handle arrives split into low/high words because
         /// JS Numbers can't represent the full u64 range cleanly.
-        /// `modifier_bits`: bit 0 = shift, bit 1 = alt — matches the
-        /// SAB layout in `packages/shell/src/gestures/gesture-sab.ts`.
+        /// `modifier_bits`: bit 0 = shift, bit 1 = alt, bit 2 =
+        /// disable_snap (Ctrl, plan-2 §8.4). Matches the SAB layout
+        /// in `packages/shell/src/gestures/gesture-sab.ts`.
         #[wasm_bindgen(js_name = updateGestureRaw)]
         pub fn update_gesture_raw(
             &mut self,
@@ -555,8 +556,9 @@ mod wasm {
                 ((handle_hi as u64) << 32) | (handle_lo as u64),
             );
             let modifiers = idml_canvas::gesture::GestureModifiers {
-                shift: (modifier_bits & 0b01) != 0,
-                alt: (modifier_bits & 0b10) != 0,
+                shift: (modifier_bits & 0b001) != 0,
+                alt: (modifier_bits & 0b010) != 0,
+                disable_snap: (modifier_bits & 0b100) != 0,
             };
             match model.update_gesture(handle, (dx, dy), modifiers) {
                 Ok(result) => {

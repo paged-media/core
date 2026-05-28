@@ -81,6 +81,14 @@ pub(crate) fn compute_snap_adjustment(
             lines: Vec::new(),
         };
     }
+    // Plan-2 §8.4 — Ctrl bypass. When the caller asks to skip snap,
+    // pass the raw delta through and surface no snap lines.
+    if session.modifiers.disable_snap {
+        return SnapAdjustment {
+            delta: raw_delta,
+            lines: Vec::new(),
+        };
+    }
     for snap in &session.snapshots {
         if !is_pure_translate_or_identity(snap.item_transform) {
             return SnapAdjustment {
@@ -489,6 +497,26 @@ mod tests {
         assert_eq!(adj.lines.len(), 1);
         assert!(matches!(adj.lines[0].axis, SnapAxis::X));
         assert!((adj.lines[0].position - 0.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn disable_snap_modifier_bypasses_snap_pass() {
+        // Same setup as `snap_to_page_left_edge`: drag by dx=-19 with
+        // tolerance 4 would normally snap left edge to 0 (effective
+        // delta -20). With `disable_snap` set the raw delta passes
+        // through and no snap lines surface.
+        let s = snap_for(
+            Bounds { top: 100.0, left: 20.0, bottom: 200.0, right: 200.0 },
+            "tf",
+            "u1",
+        );
+        let mut sess = session(vec![s]);
+        sess.modifiers.disable_snap = true;
+        let pages = vec![page("p1", 612.0, 792.0)];
+        let adj = compute_snap_adjustment(&sess, (-19.0, 0.0), &pages, &[]);
+        assert!((adj.delta.0 - -19.0).abs() < 1e-6);
+        assert_eq!(adj.delta.1, 0.0);
+        assert!(adj.lines.is_empty());
     }
 
     #[test]
