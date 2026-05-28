@@ -115,6 +115,24 @@ pub enum PropertyPath {
     /// role }` carried in the `Value::PathPoint` payload. The role
     /// picks between the anchor and its two direction handles.
     FramePathPoint,
+    /// Track J — insert a new `PathAnchor` into a `Polygon`'s
+    /// `PathPointArray` at the given flat index. Value carries the
+    /// anchor to insert; apply also updates `subpath_starts` so
+    /// any entry at or past the insert index shifts +1. Inverse is
+    /// `PathPointRemove` at the same index.
+    PathPointInsert,
+    /// Track J — remove the `PathAnchor` at the given flat index
+    /// from a `Polygon`'s `PathPointArray`. Apply captures the
+    /// removed anchor into the returned `PathPointInsert` inverse
+    /// and updates `subpath_starts` so any entry past the remove
+    /// index shifts -1.
+    PathPointRemove,
+    /// Track J — toggle a `PathAnchor` between corner (handles
+    /// equal to anchor) and smooth (handles derived from the
+    /// neighbouring segments' tangents, 1/3-distance heuristic).
+    /// Inverse restores the previous `left` + `right` exactly so
+    /// repeated toggles round-trip bytewise.
+    PathPointCurveType,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -153,6 +171,41 @@ impl PropertyPath {
             PropertyPath::FrameTransform => "frame.transform",
             PropertyPath::ImageContentTransform => "frame.imageContentTransform",
             PropertyPath::FramePathPoint => "frame.pathPoint",
+            PropertyPath::PathPointInsert => "frame.pathPointInsert",
+            PropertyPath::PathPointRemove => "frame.pathPointRemove",
+            PropertyPath::PathPointCurveType => "frame.pathPointCurveType",
+        }
+    }
+}
+
+/// Track J — wire-shape mirror of `idml_parse::PathAnchor`. The
+/// parse-side type doesn't carry `Deserialize`/`PartialEq`/`Tsify`,
+/// and the mutate API needs all three so this Op crosses the wasm
+/// boundary. The field shapes match exactly: `anchor` is the
+/// on-curve point, `left` / `right` are the incoming / outgoing
+/// Bezier handles, all in the page item's inner coordinate system.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct PathAnchorSpec {
+    pub anchor: [f32; 2],
+    pub left: [f32; 2],
+    pub right: [f32; 2],
+}
+
+impl PathAnchorSpec {
+    pub fn from_parse(a: &idml_parse::PathAnchor) -> Self {
+        Self {
+            anchor: [a.anchor.0, a.anchor.1],
+            left: [a.left.0, a.left.1],
+            right: [a.right.0, a.right.1],
+        }
+    }
+    pub fn to_parse(&self) -> idml_parse::PathAnchor {
+        idml_parse::PathAnchor {
+            anchor: (self.anchor[0], self.anchor[1]),
+            left: (self.left[0], self.left[1]),
+            right: (self.right[0], self.right[1]),
         }
     }
 }
@@ -183,6 +236,46 @@ pub enum Value {
     PathPoint {
         address: PathPointAddress,
         position: [f32; 2],
+    },
+    /// Track J — insert a new anchor into the path at `index`. Used
+    /// both as the forward value of a `PathPointInsert` op (UI
+    /// dispatches it from a segment click; the anchor is the
+    /// de-Casteljau split result) and as the inverse value of a
+    /// `PathPointRemove` op. `prev_subpath_starts` is populated by
+    /// the apply layer when this Value is the inverse of a Remove
+    /// — restoring the full pre-Remove subpath-boundary table
+    /// guarantees bytewise round-trip even when the Remove
+    /// collapsed a degenerate single-anchor subpath. UI senders
+    /// leave it `None` and the apply layer derives the new
+    /// `subpath_starts` from the increment rule.
+    PathPointInsert {
+        index: usize,
+        anchor: PathAnchorSpec,
+        #[serde(default)]
+        prev_subpath_starts: Option<Vec<usize>>,
+    },
+    /// Track J — remove the anchor at `index`. Forward value of a
+    /// `PathPointRemove` op (UI dispatches it from Backspace on a
+    /// selected anchor); also the inverse value of `PathPointInsert`.
+    /// `prev_subpath_starts` mirrors the `PathPointInsert` field
+    /// and serves the same round-trip role.
+    PathPointRemove {
+        index: usize,
+        #[serde(default)]
+        prev_subpath_starts: Option<Vec<usize>>,
+    },
+    /// Track J — set the curve type of the anchor at `index`.
+    /// `smooth: true` derives handles from neighbour tangents
+    /// (1/3-distance heuristic); `smooth: false` collapses handles
+    /// to the anchor (corner). When `prev` is `Some`, apply restores
+    /// the carried anchor verbatim and ignores `smooth` — used by
+    /// the inverse so undo round-trips bytewise even when the
+    /// "smooth" derivation would lose the prior handle positions.
+    PathPointCurveType {
+        index: usize,
+        smooth: bool,
+        #[serde(default)]
+        prev: Option<PathAnchorSpec>,
     },
 }
 
