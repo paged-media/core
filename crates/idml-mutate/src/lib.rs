@@ -1198,6 +1198,23 @@ mod tests {
         }
     }
 
+    fn insert_op_with_starts(
+        self_id: &str,
+        index: usize,
+        anchor: PathAnchorSpec,
+        prev_subpath_starts: Vec<usize>,
+    ) -> Operation {
+        Operation::SetProperty {
+            node: NodeId::Polygon(self_id.to_string()),
+            path: PropertyPath::PathPointInsert,
+            value: Value::PathPointInsert {
+                index,
+                anchor,
+                prev_subpath_starts: Some(prev_subpath_starts),
+            },
+        }
+    }
+
     fn remove_op(self_id: &str, index: usize) -> Operation {
         Operation::SetProperty {
             node: NodeId::Polygon(self_id.to_string()),
@@ -1252,6 +1269,85 @@ mod tests {
                 },
             }
         );
+    }
+
+    #[test]
+    fn closing_edge_insert_joins_prior_subpath_via_explicit_starts() {
+        // Two subpaths starts=[0, 2], anchors=[A0, A1, B0, B1]. The
+        // closing edge of subpath 0 runs from A1 (index 1) back to A0
+        // (index 0); a click on it should land the midpoint at flat
+        // index 2 (= subEnd) and bump starts[1] from 2 → 3, so the
+        // new anchor stays inside subpath 0.
+        let mut project = project_with_polygon(
+            "Polygon/p1",
+            vec![
+                anchor_at(0.0, 0.0),
+                anchor_at(1.0, 0.0),
+                anchor_at(2.0, 2.0),
+                anchor_at(3.0, 2.0),
+            ],
+            vec![0, 2],
+        );
+        let applied = project
+            .apply(insert_op_with_starts(
+                "Polygon/p1",
+                2,
+                PathAnchorSpec {
+                    anchor: [0.5, 0.5],
+                    left: [0.5, 0.5],
+                    right: [0.5, 0.5],
+                },
+                vec![0, 3],
+            ))
+            .expect("closing-edge insert");
+        let p = polygon_of(&project);
+        assert_eq!(p.anchors.len(), 5);
+        assert_eq!(p.anchors[2].anchor, (0.5, 0.5));
+        assert_eq!(p.subpath_starts, vec![0, 3]);
+        // Inverse round-trip: decrement rule shifts starts[1] back
+        // from 3 → 2 (strictly-greater rule, n=2).
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        let p = polygon_of(&project);
+        assert_eq!(p.anchors.len(), 4);
+        assert_eq!(p.subpath_starts, vec![0, 2]);
+    }
+
+    #[test]
+    fn closing_edge_insert_on_last_subpath_needs_no_override() {
+        // Two subpaths starts=[0, 2], anchors=[A0, A1, B0, B1]. The
+        // closing edge of subpath 1 (B1 → B0) inserts at flat index 4
+        // (= anchors.len()) — no boundary entry exists at that index
+        // so the standard increment rule (strictly-greater) leaves
+        // starts unchanged. No override required.
+        let mut project = project_with_polygon(
+            "Polygon/p1",
+            vec![
+                anchor_at(0.0, 0.0),
+                anchor_at(1.0, 0.0),
+                anchor_at(2.0, 2.0),
+                anchor_at(3.0, 2.0),
+            ],
+            vec![0, 2],
+        );
+        let applied = project
+            .apply(insert_op(
+                "Polygon/p1",
+                4,
+                PathAnchorSpec {
+                    anchor: [2.5, 2.5],
+                    left: [2.5, 2.5],
+                    right: [2.5, 2.5],
+                },
+            ))
+            .expect("last-subpath closing insert");
+        let p = polygon_of(&project);
+        assert_eq!(p.anchors.len(), 5);
+        assert_eq!(p.anchors[4].anchor, (2.5, 2.5));
+        assert_eq!(p.subpath_starts, vec![0, 2]);
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        let p = polygon_of(&project);
+        assert_eq!(p.anchors.len(), 4);
+        assert_eq!(p.subpath_starts, vec![0, 2]);
     }
 
     #[test]

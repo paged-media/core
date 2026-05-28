@@ -616,13 +616,16 @@ impl CanvasModel {
                 polygon_id,
                 index,
                 anchor,
+                prev_subpath_starts,
             } => Some(Operation::SetProperty {
                 node: NodeId::Polygon(polygon_id.clone()),
                 path: PropertyPath::PathPointInsert,
                 value: Value::PathPointInsert {
                     index: *index as usize,
                     anchor: *anchor,
-                    prev_subpath_starts: None,
+                    prev_subpath_starts: prev_subpath_starts
+                        .as_ref()
+                        .map(|v| v.iter().map(|&n| n as usize).collect()),
                 },
             }),
             Mutation::PathPointRemove { polygon_id, index } => Some(Operation::SetProperty {
@@ -1033,6 +1036,7 @@ impl CanvasModel {
                 Option<[f32; 6]>,
                 &[PathAnchor],
                 &[usize],
+                &[bool],
             )> = match id {
                 ElementId::TextFrame(_) => spread
                     .text_frames
@@ -1044,6 +1048,7 @@ impl CanvasModel {
                             f.item_transform,
                             f.anchors.as_slice(),
                             f.subpath_starts.as_slice(),
+                            f.subpath_open.as_slice(),
                         )
                     }),
                 ElementId::Rectangle(_) => spread
@@ -1056,6 +1061,7 @@ impl CanvasModel {
                             f.item_transform,
                             f.anchors.as_slice(),
                             f.subpath_starts.as_slice(),
+                            f.subpath_open.as_slice(),
                         )
                     }),
                 // Ovals don't carry a parsed PathGeometry — they're
@@ -1073,6 +1079,7 @@ impl CanvasModel {
                             f.item_transform,
                             f.anchors.as_slice(),
                             f.subpath_starts.as_slice(),
+                            f.subpath_open.as_slice(),
                         )
                     }),
                 ElementId::GraphicLine(_) => spread
@@ -1085,11 +1092,13 @@ impl CanvasModel {
                             f.item_transform,
                             f.anchors.as_slice(),
                             f.subpath_starts.as_slice(),
+                            f.subpath_open.as_slice(),
                         )
                     }),
                 ElementId::Group(_) => None,
             };
-            let Some((bounds, item_transform, anchors, subpath_starts)) = resolved else {
+            let Some((bounds, item_transform, anchors, subpath_starts, subpath_open)) = resolved
+            else {
                 continue;
             };
             // Same page-resolution as element_geometry: transform the
@@ -1114,6 +1123,7 @@ impl CanvasModel {
                 page_id: page.id.clone(),
                 anchors: anchors_out,
                 subpath_starts: subpath_starts.iter().map(|&n| n as u32).collect(),
+                subpath_open: subpath_open.to_vec(),
                 item_transform,
             });
         }

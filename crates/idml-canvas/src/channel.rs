@@ -49,7 +49,7 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(8);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(9);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -595,6 +595,12 @@ pub struct PathAnchorsResult {
     /// case so callers can iterate a single subpath without special-
     /// casing the empty `subpath_starts` vector.
     pub subpath_starts: Vec<u32>,
+    /// Parallel to `subpath_starts` (or, when `subpath_starts` is
+    /// empty, a single entry for the single contour). `true` ⇒ the
+    /// contour is open. Lets the overlay emit closing-edge insert
+    /// hit-zones for closed subpaths only.
+    #[serde(default)]
+    pub subpath_open: Vec<bool>,
     /// `[a, b, c, d, tx, ty]`. None ⇒ identity.
     #[serde(default)]
     pub item_transform: Option<[f32; 6]>,
@@ -693,10 +699,20 @@ pub enum Mutation {
     /// `index`. UI dispatches this from a segment click in path-edit
     /// mode; `anchor` is the de Casteljau split result so the
     /// curve's visible shape is preserved.
+    ///
+    /// `prev_subpath_starts` is the closing-edge override path: when
+    /// inserting at a subpath boundary (the wraparound segment from
+    /// the last anchor of a closed subpath back to its first), the
+    /// apply layer's default "strictly-greater" increment rule would
+    /// make the new anchor join the NEXT subpath. Passing the
+    /// desired post-Insert starts here overrides that rule. Omit
+    /// (`None`) for the common internal-segment insert.
     PathPointInsert {
         polygon_id: String,
         index: u32,
         anchor: idml_mutate::operation::PathAnchorSpec,
+        #[serde(default)]
+        prev_subpath_starts: Option<Vec<u32>>,
     },
     /// Track J — remove the anchor at flat `index` from a Polygon.
     /// UI dispatches from Backspace/Delete on the selected anchor.
