@@ -154,24 +154,123 @@ pub(crate) fn compute_snap_adjustment(
     let adj_dx = best_x.as_ref().map(|b| b.adjustment).unwrap_or(0.0);
     let adj_dy = best_y.as_ref().map(|b| b.adjustment).unwrap_or(0.0);
     let mut lines = Vec::new();
-    if let Some(m) = best_x {
-        lines.push(SnapLine {
-            axis: SnapAxis::X,
-            position: m.target,
-            page_id: m.page_id,
-        });
+
+    // Plan-2 §8.2 — Smart guides. The snap winner is one alignment;
+    // surface every OTHER alignment that's also exactly true after
+    // the chosen adjustment so the user sees co-aligned edges they're
+    // already on. Pure visual hint — does not affect the delta. We
+    // walk each member's candidates against every target and emit a
+    // line wherever the post-adjusted candidate hits the target
+    // within `SMART_GUIDE_EPSILON_PT` (sub-pixel noise tolerance).
+    let post_dx = dx + adj_dx;
+    let post_dy = dy + adj_dy;
+    for snap in &session.snapshots {
+        let Some(page) = host_page_for_snapshot(snap, pages) else {
+            continue;
+        };
+        let Some(aabb) = snapshot_aabb_in_page(snap, &page) else {
+            continue;
+        };
+        let cand_x = [
+            aabb.left + post_dx,
+            (aabb.left + aabb.right) * 0.5 + post_dx,
+            aabb.right + post_dx,
+        ];
+        let cand_y = [
+            aabb.top + post_dy,
+            (aabb.top + aabb.bottom) * 0.5 + post_dy,
+            aabb.bottom + post_dy,
+        ];
+        let targets_x = snap_targets_x(&page, siblings, &session.snapshots);
+        let targets_y = snap_targets_y(&page, siblings, &session.snapshots);
+        for &cand in &cand_x {
+            for &target in &targets_x {
+                if (target - cand).abs() <= SMART_GUIDE_EPSILON_PT {
+                    push_unique_line(
+                        &mut lines,
+                        SnapLine {
+                            axis: SnapAxis::X,
+                            position: target,
+                            page_id: page.page_id.clone(),
+                        },
+                    );
+                }
+            }
+        }
+        for &cand in &cand_y {
+            for &target in &targets_y {
+                if (target - cand).abs() <= SMART_GUIDE_EPSILON_PT {
+                    push_unique_line(
+                        &mut lines,
+                        SnapLine {
+                            axis: SnapAxis::Y,
+                            position: target,
+                            page_id: page.page_id.clone(),
+                        },
+                    );
+                }
+            }
+        }
     }
-    if let Some(m) = best_y {
-        lines.push(SnapLine {
-            axis: SnapAxis::Y,
-            position: m.target,
-            page_id: m.page_id,
-        });
-    }
+
+    // The winning snap line is already inside `lines` via the
+    // smart-guide pass (its candidate aligns with its target by
+    // construction). Keep the winner-first invariant the overlay
+    // historically relied on by ensuring it comes first in its axis.
+    promote_winner(&mut lines, best_x.as_ref(), SnapAxis::X);
+    promote_winner(&mut lines, best_y.as_ref(), SnapAxis::Y);
+
     SnapAdjustment {
         delta: (dx + adj_dx, dy + adj_dy),
         lines,
     }
+}
+
+/// Tolerance (pt) within which a candidate edge counts as "exactly
+/// aligned" with a target for smart-guide rendering. Tighter than the
+/// snap tolerance (~4 pt) because smart guides describe an alignment
+/// the post-snap frame is ON, not one it would BE PULLED INTO. Float
+/// noise from accumulated transform math is the dominant signal.
+const SMART_GUIDE_EPSILON_PT: f32 = 0.5;
+
+/// Append `line` only when no existing entry covers the same
+/// (axis, position-on-the-same-page) — multiple moving frames often
+/// align with the same target and we don't want duplicate overlay
+/// chrome. Position equality uses sub-pixel tolerance.
+fn push_unique_line(lines: &mut Vec<SnapLine>, line: SnapLine) {
+    if lines.iter().any(|l| {
+        l.axis == line.axis
+            && l.page_id == line.page_id
+            && (l.position - line.position).abs() < 1e-3
+    }) {
+        return;
+    }
+    lines.push(line);
+}
+
+/// Reorder so the winner-axis snap line lands at the front of the
+/// axis's lines. Stable behaviour for callers (overlay, K.3 spec)
+/// that historically read `lines[0]` / `lines.find(axis == X)` as
+/// "the snap winner."
+fn promote_winner(lines: &mut Vec<SnapLine>, winner: Option<&SnapMatch>, axis: SnapAxis) {
+    let Some(m) = winner else { return };
+    let Some(pos) = lines.iter().position(|l| {
+        l.axis == axis
+            && l.page_id == m.page_id
+            && (l.position - m.target).abs() < 1e-3
+    }) else {
+        return;
+    };
+    // Find the FIRST index in `lines` whose axis matches; move our
+    // winner there. Stable; preserves relative order of other lines.
+    let Some(first_for_axis) = lines.iter().position(|l| l.axis == axis) else {
+        return;
+    };
+    if pos == first_for_axis {
+        return;
+    }
+    let winner_line = lines.remove(pos);
+    lines.insert(first_for_axis, winner_line);
 }
 
 #[derive(Debug, Clone)]
@@ -555,6 +654,69 @@ mod tests {
         let adj = compute_snap_adjustment(&sess, (-24.0, 0.0), &pages, &[sibling]);
         assert!((adj.delta.0 - -25.0).abs() < 1e-3, "{:?}", adj);
         assert!(adj.lines.iter().any(|l| matches!(l.axis, SnapAxis::X)));
+    }
+
+    #[test]
+    fn smart_guides_surface_secondary_alignment() {
+        // Sibling A: short rectangle at top (height 30). Sibling B:
+        // tall rectangle whose right edge sits at exactly the same x
+        // as A's right edge (smart-guide alignment in y wouldn't
+        // help — A and B aren't on the same y-line; the guide we
+        // want is the SECONDARY x-alignment surfaced after the
+        // winner.
+        //
+        // Moving frame: small rect aligned with sibling A on x.
+        // Drag dy=-19 toward the page-top edge → snap wins on Y
+        // pulling top to 0. The X axis isn't snapped (dx=0), but
+        // the moving frame already lines up with A's left edge AND
+        // B's right edge → smart guides should surface both.
+        let s = snap_for(
+            Bounds { top: 100.0, left: 50.0, bottom: 130.0, right: 100.0 },
+            "tf",
+            "u_move",
+        );
+        let sess = session(vec![s]);
+        let pages = vec![page("p1", 612.0, 792.0)];
+        let sib_a = FrameRect {
+            element_id: ElementId::Rectangle("u_a".to_string()),
+            page_id: PageId("p1".to_string()),
+            aabb: [10.0, 50.0, 40.0, 200.0], // top, left, bottom, right
+        };
+        let sib_b = FrameRect {
+            element_id: ElementId::Rectangle("u_b".to_string()),
+            page_id: PageId("p1".to_string()),
+            aabb: [400.0, 0.0, 500.0, 100.0], // right edge at x=100
+        };
+        // dy=-99 → moving.top = 100-99 = 1, within 4 pt of page top
+        // (0) → snap pulls top to 0 (adjusted dy = -100).
+        let adj = compute_snap_adjustment(&sess, (0.0, -99.0), &pages, &[sib_a, sib_b]);
+        // Y snap winner exists.
+        let y_lines: Vec<&SnapLine> = adj
+            .lines
+            .iter()
+            .filter(|l| matches!(l.axis, SnapAxis::Y))
+            .collect();
+        assert!(!y_lines.is_empty(), "expected at least one Y snap line");
+        // First Y line is the winner (top → 0).
+        assert!((y_lines[0].position - 0.0).abs() < 1e-3);
+        // Smart guides: dx=0 doesn't snap on X, but the moving
+        // frame's left=50 lines up with sib_a's left=50, AND
+        // moving's right=100 lines up with sib_b's right=100.
+        // Both should surface as X snap lines.
+        let x_positions: Vec<f32> = adj
+            .lines
+            .iter()
+            .filter(|l| matches!(l.axis, SnapAxis::X))
+            .map(|l| l.position)
+            .collect();
+        assert!(
+            x_positions.iter().any(|&p| (p - 50.0).abs() < 1e-3),
+            "expected smart-guide at x=50 (left-edge alignment), got {x_positions:?}",
+        );
+        assert!(
+            x_positions.iter().any(|&p| (p - 100.0).abs() < 1e-3),
+            "expected smart-guide at x=100 (right-edge alignment), got {x_positions:?}",
+        );
     }
 
     #[test]
