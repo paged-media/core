@@ -1,19 +1,24 @@
-//! Pure geometry helpers for Track J path-topology ops.
+//! Pure geometry helpers for path-topology ops (Track J) and
+//! affine composition (Track L group rebase).
 //!
-//! Two operations:
+//! Track J:
 //!   - `split_segment_de_casteljau` — inserts a new anchor on a
 //!     cubic Bezier segment at parameter `t` without altering the
-//!     curve's visible shape. Returns the new mid-anchor + the four
-//!     adjusted handles (two on the neighbours, two on the new
-//!     anchor itself).
+//!     curve's visible shape.
 //!   - `smooth_handles_from_neighbours` — derives a smooth (left,
-//!     right) pair for an anchor from its previous + next anchor
-//!     positions, using the standard 1/3-distance heuristic. Used by
-//!     the corner→smooth toggle.
+//!     right) pair for an anchor from its neighbours, 1/3-distance
+//!     heuristic.
 //!
-//! All math runs in the path's local coordinate system. No clamping,
-//! no document state — the apply layer composes these with index
-//! bookkeeping (`subpath_starts`) and `PathAnchorSpec` capture.
+//! Track L:
+//!   - `affine_multiply` / `affine_inverse` / `affine_identity` —
+//!     2D affine matrix algebra on IDML's `[a, b, c, d, tx, ty]`
+//!     packing. The group-rebase math needs `delta = G' * inv(G)`
+//!     to lift each leaf's pre-baked transform into the new group
+//!     coords without visually shifting the rendered output.
+//!
+//! All math runs in the path / shape's local coordinate system.
+//! No clamping, no document state — callers compose with their own
+//! bookkeeping.
 
 use crate::operation::PathAnchorSpec;
 
@@ -130,6 +135,68 @@ pub fn anchor_from_split(split: SegmentSplit) -> PathAnchorSpec {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Track L — affine matrix algebra
+// ---------------------------------------------------------------------------
+
+/// IDML `ItemTransform` packing: `[a, b, c, d, tx, ty]` representing
+/// the 2×3 affine matrix `| a c tx |` over `| b d ty |`. A point
+/// `(x, y)` maps to `(a*x + c*y + tx, b*x + d*y + ty)`.
+pub type Affine = [f32; 6];
+
+pub const AFFINE_IDENTITY: Affine = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
+/// Compose two 2D affines: `M = A * B`. Apply order is "B first,
+/// then A": a point `p` maps to `A(B(p))`. Matches the IDML
+/// item_transform composition convention.
+pub fn affine_multiply(a: Affine, b: Affine) -> Affine {
+    // | a0 a2 a4 |   | b0 b2 b4 |
+    // | a1 a3 a5 | * | b1 b3 b5 |
+    // | 0  0  1  |   | 0  0  1  |
+    [
+        a[0] * b[0] + a[2] * b[1],          // m0 = a*b0 + c*b1
+        a[1] * b[0] + a[3] * b[1],          // m1
+        a[0] * b[2] + a[2] * b[3],          // m2
+        a[1] * b[2] + a[3] * b[3],          // m3
+        a[0] * b[4] + a[2] * b[5] + a[4],   // m4 = a*tx_b + c*ty_b + tx_a
+        a[1] * b[4] + a[3] * b[5] + a[5],   // m5
+    ]
+}
+
+/// Invert a 2D affine. Returns `None` when the linear part is
+/// singular (det ≈ 0); callers fall back to identity.
+pub fn affine_inverse(m: Affine) -> Option<Affine> {
+    let det = m[0] * m[3] - m[1] * m[2];
+    if det.abs() < 1e-9 {
+        return None;
+    }
+    let inv = 1.0 / det;
+    // Inverse of the linear 2x2:
+    //   | a c |^-1   1   |  d -c |
+    //   | b d |    = --- | -b  a |
+    //                det
+    let ia = m[3] * inv;
+    let ib = -m[1] * inv;
+    let ic = -m[2] * inv;
+    let id = m[0] * inv;
+    // Translation: inverse * (-t)
+    let itx = -(ia * m[4] + ic * m[5]);
+    let ity = -(ib * m[4] + id * m[5]);
+    Some([ia, ib, ic, id, itx, ity])
+}
+
+/// Track L — rebase delta for a group transform change from `G_old`
+/// to `G_new`. The delta is `G_new * inv(G_old)`; applied to a leaf's
+/// pre-baked transform (`leaf' = delta * leaf`) it produces the
+/// new leaf transform such that the rendered output equals
+/// `G_new * leaf_local` for every leaf. `None` on `G_old` is
+/// treated as identity.
+pub fn group_rebase_delta(g_old: Option<Affine>, g_new: Affine) -> Option<Affine> {
+    let g_old = g_old.unwrap_or(AFFINE_IDENTITY);
+    let inv_old = affine_inverse(g_old)?;
+    Some(affine_multiply(g_new, inv_old))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,6 +269,62 @@ mod tests {
         let (l, r) = smooth_handles_from_neighbours([1.0, 2.0], [5.0, 6.0], [1.0, 2.0]);
         assert_eq!(l, [5.0, 6.0]);
         assert_eq!(r, [5.0, 6.0]);
+    }
+
+    // ---- Track L — affine algebra ----------------------------------------
+
+    fn close6(a: Affine, b: Affine, eps: f32) -> bool {
+        (0..6).all(|i| (a[i] - b[i]).abs() < eps)
+    }
+
+    #[test]
+    fn affine_multiply_identity_is_noop() {
+        let m = [1.5, 0.0, 0.0, 2.0, 5.0, -3.0];
+        assert!(close6(affine_multiply(AFFINE_IDENTITY, m), m, 1e-5));
+        assert!(close6(affine_multiply(m, AFFINE_IDENTITY), m, 1e-5));
+    }
+
+    #[test]
+    fn affine_inverse_undoes_multiply() {
+        let m = [0.7071, 0.7071, -0.7071, 0.7071, 10.0, 20.0];
+        let inv = affine_inverse(m).expect("non-singular");
+        let id = affine_multiply(m, inv);
+        assert!(close6(id, AFFINE_IDENTITY, 1e-4));
+    }
+
+    #[test]
+    fn affine_inverse_singular_returns_none() {
+        // 2x2 has det 0 → uninvertible.
+        let m = [1.0, 2.0, 2.0, 4.0, 0.0, 0.0];
+        assert!(affine_inverse(m).is_none());
+    }
+
+    #[test]
+    fn group_rebase_round_trips_leaf_through_g_old_to_g_new_and_back() {
+        // Track L invariant: if a leaf's effective transform was
+        // `M_leaf = G_old * L_local`, then after applying the
+        // group rebase delta the new leaf becomes
+        // `G_new * inv(G_old) * M_leaf`. That equals
+        // `G_new * inv(G_old) * G_old * L_local = G_new * L_local`,
+        // so the leaf still lives in the local coords of the
+        // (now-rotated) group.
+        let g_old = [0.7071, 0.7071, -0.7071, 0.7071, 100.0, 50.0];
+        let g_new = [0.5, 0.866, -0.866, 0.5, 200.0, -10.0];
+        // Leaf local position inside the group.
+        let l_local: Affine = [1.0, 0.0, 0.0, 1.0, 30.0, 40.0];
+        let m_leaf = affine_multiply(g_old, l_local);
+        let delta = group_rebase_delta(Some(g_old), g_new).expect("invertible");
+        let m_leaf_new = affine_multiply(delta, m_leaf);
+        let expected = affine_multiply(g_new, l_local);
+        assert!(close6(m_leaf_new, expected, 1e-3));
+    }
+
+    #[test]
+    fn group_rebase_handles_none_old_as_identity() {
+        let g_new = [0.5, 0.866, -0.866, 0.5, 200.0, -10.0];
+        let delta = group_rebase_delta(None, g_new).expect("identity invertible");
+        // delta == g_new * inv(I) == g_new.
+        assert!(close6(delta, g_new, 1e-5));
     }
 
     #[test]

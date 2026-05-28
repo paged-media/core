@@ -239,6 +239,29 @@ fn apply_set_property(
                 },
             )
         }
+        // Track L — Group's own ItemTransform. The leaves carry the
+        // composed transform pre-baked by the parser
+        // (`idml-parse/spread.rs:141-144`), so mutating only the
+        // Group would visually shift everything. Pair this op with
+        // per-leaf SetProperty(FrameTransform, G' * inv(G) * old)
+        // ops in a Batch — the gesture spine (L.2) does that
+        // composition; this arm just stores the Group's own
+        // transform so reserialization preserves the grouped
+        // structure.
+        (NodeId::Group(id), PropertyPath::FrameTransform) => {
+            let new_transform = expect_transform(path, value)?;
+            let group = find_group_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = group.item_transform;
+            group.item_transform = new_transform;
+            (
+                Value::Transform(prev),
+                InvalidationHint {
+                    frame_geometry: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         (NodeId::Rectangle(id), PropertyPath::FrameTransform) => {
             let new_transform = expect_transform(path, value)?;
             let rect = find_rectangle_mut(doc, id)
@@ -690,6 +713,20 @@ fn find_rectangle_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mu
         for rect in &mut parsed.spread.rectangles {
             if rect.self_id.as_deref() == Some(self_id) {
                 return Some(rect);
+            }
+        }
+    }
+    None
+}
+
+fn find_group_mut<'a>(
+    doc: &'a mut Document,
+    self_id: &str,
+) -> Option<&'a mut idml_parse::Group> {
+    for parsed in &mut doc.spreads {
+        for group in &mut parsed.spread.groups {
+            if group.self_id.as_deref() == Some(self_id) {
+                return Some(group);
             }
         }
     }

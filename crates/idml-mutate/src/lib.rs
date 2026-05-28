@@ -977,6 +977,115 @@ mod tests {
         assert_eq!(dest_spread.text_frames.len(), 0);
     }
 
+    // ---- Track L — group transform --------------------------------------
+
+    /// Build a Document with a Group hosting two TextFrame leaves.
+    /// Each frame carries the composed leaf transform pre-baked
+    /// per `idml-parse/spread.rs:141-144`. The Group's own
+    /// `item_transform` is what L.1 mutates.
+    fn document_with_group(group_xform: Option<[f32; 6]>) -> Document {
+        let mut spread = Spread::default();
+        spread.self_id = Some("Spread/u_main".to_string());
+        spread.text_frames.push(empty_text_frame(
+            "TextFrame/leaf_a",
+            Bounds {
+                top: 0.0,
+                left: 0.0,
+                bottom: 50.0,
+                right: 50.0,
+            },
+        ));
+        spread.text_frames.push(empty_text_frame(
+            "TextFrame/leaf_b",
+            Bounds {
+                top: 0.0,
+                left: 60.0,
+                bottom: 50.0,
+                right: 110.0,
+            },
+        ));
+        spread.groups.push(idml_parse::Group {
+            self_id: Some("Group/g1".to_string()),
+            members: vec![
+                idml_parse::FrameRef::TextFrame(0),
+                idml_parse::FrameRef::TextFrame(1),
+            ],
+            transparency: idml_parse::GroupTransparency::default(),
+            item_transform: group_xform,
+        });
+        Document {
+            container: Container {
+                mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
+                designmap_raw: Bytes::new(),
+                designmap: DesignMap::default(),
+                entries: BTreeMap::new(),
+            },
+            palette: Graphic::default(),
+            spreads: vec![ParsedSpread {
+                src: "Spreads/syn.xml".to_string(),
+                spread,
+            }],
+            stories: Vec::new(),
+            master_spreads: HashMap::new(),
+            frame_for_story: HashMap::new(),
+            text_frame_index: HashMap::new(),
+            styles: StyleSheet::default(),
+            anchors: Vec::new(),
+        }
+    }
+
+    fn group_xform_op(self_id: &str, xform: Option<[f32; 6]>) -> Operation {
+        Operation::SetProperty {
+            node: NodeId::Group(self_id.to_string()),
+            path: PropertyPath::FrameTransform,
+            value: Value::Transform(xform),
+        }
+    }
+
+    #[test]
+    fn set_group_transform_mutates_group_and_inverse_carries_previous() {
+        let mut project = Project::new(document_with_group(None));
+        let m = [0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0];
+        let applied = project
+            .apply(group_xform_op("Group/g1", Some(m)))
+            .expect("apply group transform");
+        // Group's transform set.
+        let group = &project.document().spreads[0].spread.groups[0];
+        assert_eq!(group.item_transform, Some(m));
+        // Inverse carries previous (None).
+        assert_eq!(
+            applied.inverse,
+            group_xform_op("Group/g1", None),
+        );
+        // Leaves untouched at the apply layer — the gesture spine
+        // (L.2) emits their rebases as separate Batch children.
+        let frames = &project.document().spreads[0].spread.text_frames;
+        assert_eq!(frames[0].item_transform, None);
+        assert_eq!(frames[1].item_transform, None);
+    }
+
+    #[test]
+    fn set_group_transform_round_trips_through_inverse() {
+        let m0 = [1.0, 0.0, 0.0, 1.0, 10.0, 20.0];
+        let m1 = [0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0];
+        let mut project = Project::new(document_with_group(Some(m0)));
+        let applied = project
+            .apply(group_xform_op("Group/g1", Some(m1)))
+            .unwrap();
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        let group = &project.document().spreads[0].spread.groups[0];
+        assert_eq!(group.item_transform, Some(m0));
+    }
+
+    #[test]
+    fn group_transform_apply_to_missing_id_fails() {
+        let mut project = Project::new(document_with_group(None));
+        let err = project
+            .apply(group_xform_op("Group/missing", Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])))
+            .unwrap_err();
+        assert!(matches!(err, OperationError::NodeNotFound(_)));
+    }
+
     // ---- Track J — path topology ----------------------------------------
 
     /// Build a fresh Polygon fixture with the given anchors +
