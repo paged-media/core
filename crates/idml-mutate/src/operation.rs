@@ -314,11 +314,21 @@ pub enum NodeSpec {
     /// looks identical to the original at the new position. Used by
     /// the canvas's Alt-drag-to-duplicate gesture; never serialised
     /// from a script.
+    ///
+    /// Track K — `destination_spread_id` lets the apply layer route
+    /// the clone to a different spread than the source's. When
+    /// `Some`, `dx`/`dy` are still world-space pointer deltas; the
+    /// apply path additionally corrects for the source-vs-destination
+    /// spread-origin offset so the inserted clone lands at the right
+    /// page-local position on the destination. `None` preserves the
+    /// Phase H.4 behaviour (clone into source's spread).
     CloneTranslate {
         self_id: String,
         source: NodeId,
         dx: f32,
         dy: f32,
+        #[serde(default)]
+        destination_spread_id: Option<String>,
     },
 }
 

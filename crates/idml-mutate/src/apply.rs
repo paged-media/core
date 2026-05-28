@@ -1105,6 +1105,7 @@ fn apply_insert_clone_translate(
         source,
         dx,
         dy,
+        destination_spread_id,
     } = spec
     else {
         unreachable!("apply_insert_clone_translate called with non-clone spec");
@@ -1131,14 +1132,51 @@ fn apply_insert_clone_translate(
         }),
         _ => None,
     };
-    let Some(idx) = source_spread_idx else {
+    let Some(src_idx) = source_spread_idx else {
         return Err(OperationError::NodeNotFound(source.clone()));
     };
-    let spread = &mut doc.spreads[idx];
-    let parent_spread_id = spread.spread.self_id.clone().unwrap_or_default();
+
+    // Track K — resolve the destination spread. Default (None) is
+    // the source's spread (Phase H.4 behaviour). When Some, locate
+    // the dest by self_id and compute the additional spread-origin
+    // offset so the clone's per-spread-local bounds land at the
+    // pointer's WORLD position regardless of cross-spread move.
+    let (dest_idx, eff_dx, eff_dy) = match destination_spread_id {
+        None => (src_idx, *dx, *dy),
+        Some(dest_id) => {
+            let dest_idx = doc
+                .spreads
+                .iter()
+                .position(|s| s.spread.self_id.as_deref() == Some(dest_id.as_str()))
+                .ok_or_else(|| OperationError::NodeNotFound(NodeId::Spread(dest_id.clone())))?;
+            // Each spread's item_transform maps its inner coords
+            // into the pasteboard. We only need the translation
+            // component; InDesign limits spread transforms to
+            // translation + 0/90/180/270 rotation (idml-parse spread.rs:81).
+            // Real-world IDMLs are translation-only at the spread
+            // level, so the additive correction is exact in the
+            // common case.
+            let src_origin = spread_origin(&doc.spreads[src_idx].spread.item_transform);
+            let dest_origin = spread_origin(&doc.spreads[dest_idx].spread.item_transform);
+            (
+                dest_idx,
+                *dx + src_origin.0 - dest_origin.0,
+                *dy + src_origin.1 - dest_origin.1,
+            )
+        }
+    };
+
+    // Capture the parent spread id BEFORE the source clone (the
+    // borrow for cloning needs to read self.spreads[src_idx], so
+    // we can't hold a separate &mut to the destination yet).
+    let parent_spread_id = doc.spreads[dest_idx]
+        .spread
+        .self_id
+        .clone()
+        .unwrap_or_default();
     match source {
         NodeId::TextFrame(src_id) => {
-            let src_frame: TextFrame = spread
+            let src_frame: TextFrame = doc.spreads[src_idx]
                 .spread
                 .text_frames
                 .iter()
@@ -1150,15 +1188,16 @@ fn apply_insert_clone_translate(
             apply_translate_in_place(
                 &mut clone.bounds,
                 &mut clone.item_transform,
-                *dx,
-                *dy,
+                eff_dx,
+                eff_dy,
             );
-            let len = spread.spread.text_frames.len();
+            let dest_spread = &mut doc.spreads[dest_idx];
+            let len = dest_spread.spread.text_frames.len();
             let pos = position.min(len);
-            spread.spread.text_frames.insert(pos, clone);
+            dest_spread.spread.text_frames.insert(pos, clone);
         }
         NodeId::Rectangle(src_id) => {
-            let src_rect: Rectangle = spread
+            let src_rect: Rectangle = doc.spreads[src_idx]
                 .spread
                 .rectangles
                 .iter()
@@ -1170,12 +1209,13 @@ fn apply_insert_clone_translate(
             apply_translate_in_place(
                 &mut clone.bounds,
                 &mut clone.item_transform,
-                *dx,
-                *dy,
+                eff_dx,
+                eff_dy,
             );
-            let len = spread.spread.rectangles.len();
+            let dest_spread = &mut doc.spreads[dest_idx];
+            let len = dest_spread.spread.rectangles.len();
             let pos = position.min(len);
-            spread.spread.rectangles.insert(pos, clone);
+            dest_spread.spread.rectangles.insert(pos, clone);
         }
         other => {
             return Err(OperationError::UnsupportedProperty {
@@ -1198,6 +1238,19 @@ fn apply_insert_clone_translate(
         inverse,
         invalidation,
     })
+}
+
+/// Track K — extract a spread's translation origin from its
+/// `item_transform`. Returns (0, 0) when the transform is absent
+/// (identity per the spec). Rotation is ignored — InDesign limits
+/// spread transforms to translation + cardinal rotation, and the
+/// pasteboard-mapping cases that real IDMLs ship are all
+/// translation-only.
+fn spread_origin(item_transform: &Option<[f32; 6]>) -> (f32, f32) {
+    match item_transform {
+        Some(m) => (m[4], m[5]),
+        None => (0.0, 0.0),
+    }
 }
 
 /// Phase H — shift either the bounds (un-rotated frame) or the

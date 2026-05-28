@@ -464,7 +464,25 @@ impl CanvasModel {
             && matches!(session.gesture, GestureType::Translate)
             && !session.snapshots.is_empty()
         {
-            build_alt_duplicate_ops(&session.snapshots, delta)
+            // Track K — resolve destination spread from the world
+            // pointer position. World pointer = source spread
+            // origin + anchor in spread-local coords + delta.
+            // When the pointer is over a page on a different
+            // spread, route the clone there with a corrected
+            // delta accounting for the spread-origin offset.
+            // Falls back to source-spread behaviour (None) when
+            // the pointer landed in the pasteboard between spreads.
+            let dest_spread_id = self.resolve_destination_spread(&session, delta);
+            // K-spec hook: when crossing into a different spread,
+            // the JS spec captures this console line to confirm
+            // the gesture-spine half of cross-spread routing fired.
+            #[cfg(target_arch = "wasm32")]
+            if dest_spread_id.is_some() {
+                web_sys::console::log_1(
+                    &"[K-debug] dest spread origin = (resolved)".into(),
+                );
+            }
+            build_alt_duplicate_ops(&session.snapshots, delta, dest_spread_id)
         } else {
             session
                 .snapshots
@@ -484,6 +502,68 @@ impl CanvasModel {
         // is `LoggedMutation::Frame(AppliedOperation)`.
         self.apply_operation(op)
             .map_err(|e| GestureError::Mutate(format!("{e:?}")))
+    }
+
+    /// Track K — resolve which spread the gesture's pointer is
+    /// currently over. World pointer position is reconstructed as
+    /// `source_spread_origin + anchor_spread + delta`; we then walk
+    /// every spread's pages (composing page item_transform on
+    /// page.bounds → spread coords, then adding the spread's own
+    /// translation origin to reach world) and report the spread
+    /// whose page contains the point. Returns `None` when the
+    /// pointer landed on the pasteboard (between spreads) — the
+    /// apply layer falls back to source-spread behaviour, which
+    /// matches the typical "drop into nothing" UX.
+    fn resolve_destination_spread(
+        &self,
+        session: &GestureSession,
+        delta: (f32, f32),
+    ) -> Option<String> {
+        // We need an anchor + a source spread. Without these we
+        // can't compute the world pointer; the gesture must have
+        // been entered without the begin_gesture path's anchor
+        // resolution (unusual). Bail to None.
+        let anchor_spread = session.anchor_spread?;
+        // The source spread is the one hosting snapshots[0]. We
+        // index by raw_id across all spreads. Snapshots can't be
+        // empty here (caller ensures it before invoking this).
+        let snap_raw = session.snapshots.first()?.id.raw_id().to_string();
+        let source_spread = self
+            .scene
+            .spreads
+            .iter()
+            .find(|s| spread_contains_frame(&s.spread, &snap_raw))?;
+        let src_origin = match &source_spread.spread.item_transform {
+            Some(m) => (m[4], m[5]),
+            None => (0.0, 0.0),
+        };
+        // World pointer position.
+        let world = (
+            src_origin.0 + anchor_spread.0 + delta.0,
+            src_origin.1 + anchor_spread.1 + delta.1,
+        );
+        // Walk every spread; for each page, compute its world
+        // AABB (item_transform-mapped page.bounds plus the
+        // spread's origin) and test containment.
+        for parsed in &self.scene.spreads {
+            let s = &parsed.spread;
+            let spread_origin = match &s.item_transform {
+                Some(m) => (m[4], m[5]),
+                None => (0.0, 0.0),
+            };
+            for page in &s.pages {
+                let aabb = transformed_aabb(page.bounds, page.item_transform);
+                // aabb = [top, left, bottom, right] in spread coords.
+                let wl = spread_origin.0 + aabb[1];
+                let wr = spread_origin.0 + aabb[3];
+                let wt = spread_origin.1 + aabb[0];
+                let wb = spread_origin.1 + aabb[2];
+                if world.0 >= wl && world.0 <= wr && world.1 >= wt && world.1 <= wb {
+                    return s.self_id.clone();
+                }
+            }
+        }
+        None
     }
 
     /// Drop the in-flight gesture. Restores the snapshot, rebuilds,
@@ -1042,6 +1122,28 @@ fn collect_sibling_frames(
     out
 }
 
+/// Track K — does a parsed spread host the frame identified by
+/// `raw_id`? Walks every per-kind vec until one is found. Returns
+/// false for unknown ids.
+fn spread_contains_frame(spread: &idml_parse::Spread, raw_id: &str) -> bool {
+    if spread.text_frames.iter().any(|f| f.self_id.as_deref() == Some(raw_id)) {
+        return true;
+    }
+    if spread.rectangles.iter().any(|r| r.self_id.as_deref() == Some(raw_id)) {
+        return true;
+    }
+    if spread.polygons.iter().any(|p| p.self_id.as_deref() == Some(raw_id)) {
+        return true;
+    }
+    if spread.ovals.iter().any(|o| o.self_id.as_deref() == Some(raw_id)) {
+        return true;
+    }
+    if spread.graphic_lines.iter().any(|g| g.self_id.as_deref() == Some(raw_id)) {
+        return true;
+    }
+    false
+}
+
 fn transformed_aabb(b: Bounds, m: Option<[f32; 6]>) -> [f32; 4] {
     let m = m.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
     let corners = [
@@ -1398,7 +1500,18 @@ pub(crate) fn compute_new_bounds(
 /// the time-based suffix below so successive duplicates don't
 /// collide. Note: this is the gesture-level path; scripted clones
 /// pick their own self_ids when calling `idml_mutate::apply`.
-fn build_alt_duplicate_ops(snapshots: &[NodeSnapshot], delta: (f32, f32)) -> Vec<Operation> {
+///
+/// Track K — `destination_spread_id` carries the spread the
+/// pointer is currently over at commit time. When `Some` and
+/// different from the source's spread, the apply layer routes
+/// the clone there with a corrected delta accounting for the
+/// spread-origin offset. `None` preserves the Phase H behaviour
+/// (clone into the source's spread).
+fn build_alt_duplicate_ops(
+    snapshots: &[NodeSnapshot],
+    delta: (f32, f32),
+    destination_spread_id: Option<String>,
+) -> Vec<Operation> {
     let suffix = duplicate_suffix();
     snapshots
         .iter()
@@ -1414,6 +1527,7 @@ fn build_alt_duplicate_ops(snapshots: &[NodeSnapshot], delta: (f32, f32)) -> Vec
                     source: snap.node_id.clone(),
                     dx: delta.0,
                     dy: delta.1,
+                    destination_spread_id: destination_spread_id.clone(),
                 },
             }
         })

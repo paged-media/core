@@ -326,6 +326,7 @@ mod tests {
                     source: NodeId::TextFrame("TextFrame/u1".to_string()),
                     dx: 10.0,
                     dy: 20.0,
+                    destination_spread_id: None,
                 },
             })
             .expect("apply clone translate");
@@ -776,6 +777,204 @@ mod tests {
             let parsed: Operation = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(parsed, op, "round-trip failed for: {json}");
         }
+    }
+
+    // ---- Track K — cross-spread Alt-duplicate ---------------------------
+
+    /// Build a Document with two spreads at distinct world origins.
+    /// Source spread carries TextFrame `src_id` at the given bounds.
+    /// The destination spread is empty (the apply path inserts into
+    /// its text_frames vec when routed cross-spread).
+    fn document_with_two_spreads(
+        src_id: &str,
+        src_bounds: Bounds,
+        src_spread_origin: (f32, f32),
+        dest_spread_origin: (f32, f32),
+    ) -> Document {
+        let mut src_spread = Spread::default();
+        src_spread.self_id = Some("Spread/u_src".to_string());
+        src_spread.item_transform = Some([
+            1.0,
+            0.0,
+            0.0,
+            1.0,
+            src_spread_origin.0,
+            src_spread_origin.1,
+        ]);
+        src_spread
+            .text_frames
+            .push(empty_text_frame(src_id, src_bounds));
+
+        let mut dest_spread = Spread::default();
+        dest_spread.self_id = Some("Spread/u_dest".to_string());
+        dest_spread.item_transform = Some([
+            1.0,
+            0.0,
+            0.0,
+            1.0,
+            dest_spread_origin.0,
+            dest_spread_origin.1,
+        ]);
+
+        Document {
+            container: Container {
+                mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
+                designmap_raw: Bytes::new(),
+                designmap: DesignMap::default(),
+                entries: BTreeMap::new(),
+            },
+            palette: Graphic::default(),
+            spreads: vec![
+                ParsedSpread {
+                    src: "Spreads/u_src.xml".to_string(),
+                    spread: src_spread,
+                },
+                ParsedSpread {
+                    src: "Spreads/u_dest.xml".to_string(),
+                    spread: dest_spread,
+                },
+            ],
+            stories: Vec::new(),
+            master_spreads: HashMap::new(),
+            frame_for_story: HashMap::new(),
+            text_frame_index: HashMap::new(),
+            styles: StyleSheet::default(),
+            anchors: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn clone_translate_without_destination_preserves_phase_h_behaviour() {
+        // AC-K-1 — same-spread Alt-duplicate, destination_spread_id =
+        // None. Clone must land on the source spread with bounds
+        // shifted by the raw (dx, dy). Identical to the Phase H
+        // covering test, but on a doc with TWO spreads so the
+        // "wrong spread" failure mode is visible.
+        let src_bounds = Bounds {
+            top: 0.0,
+            left: 0.0,
+            bottom: 100.0,
+            right: 200.0,
+        };
+        let mut project = Project::new(document_with_two_spreads(
+            "TextFrame/u1",
+            src_bounds,
+            (0.0, 0.0),
+            (1000.0, 0.0),
+        ));
+        project
+            .apply(Operation::InsertNode {
+                parent: NodeId::Spread("Spread/u_src".to_string()),
+                position: 1,
+                node: NodeSpec::CloneTranslate {
+                    self_id: "TextFrame/u1_dup".to_string(),
+                    source: NodeId::TextFrame("TextFrame/u1".to_string()),
+                    dx: 10.0,
+                    dy: 20.0,
+                    destination_spread_id: None,
+                },
+            })
+            .expect("apply same-spread clone");
+        // Duplicate on the SOURCE spread (index 0).
+        let src_spread = &project.document().spreads[0].spread;
+        let dest_spread = &project.document().spreads[1].spread;
+        assert_eq!(src_spread.text_frames.len(), 2);
+        assert_eq!(dest_spread.text_frames.len(), 0);
+        let dup = &src_spread.text_frames[1];
+        // Bounds shifted exactly by (dx, dy) — no spread-origin
+        // correction in the None path.
+        assert_eq!(dup.bounds.left, 10.0);
+        assert_eq!(dup.bounds.top, 20.0);
+    }
+
+    #[test]
+    fn clone_translate_with_destination_routes_to_dest_with_corrected_delta() {
+        // AC-K-2 — cross-spread Alt-duplicate. Source spread at
+        // world (0,0); destination at world (1000, 0). A drag of
+        // (1050, 30) world-delta should land the clone on the
+        // destination spread with bounds shifted by the EFFECTIVE
+        // delta (1050 + 0 - 1000, 30 + 0 - 0) = (50, 30) — i.e.
+        // 50 pt right + 30 pt down of the source-frame's
+        // position INSIDE the destination spread.
+        let src_bounds = Bounds {
+            top: 0.0,
+            left: 0.0,
+            bottom: 100.0,
+            right: 200.0,
+        };
+        let mut project = Project::new(document_with_two_spreads(
+            "TextFrame/u1",
+            src_bounds,
+            (0.0, 0.0),
+            (1000.0, 0.0),
+        ));
+        project
+            .apply(Operation::InsertNode {
+                parent: NodeId::Spread("Spread/u_dest".to_string()),
+                position: 0,
+                node: NodeSpec::CloneTranslate {
+                    self_id: "TextFrame/u1_dup".to_string(),
+                    source: NodeId::TextFrame("TextFrame/u1".to_string()),
+                    dx: 1050.0,
+                    dy: 30.0,
+                    destination_spread_id: Some("Spread/u_dest".to_string()),
+                },
+            })
+            .expect("apply cross-spread clone");
+        let src_spread = &project.document().spreads[0].spread;
+        let dest_spread = &project.document().spreads[1].spread;
+        // Source spread still has only its original frame.
+        assert_eq!(src_spread.text_frames.len(), 1);
+        assert_eq!(src_spread.text_frames[0].self_id.as_deref(), Some("TextFrame/u1"));
+        // Destination spread now hosts the duplicate.
+        assert_eq!(dest_spread.text_frames.len(), 1);
+        let dup = &dest_spread.text_frames[0];
+        assert_eq!(dup.self_id.as_deref(), Some("TextFrame/u1_dup"));
+        // Bounds shifted by EFFECTIVE delta (50, 30) — i.e. (dx +
+        // src_origin - dest_origin, dy + src_origin - dest_origin).
+        assert_eq!(dup.bounds.left, 50.0);
+        assert_eq!(dup.bounds.top, 30.0);
+        assert_eq!(dup.bounds.right, 250.0);
+        assert_eq!(dup.bounds.bottom, 130.0);
+    }
+
+    #[test]
+    fn cross_spread_clone_undo_removes_from_dest() {
+        // AC-K-4 — undo a cross-spread Alt-duplicate. The inverse
+        // is RemoveNode(self_id); the apply layer must find the
+        // duplicate on the DESTINATION spread (not the source's)
+        // and remove it there. Both spreads land back at their
+        // pre-clone counts.
+        let src_bounds = Bounds {
+            top: 0.0,
+            left: 0.0,
+            bottom: 100.0,
+            right: 200.0,
+        };
+        let mut project = Project::new(document_with_two_spreads(
+            "TextFrame/u1",
+            src_bounds,
+            (0.0, 0.0),
+            (1000.0, 0.0),
+        ));
+        project
+            .apply(Operation::InsertNode {
+                parent: NodeId::Spread("Spread/u_dest".to_string()),
+                position: 0,
+                node: NodeSpec::CloneTranslate {
+                    self_id: "TextFrame/u1_dup".to_string(),
+                    source: NodeId::TextFrame("TextFrame/u1".to_string()),
+                    dx: 1050.0,
+                    dy: 30.0,
+                    destination_spread_id: Some("Spread/u_dest".to_string()),
+                },
+            })
+            .expect("apply cross-spread clone");
+        project.undo().expect("undo");
+        let src_spread = &project.document().spreads[0].spread;
+        let dest_spread = &project.document().spreads[1].spread;
+        assert_eq!(src_spread.text_frames.len(), 1);
+        assert_eq!(dest_spread.text_frames.len(), 0);
     }
 
     // ---- Track J — path topology ----------------------------------------
