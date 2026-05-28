@@ -13,10 +13,24 @@
 mod wasm {
     use idml_canvas::{
         channel::LayoutCacheStats,
+        snap::SnapLine,
         CanvasModel, CanvasOptions, FontEntry, LoadError, MainToWorker, MainToWorkerKind,
-        ProtocolVersion, WorkerError, WorkerToMain, WorkerToMainKind, PROTOCOL_VERSION,
+        PageId, ProtocolVersion, WorkerError, WorkerToMain, WorkerToMainKind, PROTOCOL_VERSION,
     };
+    use serde::Serialize;
     use wasm_bindgen::prelude::*;
+
+    /// Return shape of `update_gesture_raw` (Step 5e). Worker parses
+    /// this to emit `GestureSnapLines` notifications and to scope its
+    /// `markDirty` invalidation. Serialised as JSON because the SAB
+    /// hot path bypasses tsify — a flat ad-hoc struct keeps the
+    /// boundary thin.
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct GestureRawOutcome {
+        page_ids: Vec<PageId>,
+        snap_lines: Vec<SnapLine>,
+    }
 
     #[wasm_bindgen(start)]
     pub fn on_start() {
@@ -512,11 +526,14 @@ mod wasm {
         /// the JSON string the JS side should `JSON.parse` and post
         /// back to the main thread. Returning a string (rather than
         /// a wasm-bindgen-serialised object) keeps the boundary
-        /// Step 5d — raw-arg update-gesture entry. The worker drains
+        /// Step 5d/5e — raw-arg update-gesture entry. The worker drains
         /// the gesture SAB every tick and calls this without going
-        /// through `handleMessage`'s JSON envelope. Returns `true` on
-        /// success; `false` when no document is loaded or the gesture
-        /// has gone stale. The worker silently drops the latter.
+        /// through `handleMessage`'s JSON envelope. Returns an empty
+        /// string on failure (no document loaded or gesture has gone
+        /// stale — the worker drops the tick). On success returns a
+        /// JSON string with the dirty page set + active snap guides so
+        /// the worker can post a `GestureSnapLines` notification and
+        /// run its `markDirty` invalidation without re-querying.
         ///
         /// The 64-bit handle arrives split into low/high words because
         /// JS Numbers can't represent the full u64 range cleanly.
@@ -530,9 +547,9 @@ mod wasm {
             dx: f32,
             dy: f32,
             modifier_bits: u32,
-        ) -> bool {
+        ) -> String {
             let Some(model) = self.model.as_mut() else {
-                return false;
+                return String::new();
             };
             let handle = idml_canvas::gesture::GestureHandle(
                 ((handle_hi as u64) << 32) | (handle_lo as u64),
@@ -542,12 +559,16 @@ mod wasm {
                 alt: (modifier_bits & 0b10) != 0,
             };
             match model.update_gesture(handle, (dx, dy), modifiers) {
-                Ok(_) => {
+                Ok(result) => {
                     #[cfg(feature = "gpu")]
                     self.scene_cache.clear();
-                    true
+                    let outcome = GestureRawOutcome {
+                        page_ids: result.page_ids,
+                        snap_lines: result.snap_lines,
+                    };
+                    serde_json::to_string(&outcome).unwrap_or_default()
                 }
-                Err(_) => false,
+                Err(_) => String::new(),
             }
         }
 

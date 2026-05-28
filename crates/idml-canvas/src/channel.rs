@@ -49,7 +49,7 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(3);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(4);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -486,6 +486,17 @@ pub enum WorkerToMainKind {
     AttachReady {
         gpu_active: bool,
         scene_cache_budget: u32,
+    },
+    /// Step 5e — fired by the JS-side worker glue after a SAB-drain
+    /// tick that ran `update_gesture_raw`. The SAB hot path bypasses
+    /// the `GestureUpdated` JSON envelope, so this unsolicited notify
+    /// is how the overlay still learns about the active snap guides.
+    /// Always carries the latest snap-line set, including the empty
+    /// vec when the gesture left a previously-snapped axis (so the
+    /// overlay can clear stale guides). Emitting code lives in
+    /// `apps/canvas/src/worker/worker.ts`.
+    GestureSnapLines {
+        snap_lines: Vec<crate::snap::SnapLine>,
     },
     /// Sent by the JS-side worker glue (not by Rust) after `LoadDocument`
     /// succeeds, carrying the Tier 3 resolution result. The Rust variant
