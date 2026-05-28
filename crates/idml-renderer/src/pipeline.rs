@@ -115,6 +115,14 @@ pub struct PipelineOptions<'a> {
     /// behaviour: a fresh local cache per call.
     pub image_decode_cache:
         Option<&'a std::cell::RefCell<HashMap<String, idml_compose::DecodedImage>>>,
+    /// Perf-FontTable — pre-built shaping table. When `Some`,
+    /// `build_document` skips its internal `FontTable::build` call
+    /// (which walks every paragraph + resolver-fetches every font
+    /// and costs ~225ms on a multi-spread fixture). Callers that
+    /// own the document for multiple builds (e.g. `CanvasModel`)
+    /// should pre-build once and pass `&self.font_table` here on
+    /// every subsequent rebuild. `None` ⇒ build fresh per call.
+    pub pre_built_font_table: Option<&'a FontTable>,
 }
 
 /// Missing-image placeholder calibration (Q-22). Originally P-02
@@ -166,6 +174,7 @@ impl Default for PipelineOptions<'_> {
             break_story_filter: None,
             break_page_range: None,
             image_decode_cache: None,
+            pre_built_font_table: None,
         }
     }
 }
@@ -1271,7 +1280,18 @@ pub fn build_document(
         crate::module::group_pass(&parsed.spread, spans, &mut pages);
     }
 
-    let font_table = FontTable::build(document, options);
+    // Perf-FontTable — reuse the caller's pre-built table when
+    // provided; otherwise build a fresh one for this call. The
+    // `owned_font_table` binding holds the local value's storage
+    // for the duration of the build when we fall through to the
+    // None branch (its address is stable in that scope).
+    let owned_font_table: Option<FontTable> = match options.pre_built_font_table {
+        Some(_) => None,
+        None => Some(FontTable::build(document, options)),
+    };
+    let font_table: &FontTable = options
+        .pre_built_font_table
+        .unwrap_or_else(|| owned_font_table.as_ref().expect("set on None branch"));
     // One hyphenator per render. We currently only build English-US;
     // the document's `AppliedLanguage` is honoured via the cascade,
     // but unrecognised values fall back to this dictionary so we
@@ -13094,7 +13114,16 @@ fn map_tab_alignment(a: Option<&str>) -> idml_text::layout::TabAlignment {
 /// briefly hold dangling references. Rust drops struct fields in
 /// declaration order (first declared = first dropped), so keeping
 /// `faces` above `face_bytes` is load-bearing for soundness.
-struct FontTable {
+/// Per-render shaping resource: the resolved bytes + configured
+/// rustybuzz Faces for every (family, style, wght) referenced by the
+/// document. Built once per `build_document` call by default; the
+/// caller can pre-build it (via `FontTable::build`) and pass it
+/// through `PipelineOptions::pre_built_font_table` to amortise the
+/// ~225ms harvest-and-resolve cost across gesture rebuilds on
+/// image-heavy fixtures. See the SAFETY contract on `faces` below
+/// — the struct can be moved + held by a long-lived caller (e.g.
+/// `CanvasModel`) without invalidating the Face references.
+pub struct FontTable {
     /// Pre-configured rustybuzz `Face` cache keyed by
     /// `(font_id, wght_bits)`. The `Face<'static>` lifetime is a
     /// LIE narrowed back to `&self` at the public accessor.
@@ -13158,7 +13187,7 @@ struct FontMetrics {
 }
 
 impl FontTable {
-    fn build(document: &Document, options: &PipelineOptions) -> Self {
+    pub fn build(document: &Document, options: &PipelineOptions) -> Self {
         let fallback = options.font.map(Bytes::copy_from_slice);
         let mut cache: HashMap<(String, Option<String>), Bytes> = HashMap::new();
         if let Some(resolver) = options.assets {

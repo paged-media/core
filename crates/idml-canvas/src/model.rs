@@ -228,11 +228,20 @@ pub struct CanvasModel {
     /// Perf-S — persistent `URI → DecodedImage` cache shared across
     /// rebuilds. Threaded into `PipelineOptions::image_decode_cache`
     /// on every `rebuild_after_mutation` so gesture-driven rebuilds
-    /// don't re-decode placed images. Per the 5e perf investigation
-    /// (memory: project_gesture_rebuild_perf), image decoding
-    /// dominates ~99% of update_gesture cost on heavy fixtures.
+    /// don't re-decode placed images. Per the corrected perf
+    /// investigation, image decoding isn't actually the bottleneck
+    /// in the current test harness; this stays as forward-looking
+    /// infra for when asset resolvers wire up.
     image_decode_cache:
         std::cell::RefCell<HashMap<String, idml_compose::DecodedImage>>,
+    /// Perf-FontTable — pre-built shaping table reused across every
+    /// `rebuild_after_mutation`. The `FontTable::build` walk costs
+    /// ~225ms on a multi-spread fixture (harvests every paragraph's
+    /// cascade-resolved font key, then resolver-fetches bytes per
+    /// key). The document's font registry only changes at
+    /// loadDocument boundaries — fresh CanvasModel ⇒ fresh table —
+    /// so we never need to invalidate mid-lifetime.
+    font_table: idml_renderer::FontTable,
 }
 
 /// One entry in the applied / redo logs.
@@ -292,12 +301,24 @@ impl CanvasModel {
         let image_decode_cache: std::cell::RefCell<
             HashMap<String, idml_compose::DecodedImage>,
         > = std::cell::RefCell::new(HashMap::new());
+        // Perf-FontTable — pre-build the shaping table once so the
+        // initial build_document + every subsequent
+        // rebuild_after_mutation skips the harvest walk
+        // (~225ms/call on a multi-spread fixture).
+        let font_table_options = PipelineOptions {
+            font: font_bytes.as_deref(),
+            assets: resolver.as_ref().map(|r| r as &dyn idml_renderer::AssetResolver),
+            cmyk_icc_profile: icc_bytes.as_deref(),
+            ..PipelineOptions::default()
+        };
+        let font_table = idml_renderer::FontTable::build(&scene, &font_table_options);
         let (built_result, layout_cache) = {
             let options = PipelineOptions {
                 font: font_bytes.as_deref(),
                 assets: resolver.as_ref().map(|r| r as &dyn idml_renderer::AssetResolver),
                 cmyk_icc_profile: icc_bytes.as_deref(),
                 image_decode_cache: Some(&image_decode_cache),
+                pre_built_font_table: Some(&font_table),
                 ..PipelineOptions::default()
             };
             // Phase 4 Step 1 — install an empty cache for the initial
@@ -343,6 +364,9 @@ impl CanvasModel {
             // above; subsequent rebuild_after_mutation calls share
             // this RefCell so decode cost amortises.
             image_decode_cache,
+            // Perf-FontTable — built once above and reused by every
+            // rebuild_after_mutation.
+            font_table,
         })
     }
 
@@ -1059,6 +1083,10 @@ impl CanvasModel {
             // Perf-S — reuse the persistent image-decode cache so
             // placed images don't re-decode on every gesture rebuild.
             image_decode_cache: Some(&self.image_decode_cache),
+            // Perf-FontTable — reuse the shaping table built at
+            // load. Saves the ~225ms harvest+resolve walk that
+            // FontTable::build does internally.
+            pre_built_font_table: Some(&self.font_table),
             ..PipelineOptions::default()
         };
         let mut cache = std::mem::take(&mut self.layout_cache);
