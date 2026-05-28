@@ -49,7 +49,7 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(11);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(12);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -206,6 +206,20 @@ pub enum MainToWorkerKind {
     /// designmap. Reply: `Layers`. The panel polls this once on mount
     /// and on every `LayersChanged` notification.
     RequestLayers,
+    /// Inspector P1 — return a property snapshot for one element so
+    /// the Inspector panel can render typed editors. Reply:
+    /// `ElementProperties`. Each entry carries the property path +
+    /// its authored value tagged by kind so the UI picks the right
+    /// editor without re-deriving the schema. `None` when the id
+    /// doesn't resolve.
+    RequestElementProperties {
+        id: crate::element_selection::ElementId,
+    },
+    /// Inspector P1 — return the scene hierarchy
+    /// (spread → page → group? → frame) so the Tree panel can render
+    /// a navigable outline. The reply carries name + id + kind per
+    /// node + nested children. Lightweight enough to send eagerly.
+    RequestSceneTree,
     /// Phase B — start a gesture against the listed elements. Reply
     /// `GestureBegun { handle }` carrying the opaque handle the main
     /// thread sends back on every subsequent update / commit / cancel.
@@ -454,6 +468,15 @@ pub enum WorkerToMainKind {
     Layers {
         items: Vec<LayerSummary>,
     },
+    /// Inspector P1 — `RequestElementProperties` reply. `None` when
+    /// the id doesn't resolve.
+    ElementProperties {
+        result: Option<ElementProperties>,
+    },
+    /// Inspector P1 — `RequestSceneTree` reply.
+    SceneTree {
+        roots: Vec<SceneTreeNode>,
+    },
     /// Phase B — `BeginGesture` succeeded.
     GestureBegun {
         handle: crate::gesture::GestureHandle,
@@ -606,6 +629,55 @@ pub struct LayerSummary {
     pub locked: bool,
     pub printable: bool,
     pub z: u32,
+}
+
+/// Inspector P1 — typed property snapshot for one element. The
+/// Inspector panel maps each entry to the right typed editor:
+/// bounds → `BoundsInput`, transform → 6-cell matrix, colour ref →
+/// `ColorPicker`, length → `LengthInput`, etc.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct ElementProperties {
+    pub id: crate::element_selection::ElementId,
+    pub kind: String,
+    /// Optional human-readable name (frame label, layer name, …) when
+    /// the underlying type carries one.
+    #[serde(default)]
+    pub name: Option<String>,
+    pub entries: Vec<PropertyEntry>,
+}
+
+/// Inspector P1 — one row of the inspector. `path` is the
+/// `PropertyPath` discriminant (camelCase). `value` mirrors the
+/// `Value` wire shape exactly so the panel can pass it through to
+/// `Mutation::SetElementProperty` without re-encoding.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct PropertyEntry {
+    pub path: idml_mutate::PropertyPath,
+    pub value: idml_mutate::Value,
+}
+
+/// Inspector P1 — one node in the scene tree. Children are nested
+/// (Spread → Page → Group? → frame leaf). `kind` is a short label
+/// the panel renders ("Spread", "Page", "TextFrame", "Group", …).
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneTreeNode {
+    /// Element id when the node is selectable (frames, groups). For
+    /// Spread / Page rows that don't address into the gesture spine,
+    /// `None`.
+    #[serde(default)]
+    pub id: Option<crate::element_selection::ElementId>,
+    pub kind: String,
+    /// Human-readable label. For frames falls back to the kind + raw
+    /// id; for pages uses the parsed `<Page Name>`.
+    pub label: String,
+    #[serde(default)]
+    pub children: Vec<SceneTreeNode>,
 }
 
 /// Step 5 — `RequestPathAnchors` reply payload. `anchors.len()` may
@@ -798,6 +870,17 @@ pub enum Mutation {
         layer_id: String,
         printable: bool,
     },
+    /// Inspector P1 — generic property write. Routes the named
+    /// element's property edit through `Operation::SetProperty`,
+    /// covering whatever path/value variants the apply layer
+    /// already understands. The Inspector + REPL both ride this
+    /// shape; the gesture spine's typed ops (`MoveFrame`,
+    /// `ResizeFrame`, `LayerSet*`) stay as ergonomic shortcuts.
+    SetElementProperty {
+        element_id: crate::element_selection::ElementId,
+        path: idml_mutate::PropertyPath,
+        value: idml_mutate::Value,
+    },
 }
 
 impl Mutation {
@@ -824,6 +907,7 @@ impl Mutation {
             Self::LayerSetVisible { .. } => "LayerSetVisible",
             Self::LayerSetLocked { .. } => "LayerSetLocked",
             Self::LayerSetPrintable { .. } => "LayerSetPrintable",
+            Self::SetElementProperty { .. } => "SetElementProperty",
         }
     }
 }

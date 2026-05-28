@@ -182,6 +182,98 @@ fn path_node_id_for(
     }
 }
 
+/// Inspector P1 — map a wire `ElementId` to the apply layer's
+/// `NodeId`. Unlike `path_node_id_for`, this version handles every
+/// element kind including Oval / Group; the apply layer may refuse
+/// some `(NodeId, PropertyPath)` combinations, but routing decides
+/// that at apply time.
+fn element_to_node_id(id: &crate::element_selection::ElementId) -> idml_mutate::NodeId {
+    use crate::element_selection::ElementId;
+    use idml_mutate::NodeId;
+    match id {
+        ElementId::TextFrame(s) => NodeId::TextFrame(s.clone()),
+        ElementId::Rectangle(s) => NodeId::Rectangle(s.clone()),
+        ElementId::Oval(s) => NodeId::Oval(s.clone()),
+        ElementId::Polygon(s) => NodeId::Polygon(s.clone()),
+        ElementId::GraphicLine(s) => NodeId::GraphicLine(s.clone()),
+        ElementId::Group(s) => NodeId::Group(s.clone()),
+    }
+}
+
+/// Inspector P1 — translate a `FrameRef` into a tree node for the
+/// scene-tree outline. Recurses through Groups so nested members
+/// appear as children. Returns `None` for empty / unresolvable
+/// references.
+fn frame_to_tree_node(
+    spread: &idml_parse::Spread,
+    fr: idml_parse::FrameRef,
+) -> Option<crate::channel::SceneTreeNode> {
+    use crate::channel::SceneTreeNode;
+    use crate::element_selection::ElementId;
+    use idml_parse::FrameRef;
+    match fr {
+        FrameRef::TextFrame(i) => spread.text_frames.get(i).and_then(|f| {
+            let id = f.self_id.clone()?;
+            Some(SceneTreeNode {
+                id: Some(ElementId::TextFrame(id.clone())),
+                kind: "TextFrame".to_string(),
+                label: format!("TextFrame {id}"),
+                children: Vec::new(),
+            })
+        }),
+        FrameRef::Rectangle(i) => spread.rectangles.get(i).and_then(|f| {
+            let id = f.self_id.clone()?;
+            Some(SceneTreeNode {
+                id: Some(ElementId::Rectangle(id.clone())),
+                kind: "Rectangle".to_string(),
+                label: format!("Rectangle {id}"),
+                children: Vec::new(),
+            })
+        }),
+        FrameRef::Oval(i) => spread.ovals.get(i).and_then(|f| {
+            let id = f.self_id.clone()?;
+            Some(SceneTreeNode {
+                id: Some(ElementId::Oval(id.clone())),
+                kind: "Oval".to_string(),
+                label: format!("Oval {id}"),
+                children: Vec::new(),
+            })
+        }),
+        FrameRef::Polygon(i) => spread.polygons.get(i).and_then(|f| {
+            let id = f.self_id.clone()?;
+            Some(SceneTreeNode {
+                id: Some(ElementId::Polygon(id.clone())),
+                kind: "Polygon".to_string(),
+                label: format!("Polygon {id}"),
+                children: Vec::new(),
+            })
+        }),
+        FrameRef::GraphicLine(i) => spread.graphic_lines.get(i).and_then(|f| {
+            let id = f.self_id.clone()?;
+            Some(SceneTreeNode {
+                id: Some(ElementId::GraphicLine(id.clone())),
+                kind: "GraphicLine".to_string(),
+                label: format!("GraphicLine {id}"),
+                children: Vec::new(),
+            })
+        }),
+        FrameRef::Group(i) => spread.groups.get(i).map(|g| {
+            let id = g.self_id.clone().unwrap_or_else(|| format!("group#{i}"));
+            let children = g
+                .members
+                .iter()
+                .filter_map(|m| frame_to_tree_node(spread, *m))
+                .collect();
+            SceneTreeNode {
+                id: Some(ElementId::Group(id.clone())),
+                kind: "Group".to_string(),
+                label: format!("Group {id}"),
+                children,
+            }
+        }),
+    }
+}
+
 fn story_id_of_text_op(op: &crate::mutate::TextOp) -> &str {
     match op {
         crate::mutate::TextOp::InsertText { story_id, .. } => story_id,
@@ -779,6 +871,15 @@ impl CanvasModel {
                 path: PropertyPath::LayerPrintable,
                 value: Value::Bool(*printable),
             }),
+            Mutation::SetElementProperty {
+                element_id,
+                path,
+                value,
+            } => Some(Operation::SetProperty {
+                node: element_to_node_id(element_id),
+                path: *path,
+                value: value.clone(),
+            }),
             _ => None,
         }
     }
@@ -991,6 +1092,170 @@ impl CanvasModel {
                 z: z as u32,
             })
             .collect()
+    }
+
+    /// Inspector P1 — typed property snapshot for the named element.
+    /// Returns `None` when the id doesn't resolve. Frame-level
+    /// properties only for v1: bounds, item_transform, fill, stroke,
+    /// stroke weight, opacity. Paragraph / character / story
+    /// properties land in a v2 once their apply arms ship.
+    pub fn element_properties(
+        &self,
+        id: &crate::element_selection::ElementId,
+    ) -> Option<crate::channel::ElementProperties> {
+        use crate::channel::{ElementProperties, PropertyEntry};
+        use crate::element_selection::ElementId;
+        use idml_mutate::{PropertyPath, Value};
+        let raw = id.raw_id();
+        for parsed in &self.scene.spreads {
+            let spread = &parsed.spread;
+            let entries: Option<Vec<PropertyEntry>> = match id {
+                ElementId::TextFrame(_) => spread
+                    .text_frames
+                    .iter()
+                    .find(|f| f.self_id.as_deref() == Some(raw))
+                    .map(|f| {
+                        vec![
+                            PropertyEntry {
+                                path: PropertyPath::FrameBounds,
+                                value: Value::Bounds([
+                                    f.bounds.top,
+                                    f.bounds.left,
+                                    f.bounds.bottom,
+                                    f.bounds.right,
+                                ]),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameTransform,
+                                value: Value::Transform(f.item_transform),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameFillColor,
+                                value: Value::ColorRef(f.fill_color.clone()),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeColor,
+                                value: Value::ColorRef(f.stroke_color.clone()),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeWeight,
+                                value: Value::Length(f.stroke_weight),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameOpacity,
+                                value: Value::Length(f.opacity),
+                            },
+                        ]
+                    }),
+                ElementId::Rectangle(_) => spread
+                    .rectangles
+                    .iter()
+                    .find(|f| f.self_id.as_deref() == Some(raw))
+                    .map(|f| {
+                        vec![
+                            PropertyEntry {
+                                path: PropertyPath::FrameBounds,
+                                value: Value::Bounds([
+                                    f.bounds.top,
+                                    f.bounds.left,
+                                    f.bounds.bottom,
+                                    f.bounds.right,
+                                ]),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameTransform,
+                                value: Value::Transform(f.item_transform),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameFillColor,
+                                value: Value::ColorRef(f.fill_color.clone()),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeColor,
+                                value: Value::ColorRef(f.stroke_color.clone()),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeWeight,
+                                value: Value::Length(f.stroke_weight),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameOpacity,
+                                value: Value::Length(f.opacity),
+                            },
+                        ]
+                    }),
+                // Oval / Polygon / GraphicLine / Group: v1 surfaces
+                // only the geometry common to all kinds (bounds +
+                // transform). Per-kind authored properties (fill,
+                // stroke) follow once the apply arms cover them.
+                _ => None,
+            };
+            if let Some(entries) = entries {
+                let kind = id.kind_label().to_string();
+                let name = None; // TextFrame/Rectangle don't carry a Name attr today.
+                return Some(ElementProperties {
+                    id: id.clone(),
+                    kind,
+                    name,
+                    entries,
+                });
+            }
+        }
+        None
+    }
+
+    /// Inspector P1 — build the scene-tree outline. Spread → Page →
+    /// (group leaves OR top-level frames). Light enough to send
+    /// eagerly; the panel can re-fetch on `mutationApplied`.
+    pub fn scene_tree(&self) -> Vec<crate::channel::SceneTreeNode> {
+        use crate::channel::SceneTreeNode;
+        use idml_parse::FrameRef;
+        let mut spread_nodes = Vec::with_capacity(self.scene.spreads.len());
+        for (si, parsed) in self.scene.spreads.iter().enumerate() {
+            let spread = &parsed.spread;
+            let spread_label = spread
+                .self_id
+                .clone()
+                .map(|id| format!("Spread {id}"))
+                .unwrap_or_else(|| format!("Spread {}", si + 1));
+            let mut page_nodes = Vec::with_capacity(spread.pages.len().max(1));
+            // Single page node for now — the parser doesn't carry a
+            // per-page frame map; all frames belong to the spread.
+            // Per-page partitioning is a v2 refinement.
+            let order: Vec<FrameRef> = if !spread.frames_in_order.is_empty() {
+                spread.frames_in_order.clone()
+            } else {
+                let mut v: Vec<FrameRef> = Vec::new();
+                v.extend((0..spread.text_frames.len()).map(FrameRef::TextFrame));
+                v.extend((0..spread.rectangles.len()).map(FrameRef::Rectangle));
+                v.extend((0..spread.ovals.len()).map(FrameRef::Oval));
+                v.extend((0..spread.graphic_lines.len()).map(FrameRef::GraphicLine));
+                v.extend((0..spread.polygons.len()).map(FrameRef::Polygon));
+                v
+            };
+            let frame_nodes: Vec<SceneTreeNode> = order
+                .into_iter()
+                .filter_map(|fr| frame_to_tree_node(spread, fr))
+                .collect();
+            let label = spread
+                .pages
+                .first()
+                .and_then(|p| p.name.clone())
+                .unwrap_or_else(|| "Page".to_string());
+            page_nodes.push(SceneTreeNode {
+                id: None,
+                kind: "Page".to_string(),
+                label,
+                children: frame_nodes,
+            });
+            spread_nodes.push(SceneTreeNode {
+                id: None,
+                kind: "Spread".to_string(),
+                label: spread_label,
+                children: page_nodes,
+            });
+        }
+        spread_nodes
     }
 
     pub fn group_leaves(

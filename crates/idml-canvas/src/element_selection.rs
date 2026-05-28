@@ -42,6 +42,20 @@ impl ElementId {
             | ElementId::Group(id) => id,
         }
     }
+
+    /// Short human-readable kind label used by the Inspector panel
+    /// + scene tree. Matches the IDML element name conventionally
+    /// shown to designers.
+    pub fn kind_label(&self) -> &'static str {
+        match self {
+            ElementId::TextFrame(_) => "TextFrame",
+            ElementId::Rectangle(_) => "Rectangle",
+            ElementId::Oval(_) => "Oval",
+            ElementId::Polygon(_) => "Polygon",
+            ElementId::GraphicLine(_) => "GraphicLine",
+            ElementId::Group(_) => "Group",
+        }
+    }
 }
 
 /// How a `SetElementSelection` request combines with the current set.

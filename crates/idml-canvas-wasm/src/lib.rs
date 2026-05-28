@@ -906,6 +906,21 @@ mod wasm {
                         .unwrap_or_default();
                     WorkerToMainKind::Layers { items }
                 }
+                MainToWorkerKind::RequestElementProperties { id } => {
+                    let result = self
+                        .model
+                        .as_ref()
+                        .and_then(|m| m.element_properties(&id));
+                    WorkerToMainKind::ElementProperties { result }
+                }
+                MainToWorkerKind::RequestSceneTree => {
+                    let roots = self
+                        .model
+                        .as_ref()
+                        .map(|m| m.scene_tree())
+                        .unwrap_or_default();
+                    WorkerToMainKind::SceneTree { roots }
+                }
                 MainToWorkerKind::BeginGesture {
                     nodes,
                     gesture,
