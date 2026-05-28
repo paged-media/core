@@ -551,6 +551,35 @@ impl CanvasModel {
                     prev: None,
                 },
             }),
+            Mutation::PathPointSet {
+                polygon_id,
+                index,
+                role,
+                position,
+            } => Some(Operation::SetProperty {
+                node: NodeId::Polygon(polygon_id.clone()),
+                path: PropertyPath::FramePathPoint,
+                value: Value::PathPoint {
+                    address: idml_mutate::PathPointAddress {
+                        index: *index as usize,
+                        role: *role,
+                    },
+                    position: *position,
+                },
+            }),
+            Mutation::Batch { ops } => {
+                // Recursive: every child mutation must translate
+                // through this same dispatch. If any child fails
+                // (text mutation, unimplemented variant) the whole
+                // batch falls through to the non-frame handler so
+                // the worker can return a coherent error.
+                let mut translated = Vec::with_capacity(ops.len());
+                for child in ops {
+                    let op = self.try_translate_frame_mutation_to_operation(child)?;
+                    translated.push(op);
+                }
+                Some(Operation::Batch { ops: translated })
+            }
             _ => None,
         }
     }

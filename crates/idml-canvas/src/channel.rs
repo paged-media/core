@@ -49,7 +49,7 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(6);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(7);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -713,6 +713,27 @@ pub enum Mutation {
         index: u32,
         smooth: bool,
     },
+    /// Track J — direct write of one Bezier handle (anchor / left /
+    /// right) on a Polygon's PathPointArray. Phase H's drag-anchor
+    /// gesture already does this through `Operation::SetProperty`
+    /// at the apply layer, but the channel exposed it only through
+    /// the gesture path; the segment-click insert (J.5b) needs
+    /// it as a direct mutation so a curve-preserving Batch can
+    /// adjust the two segment-endpoint handles alongside the new
+    /// anchor's insertion.
+    PathPointSet {
+        polygon_id: String,
+        index: u32,
+        role: idml_mutate::PathPointRole,
+        position: [f32; 2],
+    },
+    /// Track J — atomic group of mutations recorded as one undo
+    /// entry. The segment-click insert uses this to update the
+    /// neighbouring anchors' Bezier handles AND insert the new
+    /// mid-anchor in one Cmd-Z step. Children translate
+    /// recursively; an empty ops vec is a valid no-op (mirrors
+    /// `Operation::Batch` semantics in idml-mutate).
+    Batch { ops: Vec<Mutation> },
 }
 
 impl Mutation {
@@ -734,6 +755,8 @@ impl Mutation {
             Self::PathPointInsert { .. } => "PathPointInsert",
             Self::PathPointRemove { .. } => "PathPointRemove",
             Self::PathPointCurveType { .. } => "PathPointCurveType",
+            Self::PathPointSet { .. } => "PathPointSet",
+            Self::Batch { .. } => "Batch",
         }
     }
 }
