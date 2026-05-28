@@ -297,6 +297,14 @@ impl CanvasModel {
         if nodes.is_empty() {
             return Err(GestureError::EmptySelection);
         }
+        // Track L — when a Group element is in the selection,
+        // expand it to (Group itself, every member recursively).
+        // The Group's own item_transform mutates alongside each
+        // member's so the IDML reserializes with the grouped
+        // transform structure intact. Members include sub-groups,
+        // which expand recursively — each sub-group also has its
+        // transform updated.
+        let nodes = self.expand_group_ids(&nodes);
         let snapshots = nodes
             .iter()
             .map(|id| self.snapshot_for(id))
@@ -632,8 +640,114 @@ impl CanvasModel {
                     });
                 }
             }
+            if let ElementId::Group(_) = id {
+                if let Some(g) = s.groups.iter().find(|g| g.self_id.as_deref() == Some(raw)) {
+                    // Track L — Groups don't carry geometric
+                    // bounds; the snapshot uses a sentinel zero
+                    // bounds value. `compute_node_mutation` checks
+                    // `snap.node_id` and forces the transform path
+                    // for Translate so the unused bounds never
+                    // matters at apply time.
+                    return Ok(NodeSnapshot {
+                        id: id.clone(),
+                        node_id: NodeId::Group(raw.to_string()),
+                        bounds: idml_parse::Bounds {
+                            top: 0.0,
+                            left: 0.0,
+                            bottom: 0.0,
+                            right: 0.0,
+                        },
+                        item_transform: g.item_transform,
+                        image_item_transform: None,
+                        path_anchors: Vec::new(),
+                    });
+                }
+            }
         }
         Err(GestureError::ElementNotFound(id.clone()))
+    }
+
+    /// Track L — recursively expand any `Group` id in `ids` into
+    /// `[group, member, ...]`, where members are walked through any
+    /// nested sub-groups. Non-group ids pass through unchanged.
+    /// Order preserves the input + adds expansion after each Group
+    /// id so the snapshot list keeps the same prefix the caller
+    /// supplied (useful when tests rely on snapshots\[0\] being
+    /// the originally-selected element).
+    fn expand_group_ids(&self, ids: &[ElementId]) -> Vec<ElementId> {
+        let mut out = Vec::with_capacity(ids.len());
+        let mut visited = std::collections::HashSet::new();
+        for id in ids {
+            if visited.contains(id.raw_id()) {
+                continue;
+            }
+            visited.insert(id.raw_id().to_string());
+            out.push(id.clone());
+            if let ElementId::Group(raw) = id {
+                self.collect_group_members(raw, &mut out, &mut visited);
+            }
+        }
+        out
+    }
+
+    fn collect_group_members(
+        &self,
+        group_id: &str,
+        out: &mut Vec<ElementId>,
+        visited: &mut std::collections::HashSet<String>,
+    ) {
+        // Find the group across all spreads (groups are
+        // spread-local but ids are document-unique).
+        for parsed in &self.scene.spreads {
+            let s = &parsed.spread;
+            let Some(g) = s.groups.iter().find(|g| g.self_id.as_deref() == Some(group_id)) else {
+                continue;
+            };
+            for fr in &g.members {
+                let member_id = match fr {
+                    idml_parse::FrameRef::TextFrame(idx) => s
+                        .text_frames
+                        .get(*idx)
+                        .and_then(|f| f.self_id.clone())
+                        .map(ElementId::TextFrame),
+                    idml_parse::FrameRef::Rectangle(idx) => s
+                        .rectangles
+                        .get(*idx)
+                        .and_then(|r| r.self_id.clone())
+                        .map(ElementId::Rectangle),
+                    idml_parse::FrameRef::Oval(idx) => s
+                        .ovals
+                        .get(*idx)
+                        .and_then(|o| o.self_id.clone())
+                        .map(ElementId::Oval),
+                    idml_parse::FrameRef::GraphicLine(idx) => s
+                        .graphic_lines
+                        .get(*idx)
+                        .and_then(|l| l.self_id.clone())
+                        .map(ElementId::GraphicLine),
+                    idml_parse::FrameRef::Polygon(idx) => s
+                        .polygons
+                        .get(*idx)
+                        .and_then(|p| p.self_id.clone())
+                        .map(ElementId::Polygon),
+                    idml_parse::FrameRef::Group(idx) => s
+                        .groups
+                        .get(*idx)
+                        .and_then(|g| g.self_id.clone())
+                        .map(ElementId::Group),
+                };
+                let Some(mid) = member_id else { continue };
+                if visited.contains(mid.raw_id()) {
+                    continue;
+                }
+                visited.insert(mid.raw_id().to_string());
+                out.push(mid.clone());
+                if let ElementId::Group(sub_raw) = &mid {
+                    self.collect_group_members(sub_raw, out, visited);
+                }
+            }
+            return;
+        }
     }
 
     fn restore_from_snapshots(
@@ -687,7 +801,24 @@ fn compute_node_mutation(
             // Phase D — rotated frames translate through their
             // ItemTransform's tx/ty; un-rotated stays on the bounds
             // path so text reflow continues to track the bbox.
-            if is_pure_translate_or_identity(snap.item_transform) {
+            // Track L — two new constraints:
+            //   * Groups carry no geometric bounds, so a translate
+            //     ALWAYS mutates their item_transform.
+            //   * Leaves inside a Group-targeted gesture also must
+            //     translate via item_transform (not bounds): the
+            //     parser pre-bakes the group's transform into each
+            //     leaf's item_transform (idml-parse spread.rs:141),
+            //     so on reserialization the leaves' positions read
+            //     from item_transform. Mutating bounds inside a
+            //     group session would diverge from the group's
+            //     transform on the next reparse.
+            let is_group = matches!(snap.node_id, NodeId::Group(_));
+            let session_targets_group = session
+                .snapshots
+                .iter()
+                .any(|s| matches!(s.node_id, NodeId::Group(_)));
+            let force_transform_path = is_group || session_targets_group;
+            if !force_transform_path && is_pure_translate_or_identity(snap.item_transform) {
                 NodeMutation::Bounds(translate_bounds(snap.bounds, d))
             } else {
                 NodeMutation::Transform(Some(translate_transform(
@@ -1399,9 +1530,25 @@ fn write_mutation_to_scene(
                 }
             }
         }
+        NodeId::Group(id) => {
+            for parsed in scene.spreads.iter_mut() {
+                if let Some(g) = parsed
+                    .spread
+                    .groups
+                    .iter_mut()
+                    .find(|g| g.self_id.as_deref() == Some(id.as_str()))
+                {
+                    if let NodeMutation::Transform(m) = mutation {
+                        g.item_transform = m;
+                    }
+                    return;
+                }
+            }
+        }
         // Phase D only mutates TextFrame + Rectangle. Other shapes
         // resolve as ElementNotFound at snapshot time. Phase H added
-        // Polygon for path-point editing (handled above).
+        // Polygon for path-point editing (handled above); Track L
+        // added Group above.
         _ => {}
     }
 }
@@ -1448,6 +1595,19 @@ fn restore_snapshot_in_scene(scene: &mut idml_scene::Document, snap: &NodeSnapsh
                     p.bounds = snap.bounds;
                     p.item_transform = snap.item_transform;
                     p.anchors = snap.path_anchors.clone();
+                    return;
+                }
+            }
+        }
+        NodeId::Group(id) => {
+            for parsed in scene.spreads.iter_mut() {
+                if let Some(g) = parsed
+                    .spread
+                    .groups
+                    .iter_mut()
+                    .find(|g| g.self_id.as_deref() == Some(id.as_str()))
+                {
+                    g.item_transform = snap.item_transform;
                     return;
                 }
             }
