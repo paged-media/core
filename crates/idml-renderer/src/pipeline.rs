@@ -141,6 +141,49 @@ pub struct PipelineOptions<'a> {
             HashMap<(String, usize), MasterTextEmitDelta>,
         >,
     >,
+    /// Perf-BodyStory — per-(story_id, signature) cache of the
+    /// multi-page DisplayList delta produced by the body-story
+    /// pass. The signature hashes the chain's frames (bounds +
+    /// transforms) + the wrap_rects on the chain's host pages,
+    /// so a story whose chain doesn't include the dragged frame
+    /// AND whose chain pages don't see a wrap-rect change keeps
+    /// hitting the cache during gestures. The body-story pass is
+    /// the largest single cost in `build_document` on a multi-
+    /// spread fixture (~613ms); most stories are unaffected by
+    /// any given gesture, so the win ratio is high.
+    pub body_story_emit_cache: Option<
+        &'a std::cell::RefCell<
+            HashMap<(String, u64), BodyStoryEmissionDelta>,
+        >,
+    >,
+}
+
+/// Perf-BodyStory — captured multi-page emission delta from one
+/// body-story pass iteration. The per-page entries reuse
+/// `MasterTextEmitDelta`'s relative-path-id rebase trick AND
+/// also carry the `story_layout` + `footnotes` entries the emit
+/// would have appended so caret/hit-test queries and per-page
+/// footnote pools land in the same shape as a non-cached build.
+/// The anchored + breaks side-channels survive verbatim because
+/// their contents are page-indexed and pool-independent.
+#[derive(Debug, Clone)]
+pub struct BodyStoryEmissionDelta {
+    pub per_page: Vec<(usize, BodyStoryPageDelta)>,
+    pub anchored: Vec<AnchoredImageEmit>,
+    pub breaks: Vec<BreakRecord>,
+}
+
+/// Perf-BodyStory — single page's worth of captured emission state.
+/// Splice on hit: push `paths` through `PathBuffer::push_anon`
+/// (rebasing each command's path-ids by the current pool size),
+/// extend `pages[i].story_layout` with `story_layout`, and extend
+/// `pages[i].footnotes` with `footnotes`.
+#[derive(Debug, Clone)]
+pub struct BodyStoryPageDelta {
+    pub paths: Vec<idml_compose::PathData>,
+    pub commands: Vec<idml_compose::DisplayCommand>,
+    pub story_layout: Vec<LineLayout>,
+    pub footnotes: Vec<EmittedFootnote>,
 }
 
 /// Perf-MasterText — captured DisplayList delta for one
@@ -215,6 +258,7 @@ impl Default for PipelineOptions<'_> {
             image_decode_cache: None,
             pre_built_font_table: None,
             master_text_emit_cache: None,
+            body_story_emit_cache: None,
         }
     }
 }
@@ -1608,6 +1652,62 @@ pub fn build_document(
         if chain.is_empty() {
             continue;
         }
+        // Perf-BodyStory — try the cache before running the emit.
+        // Signature hashes the chain's frames (bounds + transforms)
+        // and the wrap_rects_per_page entries for every page the
+        // chain touches. Stories whose chain doesn't include the
+        // dragged frame AND whose chain pages don't see a wrap
+        // change keep hitting through the drag. Capture happens
+        // post-emit (and post-all-post-passes) so the cached
+        // commands are fully baked.
+        let chain_pages_pre: Vec<usize> = chain
+            .iter()
+            .map(|f| {
+                f.self_id
+                    .as_deref()
+                    .and_then(|id| frame_to_page.get(id).copied())
+                    .unwrap_or(0)
+            })
+            .collect();
+        let cache_key: Option<(String, u64)> = if options.body_story_emit_cache.is_some() {
+            Some((
+                parsed.self_id.clone(),
+                body_story_signature(&chain, &chain_pages_pre, &wrap_rects_per_page),
+            ))
+        } else {
+            None
+        };
+        if let (Some(ref key), Some(rc)) = (&cache_key, options.body_story_emit_cache) {
+            if let Some(delta) = rc.borrow().get(key) {
+                for (page_idx, page_delta) in &delta.per_page {
+                    splice_body_story_page_delta(&mut pages[*page_idx], page_delta);
+                }
+                anchored_image_queue.extend(delta.anchored.iter().cloned());
+                breaks.extend(delta.breaks.iter().cloned());
+                continue;
+            }
+        }
+        // Snapshot per-page pool sizes BEFORE this story emits so
+        // post-emit extraction can compute per-page deltas. Tracks
+        // path / command / gradient / image pool sizes plus the
+        // story_layout + footnotes vec lengths — the latter two
+        // are extended by emit_paragraph and must be replayed on
+        // cache hit so caret / hit-test / footnote pools match a
+        // from-scratch emit.
+        let pre_snapshot: Vec<(usize, usize, usize, usize, usize, usize, usize)> = pages
+            .iter()
+            .map(|p| {
+                (
+                    p.list.paths.len(),
+                    p.list.commands.len(),
+                    p.list.gradients.len(),
+                    p.list.radial_gradients.len(),
+                    p.list.images.len(),
+                    p.story_layout.len(),
+                    p.footnotes.len(),
+                )
+            })
+            .collect();
         // TOC swap-in: if the head text frame carries
         // `AppliedTOCStyle="TOCStyle/<id>"`, replace the story's
         // own paragraphs with the resolver's output for that TOC
@@ -1623,15 +1723,7 @@ pub fn build_document(
             .and_then(|f| f.applied_toc_style.as_deref())
             .and_then(|toc_id| document.styles.toc_styles.get(toc_id))
             .map(|toc| build_toc_paragraphs(document, toc, &page_labels));
-        let chain_pages: Vec<usize> = chain
-            .iter()
-            .map(|f| {
-                f.self_id
-                    .as_deref()
-                    .and_then(|id| frame_to_page.get(id).copied())
-                    .unwrap_or(0)
-            })
-            .collect();
+        let chain_pages = chain_pages_pre.clone();
         let head_page_idx = chain_pages[0];
         let head_wrap_rects: &[WrapShape] = wrap_rects_per_page
             .get(head_page_idx)
@@ -1712,8 +1804,67 @@ pub fn build_document(
                 &chain_pages_for_post,
             );
         }
-        anchored_image_queue.extend(emitter.take_anchored_image_queue());
-        breaks.extend(emitter.take_breaks());
+        let new_anchored = emitter.take_anchored_image_queue();
+        let new_breaks = emitter.take_breaks();
+        anchored_image_queue.extend(new_anchored.iter().cloned());
+        breaks.extend(new_breaks.iter().cloned());
+
+        // Perf-BodyStory — capture the per-page delta if the emit
+        // didn't touch gradient/image pools. Same conservative
+        // policy as master_text: skip caching when gradient or
+        // image entries were added, since the cached splice path
+        // only renumbers path-ids.
+        if let (Some(ref key), Some(rc)) = (&cache_key, options.body_story_emit_cache) {
+            let mut uncacheable = false;
+            let mut per_page: Vec<(usize, BodyStoryPageDelta)> = Vec::new();
+            for (page_idx, snap) in pre_snapshot.iter().enumerate() {
+                let page = &pages[page_idx];
+                let list = &page.list;
+                if list.gradients.len() != snap.2
+                    || list.radial_gradients.len() != snap.3
+                    || list.images.len() != snap.4
+                {
+                    uncacheable = true;
+                    break;
+                }
+                let grew_list =
+                    list.paths.len() > snap.0 || list.commands.len() > snap.1;
+                let grew_layout = page.story_layout.len() > snap.5;
+                let grew_footnotes = page.footnotes.len() > snap.6;
+                if grew_list || grew_layout || grew_footnotes {
+                    let new_paths: Vec<idml_compose::PathData> =
+                        list.paths.slice(snap.0, list.paths.len()).to_vec();
+                    let mut new_commands: Vec<idml_compose::DisplayCommand> =
+                        list.commands[snap.1..list.commands.len()].to_vec();
+                    for cmd in new_commands.iter_mut() {
+                        rebase_path_ids(cmd, -(snap.0 as i64));
+                    }
+                    let new_story_layout: Vec<LineLayout> =
+                        page.story_layout[snap.5..].to_vec();
+                    let new_footnotes: Vec<EmittedFootnote> =
+                        page.footnotes[snap.6..].to_vec();
+                    per_page.push((
+                        page_idx,
+                        BodyStoryPageDelta {
+                            paths: new_paths,
+                            commands: new_commands,
+                            story_layout: new_story_layout,
+                            footnotes: new_footnotes,
+                        },
+                    ));
+                }
+            }
+            if !uncacheable {
+                rc.borrow_mut().insert(
+                    key.clone(),
+                    BodyStoryEmissionDelta {
+                        per_page,
+                        anchored: new_anchored,
+                        breaks: new_breaks,
+                    },
+                );
+            }
+        }
     }
 
     // Anchored-rectangle image post-pass. Each entry was captured
@@ -1905,19 +2056,21 @@ struct StoryEmitter<'a> {
 /// One image-bearing anchored Rectangle captured during the body /
 /// master story pass. The post-pass in `build_document` drains
 /// these and routes each through `emit_rectangle_image` with the
-/// per-page + decoded caches already in scope.
+/// per-page + decoded caches already in scope. Made `pub` so the
+/// Perf-BodyStory cache can hold these entries between rebuilds —
+/// see `BodyStoryEmissionDelta`.
 #[derive(Debug, Clone)]
-struct AnchoredImageEmit {
-    target_page: usize,
-    place_x: f32,
-    place_y: f32,
-    width: f32,
-    height: f32,
+pub struct AnchoredImageEmit {
+    pub target_page: usize,
+    pub place_x: f32,
+    pub place_y: f32,
+    pub width: f32,
+    pub height: f32,
     /// Cloned so the post-pass doesn't borrow the source
     /// `AnchoredFrame` (which lives inside the parsed Story tree). We
     /// only need image_link / image_item_transform / self_id for the
     /// rectangle synthesis below, so the clone is cheap.
-    af: idml_parse::AnchoredFrame,
+    pub af: idml_parse::AnchoredFrame,
 }
 
 /// Hard cap on `anchored_recursion_depth`. Real-world IDMLs nest at
@@ -7557,6 +7710,60 @@ fn split_paragraph_at_breaks(paragraph: &idml_parse::Paragraph) -> Vec<idml_pars
 ///   frame currently overruns above the body content),
 /// - Footnote separator rule (the thin horizontal line InDesign
 ///   draws between body text and the footnote pool).
+/// Perf-BodyStory — signature for a story's emission inputs. Hashes
+/// the frame chain's (self_id, bounds, item_transform) plus the
+/// wrap_rects on each chain page. A gesture that moves a frame
+/// outside this set leaves the signature unchanged → cache hit.
+/// Moving a frame INSIDE the chain or a frame whose wrap rect
+/// lives on a chain page bumps the signature → cache miss + fresh
+/// capture.
+fn body_story_signature(
+    chain: &[&TextFrame],
+    chain_pages: &[usize],
+    wrap_rects_per_page: &[Vec<WrapShape>],
+) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    // Chain — frame identity + geometry.
+    chain.len().hash(&mut h);
+    for f in chain {
+        f.self_id.as_deref().unwrap_or("").hash(&mut h);
+        f.bounds.top.to_bits().hash(&mut h);
+        f.bounds.left.to_bits().hash(&mut h);
+        f.bounds.bottom.to_bits().hash(&mut h);
+        f.bounds.right.to_bits().hash(&mut h);
+        match f.item_transform {
+            Some(m) => {
+                1u8.hash(&mut h);
+                for v in &m {
+                    v.to_bits().hash(&mut h);
+                }
+            }
+            None => 0u8.hash(&mut h),
+        }
+    }
+    // Wrap rects on chain pages — captures wrap-causing frames'
+    // movements on pages this story touches. Other pages' wrap
+    // changes don't affect this story's line breaking.
+    for &page in chain_pages {
+        if let Some(rects) = wrap_rects_per_page.get(page) {
+            rects.len().hash(&mut h);
+            for r in rects {
+                r.bounds.top.to_bits().hash(&mut h);
+                r.bounds.left.to_bits().hash(&mut h);
+                r.bounds.bottom.to_bits().hash(&mut h);
+                r.bounds.right.to_bits().hash(&mut h);
+                for (cx, cy) in &r.corners {
+                    cx.to_bits().hash(&mut h);
+                    cy.to_bits().hash(&mut h);
+                }
+            }
+        }
+    }
+    h.finish()
+}
+
 /// Perf-MasterText — splice a cached delta into a page's display
 /// list. Appends the delta's path entries (via `push_anon`, no
 /// intern dedup — the rebuild's master+frame pass may have already
@@ -7577,6 +7784,24 @@ fn splice_master_text_delta(
         rebase_path_ids(&mut c, new_base);
         list.commands.push(c);
     }
+}
+
+/// Perf-BodyStory — splice one page's captured body-story emission
+/// into a `BuiltPage`: rebase + push the path+command delta, and
+/// extend `story_layout` + `footnotes` so caret / hit-test /
+/// footnote queries match a from-scratch emit.
+fn splice_body_story_page_delta(page: &mut BuiltPage, delta: &BodyStoryPageDelta) {
+    let new_base = page.list.paths.len() as i64;
+    for path in &delta.paths {
+        page.list.paths.push_anon(path.clone());
+    }
+    for cmd in &delta.commands {
+        let mut c = cmd.clone();
+        rebase_path_ids(&mut c, new_base);
+        page.list.commands.push(c);
+    }
+    page.story_layout.extend(delta.story_layout.iter().cloned());
+    page.footnotes.extend(delta.footnotes.iter().cloned());
 }
 
 /// Perf-MasterText — adds `offset` to every PathId field on a

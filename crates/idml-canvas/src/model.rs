@@ -254,6 +254,18 @@ pub struct CanvasModel {
     master_text_emit_cache: std::cell::RefCell<
         HashMap<(String, usize), idml_renderer::MasterTextEmitDelta>,
     >,
+    /// Perf-BodyStory — per-(story_self_id, signature) cache of
+    /// the multi-page body-story emission delta. Signature
+    /// hashes the chain's frames + wrap_rects on chain pages, so
+    /// a story whose chain doesn't see a change keeps hitting
+    /// through a drag. Body-story emission is the largest single
+    /// cost in `build_document` on a multi-spread fixture
+    /// (~613ms); most stories are unaffected by any given gesture
+    /// so the hit ratio is high. Cleared by `apply_operation` on
+    /// structural commits.
+    body_story_emit_cache: std::cell::RefCell<
+        HashMap<(String, u64), idml_renderer::BodyStoryEmissionDelta>,
+    >,
 }
 
 /// One entry in the applied / redo logs.
@@ -329,6 +341,11 @@ impl CanvasModel {
         let master_text_emit_cache: std::cell::RefCell<
             HashMap<(String, usize), idml_renderer::MasterTextEmitDelta>,
         > = std::cell::RefCell::new(HashMap::new());
+        // Perf-BodyStory — same pattern; populated by the initial
+        // build, reused by every subsequent rebuild.
+        let body_story_emit_cache: std::cell::RefCell<
+            HashMap<(String, u64), idml_renderer::BodyStoryEmissionDelta>,
+        > = std::cell::RefCell::new(HashMap::new());
         let (built_result, layout_cache) = {
             let options = PipelineOptions {
                 font: font_bytes.as_deref(),
@@ -337,6 +354,7 @@ impl CanvasModel {
                 image_decode_cache: Some(&image_decode_cache),
                 pre_built_font_table: Some(&font_table),
                 master_text_emit_cache: Some(&master_text_emit_cache),
+                body_story_emit_cache: Some(&body_story_emit_cache),
                 ..PipelineOptions::default()
             };
             // Phase 4 Step 1 — install an empty cache for the initial
@@ -389,6 +407,8 @@ impl CanvasModel {
             // build above; subsequent rebuilds reuse + structural
             // mutations clear it.
             master_text_emit_cache,
+            // Perf-BodyStory — same lifecycle as master_text.
+            body_story_emit_cache,
         })
     }
 
@@ -524,6 +544,15 @@ impl CanvasModel {
                 what: format!("text mutation failed: {e}"),
             }
         })?;
+        // Perf-BodyStory — text edits change the *content* of a story
+        // but not its frame chain, so the body-story signature would
+        // wrongly match and the edit would never display. Blow the
+        // cache; the rebuild repopulates from the new content. We
+        // also clear master_text for symmetry with apply_operation —
+        // text in a master is rare but if it happens we want the
+        // same invariant.
+        self.master_text_emit_cache.borrow_mut().clear();
+        self.body_story_emit_cache.borrow_mut().clear();
         self.rebuild_after_mutation().map_err(|e| {
             crate::channel::WorkerError::NotImplemented {
                 what: format!("rebuild after mutation: {e}"),
@@ -685,15 +714,18 @@ impl CanvasModel {
                 what: format!("frame mutation failed: {e}"),
             }
         })?;
-        // Perf-MasterText — committed mutations can shift the
-        // path-buffer base state (e.g. Alt-duplicate inserts a new
-        // frame, the frame pass emits its path earlier, master-
-        // text path-ids in the cache would now point at the wrong
-        // slots). Clear the cache so the post-rebuild fresh capture
-        // re-pins the indices. Gesture-driven update_gesture
-        // mutates the scene directly without going through
-        // apply_operation, so the cache survives the drag.
+        // Perf-MasterText + Perf-BodyStory — committed mutations
+        // can shift the per-page pool state (Alt-duplicate inserts
+        // a new frame whose path the frame pass emits earlier,
+        // path-topology mutations change anchor counts, etc.).
+        // The cached relative-path-id rebase only stays valid
+        // when those earlier passes produce the same pool state.
+        // Clear both caches; the post-rebuild fresh capture
+        // re-pins. Gesture-driven update_gesture mutates the
+        // scene directly without going through apply_operation,
+        // so the cache survives the whole drag.
         self.master_text_emit_cache.borrow_mut().clear();
+        self.body_story_emit_cache.borrow_mut().clear();
         self.rebuild_after_mutation().map_err(|e| {
             crate::channel::WorkerError::NotImplemented {
                 what: format!("rebuild after frame mutation: {e}"),
@@ -1124,6 +1156,14 @@ impl CanvasModel {
             // `apply_operation` clears this when a structural
             // mutation lands so the next rebuild repopulates.
             master_text_emit_cache: Some(&self.master_text_emit_cache),
+            // Perf-BodyStory — reuse the per-story body emit
+            // deltas. Signature-keyed so stories whose frame
+            // chain isn't affected by the active gesture keep
+            // hitting; the dragged frame's story misses and
+            // re-emits. Largest single perf opportunity in
+            // build_document; ~613ms ceiling on a multi-spread
+            // fixture.
+            body_story_emit_cache: Some(&self.body_story_emit_cache),
             ..PipelineOptions::default()
         };
         let mut cache = std::mem::take(&mut self.layout_cache);
