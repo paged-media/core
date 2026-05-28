@@ -52,6 +52,15 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             apply_move_node(doc, node, new_parent, *position)
         }
         Operation::Batch { ops } => apply_batch(doc, ops),
+        Operation::MoveLayer { layer_id, new_index } => {
+            apply_move_layer(doc, layer_id, *new_index)
+        }
+        Operation::InsertLayer {
+            position,
+            name,
+            self_id,
+        } => apply_insert_layer(doc, *position, name, self_id.as_deref()),
+        Operation::RemoveLayer { layer_id } => apply_remove_layer(doc, layer_id),
     }
 }
 
@@ -392,6 +401,18 @@ fn apply_set_property(
                 },
             )
         }
+        (NodeId::Layer(id), PropertyPath::LayerName) => {
+            let new_value = expect_text(path, value)?;
+            let layer = find_layer_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = layer.name.clone().unwrap_or_default();
+            layer.name = Some(new_value);
+            (
+                Value::Text(prev),
+                // Name is purely a label; no scene geometry depends.
+                InvalidationHint::default(),
+            )
+        }
         // ---- Phase F: ImageContentTransform -----------------------
         (NodeId::Rectangle(id), PropertyPath::ImageContentTransform) => {
             let new_transform = expect_transform(path, value)?;
@@ -719,6 +740,158 @@ fn insert_captured(
 // Batch
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Track M — structural layer ops
+// ---------------------------------------------------------------------------
+
+fn apply_move_layer(
+    doc: &mut Document,
+    layer_id: &str,
+    new_index: usize,
+) -> Result<AppliedOperation, OperationError> {
+    let layers = &mut doc.container.designmap.layers;
+    let original_index = layers
+        .iter()
+        .position(|l| l.self_id == layer_id)
+        .ok_or_else(|| OperationError::NodeNotFound(NodeId::Layer(layer_id.to_string())))?;
+    let clamped = new_index.min(layers.len().saturating_sub(1));
+    if clamped == original_index {
+        // No-op move still records as a forward op so the undo log
+        // keeps its index in sync with caller expectations.
+    } else {
+        let layer = layers.remove(original_index);
+        layers.insert(clamped, layer);
+    }
+    let inverse = Operation::MoveLayer {
+        layer_id: layer_id.to_string(),
+        new_index: original_index,
+    };
+    Ok(AppliedOperation {
+        op: Operation::MoveLayer {
+            layer_id: layer_id.to_string(),
+            new_index: clamped,
+        },
+        inverse,
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+fn apply_insert_layer(
+    doc: &mut Document,
+    position: usize,
+    name: &str,
+    requested_self_id: Option<&str>,
+) -> Result<AppliedOperation, OperationError> {
+    let layers = &mut doc.container.designmap.layers;
+    let clamped = position.min(layers.len());
+    let self_id = match requested_self_id {
+        Some(s) => {
+            if layers.iter().any(|l| l.self_id == s) {
+                return Err(OperationError::DuplicateNodeId { id: s.to_string() });
+            }
+            s.to_string()
+        }
+        None => {
+            // Deterministic self-id derived from a counter —
+            // `Layer/u<n>` where `n` is the smallest non-colliding
+            // integer. Real-world IDMLs use IDs like `u1fe`, but for
+            // in-editor authored layers the simple monotone pattern
+            // is sufficient + readable.
+            let mut n = layers.len();
+            let mut id = format!("Layer/u{n}");
+            while layers.iter().any(|l| l.self_id == id) {
+                n += 1;
+                id = format!("Layer/u{n}");
+            }
+            id
+        }
+    };
+    layers.insert(
+        clamped,
+        idml_parse::Layer {
+            self_id: self_id.clone(),
+            name: Some(name.to_string()),
+            visible: true,
+            locked: false,
+            printable: true,
+        },
+    );
+    let inverse = Operation::RemoveLayer {
+        layer_id: self_id.clone(),
+    };
+    Ok(AppliedOperation {
+        op: Operation::InsertLayer {
+            position: clamped,
+            name: name.to_string(),
+            self_id: Some(self_id),
+        },
+        inverse,
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+fn apply_remove_layer(
+    doc: &mut Document,
+    layer_id: &str,
+) -> Result<AppliedOperation, OperationError> {
+    let layers = &mut doc.container.designmap.layers;
+    let idx = layers
+        .iter()
+        .position(|l| l.self_id == layer_id)
+        .ok_or_else(|| OperationError::NodeNotFound(NodeId::Layer(layer_id.to_string())))?;
+    let captured = layers.remove(idx);
+    // Inverse: re-insert at the original index, then rename to
+    // restore name + re-apply flags. We pack the restore into a
+    // Batch so a single Cmd-Z reverses the whole removal.
+    let restore_flags: Vec<Operation> = vec![
+        Operation::SetProperty {
+            node: NodeId::Layer(captured.self_id.clone()),
+            path: PropertyPath::LayerName,
+            value: Value::Text(captured.name.clone().unwrap_or_default()),
+        },
+        Operation::SetProperty {
+            node: NodeId::Layer(captured.self_id.clone()),
+            path: PropertyPath::LayerVisible,
+            value: Value::Bool(captured.visible),
+        },
+        Operation::SetProperty {
+            node: NodeId::Layer(captured.self_id.clone()),
+            path: PropertyPath::LayerLocked,
+            value: Value::Bool(captured.locked),
+        },
+        Operation::SetProperty {
+            node: NodeId::Layer(captured.self_id.clone()),
+            path: PropertyPath::LayerPrintable,
+            value: Value::Bool(captured.printable),
+        },
+    ];
+    let inverse = Operation::Batch {
+        ops: std::iter::once(Operation::InsertLayer {
+            position: idx,
+            name: captured.name.clone().unwrap_or_default(),
+            self_id: Some(captured.self_id.clone()),
+        })
+        .chain(restore_flags)
+        .collect(),
+    };
+    Ok(AppliedOperation {
+        op: Operation::RemoveLayer {
+            layer_id: layer_id.to_string(),
+        },
+        inverse,
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
 fn apply_batch(
     doc: &mut Document,
     children: &[Operation],
@@ -880,6 +1053,16 @@ fn expect_bool(path: PropertyPath, value: &Value) -> Result<bool, OperationError
         _ => Err(OperationError::TypeMismatch {
             path,
             expected: "Bool".to_string(),
+        }),
+    }
+}
+
+fn expect_text(path: PropertyPath, value: &Value) -> Result<String, OperationError> {
+    match value {
+        Value::Text(s) => Ok(s.clone()),
+        _ => Err(OperationError::TypeMismatch {
+            path,
+            expected: "Text".to_string(),
         }),
     }
 }

@@ -880,6 +880,26 @@ impl CanvasModel {
                 path: *path,
                 value: value.clone(),
             }),
+            Mutation::LayerSetName { layer_id, name } => Some(Operation::SetProperty {
+                node: NodeId::Layer(layer_id.clone()),
+                path: PropertyPath::LayerName,
+                value: Value::Text(name.clone()),
+            }),
+            Mutation::LayerMove {
+                layer_id,
+                new_index,
+            } => Some(Operation::MoveLayer {
+                layer_id: layer_id.clone(),
+                new_index: *new_index as usize,
+            }),
+            Mutation::LayerInsert { position, name } => Some(Operation::InsertLayer {
+                position: *position as usize,
+                name: name.clone(),
+                self_id: None,
+            }),
+            Mutation::LayerRemove { layer_id } => Some(Operation::RemoveLayer {
+                layer_id: layer_id.clone(),
+            }),
             _ => None,
         }
     }

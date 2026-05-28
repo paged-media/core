@@ -49,7 +49,7 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(12);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(13);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -203,8 +203,11 @@ pub enum MainToWorkerKind {
         id: crate::element_selection::ElementId,
     },
     /// Track M — list every `<Layer>` from the loaded document's
-    /// designmap. Reply: `Layers`. The panel polls this once on mount
-    /// and on every `LayersChanged` notification.
+    /// designmap. Reply: `Layers`. The Layers panel polls this on
+    /// mount and on every `MutationApplied` / `UndoApplied` /
+    /// `RedoApplied` push (same pattern as the Inspector) — a
+    /// dedicated `LayersChanged` notification is overkill given the
+    /// small payload size and existing subscription wiring.
     RequestLayers,
     /// Inspector P1 — return a property snapshot for one element so
     /// the Inspector panel can render typed editors. Reply:
@@ -870,6 +873,28 @@ pub enum Mutation {
         layer_id: String,
         printable: bool,
     },
+    /// Track M — `<Layer>` rename.
+    LayerSetName {
+        layer_id: String,
+        name: String,
+    },
+    /// Track M — reorder a layer to a new zero-based index.
+    LayerMove {
+        layer_id: String,
+        new_index: u32,
+    },
+    /// Track M — append a new layer. Apply layer assigns the
+    /// self-id deterministically; the panel can ignore the
+    /// returned id and re-fetch via `RequestLayers`.
+    LayerInsert {
+        position: u32,
+        name: String,
+    },
+    /// Track M — remove a layer. Inverse restores the layer's
+    /// previous flags and name in a single Cmd-Z step.
+    LayerRemove {
+        layer_id: String,
+    },
     /// Inspector P1 — generic property write. Routes the named
     /// element's property edit through `Operation::SetProperty`,
     /// covering whatever path/value variants the apply layer
@@ -907,6 +932,10 @@ impl Mutation {
             Self::LayerSetVisible { .. } => "LayerSetVisible",
             Self::LayerSetLocked { .. } => "LayerSetLocked",
             Self::LayerSetPrintable { .. } => "LayerSetPrintable",
+            Self::LayerSetName { .. } => "LayerSetName",
+            Self::LayerMove { .. } => "LayerMove",
+            Self::LayerInsert { .. } => "LayerInsert",
+            Self::LayerRemove { .. } => "LayerRemove",
             Self::SetElementProperty { .. } => "SetElementProperty",
         }
     }

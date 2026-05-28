@@ -151,6 +151,8 @@ pub enum PropertyPath {
     /// Track M — `<Layer Printable="...">` toggle. Non-printable
     /// layers are skipped during rendering.
     LayerPrintable,
+    /// Track M — `<Layer Name="...">` rename. Value is `Value::Text`.
+    LayerName,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -195,6 +197,7 @@ impl PropertyPath {
             PropertyPath::LayerVisible => "layer.visible",
             PropertyPath::LayerLocked => "layer.locked",
             PropertyPath::LayerPrintable => "layer.printable",
+            PropertyPath::LayerName => "layer.name",
         }
     }
 }
@@ -307,6 +310,9 @@ pub enum Value {
     /// printable). The inverse is just the same Value with the
     /// flag negated.
     Bool(bool),
+    /// Track M — plain text value (layer name, future story
+    /// titles, etc.). Inverse via the previous text.
+    Text(String),
 }
 
 /// Description of a node about to be inserted. Carries the minimal
@@ -399,6 +405,33 @@ pub enum Operation {
     },
     Batch {
         ops: Vec<Operation>,
+    },
+    /// Track M — reorder a layer to a new zero-based index in
+    /// `designmap.layers`. Inverse moves it back. Layer-affecting
+    /// op kept top-level (rather than `MoveNode { node: Layer }`)
+    /// because layers don't sit under a NodeId parent — they live
+    /// in the DesignMap vec.
+    MoveLayer {
+        layer_id: String,
+        new_index: usize,
+    },
+    /// Track M — insert a new layer at `position` with `name`. When
+    /// `self_id` is `None` the apply layer assigns one
+    /// deterministically (`Layer/u<seq>`); when `Some` it's used
+    /// verbatim so the RemoveLayer inverse can restore an exact id
+    /// (including the layer's original `visible/locked/printable`
+    /// flags via a Batch).
+    InsertLayer {
+        position: usize,
+        name: String,
+        #[serde(default)]
+        self_id: Option<String>,
+    },
+    /// Track M — remove a layer. The apply layer captures the
+    /// removed layer's full state for the inverse so undo restores
+    /// name + flags + position bytewise.
+    RemoveLayer {
+        layer_id: String,
     },
 }
 

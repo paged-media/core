@@ -1674,6 +1674,108 @@ mod tests {
         assert!(matches!(err, OperationError::NodeNotFound(_)));
     }
 
+    #[test]
+    fn layer_name_round_trips() {
+        let mut project = Project::new(document_with_one_layer("ua"));
+        let applied = project
+            .apply(Operation::SetProperty {
+                node: NodeId::Layer("ua".to_string()),
+                path: PropertyPath::LayerName,
+                value: Value::Text("Sketch".to_string()),
+            })
+            .expect("rename");
+        assert_eq!(layer_of(&project).name.as_deref(), Some("Sketch"));
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        assert_eq!(layer_of(&project).name.as_deref(), Some("Body"));
+    }
+
+    #[test]
+    fn move_layer_reorders_and_inverts() {
+        let mut project = {
+            let doc = document_with_one_layer("ua");
+            let mut p = Project::new(doc);
+            p.document_mut()
+                .container
+                .designmap
+                .layers
+                .push(idml_parse::Layer {
+                    self_id: "ub".to_string(),
+                    name: Some("Guides".to_string()),
+                    visible: true,
+                    locked: false,
+                    printable: true,
+                });
+            p
+        };
+        // Move "ub" to index 0 (becomes the topmost layer).
+        let applied = project
+            .apply(Operation::MoveLayer {
+                layer_id: "ub".to_string(),
+                new_index: 0,
+            })
+            .expect("move");
+        let ids: Vec<_> = project
+            .document()
+            .container
+            .designmap
+            .layers
+            .iter()
+            .map(|l| l.self_id.clone())
+            .collect();
+        assert_eq!(ids, vec!["ub".to_string(), "ua".to_string()]);
+        // Undo restores original order.
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        let ids: Vec<_> = project
+            .document()
+            .container
+            .designmap
+            .layers
+            .iter()
+            .map(|l| l.self_id.clone())
+            .collect();
+        assert_eq!(ids, vec!["ua".to_string(), "ub".to_string()]);
+    }
+
+    #[test]
+    fn insert_layer_appends_and_inverts() {
+        let mut project = Project::new(document_with_one_layer("ua"));
+        let applied = project
+            .apply(Operation::InsertLayer {
+                position: 1,
+                name: "New".to_string(),
+                self_id: None,
+            })
+            .expect("insert");
+        let layers = &project.document().container.designmap.layers;
+        assert_eq!(layers.len(), 2);
+        assert_eq!(layers[1].name.as_deref(), Some("New"));
+        // Inverse removes it.
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        assert_eq!(project.document().container.designmap.layers.len(), 1);
+    }
+
+    #[test]
+    fn remove_layer_inverts_via_batch_restoring_flags() {
+        let mut project = Project::new(document_with_one_layer("ua"));
+        // Toggle every flag before removal so the inverse exercises
+        // the flag-restore branch.
+        project.document_mut().container.designmap.layers[0].locked = true;
+        project.document_mut().container.designmap.layers[0].printable = false;
+        let applied = project
+            .apply(Operation::RemoveLayer {
+                layer_id: "ua".to_string(),
+            })
+            .expect("remove");
+        assert!(project.document().container.designmap.layers.is_empty());
+        // Inverse restores the layer with its flags.
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        let layer = &project.document().container.designmap.layers[0];
+        assert_eq!(layer.self_id, "ua");
+        assert!(layer.locked);
+        assert!(!layer.printable);
+        assert_eq!(layer.name.as_deref(), Some("Body"));
+    }
+
     // ---- Track J fan-out — path topology on non-Polygon kinds ----------
 
     /// Seed a TextFrame's anchors. `document_with_one_textframe`
