@@ -13,8 +13,8 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use idml_canvas::{
-    channel::Mutation, gesture::GestureType, CanvasModel, CanvasOptions, ElementId,
-    GestureModifiers,
+    channel::Mutation, gesture::GestureAnchor, gesture::GestureType, CanvasModel, CanvasOptions,
+    ElementId, GestureModifiers, PageId,
 };
 
 fn font_dir() -> PathBuf {
@@ -252,4 +252,114 @@ fn translate_group_dispatches_a_single_undo_entry() {
     // the batch internally contains (group + 2 leaves) = 3
     // SetProperty children.
     assert_eq!(outcome.applied_seq, 1);
+}
+
+/// Rotate on a Group target should compose the same rotation onto
+/// the Group's `item_transform` AND every member's. The pivot
+/// resolves to the union centroid of the snapshots; with the
+/// Group's zero-bounds sentinel the centroid lands at the
+/// members' centroid (correct intent).
+#[test]
+fn rotate_group_composes_same_rotation_onto_group_and_members() {
+    let mut model = load_model();
+    let group_id = ElementId::Group("g1".to_string());
+    let anchor = GestureAnchor {
+        page_id: PageId("p1".to_string()),
+        point_in_page: (55.0, 25.0), // roughly the centroid of (0..50, 0..50) + (60..110, 0..50)
+    };
+
+    let handle = model
+        .begin_gesture(vec![group_id], GestureType::Rotate, Some(anchor))
+        .expect("begin rotate");
+    // Phase D's rotate gesture interprets `delta` as a pointer
+    // movement; the resulting angle is delta.1 — i.e. drag down
+    // = positive rotation. A delta of (0, 30) gives a positive
+    // angle in pt-equivalent units.
+    model
+        .update_gesture(
+            handle,
+            (0.0, 30.0),
+            GestureModifiers {
+                shift: false,
+                alt: false,
+            },
+        )
+        .expect("update");
+    model.commit_gesture(handle).expect("commit");
+
+    // Group's transform now has a non-trivial rotation (linear
+    // part differs from identity).
+    let g = group_transform(&model).expect("group transform set");
+    assert!(
+        (g[0] - 1.0).abs() > 1e-3 || g[1].abs() > 1e-3,
+        "group's linear part should differ from identity after rotate: {:?}",
+        g,
+    );
+
+    // Each leaf has its own rotated transform — same linear
+    // 2×2 as the group (rotation is rigid), but with a different
+    // translation reflecting the leaf's pivot offset.
+    let m_a = leaf_transform(&model, "leafA").expect("leafA transform after rotate");
+    let m_b = leaf_transform(&model, "leafB").expect("leafB transform after rotate");
+    for i in 0..4 {
+        // Linear part matches the group's linear part to float tol.
+        assert!(
+            (m_a[i] - g[i]).abs() < 1e-3,
+            "leafA m[{i}]={} != g[{i}]={}",
+            m_a[i],
+            g[i],
+        );
+        assert!(
+            (m_b[i] - g[i]).abs() < 1e-3,
+            "leafB m[{i}]={} != g[{i}]={}",
+            m_b[i],
+            g[i],
+        );
+    }
+}
+
+/// Scale on a Group target composes onto the linear part. The
+/// member transforms get the same linear scaling — un-rotated
+/// before becomes still-un-rotated but with non-identity
+/// diagonal entries.
+#[test]
+fn scale_group_composes_same_scale_onto_group_and_members() {
+    let mut model = load_model();
+    let group_id = ElementId::Group("g1".to_string());
+    let anchor = GestureAnchor {
+        page_id: PageId("p1".to_string()),
+        point_in_page: (55.0, 25.0),
+    };
+
+    let handle = model
+        .begin_gesture(vec![group_id], GestureType::Scale, Some(anchor))
+        .expect("begin scale");
+    model
+        .update_gesture(
+            handle,
+            (40.0, 0.0),
+            GestureModifiers {
+                shift: false,
+                alt: false,
+            },
+        )
+        .expect("update");
+    model.commit_gesture(handle).expect("commit");
+
+    let g = group_transform(&model).expect("group transform set");
+    // Scale changes the diagonal entries; off-diagonal stays zero
+    // for a pure scale.
+    assert!((g[0] - 1.0).abs() > 1e-3, "scaled x: {:?}", g);
+    // Each leaf's linear part matches the group's.
+    for leaf in ["leafA", "leafB"] {
+        let m = leaf_transform(&model, leaf).expect("leaf transform after scale");
+        for i in 0..4 {
+            assert!(
+                (m[i] - g[i]).abs() < 1e-3,
+                "{leaf} linear part m[{i}]={} != g[{i}]={}",
+                m[i],
+                g[i],
+            );
+        }
+    }
 }
