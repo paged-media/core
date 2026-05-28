@@ -1589,6 +1589,91 @@ mod tests {
         assert_eq!(frame.fill_color, original_fill);
     }
 
+    // ---- Track M — layer toggle ops ------------------------------------
+
+    fn document_with_one_layer(self_id: &str) -> Document {
+        let mut spread = Spread::default();
+        spread.self_id = Some("Spread/u_main".to_string());
+        let mut designmap = DesignMap::default();
+        designmap.layers.push(idml_parse::Layer {
+            self_id: self_id.to_string(),
+            name: Some("Body".to_string()),
+            visible: true,
+            locked: false,
+            printable: true,
+        });
+        Document {
+            container: Container {
+                mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
+                designmap_raw: Bytes::new(),
+                designmap,
+                entries: BTreeMap::new(),
+            },
+            palette: Graphic::default(),
+            spreads: vec![ParsedSpread {
+                src: "Spreads/syn.xml".to_string(),
+                spread,
+            }],
+            stories: Vec::new(),
+            master_spreads: HashMap::new(),
+            frame_for_story: HashMap::new(),
+            text_frame_index: HashMap::new(),
+            styles: StyleSheet::default(),
+            anchors: Vec::new(),
+        }
+    }
+
+    fn layer_op(self_id: &str, path: PropertyPath, value: bool) -> Operation {
+        Operation::SetProperty {
+            node: NodeId::Layer(self_id.to_string()),
+            path,
+            value: Value::Bool(value),
+        }
+    }
+
+    fn layer_of<'a>(project: &'a Project) -> &'a idml_parse::Layer {
+        &project.document().container.designmap.layers[0]
+    }
+
+    #[test]
+    fn layer_visible_toggles_and_round_trips() {
+        let mut project = Project::new(document_with_one_layer("ua"));
+        assert!(layer_of(&project).visible);
+        let applied = project
+            .apply(layer_op("ua", PropertyPath::LayerVisible, false))
+            .expect("toggle off");
+        assert!(!layer_of(&project).visible);
+        // Inverse restores visibility.
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        assert!(layer_of(&project).visible);
+    }
+
+    #[test]
+    fn layer_locked_and_printable_toggle_and_round_trip() {
+        let mut project = Project::new(document_with_one_layer("ua"));
+        let lock = project
+            .apply(layer_op("ua", PropertyPath::LayerLocked, true))
+            .expect("lock");
+        assert!(layer_of(&project).locked);
+        let unprintable = project
+            .apply(layer_op("ua", PropertyPath::LayerPrintable, false))
+            .expect("non-printable");
+        assert!(!layer_of(&project).printable);
+        crate::apply(project.document_mut(), &unprintable.inverse).unwrap();
+        crate::apply(project.document_mut(), &lock.inverse).unwrap();
+        assert!(!layer_of(&project).locked);
+        assert!(layer_of(&project).printable);
+    }
+
+    #[test]
+    fn layer_toggle_with_missing_id_returns_not_found() {
+        let mut project = Project::new(document_with_one_layer("ua"));
+        let err = project
+            .apply(layer_op("u_missing", PropertyPath::LayerVisible, false))
+            .unwrap_err();
+        assert!(matches!(err, OperationError::NodeNotFound(_)));
+    }
+
     // ---- Track J fan-out — path topology on non-Polygon kinds ----------
 
     /// Seed a TextFrame's anchors. `document_with_one_textframe`

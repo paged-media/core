@@ -49,7 +49,7 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(10);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(11);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -202,6 +202,10 @@ pub enum MainToWorkerKind {
     RequestPathAnchors {
         id: crate::element_selection::ElementId,
     },
+    /// Track M — list every `<Layer>` from the loaded document's
+    /// designmap. Reply: `Layers`. The panel polls this once on mount
+    /// and on every `LayersChanged` notification.
+    RequestLayers,
     /// Phase B — start a gesture against the listed elements. Reply
     /// `GestureBegun { handle }` carrying the opaque handle the main
     /// thread sends back on every subsequent update / commit / cancel.
@@ -444,6 +448,12 @@ pub enum WorkerToMainKind {
     PathAnchors {
         result: Option<PathAnchorsResult>,
     },
+    /// Track M — `RequestLayers` reply. Documents without `<Layer>`
+    /// elements (rare; the IDML container always emits at least a
+    /// default layer) come back with an empty Vec.
+    Layers {
+        items: Vec<LayerSummary>,
+    },
     /// Phase B — `BeginGesture` succeeded.
     GestureBegun {
         handle: crate::gesture::GestureHandle,
@@ -579,6 +589,23 @@ pub struct PathAnchorTriple {
     pub anchor: [f32; 2],
     pub left: [f32; 2],
     pub right: [f32; 2],
+}
+
+/// Track M — wire-shape mirror of `idml_parse::Layer`. Surfaces
+/// everything the Layers panel needs without leaking parse-side
+/// fields the wasm boundary doesn't understand. `z` is the layer's
+/// zero-based index in `designmap.layers` (top-first, matching the
+/// renderer's paint order via `layer_z_index`).
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct LayerSummary {
+    pub self_id: String,
+    pub name: Option<String>,
+    pub visible: bool,
+    pub locked: bool,
+    pub printable: bool,
+    pub z: u32,
 }
 
 /// Step 5 — `RequestPathAnchors` reply payload. `anchors.len()` may
@@ -755,6 +782,22 @@ pub enum Mutation {
     /// recursively; an empty ops vec is a valid no-op (mirrors
     /// `Operation::Batch` semantics in idml-mutate).
     Batch { ops: Vec<Mutation> },
+    /// Track M — `<Layer>` visibility toggle. The Layers panel
+    /// dispatches this when the user clicks the eye icon.
+    LayerSetVisible {
+        layer_id: String,
+        visible: bool,
+    },
+    /// Track M — `<Layer>` lock toggle.
+    LayerSetLocked {
+        layer_id: String,
+        locked: bool,
+    },
+    /// Track M — `<Layer>` printable toggle.
+    LayerSetPrintable {
+        layer_id: String,
+        printable: bool,
+    },
 }
 
 impl Mutation {
@@ -778,6 +821,9 @@ impl Mutation {
             Self::PathPointCurveType { .. } => "PathPointCurveType",
             Self::PathPointSet { .. } => "PathPointSet",
             Self::Batch { .. } => "Batch",
+            Self::LayerSetVisible { .. } => "LayerSetVisible",
+            Self::LayerSetLocked { .. } => "LayerSetLocked",
+            Self::LayerSetPrintable { .. } => "LayerSetPrintable",
         }
     }
 }

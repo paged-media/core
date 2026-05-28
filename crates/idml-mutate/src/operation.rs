@@ -41,6 +41,9 @@ pub enum NodeId {
     // name where a node lands.
     Spread(String),
     Page(String),
+    /// Track M — `<Layer>` defined in the `designmap.xml`. The
+    /// associated `String` is the layer's IDML `Self` id.
+    Layer(String),
 }
 
 impl NodeId {
@@ -54,7 +57,8 @@ impl NodeId {
             | NodeId::GraphicLine(s)
             | NodeId::Group(s)
             | NodeId::Spread(s)
-            | NodeId::Page(s) => s,
+            | NodeId::Page(s)
+            | NodeId::Layer(s) => s,
         }
     }
 
@@ -68,6 +72,7 @@ impl NodeId {
             NodeId::Group(_) => "Group",
             NodeId::Spread(_) => "Spread",
             NodeId::Page(_) => "Page",
+            NodeId::Layer(_) => "Layer",
         }
     }
 }
@@ -133,6 +138,19 @@ pub enum PropertyPath {
     /// Inverse restores the previous `left` + `right` exactly so
     /// repeated toggles round-trip bytewise.
     PathPointCurveType,
+    /// Track M — `<Layer Visible="true|false">` toggle. Applies to
+    /// `NodeId::Layer(self_id)`; value is `Value::Bool`. The
+    /// renderer's layer-visibility helper already honours
+    /// `DesignMap.layers[i].visible` so the next rebuild paints
+    /// items on a now-hidden layer through.
+    LayerVisible,
+    /// Track M — `<Layer Locked="...">` toggle. The renderer
+    /// ignores this but the canvas's hit-tester gates selection
+    /// on it (a locked layer's items become un-clickable).
+    LayerLocked,
+    /// Track M — `<Layer Printable="...">` toggle. Non-printable
+    /// layers are skipped during rendering.
+    LayerPrintable,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -174,6 +192,9 @@ impl PropertyPath {
             PropertyPath::PathPointInsert => "frame.pathPointInsert",
             PropertyPath::PathPointRemove => "frame.pathPointRemove",
             PropertyPath::PathPointCurveType => "frame.pathPointCurveType",
+            PropertyPath::LayerVisible => "layer.visible",
+            PropertyPath::LayerLocked => "layer.locked",
+            PropertyPath::LayerPrintable => "layer.printable",
         }
     }
 }
@@ -282,6 +303,10 @@ pub enum Value {
         #[serde(default)]
         prev: Option<PathAnchorSpec>,
     },
+    /// Track M — boolean toggle (e.g. layer visibility / lock /
+    /// printable). The inverse is just the same Value with the
+    /// flag negated.
+    Bool(bool),
 }
 
 /// Description of a node about to be inserted. Carries the minimal

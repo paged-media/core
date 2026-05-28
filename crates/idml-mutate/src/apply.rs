@@ -350,6 +350,48 @@ fn apply_set_property(
                 },
             )
         }
+        // ---- Track M: Layer toggles (visible / locked / printable)
+        (NodeId::Layer(id), PropertyPath::LayerVisible) => {
+            let new_value = expect_bool(path, value)?;
+            let layer = find_layer_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = layer.visible;
+            layer.visible = new_value;
+            (
+                Value::Bool(prev),
+                InvalidationHint {
+                    structural: true,
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Layer(id), PropertyPath::LayerLocked) => {
+            let new_value = expect_bool(path, value)?;
+            let layer = find_layer_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = layer.locked;
+            layer.locked = new_value;
+            (
+                Value::Bool(prev),
+                // Locked is a hit-test concern only; no scene
+                // geometry / layout depends on it.
+                InvalidationHint::default(),
+            )
+        }
+        (NodeId::Layer(id), PropertyPath::LayerPrintable) => {
+            let new_value = expect_bool(path, value)?;
+            let layer = find_layer_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = layer.printable;
+            layer.printable = new_value;
+            (
+                Value::Bool(prev),
+                InvalidationHint {
+                    structural: true,
+                    ..Default::default()
+                },
+            )
+        }
         // ---- Phase F: ImageContentTransform -----------------------
         (NodeId::Rectangle(id), PropertyPath::ImageContentTransform) => {
             let new_transform = expect_transform(path, value)?;
@@ -816,6 +858,30 @@ fn node_exists(doc: &Document, node: &NodeId) -> bool {
         }
     }
     false
+}
+
+/// Track M — locate a `<Layer>` by its `Self` id in the document's
+/// designmap. The designmap is the only place layers live; spread /
+/// page items only carry an `ItemLayer` reference back into it.
+fn find_layer_mut<'a>(
+    doc: &'a mut Document,
+    self_id: &str,
+) -> Option<&'a mut idml_parse::Layer> {
+    doc.container
+        .designmap
+        .layers
+        .iter_mut()
+        .find(|l| l.self_id == self_id)
+}
+
+fn expect_bool(path: PropertyPath, value: &Value) -> Result<bool, OperationError> {
+    match value {
+        Value::Bool(b) => Ok(*b),
+        _ => Err(OperationError::TypeMismatch {
+            path,
+            expected: "Bool".to_string(),
+        }),
+    }
 }
 
 fn expect_bounds(path: PropertyPath, value: &Value) -> Result<[f32; 4], OperationError> {

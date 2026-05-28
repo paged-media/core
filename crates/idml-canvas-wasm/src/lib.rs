@@ -898,6 +898,14 @@ mod wasm {
                     let result = self.model.as_ref().and_then(|m| m.path_anchors(&id));
                     WorkerToMainKind::PathAnchors { result }
                 }
+                MainToWorkerKind::RequestLayers => {
+                    let items = self
+                        .model
+                        .as_ref()
+                        .map(|m| m.layers())
+                        .unwrap_or_default();
+                    WorkerToMainKind::Layers { items }
+                }
                 MainToWorkerKind::BeginGesture {
                     nodes,
                     gesture,

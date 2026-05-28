@@ -761,6 +761,24 @@ impl CanvasModel {
                 }
                 Some(Operation::Batch { ops: translated })
             }
+            Mutation::LayerSetVisible { layer_id, visible } => Some(Operation::SetProperty {
+                node: NodeId::Layer(layer_id.clone()),
+                path: PropertyPath::LayerVisible,
+                value: Value::Bool(*visible),
+            }),
+            Mutation::LayerSetLocked { layer_id, locked } => Some(Operation::SetProperty {
+                node: NodeId::Layer(layer_id.clone()),
+                path: PropertyPath::LayerLocked,
+                value: Value::Bool(*locked),
+            }),
+            Mutation::LayerSetPrintable {
+                layer_id,
+                printable,
+            } => Some(Operation::SetProperty {
+                node: NodeId::Layer(layer_id.clone()),
+                path: PropertyPath::LayerPrintable,
+                value: Value::Bool(*printable),
+            }),
             _ => None,
         }
     }
@@ -952,6 +970,29 @@ impl CanvasModel {
     /// by the canvas's double-click-to-enter-group gesture so the
     /// user can select a whole group as a unit and translate / scale
     /// it via the existing union handles.
+    /// Track M — flatten the loaded document's designmap layers into
+    /// the wire-shape `LayerSummary` list. Top-first order matches
+    /// the renderer's `layer_z_index` (designmap[0] = topmost in the
+    /// IDML wire convention).
+    pub fn layers(&self) -> Vec<crate::channel::LayerSummary> {
+        use crate::channel::LayerSummary;
+        self.scene
+            .container
+            .designmap
+            .layers
+            .iter()
+            .enumerate()
+            .map(|(z, l)| LayerSummary {
+                self_id: l.self_id.clone(),
+                name: l.name.clone(),
+                visible: l.visible,
+                locked: l.locked,
+                printable: l.printable,
+                z: z as u32,
+            })
+            .collect()
+    }
+
     pub fn group_leaves(
         &self,
         group_self_id: &str,
