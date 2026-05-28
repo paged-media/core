@@ -905,6 +905,7 @@ mod tests {
                 glyphs: 50,
                 lines: 5,
             },
+            ruler_guides: Vec::new(),
         };
         let json = serde_json::to_string(&h).unwrap();
         for needle in ["\"docId\":", "\"pageCount\":", "\"pageIds\":", "\"pageSizesPt\":"] {

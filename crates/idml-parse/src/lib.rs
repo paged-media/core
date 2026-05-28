@@ -30,8 +30,8 @@ pub use spread::{
     AutoSizingReferencePoint, AutoSizingType, Bounds, CornerOption, CornerSpec,
     DirectionalFeatherParams, DropShadowSetting, FirstBaselineOffset, FrameEffects,
     FrameFittingOption, FrameRef, GradientFeatherParams, GradientFeatherStop, GraphicLine, Group,
-    GroupTransparency, Oval, Page, PathAnchor, Polygon, Rectangle, Spread, TextFrame, TextPath,
-    TextWrap, TextWrapMode, VerticalJustification,
+    GroupTransparency, GuideOrientation, Oval, Page, PathAnchor, Polygon, Rectangle, RulerGuide,
+    Spread, TextFrame, TextPath, TextWrap, TextWrapMode, VerticalJustification,
 };
 pub use story::{
     AnchoredFrame, AnchoredFrameKind, AnchoredObjectSetting, CellDiagonal, CharacterRun,

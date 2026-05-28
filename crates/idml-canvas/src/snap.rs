@@ -281,13 +281,20 @@ struct SnapMatch {
 }
 
 /// Page summary fed into the snap pass.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct PageInfo {
     pub page_id: PageId,
     pub width_pt: f32,
     pub height_pt: f32,
     /// Page origin in spread coords (matches `BuiltPage::spread_origin`).
     pub spread_origin: (f32, f32),
+    /// Plan-2 §8.3 — ruler guides on this page. Vertical guide
+    /// locations (x in page-local pt) and horizontal guide locations
+    /// (y in page-local pt) are pre-split so the snap target builders
+    /// can append them without re-discriminating per call. Empty for
+    /// pages with no `<Guide>` declarations.
+    pub vertical_guides: Vec<f32>,
+    pub horizontal_guides: Vec<f32>,
 }
 
 /// Snapshot of one frame's geometry used for snap targeting. Carries
@@ -441,6 +448,8 @@ fn snap_targets_x(
         out.push(right);
         out.push((left + right) * 0.5);
     }
+    // Plan-2 §8.3 — vertical ruler guides snap on the x axis.
+    out.extend_from_slice(&host_page.vertical_guides);
     out
 }
 
@@ -468,6 +477,8 @@ fn snap_targets_y(
         out.push(bottom);
         out.push((top + bottom) * 0.5);
     }
+    // Plan-2 §8.3 — horizontal ruler guides snap on the y axis.
+    out.extend_from_slice(&host_page.horizontal_guides);
     out
 }
 
@@ -576,6 +587,8 @@ mod tests {
             width_pt: w,
             height_pt: h,
             spread_origin: (0.0, 0.0),
+            vertical_guides: Vec::new(),
+            horizontal_guides: Vec::new(),
         }
     }
 
@@ -720,6 +733,26 @@ mod tests {
     }
 
     #[test]
+    fn vertical_ruler_guide_acts_as_snap_target() {
+        // Frame at left=20; vertical guide at x=18. Drag dx=-1 →
+        // candidate left lands at 19, within 4pt of the guide
+        // (delta 1 < 4) → snap pulls left to 18 (effective dx=-2).
+        let s = snap_for(
+            Bounds { top: 100.0, left: 20.0, bottom: 200.0, right: 200.0 },
+            "tf",
+            "u1",
+        );
+        let sess = session(vec![s]);
+        let mut pg = page("p1", 612.0, 792.0);
+        pg.vertical_guides.push(18.0);
+        let pages = vec![pg];
+        let adj = compute_snap_adjustment(&sess, (-1.0, 0.0), &pages, &[]);
+        assert!((adj.delta.0 - -2.0).abs() < 1e-3, "{:?}", adj);
+        assert!(adj.lines.iter().any(|l| matches!(l.axis, SnapAxis::X)
+            && (l.position - 18.0).abs() < 1e-3));
+    }
+
+    #[test]
     fn moving_frame_excluded_from_its_own_snap_targets() {
         // The moving frame's own bounds must NOT appear as a target —
         // otherwise dx=0 would always snap to dx=0 and the user could
@@ -752,6 +785,8 @@ mod tests {
             width_pt: w,
             height_pt: h,
             spread_origin: origin,
+            vertical_guides: Vec::new(),
+            horizontal_guides: Vec::new(),
         }
     }
 

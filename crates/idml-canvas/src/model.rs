@@ -79,6 +79,34 @@ pub struct DocumentHandle {
     pub page_sizes_pt: Vec<(f32, f32)>,
     /// Aggregate counts for debugging / UI badges.
     pub stats: DocumentStats,
+    /// Plan-2 §8.3 — ruler guides per page. The overlay renders
+    /// these and the snap pass treats them as targets. Total volume
+    /// is small (real docs ship a few dozen at most) so we ship them
+    /// inline on the handle rather than paging via a separate
+    /// request.
+    #[serde(default)]
+    pub ruler_guides: Vec<RulerGuideWire>,
+}
+
+/// Plan-2 §8.3 — wire shape of a ruler guide. `page_id` matches one
+/// of `DocumentHandle::page_ids`. `orientation` is "vertical" (snaps
+/// on x) or "horizontal" (snaps on y); `location` is the page-local
+/// coord on the perpendicular axis.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct RulerGuideWire {
+    pub page_id: PageId,
+    pub orientation: GuideOrientationWire,
+    pub location: f32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Tsify, PartialEq, Eq)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "camelCase")]
+pub enum GuideOrientationWire {
+    Vertical,
+    Horizontal,
 }
 
 /// Structural counts. The main thread surfaces these in the debug
@@ -451,12 +479,49 @@ impl CanvasModel {
             .iter()
             .map(|p| (p.width_pt, p.height_pt))
             .collect();
+        // Plan-2 §8.3 — flatten per-spread `<Guide>` parses into a
+        // page-id-keyed list. IDML's `PageIndex` is 1-based per
+        // spread (single-page spreads use `PageIndex="1"` for their
+        // only page); we subtract 1 and clamp to the last valid
+        // page so off-by-one or absent attributes still surface the
+        // guide on the spread's first page.
+        let mut ruler_guides: Vec<RulerGuideWire> = Vec::new();
+        for parsed in &self.scene.spreads {
+            let pages = &parsed.spread.pages;
+            if pages.is_empty() {
+                continue;
+            }
+            for g in &parsed.spread.guides {
+                let idx = if g.page_index == 0 {
+                    0
+                } else {
+                    ((g.page_index as usize) - 1).min(pages.len() - 1)
+                };
+                let Some(p) = pages.get(idx) else {
+                    continue;
+                };
+                let Some(sid) = p.self_id.clone() else {
+                    continue;
+                };
+                ruler_guides.push(RulerGuideWire {
+                    page_id: PageId(sid),
+                    orientation: match g.orientation {
+                        idml_parse::GuideOrientation::Vertical => GuideOrientationWire::Vertical,
+                        idml_parse::GuideOrientation::Horizontal => {
+                            GuideOrientationWire::Horizontal
+                        }
+                    },
+                    location: g.location,
+                });
+            }
+        }
         DocumentHandle {
             doc_id: self.doc_id.clone(),
             page_count: self.built.pages.len(),
             page_ids,
             page_sizes_pt,
             stats: DocumentStats::from(&self.built.stats),
+            ruler_guides,
         }
     }
 

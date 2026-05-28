@@ -385,15 +385,57 @@ impl CanvasModel {
             }
             session.modifiers = modifiers;
             let session_clone = session.clone();
+            // Build a page_id → (vertical_guides, horizontal_guides)
+            // lookup once per gesture tick. Walks each parsed spread,
+            // bucketing each guide by its `page_index` into the
+            // spread's pages. Plan-2 §8.3.
+            let mut guides_by_page: std::collections::HashMap<
+                String,
+                (Vec<f32>, Vec<f32>),
+            > = std::collections::HashMap::new();
+            for parsed in &self.scene.spreads {
+                let pages_of_spread = &parsed.spread.pages;
+                if pages_of_spread.is_empty() {
+                    continue;
+                }
+                for g in &parsed.spread.guides {
+                    // IDML `PageIndex` is 1-based per spread; clamp
+                    // matches the wire-handle conversion in model.rs.
+                    let idx = if g.page_index == 0 {
+                        0
+                    } else {
+                        ((g.page_index as usize) - 1).min(pages_of_spread.len() - 1)
+                    };
+                    let Some(p) = pages_of_spread.get(idx) else {
+                        continue;
+                    };
+                    let Some(sid) = p.self_id.clone() else {
+                        continue;
+                    };
+                    let entry = guides_by_page.entry(sid).or_default();
+                    match g.orientation {
+                        idml_parse::GuideOrientation::Vertical => entry.0.push(g.location),
+                        idml_parse::GuideOrientation::Horizontal => entry.1.push(g.location),
+                    }
+                }
+            }
             let pages = self
                 .built
                 .pages
                 .iter()
-                .map(|p| crate::snap::PageInfo {
-                    page_id: p.id.clone(),
-                    width_pt: p.width_pt,
-                    height_pt: p.height_pt,
-                    spread_origin: p.spread_origin,
+                .map(|p| {
+                    let (vertical_guides, horizontal_guides) = guides_by_page
+                        .get(p.id.as_str())
+                        .cloned()
+                        .unwrap_or_default();
+                    crate::snap::PageInfo {
+                        page_id: p.id.clone(),
+                        width_pt: p.width_pt,
+                        height_pt: p.height_pt,
+                        spread_origin: p.spread_origin,
+                        vertical_guides,
+                        horizontal_guides,
+                    }
                 })
                 .collect::<Vec<_>>();
             let siblings = collect_sibling_frames(&self.scene, &self.built);

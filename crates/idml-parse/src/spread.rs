@@ -125,6 +125,36 @@ pub struct Spread {
     /// paint before items on a front layer regardless of the
     /// per-shape XML order their backing `Vec<…>` records.
     pub frames_in_order: Vec<FrameRef>,
+    /// `<Guide>` elements parsed off the spread (plan-2 §8.3 "ruler
+    /// guides"). Vertical guides have `orientation = Vertical` and a
+    /// page-local `location` on the x axis; horizontal guides
+    /// flip the axis. `page_index` is the zero-based index into the
+    /// spread's pages (matches IDML's `PageIndex` attribute). The
+    /// snap pass treats each guide on the moving frame's host page
+    /// as an extra target; the overlay renders them as cyan lines.
+    #[serde(default)]
+    pub guides: Vec<RulerGuide>,
+}
+
+/// Ruler guide on a spread. See [`Spread::guides`].
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct RulerGuide {
+    pub orientation: GuideOrientation,
+    /// Coordinate (pt) along the perpendicular axis. For
+    /// `Vertical`, this is the page-local x; for `Horizontal`,
+    /// the page-local y.
+    pub location: f32,
+    /// Zero-based index into the spread's pages. IDML's
+    /// `PageIndex` attribute is 1-based on per-spread guides but
+    /// 0-based in real-world exports inspected — we read it
+    /// verbatim and let downstream consumers clamp.
+    pub page_index: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum GuideOrientation {
+    Vertical,
+    Horizontal,
 }
 
 /// One `<Group>` page-item record. The renderer walks `members` to
@@ -1567,6 +1597,32 @@ impl Spread {
                             content_transparency_depth: 0,
                         });
                     }
+                    b"Guide" => {
+                        // Plan-2 §8.3 ruler guides. Both `<Guide>`
+                        // and `<Empty Guide />` variants surface here.
+                        // The `Orientation` + `Location` attributes
+                        // are required for the guide to mean anything;
+                        // unparseable entries get dropped.
+                        let orientation = attr(&e, b"Orientation");
+                        let location = attr(&e, b"Location").and_then(|s| s.parse::<f32>().ok());
+                        if let (Some(orient), Some(loc)) = (orientation, location) {
+                            let orient = match orient.as_str() {
+                                "Vertical" => Some(GuideOrientation::Vertical),
+                                "Horizontal" => Some(GuideOrientation::Horizontal),
+                                _ => None,
+                            };
+                            let page_index = attr(&e, b"PageIndex")
+                                .and_then(|s| s.parse::<u32>().ok())
+                                .unwrap_or(0);
+                            if let Some(orient) = orient {
+                                out.guides.push(RulerGuide {
+                                    orientation: orient,
+                                    location: loc,
+                                    page_index,
+                                });
+                            }
+                        }
+                    }
                     b"Page" => {
                         if let Some(bounds) =
                             attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s))
@@ -2997,6 +3053,35 @@ mod tests {
                GeometricBounds="100 700 300 1100"/>
   </Spread>
 </idPkg:Spread>"#;
+
+    #[test]
+    fn parses_ruler_guides() {
+        // Mix of vertical + horizontal guides on a 2-page spread.
+        // Both `<Guide>` and self-closing variants accepted.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="spread1">
+    <Page Self="p1" GeometricBounds="0 0 792 612"/>
+    <Guide Self="g1" Orientation="Vertical" Location="120.5" PageIndex="0"/>
+    <Guide Self="g2" Orientation="Horizontal" Location="240" PageIndex="1"/>
+    <Guide Self="g3" Orientation="Bogus" Location="50"/>
+  </Spread>
+</idPkg:Spread>"#;
+        let s = Spread::parse(xml.as_bytes()).unwrap();
+        assert_eq!(s.guides.len(), 2, "bogus orientation should be dropped");
+        assert!(matches!(
+            s.guides[0].orientation,
+            GuideOrientation::Vertical
+        ));
+        assert!((s.guides[0].location - 120.5).abs() < 1e-3);
+        assert_eq!(s.guides[0].page_index, 0);
+        assert!(matches!(
+            s.guides[1].orientation,
+            GuideOrientation::Horizontal
+        ));
+        assert!((s.guides[1].location - 240.0).abs() < 1e-3);
+        assert_eq!(s.guides[1].page_index, 1);
+    }
 
     #[test]
     fn parses_pages_and_frames() {
