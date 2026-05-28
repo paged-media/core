@@ -505,7 +505,7 @@ impl CanvasModel {
         &self,
         mutation: &Mutation,
     ) -> Option<idml_mutate::Operation> {
-        use idml_mutate::{Operation, PropertyPath, Value};
+        use idml_mutate::{NodeId, Operation, PropertyPath, Value};
         match mutation {
             Mutation::ResizeFrame { frame_id, bounds } => {
                 let node = self.resolve_frame_node_id(frame_id)?;
@@ -517,6 +517,40 @@ impl CanvasModel {
                     value: Value::Bounds([bounds.0, bounds.1, bounds.2, bounds.3]),
                 })
             }
+            Mutation::PathPointInsert {
+                polygon_id,
+                index,
+                anchor,
+            } => Some(Operation::SetProperty {
+                node: NodeId::Polygon(polygon_id.clone()),
+                path: PropertyPath::PathPointInsert,
+                value: Value::PathPointInsert {
+                    index: *index as usize,
+                    anchor: *anchor,
+                    prev_subpath_starts: None,
+                },
+            }),
+            Mutation::PathPointRemove { polygon_id, index } => Some(Operation::SetProperty {
+                node: NodeId::Polygon(polygon_id.clone()),
+                path: PropertyPath::PathPointRemove,
+                value: Value::PathPointRemove {
+                    index: *index as usize,
+                    prev_subpath_starts: None,
+                },
+            }),
+            Mutation::PathPointCurveType {
+                polygon_id,
+                index,
+                smooth,
+            } => Some(Operation::SetProperty {
+                node: NodeId::Polygon(polygon_id.clone()),
+                path: PropertyPath::PathPointCurveType,
+                value: Value::PathPointCurveType {
+                    index: *index as usize,
+                    smooth: *smooth,
+                    prev: None,
+                },
+            }),
             _ => None,
         }
     }

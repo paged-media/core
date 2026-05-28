@@ -215,7 +215,12 @@ impl PathAnchorSpec {
 /// the variant doesn't match what the path expects.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
-#[serde(tag = "type", content = "value", rename_all = "camelCase")]
+#[serde(
+    tag = "type",
+    content = "value",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum Value {
     Bounds([f32; 4]),
     ColorRef(Option<String>),

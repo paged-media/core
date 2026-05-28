@@ -49,7 +49,7 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(5);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(6);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -689,6 +689,30 @@ pub enum Mutation {
     DeleteFrame {
         frame_id: String,
     },
+    /// Track J — insert a new anchor into a Polygon's path at flat
+    /// `index`. UI dispatches this from a segment click in path-edit
+    /// mode; `anchor` is the de Casteljau split result so the
+    /// curve's visible shape is preserved.
+    PathPointInsert {
+        polygon_id: String,
+        index: u32,
+        anchor: idml_mutate::operation::PathAnchorSpec,
+    },
+    /// Track J — remove the anchor at flat `index` from a Polygon.
+    /// UI dispatches from Backspace/Delete on the selected anchor.
+    PathPointRemove {
+        polygon_id: String,
+        index: u32,
+    },
+    /// Track J — toggle the curve type of an anchor between corner
+    /// (handles equal to anchor) and smooth (handles derived from
+    /// neighbour tangents). UI dispatches from a double-click on
+    /// the anchor.
+    PathPointCurveType {
+        polygon_id: String,
+        index: u32,
+        smooth: bool,
+    },
 }
 
 impl Mutation {
@@ -707,6 +731,9 @@ impl Mutation {
             Self::DeletePage { .. } => "DeletePage",
             Self::InsertFrame { .. } => "InsertFrame",
             Self::DeleteFrame { .. } => "DeleteFrame",
+            Self::PathPointInsert { .. } => "PathPointInsert",
+            Self::PathPointRemove { .. } => "PathPointRemove",
+            Self::PathPointCurveType { .. } => "PathPointCurveType",
         }
     }
 }
