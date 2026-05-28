@@ -1588,4 +1588,95 @@ mod tests {
         assert_eq!(frame.bounds, original_bounds);
         assert_eq!(frame.fill_color, original_fill);
     }
+
+    // ---- Track J fan-out — path topology on non-Polygon kinds ----------
+
+    /// Seed a TextFrame's anchors. `document_with_one_textframe`
+    /// builds the frame with empty anchors; mutate the lone frame to
+    /// install a few before running the path-topology op.
+    fn project_with_textframe_anchors(
+        self_id: &str,
+        anchors: Vec<PathAnchor>,
+        subpath_starts: Vec<usize>,
+    ) -> Project {
+        let doc = document_with_one_textframe(self_id);
+        let mut project = Project::new(doc);
+        let frame = &mut project.document_mut().spreads[0].spread.text_frames[0];
+        frame.anchors = anchors;
+        frame.subpath_open = vec![false; subpath_starts.len().max(1)];
+        frame.subpath_starts = subpath_starts;
+        project
+    }
+
+    fn textframe_of<'a>(project: &'a Project) -> &'a ParsedTextFrame {
+        &project.document().spreads[0].spread.text_frames[0]
+    }
+
+    #[test]
+    fn path_point_insert_on_textframe_grows_anchors_and_round_trips() {
+        // Track J fan-out — the apply layer treats a TextFrame's
+        // anchors + subpath_starts identically to a Polygon's. The
+        // same Insert / Remove inverses round-trip bytewise.
+        let mut project = project_with_textframe_anchors(
+            "u_tf",
+            vec![anchor_at(0.0, 0.0), anchor_at(10.0, 0.0)],
+            vec![],
+        );
+        let op = Operation::SetProperty {
+            node: NodeId::TextFrame("u_tf".to_string()),
+            path: PropertyPath::PathPointInsert,
+            value: Value::PathPointInsert {
+                index: 1,
+                anchor: PathAnchorSpec {
+                    anchor: [5.0, 0.0],
+                    left: [3.0, 0.0],
+                    right: [7.0, 0.0],
+                },
+                prev_subpath_starts: None,
+            },
+        };
+        let applied = project.apply(op).expect("textframe insert");
+        assert_eq!(textframe_of(&project).anchors.len(), 3);
+        assert_eq!(textframe_of(&project).anchors[1].anchor, (5.0, 0.0));
+        // Inverse Remove restores bytewise.
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        assert_eq!(textframe_of(&project).anchors.len(), 2);
+        assert_eq!(textframe_of(&project).anchors[0].anchor, (0.0, 0.0));
+        assert_eq!(textframe_of(&project).anchors[1].anchor, (10.0, 0.0));
+    }
+
+    #[test]
+    fn path_point_curve_type_on_textframe_smooths_handles() {
+        // Three collinear corner anchors on a TextFrame. Smooth the
+        // middle one → handles derive from neighbour tangents; undo
+        // restores. Same code path as the Polygon test, exercised
+        // through the TextFrame fan-out arm.
+        let mut project = project_with_textframe_anchors(
+            "u_tf",
+            vec![
+                anchor_at(0.0, 0.0),
+                anchor_at(5.0, 0.0),
+                anchor_at(15.0, 0.0),
+            ],
+            vec![],
+        );
+        let op = Operation::SetProperty {
+            node: NodeId::TextFrame("u_tf".to_string()),
+            path: PropertyPath::PathPointCurveType,
+            value: Value::PathPointCurveType {
+                index: 1,
+                smooth: true,
+                prev: None,
+            },
+        };
+        let applied = project.apply(op).expect("smooth");
+        let a = &textframe_of(&project).anchors[1];
+        assert!((a.left.0 - a.anchor.0).abs() > 0.5);
+        // Undo collapses handles back to the anchor (the original
+        // anchor was a corner — left == right == anchor).
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        let a = &textframe_of(&project).anchors[1];
+        assert_eq!(a.left, a.anchor);
+        assert_eq!(a.right, a.anchor);
+    }
 }

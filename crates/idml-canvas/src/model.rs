@@ -164,6 +164,24 @@ pub struct UndoOutcome {
     pub affected_story_id: Option<String>,
 }
 
+/// Track J fan-out — map an `ElementId` carried on the wire to the
+/// matching `idml_mutate::NodeId` for the apply layer. Ovals + Groups
+/// don't carry editable PathPointArrays so they translate to `None`
+/// and the calling Mutation falls through to the non-frame handler.
+fn path_node_id_for(
+    id: &crate::element_selection::ElementId,
+) -> Option<idml_mutate::NodeId> {
+    use crate::element_selection::ElementId;
+    use idml_mutate::NodeId;
+    match id {
+        ElementId::Polygon(s) => Some(NodeId::Polygon(s.clone())),
+        ElementId::TextFrame(s) => Some(NodeId::TextFrame(s.clone())),
+        ElementId::Rectangle(s) => Some(NodeId::Rectangle(s.clone())),
+        ElementId::GraphicLine(s) => Some(NodeId::GraphicLine(s.clone())),
+        ElementId::Oval(_) | ElementId::Group(_) => None,
+    }
+}
+
 fn story_id_of_text_op(op: &crate::mutate::TextOp) -> &str {
     match op {
         crate::mutate::TextOp::InsertText { story_id, .. } => story_id,
@@ -678,12 +696,12 @@ impl CanvasModel {
                 })
             }
             Mutation::PathPointInsert {
-                polygon_id,
+                element_id,
                 index,
                 anchor,
                 prev_subpath_starts,
             } => Some(Operation::SetProperty {
-                node: NodeId::Polygon(polygon_id.clone()),
+                node: path_node_id_for(element_id)?,
                 path: PropertyPath::PathPointInsert,
                 value: Value::PathPointInsert {
                     index: *index as usize,
@@ -693,8 +711,8 @@ impl CanvasModel {
                         .map(|v| v.iter().map(|&n| n as usize).collect()),
                 },
             }),
-            Mutation::PathPointRemove { polygon_id, index } => Some(Operation::SetProperty {
-                node: NodeId::Polygon(polygon_id.clone()),
+            Mutation::PathPointRemove { element_id, index } => Some(Operation::SetProperty {
+                node: path_node_id_for(element_id)?,
                 path: PropertyPath::PathPointRemove,
                 value: Value::PathPointRemove {
                     index: *index as usize,
@@ -702,11 +720,11 @@ impl CanvasModel {
                 },
             }),
             Mutation::PathPointCurveType {
-                polygon_id,
+                element_id,
                 index,
                 smooth,
             } => Some(Operation::SetProperty {
-                node: NodeId::Polygon(polygon_id.clone()),
+                node: path_node_id_for(element_id)?,
                 path: PropertyPath::PathPointCurveType,
                 value: Value::PathPointCurveType {
                     index: *index as usize,
@@ -715,12 +733,12 @@ impl CanvasModel {
                 },
             }),
             Mutation::PathPointSet {
-                polygon_id,
+                element_id,
                 index,
                 role,
                 position,
             } => Some(Operation::SetProperty {
-                node: NodeId::Polygon(polygon_id.clone()),
+                node: path_node_id_for(element_id)?,
                 path: PropertyPath::FramePathPoint,
                 value: Value::PathPoint {
                     address: idml_mutate::PathPointAddress {

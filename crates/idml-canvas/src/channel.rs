@@ -49,7 +49,7 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(9);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -695,10 +695,14 @@ pub enum Mutation {
     DeleteFrame {
         frame_id: String,
     },
-    /// Track J — insert a new anchor into a Polygon's path at flat
-    /// `index`. UI dispatches this from a segment click in path-edit
-    /// mode; `anchor` is the de Casteljau split result so the
-    /// curve's visible shape is preserved.
+    /// Track J — insert a new anchor into a path-bearing element's
+    /// PathPointArray at flat `index`. UI dispatches from a segment
+    /// click in path-edit mode; `anchor` is the de Casteljau split
+    /// result so the curve's visible shape is preserved.
+    ///
+    /// `element_id` accepts any of the four path-bearing kinds —
+    /// Polygon (the original v1 target), TextFrame, Rectangle, and
+    /// GraphicLine. The apply layer routes via the kind discriminant.
     ///
     /// `prev_subpath_starts` is the closing-edge override path: when
     /// inserting at a subpath boundary (the wraparound segment from
@@ -708,16 +712,17 @@ pub enum Mutation {
     /// desired post-Insert starts here overrides that rule. Omit
     /// (`None`) for the common internal-segment insert.
     PathPointInsert {
-        polygon_id: String,
+        element_id: crate::element_selection::ElementId,
         index: u32,
         anchor: idml_mutate::operation::PathAnchorSpec,
         #[serde(default)]
         prev_subpath_starts: Option<Vec<u32>>,
     },
-    /// Track J — remove the anchor at flat `index` from a Polygon.
-    /// UI dispatches from Backspace/Delete on the selected anchor.
+    /// Track J — remove the anchor at flat `index` from any path-
+    /// bearing element. UI dispatches from Backspace/Delete on the
+    /// selected anchor.
     PathPointRemove {
-        polygon_id: String,
+        element_id: crate::element_selection::ElementId,
         index: u32,
     },
     /// Track J — toggle the curve type of an anchor between corner
@@ -725,12 +730,12 @@ pub enum Mutation {
     /// neighbour tangents). UI dispatches from a double-click on
     /// the anchor.
     PathPointCurveType {
-        polygon_id: String,
+        element_id: crate::element_selection::ElementId,
         index: u32,
         smooth: bool,
     },
     /// Track J — direct write of one Bezier handle (anchor / left /
-    /// right) on a Polygon's PathPointArray. Phase H's drag-anchor
+    /// right) on an element's PathPointArray. Phase H's drag-anchor
     /// gesture already does this through `Operation::SetProperty`
     /// at the apply layer, but the channel exposed it only through
     /// the gesture path; the segment-click insert (J.5b) needs
@@ -738,7 +743,7 @@ pub enum Mutation {
     /// adjust the two segment-endpoint handles alongside the new
     /// anchor's insertion.
     PathPointSet {
-        polygon_id: String,
+        element_id: crate::element_selection::ElementId,
         index: u32,
         role: idml_mutate::PathPointRole,
         position: [f32; 2],
