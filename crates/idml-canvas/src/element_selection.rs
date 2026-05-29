@@ -15,8 +15,15 @@
 use serde::{Deserialize, Serialize};
 use tsify_next::Tsify;
 
-/// Page item identifier the user can select. The String payload is the
-/// item's `Self` id from the IDML XML.
+/// Element address the user can select OR a `SetElementProperty`
+/// mutation can target. The first six variants are page items
+/// (selection state holds these); `StoryRange` is the half-open
+/// character range that character / paragraph property writes
+/// address. Selection state today never holds `StoryRange` (the
+/// text-side caret + range live in `ContentSelection`); the
+/// variant exists so the apply layer can be reached via the
+/// existing `Mutation::SetElementProperty` wire shape — see
+/// `docs/verso/sdk-implementation-plan.md` §3c.1 ADR.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(tag = "kind", content = "id", rename_all = "camelCase")]
@@ -27,11 +34,21 @@ pub enum ElementId {
     Polygon(String),
     GraphicLine(String),
     Group(String),
+    /// SDK Phase 3 — addresses a half-open `[start, end)` character
+    /// range inside a story for character / paragraph property
+    /// writes. Maps to `idml_mutate::NodeId::StoryRange { ... }`.
+    StoryRange {
+        story_id: String,
+        start: u32,
+        end: u32,
+    },
 }
 
 impl ElementId {
     /// The bare `Self` id, regardless of kind. Useful when matching
     /// against parser/scene structures that only expose the string.
+    /// For `StoryRange` this returns the story id; callers needing
+    /// the range bounds should match on the variant.
     pub fn raw_id(&self) -> &str {
         match self {
             ElementId::TextFrame(id)
@@ -40,6 +57,7 @@ impl ElementId {
             | ElementId::Polygon(id)
             | ElementId::GraphicLine(id)
             | ElementId::Group(id) => id,
+            ElementId::StoryRange { story_id, .. } => story_id,
         }
     }
 
@@ -54,6 +72,7 @@ impl ElementId {
             ElementId::Polygon(_) => "Polygon",
             ElementId::GraphicLine(_) => "GraphicLine",
             ElementId::Group(_) => "Group",
+            ElementId::StoryRange { .. } => "StoryRange",
         }
     }
 }

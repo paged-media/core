@@ -178,7 +178,10 @@ fn path_node_id_for(
         ElementId::TextFrame(s) => Some(NodeId::TextFrame(s.clone())),
         ElementId::Rectangle(s) => Some(NodeId::Rectangle(s.clone())),
         ElementId::GraphicLine(s) => Some(NodeId::GraphicLine(s.clone())),
-        ElementId::Oval(_) | ElementId::Group(_) => None,
+        // Path-bearing only — Oval / Group / StoryRange have no
+        // `<PathPointArray>`, so the path-edit gestures never
+        // target them.
+        ElementId::Oval(_) | ElementId::Group(_) | ElementId::StoryRange { .. } => None,
     }
 }
 
@@ -197,6 +200,11 @@ fn element_to_node_id(id: &crate::element_selection::ElementId) -> idml_mutate::
         ElementId::Polygon(s) => NodeId::Polygon(s.clone()),
         ElementId::GraphicLine(s) => NodeId::GraphicLine(s.clone()),
         ElementId::Group(s) => NodeId::Group(s.clone()),
+        ElementId::StoryRange { story_id, start, end } => NodeId::StoryRange {
+            story_id: story_id.clone(),
+            start: *start,
+            end: *end,
+        },
     }
 }
 
@@ -1390,6 +1398,12 @@ impl CanvasModel {
                     // leaves. A future revision can compute the group's
                     // union bbox once Phase B introduces "enter group".
                     ElementId::Group(_) => None,
+                    // StoryRange is a property-address, not a
+                    // geometric element — its bounds are the host
+                    // frame's. The caret/selection-rect surface
+                    // (RequestCaretGeometry / RequestSelectionGeometry)
+                    // is the right read path for text-range visuals.
+                    ElementId::StoryRange { .. } => None,
                 };
                 let Some((bounds, item_transform, has_image)) = resolved else {
                     continue;
@@ -1513,6 +1527,8 @@ impl CanvasModel {
                         )
                     }),
                 ElementId::Group(_) => None,
+                // StoryRange doesn't carry path anchors.
+                ElementId::StoryRange { .. } => None,
             };
             let Some((bounds, item_transform, anchors, subpath_starts, subpath_open)) = resolved
             else {

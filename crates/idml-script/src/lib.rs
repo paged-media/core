@@ -321,6 +321,26 @@ fn parse_element_id(s: &str) -> Option<idml_canvas::element_selection::ElementId
     if id.is_empty() {
         return None;
     }
+    // SDK Phase 3 — `storyRange:Story/u1@0..6` addresses a character
+    // range. The id payload is `<story_id>@<start>..<end>` where
+    // start + end are unsigned character offsets and end > start.
+    if kind == "storyRange" || kind == "storyrange" {
+        let (story_id, range) = id.split_once('@')?;
+        if story_id.is_empty() {
+            return None;
+        }
+        let (start_s, end_s) = range.split_once("..")?;
+        let start: u32 = start_s.parse().ok()?;
+        let end: u32 = end_s.parse().ok()?;
+        if end <= start {
+            return None;
+        }
+        return Some(ElementId::StoryRange {
+            story_id: story_id.to_string(),
+            start,
+            end,
+        });
+    }
     let id = id.to_string();
     Some(match kind {
         "textFrame" | "textframe" => ElementId::TextFrame(id),
