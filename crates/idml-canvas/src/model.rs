@@ -1138,32 +1138,32 @@ impl CanvasModel {
                         vec![
                             PropertyEntry {
                                 path: PropertyPath::FrameBounds,
-                                value: Value::Bounds([
+                                value: Some(Value::Bounds([
                                     f.bounds.top,
                                     f.bounds.left,
                                     f.bounds.bottom,
                                     f.bounds.right,
-                                ]),
+                                ])),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameTransform,
-                                value: Value::Transform(f.item_transform),
+                                value: Some(Value::Transform(f.item_transform)),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameFillColor,
-                                value: Value::ColorRef(f.fill_color.clone()),
+                                value: Some(Value::ColorRef(f.fill_color.clone())),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameStrokeColor,
-                                value: Value::ColorRef(f.stroke_color.clone()),
+                                value: Some(Value::ColorRef(f.stroke_color.clone())),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameStrokeWeight,
-                                value: Value::Length(f.stroke_weight),
+                                value: Some(Value::Length(f.stroke_weight)),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameOpacity,
-                                value: Value::Length(f.opacity),
+                                value: Some(Value::Length(f.opacity)),
                             },
                         ]
                     }),
@@ -1175,32 +1175,32 @@ impl CanvasModel {
                         vec![
                             PropertyEntry {
                                 path: PropertyPath::FrameBounds,
-                                value: Value::Bounds([
+                                value: Some(Value::Bounds([
                                     f.bounds.top,
                                     f.bounds.left,
                                     f.bounds.bottom,
                                     f.bounds.right,
-                                ]),
+                                ])),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameTransform,
-                                value: Value::Transform(f.item_transform),
+                                value: Some(Value::Transform(f.item_transform)),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameFillColor,
-                                value: Value::ColorRef(f.fill_color.clone()),
+                                value: Some(Value::ColorRef(f.fill_color.clone())),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameStrokeColor,
-                                value: Value::ColorRef(f.stroke_color.clone()),
+                                value: Some(Value::ColorRef(f.stroke_color.clone())),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameStrokeWeight,
-                                value: Value::Length(f.stroke_weight),
+                                value: Some(Value::Length(f.stroke_weight)),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameOpacity,
-                                value: Value::Length(f.opacity),
+                                value: Some(Value::Length(f.opacity)),
                             },
                         ]
                     }),

@@ -49,7 +49,7 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(14);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(15);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -665,14 +665,22 @@ pub struct ElementProperties {
 
 /// Inspector P1 — one row of the inspector. `path` is the
 /// `PropertyPath` discriminant (camelCase). `value` mirrors the
-/// `Value` wire shape exactly so the panel can pass it through to
+/// `Value` wire shape so the panel can pass it through to
 /// `Mutation::SetElementProperty` without re-encoding.
+///
+/// SDK Phase 3 — `value` is `Option<Value>` (was `Value`). `None`
+/// signals "mixed / indeterminate" — a `NodeId::StoryRange` whose
+/// `CharacterRun`s carry conflicting values for this path returns
+/// `None` so the binding renderer can show a placeholder (em-dash)
+/// rather than picking an arbitrary winner. For frame-level reads
+/// the value is always `Some(_)`.
 #[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct PropertyEntry {
     pub path: idml_mutate::PropertyPath,
-    pub value: idml_mutate::Value,
+    #[serde(default)]
+    pub value: Option<idml_mutate::Value>,
 }
 
 /// Inspector P1 — one node in the scene tree. Children are nested

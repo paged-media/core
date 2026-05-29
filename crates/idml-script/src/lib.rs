@@ -351,6 +351,10 @@ fn parse_property_path(s: &str) -> Option<idml_mutate::PropertyPath> {
         "layerLocked" => LayerLocked,
         "layerPrintable" => LayerPrintable,
         "layerName" => LayerName,
+        "characterFontSize" => CharacterFontSize,
+        "characterLeading" => CharacterLeading,
+        "characterTracking" => CharacterTracking,
+        "characterFillColor" => CharacterFillColor,
         _ => return None,
     })
 }
@@ -373,6 +377,10 @@ fn property_path_label(path: idml_mutate::PropertyPath) -> &'static str {
         LayerLocked => "layerLocked",
         LayerPrintable => "layerPrintable",
         LayerName => "layerName",
+        CharacterFontSize => "characterFontSize",
+        CharacterLeading => "characterLeading",
+        CharacterTracking => "characterTracking",
+        CharacterFillColor => "characterFillColor",
     }
 }
 

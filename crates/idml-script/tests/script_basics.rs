@@ -37,7 +37,7 @@ fn current_opacity(model: &CanvasModel) -> Option<f32> {
         .into_iter()
         .find(|e| matches!(e.path, idml_mutate::PropertyPath::FrameOpacity))?;
     match entry.value {
-        idml_mutate::Value::Length(opt) => opt,
+        Some(idml_mutate::Value::Length(opt)) => opt,
         _ => None,
     }
 }

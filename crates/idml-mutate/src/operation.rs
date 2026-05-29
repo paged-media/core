@@ -44,10 +44,29 @@ pub enum NodeId {
     /// Track M — `<Layer>` defined in the `designmap.xml`. The
     /// associated `String` is the layer's IDML `Self` id.
     Layer(String),
+    /// SDK Phase 3 — a half-open `[start, end)` character range inside
+    /// a Story. The address Character / Paragraph `PropertyPath`s
+    /// operate against: a `SetProperty { node: StoryRange, path:
+    /// CharacterFontSize, value: Length(Some(12.0)) }` writes 12pt
+    /// to every `CharacterRun` covered by the range, splitting runs
+    /// at the boundaries when needed. Offsets are character indices
+    /// in the story (IDML's native convention — matches the
+    /// `<CharacterStyleRange>` / `<ParagraphStyleRange>` serialization).
+    /// Paragraph paths round the addressed range to paragraph
+    /// boundaries (paragraphs are atomic in IDML) before applying.
+    StoryRange {
+        story_id: String,
+        start: u32,
+        end: u32,
+    },
 }
 
 impl NodeId {
-    /// Returns the IDML `Self` string for any variant.
+    /// Returns the IDML `Self` string identifying the **container**
+    /// of this node — the story id for `StoryRange`, the page-item
+    /// or layer self_id otherwise. Range bounds are carried as
+    /// metadata on the variant itself; callers needing them should
+    /// match on the variant.
     pub fn self_id(&self) -> &str {
         match self {
             NodeId::TextFrame(s)
@@ -59,6 +78,7 @@ impl NodeId {
             | NodeId::Spread(s)
             | NodeId::Page(s)
             | NodeId::Layer(s) => s,
+            NodeId::StoryRange { story_id, .. } => story_id,
         }
     }
 
@@ -73,6 +93,7 @@ impl NodeId {
             NodeId::Spread(_) => "Spread",
             NodeId::Page(_) => "Page",
             NodeId::Layer(_) => "Layer",
+            NodeId::StoryRange { .. } => "StoryRange",
         }
     }
 }
@@ -153,6 +174,25 @@ pub enum PropertyPath {
     LayerPrintable,
     /// Track M — `<Layer Name="...">` rename. Value is `Value::Text`.
     LayerName,
+    /// SDK Phase 3 — character font size, in points, addressed against
+    /// a `NodeId::StoryRange`. Value is `Value::Length(Some(_))`. The
+    /// apply layer walks every `CharacterRun` covered by the range,
+    /// splits runs at the boundaries where needed, and writes the
+    /// new `point_size` per run. Inverse is a `Batch` of per-run
+    /// restorations.
+    CharacterFontSize,
+    /// SDK Phase 3 — character leading (line-spacing) in points.
+    /// `Value::Length(Some(_))` carries a positive number;
+    /// `Value::Length(None)` represents "Auto" (IDML's leading-from-
+    /// applied-style fallback). Addressed against `NodeId::StoryRange`.
+    CharacterLeading,
+    /// SDK Phase 3 — character tracking (letter-spacing) in 1/1000 em.
+    /// Value is `Value::Length`. Addressed against `NodeId::StoryRange`.
+    CharacterTracking,
+    /// SDK Phase 3 — character fill colour. Value is
+    /// `Value::ColorRef(Some(swatch_id))` or `Value::ColorRef(None)`
+    /// for "no fill". Addressed against `NodeId::StoryRange`.
+    CharacterFillColor,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -198,6 +238,10 @@ impl PropertyPath {
             PropertyPath::LayerLocked => "layer.locked",
             PropertyPath::LayerPrintable => "layer.printable",
             PropertyPath::LayerName => "layer.name",
+            PropertyPath::CharacterFontSize => "character.fontSize",
+            PropertyPath::CharacterLeading => "character.leading",
+            PropertyPath::CharacterTracking => "character.tracking",
+            PropertyPath::CharacterFillColor => "character.fillColor",
         }
     }
 }

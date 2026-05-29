@@ -1866,4 +1866,58 @@ mod tests {
         assert_eq!(a.left, a.anchor);
         assert_eq!(a.right, a.anchor);
     }
+
+    // ---- SDK Phase 3 — addressing-model surface --------------------------
+
+    /// `NodeId::StoryRange` serializes with the IDML-conventional
+    /// `kind` tag and round-trips through serde without losing
+    /// `story_id` / `start` / `end`. The variant is only the wire
+    /// surface today; the apply layer's character-path arms land in
+    /// Phase 3 proper.
+    #[test]
+    fn story_range_node_id_serde_round_trips() {
+        let node = NodeId::StoryRange {
+            story_id: "Story/u123".to_string(),
+            start: 12,
+            end: 47,
+        };
+        let json = serde_json::to_string(&node).expect("serialize");
+        // serde with #[serde(tag="kind", content="id")] turns the
+        // NodeId into {"kind":"StoryRange","id":{...}} — the same
+        // shape every other NodeId variant uses. The story_id +
+        // start + end land inside the id payload.
+        assert!(
+            json.contains("\"StoryRange\""),
+            "json should contain the tag: {json}"
+        );
+        let parsed: NodeId = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, node);
+    }
+
+    /// Character `PropertyPath`s are wire-shape-only today (no apply
+    /// arm yet — that's the first Phase 3 work after this prep
+    /// commit). A `SetProperty` against `StoryRange` + a character
+    /// path falls through to `OperationError::UnsupportedProperty`,
+    /// which is the expected behaviour for prep — Phase 3 replaces
+    /// the fallback with real apply arms.
+    #[test]
+    fn character_set_property_against_story_range_is_unsupported_today() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 10,
+            },
+            path: PropertyPath::CharacterFontSize,
+            value: Value::Length(Some(12.0)),
+        };
+        let err = project.apply(op).expect_err("no apply arm yet");
+        // The current default arm fires `UnsupportedProperty` for
+        // any (node, path) the apply layer hasn't claimed.
+        assert!(
+            matches!(err, OperationError::UnsupportedProperty { .. }),
+            "expected UnsupportedProperty, got: {err:?}"
+        );
+    }
 }

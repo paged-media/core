@@ -100,7 +100,7 @@ fn set_element_property_mutation_routes_through_apply_layer() {
         .expect("opacity entry");
     assert_eq!(
         opacity_entry.value,
-        idml_mutate::Value::Length(Some(50.0)),
+        Some(idml_mutate::Value::Length(Some(50.0))),
         "opacity should reflect the mutation",
     );
 }
