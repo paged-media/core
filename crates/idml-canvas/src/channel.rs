@@ -49,7 +49,7 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(13);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(14);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -209,6 +209,11 @@ pub enum MainToWorkerKind {
     /// dedicated `LayersChanged` notification is overkill given the
     /// small payload size and existing subscription wiring.
     RequestLayers,
+    /// Scripting Stage 2 — execute a JS source string against the
+    /// loaded document. The script's mutations route through
+    /// `Operation::SetProperty` (same channel as gestures + REPL)
+    /// so undo/redo work identically. Reply: `ScriptResult`.
+    ExecuteScript { source: String },
     /// Inspector P1 — return a property snapshot for one element so
     /// the Inspector panel can render typed editors. Reply:
     /// `ElementProperties`. Each entry carries the property path +
@@ -479,6 +484,13 @@ pub enum WorkerToMainKind {
     /// Inspector P1 — `RequestSceneTree` reply.
     SceneTree {
         roots: Vec<SceneTreeNode>,
+    },
+    /// Scripting Stage 2 — `ExecuteScript` reply. `output` is the
+    /// concatenated console.* lines; `error` is non-null when the
+    /// script threw an unhandled exception.
+    ScriptResult {
+        output: Vec<String>,
+        error: Option<String>,
     },
     /// Phase B — `BeginGesture` succeeded.
     GestureBegun {

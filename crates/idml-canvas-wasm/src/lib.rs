@@ -921,6 +921,23 @@ mod wasm {
                         .unwrap_or_default();
                     WorkerToMainKind::SceneTree { roots }
                 }
+                MainToWorkerKind::ExecuteScript { source } => {
+                    let Some(model) = self.model.as_mut() else {
+                        return WorkerToMain {
+                            seq,
+                            protocol: PROTOCOL_VERSION,
+                            kind: WorkerToMainKind::ScriptResult {
+                                output: Vec::new(),
+                                error: Some("no document loaded".to_string()),
+                            },
+                        };
+                    };
+                    let result = idml_script::execute_script(model, &source);
+                    WorkerToMainKind::ScriptResult {
+                        output: result.output,
+                        error: result.error,
+                    }
+                }
                 MainToWorkerKind::BeginGesture {
                     nodes,
                     gesture,

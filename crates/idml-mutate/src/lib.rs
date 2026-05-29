@@ -3,7 +3,7 @@
 //! Stage 1 of the Verso scripting layer (`docs/verso/scripting-layer.md`):
 //! a single typed, serializable, invertible [`Operation`] is the sole
 //! committed mutation surface. The inspector, the future REPL, the
-//! QuickJS-based scripting layer, the gesture commit path, undo/redo,
+//! Boa-based scripting layer, the gesture commit path, undo/redo,
 //! and any future collaboration layer all go through this one channel.
 //!
 //! ```text
