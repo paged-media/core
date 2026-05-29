@@ -261,6 +261,69 @@ fn verso_set_against_story_range_reaches_the_apply_arm() {
     );
 }
 
+/// SDK Phase 3 — `verso.inspect("storyRange:<id>@<start>..<end>")`
+/// returns a populated `ElementProperties` with character entries.
+/// `value` is `Option<Value>` — `None` for "mixed across runs",
+/// `Some(...)` when every run in the range agrees (including the
+/// "all agree on None" case). This test covers the happy path
+/// where the fixture's first story is homogeneous over its first
+/// few characters and the snapshot returns concrete values.
+#[test]
+fn verso_inspect_story_range_returns_character_entries() {
+    let mut model = load();
+    let story_id = model
+        .scene()
+        .stories
+        .first()
+        .map(|s| s.self_id.clone())
+        .expect("fixture should contain at least one story");
+    let result = execute_script(
+        &mut model,
+        &format!(
+            r#"
+                const json = verso.inspect("storyRange:{story_id}@0..3");
+                const props = JSON.parse(json);
+                // Print the entry count + each path so we can grep them.
+                console.log("kind", props.kind);
+                console.log("entries", props.entries.length);
+                for (const e of props.entries) console.log("path", e.path);
+            "#,
+        ),
+    );
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let kind_line = result
+        .output
+        .iter()
+        .find(|l| l.starts_with("[log] kind"))
+        .expect("no kind line");
+    assert!(kind_line.contains("StoryRange"), "got: {kind_line}");
+    let entries_line = result
+        .output
+        .iter()
+        .find(|l| l.starts_with("[log] entries"))
+        .expect("no entries line");
+    // 4 character paths (FontSize / Leading / Tracking / FillColor).
+    assert!(entries_line.contains("4"), "got: {entries_line}");
+    let path_lines: Vec<&String> = result
+        .output
+        .iter()
+        .filter(|l| l.starts_with("[log] path"))
+        .collect();
+    assert_eq!(path_lines.len(), 4, "got: {:?}", path_lines);
+    // Every character path should appear in the entry list.
+    for needle in [
+        "characterFontSize",
+        "characterLeading",
+        "characterTracking",
+        "characterFillColor",
+    ] {
+        assert!(
+            path_lines.iter().any(|l| l.contains(needle)),
+            "missing {needle} in {path_lines:?}"
+        );
+    }
+}
+
 /// Parser sanity — malformed storyRange addresses return null /
 /// false through verso.set rather than panicking the script.
 #[test]

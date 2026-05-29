@@ -282,6 +282,21 @@ fn frame_to_tree_node(
     }
 }
 
+/// SDK Phase 3 — uniform-collapse helper for the StoryRange
+/// snapshot. Returns `Some(common)` when all values match (every
+/// run agrees, including the "all agree on None" case);
+/// `None` when values diverge. The wrapping `PropertyEntry.value:
+/// Option<Value>` then carries `Some(Value::Length(uniform))` /
+/// `None` (mixed) at the wire boundary.
+fn collapse_uniform<T: Clone + PartialEq>(values: &[T]) -> Option<T> {
+    let first = values.first()?;
+    if values.iter().all(|v| v == first) {
+        Some(first.clone())
+    } else {
+        None
+    }
+}
+
 fn story_id_of_text_op(op: &crate::mutate::TextOp) -> &str {
     match op {
         crate::mutate::TextOp::InsertText { story_id, .. } => story_id,
@@ -1124,9 +1139,12 @@ impl CanvasModel {
 
     /// Inspector P1 — typed property snapshot for the named element.
     /// Returns `None` when the id doesn't resolve. Frame-level
-    /// properties only for v1: bounds, item_transform, fill, stroke,
-    /// stroke weight, opacity. Paragraph / character / story
-    /// properties land in a v2 once their apply arms ship.
+    /// properties: bounds, item_transform, fill, stroke, stroke
+    /// weight, opacity. SDK Phase 3 — character properties when
+    /// `id` is `ElementId::StoryRange`: walks the story's
+    /// `CharacterRun`s within `[start, end)`, collapses uniform
+    /// values, emits `None` for "mixed" so the binding renderer
+    /// can show an em-dash placeholder.
     pub fn element_properties(
         &self,
         id: &crate::element_selection::ElementId,
@@ -1134,6 +1152,14 @@ impl CanvasModel {
         use crate::channel::{ElementProperties, PropertyEntry};
         use crate::element_selection::ElementId;
         use idml_mutate::{PropertyPath, Value};
+
+        // SDK Phase 3 — StoryRange snapshot. Story lives in
+        // `self.scene.stories`, not in spreads, so this branch
+        // returns early before the spread loop below.
+        if let ElementId::StoryRange { story_id, start, end } = id {
+            return self.story_range_properties(story_id, *start, *end, id);
+        }
+
         let raw = id.raw_id();
         for parsed in &self.scene.spreads {
             let spread = &parsed.spread;
@@ -1230,6 +1256,103 @@ impl CanvasModel {
             }
         }
         None
+    }
+
+    /// SDK Phase 3 — `(StoryRange, Character*)` snapshot. Walks the
+    /// story's runs that intersect `[start, end)`, collects the
+    /// resolved per-run value for each character path, and collapses:
+    ///
+    /// - All runs share the same value → `PropertyEntry.value =
+    ///   Some(Value::Length(uniform))` (or `Some(Value::ColorRef(uniform))`).
+    /// - Runs disagree → `PropertyEntry.value = None` (the catalog
+    ///   renderer shows "—").
+    ///
+    /// Note: a uniform `None` (every run has `point_size: None`,
+    /// i.e. inherits) collapses to `Some(Value::Length(None))` — the
+    /// "they all agree on inherit" case, distinct from "they
+    /// disagree". This matches the apply layer's semantics where
+    /// `Value::Length(None)` is a meaningful "clear the override"
+    /// payload, not just absence.
+    fn story_range_properties(
+        &self,
+        story_id: &str,
+        start: u32,
+        end: u32,
+        id: &crate::element_selection::ElementId,
+    ) -> Option<crate::channel::ElementProperties> {
+        use crate::channel::{ElementProperties, PropertyEntry};
+        use idml_mutate::{PropertyPath, Value};
+
+        let story_idx = self
+            .scene
+            .stories
+            .iter()
+            .position(|s| s.self_id == story_id)?;
+        let story = &self.scene.stories[story_idx].story;
+
+        // Collect per-run values for each character path the apply
+        // layer covers today. Empty if no runs intersect the range.
+        let mut font_sizes: Vec<Option<f32>> = Vec::new();
+        let mut leadings: Vec<Option<f32>> = Vec::new();
+        let mut trackings: Vec<Option<f32>> = Vec::new();
+        let mut fill_colors: Vec<Option<String>> = Vec::new();
+
+        let mut char_offset: u32 = 0;
+        for para in &story.paragraphs {
+            for run in &para.runs {
+                let run_len = run.text.chars().count() as u32;
+                let run_start = char_offset;
+                let run_end = char_offset + run_len;
+                char_offset = run_end;
+                // Skip runs entirely outside [start, end).
+                if run_end <= start || run_start >= end {
+                    continue;
+                }
+                font_sizes.push(run.point_size);
+                leadings.push(run.leading);
+                trackings.push(run.tracking);
+                fill_colors.push(run.fill_color.clone());
+            }
+        }
+
+        if font_sizes.is_empty() {
+            // No runs in range — the address is well-formed but
+            // empty. Return an `ElementProperties` with no entries
+            // so the UI shows the (empty) StoryRange panel rather
+            // than treating the address as "not found".
+            return Some(ElementProperties {
+                id: id.clone(),
+                kind: "StoryRange".to_string(),
+                name: None,
+                entries: Vec::new(),
+            });
+        }
+
+        let entries = vec![
+            PropertyEntry {
+                path: PropertyPath::CharacterFontSize,
+                value: collapse_uniform(&font_sizes).map(Value::Length),
+            },
+            PropertyEntry {
+                path: PropertyPath::CharacterLeading,
+                value: collapse_uniform(&leadings).map(Value::Length),
+            },
+            PropertyEntry {
+                path: PropertyPath::CharacterTracking,
+                value: collapse_uniform(&trackings).map(Value::Length),
+            },
+            PropertyEntry {
+                path: PropertyPath::CharacterFillColor,
+                value: collapse_uniform(&fill_colors).map(Value::ColorRef),
+            },
+        ];
+
+        Some(ElementProperties {
+            id: id.clone(),
+            kind: "StoryRange".to_string(),
+            name: None,
+            entries,
+        })
     }
 
     /// Inspector P1 — build the scene-tree outline. Spread → Page →
