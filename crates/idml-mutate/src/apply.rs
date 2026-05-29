@@ -428,6 +428,19 @@ fn apply_set_property(
                 },
             )
         }
+        (
+            NodeId::StoryRange {
+                story_id,
+                start,
+                end,
+            },
+            PropertyPath::CharacterFontSize
+            | PropertyPath::CharacterLeading
+            | PropertyPath::CharacterTracking
+            | PropertyPath::CharacterFillColor,
+        ) => {
+            return apply_character_property(doc, story_id, *start, *end, node, path, value);
+        }
         _ => {
             return Err(OperationError::UnsupportedProperty {
                 node: node.clone(),
@@ -446,6 +459,252 @@ fn apply_set_property(
         inverse,
         invalidation,
     })
+}
+
+// ---------------------------------------------------------------------------
+// SDK Phase 3 — character properties addressed by `NodeId::StoryRange`
+// ---------------------------------------------------------------------------
+//
+// The forward op walks `doc.stories[story_id].story.paragraphs`,
+// computing the running character offset across all `CharacterRun.text`
+// fields in order. Runs whose `[run_start, run_end)` intersect
+// `[start, end)` receive the new property value; an inverse `Batch`
+// of restorations is built per affected run.
+//
+// Constraint (this commit): the range must align with whole-run
+// boundaries. If `start` or `end` cuts inside a `CharacterRun.text`,
+// the apply returns `OperationError::Unimplemented`. Run-splitting
+// at arbitrary character offsets is a Phase 3.x follow-up — it
+// needs a story-snapshot inverse strategy (clone the affected
+// paragraphs' run lists pre-mutation, restore on undo) to round-
+// trip bytewise, which in turn needs `CharacterRun` to derive
+// Deserialize/PartialEq/Tsify. Out of scope for this commit;
+// today's editor-binding-flow can target catalog-bound writes that
+// already snap to run boundaries.
+
+fn apply_character_property(
+    doc: &mut Document,
+    story_id: &str,
+    start: u32,
+    end: u32,
+    node: &NodeId,
+    path: PropertyPath,
+    value: &Value,
+) -> Result<AppliedOperation, OperationError> {
+    if start >= end {
+        return Err(OperationError::InvalidValue {
+            node: node.clone(),
+            path,
+            reason: format!("empty range: start={start} >= end={end}"),
+        });
+    }
+
+    // Find the story by self_id.
+    let story_idx = doc
+        .stories
+        .iter()
+        .position(|s| s.self_id == story_id)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+
+    // Collect (paragraph_index, run_index, run_start, run_end) for
+    // every run that intersects [start, end). Walk in one pass to
+    // accumulate the running character offset.
+    let mut affected: Vec<(usize, usize)> = Vec::new();
+    {
+        let story = &doc.stories[story_idx].story;
+        let mut char_offset: u32 = 0;
+        for (para_idx, para) in story.paragraphs.iter().enumerate() {
+            for (run_idx, run) in para.runs.iter().enumerate() {
+                let run_len = run.text.chars().count() as u32;
+                let run_start = char_offset;
+                let run_end = char_offset + run_len;
+                char_offset = run_end;
+
+                // Whole-run-only constraint: a run intersects the
+                // requested range either entirely or not at all.
+                let intersects = run_end > start && run_start < end;
+                if !intersects {
+                    continue;
+                }
+                let aligned = run_start >= start && run_end <= end;
+                if !aligned {
+                    return Err(OperationError::InvalidValue {
+                        node: node.clone(),
+                        path,
+                        reason: format!(
+                            "range [{start}, {end}) cuts inside CharacterRun \
+                             [paragraph {para_idx}, run {run_idx}] spanning \
+                             [{run_start}, {run_end}); whole-run-aligned ranges \
+                             only in this build (Phase 3.x extends to partial \
+                             ranges via run-splitting + story-snapshot inverse)"
+                        ),
+                    });
+                }
+                affected.push((para_idx, run_idx));
+            }
+        }
+    }
+
+    if affected.is_empty() {
+        // No runs in the range — nothing to mutate. Return a no-op
+        // applied operation so the caller's undo stack stays
+        // consistent (the inverse is the same SetProperty op).
+        return Ok(AppliedOperation {
+            op: Operation::SetProperty {
+                node: node.clone(),
+                path,
+                value: value.clone(),
+            },
+            inverse: Operation::SetProperty {
+                node: node.clone(),
+                path,
+                value: value.clone(),
+            },
+            invalidation: InvalidationHint::default(),
+        });
+    }
+
+    // Apply the new value to each affected run, capturing the
+    // previous value for the inverse Batch. The inverse is a sequence
+    // of SetProperty Ops each addressing the SAME (story_id, run's
+    // character range), so undo restores per-run values without
+    // re-running the alignment check.
+    let story = &mut doc.stories[story_idx].story;
+    let mut inverse_ops: Vec<Operation> = Vec::with_capacity(affected.len());
+    let mut char_offset: u32 = 0;
+    // Walk again to know each run's [run_start, run_end) so we can
+    // address it precisely in the inverse. The two-pass design keeps
+    // the borrow checker happy: the first pass borrowed `&story`,
+    // here we hold `&mut story`.
+    for (para_idx, para) in story.paragraphs.iter_mut().enumerate() {
+        for (run_idx, run) in para.runs.iter_mut().enumerate() {
+            let run_len = run.text.chars().count() as u32;
+            let run_start = char_offset;
+            let run_end = char_offset + run_len;
+            char_offset = run_end;
+            if !affected.contains(&(para_idx, run_idx)) {
+                continue;
+            }
+            let (prev_value, new_set) = apply_character_field_on_run(run, path, value)?;
+            inverse_ops.push(Operation::SetProperty {
+                node: NodeId::StoryRange {
+                    story_id: story_id.to_string(),
+                    start: run_start,
+                    end: run_end,
+                },
+                path,
+                value: prev_value,
+            });
+            // `new_set` is the actually-written value; if the caller
+            // sent a `Length(None)` for "clear", `new_set` reflects
+            // that. We don't use it directly here but keep the local
+            // for clarity / future logging.
+            let _ = new_set;
+        }
+    }
+
+    // Build an InvalidationHint targeting the host text frame so the
+    // renderer's text-reflow cache invalidates the right page. The
+    // story-to-frame index is built at document open; if it's empty
+    // (shouldn't happen for parsed docs) we leave the hint default.
+    let invalidation = match doc.frame_for_story.get(story_id) {
+        Some(frame) => {
+            if let Some(self_id) = &frame.self_id {
+                InvalidationHint {
+                    text_reflow: vec![NodeId::TextFrame(self_id.clone())],
+                    ..Default::default()
+                }
+            } else {
+                InvalidationHint::default()
+            }
+        }
+        None => InvalidationHint::default(),
+    };
+
+    // The forward op's recorded form is the original (caller-provided)
+    // node/path/value. The inverse is a Batch of per-run restorations
+    // — even if there's only one affected run, wrapping in Batch keeps
+    // the inverse shape stable across the cardinality of the range.
+    let inverse = if inverse_ops.len() == 1 {
+        inverse_ops.into_iter().next().unwrap()
+    } else {
+        Operation::Batch { ops: inverse_ops }
+    };
+
+    Ok(AppliedOperation {
+        op: Operation::SetProperty {
+            node: node.clone(),
+            path,
+            value: value.clone(),
+        },
+        inverse,
+        invalidation,
+    })
+}
+
+/// Apply one character property to one `CharacterRun`. Returns
+/// (previous_value, new_value) on success. The new_value mirrors
+/// what was set so downstream logging can attribute correctly even
+/// when the caller passes through e.g. `Length(None)`.
+fn apply_character_field_on_run(
+    run: &mut idml_parse::CharacterRun,
+    path: PropertyPath,
+    value: &Value,
+) -> Result<(Value, Value), OperationError> {
+    match path {
+        PropertyPath::CharacterFontSize => {
+            let Value::Length(new_val) = value else {
+                return Err(OperationError::TypeMismatch {
+                    path,
+                    expected: "Length".to_string(),
+                });
+            };
+            let prev = run.point_size;
+            run.point_size = *new_val;
+            Ok((Value::Length(prev), Value::Length(*new_val)))
+        }
+        PropertyPath::CharacterLeading => {
+            let Value::Length(new_val) = value else {
+                return Err(OperationError::TypeMismatch {
+                    path,
+                    expected: "Length".to_string(),
+                });
+            };
+            let prev = run.leading;
+            run.leading = *new_val;
+            Ok((Value::Length(prev), Value::Length(*new_val)))
+        }
+        PropertyPath::CharacterTracking => {
+            let Value::Length(new_val) = value else {
+                return Err(OperationError::TypeMismatch {
+                    path,
+                    expected: "Length".to_string(),
+                });
+            };
+            let prev = run.tracking;
+            run.tracking = *new_val;
+            Ok((Value::Length(prev), Value::Length(*new_val)))
+        }
+        PropertyPath::CharacterFillColor => {
+            let Value::ColorRef(new_val) = value else {
+                return Err(OperationError::TypeMismatch {
+                    path,
+                    expected: "ColorRef".to_string(),
+                });
+            };
+            let prev = run.fill_color.clone();
+            run.fill_color = new_val.clone();
+            Ok((Value::ColorRef(prev), Value::ColorRef(new_val.clone())))
+        }
+        _ => Err(OperationError::UnsupportedProperty {
+            node: NodeId::StoryRange {
+                story_id: String::new(),
+                start: 0,
+                end: 0,
+            },
+            path,
+        }),
+    }
 }
 
 // ---------------------------------------------------------------------------

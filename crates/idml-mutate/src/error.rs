@@ -29,6 +29,18 @@ pub enum OperationError {
         expected: String,
     },
 
+    /// SDK Phase 3 — the carried `Value` was the right kind for the
+    /// path but is semantically invalid for the addressed node. For
+    /// example, `(NodeId::StoryRange, CharacterFontSize, Length(_))`
+    /// is type-correct but fails if the range is empty or cuts inside
+    /// a `CharacterRun` (whole-run-only constraint in this build).
+    #[error("invalid value for {path:?} on {node:?}: {reason}")]
+    InvalidValue {
+        node: NodeId,
+        path: PropertyPath,
+        reason: String,
+    },
+
     #[error("parent {parent:?} cannot host a {child_kind} child")]
     InvalidParent {
         parent: NodeId,

@@ -146,7 +146,7 @@ mod tests {
         Bounds, Container, DesignMap, Graphic, PathAnchor, Polygon, Spread, StyleSheet,
         TextFrame as ParsedTextFrame,
     };
-    use idml_scene::ParsedSpread;
+    use idml_scene::{ParsedSpread, ParsedStory};
     use crate::operation::PathAnchorSpec;
     use crate::path_math::smooth_handles_from_neighbours;
 
@@ -1894,30 +1894,191 @@ mod tests {
         assert_eq!(parsed, node);
     }
 
-    /// Character `PropertyPath`s are wire-shape-only today (no apply
-    /// arm yet — that's the first Phase 3 work after this prep
-    /// commit). A `SetProperty` against `StoryRange` + a character
-    /// path falls through to `OperationError::UnsupportedProperty`,
-    /// which is the expected behaviour for prep — Phase 3 replaces
-    /// the fallback with real apply arms.
+    /// Builds a Document with one parsed story containing three
+    /// `CharacterRun`s split across two paragraphs:
+    ///   paragraph 0: runs ["Hello ", "world"]  (offsets 0..6, 6..11)
+    ///   paragraph 1: runs ["!"]                (offset 11..12)
+    /// Used to exercise the character-property apply arm + the
+    /// whole-run-only constraint.
+    fn document_with_one_story(story_id: &str) -> Document {
+        use idml_parse::{CharacterRun, Paragraph, Story};
+
+        let mk_run = |text: &str| CharacterRun {
+            text: text.to_string(),
+            point_size: Some(10.0),
+            leading: Some(12.0),
+            tracking: Some(0.0),
+            fill_color: Some("Color/Black".to_string()),
+            ..CharacterRun::default()
+        };
+
+        let mut para1 = Paragraph::default();
+        para1.runs.push(mk_run("Hello "));
+        para1.runs.push(mk_run("world"));
+        let mut para2 = Paragraph::default();
+        para2.runs.push(mk_run("!"));
+
+        let story = Story {
+            paragraphs: vec![para1, para2],
+            optical_margin_alignment: false,
+            optical_margin_size: 0.0,
+            story_direction: None,
+        };
+
+        Document {
+            container: Container {
+                mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
+                designmap_raw: Bytes::new(),
+                designmap: DesignMap::default(),
+                entries: BTreeMap::new(),
+            },
+            palette: Graphic::default(),
+            spreads: Vec::new(),
+            stories: vec![ParsedStory {
+                src: format!("Stories/Story_{story_id}.xml"),
+                self_id: story_id.to_string(),
+                story,
+            }],
+            master_spreads: HashMap::new(),
+            frame_for_story: HashMap::new(),
+            text_frame_index: HashMap::new(),
+            styles: StyleSheet::default(),
+            anchors: Vec::new(),
+        }
+    }
+
+    /// Happy path: a SetProperty against a `StoryRange` covering the
+    /// first run [0, 6) sets the new font size and returns an inverse
+    /// that restores the prior value.
     #[test]
-    fn character_set_property_against_story_range_is_unsupported_today() {
-        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+    fn character_font_size_applies_to_whole_run_range_and_undo_round_trips() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
         let op = Operation::SetProperty {
             node: NodeId::StoryRange {
                 story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::CharacterFontSize,
+            value: Value::Length(Some(24.0)),
+        };
+        let applied = project.apply(op).expect("apply must succeed");
+
+        // First run's point_size should now be 24.0; the second
+        // ("world") and third ("!") runs stay at 10.0.
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].runs[0].point_size, Some(24.0));
+        assert_eq!(story.paragraphs[0].runs[1].point_size, Some(10.0));
+        assert_eq!(story.paragraphs[1].runs[0].point_size, Some(10.0));
+
+        // Inverse restores 10.0 (the original).
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].runs[0].point_size, Some(10.0));
+    }
+
+    /// Multi-run range: a SetProperty against [0, 11) covers both
+    /// runs of paragraph 0; the inverse is a Batch of two
+    /// per-run restorations.
+    #[test]
+    fn character_font_size_applies_across_multiple_runs() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 11,
+            },
+            path: PropertyPath::CharacterFontSize,
+            value: Value::Length(Some(14.0)),
+        };
+        let applied = project.apply(op).expect("apply must succeed");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].runs[0].point_size, Some(14.0));
+        assert_eq!(story.paragraphs[0].runs[1].point_size, Some(14.0));
+        // Run beyond the range is unchanged.
+        assert_eq!(story.paragraphs[1].runs[0].point_size, Some(10.0));
+
+        // Inverse should be a Batch (two ops).
+        assert!(matches!(&applied.inverse, Operation::Batch { ops } if ops.len() == 2));
+    }
+
+    /// Whole-run-only constraint: a range cutting inside a run
+    /// returns `InvalidValue` with a descriptive reason. Phase 3.x
+    /// replaces this with run-splitting + story-snapshot inverse.
+    #[test]
+    fn character_set_property_against_partial_run_is_unimplemented() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        // The first run is "Hello " (0..6); a range [2, 4) cuts inside it.
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 2,
+                end: 4,
+            },
+            path: PropertyPath::CharacterFontSize,
+            value: Value::Length(Some(14.0)),
+        };
+        let err = project.apply(op).expect_err("partial-run range");
+        assert!(
+            matches!(err, OperationError::InvalidValue { .. }),
+            "expected InvalidValue, got: {err:?}"
+        );
+    }
+
+    /// Missing story: a SetProperty against a `StoryRange` whose
+    /// story_id doesn't exist returns `NodeNotFound`, the same shape
+    /// every other addressed mutation uses for "addressee gone".
+    #[test]
+    fn character_set_property_against_missing_story_errs_node_not_found() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/missing".to_string(),
                 start: 0,
                 end: 10,
             },
             path: PropertyPath::CharacterFontSize,
             value: Value::Length(Some(12.0)),
         };
-        let err = project.apply(op).expect_err("no apply arm yet");
-        // The current default arm fires `UnsupportedProperty` for
-        // any (node, path) the apply layer hasn't claimed.
+        let err = project.apply(op).expect_err("story missing");
         assert!(
-            matches!(err, OperationError::UnsupportedProperty { .. }),
-            "expected UnsupportedProperty, got: {err:?}"
+            matches!(err, OperationError::NodeNotFound(_)),
+            "expected NodeNotFound, got: {err:?}"
+        );
+    }
+
+    /// CharacterFillColor end-to-end: switches the colour ref + undo
+    /// restores. Covers the `Value::ColorRef` path arm.
+    #[test]
+    fn character_fill_color_round_trips() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 6,
+                end: 11,
+            },
+            path: PropertyPath::CharacterFillColor,
+            value: Value::ColorRef(Some("Color/Red".to_string())),
+        };
+        let applied = project.apply(op).expect("apply must succeed");
+        let story = &project.document().stories[0].story;
+        assert_eq!(
+            story.paragraphs[0].runs[1].fill_color.as_deref(),
+            Some("Color/Red")
+        );
+        // Other runs untouched.
+        assert_eq!(
+            story.paragraphs[0].runs[0].fill_color.as_deref(),
+            Some("Color/Black")
+        );
+        // Undo restores Color/Black.
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        assert_eq!(
+            story.paragraphs[0].runs[1].fill_color.as_deref(),
+            Some("Color/Black")
         );
     }
 }
