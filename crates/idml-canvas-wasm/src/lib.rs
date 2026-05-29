@@ -1102,6 +1102,33 @@ mod wasm {
         idml_canvas::CAMERA_SAB_BYTES
     }
 
+    // Full camera SAB layout snapshot — single source of truth for the
+    // byte size + offsets the SAB writer/reader use. The TS side
+    // (`apps/canvas/src/channel/camera.ts`) reconciles its hardcoded
+    // mirror against this struct at worker init.
+    #[wasm_bindgen(js_name = cameraSabLayout)]
+    pub fn camera_sab_layout() -> idml_canvas::CameraSabLayout {
+        idml_canvas::CameraSabLayout::canonical()
+    }
+
+    // Gesture SAB byte size — mirrors `cameraSabBytes`. The TS
+    // `GestureBuffer` allocator reads this at worker init and asserts
+    // its hardcoded mirror matches.
+    #[wasm_bindgen(js_name = gestureSabBytes)]
+    pub fn gesture_sab_bytes() -> usize {
+        idml_canvas::GESTURE_SAB_BYTES
+    }
+
+    // Full gesture SAB layout snapshot — single source of truth for the
+    // offsets + modifier bit masks the producer/consumer use. The TS
+    // side (`packages/shell/src/gestures/gesture-sab.ts`) reconciles
+    // its own hardcoded mirror against this struct at worker init and
+    // fires a `protocolMismatch` warning on drift.
+    #[wasm_bindgen(js_name = gestureSabLayout)]
+    pub fn gesture_sab_layout() -> idml_canvas::GestureSabLayout {
+        idml_canvas::GestureSabLayout::canonical()
+    }
+
     // Suppress unused-import warning when only the wasm target uses
     // the LoadError import in this module.
     #[allow(dead_code)]

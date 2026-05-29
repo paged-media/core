@@ -32,6 +32,14 @@
 //! (canvas §5.1) — the next frame reads consistent state. For values
 //! where torn reads would corrupt behaviour (selection, mutation),
 //! the typed channel is used instead.
+//!
+//! Single source of truth: the constants below are Rust-authoritative;
+//! TS-side mirrors in `apps/canvas/src/channel/camera.ts` read them
+//! via `cameraSabBytes()` / `cameraSabLayout()` at worker init and
+//! reconcile, firing a `protocolMismatch` warning on drift.
+
+use serde::{Deserialize, Serialize};
+use tsify_next::Tsify;
 
 /// Total bytes the camera SAB occupies. The writer (JS) allocates
 /// `new SharedArrayBuffer(CAMERA_SAB_BYTES)`; the reader maps the
@@ -44,6 +52,38 @@ pub const OFFSET_TX: usize = 4;
 pub const OFFSET_TY: usize = 8;
 pub const OFFSET_GEN_LO: usize = 16;
 pub const OFFSET_GEN_HI: usize = 20;
+
+/// Tsify-exposed snapshot of the camera SAB layout. The TS-side
+/// `CameraBuffer` reads this once at startup via `cameraSabLayout()`
+/// and asserts its own hardcoded `OFFSET_*` constants match — any
+/// drift triggers a `protocolMismatch` warning on the canvas.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraSabLayout {
+    pub bytes: u32,
+    pub offset_scale: u32,
+    pub offset_tx: u32,
+    pub offset_ty: u32,
+    pub offset_gen_lo: u32,
+    pub offset_gen_hi: u32,
+}
+
+impl CameraSabLayout {
+    /// Canonical layout — single source of truth for the camera SAB
+    /// contract. Mirrors the per-const declarations above; the unit
+    /// test below asserts they stay in sync.
+    pub const fn canonical() -> Self {
+        Self {
+            bytes: CAMERA_SAB_BYTES as u32,
+            offset_scale: OFFSET_SCALE as u32,
+            offset_tx: OFFSET_TX as u32,
+            offset_ty: OFFSET_TY as u32,
+            offset_gen_lo: OFFSET_GEN_LO as u32,
+            offset_gen_hi: OFFSET_GEN_HI as u32,
+        }
+    }
+}
 
 /// Canonical camera transform: document space → viewport space.
 /// `scale` is pixels-per-pt; `tx`, `ty` are the viewport-space
@@ -163,15 +203,28 @@ mod tests {
 
     #[test]
     fn sab_layout_constants_match_spec() {
-        // Locked-down field offsets — TS code in apps/canvas/ hardcodes
-        // the same values via the camera contract types. Any drift
-        // here is a wire-format break.
+        // Locked-down field offsets — TS code in apps/canvas/ reads
+        // these via `cameraSabBytes()` / `cameraSabLayout()` at worker
+        // init and reconciles its hardcoded mirror. Any drift here
+        // either trips this assert (Rust-side) or the runtime reconcile
+        // (TS-side).
         assert_eq!(OFFSET_SCALE, 0);
         assert_eq!(OFFSET_TX, 4);
         assert_eq!(OFFSET_TY, 8);
         assert_eq!(OFFSET_GEN_LO, 16);
         assert_eq!(OFFSET_GEN_HI, 20);
         assert_eq!(CAMERA_SAB_BYTES, 32);
+    }
+
+    #[test]
+    fn camera_sab_layout_canonical_matches_constants() {
+        let lo = CameraSabLayout::canonical();
+        assert_eq!(lo.bytes, CAMERA_SAB_BYTES as u32);
+        assert_eq!(lo.offset_scale, OFFSET_SCALE as u32);
+        assert_eq!(lo.offset_tx, OFFSET_TX as u32);
+        assert_eq!(lo.offset_ty, OFFSET_TY as u32);
+        assert_eq!(lo.offset_gen_lo, OFFSET_GEN_LO as u32);
+        assert_eq!(lo.offset_gen_hi, OFFSET_GEN_HI as u32);
     }
 
     #[test]

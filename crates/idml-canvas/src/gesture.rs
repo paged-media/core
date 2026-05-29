@@ -29,6 +29,109 @@ use tsify_next::Tsify;
 use crate::element_selection::ElementId;
 use crate::model::{CanvasModel, FrameMutationOutcome};
 
+// ---------------------------------------------------------------------------
+// SharedArrayBuffer layout for raw gesture updates.
+//
+// The gesture SAB is the one-slot mailbox the main thread writes
+// pointer deltas into and the worker drains every tick. The producer
+// (main thread) writes the slot atomically and bumps the generation
+// counter; the consumer (worker) coalesces — only the latest record
+// per drain matters. Mirrors the camera SAB pattern in
+// `crate::camera`.
+//
+// Layout (little-endian, 32-byte buffer, eight u32 words):
+//
+//   word 0:  handle_lo  (u32) — gesture handle low word
+//   word 1:  handle_hi  (u32) — gesture handle high word
+//   word 2:  dx         (f32) — pointer-delta x (page-local pt)
+//   word 3:  dy         (f32) — pointer-delta y (page-local pt)
+//   word 4:  modifiers  (u32) — bit 0 = shift, bit 1 = alt, bit 2 = disable_snap
+//   word 5:  seq        (u32) — bumps on every producer write
+//   word 6:  gen_lo     (u32) — generation low (Atomics.add target)
+//   word 7:  gen_hi     (u32) — generation high
+//
+// This is the canonical layout. The TS-side mirror in
+// `packages/shell/src/gestures/gesture-sab.ts` consumes the byte size
+// via `gestureSabBytes()` on the wasm module and asserts the offsets
+// match at worker init; any drift fires a `protocolMismatch` warning
+// like the `PROTOCOL_VERSION` check next door.
+
+/// Total bytes the gesture SAB occupies. The producer (JS) allocates
+/// `new SharedArrayBuffer(GESTURE_SAB_BYTES)`; the consumer maps the
+/// same buffer.
+pub const GESTURE_SAB_BYTES: usize = 32;
+
+/// u32 word index of the gesture handle's low 32 bits.
+pub const GESTURE_OFFSET_HANDLE_LO: usize = 0;
+/// u32 word index of the gesture handle's high 32 bits.
+pub const GESTURE_OFFSET_HANDLE_HI: usize = 1;
+/// u32 word index of the pointer-delta x (f32 reinterpreted).
+pub const GESTURE_OFFSET_DX: usize = 2;
+/// u32 word index of the pointer-delta y (f32 reinterpreted).
+pub const GESTURE_OFFSET_DY: usize = 3;
+/// u32 word index of the modifier bit-mask.
+pub const GESTURE_OFFSET_MODIFIERS: usize = 4;
+/// u32 word index of the producer's monotone seq counter.
+pub const GESTURE_OFFSET_SEQ: usize = 5;
+/// u32 word index of the generation counter's low 32 bits.
+pub const GESTURE_OFFSET_GEN_LO: usize = 6;
+/// u32 word index of the generation counter's high 32 bits.
+pub const GESTURE_OFFSET_GEN_HI: usize = 7;
+
+/// Bit mask: shift held during this update.
+pub const GESTURE_MODIFIER_SHIFT: u32 = 1 << 0;
+/// Bit mask: alt held during this update.
+pub const GESTURE_MODIFIER_ALT: u32 = 1 << 1;
+/// Bit mask: ctrl (snap-bypass) held during this update.
+/// Plan-2 §8.4 — passing this bit short-circuits the snap pass.
+pub const GESTURE_MODIFIER_DISABLE_SNAP: u32 = 1 << 2;
+
+/// Tsify-exposed snapshot of the SAB layout. The TS-side worker glue
+/// reads this once at startup and asserts its own hardcoded mirror
+/// matches; any drift triggers a `protocolMismatch` warning identical
+/// to the `PROTOCOL_VERSION` reconciliation. Keeping the layout in
+/// Rust lets a single edit drive both sides — TS sees the new value
+/// the next time wasm rebuilds.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct GestureSabLayout {
+    pub bytes: u32,
+    pub offset_handle_lo: u32,
+    pub offset_handle_hi: u32,
+    pub offset_dx: u32,
+    pub offset_dy: u32,
+    pub offset_modifiers: u32,
+    pub offset_seq: u32,
+    pub offset_gen_lo: u32,
+    pub offset_gen_hi: u32,
+    pub modifier_shift: u32,
+    pub modifier_alt: u32,
+    pub modifier_disable_snap: u32,
+}
+
+impl GestureSabLayout {
+    /// Canonical layout — single source of truth for the gesture SAB
+    /// contract. The wasm wrapper hands this value to the TS side
+    /// (see `idml-canvas-wasm::gestureSabLayout`).
+    pub const fn canonical() -> Self {
+        Self {
+            bytes: GESTURE_SAB_BYTES as u32,
+            offset_handle_lo: GESTURE_OFFSET_HANDLE_LO as u32,
+            offset_handle_hi: GESTURE_OFFSET_HANDLE_HI as u32,
+            offset_dx: GESTURE_OFFSET_DX as u32,
+            offset_dy: GESTURE_OFFSET_DY as u32,
+            offset_modifiers: GESTURE_OFFSET_MODIFIERS as u32,
+            offset_seq: GESTURE_OFFSET_SEQ as u32,
+            offset_gen_lo: GESTURE_OFFSET_GEN_LO as u32,
+            offset_gen_hi: GESTURE_OFFSET_GEN_HI as u32,
+            modifier_shift: GESTURE_MODIFIER_SHIFT,
+            modifier_alt: GESTURE_MODIFIER_ALT,
+            modifier_disable_snap: GESTURE_MODIFIER_DISABLE_SNAP,
+        }
+    }
+}
+
 /// Opaque, monotone handle returned by `begin_gesture`. Callers pass
 /// it back to `update_gesture` / `commit_gesture` / `cancel_gesture`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
@@ -1798,6 +1901,47 @@ fn build_op_from_mutation(snap: &NodeSnapshot, mutation: NodeMutation) -> Operat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gesture_sab_layout_constants_match_spec() {
+        // Locked-down byte size + u32-word offsets. The TS-side mirror
+        // in `packages/shell/src/gestures/gesture-sab.ts` reads
+        // `gestureSabBytes()` from wasm at worker init and asserts its
+        // own `OFFSET_*` constants against
+        // `GestureSabLayout::canonical()` — any drift here will fire
+        // a `protocolMismatch` warning on the canvas.
+        assert_eq!(GESTURE_SAB_BYTES, 32);
+        assert_eq!(GESTURE_OFFSET_HANDLE_LO, 0);
+        assert_eq!(GESTURE_OFFSET_HANDLE_HI, 1);
+        assert_eq!(GESTURE_OFFSET_DX, 2);
+        assert_eq!(GESTURE_OFFSET_DY, 3);
+        assert_eq!(GESTURE_OFFSET_MODIFIERS, 4);
+        assert_eq!(GESTURE_OFFSET_SEQ, 5);
+        assert_eq!(GESTURE_OFFSET_GEN_LO, 6);
+        assert_eq!(GESTURE_OFFSET_GEN_HI, 7);
+        assert_eq!(GESTURE_MODIFIER_SHIFT, 0b001);
+        assert_eq!(GESTURE_MODIFIER_ALT, 0b010);
+        assert_eq!(GESTURE_MODIFIER_DISABLE_SNAP, 0b100);
+        // Total bytes = 8 u32 words.
+        assert_eq!(GESTURE_SAB_BYTES, 8 * std::mem::size_of::<u32>());
+    }
+
+    #[test]
+    fn gesture_sab_layout_canonical_matches_constants() {
+        let lo = GestureSabLayout::canonical();
+        assert_eq!(lo.bytes, GESTURE_SAB_BYTES as u32);
+        assert_eq!(lo.offset_handle_lo, GESTURE_OFFSET_HANDLE_LO as u32);
+        assert_eq!(lo.offset_handle_hi, GESTURE_OFFSET_HANDLE_HI as u32);
+        assert_eq!(lo.offset_dx, GESTURE_OFFSET_DX as u32);
+        assert_eq!(lo.offset_dy, GESTURE_OFFSET_DY as u32);
+        assert_eq!(lo.offset_modifiers, GESTURE_OFFSET_MODIFIERS as u32);
+        assert_eq!(lo.offset_seq, GESTURE_OFFSET_SEQ as u32);
+        assert_eq!(lo.offset_gen_lo, GESTURE_OFFSET_GEN_LO as u32);
+        assert_eq!(lo.offset_gen_hi, GESTURE_OFFSET_GEN_HI as u32);
+        assert_eq!(lo.modifier_shift, GESTURE_MODIFIER_SHIFT);
+        assert_eq!(lo.modifier_alt, GESTURE_MODIFIER_ALT);
+        assert_eq!(lo.modifier_disable_snap, GESTURE_MODIFIER_DISABLE_SNAP);
+    }
 
     fn b(top: f32, left: f32, bottom: f32, right: f32) -> Bounds {
         Bounds {

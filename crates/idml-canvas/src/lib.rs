@@ -43,14 +43,18 @@ pub mod selection;
 pub mod snap;
 pub mod snapshot;
 
-pub use camera::{Camera, CameraLayout, CAMERA_SAB_BYTES};
+pub use camera::{Camera, CameraLayout, CameraSabLayout, CAMERA_SAB_BYTES};
 pub use channel::{
     ElementGeometryItem, HitFilter, HitResult, LoadError, MainToWorker, MainToWorkerKind, Mutation,
     ProtocolVersion, WorkerError, WorkerToMain, WorkerToMainKind, PROTOCOL_VERSION,
 };
 pub use element_selection::{ElementId, ElementSelection, SelectionMode};
 pub use gesture::{
-    GestureAnchor, GestureError, GestureHandle, GestureModifiers, GestureType, ResizeHandle,
+    GestureAnchor, GestureError, GestureHandle, GestureModifiers, GestureSabLayout, GestureType,
+    ResizeHandle, GESTURE_MODIFIER_ALT, GESTURE_MODIFIER_DISABLE_SNAP, GESTURE_MODIFIER_SHIFT,
+    GESTURE_OFFSET_DX, GESTURE_OFFSET_DY, GESTURE_OFFSET_GEN_HI, GESTURE_OFFSET_GEN_LO,
+    GESTURE_OFFSET_HANDLE_HI, GESTURE_OFFSET_HANDLE_LO, GESTURE_OFFSET_MODIFIERS,
+    GESTURE_OFFSET_SEQ, GESTURE_SAB_BYTES,
 };
 pub use snap::{SnapAxis, SnapLine};
 pub use hit::HitTestResult;
