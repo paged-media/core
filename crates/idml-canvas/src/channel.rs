@@ -49,7 +49,7 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(16);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(17);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -681,6 +681,25 @@ pub struct PropertyEntry {
     pub path: idml_mutate::PropertyPath,
     #[serde(default)]
     pub value: Option<idml_mutate::Value>,
+}
+
+/// SDK Phase 3 — one story's identity + total character length.
+/// Surfaced by `CanvasModel::stories()` and the `verso.stories()`
+/// script host function so consumers can pick valid character
+/// ranges (e.g. `[0, length)` is always a well-formed StoryRange).
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct StorySummary {
+    /// IDML `Self` id (`Story/u123`).
+    pub self_id: String,
+    /// Total character count across every `CharacterRun.text` in
+    /// every paragraph. The largest valid `StoryRange.end`.
+    pub character_count: u32,
+    /// Number of paragraphs. Useful for binding-renderer fallbacks
+    /// that want to address "the whole story" without computing
+    /// the character count.
+    pub paragraph_count: u32,
 }
 
 /// Inspector P1 — one node in the scene tree. Children are nested

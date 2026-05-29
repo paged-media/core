@@ -324,6 +324,53 @@ fn verso_inspect_story_range_returns_character_entries() {
     }
 }
 
+/// SDK Phase 3 — `verso.stories()` enumerates loaded stories so
+/// scripts (and tests) can pick valid StoryRange addresses.
+/// Returns a JSON-encoded `StorySummary[]` with selfId +
+/// characterCount + paragraphCount per story.
+#[test]
+fn verso_stories_lists_loaded_stories_with_character_counts() {
+    let mut model = load();
+    let result = execute_script(
+        &mut model,
+        r#"
+            const stories = JSON.parse(verso.stories());
+            console.log("count", stories.length);
+            if (stories.length > 0) {
+                const s = stories[0];
+                console.log("first selfId", typeof s.selfId);
+                console.log("first chars", typeof s.characterCount);
+                console.log("first paras", typeof s.paragraphCount);
+            }
+        "#,
+    );
+    assert!(result.error.is_none(), "{:?}", result.error);
+    // The geometry-groups fixture has stories (per the verso.inspect
+    // story-range tests). Assert the count line surfaced, plus the
+    // shape of the first entry's keys.
+    let count_line = result
+        .output
+        .iter()
+        .find(|l| l.contains("[log] count"))
+        .expect("no count line");
+    // Extract the integer count.
+    let n: usize = count_line
+        .split_whitespace()
+        .last()
+        .and_then(|s| s.parse().ok())
+        .expect("count not parseable");
+    assert!(n > 0, "expected at least one story, got {n}");
+    // Each entry has selfId (string), characterCount (number),
+    // paragraphCount (number).
+    for needle in ["first selfId string", "first chars number", "first paras number"] {
+        assert!(
+            result.output.iter().any(|l| l.contains(needle)),
+            "missing {needle} in {:?}",
+            result.output
+        );
+    }
+}
+
 /// Parser sanity — malformed storyRange addresses return null /
 /// false through verso.set rather than panicking the script.
 #[test]

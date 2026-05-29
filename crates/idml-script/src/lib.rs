@@ -146,6 +146,11 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
         )
         .function(NativeFunction::from_fn_ptr(verso_tree), js_string!("tree"), 0)
         .function(
+            NativeFunction::from_fn_ptr(verso_stories),
+            js_string!("stories"),
+            0,
+        )
+        .function(
             NativeFunction::from_fn_ptr(verso_selection),
             js_string!("selection"),
             0,
@@ -256,6 +261,16 @@ fn verso_layers(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsRes
 
 fn verso_tree(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let s = with_model(|m| serde_json::to_string(&m.scene_tree()).unwrap_or_default());
+    Ok(JsValue::from(js_string!(s)))
+}
+
+/// SDK Phase 3 — returns the loaded document's stories as a JSON-
+/// encoded `StorySummary[]`. Each entry carries `selfId`,
+/// `characterCount`, `paragraphCount`. Scripts use this to pick
+/// valid `StoryRange` addresses; tests use it to populate the
+/// content selection programmatically.
+fn verso_stories(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let s = with_model(|m| serde_json::to_string(&m.stories()).unwrap_or_default());
     Ok(JsValue::from(js_string!(s)))
 }
 

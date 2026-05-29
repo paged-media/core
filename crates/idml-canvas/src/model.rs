@@ -1355,6 +1355,29 @@ impl CanvasModel {
         })
     }
 
+    /// SDK Phase 3 — list every story's self_id + character count.
+    /// Used by `verso.stories()` (the script host fn) and by tests
+    /// that need a valid story id to address a StoryRange edit.
+    pub fn stories(&self) -> Vec<crate::channel::StorySummary> {
+        self.scene
+            .stories
+            .iter()
+            .map(|s| {
+                let mut chars: u32 = 0;
+                for para in &s.story.paragraphs {
+                    for run in &para.runs {
+                        chars += run.text.chars().count() as u32;
+                    }
+                }
+                crate::channel::StorySummary {
+                    self_id: s.self_id.clone(),
+                    character_count: chars,
+                    paragraph_count: s.story.paragraphs.len() as u32,
+                }
+            })
+            .collect()
+    }
+
     /// Inspector P1 — build the scene-tree outline. Spread → Page →
     /// (group leaves OR top-level frames). Light enough to send
     /// eagerly; the panel can re-fetch on `mutationApplied`.
