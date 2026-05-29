@@ -9,7 +9,7 @@ on:
       - "crates/idml-canvas-wasm/**"
       - "crates/idml-mutate/**"
       - "crates/idml-renderer/**"
-      - "apps/canvas/src/wasm/idml_canvas_wasm.d.ts"
+      - "packages/client/src/wasm/idml_canvas_wasm.d.ts"
       - "apps/canvas/build-wasm.sh"
 
 env:
@@ -48,13 +48,13 @@ jobs:
           bash build-wasm.sh
 
       - name: vendored .d.ts must match regenerated output
-        # Diff the whole apps/canvas/src/wasm/ directory so any future
-        # tracked file (e.g. a manifest or sibling .d.ts) is covered.
-        # The .wasm + .js outputs stay gitignored — see
-        # apps/canvas/.gitignore — so only the .d.ts surfaces here.
+        # Diff the whole packages/client/src/wasm/ directory so any
+        # future tracked file (e.g. a manifest or sibling .d.ts) is
+        # covered. The .wasm + .js outputs stay gitignored — see
+        # packages/client/.gitignore — so only the .d.ts surfaces here.
         run: |
-          if ! git diff --exit-code apps/canvas/src/wasm/; then
-            echo "::error::Vendored apps/canvas/src/wasm/ is out of date. Run 'pnpm wasm' (or bash apps/canvas/build-wasm.sh) locally and commit the result."
+          if ! git diff --exit-code packages/client/src/wasm/; then
+            echo "::error::Vendored packages/client/src/wasm/ is out of date. Run 'pnpm wasm' (or bash apps/canvas/build-wasm.sh) locally and commit the result."
             exit 1
           fi
 

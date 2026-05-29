@@ -51,7 +51,7 @@ use crate::model::{CanvasModel, FrameMutationOutcome};
 //   word 7:  gen_hi     (u32) — generation high
 //
 // This is the canonical layout. The TS-side mirror in
-// `packages/shell/src/gestures/gesture-sab.ts` consumes the byte size
+// `packages/client/src/sab/gesture.ts` consumes the byte size
 // via `gestureSabBytes()` on the wasm module and asserts the offsets
 // match at worker init; any drift fires a `protocolMismatch` warning
 // like the `PROTOCOL_VERSION` check next door.
@@ -1905,7 +1905,7 @@ mod tests {
     #[test]
     fn gesture_sab_layout_constants_match_spec() {
         // Locked-down byte size + u32-word offsets. The TS-side mirror
-        // in `packages/shell/src/gestures/gesture-sab.ts` reads
+        // in `packages/client/src/sab/gesture.ts` reads
         // `gestureSabBytes()` from wasm at worker init and asserts its
         // own `OFFSET_*` constants against
         // `GestureSabLayout::canonical()` — any drift here will fire

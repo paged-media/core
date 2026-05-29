@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fails when the vendored apps/canvas/src/wasm/idml_canvas_wasm.d.ts
+# Fails when the vendored packages/client/src/wasm/idml_canvas_wasm.d.ts
 # changes between the merge base and HEAD without a matching bump
 # to PROTOCOL_VERSION in crates/idml-canvas/src/channel.rs.
 #
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 BASE_REF="${BASE_REF:-origin/main}"
-DTS_PATH="apps/canvas/src/wasm/idml_canvas_wasm.d.ts"
+DTS_PATH="packages/client/src/wasm/idml_canvas_wasm.d.ts"
 CHANNEL_PATH="crates/idml-canvas/src/channel.rs"
 
 # Skip the check when the .d.ts didn't exist on the base ref — this
