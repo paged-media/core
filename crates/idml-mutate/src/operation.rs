@@ -236,6 +236,21 @@ pub enum PropertyPath {
     /// placeholder treatment as `AppliedCellStyle`: wire-shape only,
     /// apply layer errors until Tier 2d.
     AppliedTableStyle,
+    /// SDK Phase 5 (v1 sweep) — `<TextWrapPreference Mode="…">` enum.
+    /// Wire value is `Value::Text` carrying the IDML attribute string
+    /// (`"None"`, `"BoundingBoxTextWrap"`, `"ContourTextWrap"`,
+    /// `"JumpObjectTextWrap"`, `"NextColumnTextWrap"`). The apply arm
+    /// reads the current `Option<TextWrap>`, replaces the `mode`
+    /// (preserving `offsets`), and writes back; if the prior was
+    /// `None` it creates a TextWrap with default `[0,0,0,0]` offsets.
+    /// Empty string clears the override (`text_wrap = None`).
+    FrameTextWrapMode,
+    /// SDK Phase 5 (v1 sweep) — `<TextWrapPreference TextWrapOffset="…">`.
+    /// Wire value is `Value::Bounds([top, left, bottom, right])` in
+    /// pt. Same Option<TextWrap> handling as `FrameTextWrapMode` —
+    /// preserves `mode` when set on a prior-None state by defaulting
+    /// to `TextWrapMode::None`.
+    FrameTextWrapOffsets,
     /// SDK Phase 5 (v1 sweep) — paragraph alignment / justification.
     /// Wire value is `Value::Text` carrying the IDML attribute string
     /// (`"LeftAlign"`, `"CenterAlign"`, `"RightAlign"`,
@@ -335,6 +350,8 @@ impl PropertyPath {
             PropertyPath::FrameInsetSpacing => "textFrame.insetSpacing",
             PropertyPath::ParagraphJustification => "paragraph.justification",
             PropertyPath::FrameStrokeEndCap => "frame.strokeEndCap",
+            PropertyPath::FrameTextWrapMode => "frame.textWrapMode",
+            PropertyPath::FrameTextWrapOffsets => "frame.textWrapOffsets",
         }
     }
 }

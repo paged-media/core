@@ -1062,6 +1062,21 @@ impl TextWrapMode {
             _ => Self::Other,
         }
     }
+    /// Render back to the canonical IDML attribute string. Used by
+    /// the editor's `verso.inspect` round-trip + the mutate-layer
+    /// inverse, which need a stable string form. Falls back to
+    /// `"None"` for `Other` since the underlying string was lost on
+    /// `from_idml` (a future fidelity polish carries the raw string).
+    pub fn as_idml(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::BoundingBoxTextWrap => "BoundingBoxTextWrap",
+            Self::ContourTextWrap => "ContourTextWrap",
+            Self::JumpObjectTextWrap => "JumpObjectTextWrap",
+            Self::NextColumnTextWrap => "NextColumnTextWrap",
+            Self::Other => "None",
+        }
+    }
     pub fn is_active(self) -> bool {
         !matches!(self, Self::None)
     }

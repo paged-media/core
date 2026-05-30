@@ -2317,6 +2317,58 @@ mod tests {
         }
     }
 
+    /// SDK Phase 5 (v1 sweep) — text-wrap mode + offsets apply +
+    /// undo. The two paths share the same `Option<TextWrap>` field
+    /// but write distinct halves; both preserve the other half on
+    /// commit.
+    #[test]
+    fn frame_text_wrap_round_trips() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        // Set mode on a fresh fixture (text_wrap = None) → creates
+        // a TextWrap with the picked mode and default offsets.
+        let applied_mode = project
+            .apply(Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FrameTextWrapMode,
+                value: Value::Text("BoundingBoxTextWrap".to_string()),
+            })
+            .expect("apply mode");
+        let tw = project.document().spreads[0].spread.text_frames[0]
+            .text_wrap
+            .expect("text_wrap should now be Some");
+        assert_eq!(tw.mode, idml_parse::TextWrapMode::BoundingBoxTextWrap);
+        assert_eq!(tw.offsets, [0.0; 4]);
+
+        // Set offsets — must preserve mode.
+        project
+            .apply(Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FrameTextWrapOffsets,
+                value: Value::Bounds([6.0, 6.0, 6.0, 6.0]),
+            })
+            .expect("apply offsets");
+        let tw = project.document().spreads[0].spread.text_frames[0]
+            .text_wrap
+            .expect("text_wrap should still be Some");
+        assert_eq!(tw.mode, idml_parse::TextWrapMode::BoundingBoxTextWrap);
+        assert_eq!(tw.offsets, [6.0, 6.0, 6.0, 6.0]);
+
+        // Undo the mode-set: the inverse carries the prior mode
+        // string, which was empty (the fixture started with
+        // text_wrap = None → empty prev_mode string). Empty string
+        // clears the override, so text_wrap returns to `None` —
+        // the offsets set in between are dropped. Bytewise
+        // round-trip across both paths would need a compound
+        // inverse; v1 collapses to single-field semantics.
+        crate::apply(project.document_mut(), &applied_mode.inverse).expect("undo mode");
+        assert!(
+            project.document().spreads[0].spread.text_frames[0]
+                .text_wrap
+                .is_none(),
+            "text_wrap should clear back to None after undo of mode-set"
+        );
+    }
+
     /// SDK Phase 5 (v1 sweep) — paragraph justification apply +
     /// undo. Wire shape: Value::Text carrying the IDML enum string.
     #[test]

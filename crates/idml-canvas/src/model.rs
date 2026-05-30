@@ -1206,6 +1206,22 @@ impl CanvasModel {
                                 )),
                             },
                             PropertyEntry {
+                                path: PropertyPath::FrameTextWrapMode,
+                                value: Some(Value::Text(
+                                    f.text_wrap
+                                        .map(|t| t.mode.as_idml().to_string())
+                                        .unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameTextWrapOffsets,
+                                value: Some(Value::Bounds(
+                                    f.text_wrap
+                                        .map(|t| t.offsets)
+                                        .unwrap_or([0.0; 4]),
+                                )),
+                            },
+                            PropertyEntry {
                                 path: PropertyPath::FrameInsetSpacing,
                                 value: Some(Value::Bounds(
                                     f.inset_spacing.unwrap_or([0.0; 4]),
@@ -1252,6 +1268,22 @@ impl CanvasModel {
                                 path: PropertyPath::AppliedObjectStyle,
                                 value: Some(Value::Text(
                                     f.applied_object_style.clone().unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameTextWrapMode,
+                                value: Some(Value::Text(
+                                    f.text_wrap
+                                        .map(|t| t.mode.as_idml().to_string())
+                                        .unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameTextWrapOffsets,
+                                value: Some(Value::Bounds(
+                                    f.text_wrap
+                                        .map(|t| t.offsets)
+                                        .unwrap_or([0.0; 4]),
                                 )),
                             },
                             PropertyEntry {

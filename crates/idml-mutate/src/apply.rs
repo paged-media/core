@@ -438,6 +438,72 @@ fn apply_set_property(
                 },
             )
         }
+        // ---- SDK Phase 5 (v1 sweep) — text wrap mode + offsets ----
+        // All five page-item kinds (TextFrame / Rectangle / Oval /
+        // Polygon / GraphicLine) carry `text_wrap: Option<TextWrap>`.
+        // Each property writes one field of the TextWrap, preserving
+        // the other; if the prior state was `None`, the apply layer
+        // materialises a default TextWrap (mode=None, offsets=[0;4])
+        // so partial writes don't drop information silently.
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameTextWrapMode,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let tw = find_text_wrap_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev_mode = tw
+                .map(|t| t.mode.as_idml().to_string())
+                .unwrap_or_default();
+            let prev_offsets = tw.map(|t| t.offsets).unwrap_or([0.0; 4]);
+            if new_val.is_empty() {
+                *tw = None;
+            } else {
+                *tw = Some(idml_parse::TextWrap {
+                    mode: idml_parse::TextWrapMode::from_idml(&new_val),
+                    offsets: prev_offsets,
+                });
+            }
+            let _ = prev_offsets;
+            (
+                Value::Text(prev_mode),
+                InvalidationHint {
+                    text_reflow: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameTextWrapOffsets,
+        ) => {
+            let new_offsets = expect_bounds(path, value)?;
+            let tw = find_text_wrap_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev_mode = tw
+                .map(|t| t.mode)
+                .unwrap_or(idml_parse::TextWrapMode::None);
+            let prev_offsets = tw.map(|t| t.offsets).unwrap_or([0.0; 4]);
+            *tw = Some(idml_parse::TextWrap {
+                mode: prev_mode,
+                offsets: new_offsets,
+            });
+            (
+                Value::Bounds(prev_offsets),
+                InvalidationHint {
+                    text_reflow: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         // ---- SDK Phase 5 (v1 sweep) — TextFrame inset spacing ----
         // Only TextFrame carries the inset_spacing field; other
         // page-item kinds fall through to the default
@@ -1692,6 +1758,75 @@ fn find_group_mut<'a>(
             if group.self_id.as_deref() == Some(self_id) {
                 return Some(group);
             }
+        }
+    }
+    None
+}
+
+/// SDK Phase 5 (v1 sweep) — locate the `text_wrap: Option<TextWrap>`
+/// field on any page-item kind that carries it. TextFrame /
+/// Rectangle / Oval / Polygon / GraphicLine all do (Group doesn't —
+/// the wrap rect is a leaf-item concept). Returns a mutable
+/// reference so the apply arm can swap `mode` / `offsets`
+/// independently while preserving the other.
+fn find_text_wrap_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut Option<idml_parse::TextWrap>> {
+    let raw = node.self_id();
+    for parsed in &mut doc.spreads {
+        match node {
+            NodeId::TextFrame(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .text_frames
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(&mut p.text_wrap);
+                }
+            }
+            NodeId::Rectangle(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .rectangles
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(&mut p.text_wrap);
+                }
+            }
+            NodeId::Oval(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .ovals
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(&mut p.text_wrap);
+                }
+            }
+            NodeId::GraphicLine(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .graphic_lines
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(&mut p.text_wrap);
+                }
+            }
+            NodeId::Polygon(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .polygons
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(&mut p.text_wrap);
+                }
+            }
+            _ => {}
         }
     }
     None
