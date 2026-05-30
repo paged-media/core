@@ -193,6 +193,16 @@ pub enum PropertyPath {
     /// `Value::ColorRef(Some(swatch_id))` or `Value::ColorRef(None)`
     /// for "no fill". Addressed against `NodeId::StoryRange`.
     CharacterFillColor,
+    /// SDK Phase 3 — paragraph space-before in points. Value is
+    /// `Value::Length`. Addressed against `NodeId::StoryRange`;
+    /// the apply layer rounds the range to paragraph boundaries
+    /// (paragraphs are atomic — you can't half-apply space-before).
+    ParagraphSpaceBefore,
+    /// SDK Phase 3 — paragraph space-after in points. Same shape
+    /// as SpaceBefore.
+    ParagraphSpaceAfter,
+    /// SDK Phase 3 — first-line indent in points. Same shape.
+    ParagraphFirstLineIndent,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -242,6 +252,9 @@ impl PropertyPath {
             PropertyPath::CharacterLeading => "character.leading",
             PropertyPath::CharacterTracking => "character.tracking",
             PropertyPath::CharacterFillColor => "character.fillColor",
+            PropertyPath::ParagraphSpaceBefore => "paragraph.spaceBefore",
+            PropertyPath::ParagraphSpaceAfter => "paragraph.spaceAfter",
+            PropertyPath::ParagraphFirstLineIndent => "paragraph.firstLineIndent",
         }
     }
 }

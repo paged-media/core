@@ -390,6 +390,9 @@ fn parse_property_path(s: &str) -> Option<idml_mutate::PropertyPath> {
         "characterLeading" => CharacterLeading,
         "characterTracking" => CharacterTracking,
         "characterFillColor" => CharacterFillColor,
+        "paragraphSpaceBefore" => ParagraphSpaceBefore,
+        "paragraphSpaceAfter" => ParagraphSpaceAfter,
+        "paragraphFirstLineIndent" => ParagraphFirstLineIndent,
         _ => return None,
     })
 }
@@ -416,6 +419,9 @@ fn property_path_label(path: idml_mutate::PropertyPath) -> &'static str {
         CharacterLeading => "characterLeading",
         CharacterTracking => "characterTracking",
         CharacterFillColor => "characterFillColor",
+        ParagraphSpaceBefore => "paragraphSpaceBefore",
+        ParagraphSpaceAfter => "paragraphSpaceAfter",
+        ParagraphFirstLineIndent => "paragraphFirstLineIndent",
     }
 }
 

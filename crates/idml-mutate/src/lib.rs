@@ -2102,6 +2102,82 @@ mod tests {
         assert_eq!(story.paragraphs[0].runs[2].point_size, Some(10.0));
     }
 
+    /// SDK Phase 3 — paragraph-space-before applies to every
+    /// paragraph that intersects [start, end). Paragraphs are
+    /// atomic; the apply layer rounds the range to whole
+    /// paragraphs by treating intersection as the trigger.
+    #[test]
+    fn paragraph_space_before_applies_to_intersecting_paragraphs() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        // Range [3, 11): cuts inside paragraph 0 ("Hello world",
+        // chars 0..11) but doesn't reach paragraph 1 ("!" at 11..12).
+        // Should apply to paragraph 0 only.
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 3,
+                end: 11,
+            },
+            path: PropertyPath::ParagraphSpaceBefore,
+            value: Value::Length(Some(18.0)),
+        };
+        let applied = project.apply(op).expect("apply");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].space_before, Some(18.0));
+        // Paragraph 1 unchanged (default `None`).
+        assert_eq!(story.paragraphs[1].space_before, None);
+
+        // Inverse restores the prior value (the fixture didn't set
+        // space_before so it was None).
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].space_before, None);
+    }
+
+    /// Cross-paragraph paragraph-property write: a range that
+    /// touches both paragraphs writes to both.
+    #[test]
+    fn paragraph_space_after_applies_across_paragraphs() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        // Range [5, 12): cuts inside paragraph 0 + covers paragraph 1.
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 5,
+                end: 12,
+            },
+            path: PropertyPath::ParagraphSpaceAfter,
+            value: Value::Length(Some(6.0)),
+        };
+        let applied = project.apply(op).expect("apply");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].space_after, Some(6.0));
+        assert_eq!(story.paragraphs[1].space_after, Some(6.0));
+        // Inverse is a Batch of two restorations.
+        assert!(matches!(&applied.inverse, Operation::Batch { ops } if ops.len() == 2));
+    }
+
+    /// First-line-indent — exercises the third paragraph path.
+    #[test]
+    fn paragraph_first_line_indent_round_trips() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::ParagraphFirstLineIndent,
+            value: Value::Length(Some(12.0)),
+        };
+        let applied = project.apply(op).expect("apply");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].first_line_indent, Some(12.0));
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].first_line_indent, None);
+    }
+
     /// Cross-paragraph range: covers part of paragraph 0's last run
     /// PLUS all of paragraph 1's content. Verifies the per-paragraph
     /// walk correctly handles ranges that span paragraph boundaries.

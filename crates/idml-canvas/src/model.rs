@@ -1290,21 +1290,43 @@ impl CanvasModel {
             .position(|s| s.self_id == story_id)?;
         let story = &self.scene.stories[story_idx].story;
 
-        // Collect per-run values for each character path the apply
-        // layer covers today. Empty if no runs intersect the range.
+        // Collect per-run + per-paragraph values for each path the
+        // apply layer covers today. Character paths walk per-run;
+        // paragraph paths walk per-paragraph (each paragraph that
+        // intersects [start, end) contributes one value).
         let mut font_sizes: Vec<Option<f32>> = Vec::new();
         let mut leadings: Vec<Option<f32>> = Vec::new();
         let mut trackings: Vec<Option<f32>> = Vec::new();
         let mut fill_colors: Vec<Option<String>> = Vec::new();
+        let mut space_before: Vec<Option<f32>> = Vec::new();
+        let mut space_after: Vec<Option<f32>> = Vec::new();
+        let mut first_line_indent: Vec<Option<f32>> = Vec::new();
 
         let mut char_offset: u32 = 0;
         for para in &story.paragraphs {
+            let para_chars: u32 = para
+                .runs
+                .iter()
+                .map(|r| r.text.chars().count() as u32)
+                .sum();
+            let para_start = char_offset;
+            let para_end = char_offset + para_chars;
+
+            // Paragraph intersects iff (para_end > start AND
+            // para_start < end). Collect paragraph-level values for
+            // every intersecting paragraph.
+            if para_end > start && para_start < end {
+                space_before.push(para.space_before);
+                space_after.push(para.space_after);
+                first_line_indent.push(para.first_line_indent);
+            }
+
+            // Character-level walk: per run inside the paragraph.
             for run in &para.runs {
                 let run_len = run.text.chars().count() as u32;
                 let run_start = char_offset;
                 let run_end = char_offset + run_len;
                 char_offset = run_end;
-                // Skip runs entirely outside [start, end).
                 if run_end <= start || run_start >= end {
                     continue;
                 }
@@ -1315,11 +1337,11 @@ impl CanvasModel {
             }
         }
 
-        if font_sizes.is_empty() {
-            // No runs in range — the address is well-formed but
-            // empty. Return an `ElementProperties` with no entries
-            // so the UI shows the (empty) StoryRange panel rather
-            // than treating the address as "not found".
+        if font_sizes.is_empty() && space_before.is_empty() {
+            // No runs and no paragraphs intersect — well-formed but
+            // empty address. Return empty entries so the UI shows
+            // the (empty) StoryRange panel rather than treating the
+            // address as "not found".
             return Some(ElementProperties {
                 id: id.clone(),
                 kind: "StoryRange".to_string(),
@@ -1344,6 +1366,18 @@ impl CanvasModel {
             PropertyEntry {
                 path: PropertyPath::CharacterFillColor,
                 value: collapse_uniform(&fill_colors).map(Value::ColorRef),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphSpaceBefore,
+                value: collapse_uniform(&space_before).map(Value::Length),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphSpaceAfter,
+                value: collapse_uniform(&space_after).map(Value::Length),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphFirstLineIndent,
+                value: collapse_uniform(&first_line_indent).map(Value::Length),
             },
         ];
 

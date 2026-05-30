@@ -329,20 +329,23 @@ fn verso_inspect_story_range_returns_character_entries() {
         .iter()
         .find(|l| l.starts_with("[log] entries"))
         .expect("no entries line");
-    // 4 character paths (FontSize / Leading / Tracking / FillColor).
-    assert!(entries_line.contains("4"), "got: {entries_line}");
+    // 4 character paths (FontSize / Leading / Tracking / FillColor)
+    // + 3 paragraph paths (SpaceBefore / SpaceAfter / FirstLineIndent).
+    assert!(entries_line.contains("7"), "got: {entries_line}");
     let path_lines: Vec<&String> = result
         .output
         .iter()
         .filter(|l| l.starts_with("[log] path"))
         .collect();
-    assert_eq!(path_lines.len(), 4, "got: {:?}", path_lines);
-    // Every character path should appear in the entry list.
+    assert_eq!(path_lines.len(), 7, "got: {:?}", path_lines);
     for needle in [
         "characterFontSize",
         "characterLeading",
         "characterTracking",
         "characterFillColor",
+        "paragraphSpaceBefore",
+        "paragraphSpaceAfter",
+        "paragraphFirstLineIndent",
     ] {
         assert!(
             path_lines.iter().any(|l| l.contains(needle)),

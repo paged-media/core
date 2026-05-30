@@ -441,6 +441,18 @@ fn apply_set_property(
         ) => {
             return apply_character_property(doc, story_id, *start, *end, node, path, value);
         }
+        (
+            NodeId::StoryRange {
+                story_id,
+                start,
+                end,
+            },
+            PropertyPath::ParagraphSpaceBefore
+            | PropertyPath::ParagraphSpaceAfter
+            | PropertyPath::ParagraphFirstLineIndent,
+        ) => {
+            return apply_paragraph_property(doc, story_id, *start, *end, node, path, value);
+        }
         _ => {
             return Err(OperationError::UnsupportedProperty {
                 node: node.clone(),
@@ -710,6 +722,172 @@ fn apply_character_property(
         inverse,
         invalidation,
     })
+}
+
+// ---------------------------------------------------------------------------
+// SDK Phase 3 — paragraph properties addressed by `NodeId::StoryRange`
+// ---------------------------------------------------------------------------
+//
+// Paragraphs are atomic: you can't half-apply `ParagraphSpaceBefore`
+// to the middle of a paragraph. The apply layer walks `story.paragraphs`,
+// finds every paragraph whose `[para_start, para_end)` intersects the
+// requested `[start, end)`, and writes the property to each. Inverse
+// is a `Batch` of per-paragraph SetProperty restorations addressed
+// at each paragraph's full range — undo applies them in order to
+// restore prior values without needing to know the original input
+// range. Paragraph boundaries are NOT split (unlike CharacterRuns) —
+// the apply layer rounds the range to whole paragraphs by treating
+// intersection as the trigger.
+
+fn apply_paragraph_property(
+    doc: &mut Document,
+    story_id: &str,
+    start: u32,
+    end: u32,
+    node: &NodeId,
+    path: PropertyPath,
+    value: &Value,
+) -> Result<AppliedOperation, OperationError> {
+    if start >= end {
+        return Err(OperationError::InvalidValue {
+            node: node.clone(),
+            path,
+            reason: format!("empty range: start={start} >= end={end}"),
+        });
+    }
+
+    let story_idx = doc
+        .stories
+        .iter()
+        .position(|s| s.self_id == story_id)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+
+    let story = &mut doc.stories[story_idx].story;
+    let mut inverse_ops: Vec<Operation> = Vec::new();
+    let mut char_offset: u32 = 0;
+
+    for para in story.paragraphs.iter_mut() {
+        let para_chars: u32 = para
+            .runs
+            .iter()
+            .map(|r| r.text.chars().count() as u32)
+            .sum();
+        let para_start = char_offset;
+        let para_end = char_offset + para_chars;
+        char_offset = para_end;
+
+        // Skip paragraphs entirely outside [start, end).
+        if para_end <= start || para_start >= end {
+            continue;
+        }
+
+        let (prev_value, _new_set) = apply_paragraph_field(para, path, value)?;
+        inverse_ops.push(Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: story_id.to_string(),
+                start: para_start,
+                end: para_end,
+            },
+            path,
+            value: prev_value,
+        });
+    }
+
+    if inverse_ops.is_empty() {
+        return Ok(AppliedOperation {
+            op: Operation::SetProperty {
+                node: node.clone(),
+                path,
+                value: value.clone(),
+            },
+            inverse: Operation::SetProperty {
+                node: node.clone(),
+                path,
+                value: value.clone(),
+            },
+            invalidation: InvalidationHint::default(),
+        });
+    }
+
+    let invalidation = match doc.frame_for_story.get(story_id) {
+        Some(frame) => {
+            if let Some(self_id) = &frame.self_id {
+                InvalidationHint {
+                    text_reflow: vec![NodeId::TextFrame(self_id.clone())],
+                    ..Default::default()
+                }
+            } else {
+                InvalidationHint::default()
+            }
+        }
+        None => InvalidationHint::default(),
+    };
+
+    let inverse = if inverse_ops.len() == 1 {
+        inverse_ops.into_iter().next().unwrap()
+    } else {
+        Operation::Batch { ops: inverse_ops }
+    };
+
+    Ok(AppliedOperation {
+        op: Operation::SetProperty {
+            node: node.clone(),
+            path,
+            value: value.clone(),
+        },
+        inverse,
+        invalidation,
+    })
+}
+
+fn apply_paragraph_field(
+    para: &mut idml_parse::Paragraph,
+    path: PropertyPath,
+    value: &Value,
+) -> Result<(Value, Value), OperationError> {
+    match path {
+        PropertyPath::ParagraphSpaceBefore => {
+            let Value::Length(new_val) = value else {
+                return Err(OperationError::TypeMismatch {
+                    path,
+                    expected: "Length".to_string(),
+                });
+            };
+            let prev = para.space_before;
+            para.space_before = *new_val;
+            Ok((Value::Length(prev), Value::Length(*new_val)))
+        }
+        PropertyPath::ParagraphSpaceAfter => {
+            let Value::Length(new_val) = value else {
+                return Err(OperationError::TypeMismatch {
+                    path,
+                    expected: "Length".to_string(),
+                });
+            };
+            let prev = para.space_after;
+            para.space_after = *new_val;
+            Ok((Value::Length(prev), Value::Length(*new_val)))
+        }
+        PropertyPath::ParagraphFirstLineIndent => {
+            let Value::Length(new_val) = value else {
+                return Err(OperationError::TypeMismatch {
+                    path,
+                    expected: "Length".to_string(),
+                });
+            };
+            let prev = para.first_line_indent;
+            para.first_line_indent = *new_val;
+            Ok((Value::Length(prev), Value::Length(*new_val)))
+        }
+        _ => Err(OperationError::UnsupportedProperty {
+            node: NodeId::StoryRange {
+                story_id: String::new(),
+                start: 0,
+                end: 0,
+            },
+            path,
+        }),
+    }
 }
 
 /// SDK Phase 3.x — split a `CharacterRun` at character offset
