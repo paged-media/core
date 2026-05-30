@@ -225,7 +225,7 @@ fn verso_set(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
     let Some(wire_path) = parse_property_path(&path) else {
         return Ok(JsValue::from(false));
     };
-    let Some(wire_value) = js_value_to_wire(&value_arg, ctx) else {
+    let Some(wire_value) = js_value_to_wire(&value_arg, wire_path, ctx) else {
         return Ok(JsValue::from(false));
     };
 
@@ -542,7 +542,12 @@ fn property_path_label(path: idml_mutate::PropertyPath) -> &'static str {
     }
 }
 
-fn js_value_to_wire(value: &JsValue, ctx: &mut Context) -> Option<idml_mutate::Value> {
+fn js_value_to_wire(
+    value: &JsValue,
+    path: idml_mutate::PropertyPath,
+    ctx: &mut Context,
+) -> Option<idml_mutate::Value> {
+    use idml_mutate::PropertyPath as P;
     use idml_mutate::Value as W;
     if let Some(b) = value.as_boolean() {
         return Some(W::Bool(b));
@@ -554,7 +559,33 @@ fn js_value_to_wire(value: &JsValue, ctx: &mut Context) -> Option<idml_mutate::V
         return Some(W::Length(None));
     }
     if let Some(s) = value.as_string() {
-        return Some(W::ColorRef(Some(s.to_std_string_escaped())));
+        let s = s.to_std_string_escaped();
+        // Path-aware string encoding. The wire `Value` enum has two
+        // string-ish variants (`Text`, `ColorRef`); the apply layer
+        // raises `TypeMismatch` if we pick wrong, so the bridge has
+        // to know the path's expected variant. We default to
+        // `ColorRef` for back-compat with pre-Track-A scripts that
+        // wrote `verso.set(id, "frameFillColor", "Color/Red")`;
+        // explicit Text-bearing paths get the matching variant.
+        return Some(match path {
+            // Applied-entity refs (D3 paths) — Value::Text payload.
+            P::AppliedParagraphStyle
+            | P::AppliedCharacterStyle
+            | P::AppliedObjectStyle
+            | P::AppliedCellStyle
+            | P::AppliedTableStyle
+            | P::AppliedConditions
+            | P::LayerName => W::Text(s),
+            // Color-ref paths.
+            P::FrameFillColor | P::FrameStrokeColor | P::CharacterFillColor => {
+                W::ColorRef(Some(s))
+            }
+            // Anything else gets ColorRef as the legacy default —
+            // callers passing other typed strings should use the
+            // explicit `{ type, value }` wrapper which the
+            // `to_json`-round-trip branch below handles.
+            _ => W::ColorRef(Some(s)),
+        });
     }
     if let Some(obj) = value.as_object() {
         if obj.is_array() {
