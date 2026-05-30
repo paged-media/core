@@ -987,6 +987,63 @@ pub struct FontSummary {
     pub reference_count: u32,
 }
 
+/// SDK Phase 5 (v1 sweep) — one `<Article>` summary. Backs
+/// `documentCollection:articles`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct ArticleSummary {
+    pub self_id: String,
+    pub name: String,
+    pub members: Vec<String>,
+}
+
+/// SDK Phase 5 (v1 sweep) — one `<Hyperlink>` summary. Backs
+/// `documentCollection:hyperlinks`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct HyperlinkSummary {
+    pub self_id: String,
+    pub name: String,
+    pub source: String,
+    pub destination: String,
+}
+
+/// SDK Phase 5 (v1 sweep) — one `<Bookmark>` summary. Backs
+/// `documentCollection:bookmarks`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct BookmarkSummary {
+    pub self_id: String,
+    pub name: String,
+    pub destination: String,
+}
+
+/// SDK Phase 5 (v1 sweep) — one `<CrossReferenceSource>` summary.
+/// Backs `documentCollection:crossReferences`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct CrossReferenceSummary {
+    pub self_id: String,
+    pub name: String,
+    pub format: String,
+    pub destination: String,
+}
+
+/// SDK Phase 5 (v1 sweep) — one `<Topic>` summary. Backs
+/// `documentCollection:indexTopics`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexTopicSummary {
+    pub self_id: String,
+    pub name: String,
+    pub sort_order: String,
+}
+
 /// SDK Phase 5 (v1 sweep) — one `<ConditionSet>` definition. Backs
 /// `documentCollection:conditionSets` per §5.1. Each entry is a
 /// named grouping of Condition self_ids; the editor's Conditions

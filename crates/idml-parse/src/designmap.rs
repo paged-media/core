@@ -34,6 +34,82 @@ pub struct DesignMap {
     /// authoritative value at the moment InDesign exported the IDML —
     /// "live" recomputation per page is a future task.
     pub text_variables: Vec<TextVariable>,
+    /// SDK Phase 5 (v1 sweep) — `<Article>` definitions. Each is a
+    /// named ordered list of `ArticleMember` refs that group
+    /// related stories for accessibility / linked-text reading
+    /// order. The renderer doesn't branch on them today; the
+    /// editor surfaces them via the Articles panel.
+    pub articles: Vec<Article>,
+    /// SDK Phase 5 (v1 sweep) — `<Hyperlink>` definitions. Each
+    /// has a name + a source (HyperlinkTextSource ref) + a
+    /// destination (URL, page, or anchor).
+    pub hyperlinks: Vec<Hyperlink>,
+    /// SDK Phase 5 (v1 sweep) — `<Bookmark>` definitions. Each
+    /// is a named anchor pointing at a destination (typically a
+    /// hyperlink-page-destination or text-anchor).
+    pub bookmarks: Vec<Bookmark>,
+    /// SDK Phase 5 (v1 sweep) — `<CrossReferenceSource>` markers.
+    /// Each names a CrossReferenceFormat + the destination.
+    pub cross_references: Vec<CrossReference>,
+    /// SDK Phase 5 (v1 sweep) — `<Topic>` definitions for the
+    /// document's index. Flat list (the IDML schema's nested
+    /// topics are flattened to one entry per Self for v1).
+    pub index_topics: Vec<IndexTopic>,
+}
+
+/// IDML `<Article>` definition. Members reference stories via
+/// `ArticleMember/ItemRef`.
+#[derive(Debug, Clone, Serialize)]
+pub struct Article {
+    pub self_id: String,
+    pub name: Option<String>,
+    /// Member self_ids the article wraps (typically Story refs).
+    pub members: Vec<String>,
+}
+
+/// IDML `<Hyperlink>` definition.
+#[derive(Debug, Clone, Serialize)]
+pub struct Hyperlink {
+    pub self_id: String,
+    pub name: Option<String>,
+    /// Source ref (typically `HyperlinkTextSource/<id>`).
+    pub source: Option<String>,
+    /// Destination ref (URL / page / anchor). May be a
+    /// `HyperlinkURLDestination`, `HyperlinkPageDestination`,
+    /// or `HyperlinkTextDestination` self_id depending on the
+    /// kind of hyperlink.
+    pub destination: Option<String>,
+}
+
+/// IDML `<Bookmark>` definition.
+#[derive(Debug, Clone, Serialize)]
+pub struct Bookmark {
+    pub self_id: String,
+    pub name: Option<String>,
+    /// Destination ref (`HyperlinkTextDestination/<id>` or
+    /// `HyperlinkPageDestination/<id>`).
+    pub destination: Option<String>,
+}
+
+/// IDML `<CrossReferenceSource>` marker.
+#[derive(Debug, Clone, Serialize)]
+pub struct CrossReference {
+    pub self_id: String,
+    pub name: Option<String>,
+    /// `AppliedFormat` — ref to a `<CrossReferenceFormat>`.
+    pub format: Option<String>,
+    /// `Destination` — anchor / text-destination ref.
+    pub destination: Option<String>,
+}
+
+/// IDML `<Topic>` definition for an index entry.
+#[derive(Debug, Clone, Serialize)]
+pub struct IndexTopic {
+    pub self_id: String,
+    pub name: Option<String>,
+    /// Sort key (`SortOrder` attribute). Some IDMLs use this to
+    /// override the alphabetical order.
+    pub sort_order: Option<String>,
 }
 
 /// IDML `<TextVariable>` declaration. Parsed for completeness; the
@@ -140,6 +216,65 @@ impl DesignMap {
                                 self_id,
                                 name: attr(&e, b"Name"),
                                 variable_type: attr(&e, b"VariableType"),
+                            });
+                        }
+                    }
+                    if e.name().as_ref() == b"Article" {
+                        if let Some(self_id) = attr(&e, b"Self") {
+                            // `MemberItemRefs` is the typical attribute on
+                            // a self-closing Article; nested
+                            // <ArticleMember> children are flattened to
+                            // their `ItemRef` attribute by a future polish.
+                            let members = attr(&e, b"MemberItemRefs")
+                                .map(|s| {
+                                    s.split_whitespace()
+                                        .map(|t| t.to_string())
+                                        .collect::<Vec<_>>()
+                                })
+                                .unwrap_or_default();
+                            out.articles.push(Article {
+                                self_id,
+                                name: attr(&e, b"Name"),
+                                members,
+                            });
+                        }
+                    }
+                    if e.name().as_ref() == b"Hyperlink" {
+                        if let Some(self_id) = attr(&e, b"Self") {
+                            out.hyperlinks.push(Hyperlink {
+                                self_id,
+                                name: attr(&e, b"Name"),
+                                source: attr(&e, b"Source"),
+                                destination: attr(&e, b"DestinationUniqueKey")
+                                    .or_else(|| attr(&e, b"Destination")),
+                            });
+                        }
+                    }
+                    if e.name().as_ref() == b"Bookmark" {
+                        if let Some(self_id) = attr(&e, b"Self") {
+                            out.bookmarks.push(Bookmark {
+                                self_id,
+                                name: attr(&e, b"Name"),
+                                destination: attr(&e, b"Destination"),
+                            });
+                        }
+                    }
+                    if e.name().as_ref() == b"CrossReferenceSource" {
+                        if let Some(self_id) = attr(&e, b"Self") {
+                            out.cross_references.push(CrossReference {
+                                self_id,
+                                name: attr(&e, b"Name"),
+                                format: attr(&e, b"AppliedFormat"),
+                                destination: attr(&e, b"Destination"),
+                            });
+                        }
+                    }
+                    if e.name().as_ref() == b"Topic" {
+                        if let Some(self_id) = attr(&e, b"Self") {
+                            out.index_topics.push(IndexTopic {
+                                self_id,
+                                name: attr(&e, b"Name"),
+                                sort_order: attr(&e, b"SortOrder"),
                             });
                         }
                     }

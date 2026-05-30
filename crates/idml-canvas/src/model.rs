@@ -1823,6 +1823,88 @@ impl CanvasModel {
             .collect()
     }
 
+    /// SDK Phase 5 (v1 sweep) — list every `<Article>` defined.
+    pub fn articles(&self) -> Vec<crate::channel::ArticleSummary> {
+        use crate::channel::ArticleSummary;
+        self.scene
+            .container
+            .designmap
+            .articles
+            .iter()
+            .map(|a| ArticleSummary {
+                self_id: a.self_id.clone(),
+                name: a.name.clone().unwrap_or_else(|| a.self_id.clone()),
+                members: a.members.clone(),
+            })
+            .collect()
+    }
+
+    /// SDK Phase 5 (v1 sweep) — list every `<Hyperlink>` defined.
+    pub fn hyperlinks(&self) -> Vec<crate::channel::HyperlinkSummary> {
+        use crate::channel::HyperlinkSummary;
+        self.scene
+            .container
+            .designmap
+            .hyperlinks
+            .iter()
+            .map(|h| HyperlinkSummary {
+                self_id: h.self_id.clone(),
+                name: h.name.clone().unwrap_or_else(|| h.self_id.clone()),
+                source: h.source.clone().unwrap_or_default(),
+                destination: h.destination.clone().unwrap_or_default(),
+            })
+            .collect()
+    }
+
+    /// SDK Phase 5 (v1 sweep) — list every `<Bookmark>` defined.
+    pub fn bookmarks(&self) -> Vec<crate::channel::BookmarkSummary> {
+        use crate::channel::BookmarkSummary;
+        self.scene
+            .container
+            .designmap
+            .bookmarks
+            .iter()
+            .map(|b| BookmarkSummary {
+                self_id: b.self_id.clone(),
+                name: b.name.clone().unwrap_or_else(|| b.self_id.clone()),
+                destination: b.destination.clone().unwrap_or_default(),
+            })
+            .collect()
+    }
+
+    /// SDK Phase 5 (v1 sweep) — list every `<CrossReferenceSource>`.
+    pub fn cross_references(&self) -> Vec<crate::channel::CrossReferenceSummary> {
+        use crate::channel::CrossReferenceSummary;
+        self.scene
+            .container
+            .designmap
+            .cross_references
+            .iter()
+            .map(|x| CrossReferenceSummary {
+                self_id: x.self_id.clone(),
+                name: x.name.clone().unwrap_or_else(|| x.self_id.clone()),
+                format: x.format.clone().unwrap_or_default(),
+                destination: x.destination.clone().unwrap_or_default(),
+            })
+            .collect()
+    }
+
+    /// SDK Phase 5 (v1 sweep) — list every `<Topic>` for the index.
+    pub fn index_topics(&self) -> Vec<crate::channel::IndexTopicSummary> {
+        use crate::channel::IndexTopicSummary;
+        self.scene
+            .container
+            .designmap
+            .index_topics
+            .iter()
+            .map(|t| IndexTopicSummary {
+                self_id: t.self_id.clone(),
+                name: t.name.clone().unwrap_or_else(|| t.self_id.clone()),
+                sort_order: t.sort_order.clone().unwrap_or_default(),
+            })
+            .collect()
+    }
+
     /// SDK Phase 5 (v1 sweep) — list every `<ConditionSet>` defined.
     /// Backs `documentCollection:conditionSets`.
     pub fn condition_sets(&self) -> Vec<crate::channel::ConditionSetSummary> {
@@ -2047,10 +2129,16 @@ impl CanvasModel {
             ColorGroups => {
                 serde_json::to_value(self.color_groups()).unwrap_or_default()
             }
-            // Remaining 5 collections from the §5.1 enum still need
-            // parser support / accessors. Empty array placeholder.
-            Articles | Hyperlinks | Bookmarks | CrossReferences | IndexTopics => {
-                serde_json::Value::Array(Vec::new())
+            Articles => serde_json::to_value(self.articles()).unwrap_or_default(),
+            Hyperlinks => {
+                serde_json::to_value(self.hyperlinks()).unwrap_or_default()
+            }
+            Bookmarks => serde_json::to_value(self.bookmarks()).unwrap_or_default(),
+            CrossReferences => {
+                serde_json::to_value(self.cross_references()).unwrap_or_default()
+            }
+            IndexTopics => {
+                serde_json::to_value(self.index_topics()).unwrap_or_default()
             }
         }
     }
