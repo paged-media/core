@@ -504,6 +504,89 @@ fn apply_set_property(
                 },
             )
         }
+        // ---- SDK Phase 5 (v1 sweep) — frame fitting (Rectangle) ----
+        // The placed-image crop set + fitting-type enum live in
+        // `Rectangle::frame_fitting: Option<FrameFittingOption>`.
+        // Both apply arms materialise a default FrameFitting when
+        // the prior was `None`, preserving the other half. Other
+        // page-item kinds raise UnsupportedProperty.
+        (NodeId::Rectangle(id), PropertyPath::FrameFittingCrops) => {
+            let new_bounds = expect_bounds(path, value)?;
+            let rect = find_rectangle_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev_bounds = rect
+                .frame_fitting
+                .as_ref()
+                .map(|f| {
+                    [
+                        f.top_crop.unwrap_or(0.0),
+                        f.left_crop.unwrap_or(0.0),
+                        f.bottom_crop.unwrap_or(0.0),
+                        f.right_crop.unwrap_or(0.0),
+                    ]
+                })
+                .unwrap_or([0.0; 4]);
+            let prev_type = rect
+                .frame_fitting
+                .as_ref()
+                .and_then(|f| f.fitting_on_empty_frame.clone());
+            rect.frame_fitting = Some(idml_parse::FrameFittingOption {
+                top_crop: Some(new_bounds[0]),
+                left_crop: Some(new_bounds[1]),
+                bottom_crop: Some(new_bounds[2]),
+                right_crop: Some(new_bounds[3]),
+                fitting_on_empty_frame: prev_type,
+            });
+            (
+                Value::Bounds(prev_bounds),
+                InvalidationHint {
+                    frame_geometry: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Rectangle(id), PropertyPath::FrameFittingType) => {
+            let new_val = expect_text(path, value)?;
+            let rect = find_rectangle_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev_type = rect
+                .frame_fitting
+                .as_ref()
+                .and_then(|f| f.fitting_on_empty_frame.clone())
+                .unwrap_or_default();
+            let (prev_top, prev_left, prev_bottom, prev_right) = rect
+                .frame_fitting
+                .as_ref()
+                .map(|f| (f.top_crop, f.left_crop, f.bottom_crop, f.right_crop))
+                .unwrap_or((None, None, None, None));
+            let new_type = if new_val.is_empty() { None } else { Some(new_val.clone()) };
+            // Clearing both halves leaves frame_fitting at `None`
+            // for honest defaults; otherwise materialise the
+            // FrameFitting with the merged state.
+            if new_type.is_none()
+                && prev_top.is_none()
+                && prev_left.is_none()
+                && prev_bottom.is_none()
+                && prev_right.is_none()
+            {
+                rect.frame_fitting = None;
+            } else {
+                rect.frame_fitting = Some(idml_parse::FrameFittingOption {
+                    top_crop: prev_top,
+                    left_crop: prev_left,
+                    bottom_crop: prev_bottom,
+                    right_crop: prev_right,
+                    fitting_on_empty_frame: new_type,
+                });
+            }
+            (
+                Value::Text(prev_type),
+                InvalidationHint {
+                    frame_geometry: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         // ---- SDK Phase 5 (v1 sweep) — TextFrame inset spacing ----
         // Only TextFrame carries the inset_spacing field; other
         // page-item kinds fall through to the default

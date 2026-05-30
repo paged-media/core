@@ -236,6 +236,26 @@ pub enum PropertyPath {
     /// placeholder treatment as `AppliedCellStyle`: wire-shape only,
     /// apply layer errors until Tier 2d.
     AppliedTableStyle,
+    /// SDK Phase 5 (v1 sweep) — `<FrameFittingOption>` crops on a
+    /// Rectangle hosting a placed image. Wire value is
+    /// `Value::Bounds([top, left, bottom, right])` in pt — IDML's
+    /// signed-from-frame-edge convention; negative numbers grow the
+    /// image outside the frame (typical of FillProportionally fits).
+    /// Only `NodeId::Rectangle` carries the field; other kinds
+    /// raise `UnsupportedProperty`. The apply layer treats the
+    /// Bounds as four separate crops, materialising a FrameFitting
+    /// when the prior was `None`.
+    FrameFittingCrops,
+    /// SDK Phase 5 (v1 sweep) — `<FrameFittingOption
+    /// FittingOnEmptyFrame="…">` enum. Wire value is `Value::Text`
+    /// carrying the IDML attribute string (`"None"`,
+    /// `"Proportionally"`, `"FillProportionally"`, `"FitContent"`,
+    /// `"FitContentToFrame"`, `"ContentAwareFit"`). The renderer
+    /// currently doesn't branch on this attribute (the crops alone
+    /// drive placement); keeping the wire shape so the Frame
+    /// Fitting panel can declare it today. Empty string clears
+    /// the override.
+    FrameFittingType,
     /// SDK Phase 5 (v1 sweep) — `<TextWrapPreference Mode="…">` enum.
     /// Wire value is `Value::Text` carrying the IDML attribute string
     /// (`"None"`, `"BoundingBoxTextWrap"`, `"ContourTextWrap"`,
@@ -352,6 +372,8 @@ impl PropertyPath {
             PropertyPath::FrameStrokeEndCap => "frame.strokeEndCap",
             PropertyPath::FrameTextWrapMode => "frame.textWrapMode",
             PropertyPath::FrameTextWrapOffsets => "frame.textWrapOffsets",
+            PropertyPath::FrameFittingCrops => "frame.fittingCrops",
+            PropertyPath::FrameFittingType => "frame.fittingType",
         }
     }
 }

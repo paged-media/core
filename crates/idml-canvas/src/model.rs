@@ -1292,6 +1292,33 @@ impl CanvasModel {
                                     f.end_cap.clone().unwrap_or_default(),
                                 )),
                             },
+                            PropertyEntry {
+                                path: PropertyPath::FrameFittingCrops,
+                                value: Some(Value::Bounds(
+                                    f.frame_fitting
+                                        .as_ref()
+                                        .map(|ff| {
+                                            [
+                                                ff.top_crop.unwrap_or(0.0),
+                                                ff.left_crop.unwrap_or(0.0),
+                                                ff.bottom_crop.unwrap_or(0.0),
+                                                ff.right_crop.unwrap_or(0.0),
+                                            ]
+                                        })
+                                        .unwrap_or([0.0; 4]),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameFittingType,
+                                value: Some(Value::Text(
+                                    f.frame_fitting
+                                        .as_ref()
+                                        .and_then(|ff| {
+                                            ff.fitting_on_empty_frame.clone()
+                                        })
+                                        .unwrap_or_default(),
+                                )),
+                            },
                         ]
                     }),
                 // Oval / Polygon / GraphicLine / Group: v1 surfaces
