@@ -254,6 +254,28 @@ pub enum PropertyPath {
     /// renderer uses the swatch at full strength. Tints scale the
     /// resolved colour toward paper white at composition time.
     FrameFillTint,
+    /// SDK Phase 5 (v1 sweep) — drop-shadow per-field editors.
+    /// All five operate on the frame's `drop_shadow:
+    /// Option<DropShadowSetting>`. Writing to any of them
+    /// materialises a default DropShadowSetting if the prior
+    /// was `None`, then sets the named field. Use
+    /// `FrameDropShadow` (the boolean toggle, defined below) to
+    /// fully clear the shadow.
+    ///
+    /// `FrameDropShadowMode` carries the IDML mode string
+    /// ("Drop" / "Inner" / etc); the renderer only branches on
+    /// "Drop" today, others fall back to it.
+    FrameDropShadowMode,
+    /// X offset in pt. Positive = right.
+    FrameDropShadowXOffset,
+    /// Y offset in pt. Positive = down.
+    FrameDropShadowYOffset,
+    /// Blur radius in pt.
+    FrameDropShadowSize,
+    /// Opacity percent (0..=100).
+    FrameDropShadowOpacity,
+    /// Shadow tint colour ref. `Value::ColorRef`.
+    FrameDropShadowColor,
     /// SDK Phase 5 (v1 sweep) — drop-shadow enabled toggle. Wire
     /// value is `Value::Bool`. Setting `true` materialises a
     /// default `DropShadowSetting` (mode="Drop", small offset, low
@@ -411,6 +433,12 @@ impl PropertyPath {
             PropertyPath::FramePath => "frame.path",
             PropertyPath::FrameFillTint => "frame.fillTint",
             PropertyPath::FrameNonprinting => "frame.nonprinting",
+            PropertyPath::FrameDropShadowMode => "frame.dropShadowMode",
+            PropertyPath::FrameDropShadowXOffset => "frame.dropShadowXOffset",
+            PropertyPath::FrameDropShadowYOffset => "frame.dropShadowYOffset",
+            PropertyPath::FrameDropShadowSize => "frame.dropShadowSize",
+            PropertyPath::FrameDropShadowOpacity => "frame.dropShadowOpacity",
+            PropertyPath::FrameDropShadowColor => "frame.dropShadowColor",
         }
     }
 }

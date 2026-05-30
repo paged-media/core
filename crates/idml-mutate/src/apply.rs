@@ -789,6 +789,101 @@ fn apply_set_property(
                 },
             )
         }
+        // ---- SDK Phase 5 (v1 sweep) — drop-shadow per-field ----
+        // Six fields on `frame.drop_shadow`. Each materialises a
+        // default DropShadowSetting if the prior was `None`, then
+        // mutates the named field. v1 wires TextFrame + Rectangle
+        // (others fall through to UnsupportedProperty).
+        (NodeId::TextFrame(_), PropertyPath::FrameDropShadowMode)
+        | (NodeId::Rectangle(_), PropertyPath::FrameDropShadowMode) => {
+            let new_val = expect_text(path, value)?;
+            let ds = find_drop_shadow_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = ds.mode.clone();
+            ds.mode = if new_val.is_empty() { "Drop".to_string() } else { new_val.clone() };
+            (
+                Value::Text(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::TextFrame(_), PropertyPath::FrameDropShadowXOffset)
+        | (NodeId::Rectangle(_), PropertyPath::FrameDropShadowXOffset) => {
+            let new_val = expect_length(path, value)?.unwrap_or(0.0);
+            let ds = find_drop_shadow_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = ds.x_offset;
+            ds.x_offset = new_val;
+            (
+                Value::Length(Some(prev)),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::TextFrame(_), PropertyPath::FrameDropShadowYOffset)
+        | (NodeId::Rectangle(_), PropertyPath::FrameDropShadowYOffset) => {
+            let new_val = expect_length(path, value)?.unwrap_or(0.0);
+            let ds = find_drop_shadow_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = ds.y_offset;
+            ds.y_offset = new_val;
+            (
+                Value::Length(Some(prev)),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::TextFrame(_), PropertyPath::FrameDropShadowSize)
+        | (NodeId::Rectangle(_), PropertyPath::FrameDropShadowSize) => {
+            let new_val = expect_length(path, value)?.unwrap_or(0.0);
+            let ds = find_drop_shadow_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = ds.size;
+            ds.size = new_val;
+            (
+                Value::Length(Some(prev)),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::TextFrame(_), PropertyPath::FrameDropShadowOpacity)
+        | (NodeId::Rectangle(_), PropertyPath::FrameDropShadowOpacity) => {
+            let new_val = expect_length(path, value)?.unwrap_or(100.0);
+            let ds = find_drop_shadow_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = ds.opacity_pct;
+            ds.opacity_pct = new_val;
+            (
+                Value::Length(Some(prev)),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::TextFrame(_), PropertyPath::FrameDropShadowColor)
+        | (NodeId::Rectangle(_), PropertyPath::FrameDropShadowColor) => {
+            let new_color = expect_color_ref(path, value)?;
+            let ds = find_drop_shadow_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = ds.effect_color.clone();
+            ds.effect_color = new_color;
+            (
+                Value::ColorRef(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         // ---- SDK Phase 5 (v1 sweep) — drop-shadow toggle ---------
         // TextFrame + Rectangle carry `drop_shadow: Option<...>`.
         // Toggle semantics: true → default DropShadowSetting when
@@ -2181,11 +2276,9 @@ fn find_group_mut<'a>(
 }
 
 /// SDK Phase 5 (v1 sweep) — synthesise a default DropShadowSetting
-/// for the toggle-on case. Values mirror InDesign's "Drop Shadow"
-/// preset (multiply blend, ~3pt offset, ~30% opacity). The Effects
-/// panel will eventually expose per-field editors — this default
-/// is what materialises when the toggle is flipped without those
-/// fields being authored yet.
+/// for the toggle-on case + per-field editors that write into a
+/// prior-None state. Values mirror InDesign's "Drop Shadow"
+/// preset (multiply blend, ~3pt offset, ~30% opacity).
 fn default_drop_shadow() -> idml_parse::DropShadowSetting {
     idml_parse::DropShadowSetting {
         mode: "Drop".to_string(),
@@ -2195,6 +2288,50 @@ fn default_drop_shadow() -> idml_parse::DropShadowSetting {
         opacity_pct: 30.0,
         effect_color: None,
     }
+}
+
+/// SDK Phase 5 (v1 sweep) — locate a mutable DropShadowSetting on
+/// the named page item, materialising a default on `None` so
+/// per-field editors always have a target to mutate. Supports
+/// TextFrame + Rectangle (the two kinds with apply arms today);
+/// returns `None` for other kinds.
+fn find_drop_shadow_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut idml_parse::DropShadowSetting> {
+    let raw = node.self_id();
+    for parsed in &mut doc.spreads {
+        match node {
+            NodeId::TextFrame(_) => {
+                if let Some(f) = parsed
+                    .spread
+                    .text_frames
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    if f.drop_shadow.is_none() {
+                        f.drop_shadow = Some(default_drop_shadow());
+                    }
+                    return f.drop_shadow.as_mut();
+                }
+            }
+            NodeId::Rectangle(_) => {
+                if let Some(f) = parsed
+                    .spread
+                    .rectangles
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    if f.drop_shadow.is_none() {
+                        f.drop_shadow = Some(default_drop_shadow());
+                    }
+                    return f.drop_shadow.as_mut();
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// SDK Phase 5 (v1 sweep) — locate the `text_wrap: Option<TextWrap>`

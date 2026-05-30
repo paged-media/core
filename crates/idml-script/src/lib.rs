@@ -590,6 +590,12 @@ fn parse_property_path(s: &str) -> Option<idml_mutate::PropertyPath> {
         "frameFittingCrops" => FrameFittingCrops,
         "frameFittingType" => FrameFittingType,
         "frameDropShadow" => FrameDropShadow,
+        "frameDropShadowMode" => FrameDropShadowMode,
+        "frameDropShadowXOffset" => FrameDropShadowXOffset,
+        "frameDropShadowYOffset" => FrameDropShadowYOffset,
+        "frameDropShadowSize" => FrameDropShadowSize,
+        "frameDropShadowOpacity" => FrameDropShadowOpacity,
+        "frameDropShadowColor" => FrameDropShadowColor,
         "framePath" => FramePath,
         "frameFillTint" => FrameFillTint,
         "frameNonprinting" => FrameNonprinting,
@@ -636,6 +642,12 @@ fn property_path_label(path: idml_mutate::PropertyPath) -> &'static str {
         FrameFittingCrops => "frameFittingCrops",
         FrameFittingType => "frameFittingType",
         FrameDropShadow => "frameDropShadow",
+        FrameDropShadowMode => "frameDropShadowMode",
+        FrameDropShadowXOffset => "frameDropShadowXOffset",
+        FrameDropShadowYOffset => "frameDropShadowYOffset",
+        FrameDropShadowSize => "frameDropShadowSize",
+        FrameDropShadowOpacity => "frameDropShadowOpacity",
+        FrameDropShadowColor => "frameDropShadowColor",
         FramePath => "framePath",
         FrameFillTint => "frameFillTint",
         FrameNonprinting => "frameNonprinting",
@@ -680,11 +692,13 @@ fn js_value_to_wire(
             | P::ParagraphJustification
             | P::FrameStrokeEndCap
             | P::FrameTextWrapMode
-            | P::FrameFittingType => W::Text(s),
+            | P::FrameFittingType
+            | P::FrameDropShadowMode => W::Text(s),
             // Color-ref paths.
-            P::FrameFillColor | P::FrameStrokeColor | P::CharacterFillColor => {
-                W::ColorRef(Some(s))
-            }
+            P::FrameFillColor
+            | P::FrameStrokeColor
+            | P::CharacterFillColor
+            | P::FrameDropShadowColor => W::ColorRef(Some(s)),
             // Anything else gets ColorRef as the legacy default —
             // callers passing other typed strings should use the
             // explicit `{ type, value }` wrapper which the

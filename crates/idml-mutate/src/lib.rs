@@ -194,6 +194,7 @@ mod tests {
             applied_toc_style: None,
             overprint_fill: false,
             overprint_stroke: false,
+            nonprinting: false,
         }
     }
 
@@ -1135,6 +1136,7 @@ mod tests {
             image_item_transform: None,
             overprint_fill: false,
             overprint_stroke: false,
+            nonprinting: false,
         }
     }
 
@@ -2452,6 +2454,54 @@ mod tests {
         let frame = &project.document().spreads[0].spread.text_frames[0];
         assert_eq!(frame.anchors.len(), 3);
         assert_eq!(frame.anchors[1].anchor, (10.0, 0.0));
+    }
+
+    /// SDK Phase 5 (v1 sweep) — drop-shadow per-field editors.
+    /// Each field write materialises a default DropShadowSetting
+    /// on the prior-None state, then sets the named field; undo
+    /// restores the prior value.
+    #[test]
+    fn drop_shadow_per_field_round_trips() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        // Set X offset — materialises a default shadow.
+        let applied = project
+            .apply(Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FrameDropShadowXOffset,
+                value: Value::Length(Some(7.5)),
+            })
+            .expect("apply x_offset");
+        let f = &project.document().spreads[0].spread.text_frames[0];
+        let ds = f.drop_shadow.as_ref().expect("default shadow");
+        assert_eq!(ds.x_offset, 7.5);
+        assert_eq!(ds.mode, "Drop"); // default
+
+        // Set opacity.
+        project
+            .apply(Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FrameDropShadowOpacity,
+                value: Value::Length(Some(60.0)),
+            })
+            .expect("apply opacity");
+        let ds = project.document().spreads[0].spread.text_frames[0]
+            .drop_shadow
+            .as_ref()
+            .expect("shadow");
+        assert_eq!(ds.opacity_pct, 60.0);
+        assert_eq!(ds.x_offset, 7.5); // preserved
+
+        // Undo the x_offset — restores prior value (the default
+        // 3.0 from when the shadow was materialised on the first
+        // write).
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let ds = project.document().spreads[0].spread.text_frames[0]
+            .drop_shadow
+            .as_ref()
+            .expect("shadow stays after partial undo");
+        // The inverse stored prev=3.0 (the default at apply
+        // time). Restoring brings x_offset back to 3.0.
+        assert_eq!(ds.x_offset, 3.0);
     }
 
     /// SDK Phase 5 (v1 sweep) — drop-shadow toggle. true → default

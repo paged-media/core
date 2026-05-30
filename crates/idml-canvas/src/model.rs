@@ -1248,6 +1248,47 @@ impl CanvasModel {
                                 )),
                             },
                             PropertyEntry {
+                                path: PropertyPath::FrameDropShadowMode,
+                                value: Some(Value::Text(
+                                    f.drop_shadow
+                                        .as_ref()
+                                        .map(|s| s.mode.clone())
+                                        .unwrap_or_else(|| "Drop".to_string()),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameDropShadowXOffset,
+                                value: Some(Value::Length(
+                                    f.drop_shadow.as_ref().map(|s| s.x_offset),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameDropShadowYOffset,
+                                value: Some(Value::Length(
+                                    f.drop_shadow.as_ref().map(|s| s.y_offset),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameDropShadowSize,
+                                value: Some(Value::Length(
+                                    f.drop_shadow.as_ref().map(|s| s.size),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameDropShadowOpacity,
+                                value: Some(Value::Length(
+                                    f.drop_shadow.as_ref().map(|s| s.opacity_pct),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameDropShadowColor,
+                                value: Some(Value::ColorRef(
+                                    f.drop_shadow
+                                        .as_ref()
+                                        .and_then(|s| s.effect_color.clone()),
+                                )),
+                            },
+                            PropertyEntry {
                                 path: PropertyPath::FrameFillTint,
                                 value: Some(Value::Length(f.fill_tint)),
                             },
@@ -1324,6 +1365,47 @@ impl CanvasModel {
                                 path: PropertyPath::FrameDropShadow,
                                 value: Some(Value::Bool(
                                     f.drop_shadow.is_some(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameDropShadowMode,
+                                value: Some(Value::Text(
+                                    f.drop_shadow
+                                        .as_ref()
+                                        .map(|s| s.mode.clone())
+                                        .unwrap_or_else(|| "Drop".to_string()),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameDropShadowXOffset,
+                                value: Some(Value::Length(
+                                    f.drop_shadow.as_ref().map(|s| s.x_offset),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameDropShadowYOffset,
+                                value: Some(Value::Length(
+                                    f.drop_shadow.as_ref().map(|s| s.y_offset),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameDropShadowSize,
+                                value: Some(Value::Length(
+                                    f.drop_shadow.as_ref().map(|s| s.size),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameDropShadowOpacity,
+                                value: Some(Value::Length(
+                                    f.drop_shadow.as_ref().map(|s| s.opacity_pct),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameDropShadowColor,
+                                value: Some(Value::ColorRef(
+                                    f.drop_shadow
+                                        .as_ref()
+                                        .and_then(|s| s.effect_color.clone()),
                                 )),
                             },
                             PropertyEntry {
