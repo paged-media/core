@@ -1199,6 +1199,12 @@ impl CanvasModel {
                                 path: PropertyPath::FrameOpacity,
                                 value: Some(Value::Length(f.opacity)),
                             },
+                            PropertyEntry {
+                                path: PropertyPath::AppliedObjectStyle,
+                                value: Some(Value::Text(
+                                    f.applied_object_style.clone().unwrap_or_default(),
+                                )),
+                            },
                         ]
                     }),
                 ElementId::Rectangle(_) => spread
@@ -1235,6 +1241,12 @@ impl CanvasModel {
                             PropertyEntry {
                                 path: PropertyPath::FrameOpacity,
                                 value: Some(Value::Length(f.opacity)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::AppliedObjectStyle,
+                                value: Some(Value::Text(
+                                    f.applied_object_style.clone().unwrap_or_default(),
+                                )),
                             },
                         ]
                     }),
@@ -1473,6 +1485,26 @@ impl CanvasModel {
             .collect()
     }
 
+    /// SDK Phase 5 (v1 sweep) — list every object style in the
+    /// document. Backs `documentCollection:objectStyles` per
+    /// `panel-catalog-and-sdk-extension.md` §5.1. The Object Styles
+    /// panel consumes this through `useCollection<ObjectStyleSummary>
+    /// ("objectStyles")` and applies the chosen `selfId` via the
+    /// existing `AppliedObjectStyle` apply arm.
+    pub fn object_styles(&self) -> Vec<crate::channel::ObjectStyleSummary> {
+        use crate::channel::ObjectStyleSummary;
+        self.scene
+            .styles
+            .object_styles
+            .iter()
+            .map(|(self_id, style)| ObjectStyleSummary {
+                self_id: self_id.clone(),
+                name: style.name.clone().unwrap_or_else(|| self_id.clone()),
+                based_on: style.based_on.clone(),
+            })
+            .collect()
+    }
+
     /// SDK Phase 3 — list every gradient swatch in the palette.
     /// `kind` is the IDML `Type` attribute — `"linear"` / `"radial"`.
     pub fn gradients(&self) -> Vec<crate::channel::GradientSummary> {
@@ -1547,15 +1579,18 @@ impl CanvasModel {
                 serde_json::to_value(self.character_styles()).unwrap_or_default()
             }
             Layers => serde_json::to_value(self.layers()).unwrap_or_default(),
-            // Remaining 16 collections from the §5.1 enum don't have
+            ObjectStyles => {
+                serde_json::to_value(self.object_styles()).unwrap_or_default()
+            }
+            // Remaining 15 collections from the §5.1 enum don't have
             // accessors yet — the audit pipeline picks them up as
             // wire-shape-only. Return an empty array (NOT a null) so
             // the consumer's `useCollection<T>` typed array stays
             // valid; the empty payload + console-side warning is
             // sufficient signal during dev.
-            ColorGroups | ObjectStyles | CellStyles | TableStyles | Spreads | Pages
-            | MasterPages | Links | Articles | Hyperlinks | Bookmarks | CrossReferences
-            | Conditions | ConditionSets | Fonts | IndexTopics => {
+            ColorGroups | CellStyles | TableStyles | Spreads | Pages | MasterPages
+            | Links | Articles | Hyperlinks | Bookmarks | CrossReferences | Conditions
+            | ConditionSets | Fonts | IndexTopics => {
                 serde_json::Value::Array(Vec::new())
             }
         }

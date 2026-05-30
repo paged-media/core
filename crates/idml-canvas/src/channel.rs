@@ -901,6 +901,20 @@ pub struct CharacterStyleSummary {
     pub based_on: Option<String>,
 }
 
+/// SDK Phase 5 (v1 sweep) — one object style's summary. Backs
+/// `documentCollection:objectStyles` per `panel-catalog-and-sdk-
+/// extension.md` §5.1; consumed by the Object Styles panel via
+/// the `collection-select` primitive to drive an
+/// `appliedObjectStyle` write on the selected frame.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectStyleSummary {
+    pub self_id: String,
+    pub name: String,
+    pub based_on: Option<String>,
+}
+
 /// SDK Phase 3 — one gradient swatch's summary. `kind` is the
 /// IDML `Type` attribute — `"linear"` / `"radial"` — so a picker
 /// composition can icon-badge linear vs radial.

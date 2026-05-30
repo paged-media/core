@@ -1134,6 +1134,27 @@ impl StyleSheet {
                             out.paragraph_styles.insert(s.self_id.clone(), s);
                         }
                     }
+                    // Self-closing forms of the page-item style kinds.
+                    // IDML's default `[None]` entries ship as
+                    // `<ObjectStyle Self="..." Name="..." .../>` with
+                    // no body — without these arms the BTreeMap never
+                    // populates and `documentCollection:objectStyles`
+                    // returns empty even though the entries exist.
+                    b"ObjectStyle" => {
+                        if let Some(s) = parse_object_style(&e) {
+                            out.object_styles.insert(s.self_id.clone(), s);
+                        }
+                    }
+                    b"CellStyle" => {
+                        if let Some(s) = parse_cell_style(&e) {
+                            out.cell_styles.insert(s.self_id.clone(), s);
+                        }
+                    }
+                    b"TableStyle" => {
+                        if let Some(s) = parse_table_style(&e) {
+                            out.table_styles.insert(s.self_id.clone(), s);
+                        }
+                    }
                     b"TOCStyle" => {
                         // Self-closing `<TOCStyle ... />` — common for
                         // the document's default empty TOCStyle that
