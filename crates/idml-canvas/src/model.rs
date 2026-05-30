@@ -1252,6 +1252,10 @@ impl CanvasModel {
                                 value: Some(Value::Length(f.fill_tint)),
                             },
                             PropertyEntry {
+                                path: PropertyPath::FrameNonprinting,
+                                value: Some(Value::Bool(f.nonprinting)),
+                            },
+                            PropertyEntry {
                                 path: PropertyPath::FrameInsetSpacing,
                                 value: Some(Value::Bounds(
                                     f.inset_spacing.unwrap_or([0.0; 4]),
@@ -1325,6 +1329,10 @@ impl CanvasModel {
                             PropertyEntry {
                                 path: PropertyPath::FrameFillTint,
                                 value: Some(Value::Length(f.fill_tint)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameNonprinting,
+                                value: Some(Value::Bool(f.nonprinting)),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameStrokeEndCap,

@@ -723,6 +723,40 @@ fn apply_set_property(
                 },
             )
         }
+        // ---- SDK Phase 5 (v1 sweep) — frame nonprinting toggle --
+        // Excludes the frame from print/export passes; canvas
+        // still renders it. v1 wires TextFrame + Rectangle; the
+        // other kinds (Oval / Polygon / GraphicLine) also carry
+        // the parsed field but their apply arms fall through to
+        // UnsupportedProperty until they're added.
+        (NodeId::TextFrame(id), PropertyPath::FrameNonprinting) => {
+            let new_val = expect_bool(path, value)?;
+            let frame = find_text_frame_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = frame.nonprinting;
+            frame.nonprinting = new_val;
+            (
+                Value::Bool(prev),
+                InvalidationHint {
+                    structural: true,
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Rectangle(id), PropertyPath::FrameNonprinting) => {
+            let new_val = expect_bool(path, value)?;
+            let rect = find_rectangle_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = rect.nonprinting;
+            rect.nonprinting = new_val;
+            (
+                Value::Bool(prev),
+                InvalidationHint {
+                    structural: true,
+                    ..Default::default()
+                },
+            )
+        }
         // ---- SDK Phase 5 (v1 sweep) — frame fill tint percent --
         // Per-frame override on TextFrame + Rectangle. `None`
         // (Value::Length(None)) clears the tint, restoring the
@@ -3030,6 +3064,7 @@ fn new_text_frame(self_id: String, bounds: Bounds, fill_color: Option<String>) -
         applied_toc_style: None,
         overprint_fill: false,
         overprint_stroke: false,
+        nonprinting: false,
     }
 }
 
@@ -3072,6 +3107,7 @@ fn new_rectangle(self_id: String, bounds: Bounds, fill_color: Option<String>) ->
         text_paths: Vec::new(),
         overprint_fill: false,
         overprint_stroke: false,
+        nonprinting: false,
         anchors: Vec::new(),
         subpath_starts: Vec::new(),
         subpath_open: Vec::new(),

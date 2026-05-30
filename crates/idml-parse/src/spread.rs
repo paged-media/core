@@ -397,6 +397,9 @@ pub struct TextFrame {
     pub overprint_fill: bool,
     /// `OverprintStroke="true"` analogue for the frame stroke.
     pub overprint_stroke: bool,
+    /// SDK Phase 5 (v1 sweep) — `Nonprinting="true"`. Excludes
+    /// this item from print/export passes; canvas still shows it.
+    pub nonprinting: bool,
 }
 
 /// IDML `<TextFramePreference VerticalJustification="...">` values.
@@ -704,6 +707,9 @@ pub struct Rectangle {
     pub overprint_fill: bool,
     /// `OverprintStroke="true"`. See [`TextFrame::overprint_stroke`].
     pub overprint_stroke: bool,
+    /// SDK Phase 5 (v1 sweep) — `Nonprinting`. See
+    /// [`TextFrame::nonprinting`].
+    pub nonprinting: bool,
     /// Q-11: Bezier path anchors captured from `<PathGeometry>` when
     /// the rectangle's outline is non-rectangular (torn-paper /
     /// asymmetric / multi-anchor stylised shapes that Envato saves as
@@ -960,6 +966,9 @@ pub struct Oval {
     pub overprint_fill: bool,
     /// `OverprintStroke="true"`. See [`TextFrame::overprint_stroke`].
     pub overprint_stroke: bool,
+    /// SDK Phase 5 (v1 sweep) — `Nonprinting`. See
+    /// [`TextFrame::nonprinting`].
+    pub nonprinting: bool,
 }
 
 /// Straight line — `<GraphicLine>` in IDML. The endpoints are the
@@ -1002,6 +1011,9 @@ pub struct GraphicLine {
     /// `OverprintStroke="true"`. See [`TextFrame::overprint_stroke`].
     /// Lines carry no fill, so only the stroke flag is meaningful.
     pub overprint_stroke: bool,
+    /// SDK Phase 5 (v1 sweep) — `Nonprinting`. See
+    /// [`TextFrame::nonprinting`].
+    pub nonprinting: bool,
 }
 
 /// One point on an IDML `<PathGeometry>` path. `anchor` is the
@@ -1188,6 +1200,9 @@ pub struct Polygon {
     pub overprint_fill: bool,
     /// `OverprintStroke="true"`. See [`TextFrame::overprint_stroke`].
     pub overprint_stroke: bool,
+    /// SDK Phase 5 (v1 sweep) — `Nonprinting`. See
+    /// [`TextFrame::nonprinting`].
+    pub nonprinting: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
@@ -1361,6 +1376,10 @@ struct CommonAttrs {
     overprint_fill: bool,
     /// `OverprintStroke="true"` analogue.
     overprint_stroke: bool,
+    /// SDK Phase 5 (v1 sweep) — `Nonprinting="true"` excludes the
+    /// item from print/export. Renderer keeps it visible on canvas
+    /// but suppresses it from output passes. Default: `false`.
+    nonprinting: bool,
 }
 
 fn read_common_attrs(e: &quick_xml::events::BytesStart) -> CommonAttrs {
@@ -1382,6 +1401,9 @@ fn read_common_attrs(e: &quick_xml::events::BytesStart) -> CommonAttrs {
             .and_then(|s| s.parse::<bool>().ok())
             .unwrap_or(false),
         overprint_stroke: attr(e, b"OverprintStroke")
+            .and_then(|s| s.parse::<bool>().ok())
+            .unwrap_or(false),
+        nonprinting: attr(e, b"Nonprinting")
             .and_then(|s| s.parse::<bool>().ok())
             .unwrap_or(false),
     }
@@ -1702,6 +1724,7 @@ impl Spread {
                             applied_toc_style: attr(&e, b"AppliedTOCStyle"),
                             overprint_fill: common.overprint_fill,
                             overprint_stroke: common.overprint_stroke,
+                            nonprinting: common.nonprinting,
                         });
                         let idx = out.text_frames.len() - 1;
                         register_with_group(
@@ -1772,6 +1795,7 @@ impl Spread {
                             text_paths: Vec::new(),
                             overprint_fill: common.overprint_fill,
                             overprint_stroke: common.overprint_stroke,
+                            nonprinting: common.nonprinting,
                             anchors: Vec::new(),
                             subpath_starts: Vec::new(),
                             subpath_open: Vec::new(),
@@ -1833,6 +1857,7 @@ impl Spread {
                             effects: None,
                             overprint_fill: common.overprint_fill,
                             overprint_stroke: common.overprint_stroke,
+                            nonprinting: common.nonprinting,
                         });
                         let idx = out.ovals.len() - 1;
                         register_with_group(&mut out, &mut group_builders, FrameRef::Oval(idx));
@@ -2578,6 +2603,7 @@ impl Spread {
                             text_paths: Vec::new(),
                             effects: None,
                             overprint_stroke: common.overprint_stroke,
+                            nonprinting: common.nonprinting,
                         });
                         let idx = out.graphic_lines.len() - 1;
                         register_with_group(
@@ -2636,6 +2662,7 @@ impl Spread {
                             effects: None,
                             overprint_fill: common.overprint_fill,
                             overprint_stroke: common.overprint_stroke,
+                            nonprinting: common.nonprinting,
                         });
                         let idx = out.polygons.len() - 1;
                         register_with_group(&mut out, &mut group_builders, FrameRef::Polygon(idx));

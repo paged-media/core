@@ -244,6 +244,10 @@ pub enum PropertyPath {
     /// Pathfinder's Subtract / Exclude where the result is a fresh
     /// polygon set rather than a partial edit.
     FramePath,
+    /// SDK Phase 5 (v1 sweep) — `Nonprinting="true|false"` toggle on
+    /// any page-item kind. `Value::Bool`. The renderer keeps the
+    /// item visible on canvas but excludes it from print/export.
+    FrameNonprinting,
     /// SDK Phase 5 (v1 sweep) — frame `FillTint` percent (0..=100).
     /// `Value::Length(Some(_))` carries the tint percentage;
     /// `Value::Length(None)` represents "no tint override" — the
@@ -406,6 +410,7 @@ impl PropertyPath {
             PropertyPath::FrameDropShadow => "frame.dropShadow",
             PropertyPath::FramePath => "frame.path",
             PropertyPath::FrameFillTint => "frame.fillTint",
+            PropertyPath::FrameNonprinting => "frame.nonprinting",
         }
     }
 }

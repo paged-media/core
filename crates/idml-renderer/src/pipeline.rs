@@ -4966,6 +4966,7 @@ fn emit_anchored_rect_via_pipeline(
         // AnchoredFrame mirror; default to knockout (the IDML default).
         overprint_fill: false,
         overprint_stroke: false,
+        nonprinting: false,
         anchors: Vec::new(),
         subpath_starts: Vec::new(),
         subpath_open: Vec::new(),
@@ -5051,6 +5052,7 @@ fn emit_anchored_rect_image(
         // AnchoredFrame mirror; default to knockout (the IDML default).
         overprint_fill: false,
         overprint_stroke: false,
+        nonprinting: false,
         anchors: Vec::new(),
         subpath_starts: Vec::new(),
         subpath_open: Vec::new(),
@@ -5158,6 +5160,7 @@ fn emit_anchored_textframe_story<'a>(
         applied_toc_style: None,
         overprint_fill: false,
         overprint_stroke: false,
+        nonprinting: false,
     };
     // Sub-emitter borrows from the parent's `'a` so the document /
     // palette / font_table refs share lifetimes with the body pass.
