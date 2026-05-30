@@ -236,6 +236,23 @@ pub enum PropertyPath {
     /// placeholder treatment as `AppliedCellStyle`: wire-shape only,
     /// apply layer errors until Tier 2d.
     AppliedTableStyle,
+    /// SDK Phase 5 (v1 sweep) — paragraph alignment / justification.
+    /// Wire value is `Value::Text` carrying the IDML attribute string
+    /// (`"LeftAlign"`, `"CenterAlign"`, `"RightAlign"`,
+    /// `"LeftJustified"`, `"CenterJustified"`, `"RightJustified"`,
+    /// `"FullyJustified"`, `"ToBindingSide"`, `"AwayFromBindingSide"`)
+    /// — the same shape `Justification::as_idml()` round-trips
+    /// through. Addressed against a `NodeId::StoryRange`; the apply
+    /// arm rounds the range to whole paragraphs (paragraphs are
+    /// atomic in IDML). Unknown strings raise `InvalidValue`.
+    ParagraphJustification,
+    /// SDK Phase 5 (v1 sweep) — frame stroke end-cap. Wire value is
+    /// `Value::Text` carrying the IDML enum string
+    /// (`"ButtEndCap"`, `"RoundEndCap"`, `"ProjectingEndCap"`).
+    /// Addressed against any page-item kind that carries stroke
+    /// state; the renderer uses the field on next paint. Empty
+    /// string clears the override.
+    FrameStrokeEndCap,
     /// SDK Phase 5 (v1 sweep) — `<TextFramePreference InsetSpacing="…">`
     /// in pt as a `Value::Bounds([top, left, bottom, right])`. Only
     /// `NodeId::TextFrame` carries inset spacing (the field doesn't
@@ -316,6 +333,8 @@ impl PropertyPath {
             PropertyPath::AppliedTableStyle => "table.appliedStyle",
             PropertyPath::AppliedConditions => "story.appliedConditions",
             PropertyPath::FrameInsetSpacing => "textFrame.insetSpacing",
+            PropertyPath::ParagraphJustification => "paragraph.justification",
+            PropertyPath::FrameStrokeEndCap => "frame.strokeEndCap",
         }
     }
 }

@@ -525,6 +525,8 @@ fn parse_property_path(s: &str) -> Option<idml_mutate::PropertyPath> {
         "appliedTableStyle" => AppliedTableStyle,
         "appliedConditions" => AppliedConditions,
         "frameInsetSpacing" => FrameInsetSpacing,
+        "paragraphJustification" => ParagraphJustification,
+        "frameStrokeEndCap" => FrameStrokeEndCap,
         _ => return None,
     })
 }
@@ -561,6 +563,8 @@ fn property_path_label(path: idml_mutate::PropertyPath) -> &'static str {
         AppliedTableStyle => "appliedTableStyle",
         AppliedConditions => "appliedConditions",
         FrameInsetSpacing => "frameInsetSpacing",
+        ParagraphJustification => "paragraphJustification",
+        FrameStrokeEndCap => "frameStrokeEndCap",
     }
 }
 
@@ -597,7 +601,10 @@ fn js_value_to_wire(
             | P::AppliedCellStyle
             | P::AppliedTableStyle
             | P::AppliedConditions
-            | P::LayerName => W::Text(s),
+            | P::LayerName
+            // Enum strings (v1 sweep).
+            | P::ParagraphJustification
+            | P::FrameStrokeEndCap => W::Text(s),
             // Color-ref paths.
             P::FrameFillColor | P::FrameStrokeColor | P::CharacterFillColor => {
                 W::ColorRef(Some(s))

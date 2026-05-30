@@ -413,6 +413,31 @@ fn apply_set_property(
                 InvalidationHint::default(),
             )
         }
+        // ---- SDK Phase 5 (v1 sweep) — stroke end-cap (enum string)
+        // Per-frame override. Empty string clears the override.
+        // Only Rectangle / Oval / Polygon / GraphicLine carry the
+        // `end_cap` field in the parse layer — TextFrame's stroke
+        // shape does not (its renderer path uses a simple solid
+        // outline rather than a stroked path with cap/join). Falls
+        // through to UnsupportedProperty for TextFrame.
+        (NodeId::Rectangle(id), PropertyPath::FrameStrokeEndCap) => {
+            let new_val = expect_text(path, value)?;
+            let rect = find_rectangle_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = rect.end_cap.clone().unwrap_or_default();
+            rect.end_cap = if new_val.is_empty() {
+                None
+            } else {
+                Some(new_val.clone())
+            };
+            (
+                Value::Text(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         // ---- SDK Phase 5 (v1 sweep) — TextFrame inset spacing ----
         // Only TextFrame carries the inset_spacing field; other
         // page-item kinds fall through to the default
@@ -509,7 +534,8 @@ fn apply_set_property(
             PropertyPath::ParagraphSpaceBefore
             | PropertyPath::ParagraphSpaceAfter
             | PropertyPath::ParagraphFirstLineIndent
-            | PropertyPath::AppliedParagraphStyle,
+            | PropertyPath::AppliedParagraphStyle
+            | PropertyPath::ParagraphJustification,
         ) => {
             return apply_paragraph_property(doc, story_id, *start, *end, node, path, value);
         }
@@ -952,6 +978,43 @@ fn apply_paragraph_field(
                 None
             } else {
                 Some(new_val.clone())
+            };
+            Ok((Value::Text(prev), Value::Text(new_val.clone())))
+        }
+        PropertyPath::ParagraphJustification => {
+            // SDK Phase 5 (v1 sweep) — paragraph alignment via the
+            // IDML attribute string. Empty value clears the override
+            // (`None` ⇒ inherit from style cascade); non-empty parses
+            // through `Justification::from_idml` and stores. Unknown
+            // strings raise `InvalidValue` (the toggle-group primitive
+            // ensures the UI never emits an unknown value).
+            let Value::Text(new_val) = value else {
+                return Err(OperationError::TypeMismatch {
+                    path,
+                    expected: "Text".to_string(),
+                });
+            };
+            let prev = para
+                .justification
+                .map(|j| j.as_idml().to_string())
+                .unwrap_or_default();
+            para.justification = if new_val.is_empty() {
+                None
+            } else {
+                match idml_parse::Justification::from_idml(new_val) {
+                    Some(j) => Some(j),
+                    None => {
+                        return Err(OperationError::InvalidValue {
+                            node: NodeId::StoryRange {
+                                story_id: String::new(),
+                                start: 0,
+                                end: 0,
+                            },
+                            path,
+                            reason: format!("unknown Justification: {new_val:?}"),
+                        });
+                    }
+                }
             };
             Ok((Value::Text(prev), Value::Text(new_val.clone())))
         }

@@ -2317,6 +2317,121 @@ mod tests {
         }
     }
 
+    /// SDK Phase 5 (v1 sweep) — paragraph justification apply +
+    /// undo. Wire shape: Value::Text carrying the IDML enum string.
+    #[test]
+    fn paragraph_justification_round_trips() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::ParagraphJustification,
+            value: Value::Text("CenterAlign".to_string()),
+        };
+        let applied = project.apply(op).expect("apply");
+        let story = &project.document().stories[0].story;
+        assert_eq!(
+            story.paragraphs[0].justification,
+            Some(idml_parse::Justification::CenterAlign)
+        );
+        // Inverse restores None.
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].justification, None);
+    }
+
+    /// SDK Phase 5 (v1 sweep) — invalid Justification string raises
+    /// InvalidValue rather than silently dropping the write.
+    #[test]
+    fn paragraph_justification_rejects_unknown_string() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::ParagraphJustification,
+            value: Value::Text("NotARealAlignment".to_string()),
+        };
+        let err = project.apply(op).expect_err("expected InvalidValue");
+        assert!(matches!(
+            err,
+            crate::OperationError::InvalidValue {
+                path: PropertyPath::ParagraphJustification,
+                ..
+            }
+        ));
+    }
+
+    /// SDK Phase 5 (v1 sweep) — stroke end-cap on Rectangle. Uses
+    /// the InsertNode path through the apply layer to build the
+    /// rectangle (mirrors how existing fixture helpers exercise
+    /// `apply_insert_node`), then commits the end-cap change.
+    #[test]
+    fn frame_stroke_end_cap_round_trips_on_rectangle() {
+        let mut project = Project::new(Document {
+            container: Container {
+                mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
+                designmap_raw: Bytes::new(),
+                designmap: DesignMap::default(),
+                entries: BTreeMap::new(),
+            },
+            palette: Graphic::default(),
+            spreads: vec![ParsedSpread {
+                src: "Spreads/syn.xml".to_string(),
+                spread: {
+                    let mut s = idml_parse::Spread::default();
+                    s.self_id = Some("Spread/u_main".to_string());
+                    s
+                },
+            }],
+            stories: Vec::new(),
+            master_spreads: HashMap::new(),
+            frame_for_story: HashMap::new(),
+            text_frame_index: HashMap::new(),
+            styles: StyleSheet::default(),
+            anchors: Vec::new(),
+        });
+        // Insert a fresh rectangle (the InsertNode arm fills in the
+        // full struct including default `end_cap: None`).
+        project
+            .apply(Operation::InsertNode {
+                parent: NodeId::Spread("Spread/u_main".to_string()),
+                position: 0,
+                node: NodeSpec::Rectangle {
+                    self_id: "Rectangle/u1".to_string(),
+                    bounds: [0.0, 0.0, 100.0, 100.0],
+                    fill_color: None,
+                },
+            })
+            .expect("insert");
+
+        let op = Operation::SetProperty {
+            node: NodeId::Rectangle("Rectangle/u1".to_string()),
+            path: PropertyPath::FrameStrokeEndCap,
+            value: Value::Text("RoundEndCap".to_string()),
+        };
+        let applied = project.apply(op).expect("apply");
+        assert_eq!(
+            project.document().spreads[0]
+                .spread
+                .rectangles[0]
+                .end_cap
+                .as_deref(),
+            Some("RoundEndCap")
+        );
+        // Undo: fresh fixture had end_cap = None → empty Text inverse.
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        assert_eq!(
+            project.document().spreads[0].spread.rectangles[0].end_cap,
+            None
+        );
+    }
+
     /// SDK Phase 5 (v1 sweep) — TextFrame inset spacing apply +
     /// undo. Wire shape: Value::Bounds([top, left, bottom, right])
     /// in pt. The renderer's text-frame composer reads the field

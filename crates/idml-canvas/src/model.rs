@@ -1254,6 +1254,12 @@ impl CanvasModel {
                                     f.applied_object_style.clone().unwrap_or_default(),
                                 )),
                             },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeEndCap,
+                                value: Some(Value::Text(
+                                    f.end_cap.clone().unwrap_or_default(),
+                                )),
+                            },
                         ]
                     }),
                 // Oval / Polygon / GraphicLine / Group: v1 surfaces
@@ -1321,6 +1327,7 @@ impl CanvasModel {
         let mut space_after: Vec<Option<f32>> = Vec::new();
         let mut first_line_indent: Vec<Option<f32>> = Vec::new();
         let mut applied_paragraph_styles: Vec<String> = Vec::new();
+        let mut justifications: Vec<String> = Vec::new();
 
         let mut char_offset: u32 = 0;
         for para in &story.paragraphs {
@@ -1341,6 +1348,11 @@ impl CanvasModel {
                 first_line_indent.push(para.first_line_indent);
                 applied_paragraph_styles
                     .push(para.paragraph_style.clone().unwrap_or_default());
+                justifications.push(
+                    para.justification
+                        .map(|j| j.as_idml().to_string())
+                        .unwrap_or_default(),
+                );
             }
 
             // Character-level walk: per run inside the paragraph.
@@ -1410,6 +1422,10 @@ impl CanvasModel {
             PropertyEntry {
                 path: PropertyPath::AppliedCharacterStyle,
                 value: collapse_uniform(&applied_character_styles).map(Value::Text),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphJustification,
+                value: collapse_uniform(&justifications).map(Value::Text),
             },
         ];
 
