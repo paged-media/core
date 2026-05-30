@@ -1248,6 +1248,10 @@ impl CanvasModel {
                                 )),
                             },
                             PropertyEntry {
+                                path: PropertyPath::FrameFillTint,
+                                value: Some(Value::Length(f.fill_tint)),
+                            },
+                            PropertyEntry {
                                 path: PropertyPath::FrameInsetSpacing,
                                 value: Some(Value::Bounds(
                                     f.inset_spacing.unwrap_or([0.0; 4]),
@@ -1317,6 +1321,10 @@ impl CanvasModel {
                                 value: Some(Value::Bool(
                                     f.drop_shadow.is_some(),
                                 )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameFillTint,
+                                value: Some(Value::Length(f.fill_tint)),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameStrokeEndCap,

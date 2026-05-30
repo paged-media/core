@@ -723,6 +723,38 @@ fn apply_set_property(
                 },
             )
         }
+        // ---- SDK Phase 5 (v1 sweep) — frame fill tint percent --
+        // Per-frame override on TextFrame + Rectangle. `None`
+        // (Value::Length(None)) clears the tint, restoring the
+        // swatch's full strength.
+        (NodeId::TextFrame(id), PropertyPath::FrameFillTint) => {
+            let new_val = expect_length(path, value)?;
+            let frame = find_text_frame_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = frame.fill_tint;
+            frame.fill_tint = new_val;
+            (
+                Value::Length(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Rectangle(id), PropertyPath::FrameFillTint) => {
+            let new_val = expect_length(path, value)?;
+            let rect = find_rectangle_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = rect.fill_tint;
+            rect.fill_tint = new_val;
+            (
+                Value::Length(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         // ---- SDK Phase 5 (v1 sweep) — drop-shadow toggle ---------
         // TextFrame + Rectangle carry `drop_shadow: Option<...>`.
         // Toggle semantics: true → default DropShadowSetting when
