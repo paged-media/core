@@ -1,0 +1,30 @@
+[package]
+name = "paged-introspect"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Inspector API: tree walk, typed property descriptors, render-page output."
+
+[lints]
+workspace = true
+
+[features]
+default = ["render"]
+render = ["dep:paged-renderer", "dep:image", "dep:paged-compose", "dep:anyhow"]
+
+[dependencies]
+paged-parse = { path = "../paged-parse" }
+paged-scene = { path = "../paged-scene" }
+paged-mutate = { path = "../paged-mutate" }
+paged-renderer = { path = "../paged-renderer", optional = true }
+paged-compose = { path = "../paged-compose", optional = true }
+anyhow = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+bytes = { workspace = true }
+serde_json = "1"

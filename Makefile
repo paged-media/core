@@ -2,7 +2,7 @@
 #
 #   make fidelity          # everything (cargo, native renderer, canvas)
 #   make fidelity-rust     # cargo unit tests across the workspace
-#   make fidelity-native   # InDesign-PDF vs native renderer (idml-inspect)
+#   make fidelity-native   # InDesign-PDF vs native renderer (paged-inspect)
 #   make fidelity-canvas   # InDesign-PDF vs web canvas (Playwright)
 #
 # Each target is independent — pick the smallest one that covers the

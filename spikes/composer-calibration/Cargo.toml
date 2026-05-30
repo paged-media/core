@@ -17,7 +17,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 serde = { workspace = true }
-idml-text = { path = "../../crates/idml-text" }
+paged-text = { path = "../../crates/paged-text" }
 rustybuzz = "0.18"
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"

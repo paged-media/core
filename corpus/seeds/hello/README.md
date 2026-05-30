@@ -17,7 +17,7 @@ the renderer supports today:
 
 The constituents live as plain XML so they're easy to read and diff.
 The library test `corpus_seed_hello_renders` zips them into a valid
-`.idml` at test time, opens the result through `idml_renderer::Document`,
+`.idml` at test time, opens the result through `paged_renderer::Document`,
 runs `pipeline::render_document`, and asserts the output:
 
 - 2 pages each at 612 × 792 pt

@@ -14,9 +14,9 @@ default) or Vello (wgpu/GPU). Public APIs target both native and WASM.
 Pipeline:
 
 ```
-idml-parse → idml-scene → idml-text → idml-compose → idml-gpu
-                                              ↘ idml-renderer (top)
-                                                   ↘ idml-fidelity (diff)
+paged-parse → paged-scene → paged-text → paged-compose → paged-gpu
+                                              ↘ paged-renderer (top)
+                                                   ↘ paged-fidelity (diff)
 ```
 
 ## Common commands
@@ -28,15 +28,15 @@ cargo check --workspace --all-targets
 
 # Tests
 cargo test --workspace                    # everything
-cargo test -p idml-fidelity               # diff-harness unit + CLI
-cargo test -p idml-renderer self_diff     # self-diff against golden
+cargo test -p paged-fidelity               # diff-harness unit + CLI
+cargo test -p paged-renderer self_diff     # self-diff against golden
 
 # Render a sample
-cargo run --release --bin idml-inspect -- \
+cargo run --release --bin paged-inspect -- \
   --render /tmp/out corpus/generated/<name>.idml
 
 # Diff harness (positional: REFERENCE then CANDIDATE)
-cargo run --release -p idml-fidelity --bin idml-diff -- \
+cargo run --release -p paged-fidelity --bin paged-diff -- \
   --json --heatmap heat.png ref.png cand.png
 
 # Hard fidelity gate over corpus/generated/*.idml + *.pdf
@@ -53,30 +53,30 @@ you've touched.
 
 ## Layout
 
-- `crates/idml-parse/` — ZIP + XML → AST. Container, designmap,
+- `crates/paged-parse/` — ZIP + XML → AST. Container, designmap,
   spreads (TextFrame / Rectangle / Oval / Polygon / GraphicLine /
   Group), stories, graphic, gradients, ItemTransform, NextTextFrame,
   TextFramePreference, tabs, Image, styles + BasedOn cascade,
   bullets/numbering. Also parses `<GeometryPathType>` subpath
   boundaries for compound paths.
-- `crates/idml-scene/` — `Document::open`. Resolves cascade,
+- `crates/paged-scene/` — `Document::open`. Resolves cascade,
   `frame_for_story`, `text_frame_index`, `frame_chain` (threading).
-- `crates/idml-text/` — `shape_run`, `compose_paragraph`,
+- `crates/paged-text/` — `shape_run`, `compose_paragraph`,
   `layout_paragraph` / `layout_runs` (multi-font). Knuth-Plass +
   hyphenation. `apply_tab_stops`.
-- `crates/idml-compose/` — display list, `Transform::for_rect_in`,
+- `crates/paged-compose/` — display list, `Transform::for_rect_in`,
   glyph cache, gradient/image pools.
-- `crates/idml-gpu/` — `PathRasterizer` trait. CPU (tiny-skia,
+- `crates/paged-gpu/` — `PathRasterizer` trait. CPU (tiny-skia,
   default) + Vello backend (FillPath / StrokePath / Image /
   LinearGradient; DropShadow stub).
-- `crates/idml-renderer/` — top-level `pipeline::build` /
-  `pipeline::render`. `StoryEmitter` per-story state. `idml-inspect`
+- `crates/paged-renderer/` — top-level `pipeline::build` /
+  `pipeline::render`. `StoryEmitter` per-story state. `paged-inspect`
   CLI.
-- `crates/idml-color/` — lcms2 wrapper (native); naive fallback on
+- `crates/paged-color/` — lcms2 wrapper (native); naive fallback on
   wasm32.
-- `crates/idml-fidelity/` — ΔE2000 + SSIM diff library + `idml-diff`
+- `crates/paged-fidelity/` — ΔE2000 + SSIM diff library + `paged-diff`
   CLI. Reference is positional arg #1, candidate #2.
-- `crates/idml-wasm/` — `render_to_png` / `parse_summary`.
+- `crates/paged-sdk/` — `render_to_png` / `parse_summary`.
 - `corpus/generated/` — license-clear generator-produced fixtures
   (IDML + paired InDesign-exported PDF + meta JSON). Hard fidelity
   gate runs over these via `diff.sh` + `fidelity-thresholds.json`.

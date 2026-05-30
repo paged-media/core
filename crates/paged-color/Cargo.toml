@@ -1,0 +1,29 @@
+[package]
+name = "paged-color"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "ICC-based color management. Resolves all paints to linear RGB before GPU handoff."
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# lcms2 is native-only here (C lib via lcms2-sys). On wasm32 we use
+# qcms — Mozilla's pure-Rust ICC library that ships in Firefox.
+# Carries CMYK + iccv4 behind feature flags.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lcms2 = "6"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+qcms = { version = "0.3", default-features = false, features = ["cmyk", "iccv4-enabled"] }
+
+[dev-dependencies]
+# Used in tests once a redistributable CMYK profile lands in
+# corpus/profiles. Keeping the placeholder dep slot here so the
+# test setup is one Cargo.toml line away from being live.

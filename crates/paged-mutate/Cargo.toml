@@ -1,0 +1,28 @@
+[package]
+name = "paged-mutate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Operation-based mutation channel for the IDML scene graph. Typed, serializable, invertible Operations + undo/redo + change notification. Consumed by paged-introspect."
+
+[lints]
+workspace = true
+
+[dependencies]
+paged-parse = { path = "../paged-parse" }
+paged-scene = { path = "../paged-scene" }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tsify-next = { workspace = true }
+wasm-bindgen = { workspace = true }
+# Curve-preserving Bezier CSG for Pathfinder ops + foundation for
+# future curve-based features (offset / outline-stroke / curve
+# simplification). See path_math::bezier_conv for the
+# PathAnchor ↔ SimpleBezierPath converters.
+flo_curves = "=0.8.0"
+
+[dev-dependencies]
+bytes = { workspace = true }
+serde_json = "1"

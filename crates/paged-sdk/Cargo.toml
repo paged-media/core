@@ -1,0 +1,27 @@
+[package]
+name = "paged-sdk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "wasm-bindgen surface and browser glue for the renderer."
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+paged-renderer = { path = "../paged-renderer" }
+paged-parse = { path = "../paged-parse" }
+paged-compose = { path = "../paged-compose" }
+paged-gpu = { path = "../paged-gpu" }
+image = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["console"] }
+console_error_panic_hook = "0.1"

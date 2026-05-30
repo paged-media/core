@@ -1,0 +1,60 @@
+[package]
+name = "paged-gpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "wgpu backend and Vello integration. Owns the PathRasterizer trait."
+
+[lints]
+workspace = true
+
+[features]
+default = ["cpu"]
+# Selects the active rasterizer. Only one may be enabled at a time; the
+# default (none) means the crate exposes only the trait surface. The
+# concrete choice is made after Spike A concludes.
+vello-backend = ["dep:vello", "dep:wgpu", "dep:image"]
+# CPU rasterizer via tiny-skia — always buildable, exercises the full
+# pipeline in environments without a GPU. Primarily used by tests and
+# the fidelity harness.
+cpu = ["dep:tiny-skia", "dep:image"]
+
+[dependencies]
+paged-compose = { path = "../paged-compose" }
+# vello 0.8 / tiny-skia 0.12 / wgpu 29 — current Chrome ships the
+# post-2024 WebGPU spec and rejects wgpu < 24's
+# `maxInterStageShaderComponents` limit. wgpu is direct-deps so its
+# version is explicit; we still use vello for the path rasterizer.
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+vello = { git = "https://github.com/linebender/vello.git", tag = "v0.9.0", optional = true, default-features = false, features = ["wgpu"] }
+tiny-skia = { version = "0.12", optional = true }
+image = { workspace = true, optional = true }
+wgpu = { version = "29.0.1", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "OffscreenCanvas"] }
+# The browser WebGPU backend is gated behind wgpu's `webgpu` feature.
+# On wasm32 we always want it on so the worker can talk to
+# `navigator.gpu`. Native targets continue using Vulkan / Metal /
+# DX12 (wgpu's default features).
+wgpu = { version = "29.0.1", optional = true, features = ["webgpu"] }
+# Sub-phase D — PNG-readback for offscreen Vello renders (used by the
+# fidelity test driver to compare Vello's GPU output against the
+# reference PDF). image + futures-channel are wasm-only because
+# `surface.rs` is wasm-only.
+image = { workspace = true }
+futures-channel = { version = "0.3" }
+
+# Build-time WGSL validation for the Vello CMYK-parity compute
+# shaders. The cmyk_compute module is gated behind `vello-backend`,
+# but cargo doesn't surface a feature-gated `[build-dependencies]`
+# table cleanly — the build.rs is a no-op when the shader files are
+# absent, so the unconditional dep is benign for non-Vello builds.
+[build-dependencies]
+naga = { version = "29", features = ["wgsl-in"] }

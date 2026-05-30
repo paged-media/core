@@ -4,13 +4,13 @@
 # Hard-failing fidelity gate over `corpus/generated/*.idml + *.pdf`.
 #
 # Pipeline per fixture:
-#   1. Regenerate the IDML via `cargo run -p idml-gen -- emit --sample <name>`.
+#   1. Regenerate the IDML via `cargo run -p paged-gen -- emit --sample <name>`.
 #      Generated IDMLs are gitignored and reproducible.
 #   2. Render every page through the CPU backend → cand-NNN.png
 #      (delegates to corpus/samples/diff.sh, which already wires up
-#      idml-inspect + per-fixture font flags).
+#      paged-inspect + per-fixture font flags).
 #   3. Rasterise each PDF page via pdftoppm → ref-NNN.png.
-#   4. Run idml-diff per page → JSON report (mean ΔE / p99 ΔE / SSIM).
+#   4. Run paged-diff per page → JSON report (mean ΔE / p99 ΔE / SSIM).
 #   5. Compare against per-fixture worst-page tolerances in
 #      corpus/generated/fidelity-thresholds.json. Any page exceeding
 #      a threshold fails the run.
@@ -65,11 +65,11 @@ fi
 rm -rf "$GATE_OUT"
 mkdir -p "$GATE_OUT"
 
-echo "==> build idml-gen + idml-diff + idml-inspect (release)"
+echo "==> build paged-gen + paged-diff + paged-inspect (release)"
 (cd "$ROOT" && cargo build --release \
-    -p idml-gen --bin idml-gen \
-    -p idml-fidelity --bin idml-diff \
-    -p idml-renderer --bin idml-inspect >/dev/null 2>&1)
+    -p paged-gen --bin paged-gen \
+    -p paged-fidelity --bin paged-diff \
+    -p paged-renderer --bin paged-inspect >/dev/null 2>&1)
 
 OVERALL_PASS=1
 
@@ -82,7 +82,7 @@ for fixture in "${FIXTURES[@]}"; do
 
     echo
     echo "==> [$fixture] regenerate IDML"
-    "$ROOT/target/release/idml-gen" emit --sample "$fixture" --out "$GENERATED_DIR" >/dev/null
+    "$ROOT/target/release/paged-gen" emit --sample "$fixture" --out "$GENERATED_DIR" >/dev/null
 
     fixture_out="$GATE_OUT/$fixture"
     mkdir -p "$fixture_out"

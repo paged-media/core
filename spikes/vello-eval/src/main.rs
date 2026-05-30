@@ -68,6 +68,6 @@ fn main() -> Result<()> {
     eprintln!("\nvello::Scene constructed OK");
 
     eprintln!("\nTODO: wire wgpu adapter, vello Renderer, render each case to a PNG.");
-    eprintln!("TODO: compare against corpus/seeds/vello-eval/*.png via idml-diff.");
+    eprintln!("TODO: compare against corpus/seeds/vello-eval/*.png via paged-diff.");
     Ok(())
 }

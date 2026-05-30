@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Fails when the vendored packages/client/src/wasm/idml_canvas_wasm.d.ts
+# Fails when the vendored packages/client/src/wasm/paged_canvas_wasm.d.ts
 # changes between the merge base and HEAD without a matching bump
-# to PROTOCOL_VERSION in crates/idml-canvas/src/channel.rs.
+# to PROTOCOL_VERSION in crates/paged-canvas/src/channel.rs.
 #
 # Triggered by .github/workflows/protocol-version.yml after the
 # wasm rebuild + `git diff --exit-code` step confirms the vendored
@@ -15,8 +15,8 @@
 set -euo pipefail
 
 BASE_REF="${BASE_REF:-origin/main}"
-DTS_PATH="packages/client/src/wasm/idml_canvas_wasm.d.ts"
-CHANNEL_PATH="crates/idml-canvas/src/channel.rs"
+DTS_PATH="packages/client/src/wasm/paged_canvas_wasm.d.ts"
+CHANNEL_PATH="crates/paged-canvas/src/channel.rs"
 
 # Skip the check when the .d.ts didn't exist on the base ref — this
 # is the one-time bootstrap (vendoring the previously-ignored file).

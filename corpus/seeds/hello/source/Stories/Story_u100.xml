@@ -19,7 +19,7 @@
                          Justification="FullyJustified" FirstLineIndent="12">
       <CharacterStyleRange AppliedFont="Body Font" PointSize="11"
                            FillColor="Color/Black">
-        <Content>The accent block to the left is a process CMYK swatch resolved via the swatch palette. With no ICC profile supplied the renderer falls back to the naive CMYK to sRGB conversion documented in idml-parse::graphic.</Content>
+        <Content>The accent block to the left is a process CMYK swatch resolved via the swatch palette. With no ICC profile supplied the renderer falls back to the naive CMYK to sRGB conversion documented in paged-parse::graphic.</Content>
       </CharacterStyleRange>
     </ParagraphStyleRange>
   </Story>

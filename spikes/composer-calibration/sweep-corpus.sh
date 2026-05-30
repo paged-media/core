@@ -68,7 +68,7 @@ if [ "$MODE" = "--best" ] || [ "$MODE" = "--report" ]; then
         /pub fn new\(column_width_pt: f32\) -> Self/ { in_fn=1 }
         in_fn { print }
         in_fn && /^    \}$/ { exit }
-    ' "$ROOT/crates/idml-text/src/compose.rs")
+    ' "$ROOT/crates/paged-text/src/compose.rs")
     TOL=$(printf '%s\n' "$DEFAULTS_BLOCK" | grep -E '^\s*tolerance:' | grep -oE '[0-9]+\.[0-9]+|[0-9]+' | head -1)
     STR=$(printf '%s\n' "$DEFAULTS_BLOCK" | grep -E '^\s*stretch_ratio:' | grep -oE '[0-9]+\.[0-9]+|[0-9]+' | head -1)
     SHR=$(printf '%s\n' "$DEFAULTS_BLOCK" | grep -E '^\s*shrink_ratio:' | grep -oE '[0-9]+\.[0-9]+|[0-9]+' | head -1)

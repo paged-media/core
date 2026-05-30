@@ -1,0 +1,26 @@
+[package]
+name = "paged-gen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "IDML test-corpus generator. Emits multi-page mega-files where each page exercises one renderable feature variant; pairs with the InDesign-exported PDF reference + paged-fidelity diff harness."
+
+[lints]
+workspace = true
+
+[dependencies]
+zip = { workspace = true }
+quick-xml = { workspace = true }
+anyhow = { workspace = true }
+blake3 = "1"
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+paged-parse = { path = "../paged-parse" }
+sha2 = "0.10"
+
+[[bin]]
+name = "paged-gen"
+path = "src/bin/paged-gen.rs"

@@ -6,8 +6,8 @@
       "pdf": "anchored.pdf",
       "pages": 6,
       "passing": 0,
-      "diff_dir": "/tmp/idml-diff",
-      "report": "/tmp/idml-diff/report.json"
+      "diff_dir": "/tmp/paged-diff",
+      "report": "/tmp/paged-diff/report.json"
     },
     {
       "name": "effects",
@@ -96,8 +96,8 @@
       "pdf": "text-wrap.pdf",
       "pages": 6,
       "passing": 0,
-      "diff_dir": "/tmp/idml-diff",
-      "report": "/tmp/idml-diff/report.json"
+      "diff_dir": "/tmp/paged-diff",
+      "report": "/tmp/paged-diff/report.json"
     },
     {
       "name": "transparency",
@@ -105,8 +105,8 @@
       "pdf": "transparency.pdf",
       "pages": 12,
       "passing": 0,
-      "diff_dir": "/tmp/idml-diff",
-      "report": "/tmp/idml-diff/report.json"
+      "diff_dir": "/tmp/paged-diff",
+      "report": "/tmp/paged-diff/report.json"
     }
   ]
 }

@@ -10,27 +10,27 @@ development strategy this repository implements.
 
 ```
 idml bytes
- └─► idml-parse              ZIP + designmap + spread + story + graphic
-      └─► idml-scene         owned Document (palette, spreads, stories,
+ └─► paged-parse              ZIP + designmap + spread + story + graphic
+      └─► paged-scene         owned Document (palette, spreads, stories,
                               frame-for-story index)
-           └─► idml-text     rustybuzz shape + Knuth-Plass compose +
+           └─► paged-text     rustybuzz shape + Knuth-Plass compose +
                               aligned layout (Left / Right / Center / Justify)
-                 └─► idml-compose  DisplayCommand { FillPath | StrokePath },
+                 └─► paged-compose  DisplayCommand { FillPath | StrokePath },
                                     glyph outlines (ttf-parser), unit-rect
                                     + glyph path interning
-                       └─► idml-gpu   tiny-skia CPU rasterizer (feature:
+                       └─► paged-gpu   tiny-skia CPU rasterizer (feature:
                                        "cpu", default-on); Vello backend
                                        placeholder for Spike A
                              └─► RgbaImage
                                    └─► image PNG encode
-                                   └─► idml-fidelity  ΔE2000 + SSIM diff
+                                   └─► paged-fidelity  ΔE2000 + SSIM diff
                                                        against a reference
 ```
 
 The pipeline is exposed as two library functions:
 
 ```rust
-use idml_renderer::{Document, pipeline, PipelineOptions};
+use paged_renderer::{Document, pipeline, PipelineOptions};
 
 let document = Document::open(&idml_bytes)?;
 let opts = PipelineOptions::default();
@@ -46,22 +46,22 @@ let (built, image) = pipeline::render(&document, &opts, 144.0, Color::WHITE)?;
 
 ```
 crates/
-├── idml-parse/       ZIP + XML → typed AST (container, designmap,
+├── paged-parse/       ZIP + XML → typed AST (container, designmap,
 │                     spread, story, graphic)
-├── idml-scene/       Owned Document: parsed container, palette,
+├── paged-scene/       Owned Document: parsed container, palette,
 │                     spreads, stories, frame-for-story index
-├── idml-text/        Shape (rustybuzz) + compose (Knuth-Plass) +
+├── paged-text/        Shape (rustybuzz) + compose (Knuth-Plass) +
 │                     layout (alignment, positioned glyphs)
-├── idml-color/       ICC transforms placeholder (lcms2 non-wasm)
-├── idml-compose/     Display list, path buffer, emit primitives
+├── paged-color/       ICC transforms placeholder (lcms2 non-wasm)
+├── paged-compose/     Display list, path buffer, emit primitives
 │                     (emit_rect, emit_stroke_rect, emit_paragraph),
 │                     glyph outlining via ttf-parser
-├── idml-gpu/         PathRasterizer trait + cpu backend (tiny-skia);
+├── paged-gpu/         PathRasterizer trait + cpu backend (tiny-skia);
 │                     Vello backend gated behind vello-backend feature
-├── idml-renderer/    Top-level library (`pipeline::build`,
-│                     `pipeline::render`) + `idml-inspect` CLI
-├── idml-fidelity/    ΔE2000 + SSIM diff harness + `idml-diff` CLI
-└── idml-wasm/        wasm-bindgen surface: `render_to_png`,
+├── paged-renderer/    Top-level library (`pipeline::build`,
+│                     `pipeline::render`) + `paged-inspect` CLI
+├── paged-fidelity/    ΔE2000 + SSIM diff harness + `paged-diff` CLI
+└── paged-sdk/        wasm-bindgen surface: `render_to_png`,
                       `parse_summary`
 
 spikes/
@@ -77,11 +77,11 @@ corpus/
 
 ## CLI tools
 
-- **`idml-inspect <file.idml>`** — parse a container, walk spreads and
+- **`paged-inspect <file.idml>`** — parse a container, walk spreads and
   stories, print a human-readable summary.
   Flags: `--font <path>`, `--display-list`, `--render <out.png>`,
   `--dpi <n>`, `--column-width-pt <n>`, `--default-size <n>`.
-- **`idml-diff <reference.png> <candidate.png>`** — ΔE2000 + SSIM
+- **`paged-diff <reference.png> <candidate.png>`** — ΔE2000 + SSIM
   report against the §13.2 pass criteria (mean ΔE ≤ 1.0, p99 ΔE ≤ 2.5,
   SSIM ≥ 0.99). Exits 0 on pass, 1 on fail.
 
@@ -111,7 +111,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ./spikes/wasm-size/measure.sh          # requires binaryen + brotli
-cargo check --target wasm32-unknown-unknown -p idml-wasm
+cargo check --target wasm32-unknown-unknown -p paged-sdk
 ```
 
 All green at the latest commit on the current branch.
@@ -132,7 +132,7 @@ Material items remaining include:
 - **Spike C** — WASM size measurement script needs binaryen + brotli
   installed to run. The 3.5 MB pass criterion is not yet verified.
 - **ICC colour management** — naive CMYK/RGB → linear RGB today;
-  `idml-color` wraps `lcms2` natively but the pipeline doesn't use it.
+  `paged-color` wraps `lcms2` natively but the pipeline doesn't use it.
 - **Effects** — drop shadow, feather, glow, blend modes other than
   source-over are not implemented.
 - **Text** — no justification of metric-kerning ratios, no

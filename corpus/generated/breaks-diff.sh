@@ -23,8 +23,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-GEN="$ROOT/target/release/idml-gen"
-INSPECT="$ROOT/target/release/idml-inspect"
+GEN="$ROOT/target/release/paged-gen"
+INSPECT="$ROOT/target/release/paged-inspect"
 SNAPSHOT="$ROOT/corpus/generated/text-letterspacing.breaks.jsonl"
 IDML="$ROOT/corpus/generated/text-letterspacing.idml"
 OUT="${IDML_BREAKS_DIFF_OUT:-/tmp/text-letterspacing.cand.jsonl}"
@@ -35,10 +35,10 @@ ADVISORY=0
 [ -f "$SNAPSHOT" ] || { echo "missing snapshot $SNAPSHOT"; exit 2; }
 
 if [ ! -x "$GEN" ] || [ ! -x "$INSPECT" ]; then
-    echo "==> build idml-gen + idml-inspect (release)"
+    echo "==> build paged-gen + paged-inspect (release)"
     (cd "$ROOT" && cargo build --release \
-        -p idml-gen --bin idml-gen \
-        -p idml-renderer --bin idml-inspect >/dev/null 2>&1)
+        -p paged-gen --bin paged-gen \
+        -p paged-renderer --bin paged-inspect >/dev/null 2>&1)
 fi
 
 "$GEN" emit --sample text-letterspacing --out "$ROOT/corpus/generated" >/dev/null

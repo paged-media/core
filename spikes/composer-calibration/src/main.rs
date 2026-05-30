@@ -1,6 +1,6 @@
 //! Spike B: Paragraph Composer calibration harness.
 //!
-//! Thin CLI wrapper around `idml_text::compose_paragraph`. Takes a JSON
+//! Thin CLI wrapper around `paged_text::compose_paragraph`. Takes a JSON
 //! paragraph spec (font path, point size, column width, text, penalty
 //! knobs) and emits the chosen break positions.
 //!
@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use idml_text::{compose_paragraph, ComposeOptions, RustybuzzMeasurer};
+use paged_text::{compose_paragraph, ComposeOptions, RustybuzzMeasurer};
 use rustybuzz::Face;
 use serde::{Deserialize, Serialize};
 

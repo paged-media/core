@@ -5,11 +5,11 @@ name: protocol-version
 on:
   pull_request:
     paths:
-      - "crates/idml-canvas/**"
-      - "crates/idml-canvas-wasm/**"
-      - "crates/idml-mutate/**"
-      - "crates/idml-renderer/**"
-      - "apps/canvas/src/wasm/idml_canvas_wasm.d.ts"
+      - "crates/paged-canvas/**"
+      - "crates/paged-canvas-wasm/**"
+      - "crates/paged-mutate/**"
+      - "crates/paged-renderer/**"
+      - "apps/canvas/src/wasm/paged_canvas_wasm.d.ts"
       - "apps/canvas/build-wasm.sh"
 
 env:
@@ -49,7 +49,7 @@ jobs:
 
       - name: vendored .d.ts must match regenerated output
         run: |
-          if ! git diff --exit-code apps/canvas/src/wasm/idml_canvas_wasm.d.ts; then
+          if ! git diff --exit-code apps/canvas/src/wasm/paged_canvas_wasm.d.ts; then
             echo "::error::Vendored .d.ts is out of date. Run 'pnpm wasm' locally and commit the result."
             exit 1
           fi

@@ -17,7 +17,7 @@ PDF using the `[High Quality Print]` preset.
 
 ```bash
 # 1. Generate the IDMLs.
-cargo run -p idml-gen -- emit --sample geometry --out corpus/generated
+cargo run -p paged-gen -- emit --sample geometry --out corpus/generated
 
 # 2. Run the InDesign export pass. The script activates InDesign,
 #    iterates corpus/generated/*.idml, and writes corpus/generated/*.pdf.
