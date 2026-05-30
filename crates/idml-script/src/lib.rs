@@ -171,6 +171,11 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             0,
         )
         .function(
+            NativeFunction::from_fn_ptr(verso_links),
+            js_string!("links"),
+            0,
+        )
+        .function(
             NativeFunction::from_fn_ptr(verso_gradients),
             js_string!("gradients"),
             0,
@@ -349,6 +354,13 @@ fn verso_object_styles(
     _ctx: &mut Context,
 ) -> JsResult<JsValue> {
     let s = with_model(|m| serde_json::to_string(&m.object_styles()).unwrap_or_default());
+    Ok(JsValue::from(js_string!(s)))
+}
+
+/// SDK Phase 5 (v1 sweep) — `verso.links()` legacy-shape alias for
+/// `verso.collection("links")`.
+fn verso_links(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let s = with_model(|m| serde_json::to_string(&m.links()).unwrap_or_default());
     Ok(JsValue::from(js_string!(s)))
 }
 

@@ -901,6 +901,26 @@ pub struct CharacterStyleSummary {
     pub based_on: Option<String>,
 }
 
+/// SDK Phase 5 (v1 sweep) — one placed-image link summary. Backs
+/// `documentCollection:links` per `panel-catalog-and-sdk-extension.md`
+/// §5.1. Each entry is a `(frame, image_link)` pair derived from
+/// the parse layer's `Rectangle::image_link` / `Oval::image_link` /
+/// `Polygon::image_link` fields. The Links panel renders this list
+/// for inspection; the per-link "relocate" / "update" actions land
+/// when those Operations ship.
+///
+/// `host_kind` lets a future panel disambiguate "this link sits on
+/// a Rectangle vs. an Oval". `host_self_id` is the host frame's
+/// IDML `Self` id; the panel uses it as the row react-key.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkSummary {
+    pub host_self_id: String,
+    pub host_kind: String,
+    pub uri: String,
+}
+
 /// SDK Phase 5 (v1 sweep) — one object style's summary. Backs
 /// `documentCollection:objectStyles` per `panel-catalog-and-sdk-
 /// extension.md` §5.1; consumed by the Object Styles panel via
