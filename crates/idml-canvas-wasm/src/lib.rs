@@ -906,6 +906,29 @@ mod wasm {
                         .unwrap_or_default();
                     WorkerToMainKind::Layers { items }
                 }
+                MainToWorkerKind::RequestCollection { name } => {
+                    let items = self
+                        .model
+                        .as_ref()
+                        .map(|m| m.collection(name))
+                        .unwrap_or(serde_json::Value::Array(Vec::new()));
+                    WorkerToMainKind::CollectionReply { name, items }
+                }
+                MainToWorkerKind::RequestDocumentMeta => {
+                    let meta = self
+                        .model
+                        .as_ref()
+                        .map(|m| m.document_meta())
+                        .unwrap_or(idml_canvas::channel::DocumentMeta {
+                            page_count: 0,
+                            active_page: None,
+                            units: String::new(),
+                            color_mode: String::new(),
+                            document_name: String::new(),
+                            dirty: false,
+                        });
+                    WorkerToMainKind::DocumentMetaReply { meta }
+                }
                 MainToWorkerKind::RequestElementProperties { id } => {
                     let result = self
                         .model

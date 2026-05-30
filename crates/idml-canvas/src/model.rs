@@ -1520,6 +1520,67 @@ impl CanvasModel {
             .collect()
     }
 
+    /// SDK Phase 5 (D1) — generic document-collection dispatcher per
+    /// `panel-catalog-and-sdk-extension.md` §5.1 + plan Task B.
+    /// Routes the requested `CollectionName` to the per-collection
+    /// accessor and returns the serialized array as a
+    /// `serde_json::Value` — one wire shape that handles all 21
+    /// collections without per-name plumbing in the channel envelope.
+    ///
+    /// Consumers deserialize against the typed `*Summary` matching
+    /// the `documentCollection:<name>` ReadSpec they declared. Names
+    /// without a backing accessor return `Value::Array(vec![])` — the
+    /// audit pass per §10 flags these as "wire-shape exists, accessor
+    /// pending."
+    pub fn collection(
+        &self,
+        name: crate::channel::CollectionName,
+    ) -> serde_json::Value {
+        use crate::channel::CollectionName::*;
+        match name {
+            Swatches => serde_json::to_value(self.swatches()).unwrap_or_default(),
+            Gradients => serde_json::to_value(self.gradients()).unwrap_or_default(),
+            ParagraphStyles => {
+                serde_json::to_value(self.paragraph_styles()).unwrap_or_default()
+            }
+            CharacterStyles => {
+                serde_json::to_value(self.character_styles()).unwrap_or_default()
+            }
+            Layers => serde_json::to_value(self.layers()).unwrap_or_default(),
+            // Remaining 16 collections from the §5.1 enum don't have
+            // accessors yet — the audit pipeline picks them up as
+            // wire-shape-only. Return an empty array (NOT a null) so
+            // the consumer's `useCollection<T>` typed array stays
+            // valid; the empty payload + console-side warning is
+            // sufficient signal during dev.
+            ColorGroups | ObjectStyles | CellStyles | TableStyles | Spreads | Pages
+            | MasterPages | Links | Articles | Hyperlinks | Bookmarks | CrossReferences
+            | Conditions | ConditionSets | Fonts | IndexTopics => {
+                serde_json::Value::Array(Vec::new())
+            }
+        }
+    }
+
+    /// SDK Phase 5 (D1) — singleton document-state snapshot per
+    /// `panel-catalog-and-sdk-extension.md` §5.6. Powers the Info
+    /// panel + status-bar + any chrome that reflects whole-document
+    /// state (vs. selection state). Scalar reads; the six fields
+    /// cover v1 panel needs.
+    pub fn document_meta(&self) -> crate::channel::DocumentMeta {
+        crate::channel::DocumentMeta {
+            page_count: self.built.pages.len() as u32,
+            // `active_page` is application state (canvas-side camera
+            // focus + Pages panel selection). The worker doesn't
+            // track it; consumers fold their own active-page state
+            // into the binding renderer when they need it.
+            active_page: None,
+            units: String::new(),
+            color_mode: String::new(),
+            document_name: String::new(),
+            dirty: false,
+        }
+    }
+
     /// Inspector P1 — build the scene-tree outline. Spread → Page →
     /// (group leaves OR top-level frames). Light enough to send
     /// eagerly; the panel can re-fetch on `mutationApplied`.
@@ -2123,6 +2184,74 @@ mod tests {
             "same bytes → same canonical hash (doc_id is not part of content)"
         );
         assert_eq!(a.initial_state_hash(), a.current_state_hash());
+    }
+
+    /// SDK Phase 5 (D1) — the generic `collection(name)` dispatcher
+    /// returns the same JSON shape the named accessor would, so
+    /// callers can switch from `verso.swatches()` to
+    /// `verso.collection("swatches")` without re-decoding.
+    #[test]
+    fn collection_dispatch_matches_named_accessor() {
+        use crate::channel::CollectionName;
+        let bytes = minimal_idml_bytes();
+        let model = CanvasModel::load("doc-1", &bytes, CanvasOptions::default()).unwrap();
+        // Swatches: the named accessor returns the IDML defaults
+        // (None / Paper / Black / Registration); the dispatcher must
+        // serialize to the same Value::Array.
+        let via_named = serde_json::to_value(model.swatches()).unwrap();
+        let via_dispatch = model.collection(CollectionName::Swatches);
+        assert_eq!(via_named, via_dispatch);
+
+        // Layers: the minimal fixture has no `<Layer>` rows; both
+        // return an empty array.
+        let via_named = serde_json::to_value(model.layers()).unwrap();
+        let via_dispatch = model.collection(CollectionName::Layers);
+        assert_eq!(via_named, via_dispatch);
+
+        // ParagraphStyles: dispatcher matches the typed accessor.
+        let via_named = serde_json::to_value(model.paragraph_styles()).unwrap();
+        let via_dispatch = model.collection(CollectionName::ParagraphStyles);
+        assert_eq!(via_named, via_dispatch);
+    }
+
+    /// SDK Phase 5 (D1) — unwired collections (§5.1 enum entries
+    /// without a backing accessor) return an empty array — never
+    /// null — so consumers' typed `useCollection<T>` arrays stay
+    /// valid.
+    #[test]
+    fn collection_dispatch_empty_array_for_unwired_collections() {
+        use crate::channel::CollectionName;
+        let bytes = minimal_idml_bytes();
+        let model = CanvasModel::load("doc-1", &bytes, CanvasOptions::default()).unwrap();
+        for name in [
+            CollectionName::ObjectStyles,
+            CollectionName::CellStyles,
+            CollectionName::TableStyles,
+            CollectionName::Links,
+            CollectionName::Articles,
+            CollectionName::Hyperlinks,
+            CollectionName::Bookmarks,
+            CollectionName::Conditions,
+            CollectionName::Fonts,
+        ] {
+            let v = model.collection(name);
+            assert_eq!(v, serde_json::Value::Array(Vec::new()), "{:?}", name);
+        }
+    }
+
+    /// SDK Phase 5 (D1) — `document_meta()` reports page count;
+    /// other fields stay at their v1 defaults.
+    #[test]
+    fn document_meta_reports_page_count() {
+        let bytes = minimal_idml_bytes();
+        let model = CanvasModel::load("doc-1", &bytes, CanvasOptions::default()).unwrap();
+        let meta = model.document_meta();
+        assert_eq!(meta.page_count, 1);
+        assert_eq!(meta.active_page, None);
+        assert!(meta.units.is_empty());
+        assert!(meta.color_mode.is_empty());
+        assert!(meta.document_name.is_empty());
+        assert!(!meta.dirty);
     }
 
     #[test]

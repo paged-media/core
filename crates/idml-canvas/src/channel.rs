@@ -49,7 +49,7 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(21);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(22);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -209,6 +209,25 @@ pub enum MainToWorkerKind {
     /// dedicated `LayersChanged` notification is overkill given the
     /// small payload size and existing subscription wiring.
     RequestLayers,
+    /// SDK Phase 5 (D1) — typed read of any document collection per
+    /// `panel-catalog-and-sdk-extension.md` §5.1. Single envelope
+    /// handles all 21 named collections; the dispatcher in
+    /// `CanvasModel::collection(name)` routes to the underlying
+    /// per-collection accessor. Reply: `CollectionReply` whose
+    /// `items` is a `serde_json::Value` — the consumer deserializes
+    /// to the typed `*Summary[]` it expects (matching the
+    /// `documentCollection:<name>` ReadSpec it declared). Unknown /
+    /// unimplemented collections come back with an empty array.
+    RequestCollection {
+        name: CollectionName,
+    },
+    /// SDK Phase 5 (D1) — singleton document meta read per
+    /// `panel-catalog-and-sdk-extension.md` §5.6. Backs the
+    /// `documentMeta:<key>` ReadSpec form. The reply carries every
+    /// field at once; the consumer picks the one it bound against.
+    /// Volume is trivial so paging per-key isn't worth the round-
+    /// trip cost. Reply: `DocumentMetaReply`.
+    RequestDocumentMeta,
     /// Scripting Stage 2 — execute a JS source string against the
     /// loaded document. The script's mutations route through
     /// `Operation::SetProperty` (same channel as gestures + REPL)
@@ -476,6 +495,25 @@ pub enum WorkerToMainKind {
     Layers {
         items: Vec<LayerSummary>,
     },
+    /// SDK Phase 5 (D1) — `RequestCollection` reply. `items` is a
+    /// `serde_json::Value` (always an array on the wire) so a single
+    /// envelope handles every collection's typed shape. The consumer
+    /// deserializes against the typed `*Summary` it expects —
+    /// `SwatchSummary[]` for `name: "swatches"`,
+    /// `ParagraphStyleSummary[]` for `name: "paragraphStyles"`,
+    /// etc. Per `panel-catalog-and-sdk-extension.md` §5.1. Unknown
+    /// or not-yet-implemented collections come back with an empty
+    /// array.
+    CollectionReply {
+        name: CollectionName,
+        #[tsify(type = "any")]
+        items: serde_json::Value,
+    },
+    /// SDK Phase 5 (D1) — `RequestDocumentMeta` reply. Per
+    /// `panel-catalog-and-sdk-extension.md` §5.6.
+    DocumentMetaReply {
+        meta: DocumentMeta,
+    },
     /// Inspector P1 — `RequestElementProperties` reply. `None` when
     /// the id doesn't resolve.
     ElementProperties {
@@ -681,6 +719,136 @@ pub struct PropertyEntry {
     pub path: idml_mutate::PropertyPath,
     #[serde(default)]
     pub value: Option<idml_mutate::Value>,
+}
+
+/// SDK Phase 5 (D1) — closed enumeration of every document
+/// collection a panel may bind against. Per
+/// `panel-catalog-and-sdk-extension.md` §5.1. The Rust enum and the
+/// TS `CollectionName` union (in `packages/catalog/src/types.ts`)
+/// stay in lockstep; tsify emits a string-tag enum at the boundary
+/// so consumers can pass names verbatim.
+///
+/// Not every variant has a backing model accessor yet — the wire
+/// surface lands here as the §5 binding ceiling, and the per-
+/// collection accessors fill in as panels need them. The
+/// `CanvasModel::collection(name)` dispatcher returns an empty
+/// `serde_json::Value::Array` for unimplemented entries, surfacing
+/// a runtime warning rather than a panic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub enum CollectionName {
+    Swatches,
+    Gradients,
+    ColorGroups,
+    ParagraphStyles,
+    CharacterStyles,
+    ObjectStyles,
+    CellStyles,
+    TableStyles,
+    Layers,
+    Spreads,
+    Pages,
+    MasterPages,
+    Links,
+    Articles,
+    Hyperlinks,
+    Bookmarks,
+    CrossReferences,
+    Conditions,
+    ConditionSets,
+    Fonts,
+    IndexTopics,
+}
+
+impl CollectionName {
+    /// String form matching the TS `CollectionName` union — used by
+    /// the script-host generic `verso.collection(name)` to round-trip
+    /// from a JS string.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Swatches => "swatches",
+            Self::Gradients => "gradients",
+            Self::ColorGroups => "colorGroups",
+            Self::ParagraphStyles => "paragraphStyles",
+            Self::CharacterStyles => "characterStyles",
+            Self::ObjectStyles => "objectStyles",
+            Self::CellStyles => "cellStyles",
+            Self::TableStyles => "tableStyles",
+            Self::Layers => "layers",
+            Self::Spreads => "spreads",
+            Self::Pages => "pages",
+            Self::MasterPages => "masterPages",
+            Self::Links => "links",
+            Self::Articles => "articles",
+            Self::Hyperlinks => "hyperlinks",
+            Self::Bookmarks => "bookmarks",
+            Self::CrossReferences => "crossReferences",
+            Self::Conditions => "conditions",
+            Self::ConditionSets => "conditionSets",
+            Self::Fonts => "fonts",
+            Self::IndexTopics => "indexTopics",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        Some(match s {
+            "swatches" => Self::Swatches,
+            "gradients" => Self::Gradients,
+            "colorGroups" => Self::ColorGroups,
+            "paragraphStyles" => Self::ParagraphStyles,
+            "characterStyles" => Self::CharacterStyles,
+            "objectStyles" => Self::ObjectStyles,
+            "cellStyles" => Self::CellStyles,
+            "tableStyles" => Self::TableStyles,
+            "layers" => Self::Layers,
+            "spreads" => Self::Spreads,
+            "pages" => Self::Pages,
+            "masterPages" => Self::MasterPages,
+            "links" => Self::Links,
+            "articles" => Self::Articles,
+            "hyperlinks" => Self::Hyperlinks,
+            "bookmarks" => Self::Bookmarks,
+            "crossReferences" => Self::CrossReferences,
+            "conditions" => Self::Conditions,
+            "conditionSets" => Self::ConditionSets,
+            "fonts" => Self::Fonts,
+            "indexTopics" => Self::IndexTopics,
+            _ => return None,
+        })
+    }
+}
+
+/// SDK Phase 5 (D1) — singleton document-level state. Per
+/// `panel-catalog-and-sdk-extension.md` §5.6. Powers the Info panel,
+/// status bar, and any chrome that reflects whole-document state
+/// (vs. selection state). Scalar reads of singleton properties; the
+/// six fields cover the v1 panel needs.
+///
+/// `dirty` mirrors the Project's "has uncommitted edits since the
+/// last save" flag (always `false` at v1 since there's no
+/// save/export path through the worker yet — the flag exists so
+/// the Info panel and tab title can react when one lands).
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentMeta {
+    pub page_count: u32,
+    pub active_page: Option<PageId>,
+    /// User-facing measurement unit — `"pt"` / `"px"` / `"in"` /
+    /// `"mm"` / `"cm"` / `"pica"` etc. Empty when the IDML doesn't
+    /// declare a default and the renderer hasn't established one.
+    pub units: String,
+    /// IDML's document colour mode — `"cmyk"` / `"rgb"`. Empty when
+    /// the source doesn't declare it.
+    pub color_mode: String,
+    /// Human-readable document name. Often the source `.idml`
+    /// filename minus extension; empty for synthetic / in-memory
+    /// documents.
+    pub document_name: String,
+    /// `true` when the worker has applied a mutation since
+    /// `LoadDocument`. Reset on save/export when that path lands.
+    pub dirty: bool,
 }
 
 /// SDK Phase 3 — one swatch's identity + display name + kind.
