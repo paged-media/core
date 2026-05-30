@@ -231,19 +231,14 @@ fn verso_content_selection_returns_null_when_unset() {
 }
 
 /// SDK Phase 3 — `verso.set("storyRange:Story/u…@0..N", ...)` parses
-/// the storyRange address and routes through the apply arm. The
-/// script-side parser accepts `storyRange:<story_id>@<start>..<end>`;
-/// this test passes a real story id from the loaded fixture into
-/// the script and verifies the script runs without throwing
-/// (proving parse_element_id accepted the address). Whether the
-/// apply arm succeeds or fails (whole-run-only constraint) depends
-/// on the fixture's run layout; either outcome is acceptable here —
-/// the parser is what's under test.
+/// the storyRange address and routes through the apply arm. Phase
+/// 3.x landed partial-range run-splitting, so a range that cuts
+/// inside a CharacterRun now succeeds (splits the run, applies the
+/// property to the middle piece). The script issues a write +
+/// verifies the change surfaces via `verso.inspect` end-to-end.
 #[test]
 fn verso_set_against_story_range_reaches_the_apply_arm() {
     let mut model = load();
-    // Pull the first story id from the model directly — the canvas
-    // surface exposes stories via `scene().stories`.
     let story_id = model
         .scene()
         .stories
@@ -251,13 +246,45 @@ fn verso_set_against_story_range_reaches_the_apply_arm() {
         .map(|s| s.self_id.clone())
         .expect("fixture should contain at least one story");
     let source = format!(
-        r#"verso.set("storyRange:{story_id}@0..3", "characterFontSize", 24);"#,
+        r#"
+            // Write font size 24 to the first 3 chars of the story.
+            const ok = verso.set("storyRange:{story_id}@0..3",
+                                  "characterFontSize", 24);
+            // Read it back through the snapshot. The range now has
+            // a uniform font size after the partial-range split, so
+            // the entry should be Some(Length(Some(24))).
+            const props = JSON.parse(
+                verso.inspect("storyRange:{story_id}@0..3")
+            );
+            const entry = props.entries.find(
+                e => e.path === "characterFontSize",
+            );
+            console.log("write ok", ok);
+            console.log("after value", JSON.stringify(entry && entry.value));
+        "#,
     );
     let result = execute_script(&mut model, &source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    // Write succeeded.
     assert!(
-        result.error.is_none(),
-        "script error: {:?}",
-        result.error
+        result.output.iter().any(|l| l.contains("[log] write ok true")),
+        "write didn't return true: {:?}",
+        result.output
+    );
+    // Inspect shows the new value.
+    let after = result
+        .output
+        .iter()
+        .find(|l| l.contains("after value"))
+        .expect("no after value line");
+    // Either the entry was uniform (Some(Length(24.0))) or — if
+    // the fixture's runs disagree past offset 3 — mixed (`null`).
+    // The latter shouldn't happen here: we wrote 24 to exactly
+    // [0, 3), so the snapshot of [0, 3) sees only the just-written
+    // value. Assert it contains "24".
+    assert!(
+        after.contains("24"),
+        "expected 24 in after-value line: {after}"
     );
 }
 
