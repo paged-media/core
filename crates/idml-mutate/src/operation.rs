@@ -236,6 +236,14 @@ pub enum PropertyPath {
     /// placeholder treatment as `AppliedCellStyle`: wire-shape only,
     /// apply layer errors until Tier 2d.
     AppliedTableStyle,
+    /// SDK Phase 5 (v1 sweep) — whole-path replacement on any path-
+    /// bearing page item. Value is `Value::FramePath { anchors,
+    /// subpath_starts }`. The apply layer swaps the frame's anchor
+    /// list wholesale; the inverse captures the prior anchors +
+    /// subpath_starts so undo round-trips bytewise. Used by
+    /// Pathfinder's Subtract / Exclude where the result is a fresh
+    /// polygon set rather than a partial edit.
+    FramePath,
     /// SDK Phase 5 (v1 sweep) — drop-shadow enabled toggle. Wire
     /// value is `Value::Bool`. Setting `true` materialises a
     /// default `DropShadowSetting` (mode="Drop", small offset, low
@@ -390,6 +398,7 @@ impl PropertyPath {
             PropertyPath::FrameFittingCrops => "frame.fittingCrops",
             PropertyPath::FrameFittingType => "frame.fittingType",
             PropertyPath::FrameDropShadow => "frame.dropShadow",
+            PropertyPath::FramePath => "frame.path",
         }
     }
 }
@@ -505,6 +514,19 @@ pub enum Value {
     /// Track M — plain text value (layer name, future story
     /// titles, etc.). Inverse via the previous text.
     Text(String),
+    /// SDK Phase 5 (v1 sweep) — full path replacement on any
+    /// path-bearing page item. Carries the new anchor list +
+    /// `subpath_starts` for compound paths. Used by Pathfinder
+    /// (Subtract / Exclude) — the result of a boolean op is a
+    /// fresh polygon set that we drop in via one SetProperty,
+    /// rather than churning through N PathPointInsert/Remove ops.
+    ///
+    /// The inverse `Value::FramePath` carries the prior anchors +
+    /// starts so undo round-trips bytewise.
+    FramePath {
+        anchors: Vec<PathAnchorSpec>,
+        subpath_starts: Vec<usize>,
+    },
 }
 
 /// Description of a node about to be inserted. Carries the minimal
@@ -625,6 +647,42 @@ pub enum Operation {
     RemoveLayer {
         layer_id: String,
     },
+    /// SDK Phase 5 (v1 sweep) — multi-target Bezier boolean op.
+    /// `kept` is the survivor (its path is replaced with the
+    /// result); `others` are the inputs that disappear. For
+    /// Subtract, `kept` is the "top" path being subtracted from;
+    /// `others` are subtracted. The apply layer:
+    ///   1. Reads each input's path (anchors + subpath_starts).
+    ///   2. Runs `pathfinder::pathfinder_boolean` (flo_curves
+    ///      curve-preserving CSG; output is real Bezier curves).
+    ///   3. Builds an internal Batch:
+    ///      `SetProperty(kept, FramePath, result)` +
+    ///      `RemoveNode(other)` per other.
+    ///   4. Applies the Batch; returns it as the AppliedOperation
+    ///      so undo reverses the whole pathfinder in one Cmd-Z.
+    PathfinderBoolean {
+        kept: NodeId,
+        others: Vec<NodeId>,
+        // `kind` is reserved by serde for the enum discriminator
+        // tag (`#[serde(tag = "kind")]` above) — use `opKind` on
+        // the wire to disambiguate.
+        #[serde(rename = "opKind")]
+        op_kind: PathfinderKind,
+    },
+}
+
+/// SDK Phase 5 (v1 sweep) — wire enum for Pathfinder ops. Mirrors
+/// `pathfinder::PathfinderKind` (the internal enum used by the
+/// flo_curves layer) — kept separate so the apply layer doesn't
+/// leak `flo_curves` types onto the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub enum PathfinderKind {
+    Union,
+    Intersect,
+    Subtract,
+    Exclude,
 }
 
 /// Hint to downstream caches about what the apply touched. Lists

@@ -31,12 +31,14 @@ use std::rc::Rc;
 use idml_scene::Document;
 
 pub mod apply;
+pub mod bezier_conv;
 pub mod error;
 pub mod history;
 pub mod invert;
 pub mod notify;
 pub mod operation;
 pub mod path_math;
+pub mod pathfinder;
 
 pub use apply::apply;
 pub use error::OperationError;
@@ -44,7 +46,7 @@ pub use history::{History, DEFAULT_HISTORY_CAPACITY};
 pub use notify::Notifier;
 pub use operation::{
     AppliedOperation, InvalidationHint, NodeId, NodeSpec, Operation, PathPointAddress,
-    PathPointRole, PropertyPath, Value,
+    PathPointRole, PathfinderKind, PropertyPath, Value,
 };
 
 /// Holds a [`Document`] plus the Operation surface, undo/redo
@@ -2315,6 +2317,141 @@ mod tests {
         for run in &story.paragraphs[0].runs {
             assert!(run.applied_conditions.is_empty());
         }
+    }
+
+    /// SDK Phase 5 (v1 sweep) — end-to-end PathfinderBoolean.
+    /// Insert two rectangles into a spread, run Subtract via the
+    /// new Operation, and verify the kept frame's anchors now
+    /// match the L-shape result (6 corner vertices) while the
+    /// other frame is gone. One Cmd-Z restores both.
+    #[test]
+    fn pathfinder_subtract_round_trips_via_operation() {
+        use idml_parse::Spread;
+        let mut project = Project::new(Document {
+            container: Container {
+                mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
+                designmap_raw: Bytes::new(),
+                designmap: DesignMap::default(),
+                entries: BTreeMap::new(),
+            },
+            palette: Graphic::default(),
+            spreads: vec![ParsedSpread {
+                src: "Spreads/syn.xml".to_string(),
+                spread: {
+                    let mut s = Spread::default();
+                    s.self_id = Some("Spread/u_main".to_string());
+                    s
+                },
+            }],
+            stories: Vec::new(),
+            master_spreads: HashMap::new(),
+            frame_for_story: HashMap::new(),
+            text_frame_index: HashMap::new(),
+            styles: StyleSheet::default(),
+            anchors: Vec::new(),
+        });
+        // Two rectangles: A = [0..20, 0..20], B = [10..30, 10..30].
+        // A \ B is an L-shape of 6 corner vertices.
+        project
+            .apply(Operation::InsertNode {
+                parent: NodeId::Spread("Spread/u_main".to_string()),
+                position: 0,
+                node: NodeSpec::Rectangle {
+                    self_id: "Rectangle/a".to_string(),
+                    bounds: [0.0, 0.0, 20.0, 20.0],
+                    fill_color: None,
+                },
+            })
+            .expect("insert a");
+        project
+            .apply(Operation::InsertNode {
+                parent: NodeId::Spread("Spread/u_main".to_string()),
+                position: 1,
+                node: NodeSpec::Rectangle {
+                    self_id: "Rectangle/b".to_string(),
+                    bounds: [10.0, 10.0, 30.0, 30.0],
+                    fill_color: None,
+                },
+            })
+            .expect("insert b");
+
+        let applied = project
+            .apply(Operation::PathfinderBoolean {
+                kept: NodeId::Rectangle("Rectangle/a".to_string()),
+                others: vec![NodeId::Rectangle("Rectangle/b".to_string())],
+                op_kind: crate::operation::PathfinderKind::Subtract,
+            })
+            .expect("pathfinder subtract");
+
+        let rect = &project.document().spreads[0].spread.rectangles;
+        // B is gone; A is left.
+        assert_eq!(rect.len(), 1);
+        assert_eq!(rect[0].self_id.as_deref(), Some("Rectangle/a"));
+        // A's anchors are now the L-shape — 6 corners.
+        assert_eq!(rect[0].anchors.len(), 6);
+
+        // One Cmd-Z restores both frames + the original path.
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let rect = &project.document().spreads[0].spread.rectangles;
+        assert_eq!(rect.len(), 2);
+    }
+
+    /// SDK Phase 5 (v1 sweep) — whole-path replacement. Pathfinder
+    /// (Subtract / Exclude) uses this to drop in a freshly-computed
+    /// polygon set in one shot. Inverse captures the prior anchors
+    /// + subpath_starts so undo round-trips bytewise.
+    #[test]
+    fn frame_path_replacement_round_trips() {
+        use idml_parse::PathAnchor;
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        // Seed three anchors so the prior state is observable.
+        {
+            let frame = &mut project.document_mut().spreads[0].spread.text_frames[0];
+            frame.anchors = vec![
+                PathAnchor {
+                    anchor: (0.0, 0.0),
+                    left: (0.0, 0.0),
+                    right: (0.0, 0.0),
+                },
+                PathAnchor {
+                    anchor: (10.0, 0.0),
+                    left: (10.0, 0.0),
+                    right: (10.0, 0.0),
+                },
+                PathAnchor {
+                    anchor: (5.0, 8.0),
+                    left: (5.0, 8.0),
+                    right: (5.0, 8.0),
+                },
+            ];
+            frame.subpath_starts = vec![0];
+        }
+
+        // Replace with a single corner.
+        let new_anchor = crate::operation::PathAnchorSpec {
+            anchor: [100.0, 100.0],
+            left: [100.0, 100.0],
+            right: [100.0, 100.0],
+        };
+        let applied = project
+            .apply(Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FramePath,
+                value: Value::FramePath {
+                    anchors: vec![new_anchor],
+                    subpath_starts: vec![0],
+                },
+            })
+            .expect("apply");
+        let frame = &project.document().spreads[0].spread.text_frames[0];
+        assert_eq!(frame.anchors.len(), 1);
+        assert_eq!(frame.anchors[0].anchor, (100.0, 100.0));
+
+        // Undo restores the original three anchors.
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let frame = &project.document().spreads[0].spread.text_frames[0];
+        assert_eq!(frame.anchors.len(), 3);
+        assert_eq!(frame.anchors[1].anchor, (10.0, 0.0));
     }
 
     /// SDK Phase 5 (v1 sweep) — drop-shadow toggle. true → default

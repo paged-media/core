@@ -814,6 +814,22 @@ impl CanvasModel {
                 let node = self.resolve_frame_node_id(frame_id)?;
                 Some(Operation::RemoveNode { node })
             }
+            Mutation::PathfinderBoolean {
+                kept,
+                others,
+                kind,
+            } => {
+                let kept_node = path_node_id_for(kept)?;
+                let other_nodes: Vec<NodeId> = others
+                    .iter()
+                    .map(path_node_id_for)
+                    .collect::<Option<Vec<_>>>()?;
+                Some(Operation::PathfinderBoolean {
+                    kept: kept_node,
+                    others: other_nodes,
+                    op_kind: *kind,
+                })
+            }
             Mutation::PathPointInsert {
                 element_id,
                 index,

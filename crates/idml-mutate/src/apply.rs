@@ -35,8 +35,10 @@ use crate::invert::{
     invert_set_property,
 };
 use crate::operation::{
-    AppliedOperation, InvalidationHint, NodeId, NodeSpec, Operation, PropertyPath, Value,
+    AppliedOperation, InvalidationHint, NodeId, NodeSpec, Operation, PathAnchorSpec,
+    PathfinderKind, PropertyPath, Value,
 };
+use crate::pathfinder::{pathfinder_boolean, PathfinderKind as InternalPathfinderKind};
 
 /// Apply an operation to `doc`. Returns the captured `AppliedOperation`
 /// (carrying op + inverse + invalidation hint) on success. The only
@@ -61,7 +63,178 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             self_id,
         } => apply_insert_layer(doc, *position, name, self_id.as_deref()),
         Operation::RemoveLayer { layer_id } => apply_remove_layer(doc, layer_id),
+        Operation::PathfinderBoolean {
+            kept,
+            others,
+            op_kind,
+        } => apply_pathfinder(doc, kept, others, *op_kind),
     }
+}
+
+/// SDK Phase 5 (v1 sweep) — apply a multi-target Pathfinder
+/// boolean. Reads every input's path, runs flo_curves CSG via
+/// `pathfinder::pathfinder_boolean`, then builds + applies an
+/// internal Batch (FramePath on kept + RemoveNode for each other).
+/// The returned AppliedOperation is the Batch — undo reverses
+/// everything in one Cmd-Z. Inverse restoration of the removed
+/// frames goes through the same path RemoveNode normally takes
+/// (specs captured at remove time).
+fn apply_pathfinder(
+    doc: &mut Document,
+    kept: &NodeId,
+    others: &[NodeId],
+    kind: PathfinderKind,
+) -> Result<AppliedOperation, OperationError> {
+    // 1. Snapshot every input's path. find_path_anchors_mut also
+    //    handles the "no anchors → bounds rectangle" fallback in
+    //    its callers; for Pathfinder we read anchors directly
+    //    since the result IS a path replacement.
+    let mut inputs: Vec<(Vec<idml_parse::PathAnchor>, Vec<usize>)> = Vec::with_capacity(1 + others.len());
+    for node in std::iter::once(kept).chain(others.iter()) {
+        let (anchors, starts) = read_path(doc, node)?;
+        inputs.push((anchors, starts));
+    }
+    // 2. Run the boolean.
+    let internal_kind = match kind {
+        PathfinderKind::Union => InternalPathfinderKind::Union,
+        PathfinderKind::Intersect => InternalPathfinderKind::Intersect,
+        PathfinderKind::Subtract => InternalPathfinderKind::Subtract,
+        PathfinderKind::Exclude => InternalPathfinderKind::Exclude,
+    };
+    let (result_anchors, result_starts) = pathfinder_boolean(&inputs, internal_kind);
+    // 3. Build the inner Batch.
+    let result_spec_anchors: Vec<PathAnchorSpec> = result_anchors
+        .iter()
+        .map(PathAnchorSpec::from_parse)
+        .collect();
+    let mut batch_children: Vec<Operation> = Vec::with_capacity(1 + others.len());
+    batch_children.push(Operation::SetProperty {
+        node: kept.clone(),
+        path: PropertyPath::FramePath,
+        value: Value::FramePath {
+            anchors: result_spec_anchors,
+            subpath_starts: result_starts,
+        },
+    });
+    for other in others {
+        batch_children.push(Operation::RemoveNode { node: other.clone() });
+    }
+    let batch = Operation::Batch {
+        ops: batch_children,
+    };
+    // 4. Apply the Batch — the existing `apply_batch` machinery
+    //    rolls back on any child failure and produces the inverse.
+    let applied = apply(doc, &batch)?;
+    // The op we record is the original PathfinderBoolean (so the
+    // forward op is meaningful in logs); the inverse is the
+    // Batch's inverse (which restores the removed frames + the
+    // kept frame's prior path).
+    Ok(AppliedOperation {
+        op: Operation::PathfinderBoolean {
+            kept: kept.clone(),
+            others: others.to_vec(),
+            op_kind: kind,
+        },
+        inverse: applied.inverse,
+        invalidation: applied.invalidation,
+    })
+}
+
+/// SDK Phase 5 (v1 sweep) — read a frame's full path. Returns
+/// the anchors + subpath_starts as a cloned snapshot. When the
+/// frame has no explicit anchors (a Rectangle declared via
+/// `GeometricBounds` alone), synthesises a four-corner closed
+/// path from the bounds so Pathfinder still has geometry to
+/// operate on.
+fn read_path(
+    doc: &Document,
+    node: &NodeId,
+) -> Result<(Vec<idml_parse::PathAnchor>, Vec<usize>), OperationError> {
+    use idml_parse::PathAnchor;
+    let raw = node.self_id();
+    for parsed in &doc.spreads {
+        match node {
+            NodeId::TextFrame(_) => {
+                if let Some(f) = parsed
+                    .spread
+                    .text_frames
+                    .iter()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    if !f.anchors.is_empty() {
+                        return Ok((f.anchors.clone(), f.subpath_starts.clone()));
+                    }
+                    return Ok((rect_anchors_from_bounds(f.bounds), vec![0]));
+                }
+            }
+            NodeId::Rectangle(_) => {
+                if let Some(f) = parsed
+                    .spread
+                    .rectangles
+                    .iter()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    if !f.anchors.is_empty() {
+                        return Ok((f.anchors.clone(), f.subpath_starts.clone()));
+                    }
+                    return Ok((rect_anchors_from_bounds(f.bounds), vec![0]));
+                }
+            }
+            NodeId::Oval(_) => {
+                if let Some(f) = parsed
+                    .spread
+                    .ovals
+                    .iter()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    // Oval's parse layer doesn't expose an
+                    // explicit anchors vec — synthesise a four-
+                    // corner approximation from bounds for now.
+                    // A future polish emits the proper four-arc
+                    // ellipse anchors.
+                    return Ok((rect_anchors_from_bounds(f.bounds), vec![0]));
+                }
+            }
+            NodeId::Polygon(_) => {
+                if let Some(f) = parsed
+                    .spread
+                    .polygons
+                    .iter()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Ok((f.anchors.clone(), f.subpath_starts.clone()));
+                }
+            }
+            NodeId::GraphicLine(_) => {
+                if let Some(f) = parsed
+                    .spread
+                    .graphic_lines
+                    .iter()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Ok((f.anchors.clone(), f.subpath_starts.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+    let _ = PathAnchor {
+        anchor: (0.0, 0.0),
+        left: (0.0, 0.0),
+        right: (0.0, 0.0),
+    };
+    Err(OperationError::NodeNotFound(node.clone()))
+}
+
+fn rect_anchors_from_bounds(b: idml_parse::Bounds) -> Vec<idml_parse::PathAnchor> {
+    use idml_parse::PathAnchor;
+    let (t, l, r, btm) = (b.top, b.left, b.right, b.bottom);
+    let corner = |x: f32, y: f32| PathAnchor {
+        anchor: (x, y),
+        left: (x, y),
+        right: (x, y),
+    };
+    vec![corner(l, t), corner(r, t), corner(r, btm), corner(l, btm)]
 }
 
 // ---------------------------------------------------------------------------
@@ -500,6 +673,52 @@ fn apply_set_property(
                 Value::Bounds(prev_offsets),
                 InvalidationHint {
                     text_reflow: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        // ---- SDK Phase 5 (v1 sweep) — whole-path replacement ----
+        // Pathfinder's Subtract / Exclude (and any future op that
+        // produces a fresh polygon set) drops in a new anchor list
+        // in one shot. Inverse captures the prior anchors +
+        // subpath_starts so undo round-trips bytewise. Targets any
+        // path-bearing page item via the existing
+        // `find_path_anchors_mut` helper.
+        (
+            NodeId::Polygon(_)
+            | NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FramePath,
+        ) => {
+            let (new_anchors, new_subpath_starts) = match value {
+                Value::FramePath {
+                    anchors,
+                    subpath_starts,
+                } => (anchors.clone(), subpath_starts.clone()),
+                _ => {
+                    return Err(OperationError::TypeMismatch {
+                        path,
+                        expected: "FramePath".to_string(),
+                    })
+                }
+            };
+            let (anchors, starts) = find_path_anchors_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev_anchors: Vec<crate::operation::PathAnchorSpec> = anchors
+                .iter()
+                .map(crate::operation::PathAnchorSpec::from_parse)
+                .collect();
+            let prev_starts: Vec<usize> = starts.clone();
+            *anchors = new_anchors.iter().map(|a| a.to_parse()).collect();
+            *starts = new_subpath_starts;
+            (
+                Value::FramePath {
+                    anchors: prev_anchors,
+                    subpath_starts: prev_starts,
+                },
+                InvalidationHint {
+                    frame_geometry: vec![node.clone()],
                     ..Default::default()
                 },
             )

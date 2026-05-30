@@ -1313,6 +1313,14 @@ pub enum Mutation {
         path: idml_mutate::PropertyPath,
         value: idml_mutate::Value,
     },
+    /// SDK Phase 5 (v1 sweep) — Pathfinder boolean op routed
+    /// through `Operation::PathfinderBoolean`. Same wire shape
+    /// the Pathfinder panel emits on a button click.
+    PathfinderBoolean {
+        kept: crate::element_selection::ElementId,
+        others: Vec<crate::element_selection::ElementId>,
+        kind: idml_mutate::PathfinderKind,
+    },
 }
 
 impl Mutation {
@@ -1344,6 +1352,7 @@ impl Mutation {
             Self::LayerInsert { .. } => "LayerInsert",
             Self::LayerRemove { .. } => "LayerRemove",
             Self::SetElementProperty { .. } => "SetElementProperty",
+            Self::PathfinderBoolean { .. } => "PathfinderBoolean",
         }
     }
 }
