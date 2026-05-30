@@ -110,6 +110,80 @@ fn script_syntax_error_surfaces_as_error_field() {
     assert!(result.error.is_some());
 }
 
+// --- SDK Phase 5 (Task E): verso.collection / verso.documentMeta ---
+//
+// `verso.collection(name)` should produce the same JSON shape as the
+// legacy hardcoded `verso.swatches()` / `verso.paragraphStyles()`
+// etc. — both route through `CanvasModel::collection(name)`. The
+// convergence thesis (sdk.md §11.1) says the script-side and the
+// UI-side reach one Rust source; this test pins the equivalence.
+
+#[test]
+fn verso_collection_matches_named_accessor() {
+    let mut model = load();
+    let via_named = execute_script(&mut model, r#"verso.swatches();"#);
+    assert!(via_named.error.is_none(), "{:?}", via_named.error);
+    let via_generic = execute_script(&mut model, r#"verso.collection("swatches");"#);
+    assert!(via_generic.error.is_none(), "{:?}", via_generic.error);
+    let a = via_named.output.into_iter().next().expect("named output");
+    let b = via_generic
+        .output
+        .into_iter()
+        .next()
+        .expect("generic output");
+    let a_json: serde_json::Value = serde_json::from_str(&a).expect("named JSON");
+    let b_json: serde_json::Value = serde_json::from_str(&b).expect("generic JSON");
+    assert_eq!(a_json, b_json);
+}
+
+#[test]
+fn verso_collection_unknown_name_returns_empty_array_with_warning() {
+    let mut model = load();
+    let result = execute_script(&mut model, r#"verso.collection("xyzNotAThing");"#);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    // The output captures the warning emitted by the host fn AND the
+    // script's terminal expression. Find the [] result.
+    let parsed: Option<serde_json::Value> = result
+        .output
+        .iter()
+        .find_map(|l| serde_json::from_str(l).ok());
+    assert_eq!(parsed, Some(serde_json::Value::Array(Vec::new())));
+    // The warning line is also captured.
+    assert!(result
+        .output
+        .iter()
+        .any(|l| l.contains("unknown collection")));
+}
+
+#[test]
+fn verso_document_meta_returns_six_fields() {
+    let mut model = load();
+    let result = execute_script(&mut model, r#"verso.documentMeta();"#);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let line = result
+        .output
+        .into_iter()
+        .next()
+        .expect("documentMeta output");
+    let parsed: serde_json::Value = serde_json::from_str(&line).expect("JSON");
+    // Required keys per the §5.6 DocumentMeta struct.
+    for key in [
+        "pageCount",
+        "activePage",
+        "units",
+        "colorMode",
+        "documentName",
+        "dirty",
+    ] {
+        assert!(
+            parsed.get(key).is_some(),
+            "missing documentMeta key {key}; got {parsed}"
+        );
+    }
+    // pageCount should be > 0 for the fixture.
+    assert!(parsed["pageCount"].as_u64().unwrap_or(0) >= 1);
+}
+
 // --- AC-2.1: parity diagnostic --------------------------------------
 //
 // `verso.inspect(id)` and the channel-side `RequestElementProperties`

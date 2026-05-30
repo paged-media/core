@@ -171,6 +171,16 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             0,
         )
         .function(
+            NativeFunction::from_fn_ptr(verso_collection),
+            js_string!("collection"),
+            1,
+        )
+        .function(
+            NativeFunction::from_fn_ptr(verso_document_meta),
+            js_string!("documentMeta"),
+            0,
+        )
+        .function(
             NativeFunction::from_fn_ptr(verso_selection),
             js_string!("selection"),
             0,
@@ -324,6 +334,48 @@ fn verso_character_styles(
 
 fn verso_gradients(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let s = with_model(|m| serde_json::to_string(&m.gradients()).unwrap_or_default());
+    Ok(JsValue::from(js_string!(s)))
+}
+
+/// SDK Phase 5 (D1) — generic typed-collection read. Backs the
+/// `documentCollection:<name>` ReadSpec end of the §5 binding
+/// ceiling and the matching `client.collection(name)` TS API.
+///
+/// Returns a JSON-encoded array matching the typed `*Summary[]`
+/// for the requested collection — `SwatchSummary[]` for
+/// `"swatches"`, `ParagraphStyleSummary[]` for
+/// `"paragraphStyles"`, etc. Unknown collection names return
+/// `"[]"` (NOT `null`) with a console warning, so consumers'
+/// typed arrays stay valid; this matches the model dispatcher's
+/// empty-for-unwired semantics. The convergence thesis (sdk.md
+/// §11.1) means this fn and the UI's `useCollection` hook reach
+/// the same `CanvasModel::collection(name)` source — one truth
+/// for both call sites.
+fn verso_collection(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let name_str = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(name) = idml_canvas::channel::CollectionName::from_str(&name_str) else {
+        push_output(format!(
+            "[warn] verso.collection(\"{name_str}\") — unknown collection; returning []"
+        ));
+        return Ok(JsValue::from(js_string!("[]")));
+    };
+    let s = with_model(|m| serde_json::to_string(&m.collection(name)).unwrap_or_default());
+    Ok(JsValue::from(js_string!(s)))
+}
+
+/// SDK Phase 5 (D1) — singleton document-state snapshot. Backs
+/// the `documentMeta:<key>` ReadSpec form and the
+/// `client.documentMeta()` TS API. Returns a JSON-encoded
+/// `DocumentMeta` (the six §5.6 fields).
+fn verso_document_meta(
+    _this: &JsValue,
+    _args: &[JsValue],
+    _ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let s = with_model(|m| serde_json::to_string(&m.document_meta()).unwrap_or_default());
     Ok(JsValue::from(js_string!(s)))
 }
 
