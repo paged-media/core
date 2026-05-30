@@ -13,7 +13,7 @@
 //! state it was in before the batch began. The error carries the
 //! index that failed.
 //!
-//! Stage 1 limitations (flagged in `docs/verso/scripting-layer.md`'s
+//! Stage 1 limitations (flagged in `docs/paged/scripting-layer.md`'s
 //! Stage-1 deliverables):
 //!   - `Document`'s pre-built indices (`text_frame_index`,
 //!     `frame_for_story`) are not surgically maintained — they're

@@ -2,7 +2,7 @@
 //!
 //! Hosts a Boa JS context inside the canvas worker so user scripts
 //! can mutate the document through the same Operation channel the
-//! Inspector + REPL already use. Per `docs/verso/scripting-layer.md`
+//! Inspector + REPL already use. Per `docs/paged/scripting-layer.md`
 //! every write goes through `idml_mutate::apply`; the host functions
 //! installed here are the only path JS can take to reach it.
 //!
@@ -12,16 +12,16 @@
 //! by the previous rquickjs/QuickJS-in-C path).
 //!
 //! v1 surface (function-style + Proxy sugar via the bootstrap JS):
-//!   verso.set(idStr, pathStr, value)
-//!   verso.get(idStr, pathStr) -> value | null
-//!   verso.inspect(idStr) -> ElementProperties JSON
-//!   verso.layers() -> LayerSummary[]
-//!   verso.tree() -> SceneTreeNode[]
-//!   verso.selection() -> ElementId[] JSON (current element selection)
-//!   verso.contentSelection() -> ContentSelection JSON | null
-//!   verso.undo() / verso.redo()
-//!   verso.frame(idStr) -> Proxy whose `prop = value` writes go
-//!                          through verso.set
+//!   paged.set(idStr, pathStr, value)
+//!   paged.get(idStr, pathStr) -> value | null
+//!   paged.inspect(idStr) -> ElementProperties JSON
+//!   paged.layers() -> LayerSummary[]
+//!   paged.tree() -> SceneTreeNode[]
+//!   paged.selection() -> ElementId[] JSON (current element selection)
+//!   paged.contentSelection() -> ContentSelection JSON | null
+//!   paged.undo() / paged.redo()
+//!   paged.frame(idStr) -> Proxy whose `prop = value` writes go
+//!                          through paged.set
 //!   console.log(...) -> captured into the output log
 
 use std::cell::RefCell;
@@ -96,9 +96,9 @@ fn run(ctx: &mut Context, source: &str) -> Option<String> {
     }
     let bootstrap = r#"
         (function () {
-            const baseSet = verso.set;
-            const baseGet = verso.get;
-            verso.frame = function (id) {
+            const baseSet = paged.set;
+            const baseGet = paged.get;
+            paged.frame = function (id) {
                 return new Proxy({}, {
                     set(_t, prop, value) {
                         baseSet(id, String(prop), value);
@@ -129,94 +129,94 @@ fn run(ctx: &mut Context, source: &str) -> Option<String> {
 }
 
 fn install_bridge(ctx: &mut Context) -> JsResult<()> {
-    let verso = ObjectInitializer::new(ctx)
-        .function(NativeFunction::from_fn_ptr(verso_set), js_string!("set"), 3)
-        .function(NativeFunction::from_fn_ptr(verso_get), js_string!("get"), 2)
-        .function(NativeFunction::from_fn_ptr(verso_undo), js_string!("undo"), 0)
-        .function(NativeFunction::from_fn_ptr(verso_redo), js_string!("redo"), 0)
+    let paged = ObjectInitializer::new(ctx)
+        .function(NativeFunction::from_fn_ptr(paged_set), js_string!("set"), 3)
+        .function(NativeFunction::from_fn_ptr(paged_get), js_string!("get"), 2)
+        .function(NativeFunction::from_fn_ptr(paged_undo), js_string!("undo"), 0)
+        .function(NativeFunction::from_fn_ptr(paged_redo), js_string!("redo"), 0)
         .function(
-            NativeFunction::from_fn_ptr(verso_inspect),
+            NativeFunction::from_fn_ptr(paged_inspect),
             js_string!("inspect"),
             1,
         )
         .function(
-            NativeFunction::from_fn_ptr(verso_layers),
+            NativeFunction::from_fn_ptr(paged_layers),
             js_string!("layers"),
             0,
         )
-        .function(NativeFunction::from_fn_ptr(verso_tree), js_string!("tree"), 0)
+        .function(NativeFunction::from_fn_ptr(paged_tree), js_string!("tree"), 0)
         .function(
-            NativeFunction::from_fn_ptr(verso_stories),
+            NativeFunction::from_fn_ptr(paged_stories),
             js_string!("stories"),
             0,
         )
         .function(
-            NativeFunction::from_fn_ptr(verso_swatches),
+            NativeFunction::from_fn_ptr(paged_swatches),
             js_string!("swatches"),
             0,
         )
         .function(
-            NativeFunction::from_fn_ptr(verso_paragraph_styles),
+            NativeFunction::from_fn_ptr(paged_paragraph_styles),
             js_string!("paragraphStyles"),
             0,
         )
         .function(
-            NativeFunction::from_fn_ptr(verso_character_styles),
+            NativeFunction::from_fn_ptr(paged_character_styles),
             js_string!("characterStyles"),
             0,
         )
         .function(
-            NativeFunction::from_fn_ptr(verso_object_styles),
+            NativeFunction::from_fn_ptr(paged_object_styles),
             js_string!("objectStyles"),
             0,
         )
         .function(
-            NativeFunction::from_fn_ptr(verso_links),
+            NativeFunction::from_fn_ptr(paged_links),
             js_string!("links"),
             0,
         )
         .function(
-            NativeFunction::from_fn_ptr(verso_conditions),
+            NativeFunction::from_fn_ptr(paged_conditions),
             js_string!("conditions"),
             0,
         )
         .function(
-            NativeFunction::from_fn_ptr(verso_condition_sets),
+            NativeFunction::from_fn_ptr(paged_condition_sets),
             js_string!("conditionSets"),
             0,
         )
         .function(
-            NativeFunction::from_fn_ptr(verso_color_groups),
+            NativeFunction::from_fn_ptr(paged_color_groups),
             js_string!("colorGroups"),
             0,
         )
         .function(
-            NativeFunction::from_fn_ptr(verso_gradients),
+            NativeFunction::from_fn_ptr(paged_gradients),
             js_string!("gradients"),
             0,
         )
         .function(
-            NativeFunction::from_fn_ptr(verso_collection),
+            NativeFunction::from_fn_ptr(paged_collection),
             js_string!("collection"),
             1,
         )
         .function(
-            NativeFunction::from_fn_ptr(verso_document_meta),
+            NativeFunction::from_fn_ptr(paged_document_meta),
             js_string!("documentMeta"),
             0,
         )
         .function(
-            NativeFunction::from_fn_ptr(verso_selection),
+            NativeFunction::from_fn_ptr(paged_selection),
             js_string!("selection"),
             0,
         )
         .function(
-            NativeFunction::from_fn_ptr(verso_content_selection),
+            NativeFunction::from_fn_ptr(paged_content_selection),
             js_string!("contentSelection"),
             0,
         )
         .build();
-    ctx.register_global_property(js_string!("verso"), verso, Attribute::all())?;
+    ctx.register_global_property(js_string!("paged"), paged, Attribute::all())?;
 
     let console = ObjectInitializer::new(ctx)
         .function(NativeFunction::from_fn_ptr(console_log), js_string!("log"), 0)
@@ -237,9 +237,9 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------- verso.*
+// ---------------------------------------------------------------- paged.*
 
-fn verso_set(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+fn paged_set(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let id = args.get_or_undefined(0).to_string(ctx)?.to_std_string_escaped();
     let path = args.get_or_undefined(1).to_string(ctx)?.to_std_string_escaped();
     let value_arg = args.get_or_undefined(2).clone();
@@ -264,7 +264,7 @@ fn verso_set(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
     })))
 }
 
-fn verso_get(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+fn paged_get(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let id = args.get_or_undefined(0).to_string(ctx)?.to_std_string_escaped();
     let path = args.get_or_undefined(1).to_string(ctx)?.to_std_string_escaped();
     let Some(element_id) = parse_element_id(&id) else {
@@ -286,15 +286,15 @@ fn verso_get(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
     }
 }
 
-fn verso_undo(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+fn paged_undo(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::from(with_model(|m| m.undo().is_some())))
 }
 
-fn verso_redo(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+fn paged_redo(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::from(with_model(|m| m.redo().is_some())))
 }
 
-fn verso_inspect(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+fn paged_inspect(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let id = args.get_or_undefined(0).to_string(ctx)?.to_std_string_escaped();
     let Some(element_id) = parse_element_id(&id) else {
         return Ok(JsValue::null());
@@ -309,12 +309,12 @@ fn verso_inspect(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResu
     }
 }
 
-fn verso_layers(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+fn paged_layers(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let s = with_model(|m| serde_json::to_string(&m.layers()).unwrap_or_default());
     Ok(JsValue::from(js_string!(s)))
 }
 
-fn verso_tree(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+fn paged_tree(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let s = with_model(|m| serde_json::to_string(&m.scene_tree()).unwrap_or_default());
     Ok(JsValue::from(js_string!(s)))
 }
@@ -324,7 +324,7 @@ fn verso_tree(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResul
 /// `characterCount`, `paragraphCount`. Scripts use this to pick
 /// valid `StoryRange` addresses; tests use it to populate the
 /// content selection programmatically.
-fn verso_stories(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+fn paged_stories(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let s = with_model(|m| serde_json::to_string(&m.stories()).unwrap_or_default());
     Ok(JsValue::from(js_string!(s)))
 }
@@ -332,14 +332,14 @@ fn verso_stories(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsRe
 /// SDK Phase 3 — returns the loaded document's swatch palette as
 /// a JSON-encoded `SwatchSummary[]`. First implementation of the
 /// `documentCollection` read kind per
-/// `docs/verso/panel-catalog-and-sdk-extension.md` §5.1; the same
-/// shape the (future) UI `verso.collection("swatches")` consumes.
-fn verso_swatches(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+/// `docs/paged/panel-catalog-and-sdk-extension.md` §5.1; the same
+/// shape the (future) UI `paged.collection("swatches")` consumes.
+fn paged_swatches(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let s = with_model(|m| serde_json::to_string(&m.swatches()).unwrap_or_default());
     Ok(JsValue::from(js_string!(s)))
 }
 
-fn verso_paragraph_styles(
+fn paged_paragraph_styles(
     _this: &JsValue,
     _args: &[JsValue],
     _ctx: &mut Context,
@@ -348,7 +348,7 @@ fn verso_paragraph_styles(
     Ok(JsValue::from(js_string!(s)))
 }
 
-fn verso_character_styles(
+fn paged_character_styles(
     _this: &JsValue,
     _args: &[JsValue],
     _ctx: &mut Context,
@@ -357,13 +357,13 @@ fn verso_character_styles(
     Ok(JsValue::from(js_string!(s)))
 }
 
-/// SDK Phase 5 (v1 sweep) — `verso.objectStyles()` legacy-shape
-/// alias for `verso.collection("objectStyles")`. The generic
-/// `verso.collection(name)` is the canonical entry point; this
+/// SDK Phase 5 (v1 sweep) — `paged.objectStyles()` legacy-shape
+/// alias for `paged.collection("objectStyles")`. The generic
+/// `paged.collection(name)` is the canonical entry point; this
 /// alias mirrors the existing `paragraphStyles` / `characterStyles`
 /// style and stays for back-compat with scripts that learn the
 /// per-collection name.
-fn verso_object_styles(
+fn paged_object_styles(
     _this: &JsValue,
     _args: &[JsValue],
     _ctx: &mut Context,
@@ -372,16 +372,16 @@ fn verso_object_styles(
     Ok(JsValue::from(js_string!(s)))
 }
 
-/// SDK Phase 5 (v1 sweep) — `verso.links()` legacy-shape alias for
-/// `verso.collection("links")`.
-fn verso_links(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+/// SDK Phase 5 (v1 sweep) — `paged.links()` legacy-shape alias for
+/// `paged.collection("links")`.
+fn paged_links(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let s = with_model(|m| serde_json::to_string(&m.links()).unwrap_or_default());
     Ok(JsValue::from(js_string!(s)))
 }
 
-/// SDK Phase 5 (v1 sweep) — `verso.conditions()` legacy-shape
-/// alias for `verso.collection("conditions")`.
-fn verso_conditions(
+/// SDK Phase 5 (v1 sweep) — `paged.conditions()` legacy-shape
+/// alias for `paged.collection("conditions")`.
+fn paged_conditions(
     _this: &JsValue,
     _args: &[JsValue],
     _ctx: &mut Context,
@@ -390,8 +390,8 @@ fn verso_conditions(
     Ok(JsValue::from(js_string!(s)))
 }
 
-/// SDK Phase 5 (v1 sweep) — `verso.conditionSets()` alias.
-fn verso_condition_sets(
+/// SDK Phase 5 (v1 sweep) — `paged.conditionSets()` alias.
+fn paged_condition_sets(
     _this: &JsValue,
     _args: &[JsValue],
     _ctx: &mut Context,
@@ -400,8 +400,8 @@ fn verso_condition_sets(
     Ok(JsValue::from(js_string!(s)))
 }
 
-/// SDK Phase 5 (v1 sweep) — `verso.colorGroups()` alias.
-fn verso_color_groups(
+/// SDK Phase 5 (v1 sweep) — `paged.colorGroups()` alias.
+fn paged_color_groups(
     _this: &JsValue,
     _args: &[JsValue],
     _ctx: &mut Context,
@@ -410,7 +410,7 @@ fn verso_color_groups(
     Ok(JsValue::from(js_string!(s)))
 }
 
-fn verso_gradients(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+fn paged_gradients(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let s = with_model(|m| serde_json::to_string(&m.gradients()).unwrap_or_default());
     Ok(JsValue::from(js_string!(s)))
 }
@@ -429,14 +429,14 @@ fn verso_gradients(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> Js
 /// §11.1) means this fn and the UI's `useCollection` hook reach
 /// the same `CanvasModel::collection(name)` source — one truth
 /// for both call sites.
-fn verso_collection(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+fn paged_collection(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let name_str = args
         .get_or_undefined(0)
         .to_string(ctx)?
         .to_std_string_escaped();
     let Some(name) = idml_canvas::channel::CollectionName::from_str(&name_str) else {
         push_output(format!(
-            "[warn] verso.collection(\"{name_str}\") — unknown collection; returning []"
+            "[warn] paged.collection(\"{name_str}\") — unknown collection; returning []"
         ));
         return Ok(JsValue::from(js_string!("[]")));
     };
@@ -448,7 +448,7 @@ fn verso_collection(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsR
 /// the `documentMeta:<key>` ReadSpec form and the
 /// `client.documentMeta()` TS API. Returns a JSON-encoded
 /// `DocumentMeta` (the six §5.6 fields).
-fn verso_document_meta(
+fn paged_document_meta(
     _this: &JsValue,
     _args: &[JsValue],
     _ctx: &mut Context,
@@ -463,7 +463,7 @@ fn verso_document_meta(
 /// `useElementSelection()`. Application state, not document state:
 /// reads do not enter the Operation log, and the caller is expected
 /// to re-poll on `mutationApplied` if it wants to react to changes.
-fn verso_selection(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+fn paged_selection(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let s = with_model(|m| serde_json::to_string(&m.element_selection.ids).unwrap_or_default());
     Ok(JsValue::from(js_string!(s)))
 }
@@ -471,7 +471,7 @@ fn verso_selection(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> Js
 /// Returns the current text-side selection (caret or range) as a
 /// JSON-encoded `ContentSelection`, or JS `null` when there is none.
 /// Same shape `client.setSelection` accepts on the way in.
-fn verso_content_selection(
+fn paged_content_selection(
     _this: &JsValue,
     _args: &[JsValue],
     _ctx: &mut Context,
@@ -677,7 +677,7 @@ fn js_value_to_wire(
         // raises `TypeMismatch` if we pick wrong, so the bridge has
         // to know the path's expected variant. We default to
         // `ColorRef` for back-compat with pre-Track-A scripts that
-        // wrote `verso.set(id, "frameFillColor", "Color/Red")`;
+        // wrote `paged.set(id, "frameFillColor", "Color/Red")`;
         // explicit Text-bearing paths get the matching variant.
         return Some(match path {
             // Applied-entity refs (D3 paths) — Value::Text payload.

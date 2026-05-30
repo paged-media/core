@@ -1,6 +1,6 @@
 //! Operation-based mutation channel for the IDML scene graph.
 //!
-//! Stage 1 of the Verso scripting layer (`docs/verso/scripting-layer.md`):
+//! Stage 1 of the Paged scripting layer (`docs/paged/scripting-layer.md`):
 //! a single typed, serializable, invertible [`Operation`] is the sole
 //! committed mutation surface. The inspector, the future REPL, the
 //! Boa-based scripting layer, the gesture commit path, undo/redo,

@@ -23,7 +23,7 @@ use tsify_next::Tsify;
 /// text-side caret + range live in `ContentSelection`); the
 /// variant exists so the apply layer can be reached via the
 /// existing `Mutation::SetElementProperty` wire shape — see
-/// `docs/verso/sdk-implementation-plan.md` §3c.1 ADR.
+/// `docs/paged/sdk-implementation-plan.md` §3c.1 ADR.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(tag = "kind", content = "id", rename_all = "camelCase")]

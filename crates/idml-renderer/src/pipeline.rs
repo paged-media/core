@@ -455,7 +455,7 @@ impl BuiltDocument {
     /// Convenience for the canvas Tier 4: hand back just the slice
     /// of render commands for one page. Mirrors the
     /// `display_list_for_page(page_id)` accessor named in the
-    /// canvas concept (docs/verso/canvas.md §4.4).
+    /// canvas concept (docs/paged/canvas.md §4.4).
     pub fn display_list_for_page(&self, id: &PageId) -> Option<&DisplayList> {
         self.page(id).map(|p| &p.list)
     }

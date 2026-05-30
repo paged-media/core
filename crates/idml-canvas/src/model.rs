@@ -1633,7 +1633,7 @@ impl CanvasModel {
     /// `kind` label so the swatch grid can badge them.
     ///
     /// Backs `documentCollection:swatches` per
-    /// `docs/verso/panel-catalog-and-sdk-extension.md` §5.1.
+    /// `docs/paged/panel-catalog-and-sdk-extension.md` §5.1.
     pub fn swatches(&self) -> Vec<crate::channel::SwatchSummary> {
         use crate::channel::SwatchSummary;
         use idml_parse::ColorModel;
@@ -1666,7 +1666,7 @@ impl CanvasModel {
 
     /// SDK Phase 3 — list every paragraph style in the document.
     /// Backs `documentCollection:paragraphStyles` per
-    /// `docs/verso/panel-catalog-and-sdk-extension.md` §5.1.
+    /// `docs/paged/panel-catalog-and-sdk-extension.md` §5.1.
     pub fn paragraph_styles(&self) -> Vec<crate::channel::ParagraphStyleSummary> {
         use crate::channel::ParagraphStyleSummary;
         self.scene
@@ -2102,7 +2102,7 @@ impl CanvasModel {
     }
 
     /// SDK Phase 3 — list every story's self_id + character count.
-    /// Used by `verso.stories()` (the script host fn) and by tests
+    /// Used by `paged.stories()` (the script host fn) and by tests
     /// that need a valid story id to address a StoryRange edit.
     pub fn stories(&self) -> Vec<crate::channel::StorySummary> {
         self.scene
@@ -2817,8 +2817,8 @@ mod tests {
 
     /// SDK Phase 5 (D1) — the generic `collection(name)` dispatcher
     /// returns the same JSON shape the named accessor would, so
-    /// callers can switch from `verso.swatches()` to
-    /// `verso.collection("swatches")` without re-decoding.
+    /// callers can switch from `paged.swatches()` to
+    /// `paged.collection("swatches")` without re-decoding.
     #[test]
     fn collection_dispatch_matches_named_accessor() {
         use crate::channel::CollectionName;

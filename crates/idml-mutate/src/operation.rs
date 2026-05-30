@@ -1,6 +1,6 @@
 //! `Operation` — the single typed primitive every committed mutation
 //! flows through. The five variants match the scripting-layer briefing
-//! (`docs/verso/scripting-layer.md`): `SetProperty`, `InsertNode`,
+//! (`docs/paged/scripting-layer.md`): `SetProperty`, `InsertNode`,
 //! `RemoveNode`, `MoveNode`, `Batch`. Extensions require deliberation.
 //!
 //! Every Operation is `Serialize`/`Deserialize` so the same value can
@@ -210,7 +210,7 @@ pub enum PropertyPath {
     /// whole paragraphs (paragraphs are atomic) and sets each
     /// paragraph's `paragraph_style` reference. This is the
     /// `apply-an-entity` write per D3 of
-    /// `docs/verso/panel-catalog-and-sdk-extension.md` — same
+    /// `docs/paged/panel-catalog-and-sdk-extension.md` — same
     /// binding kind as a scalar SetProperty, just a string-ref
     /// value.
     AppliedParagraphStyle,
