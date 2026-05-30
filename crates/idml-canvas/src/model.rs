@@ -1222,6 +1222,12 @@ impl CanvasModel {
                                 )),
                             },
                             PropertyEntry {
+                                path: PropertyPath::FrameDropShadow,
+                                value: Some(Value::Bool(
+                                    f.drop_shadow.is_some(),
+                                )),
+                            },
+                            PropertyEntry {
                                 path: PropertyPath::FrameInsetSpacing,
                                 value: Some(Value::Bounds(
                                     f.inset_spacing.unwrap_or([0.0; 4]),
@@ -1284,6 +1290,12 @@ impl CanvasModel {
                                     f.text_wrap
                                         .map(|t| t.offsets)
                                         .unwrap_or([0.0; 4]),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameDropShadow,
+                                value: Some(Value::Bool(
+                                    f.drop_shadow.is_some(),
                                 )),
                             },
                             PropertyEntry {

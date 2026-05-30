@@ -2317,6 +2317,40 @@ mod tests {
         }
     }
 
+    /// SDK Phase 5 (v1 sweep) — drop-shadow toggle. true → default
+    /// DropShadowSetting; false → None. Inverse stores the prior
+    /// `is_some()` boolean.
+    #[test]
+    fn frame_drop_shadow_toggle_round_trips() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        // Initially None.
+        assert!(project.document().spreads[0].spread.text_frames[0]
+            .drop_shadow
+            .is_none());
+
+        let applied = project
+            .apply(Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FrameDropShadow,
+                value: Value::Bool(true),
+            })
+            .expect("apply on");
+        let shadow = project.document().spreads[0].spread.text_frames[0]
+            .drop_shadow
+            .as_ref()
+            .expect("drop_shadow set");
+        // The default carries the InDesign-preset values from
+        // `default_drop_shadow`.
+        assert_eq!(shadow.mode, "Drop");
+        assert_eq!(shadow.x_offset, 3.0);
+
+        // Undo → back to None.
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        assert!(project.document().spreads[0].spread.text_frames[0]
+            .drop_shadow
+            .is_none());
+    }
+
     /// SDK Phase 5 (v1 sweep) — text-wrap mode + offsets apply +
     /// undo. The two paths share the same `Option<TextWrap>` field
     /// but write distinct halves; both preserve the other half on

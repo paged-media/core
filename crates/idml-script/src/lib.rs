@@ -531,6 +531,7 @@ fn parse_property_path(s: &str) -> Option<idml_mutate::PropertyPath> {
         "frameTextWrapOffsets" => FrameTextWrapOffsets,
         "frameFittingCrops" => FrameFittingCrops,
         "frameFittingType" => FrameFittingType,
+        "frameDropShadow" => FrameDropShadow,
         _ => return None,
     })
 }
@@ -573,6 +574,7 @@ fn property_path_label(path: idml_mutate::PropertyPath) -> &'static str {
         FrameTextWrapOffsets => "frameTextWrapOffsets",
         FrameFittingCrops => "frameFittingCrops",
         FrameFittingType => "frameFittingType",
+        FrameDropShadow => "frameDropShadow",
     }
 }
 

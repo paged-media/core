@@ -236,6 +236,21 @@ pub enum PropertyPath {
     /// placeholder treatment as `AppliedCellStyle`: wire-shape only,
     /// apply layer errors until Tier 2d.
     AppliedTableStyle,
+    /// SDK Phase 5 (v1 sweep) — drop-shadow enabled toggle. Wire
+    /// value is `Value::Bool`. Setting `true` materialises a
+    /// default `DropShadowSetting` (mode="Drop", small offset, low
+    /// opacity) on the frame; setting `false` clears it. The
+    /// renderer's transparency pipeline reads `drop_shadow` on the
+    /// next rebuild.
+    ///
+    /// v1 collapses: the toggle is one bit, but
+    /// `DropShadowSetting` carries six fields. Round-trip of an
+    /// existing customised shadow through false→true loses the
+    /// original mode/offsets/etc. — undo restores defaults rather
+    /// than the prior state. A typed wire shape per-field
+    /// (DropShadowOffset / DropShadowColor / DropShadowOpacity)
+    /// lands when the Effects panel grows to expose them.
+    FrameDropShadow,
     /// SDK Phase 5 (v1 sweep) — `<FrameFittingOption>` crops on a
     /// Rectangle hosting a placed image. Wire value is
     /// `Value::Bounds([top, left, bottom, right])` in pt — IDML's
@@ -374,6 +389,7 @@ impl PropertyPath {
             PropertyPath::FrameTextWrapOffsets => "frame.textWrapOffsets",
             PropertyPath::FrameFittingCrops => "frame.fittingCrops",
             PropertyPath::FrameFittingType => "frame.fittingType",
+            PropertyPath::FrameDropShadow => "frame.dropShadow",
         }
     }
 }

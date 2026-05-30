@@ -504,6 +504,55 @@ fn apply_set_property(
                 },
             )
         }
+        // ---- SDK Phase 5 (v1 sweep) — drop-shadow toggle ---------
+        // TextFrame + Rectangle carry `drop_shadow: Option<...>`.
+        // Toggle semantics: true → default DropShadowSetting when
+        // prior was None (preserves existing custom shadow);
+        // false → clear. Other kinds (Oval / Polygon / GraphicLine
+        // also carry the field but the apply layer's helper map
+        // doesn't reach them yet — they'd add a fan-out helper
+        // like find_text_wrap_mut).
+        (NodeId::TextFrame(id), PropertyPath::FrameDropShadow) => {
+            let new_val = expect_bool(path, value)?;
+            let frame = find_text_frame_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = frame.drop_shadow.is_some();
+            frame.drop_shadow = if new_val {
+                frame
+                    .drop_shadow
+                    .clone()
+                    .or_else(|| Some(default_drop_shadow()))
+            } else {
+                None
+            };
+            (
+                Value::Bool(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Rectangle(id), PropertyPath::FrameDropShadow) => {
+            let new_val = expect_bool(path, value)?;
+            let rect = find_rectangle_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = rect.drop_shadow.is_some();
+            rect.drop_shadow = if new_val {
+                rect.drop_shadow
+                    .clone()
+                    .or_else(|| Some(default_drop_shadow()))
+            } else {
+                None
+            };
+            (
+                Value::Bool(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         // ---- SDK Phase 5 (v1 sweep) — frame fitting (Rectangle) ----
         // The placed-image crop set + fitting-type enum live in
         // `Rectangle::frame_fitting: Option<FrameFittingOption>`.
@@ -1844,6 +1893,23 @@ fn find_group_mut<'a>(
         }
     }
     None
+}
+
+/// SDK Phase 5 (v1 sweep) — synthesise a default DropShadowSetting
+/// for the toggle-on case. Values mirror InDesign's "Drop Shadow"
+/// preset (multiply blend, ~3pt offset, ~30% opacity). The Effects
+/// panel will eventually expose per-field editors — this default
+/// is what materialises when the toggle is flipped without those
+/// fields being authored yet.
+fn default_drop_shadow() -> idml_parse::DropShadowSetting {
+    idml_parse::DropShadowSetting {
+        mode: "Drop".to_string(),
+        x_offset: 3.0,
+        y_offset: 3.0,
+        size: 4.0,
+        opacity_pct: 30.0,
+        effect_color: None,
+    }
 }
 
 /// SDK Phase 5 (v1 sweep) — locate the `text_wrap: Option<TextWrap>`
