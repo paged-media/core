@@ -1205,6 +1205,12 @@ impl CanvasModel {
                                     f.applied_object_style.clone().unwrap_or_default(),
                                 )),
                             },
+                            PropertyEntry {
+                                path: PropertyPath::FrameInsetSpacing,
+                                value: Some(Value::Bounds(
+                                    f.inset_spacing.unwrap_or([0.0; 4]),
+                                )),
+                            },
                         ]
                     }),
                 ElementId::Rectangle(_) => spread

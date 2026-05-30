@@ -413,6 +413,29 @@ fn apply_set_property(
                 InvalidationHint::default(),
             )
         }
+        // ---- SDK Phase 5 (v1 sweep) — TextFrame inset spacing ----
+        // Only TextFrame carries the inset_spacing field; other
+        // page-item kinds fall through to the default
+        // UnsupportedProperty arm.
+        (NodeId::TextFrame(id), PropertyPath::FrameInsetSpacing) => {
+            let new_bounds = expect_bounds(path, value)?;
+            let frame = find_text_frame_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = frame.inset_spacing;
+            frame.inset_spacing = Some(new_bounds);
+            (
+                // Inverse: a `None` prior round-trips as
+                // `[0,0,0,0]`. A typed null-bounds wire variant would
+                // distinguish "default" from "explicit zero"; for v1
+                // the two are indistinguishable and the renderer
+                // treats them the same.
+                Value::Bounds(prev.unwrap_or([0.0; 4])),
+                InvalidationHint {
+                    text_reflow: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         // ---- Phase F: ImageContentTransform -----------------------
         (NodeId::Rectangle(id), PropertyPath::ImageContentTransform) => {
             let new_transform = expect_transform(path, value)?;

@@ -236,6 +236,16 @@ pub enum PropertyPath {
     /// placeholder treatment as `AppliedCellStyle`: wire-shape only,
     /// apply layer errors until Tier 2d.
     AppliedTableStyle,
+    /// SDK Phase 5 (v1 sweep) — `<TextFramePreference InsetSpacing="…">`
+    /// in pt as a `Value::Bounds([top, left, bottom, right])`. Only
+    /// `NodeId::TextFrame` carries inset spacing (the field doesn't
+    /// exist on other page-item kinds — IDML's text-frame options are
+    /// genuinely text-frame-specific). `None` on the parse side means
+    /// "inherit from the document default"; the apply arm always
+    /// records the inverse with the prior `Option<[f32; 4]>` so undo
+    /// round-trips bytewise. The renderer's text composer already
+    /// honours `inset_spacing` on the next rebuild.
+    FrameInsetSpacing,
     /// SDK Phase 5 (D3 completion) — applied conditions on a
     /// `NodeId::StoryRange`. Value is `Value::Text(String)` carrying
     /// a space-separated list of `<Condition>` `self_id`s — IDML's
@@ -305,6 +315,7 @@ impl PropertyPath {
             PropertyPath::AppliedCellStyle => "cell.appliedStyle",
             PropertyPath::AppliedTableStyle => "table.appliedStyle",
             PropertyPath::AppliedConditions => "story.appliedConditions",
+            PropertyPath::FrameInsetSpacing => "textFrame.insetSpacing",
         }
     }
 }

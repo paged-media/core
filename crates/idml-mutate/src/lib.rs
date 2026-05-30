@@ -2317,6 +2317,29 @@ mod tests {
         }
     }
 
+    /// SDK Phase 5 (v1 sweep) — TextFrame inset spacing apply +
+    /// undo. Wire shape: Value::Bounds([top, left, bottom, right])
+    /// in pt. The renderer's text-frame composer reads the field
+    /// on the next rebuild.
+    #[test]
+    fn frame_inset_spacing_round_trips() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::TextFrame("TextFrame/u1".to_string()),
+            path: PropertyPath::FrameInsetSpacing,
+            value: Value::Bounds([12.0, 4.0, 12.0, 4.0]),
+        };
+        let applied = project.apply(op).expect("apply");
+        let frame = &project.document().spreads[0].spread.text_frames[0];
+        assert_eq!(frame.inset_spacing, Some([12.0, 4.0, 12.0, 4.0]));
+        // Undo: the prior `None` round-trips as `Some([0,0,0,0])`
+        // (v1 collapses "default" + "explicit zero" — a typed null-
+        // bounds wire variant would distinguish them).
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let frame = &project.document().spreads[0].spread.text_frames[0];
+        assert_eq!(frame.inset_spacing, Some([0.0, 0.0, 0.0, 0.0]));
+    }
+
     /// First-line-indent — exercises the third paragraph path.
     #[test]
     fn paragraph_first_line_indent_round_trips() {
