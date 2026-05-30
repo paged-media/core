@@ -446,6 +446,8 @@ fn parse_property_path(s: &str) -> Option<idml_mutate::PropertyPath> {
         "paragraphSpaceBefore" => ParagraphSpaceBefore,
         "paragraphSpaceAfter" => ParagraphSpaceAfter,
         "paragraphFirstLineIndent" => ParagraphFirstLineIndent,
+        "appliedParagraphStyle" => AppliedParagraphStyle,
+        "appliedCharacterStyle" => AppliedCharacterStyle,
         _ => return None,
     })
 }
@@ -475,6 +477,8 @@ fn property_path_label(path: idml_mutate::PropertyPath) -> &'static str {
         ParagraphSpaceBefore => "paragraphSpaceBefore",
         ParagraphSpaceAfter => "paragraphSpaceAfter",
         ParagraphFirstLineIndent => "paragraphFirstLineIndent",
+        AppliedParagraphStyle => "appliedParagraphStyle",
+        AppliedCharacterStyle => "appliedCharacterStyle",
     }
 }
 

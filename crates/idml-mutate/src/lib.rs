@@ -2157,6 +2157,67 @@ mod tests {
         assert!(matches!(&applied.inverse, Operation::Batch { ops } if ops.len() == 2));
     }
 
+    /// Apply-an-entity per D3: setting `appliedParagraphStyle` to
+    /// a style id stores the ref on every intersecting paragraph;
+    /// undo restores the prior value (None in the fixture, so the
+    /// inverse stores an empty-string Text payload that clears).
+    #[test]
+    fn applied_paragraph_style_round_trips() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::AppliedParagraphStyle,
+            value: Value::Text("ParagraphStyle/$ID/Heading 1".to_string()),
+        };
+        let applied = project.apply(op).expect("apply");
+        let story = &project.document().stories[0].story;
+        assert_eq!(
+            story.paragraphs[0].paragraph_style.as_deref(),
+            Some("ParagraphStyle/$ID/Heading 1")
+        );
+        // Inverse restores to None (empty Text clears).
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].paragraph_style, None);
+    }
+
+    /// Apply-an-entity for character ranges. Uses the same run-
+    /// splitting machinery as the scalar character paths.
+    #[test]
+    fn applied_character_style_splits_runs_and_round_trips() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 2,
+                end: 4,
+            },
+            path: PropertyPath::AppliedCharacterStyle,
+            value: Value::Text("CharacterStyle/$ID/Strong".to_string()),
+        };
+        let applied = project.apply(op).expect("apply");
+        let story = &project.document().stories[0].story;
+        // The run "Hello " was split into "He" + "ll" + "o ".
+        // "ll" got the style; the rest stayed at None.
+        assert_eq!(story.paragraphs[0].runs[1].text, "ll");
+        assert_eq!(
+            story.paragraphs[0].runs[1].character_style.as_deref(),
+            Some("CharacterStyle/$ID/Strong")
+        );
+        assert_eq!(story.paragraphs[0].runs[0].character_style, None);
+        assert_eq!(story.paragraphs[0].runs[2].character_style, None);
+        // Inverse restores.
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        for run in &story.paragraphs[0].runs {
+            assert_eq!(run.character_style, None);
+        }
+    }
+
     /// First-line-indent — exercises the third paragraph path.
     #[test]
     fn paragraph_first_line_indent_round_trips() {

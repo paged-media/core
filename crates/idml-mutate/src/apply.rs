@@ -437,7 +437,8 @@ fn apply_set_property(
             PropertyPath::CharacterFontSize
             | PropertyPath::CharacterLeading
             | PropertyPath::CharacterTracking
-            | PropertyPath::CharacterFillColor,
+            | PropertyPath::CharacterFillColor
+            | PropertyPath::AppliedCharacterStyle,
         ) => {
             return apply_character_property(doc, story_id, *start, *end, node, path, value);
         }
@@ -449,7 +450,8 @@ fn apply_set_property(
             },
             PropertyPath::ParagraphSpaceBefore
             | PropertyPath::ParagraphSpaceAfter
-            | PropertyPath::ParagraphFirstLineIndent,
+            | PropertyPath::ParagraphFirstLineIndent
+            | PropertyPath::AppliedParagraphStyle,
         ) => {
             return apply_paragraph_property(doc, story_id, *start, *end, node, path, value);
         }
@@ -879,6 +881,22 @@ fn apply_paragraph_field(
             para.first_line_indent = *new_val;
             Ok((Value::Length(prev), Value::Length(*new_val)))
         }
+        PropertyPath::AppliedParagraphStyle => {
+            // Apply-an-entity. Empty string clears the override.
+            let Value::Text(new_val) = value else {
+                return Err(OperationError::TypeMismatch {
+                    path,
+                    expected: "Text".to_string(),
+                });
+            };
+            let prev = para.paragraph_style.clone().unwrap_or_default();
+            para.paragraph_style = if new_val.is_empty() {
+                None
+            } else {
+                Some(new_val.clone())
+            };
+            Ok((Value::Text(prev), Value::Text(new_val.clone())))
+        }
         _ => Err(OperationError::UnsupportedProperty {
             node: NodeId::StoryRange {
                 story_id: String::new(),
@@ -976,6 +994,25 @@ fn apply_character_field_on_run(
             let prev = run.fill_color.clone();
             run.fill_color = new_val.clone();
             Ok((Value::ColorRef(prev), Value::ColorRef(new_val.clone())))
+        }
+        PropertyPath::AppliedCharacterStyle => {
+            // Apply-an-entity (D3 of panel-catalog doc): the
+            // character_style ref is a string-id payload. Empty
+            // string clears the override; otherwise stores the
+            // style's `self_id`.
+            let Value::Text(new_val) = value else {
+                return Err(OperationError::TypeMismatch {
+                    path,
+                    expected: "Text".to_string(),
+                });
+            };
+            let prev = run.character_style.clone().unwrap_or_default();
+            run.character_style = if new_val.is_empty() {
+                None
+            } else {
+                Some(new_val.clone())
+            };
+            Ok((Value::Text(prev), Value::Text(new_val.clone())))
         }
         _ => Err(OperationError::UnsupportedProperty {
             node: NodeId::StoryRange {

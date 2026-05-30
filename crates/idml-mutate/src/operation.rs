@@ -203,6 +203,21 @@ pub enum PropertyPath {
     ParagraphSpaceAfter,
     /// SDK Phase 3 — first-line indent in points. Same shape.
     ParagraphFirstLineIndent,
+    /// SDK Phase 3 — applied paragraph style ref. Value is
+    /// `Value::Text(String)` carrying the style's `self_id`
+    /// (e.g. `"ParagraphStyle/$ID/Heading 1"`). Addressed against
+    /// `NodeId::StoryRange`; the apply layer rounds the range to
+    /// whole paragraphs (paragraphs are atomic) and sets each
+    /// paragraph's `paragraph_style` reference. This is the
+    /// `apply-an-entity` write per D3 of
+    /// `docs/verso/panel-catalog-and-sdk-extension.md` — same
+    /// binding kind as a scalar SetProperty, just a string-ref
+    /// value.
+    AppliedParagraphStyle,
+    /// SDK Phase 3 — applied character style ref. Same shape as
+    /// `AppliedParagraphStyle` but per-`CharacterRun` (with
+    /// run-splitting for partial ranges).
+    AppliedCharacterStyle,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -255,6 +270,8 @@ impl PropertyPath {
             PropertyPath::ParagraphSpaceBefore => "paragraph.spaceBefore",
             PropertyPath::ParagraphSpaceAfter => "paragraph.spaceAfter",
             PropertyPath::ParagraphFirstLineIndent => "paragraph.firstLineIndent",
+            PropertyPath::AppliedParagraphStyle => "paragraph.appliedStyle",
+            PropertyPath::AppliedCharacterStyle => "character.appliedStyle",
         }
     }
 }

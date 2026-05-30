@@ -1298,9 +1298,11 @@ impl CanvasModel {
         let mut leadings: Vec<Option<f32>> = Vec::new();
         let mut trackings: Vec<Option<f32>> = Vec::new();
         let mut fill_colors: Vec<Option<String>> = Vec::new();
+        let mut applied_character_styles: Vec<String> = Vec::new();
         let mut space_before: Vec<Option<f32>> = Vec::new();
         let mut space_after: Vec<Option<f32>> = Vec::new();
         let mut first_line_indent: Vec<Option<f32>> = Vec::new();
+        let mut applied_paragraph_styles: Vec<String> = Vec::new();
 
         let mut char_offset: u32 = 0;
         for para in &story.paragraphs {
@@ -1319,6 +1321,8 @@ impl CanvasModel {
                 space_before.push(para.space_before);
                 space_after.push(para.space_after);
                 first_line_indent.push(para.first_line_indent);
+                applied_paragraph_styles
+                    .push(para.paragraph_style.clone().unwrap_or_default());
             }
 
             // Character-level walk: per run inside the paragraph.
@@ -1334,6 +1338,8 @@ impl CanvasModel {
                 leadings.push(run.leading);
                 trackings.push(run.tracking);
                 fill_colors.push(run.fill_color.clone());
+                applied_character_styles
+                    .push(run.character_style.clone().unwrap_or_default());
             }
         }
 
@@ -1378,6 +1384,14 @@ impl CanvasModel {
             PropertyEntry {
                 path: PropertyPath::ParagraphFirstLineIndent,
                 value: collapse_uniform(&first_line_indent).map(Value::Length),
+            },
+            PropertyEntry {
+                path: PropertyPath::AppliedParagraphStyle,
+                value: collapse_uniform(&applied_paragraph_styles).map(Value::Text),
+            },
+            PropertyEntry {
+                path: PropertyPath::AppliedCharacterStyle,
+                value: collapse_uniform(&applied_character_styles).map(Value::Text),
             },
         ];
 

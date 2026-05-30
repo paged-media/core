@@ -329,15 +329,15 @@ fn verso_inspect_story_range_returns_character_entries() {
         .iter()
         .find(|l| l.starts_with("[log] entries"))
         .expect("no entries line");
-    // 4 character paths (FontSize / Leading / Tracking / FillColor)
-    // + 3 paragraph paths (SpaceBefore / SpaceAfter / FirstLineIndent).
-    assert!(entries_line.contains("7"), "got: {entries_line}");
+    // 4 character paths + 3 paragraph paths + 2 applied-style
+    // paths = 9 entries.
+    assert!(entries_line.contains("9"), "got: {entries_line}");
     let path_lines: Vec<&String> = result
         .output
         .iter()
         .filter(|l| l.starts_with("[log] path"))
         .collect();
-    assert_eq!(path_lines.len(), 7, "got: {:?}", path_lines);
+    assert_eq!(path_lines.len(), 9, "got: {:?}", path_lines);
     for needle in [
         "characterFontSize",
         "characterLeading",
@@ -346,6 +346,8 @@ fn verso_inspect_story_range_returns_character_entries() {
         "paragraphSpaceBefore",
         "paragraphSpaceAfter",
         "paragraphFirstLineIndent",
+        "appliedParagraphStyle",
+        "appliedCharacterStyle",
     ] {
         assert!(
             path_lines.iter().any(|l| l.contains(needle)),
