@@ -810,6 +810,10 @@ impl CanvasModel {
                     value: Value::Bounds([bounds.0, bounds.1, bounds.2, bounds.3]),
                 })
             }
+            Mutation::DeleteFrame { frame_id } => {
+                let node = self.resolve_frame_node_id(frame_id)?;
+                Some(Operation::RemoveNode { node })
+            }
             Mutation::PathPointInsert {
                 element_id,
                 index,
