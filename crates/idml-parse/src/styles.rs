@@ -78,6 +78,12 @@ pub struct StyleSheet {
     /// at the document level. Empty when the IDML declares no
     /// conditional text.
     pub conditions: BTreeMap<String, ConditionDef>,
+    /// SDK Phase 5 (v1 sweep) — `<ConditionSet>` named groupings of
+    /// Conditions. A user-defined collection of `Condition` refs
+    /// the document organises into one toggleable set (e.g. "Print
+    /// preview", "Online preview"). Empty when the IDML declares
+    /// no condition sets.
+    pub condition_sets: BTreeMap<String, ConditionSetDef>,
 }
 
 /// IDML `<Condition>` — a named visibility toggle that can be applied
@@ -94,6 +100,23 @@ pub struct ConditionDef {
     /// `IndicatorMethod` — `Underline` / `Highlight` / `None`. The
     /// renderer ignores indicators today; captured for round-trip.
     pub indicator_method: Option<String>,
+}
+
+/// SDK Phase 5 (v1 sweep) — IDML `<ConditionSet>`. Each entry is a
+/// named grouping of `Condition` self_ids that the editor's
+/// Conditions panel can toggle as a unit. The renderer doesn't
+/// branch on this today (visibility resolution walks individual
+/// conditions); kept for round-trip + a future "show only this
+/// set" affordance.
+#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+pub struct ConditionSetDef {
+    pub self_id: String,
+    pub name: Option<String>,
+    /// IDML `Conditions` attribute — space-separated list of
+    /// `Condition/<self_id>` refs (or `Condition/$ID/...` for
+    /// IDs in the special namespace). Stored as-parsed; the
+    /// editor de-dupes for display.
+    pub conditions: Vec<String>,
 }
 
 /// Custom stroke-style definition. Today the renderer consumes the
@@ -1012,6 +1035,11 @@ impl StyleSheet {
                             out.conditions.insert(def.self_id.clone(), def);
                         }
                     }
+                    b"ConditionSet" => {
+                        if let Some(def) = parse_condition_set(&e) {
+                            out.condition_sets.insert(def.self_id.clone(), def);
+                        }
+                    }
                     b"TOCStyleEntry" => {
                         // Element-form `<TOCStyleEntry>...</TOCStyleEntry>`
                         // appears when InDesign attaches `<Properties>`
@@ -1205,6 +1233,11 @@ impl StyleSheet {
                     b"Condition" => {
                         if let Some(def) = parse_condition(&e) {
                             out.conditions.insert(def.self_id.clone(), def);
+                        }
+                    }
+                    b"ConditionSet" => {
+                        if let Some(def) = parse_condition_set(&e) {
+                            out.condition_sets.insert(def.self_id.clone(), def);
                         }
                     }
                     b"BulletChar" => {
@@ -1770,6 +1803,22 @@ fn parse_condition(e: &quick_xml::events::BytesStart) -> Option<ConditionDef> {
         name: attr(e, b"Name"),
         visible: attr(e, b"Visible").and_then(|s| s.parse().ok()),
         indicator_method: attr(e, b"IndicatorMethod"),
+    })
+}
+
+fn parse_condition_set(e: &quick_xml::events::BytesStart) -> Option<ConditionSetDef> {
+    let self_id = attr(e, b"Self")?;
+    let conditions = attr(e, b"Conditions")
+        .map(|s| {
+            s.split_whitespace()
+                .map(|t| t.to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Some(ConditionSetDef {
+        self_id,
+        name: attr(e, b"Name"),
+        conditions,
     })
 }
 

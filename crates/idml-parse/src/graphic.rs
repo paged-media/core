@@ -34,6 +34,26 @@ pub struct Graphic {
     /// `<Gradient>` swatches (linear / radial), keyed by `Self`
     /// (e.g. "Gradient/Sky").
     pub gradients: BTreeMap<String, GradientEntry>,
+    /// SDK Phase 5 (v1 sweep) — `<ColorGroup>` named groupings of
+    /// `Color` self_ids. The Color Groups panel surfaces them as
+    /// a way to organise the palette into themed families
+    /// ("Brand colours", "UI accents"). Empty when the document
+    /// declares no groups (the renderer doesn't branch on them).
+    pub color_groups: BTreeMap<String, ColorGroupEntry>,
+}
+
+/// SDK Phase 5 (v1 sweep) — `<ColorGroup>`. Named grouping of
+/// `Color` self_ids the document organises its swatch palette
+/// into. Kept for round-trip + the editor's Color Groups panel.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct ColorGroupEntry {
+    pub self_id: String,
+    pub name: Option<String>,
+    /// IDML `ColorGroupSwatches` attribute — space-separated
+    /// list of `Color/<self_id>` (or `Swatch/<self_id>`) refs.
+    /// Stored as-parsed; the editor resolves them against the
+    /// `colors` table for display.
+    pub members: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -227,6 +247,11 @@ impl Graphic {
                             g.stops.push(stop);
                         }
                     }
+                    b"ColorGroup" => {
+                        if let Some(entry) = parse_color_group(&e) {
+                            out.color_groups.insert(entry.self_id.clone(), entry);
+                        }
+                    }
                     _ => {}
                 },
                 Event::End(e) => {
@@ -357,6 +382,22 @@ fn parse_swatch(e: &quick_xml::events::BytesStart) -> Option<SwatchEntry> {
         self_id,
         name: attr(e, b"Name"),
         color_ref: attr(e, b"ColorEditorHotGraphic").or_else(|| attr(e, b"Color")),
+    })
+}
+
+fn parse_color_group(e: &quick_xml::events::BytesStart) -> Option<ColorGroupEntry> {
+    let self_id = attr(e, b"Self")?;
+    let members = attr(e, b"ColorGroupSwatches")
+        .map(|s| {
+            s.split_whitespace()
+                .map(|t| t.to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Some(ColorGroupEntry {
+        self_id,
+        name: attr(e, b"Name"),
+        members,
     })
 }
 

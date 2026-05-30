@@ -987,6 +987,34 @@ pub struct FontSummary {
     pub reference_count: u32,
 }
 
+/// SDK Phase 5 (v1 sweep) — one `<ConditionSet>` definition. Backs
+/// `documentCollection:conditionSets` per §5.1. Each entry is a
+/// named grouping of Condition self_ids; the editor's Conditions
+/// panel can use this to toggle a set as a unit (v2 affordance).
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct ConditionSetSummary {
+    pub self_id: String,
+    pub name: String,
+    /// Member Condition self_ids the set wraps.
+    pub conditions: Vec<String>,
+}
+
+/// SDK Phase 5 (v1 sweep) — one `<ColorGroup>` definition. Backs
+/// `documentCollection:colorGroups` per §5.1. A user-defined
+/// grouping of `Color` self_ids the document organises its
+/// palette into.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct ColorGroupSummary {
+    pub self_id: String,
+    pub name: String,
+    /// Member color/swatch self_ids the group wraps.
+    pub members: Vec<String>,
+}
+
 /// SDK Phase 5 (v1 sweep) — one `<Condition>` definition. Backs
 /// `documentCollection:conditions` per `panel-catalog-and-sdk-
 /// extension.md` §5.1. The Conditions panel renders this for

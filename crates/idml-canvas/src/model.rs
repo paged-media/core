@@ -1741,6 +1741,38 @@ impl CanvasModel {
             .collect()
     }
 
+    /// SDK Phase 5 (v1 sweep) — list every `<ConditionSet>` defined.
+    /// Backs `documentCollection:conditionSets`.
+    pub fn condition_sets(&self) -> Vec<crate::channel::ConditionSetSummary> {
+        use crate::channel::ConditionSetSummary;
+        self.scene
+            .styles
+            .condition_sets
+            .iter()
+            .map(|(self_id, set)| ConditionSetSummary {
+                self_id: self_id.clone(),
+                name: set.name.clone().unwrap_or_else(|| self_id.clone()),
+                conditions: set.conditions.clone(),
+            })
+            .collect()
+    }
+
+    /// SDK Phase 5 (v1 sweep) — list every `<ColorGroup>` defined.
+    /// Backs `documentCollection:colorGroups`.
+    pub fn color_groups(&self) -> Vec<crate::channel::ColorGroupSummary> {
+        use crate::channel::ColorGroupSummary;
+        self.scene
+            .palette
+            .color_groups
+            .iter()
+            .map(|(self_id, group)| ColorGroupSummary {
+                self_id: self_id.clone(),
+                name: group.name.clone().unwrap_or_else(|| self_id.clone()),
+                members: group.members.clone(),
+            })
+            .collect()
+    }
+
     /// SDK Phase 5 (v1 sweep) — list every `<Condition>` defined
     /// in the document. Backs `documentCollection:conditions` per
     /// `panel-catalog-and-sdk-extension.md` §5.1. The Conditions
@@ -1927,10 +1959,17 @@ impl CanvasModel {
                 serde_json::to_value(self.table_styles()).unwrap_or_default()
             }
             Fonts => serde_json::to_value(self.fonts()).unwrap_or_default(),
-            // Remaining 7 collections from the §5.1 enum still need
+            ConditionSets => {
+                serde_json::to_value(self.condition_sets()).unwrap_or_default()
+            }
+            ColorGroups => {
+                serde_json::to_value(self.color_groups()).unwrap_or_default()
+            }
+            // Remaining 5 collections from the §5.1 enum still need
             // parser support / accessors. Empty array placeholder.
-            ColorGroups | Articles | Hyperlinks | Bookmarks | CrossReferences
-            | ConditionSets | IndexTopics => serde_json::Value::Array(Vec::new()),
+            Articles | Hyperlinks | Bookmarks | CrossReferences | IndexTopics => {
+                serde_json::Value::Array(Vec::new())
+            }
         }
     }
 
