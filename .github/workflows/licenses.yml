@@ -1,0 +1,17 @@
+name: licenses
+
+# Dependency-license + supply-chain audit. The engine is MPL-2.0, so every
+# transitive dependency must be permissively licensed (see deny.toml).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  cargo-deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses bans sources

@@ -1,0 +1,35 @@
+# Rust build output
+target/
+**/*.rs.bk
+
+# WASM build output
+pkg/
+
+# Fidelity artefacts (generated locally)
+corpus/**/out/
+corpus/**/diff/
+*.actual.png
+
+# InDesign lock files (created next to a .indd while it's open).
+*.idlk
+~*
+
+# Adobe-copyrighted reference material kept locally only.
+idml-specification.pdf
+
+# Node (tools/ may pull in deps)
+node_modules/
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Claude Code runtime state (agent worktrees, scheduled-task lock).
+.claude/
+
+# Playwright artefact dir.
+test-results/
+
+# NOTE: Cargo.lock IS tracked in this repo (it publishes binaries +
+# a reproducible workspace) — do not add it here.

@@ -1,163 +1,104 @@
-# IDML Faithful Renderer
+# paged
 
-Pixel-faithful renderer for Adobe IDML documents, built in Rust.
+**Pixel-faithful Adobe IDML rendering, in Rust.** `paged` parses IDML
+packages, lays out text with an InDesign-calibrated Knuth–Plass composer,
+emits a versioned display list, and rasterises it through tiny-skia (CPU,
+default) or Vello (wgpu/GPU). Public APIs target both native and WASM.
 
-See `idea.md` for the full technical specification and
-`/root/.claude/plans/do-a-deep-research-humming-wigderson.md` for the
-development strategy this repository implements.
+This repository is the **open engine** — the rendering pipeline, including
+the fidelity-critical pieces (calibrated line-breaking, ICC colour, the
+Vello/WebGPU print path). The commercial editor built on top of it is
+closed and lives elsewhere; it consumes the published `@paged-media` SDK
+across a package boundary, never as a source dependency.
 
-## Current pipeline
+The engine is format-agnostic in design; IDML is the first input format.
+
+## License
+
+Dual-licensed: **MPL-2.0 OR the Paged Media Enterprise License (PMEL)**
+(commercial, from And The Next GmbH). MPL's file-level copyleft keeps the
+engine freely embeddable while requiring changes to the engine's own files
+to flow back. See [`LICENSE.md`](./LICENSE.md), [`LICENSE`](./LICENSE), and
+[`CONTRIBUTING.md`](./CONTRIBUTING.md) (contributions are under a CLA).
+
+## Pipeline
 
 ```
 idml bytes
- └─► paged-parse              ZIP + designmap + spread + story + graphic
-      └─► paged-scene         owned Document (palette, spreads, stories,
-                              frame-for-story index)
-           └─► paged-text     rustybuzz shape + Knuth-Plass compose +
-                              aligned layout (Left / Right / Center / Justify)
-                 └─► paged-compose  DisplayCommand { FillPath | StrokePath },
-                                    glyph outlines (ttf-parser), unit-rect
-                                    + glyph path interning
-                       └─► paged-gpu   tiny-skia CPU rasterizer (feature:
-                                       "cpu", default-on); Vello backend
-                                       placeholder for Spike A
-                             └─► RgbaImage
-                                   └─► image PNG encode
-                                   └─► paged-fidelity  ΔE2000 + SSIM diff
-                                                       against a reference
+ └─ paged-parse     ZIP + designmap + spreads + stories + graphic → AST
+     └─ paged-scene    owned Document (palette, spreads, stories, threading)
+         └─ paged-text     rustybuzz shaping + Knuth–Plass compose + layout
+             └─ paged-compose  display list (FillPath / StrokePath / Image /
+                               gradients), glyph + path interning
+                 └─ paged-gpu     tiny-skia (CPU, default) | Vello (wgpu/GPU)
+                     └─ RgbaImage / PNG
+                         └─ paged-fidelity   ΔE2000 + SSIM diff vs reference
 ```
-
-The pipeline is exposed as two library functions:
 
 ```rust
-use paged_renderer::{Document, pipeline, PipelineOptions};
+use paged_renderer::{Document, pipeline, PipelineOptions, Color};
 
-let document = Document::open(&idml_bytes)?;
+let document = Document::open(&idml_bytes)?;          // `idml_bytes`: the .idml package
 let opts = PipelineOptions::default();
-
-// Display list only.
-let built = pipeline::build(&document, &opts)?;
-
-// Display list + rasterised image (cpu feature).
-let (built, image) = pipeline::render(&document, &opts, 144.0, Color::WHITE)?;
+let built = pipeline::build(&document, &opts)?;                       // display list
+let (built, image) = pipeline::render(&document, &opts, 144.0, Color::WHITE)?; // + raster (cpu)
 ```
 
-## Workspace layout
+## Workspace
 
-```
-crates/
-├── paged-parse/       ZIP + XML → typed AST (container, designmap,
-│                     spread, story, graphic)
-├── paged-scene/       Owned Document: parsed container, palette,
-│                     spreads, stories, frame-for-story index
-├── paged-text/        Shape (rustybuzz) + compose (Knuth-Plass) +
-│                     layout (alignment, positioned glyphs)
-├── paged-color/       ICC transforms placeholder (lcms2 non-wasm)
-├── paged-compose/     Display list, path buffer, emit primitives
-│                     (emit_rect, emit_stroke_rect, emit_paragraph),
-│                     glyph outlining via ttf-parser
-├── paged-gpu/         PathRasterizer trait + cpu backend (tiny-skia);
-│                     Vello backend gated behind vello-backend feature
-├── paged-renderer/    Top-level library (`pipeline::build`,
-│                     `pipeline::render`) + `paged-inspect` CLI
-├── paged-fidelity/    ΔE2000 + SSIM diff harness + `paged-diff` CLI
-└── paged-sdk/        wasm-bindgen surface: `render_to_png`,
-                      `parse_summary`
+Cargo workspace, 16 crates + spikes. Internal crates stay descriptively
+named; the published artifact is the SDK.
 
-spikes/
-├── vello-eval/             Spike A harness (GPU feature coverage)
-├── composer-calibration/   Spike B harness (InDesign line-break parity)
-└── wasm-size/              Spike C harness (compressed artefact size)
+| crate | role |
+|-------|------|
+| `paged-parse` | ZIP + XML → typed AST (container, designmap, spreads, stories, graphic, styles + cascade, paths) |
+| `paged-scene` | `Document::open`; cascade resolution, frame-for-story, frame chaining |
+| `paged-text` | shaping (rustybuzz), Knuth–Plass compose, multi-font layout, hyphenation, tabs |
+| `paged-color` | ICC transforms (lcms2 native; naive fallback on wasm32) |
+| `paged-compose` | display list, transforms, glyph cache, gradient/image pools |
+| `paged-gpu` | `PathRasterizer` trait; CPU (tiny-skia) + Vello backends |
+| `paged-renderer` | top-level `pipeline::build` / `render`; the `paged-inspect` CLI |
+| `paged-fidelity` | ΔE2000 + SSIM diff library; the `paged-diff` CLI |
+| `paged-mutate` | document mutation operations (undoable) |
+| `paged-introspect` | scene-graph + property descriptors for inspection |
+| `paged-canvas` | interactive canvas model over the renderer + mutate |
+| `paged-script` | embedded scripting (Boa); the `paged.*` global API |
+| `paged-canvas-wasm`, `paged-introspect-wasm` | wasm-bindgen surfaces for the editor |
+| `paged-gen` | IDML fixture generator (the `paged-gen` bin) |
+| `paged-sdk` | the published SDK wasm surface (`render_to_png`, `parse_summary`; npm `@paged-media/sdk`) |
 
-corpus/
-└── seeds/           Golden IDMLs + reference PDFs (to be populated)
+`spikes/` — Vello eval, composer calibration, WASM size.
+`tools/indesign-export/` — drives InDesign to export reference PDFs for the
+fidelity harness (Python/ExtendScript; outside the Cargo workspace).
 
-.github/workflows/   ci.yml + fidelity.yml
-```
+## CLI
 
-## CLI tools
+- **`paged-inspect <file.idml>`** — parse + summarise a package; render with
+  `--render <out.png>` (flags: `--font`, `--display-list`, `--dpi`, …).
+- **`paged-diff <reference.png> <candidate.png>`** — ΔE2000 + SSIM report;
+  exits non-zero on fail.
 
-- **`paged-inspect <file.idml>`** — parse a container, walk spreads and
-  stories, print a human-readable summary.
-  Flags: `--font <path>`, `--display-list`, `--render <out.png>`,
-  `--dpi <n>`, `--column-width-pt <n>`, `--default-size <n>`.
-- **`paged-diff <reference.png> <candidate.png>`** — ΔE2000 + SSIM
-  report against the §13.2 pass criteria (mean ΔE ≤ 1.0, p99 ΔE ≤ 2.5,
-  SSIM ≥ 0.99). Exits 0 on pass, 1 on fail.
+## Build & test
 
-## IDML features supported today
-
-- Container: ZIP + mimetype validation + sub-resource access
-- `designmap.xml` manifest: spreads, stories, master-spread refs
-- `Resources/Graphic.xml`: `<Color>` + `<Swatch>` + one-level
-  indirection; CMYK / RGB / Gray → linear RGB (naive, non-ICC)
-- `Spread_*.xml`: `<Page>` + `<TextFrame>` + `<Rectangle>` +
-  `ItemTransform`, `GeometricBounds`, `FillColor`, `StrokeColor`,
-  `StrokeWeight`; nested-in-`<Group>` frames surfaced as skipped
-- `Story_*.xml`: `<ParagraphStyleRange>` (+ `Justification`,
-  `FirstLineIndent`, `SpaceBefore`, `SpaceAfter`) wrapping
-  `<CharacterStyleRange>` (+ `AppliedFont`, `FontStyle`, `PointSize`,
-  `FillColor`, `Tracking`) wrapping `<Content>` and `<Br/>`
-- Paragraph alignment: Left / Right / Center / Justify
-  (last-line-left)
-- Per-run fill colour picker (cluster → Paint)
-- FillPath + StrokePath commands; glyph + rect path sharing via
-  interned `PathBuffer`
-
-## Verification
+Toolchain pinned in `rust-toolchain.toml`.
 
 ```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
+cargo build --workspace
 cargo test --workspace
-./spikes/wasm-size/measure.sh          # requires binaryen + brotli
+cargo clippy --workspace --all-targets -- -D warnings
 cargo check --target wasm32-unknown-unknown -p paged-sdk
+
+# Fidelity gate over the public golden set:
+./corpus/generated/diff.sh        # needs pdftoppm (poppler-utils)
 ```
 
-All green at the latest commit on the current branch.
+CPU (tiny-skia) is the default and is what headless CI uses; Vello needs a
+GPU. Don't run `cargo fmt --all` workspace-wide (it drifts unrelated files).
 
-## What is **not** yet implemented
+## Corpus
 
-The idea.md spec calls for a multi-year effort (3–5 engineers + 1
-typographer over 36–39 months). This repository is the scaffolding +
-first slice — substantial, but far short of a print-grade renderer.
-Material items remaining include:
-
-- **Spike A** — Vello feature-coverage evaluation needs real execution.
-  The harness is in place; running it requires a GPU or software
-  Vulkan (lavapipe).
-- **Spike B** — Paragraph Composer calibration against InDesign
-  output. Needs an InDesign-exported reference corpus; the 95%
-  line-break parity gate is unpaved.
-- **Spike C** — WASM size measurement script needs binaryen + brotli
-  installed to run. The 3.5 MB pass criterion is not yet verified.
-- **ICC colour management** — naive CMYK/RGB → linear RGB today;
-  `paged-color` wraps `lcms2` natively but the pipeline doesn't use it.
-- **Effects** — drop shadow, feather, glow, blend modes other than
-  source-over are not implemented.
-- **Text** — no justification of metric-kerning ratios, no
-  hyphenation, no drop caps / nested styles / GREP styles / tables /
-  footnotes / text-on-path / CJK composition (§8.5).
-- **Images, gradients, spot colours** — `<Oval>`, `<Polygon>`,
-  `<GraphicLine>`, gradients, placed images, `<PageItem>` trees
-  inside groups.
-- **Master spreads** — referenced from the manifest, ignored today.
-- **Font resolver** — hosts pass bytes directly; the spec calls for
-  an async `AssetResolver` interface.
-- **Multi-page output** — the pipeline unions all pages into one
-  canvas; per-page rasterisation is a natural extension.
-- **Fidelity corpus** — the diff harness works; the 500-document
-  corpus is empty.
-- **CI on real corpus** — workflow exists but gates nothing until the
-  corpus is populated.
-
-See idea.md §17 for the full risk register and §16 for the phased
-roadmap. The plan document at
-`/root/.claude/plans/do-a-deep-research-humming-wigderson.md`
-captures the de-risking sequence that this repository implements
-through Phase 0 foundations.
-
-## Branch
-
-All development lands on `claude/read-idea-file-vHroZ` per the
-session-branch requirement.
+`corpus/generated/` (+ `generated-fixtures`, `fonts`, `seeds`,
+`calibration`) is a **license-clear** golden set committed here so external
+contributors can run the fidelity gate. The full Envato-backed corpus and
+the InDesign export harness are internal (private) and not required to
+contribute.

@@ -1,0 +1,45 @@
+# cargo-deny configuration for the paged engine.
+# Run:  cargo deny check          (CI runs `check licenses bans sources`)
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[advisories]
+version = 2
+# RUSTSEC advisories: fail on vulnerabilities; add IDs here to ignore
+# with a justification once triaged.
+ignore = []
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# The engine is MPL-2.0. Dependencies must be permissively licensed so
+# they can be combined into an MPL distribution (this is why MPL was
+# chosen over AGPL). Tighten/extend this list as `cargo deny check
+# licenses` surfaces the actual transitive set (wgpu, rustybuzz,
+# ttf-parser, tiny-skia, Vello, lcms2, …).
+allow = [
+    "MPL-2.0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "BSL-1.0",
+]
+# Per-crate clarifications for crates whose SPDX can't be auto-detected
+# (e.g. ring, some font/ICC bindings). Add entries here as needed.
+exceptions = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

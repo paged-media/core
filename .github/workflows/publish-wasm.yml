@@ -1,0 +1,96 @@
+name: publish-wasm
+
+# Builds the engine's wasm-bindgen surfaces and publishes them as
+# versioned npm packages that the (private) editor consumes across the
+# package boundary — "decision B" of the migration plan: the editor never
+# takes a Rust path dependency on the engine; it depends on these packages.
+#
+# PREREQUISITES before this can publish (one-time setup):
+#   1. An npm organisation `@paged-media` with publish access.
+#   2. A repo secret `NPM_TOKEN` (npm automation token, publish scope).
+#   3. Tag a release, e.g. `git tag v0.1.0 && git push --tags`. The package
+#      version is derived from the tag.
+#   4. In the editor repo, point `packages/client` at the published
+#      `@paged-media/canvas-wasm` (and devtools at `@paged-media/introspect-wasm`)
+#      instead of the in-repo `build-wasm.sh` output.
+#
+# Until those exist, this runs the build steps but the publish step is a
+# no-op without NPM_TOKEN.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-bindgen-cli + binaryen (wasm-opt)
+        run: |
+          cargo install wasm-bindgen-cli --locked
+          sudo apt-get update && sudo apt-get install -y binaryen
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Resolve version from tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build @paged-media/canvas-wasm
+        run: |
+          set -euo pipefail
+          cargo build --release --target wasm32-unknown-unknown -p paged-canvas-wasm --features gpu
+          OUT=dist/canvas-wasm
+          mkdir -p "$OUT"
+          wasm-bindgen target/wasm32-unknown-unknown/release/paged_canvas_wasm.wasm \
+            --target web --out-dir "$OUT"
+          wasm-opt -Oz "$OUT/paged_canvas_wasm_bg.wasm" -o "$OUT/paged_canvas_wasm_bg.wasm.opt" \
+            && mv "$OUT/paged_canvas_wasm_bg.wasm.opt" "$OUT/paged_canvas_wasm_bg.wasm"
+          node -e "require('fs').writeFileSync('$OUT/package.json', JSON.stringify({
+            name: '@paged-media/canvas-wasm',
+            version: '${{ steps.ver.outputs.version }}',
+            type: 'module',
+            main: 'paged_canvas_wasm.js',
+            types: 'paged_canvas_wasm.d.ts',
+            files: ['paged_canvas_wasm.js','paged_canvas_wasm_bg.wasm','paged_canvas_wasm.d.ts'],
+            license: 'MPL-2.0 OR LicenseRef-PMEL'
+          }, null, 2))"
+
+      - name: Build @paged-media/introspect-wasm
+        run: |
+          set -euo pipefail
+          cargo build --release --target wasm32-unknown-unknown -p paged-introspect-wasm
+          OUT=dist/introspect-wasm
+          mkdir -p "$OUT"
+          wasm-bindgen target/wasm32-unknown-unknown/release/paged_introspect_wasm.wasm \
+            --target web --out-dir "$OUT"
+          wasm-opt -Oz "$OUT/paged_introspect_wasm_bg.wasm" -o "$OUT/paged_introspect_wasm_bg.wasm.opt" \
+            && mv "$OUT/paged_introspect_wasm_bg.wasm.opt" "$OUT/paged_introspect_wasm_bg.wasm"
+          node -e "require('fs').writeFileSync('$OUT/package.json', JSON.stringify({
+            name: '@paged-media/introspect-wasm',
+            version: '${{ steps.ver.outputs.version }}',
+            type: 'module',
+            main: 'paged_introspect_wasm.js',
+            types: 'paged_introspect_wasm.d.ts',
+            files: ['paged_introspect_wasm.js','paged_introspect_wasm_bg.wasm','paged_introspect_wasm.d.ts'],
+            license: 'MPL-2.0 OR LicenseRef-PMEL'
+          }, null, 2))"
+
+      - name: Publish
+        if: ${{ env.NPM_TOKEN != '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm publish --access public dist/canvas-wasm
+          npm publish --access public dist/introspect-wasm
