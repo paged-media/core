@@ -1578,6 +1578,133 @@ impl CanvasModel {
             .collect()
     }
 
+    /// SDK Phase 5 (v1 sweep) — list every spread in the document.
+    pub fn spreads(&self) -> Vec<crate::channel::SpreadSummary> {
+        use crate::channel::SpreadSummary;
+        self.scene
+            .spreads
+            .iter()
+            .map(|parsed| {
+                let self_id = parsed
+                    .spread
+                    .self_id
+                    .clone()
+                    .unwrap_or_else(|| parsed.src.clone());
+                let page_count = parsed.spread.pages.len() as u32;
+                SpreadSummary {
+                    label: self_id.clone(),
+                    self_id,
+                    page_count,
+                }
+            })
+            .collect()
+    }
+
+    /// SDK Phase 5 (v1 sweep) — list every built page (the same
+    /// surface the Navigator panel reads from). Index is 1-based
+    /// (matches the "Go to page #" convention).
+    pub fn pages(&self) -> Vec<crate::channel::PageSummary> {
+        use crate::channel::PageSummary;
+        self.built
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(i, p)| PageSummary {
+                self_id: p.id.as_str().to_string(),
+                index: (i + 1) as u32,
+                size_pt: [p.width_pt, p.height_pt],
+            })
+            .collect()
+    }
+
+    /// SDK Phase 5 (v1 sweep) — list every master spread. Stable
+    /// HashMap order is undefined; the accessor sorts by self_id
+    /// so panel rendering is deterministic across reloads.
+    pub fn master_pages(&self) -> Vec<crate::channel::MasterPageSummary> {
+        use crate::channel::MasterPageSummary;
+        let mut out: Vec<MasterPageSummary> = self
+            .scene
+            .master_spreads
+            .iter()
+            .map(|(self_id, ms)| MasterPageSummary {
+                label: self_id.clone(),
+                self_id: self_id.clone(),
+                page_count: ms.spread.pages.len() as u32,
+            })
+            .collect();
+        out.sort_by(|a, b| a.self_id.cmp(&b.self_id));
+        out
+    }
+
+    /// SDK Phase 5 (v1 sweep) — list every cell style.
+    pub fn cell_styles(&self) -> Vec<crate::channel::CellStyleSummary> {
+        use crate::channel::CellStyleSummary;
+        self.scene
+            .styles
+            .cell_styles
+            .iter()
+            .map(|(self_id, style)| CellStyleSummary {
+                self_id: self_id.clone(),
+                name: style.name.clone().unwrap_or_else(|| self_id.clone()),
+                based_on: style.based_on.clone(),
+            })
+            .collect()
+    }
+
+    /// SDK Phase 5 (v1 sweep) — list every table style.
+    pub fn table_styles(&self) -> Vec<crate::channel::TableStyleSummary> {
+        use crate::channel::TableStyleSummary;
+        self.scene
+            .styles
+            .table_styles
+            .iter()
+            .map(|(self_id, style)| TableStyleSummary {
+                self_id: self_id.clone(),
+                name: style.name.clone().unwrap_or_else(|| self_id.clone()),
+                based_on: style.based_on.clone(),
+            })
+            .collect()
+    }
+
+    /// SDK Phase 5 (v1 sweep) — list every font family used in the
+    /// document. Walks character runs + paragraph-style defaults +
+    /// character-style defaults; dedupes; sums per-family
+    /// reference counts. The parse layer doesn't carry a font
+    /// registry, so this is derived from content rather than
+    /// declared — the panel surfaces "fonts in use" rather than
+    /// "fonts installed".
+    pub fn fonts(&self) -> Vec<crate::channel::FontSummary> {
+        use crate::channel::FontSummary;
+        use std::collections::BTreeMap;
+        let mut counts: BTreeMap<String, u32> = BTreeMap::new();
+        for story in &self.scene.stories {
+            for para in &story.story.paragraphs {
+                for run in &para.runs {
+                    if let Some(family) = &run.font {
+                        *counts.entry(family.clone()).or_default() += 1;
+                    }
+                }
+            }
+        }
+        for (_, style) in self.scene.styles.paragraph_styles.iter() {
+            if let Some(family) = &style.font {
+                *counts.entry(family.clone()).or_default() += 1;
+            }
+        }
+        for (_, style) in self.scene.styles.character_styles.iter() {
+            if let Some(family) = &style.font {
+                *counts.entry(family.clone()).or_default() += 1;
+            }
+        }
+        counts
+            .into_iter()
+            .map(|(family, reference_count)| FontSummary {
+                family,
+                reference_count,
+            })
+            .collect()
+    }
+
     /// SDK Phase 5 (v1 sweep) — list every `<Condition>` defined
     /// in the document. Backs `documentCollection:conditions` per
     /// `panel-catalog-and-sdk-extension.md` §5.1. The Conditions
@@ -1752,17 +1879,22 @@ impl CanvasModel {
             Conditions => {
                 serde_json::to_value(self.conditions()).unwrap_or_default()
             }
-            // Remaining 13 collections from the §5.1 enum don't have
-            // accessors yet — the audit pipeline picks them up as
-            // wire-shape-only. Return an empty array (NOT a null) so
-            // the consumer's `useCollection<T>` typed array stays
-            // valid; the empty payload + console-side warning is
-            // sufficient signal during dev.
-            ColorGroups | CellStyles | TableStyles | Spreads | Pages | MasterPages
-            | Articles | Hyperlinks | Bookmarks | CrossReferences | ConditionSets
-            | Fonts | IndexTopics => {
-                serde_json::Value::Array(Vec::new())
+            Spreads => serde_json::to_value(self.spreads()).unwrap_or_default(),
+            Pages => serde_json::to_value(self.pages()).unwrap_or_default(),
+            MasterPages => {
+                serde_json::to_value(self.master_pages()).unwrap_or_default()
             }
+            CellStyles => {
+                serde_json::to_value(self.cell_styles()).unwrap_or_default()
+            }
+            TableStyles => {
+                serde_json::to_value(self.table_styles()).unwrap_or_default()
+            }
+            Fonts => serde_json::to_value(self.fonts()).unwrap_or_default(),
+            // Remaining 7 collections from the §5.1 enum still need
+            // parser support / accessors. Empty array placeholder.
+            ColorGroups | Articles | Hyperlinks | Bookmarks | CrossReferences
+            | ConditionSets | IndexTopics => serde_json::Value::Array(Vec::new()),
         }
     }
 

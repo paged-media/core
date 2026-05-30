@@ -901,6 +901,92 @@ pub struct CharacterStyleSummary {
     pub based_on: Option<String>,
 }
 
+/// SDK Phase 5 (v1 sweep) — one spread summary. Backs
+/// `documentCollection:spreads`. `pageCount` is the number of
+/// `<Page>` children in the spread; `label` is the spread's
+/// `Self` id (or filename when missing).
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct SpreadSummary {
+    pub self_id: String,
+    pub label: String,
+    pub page_count: u32,
+}
+
+/// SDK Phase 5 (v1 sweep) — one page summary. Backs
+/// `documentCollection:pages`. Mirrors `DocumentHandle.page_ids`
+/// + `page_sizes_pt` so a Pages-as-collection panel can render a
+/// thumbnail/label list. The Navigator (existing legacy panel)
+/// uses the same data through a different surface.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct PageSummary {
+    /// Stable id (matches `PageId` everywhere else).
+    pub self_id: String,
+    /// 1-based index — what the user types in "Go to page #".
+    pub index: u32,
+    /// `[width, height]` in points.
+    pub size_pt: [f32; 2],
+}
+
+/// SDK Phase 5 (v1 sweep) — one master-spread summary. Backs
+/// `documentCollection:masterPages`. Documents typically ship 1–3
+/// master spreads (A-Master, B-Master, …) that pages reference
+/// via `AppliedMaster`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct MasterPageSummary {
+    pub self_id: String,
+    pub label: String,
+    pub page_count: u32,
+}
+
+/// SDK Phase 5 (v1 sweep) — one cell-style summary. Backs
+/// `documentCollection:cellStyles`. Apply-an-entity via
+/// `AppliedCellStyle` is wire-shape-only (UnsupportedProperty
+/// until the Table NodeId surface lands); the panel can still
+/// list defined styles today.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct CellStyleSummary {
+    pub self_id: String,
+    pub name: String,
+    pub based_on: Option<String>,
+}
+
+/// SDK Phase 5 (v1 sweep) — one table-style summary. Backs
+/// `documentCollection:tableStyles`. Same shape + apply-an-entity
+/// pattern as `CellStyleSummary`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct TableStyleSummary {
+    pub self_id: String,
+    pub name: String,
+    pub based_on: Option<String>,
+}
+
+/// SDK Phase 5 (v1 sweep) — one font family/style entry derived
+/// from the document's content. The parse layer doesn't carry a
+/// font registry — fonts are referenced from runs + paragraph
+/// styles. The accessor walks them and dedups; the result is the
+/// set of typefaces *used* by the document.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct FontSummary {
+    /// Family name (`"Open Sans"`, `"Helvetica Neue"`, …). Used as
+    /// the row react-key.
+    pub family: String,
+    /// Number of runs/styles that reference this family. Surfaces
+    /// "this font is used N times" without a full audit pass.
+    pub reference_count: u32,
+}
+
 /// SDK Phase 5 (v1 sweep) — one `<Condition>` definition. Backs
 /// `documentCollection:conditions` per `panel-catalog-and-sdk-
 /// extension.md` §5.1. The Conditions panel renders this for
