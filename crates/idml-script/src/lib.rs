@@ -151,6 +151,11 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             0,
         )
         .function(
+            NativeFunction::from_fn_ptr(verso_swatches),
+            js_string!("swatches"),
+            0,
+        )
+        .function(
             NativeFunction::from_fn_ptr(verso_selection),
             js_string!("selection"),
             0,
@@ -271,6 +276,16 @@ fn verso_tree(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResul
 /// content selection programmatically.
 fn verso_stories(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let s = with_model(|m| serde_json::to_string(&m.stories()).unwrap_or_default());
+    Ok(JsValue::from(js_string!(s)))
+}
+
+/// SDK Phase 3 — returns the loaded document's swatch palette as
+/// a JSON-encoded `SwatchSummary[]`. First implementation of the
+/// `documentCollection` read kind per
+/// `docs/verso/panel-catalog-and-sdk-extension.md` §5.1; the same
+/// shape the (future) UI `verso.collection("swatches")` consumes.
+fn verso_swatches(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let s = with_model(|m| serde_json::to_string(&m.swatches()).unwrap_or_default());
     Ok(JsValue::from(js_string!(s)))
 }
 

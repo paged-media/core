@@ -1389,6 +1389,44 @@ impl CanvasModel {
         })
     }
 
+    /// SDK Phase 3 — list every swatch in the document's palette.
+    /// One entry per `<Color>` in `graphic.colors`, classified by
+    /// model (process / spot) with the built-in specials (None /
+    /// Paper / Black / Registration) carrying their canonical
+    /// `kind` label so the swatch grid can badge them.
+    ///
+    /// Backs `documentCollection:swatches` per
+    /// `docs/verso/panel-catalog-and-sdk-extension.md` §5.1.
+    pub fn swatches(&self) -> Vec<crate::channel::SwatchSummary> {
+        use crate::channel::SwatchSummary;
+        use idml_parse::ColorModel;
+        let mut out = Vec::with_capacity(self.scene.palette.colors.len());
+        for (self_id, color) in self.scene.palette.colors.iter() {
+            let kind = match self_id.as_str() {
+                "Color/None" => "none",
+                "Color/Paper" => "paper",
+                "Color/Black" => "black",
+                "Color/Registration" => "registration",
+                _ => match color.model {
+                    ColorModel::Process => "process",
+                    ColorModel::Spot => "spot",
+                    ColorModel::MixedInk => "mixedInk",
+                    ColorModel::Unknown => "unknown",
+                },
+            };
+            let name = color
+                .name
+                .clone()
+                .unwrap_or_else(|| self_id.clone());
+            out.push(SwatchSummary {
+                self_id: self_id.clone(),
+                name,
+                kind: kind.to_string(),
+            });
+        }
+        out
+    }
+
     /// SDK Phase 3 — list every story's self_id + character count.
     /// Used by `verso.stories()` (the script host fn) and by tests
     /// that need a valid story id to address a StoryRange edit.

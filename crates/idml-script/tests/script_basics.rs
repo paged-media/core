@@ -401,6 +401,54 @@ fn verso_stories_lists_loaded_stories_with_character_counts() {
     }
 }
 
+/// SDK Phase 3 — `verso.swatches()` enumerates the document's
+/// colour palette. First implementation of the documentCollection
+/// read kind per
+/// docs/verso/panel-catalog-and-sdk-extension.md §5.1.
+#[test]
+fn verso_swatches_lists_palette_entries() {
+    let mut model = load();
+    let result = execute_script(
+        &mut model,
+        r#"
+            const swatches = JSON.parse(verso.swatches());
+            console.log("count", swatches.length);
+            if (swatches.length > 0) {
+                const s = swatches[0];
+                console.log("first selfId", typeof s.selfId);
+                console.log("first name", typeof s.name);
+                console.log("first kind", typeof s.kind);
+            }
+        "#,
+    );
+    assert!(result.error.is_none(), "{:?}", result.error);
+    // The geometry-groups fixture has at least the built-in
+    // specials (None, Paper, Black, Registration).
+    let count_line = result
+        .output
+        .iter()
+        .find(|l| l.contains("[log] count"))
+        .expect("no count line");
+    let n: usize = count_line
+        .split_whitespace()
+        .last()
+        .and_then(|s| s.parse().ok())
+        .expect("count not parseable");
+    assert!(n > 0, "expected at least one swatch, got {n}");
+    // Each entry has selfId / name / kind as strings.
+    for needle in [
+        "first selfId string",
+        "first name string",
+        "first kind string",
+    ] {
+        assert!(
+            result.output.iter().any(|l| l.contains(needle)),
+            "missing {needle} in {:?}",
+            result.output
+        );
+    }
+}
+
 /// Parser sanity — malformed storyRange addresses return null /
 /// false through verso.set rather than panicking the script.
 #[test]

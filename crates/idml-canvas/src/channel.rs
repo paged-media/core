@@ -49,7 +49,7 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(18);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(19);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -681,6 +681,29 @@ pub struct PropertyEntry {
     pub path: idml_mutate::PropertyPath,
     #[serde(default)]
     pub value: Option<idml_mutate::Value>,
+}
+
+/// SDK Phase 3 — one swatch's identity + display name + kind.
+/// Surfaced by `CanvasModel::swatches()` and the `verso.swatches()`
+/// host fn so collection-backed panels (Swatches, the color picker
+/// dropdown, the Character/Stroke fill-color enum-select) can
+/// enumerate the document's colour palette without re-parsing the
+/// graphic resource.
+///
+/// `kind` is the IDML colour-model discriminant — `"process"` for
+/// CMYK/RGB/Lab process colours, `"spot"` for named-ink swatches
+/// (PANTONE etc.), `"mixedInk"` / `"mixedInkGroup"` for those
+/// composites, and the literal labels `"none"` / `"paper"` /
+/// `"black"` / `"registration"` for the four special swatches
+/// IDML treats as built-ins. Renderers use this to badge the
+/// swatch grid.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct SwatchSummary {
+    pub self_id: String,
+    pub name: String,
+    pub kind: String,
 }
 
 /// SDK Phase 3 — one story's identity + total character length.
