@@ -1696,6 +1696,53 @@ impl CanvasModel {
             .collect()
     }
 
+    /// SDK Phase 5 (v1 sweep) — resolved colour readout for a
+    /// single swatch. Returns CMYK percentages when the swatch's
+    /// effective colour is in CMYK space, plus a display RGB hex
+    /// string the panel can render directly. None when the swatch
+    /// id doesn't resolve.
+    pub fn color_preview(
+        &self,
+        swatch_id: &str,
+    ) -> Option<crate::channel::ColorPreview> {
+        use idml_parse::graphic::{to_linear_rgb, ColorModel};
+        let color = self.scene.palette.colors.get(swatch_id)?;
+        let model = match color.model {
+            ColorModel::Process => "process",
+            ColorModel::Spot => "spot",
+            ColorModel::MixedInk => "mixedInk",
+            ColorModel::Unknown => "unknown",
+        };
+        let model_str = match swatch_id {
+            "Color/None" => "none",
+            "Color/Paper" => "paper",
+            "Color/Black" => "black",
+            "Color/Registration" => "registration",
+            _ => model,
+        };
+        let cmyk = color.effective_cmyk().map(|c| [
+            (c[0] * 100.0).clamp(0.0, 100.0),
+            (c[1] * 100.0).clamp(0.0, 100.0),
+            (c[2] * 100.0).clamp(0.0, 100.0),
+            (c[3] * 100.0).clamp(0.0, 100.0),
+        ]);
+        let rgb = to_linear_rgb(color).unwrap_or([0.5, 0.5, 0.5]);
+        let to_byte = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let rgb_hex = format!(
+            "#{:02x}{:02x}{:02x}",
+            to_byte(rgb[0]),
+            to_byte(rgb[1]),
+            to_byte(rgb[2]),
+        );
+        Some(crate::channel::ColorPreview {
+            self_id: swatch_id.to_string(),
+            name: color.name.clone().unwrap_or_else(|| swatch_id.to_string()),
+            model: model_str.to_string(),
+            cmyk,
+            rgb_hex,
+        })
+    }
+
     /// SDK Phase 5 (v1 sweep) — list every spread in the document.
     pub fn spreads(&self) -> Vec<crate::channel::SpreadSummary> {
         use crate::channel::SpreadSummary;

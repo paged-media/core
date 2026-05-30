@@ -929,6 +929,13 @@ mod wasm {
                         });
                     WorkerToMainKind::DocumentMetaReply { meta }
                 }
+                MainToWorkerKind::RequestColorPreview { swatch_id } => {
+                    let result = self
+                        .model
+                        .as_ref()
+                        .and_then(|m| m.color_preview(&swatch_id));
+                    WorkerToMainKind::ColorPreviewReply { result }
+                }
                 MainToWorkerKind::RequestElementProperties { id } => {
                     let result = self
                         .model

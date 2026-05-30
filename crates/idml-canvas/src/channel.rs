@@ -228,6 +228,14 @@ pub enum MainToWorkerKind {
     /// Volume is trivial so paging per-key isn't worth the round-
     /// trip cost. Reply: `DocumentMetaReply`.
     RequestDocumentMeta,
+    /// SDK Phase 5 (v1 sweep) — resolved CMYK + RGB readout for a
+    /// named swatch. Powers the Color panel's CMYK/RGB display.
+    /// Editor sliders (which would mutate the swatch's channel
+    /// values) are a v2 follow-up needing
+    /// `Operation::SetSwatchValue` + a Color NodeId variant.
+    RequestColorPreview {
+        swatch_id: String,
+    },
     /// Scripting Stage 2 — execute a JS source string against the
     /// loaded document. The script's mutations route through
     /// `Operation::SetProperty` (same channel as gestures + REPL)
@@ -513,6 +521,11 @@ pub enum WorkerToMainKind {
     /// `panel-catalog-and-sdk-extension.md` §5.6.
     DocumentMetaReply {
         meta: DocumentMeta,
+    },
+    /// SDK Phase 5 (v1 sweep) — `RequestColorPreview` reply.
+    /// `result` is `None` when the swatch id doesn't resolve.
+    ColorPreviewReply {
+        result: Option<ColorPreview>,
     },
     /// Inspector P1 — `RequestElementProperties` reply. `None` when
     /// the id doesn't resolve.
@@ -985,6 +998,29 @@ pub struct FontSummary {
     /// Number of runs/styles that reference this family. Surfaces
     /// "this font is used N times" without a full audit pass.
     pub reference_count: u32,
+}
+
+/// SDK Phase 5 (v1 sweep) — resolved colour readout for a single
+/// swatch. The Color panel uses this to surface "what does this
+/// swatch actually look like" — CMYK percentages for spot / CMYK
+/// process inks, and an RGB hex string for the display fallback
+/// the renderer paints with. Editor sliders are v2.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct ColorPreview {
+    pub self_id: String,
+    pub name: String,
+    /// IDML colour model — `"process"` / `"spot"` / `"mixedInk"`
+    /// / `"none"` / `"paper"` / `"black"` / `"registration"`.
+    pub model: String,
+    /// CMYK percent values (0..=100). `None` for non-CMYK swatches
+    /// (e.g. RGB / Lab process colours; spots whose alternate
+    /// isn't CMYK).
+    pub cmyk: Option<[f32; 4]>,
+    /// Display RGB as `#rrggbb`. Always present (the renderer
+    /// computes a fallback RGB for every swatch).
+    pub rgb_hex: String,
 }
 
 /// SDK Phase 5 (v1 sweep) — one `<Article>` summary. Backs
