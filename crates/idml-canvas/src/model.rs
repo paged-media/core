@@ -1578,6 +1578,29 @@ impl CanvasModel {
             .collect()
     }
 
+    /// SDK Phase 5 (v1 sweep) — list every `<Condition>` defined
+    /// in the document. Backs `documentCollection:conditions` per
+    /// `panel-catalog-and-sdk-extension.md` §5.1. The Conditions
+    /// panel renders this for inspection. Per-condition visibility
+    /// toggle lands when `Operation::SetConditionVisible` ships.
+    pub fn conditions(&self) -> Vec<crate::channel::ConditionSummary> {
+        use crate::channel::ConditionSummary;
+        self.scene
+            .styles
+            .conditions
+            .iter()
+            .map(|(self_id, cond)| ConditionSummary {
+                self_id: self_id.clone(),
+                name: cond.name.clone().unwrap_or_else(|| self_id.clone()),
+                visible: cond.visible.unwrap_or(true),
+                indicator_method: cond
+                    .indicator_method
+                    .clone()
+                    .unwrap_or_default(),
+            })
+            .collect()
+    }
+
     /// SDK Phase 5 (v1 sweep) — list every placed-image link in the
     /// document. Walks every page-item kind that can host an image
     /// (Rectangle / Oval / Polygon) and collects `image_link`
@@ -1726,15 +1749,18 @@ impl CanvasModel {
                 serde_json::to_value(self.object_styles()).unwrap_or_default()
             }
             Links => serde_json::to_value(self.links()).unwrap_or_default(),
-            // Remaining 14 collections from the §5.1 enum don't have
+            Conditions => {
+                serde_json::to_value(self.conditions()).unwrap_or_default()
+            }
+            // Remaining 13 collections from the §5.1 enum don't have
             // accessors yet — the audit pipeline picks them up as
             // wire-shape-only. Return an empty array (NOT a null) so
             // the consumer's `useCollection<T>` typed array stays
             // valid; the empty payload + console-side warning is
             // sufficient signal during dev.
             ColorGroups | CellStyles | TableStyles | Spreads | Pages | MasterPages
-            | Articles | Hyperlinks | Bookmarks | CrossReferences | Conditions
-            | ConditionSets | Fonts | IndexTopics => {
+            | Articles | Hyperlinks | Bookmarks | CrossReferences | ConditionSets
+            | Fonts | IndexTopics => {
                 serde_json::Value::Array(Vec::new())
             }
         }

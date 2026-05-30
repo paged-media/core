@@ -901,6 +901,24 @@ pub struct CharacterStyleSummary {
     pub based_on: Option<String>,
 }
 
+/// SDK Phase 5 (v1 sweep) — one `<Condition>` definition. Backs
+/// `documentCollection:conditions` per `panel-catalog-and-sdk-
+/// extension.md` §5.1. The Conditions panel renders this for
+/// inspection; per-condition visibility toggling requires a new
+/// `Operation::SetConditionVisible` that v1 doesn't ship yet.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct ConditionSummary {
+    pub self_id: String,
+    pub name: String,
+    /// Default `true` when the IDML doesn't specify (`Visible`
+    /// attribute is optional).
+    pub visible: bool,
+    /// `"Underline"` / `"Highlight"` / `"None"` (or empty).
+    pub indicator_method: String,
+}
+
 /// SDK Phase 5 (v1 sweep) — one placed-image link summary. Backs
 /// `documentCollection:links` per `panel-catalog-and-sdk-extension.md`
 /// §5.1. Each entry is a `(frame, image_link)` pair derived from
