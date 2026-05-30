@@ -449,6 +449,41 @@ fn verso_swatches_lists_palette_entries() {
     }
 }
 
+/// SDK Phase 3 — paragraphStyles + characterStyles + gradients
+/// host fns return JSON-encoded summary arrays. Same shape as
+/// verso.swatches; this test exercises all three so a single
+/// regression in the host-fn registration surfaces here.
+#[test]
+fn verso_collection_host_fns_all_return_arrays() {
+    let mut model = load();
+    let result = execute_script(
+        &mut model,
+        r#"
+            const calls = [
+                ["paragraphStyles", verso.paragraphStyles()],
+                ["characterStyles", verso.characterStyles()],
+                ["gradients", verso.gradients()],
+            ];
+            for (const [name, raw] of calls) {
+                const parsed = JSON.parse(raw);
+                console.log(name, Array.isArray(parsed));
+            }
+        "#,
+    );
+    assert!(result.error.is_none(), "{:?}", result.error);
+    for needle in [
+        "[log] paragraphStyles true",
+        "[log] characterStyles true",
+        "[log] gradients true",
+    ] {
+        assert!(
+            result.output.iter().any(|l| l.contains(needle)),
+            "missing {needle} in {:?}",
+            result.output
+        );
+    }
+}
+
 /// Parser sanity — malformed storyRange addresses return null /
 /// false through verso.set rather than panicking the script.
 #[test]

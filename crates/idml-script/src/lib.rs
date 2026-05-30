@@ -156,6 +156,21 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             0,
         )
         .function(
+            NativeFunction::from_fn_ptr(verso_paragraph_styles),
+            js_string!("paragraphStyles"),
+            0,
+        )
+        .function(
+            NativeFunction::from_fn_ptr(verso_character_styles),
+            js_string!("characterStyles"),
+            0,
+        )
+        .function(
+            NativeFunction::from_fn_ptr(verso_gradients),
+            js_string!("gradients"),
+            0,
+        )
+        .function(
             NativeFunction::from_fn_ptr(verso_selection),
             js_string!("selection"),
             0,
@@ -286,6 +301,29 @@ fn verso_stories(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsRe
 /// shape the (future) UI `verso.collection("swatches")` consumes.
 fn verso_swatches(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let s = with_model(|m| serde_json::to_string(&m.swatches()).unwrap_or_default());
+    Ok(JsValue::from(js_string!(s)))
+}
+
+fn verso_paragraph_styles(
+    _this: &JsValue,
+    _args: &[JsValue],
+    _ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let s = with_model(|m| serde_json::to_string(&m.paragraph_styles()).unwrap_or_default());
+    Ok(JsValue::from(js_string!(s)))
+}
+
+fn verso_character_styles(
+    _this: &JsValue,
+    _args: &[JsValue],
+    _ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let s = with_model(|m| serde_json::to_string(&m.character_styles()).unwrap_or_default());
+    Ok(JsValue::from(js_string!(s)))
+}
+
+fn verso_gradients(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let s = with_model(|m| serde_json::to_string(&m.gradients()).unwrap_or_default());
     Ok(JsValue::from(js_string!(s)))
 }
 

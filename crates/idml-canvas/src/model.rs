@@ -1427,6 +1427,62 @@ impl CanvasModel {
         out
     }
 
+    /// SDK Phase 3 — list every paragraph style in the document.
+    /// Backs `documentCollection:paragraphStyles` per
+    /// `docs/verso/panel-catalog-and-sdk-extension.md` §5.1.
+    pub fn paragraph_styles(&self) -> Vec<crate::channel::ParagraphStyleSummary> {
+        use crate::channel::ParagraphStyleSummary;
+        self.scene
+            .styles
+            .paragraph_styles
+            .iter()
+            .map(|(self_id, style)| ParagraphStyleSummary {
+                self_id: self_id.clone(),
+                name: style.name.clone().unwrap_or_else(|| self_id.clone()),
+                based_on: style.based_on.clone(),
+            })
+            .collect()
+    }
+
+    /// SDK Phase 3 — list every character style in the document.
+    pub fn character_styles(&self) -> Vec<crate::channel::CharacterStyleSummary> {
+        use crate::channel::CharacterStyleSummary;
+        self.scene
+            .styles
+            .character_styles
+            .iter()
+            .map(|(self_id, style)| CharacterStyleSummary {
+                self_id: self_id.clone(),
+                name: style.name.clone().unwrap_or_else(|| self_id.clone()),
+                based_on: style.based_on.clone(),
+            })
+            .collect()
+    }
+
+    /// SDK Phase 3 — list every gradient swatch in the palette.
+    /// `kind` is the IDML `Type` attribute — `"linear"` / `"radial"`.
+    pub fn gradients(&self) -> Vec<crate::channel::GradientSummary> {
+        use crate::channel::GradientSummary;
+        use idml_parse::GradientKind;
+        self.scene
+            .palette
+            .gradients
+            .iter()
+            .map(|(self_id, g)| {
+                let kind = match g.kind {
+                    GradientKind::Linear => "linear",
+                    GradientKind::Radial => "radial",
+                    GradientKind::Unknown => "unknown",
+                };
+                GradientSummary {
+                    self_id: self_id.clone(),
+                    name: g.name.clone().unwrap_or_else(|| self_id.clone()),
+                    kind: kind.to_string(),
+                }
+            })
+            .collect()
+    }
+
     /// SDK Phase 3 — list every story's self_id + character count.
     /// Used by `verso.stories()` (the script host fn) and by tests
     /// that need a valid story id to address a StoryRange edit.

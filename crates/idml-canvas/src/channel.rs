@@ -49,7 +49,7 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(19);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(20);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -701,6 +701,45 @@ pub struct PropertyEntry {
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct SwatchSummary {
+    pub self_id: String,
+    pub name: String,
+    pub kind: String,
+}
+
+/// SDK Phase 3 — one paragraph style's identity + display name +
+/// based-on link. Surfaced by `CanvasModel::paragraph_styles()`
+/// (and `verso.paragraphStyles()`) so collection-backed Style
+/// panels can render the hierarchy without re-parsing styles.xml.
+/// The `based_on` field is the parent style's `selfId` (the cascade
+/// root); `None` means this is a top-level style.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct ParagraphStyleSummary {
+    pub self_id: String,
+    pub name: String,
+    pub based_on: Option<String>,
+}
+
+/// SDK Phase 3 — one character style's summary. Same shape as
+/// `ParagraphStyleSummary`; separate type so a future SwatchPicker
+/// composition can disambiguate styles in its options source.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterStyleSummary {
+    pub self_id: String,
+    pub name: String,
+    pub based_on: Option<String>,
+}
+
+/// SDK Phase 3 — one gradient swatch's summary. `kind` is the
+/// IDML `Type` attribute — `"linear"` / `"radial"` — so a picker
+/// composition can icon-badge linear vs radial.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct GradientSummary {
     pub self_id: String,
     pub name: String,
     pub kind: String,
