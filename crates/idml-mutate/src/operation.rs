@@ -218,6 +218,35 @@ pub enum PropertyPath {
     /// `AppliedParagraphStyle` but per-`CharacterRun` (with
     /// run-splitting for partial ranges).
     AppliedCharacterStyle,
+    /// SDK Phase 5 (D3 completion) — applied object style ref. Value
+    /// is `Value::Text(String)` carrying the style's `self_id`
+    /// (e.g. `"ObjectStyle/$ID/Logo"`). Addressed against a page-item
+    /// `NodeId` (TextFrame / Rectangle / Oval / Polygon / GraphicLine
+    /// / Group). The page item's `applied_object_style` reference is
+    /// rewritten; the renderer's style-cascade re-resolves on next
+    /// rebuild. Inverse restores the previous reference.
+    AppliedObjectStyle,
+    /// SDK Phase 5 (D3 completion) — applied cell style ref. Wire-
+    /// shape only for v1: the apply layer errors with
+    /// `UnsupportedProperty` until the Table NodeId surface
+    /// (Tier 2d) lands. Reserved so Cell Style panels can declare
+    /// their write surface today and the audit pipeline picks them up.
+    AppliedCellStyle,
+    /// SDK Phase 5 (D3 completion) — applied table style ref. Same
+    /// placeholder treatment as `AppliedCellStyle`: wire-shape only,
+    /// apply layer errors until Tier 2d.
+    AppliedTableStyle,
+    /// SDK Phase 5 (D3 completion) — applied conditions on a
+    /// `NodeId::StoryRange`. Value is `Value::Text(String)` carrying
+    /// a space-separated list of `<Condition>` `self_id`s — IDML's
+    /// native `AppliedConditions` serialisation. The apply layer
+    /// walks every `CharacterRun` covered by the range (splitting
+    /// at boundaries like `AppliedCharacterStyle` does), sets each
+    /// run's `applied_conditions`, and emits a per-run Batch inverse.
+    /// Set semantics (de-duplication, add/remove of an individual
+    /// id) are the caller's responsibility for v1; the value is
+    /// written verbatim.
+    AppliedConditions,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -272,6 +301,10 @@ impl PropertyPath {
             PropertyPath::ParagraphFirstLineIndent => "paragraph.firstLineIndent",
             PropertyPath::AppliedParagraphStyle => "paragraph.appliedStyle",
             PropertyPath::AppliedCharacterStyle => "character.appliedStyle",
+            PropertyPath::AppliedObjectStyle => "object.appliedStyle",
+            PropertyPath::AppliedCellStyle => "cell.appliedStyle",
+            PropertyPath::AppliedTableStyle => "table.appliedStyle",
+            PropertyPath::AppliedConditions => "story.appliedConditions",
         }
     }
 }

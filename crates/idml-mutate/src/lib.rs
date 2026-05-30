@@ -2218,6 +2218,105 @@ mod tests {
         }
     }
 
+    /// SDK Phase 5 (D3 completion) — applied object style on a
+    /// TextFrame. Wire shape mirrors AppliedParagraphStyle (string-
+    /// id payload, empty clears).
+    #[test]
+    fn applied_object_style_text_frame_round_trips() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::TextFrame("TextFrame/u1".to_string()),
+            path: PropertyPath::AppliedObjectStyle,
+            value: Value::Text("ObjectStyle/$ID/Logo".to_string()),
+        };
+        let applied = project.apply(op).expect("apply");
+        let frame = &project.document().spreads[0].spread.text_frames[0];
+        assert_eq!(
+            frame.applied_object_style.as_deref(),
+            Some("ObjectStyle/$ID/Logo")
+        );
+        // Inverse restores to None (the fresh fixture has no override).
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let frame = &project.document().spreads[0].spread.text_frames[0];
+        assert_eq!(frame.applied_object_style, None);
+    }
+
+    /// SDK Phase 5 (D3 completion) — placeholder paths for
+    /// AppliedCellStyle / AppliedTableStyle return UnsupportedProperty
+    /// until the Table NodeId surface (Tier 2d) lands. Wire shape
+    /// exists so panels can declare their write surface today.
+    #[test]
+    fn applied_cell_style_is_unsupported_until_tier_2d() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::TextFrame("TextFrame/u1".to_string()),
+            path: PropertyPath::AppliedCellStyle,
+            value: Value::Text("CellStyle/$ID/Header".to_string()),
+        };
+        let err = project.apply(op).expect_err("expected UnsupportedProperty");
+        assert!(matches!(
+            err,
+            crate::OperationError::UnsupportedProperty {
+                path: PropertyPath::AppliedCellStyle,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn applied_table_style_is_unsupported_until_tier_2d() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::TextFrame("TextFrame/u1".to_string()),
+            path: PropertyPath::AppliedTableStyle,
+            value: Value::Text("TableStyle/$ID/Grid".to_string()),
+        };
+        let err = project.apply(op).expect_err("expected UnsupportedProperty");
+        assert!(matches!(
+            err,
+            crate::OperationError::UnsupportedProperty {
+                path: PropertyPath::AppliedTableStyle,
+                ..
+            }
+        ));
+    }
+
+    /// SDK Phase 5 (D3 completion) — AppliedConditions on a
+    /// StoryRange. Wire encoding: a single Value::Text with a
+    /// space-separated list of condition self_ids. Empty clears.
+    /// The range [0, 6) covers exactly the first run ("Hello ");
+    /// the second run ("world") stays empty.
+    #[test]
+    fn applied_conditions_round_trips() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::AppliedConditions,
+            value: Value::Text("Condition/Draft Condition/Internal".to_string()),
+        };
+        let applied = project.apply(op).expect("apply");
+        let story = &project.document().stories[0].story;
+        assert_eq!(
+            story.paragraphs[0].runs[0].applied_conditions,
+            vec![
+                "Condition/Draft".to_string(),
+                "Condition/Internal".to_string(),
+            ]
+        );
+        // The "world" run was outside the range — stays empty.
+        assert!(story.paragraphs[0].runs[1].applied_conditions.is_empty());
+        // Inverse restores the first run to empty.
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        for run in &story.paragraphs[0].runs {
+            assert!(run.applied_conditions.is_empty());
+        }
+    }
+
     /// First-line-indent — exercises the third paragraph path.
     #[test]
     fn paragraph_first_line_indent_round_trips() {

@@ -438,9 +438,44 @@ fn apply_set_property(
             | PropertyPath::CharacterLeading
             | PropertyPath::CharacterTracking
             | PropertyPath::CharacterFillColor
-            | PropertyPath::AppliedCharacterStyle,
+            | PropertyPath::AppliedCharacterStyle
+            | PropertyPath::AppliedConditions,
         ) => {
             return apply_character_property(doc, story_id, *start, *end, node, path, value);
+        }
+        // SDK Phase 5 (D3 completion) — applied object style on any
+        // leaf page-item kind. The cascade resolves on next rebuild;
+        // we only rewrite the per-item override ref here. Apply-an-
+        // entity pattern: the wire shape is the same as a scalar
+        // SetProperty, with Value::Text carrying the style's
+        // `self_id`. Empty string clears the override (returns to
+        // "[None]" in IDML terms). NodeId::Group is intentionally
+        // excluded — IDML applies object styles to leaf items, not
+        // structural containers.
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::AppliedObjectStyle,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let field = find_applied_object_style_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = field.clone().unwrap_or_default();
+            *field = if new_val.is_empty() {
+                None
+            } else {
+                Some(new_val.clone())
+            };
+            (
+                Value::Text(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
         }
         (
             NodeId::StoryRange {
@@ -1014,6 +1049,31 @@ fn apply_character_field_on_run(
             };
             Ok((Value::Text(prev), Value::Text(new_val.clone())))
         }
+        PropertyPath::AppliedConditions => {
+            // SDK Phase 5 (D3 completion) — applied conditions per
+            // CharacterRun. Wire encoding mirrors IDML's
+            // `AppliedConditions="A B C"` attribute: a single
+            // Value::Text whose payload is a whitespace-separated
+            // list of `<Condition>` self_ids. Empty string clears.
+            // Set semantics (de-dup, individual add/remove) are
+            // the caller's concern for v1.
+            let Value::Text(new_val) = value else {
+                return Err(OperationError::TypeMismatch {
+                    path,
+                    expected: "Text".to_string(),
+                });
+            };
+            let prev = run.applied_conditions.join(" ");
+            run.applied_conditions = if new_val.is_empty() {
+                Vec::new()
+            } else {
+                new_val
+                    .split_whitespace()
+                    .map(|s| s.to_string())
+                    .collect()
+            };
+            Ok((Value::Text(prev), Value::Text(new_val.clone())))
+        }
         _ => Err(OperationError::UnsupportedProperty {
             node: NodeId::StoryRange {
                 story_id: String::new(),
@@ -1546,6 +1606,76 @@ fn find_group_mut<'a>(
             if group.self_id.as_deref() == Some(self_id) {
                 return Some(group);
             }
+        }
+    }
+    None
+}
+
+/// SDK Phase 5 (D3 completion) — locate the `applied_object_style:
+/// Option<String>` field on any page-item kind. All six page-item
+/// variants carry the same field with identical semantics; this
+/// helper makes the AppliedObjectStyle apply arm kind-agnostic.
+fn find_applied_object_style_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut Option<String>> {
+    let raw = node.self_id();
+    for parsed in &mut doc.spreads {
+        match node {
+            NodeId::TextFrame(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .text_frames
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(&mut p.applied_object_style);
+                }
+            }
+            NodeId::Rectangle(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .rectangles
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(&mut p.applied_object_style);
+                }
+            }
+            NodeId::Oval(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .ovals
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(&mut p.applied_object_style);
+                }
+            }
+            NodeId::Polygon(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .polygons
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(&mut p.applied_object_style);
+                }
+            }
+            NodeId::GraphicLine(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .graphic_lines
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(&mut p.applied_object_style);
+                }
+            }
+            // Group does not carry an `applied_object_style` field on
+            // the parse-layer struct — object styles are applied to
+            // leaf items, not structural containers. Falls through.
+            _ => {}
         }
     }
     None
