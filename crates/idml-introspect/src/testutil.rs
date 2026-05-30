@@ -46,6 +46,7 @@ pub fn empty_text_frame(self_id: &str, bounds: Bounds) -> TextFrame {
         applied_toc_style: None,
         overprint_fill: false,
         overprint_stroke: false,
+        nonprinting: false,
     }
 }
 
@@ -93,5 +94,6 @@ pub fn document_with_one_textframe(self_id: &str) -> Document {
         frame_for_story: HashMap::new(),
         text_frame_index: HashMap::new(),
         styles: StyleSheet::default(),
+        anchors: Vec::new(),
     }
 }

@@ -43,7 +43,10 @@ pub struct FrameEntry {
 ///
 /// `Spread` and `Page` are addressable as parents in `InsertNode`/
 /// `MoveNode` Ops, even though the inspector tree's left pane today
-/// only surfaces the page-item variants as selectable rows.
+/// only surfaces the page-item variants as selectable rows. `Layer`
+/// (Track M) and `StoryRange` (SDK Phase 3 text addressing) are
+/// mirrored too so the conversion stays lossless as those Op surfaces
+/// land, though neither shows up as a tree row yet.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "id")]
 pub enum NodeIdJson {
@@ -55,6 +58,12 @@ pub enum NodeIdJson {
     Group(String),
     Spread(String),
     Page(String),
+    Layer(String),
+    StoryRange {
+        story_id: String,
+        start: u32,
+        end: u32,
+    },
 }
 
 impl From<NodeId> for NodeIdJson {
@@ -68,6 +77,16 @@ impl From<NodeId> for NodeIdJson {
             NodeId::Group(s) => NodeIdJson::Group(s),
             NodeId::Spread(s) => NodeIdJson::Spread(s),
             NodeId::Page(s) => NodeIdJson::Page(s),
+            NodeId::Layer(s) => NodeIdJson::Layer(s),
+            NodeId::StoryRange {
+                story_id,
+                start,
+                end,
+            } => NodeIdJson::StoryRange {
+                story_id,
+                start,
+                end,
+            },
         }
     }
 }
@@ -83,6 +102,16 @@ impl From<&NodeIdJson> for NodeId {
             NodeIdJson::Group(s) => NodeId::Group(s.clone()),
             NodeIdJson::Spread(s) => NodeId::Spread(s.clone()),
             NodeIdJson::Page(s) => NodeId::Page(s.clone()),
+            NodeIdJson::Layer(s) => NodeId::Layer(s.clone()),
+            NodeIdJson::StoryRange {
+                story_id,
+                start,
+                end,
+            } => NodeId::StoryRange {
+                story_id: story_id.clone(),
+                start: *start,
+                end: *end,
+            },
         }
     }
 }

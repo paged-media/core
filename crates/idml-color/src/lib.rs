@@ -214,7 +214,10 @@ impl IccTransform {
     }
 }
 
+// WIP: linear-sRGB profile builder, authored ahead of the transform
+// path that will consume it. Kept compiling until then.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(dead_code)]
 fn build_linear_srgb_profile() -> Result<lcms2::Profile, IccError> {
     use lcms2::{CIExyY, CIExyYTRIPLE, Profile, ToneCurve};
     // sRGB primaries.

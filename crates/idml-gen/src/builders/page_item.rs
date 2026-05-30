@@ -12,14 +12,16 @@ use crate::xml::{format_f32, XmlBuilder};
 /// `Polygon` shapes in a single enum so a `Spread` can carry a
 /// heterogeneous tree of children.
 pub enum PageItem {
-    Rect(Rect),
+    // `Rect` is ~550 bytes vs ≤128 for the others; box it so the enum
+    // isn't sized to its largest variant (clippy::large_enum_variant).
+    Rect(Box<Rect>),
     Group(Group),
     Polygon(Polygon),
 }
 
 impl From<Rect> for PageItem {
     fn from(r: Rect) -> Self {
-        PageItem::Rect(r)
+        PageItem::Rect(Box::new(r))
     }
 }
 
@@ -101,21 +103,22 @@ pub struct Polygon {
 impl Polygon {
     pub fn write(&self, b: &mut XmlBuilder) {
         let xform = format_matrix(&self.item_transform);
-        let mut attrs: Vec<(&str, String)> = Vec::new();
-        attrs.push(("Self", self.self_id.clone()));
-        attrs.push(("ItemTransform", xform));
-        attrs.push((
-            "FillColor",
-            self.fill_color
-                .clone()
-                .unwrap_or_else(|| "Swatch/None".to_string()),
-        ));
-        attrs.push((
-            "StrokeColor",
-            self.stroke_color
-                .clone()
-                .unwrap_or_else(|| "Swatch/None".to_string()),
-        ));
+        let mut attrs: Vec<(&str, String)> = vec![
+            ("Self", self.self_id.clone()),
+            ("ItemTransform", xform),
+            (
+                "FillColor",
+                self.fill_color
+                    .clone()
+                    .unwrap_or_else(|| "Swatch/None".to_string()),
+            ),
+            (
+                "StrokeColor",
+                self.stroke_color
+                    .clone()
+                    .unwrap_or_else(|| "Swatch/None".to_string()),
+            ),
+        ];
         if let Some(w) = self.stroke_weight_pt {
             attrs.push(("StrokeWeight", format_f32(w)));
         }

@@ -393,6 +393,7 @@ mod tests {
             text_paths: Vec::new(),
             overprint_fill: false,
             overprint_stroke: false,
+            nonprinting: false,
             anchors,
             subpath_starts: Vec::new(),
             subpath_open: Vec::new(),
@@ -478,6 +479,7 @@ mod tests {
             image_item_transform: None,
             overprint_fill: false,
             overprint_stroke: false,
+            nonprinting: false,
         };
         let frame = ResolvedFrame::from_oval(&oval);
         assert_eq!(frame.stroke_type, Some("StrokeStyle/$ID/Dashed"));
@@ -516,6 +518,7 @@ mod tests {
             image_bytes: None,
             overprint_fill: false,
             overprint_stroke: false,
+            nonprinting: false,
         };
         let frame = ResolvedFrame::from_polygon(&poly);
         assert_eq!(frame.stroke_type, Some("StrokeStyle/$ID/Dotted"));
@@ -540,6 +543,7 @@ mod tests {
             text_paths: Vec::new(),
             effects: None,
             overprint_stroke: false,
+            nonprinting: false,
         };
         let frame = ResolvedFrame::from_graphic_line(&line);
         assert_eq!(frame.stroke_type, Some("CustomDashStyle"));

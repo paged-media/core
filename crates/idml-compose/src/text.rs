@@ -261,6 +261,7 @@ mod tests {
                 hyphenator: None,
                 hyphen_penalty: 50,
                 kinsoku_enforce: false,
+                mojikumi_half_width: false,
             },
             line_height: 64 * 14,
             first_baseline: 64 * 10,

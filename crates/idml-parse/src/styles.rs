@@ -388,10 +388,10 @@ pub struct CharacterStyleDef {
     pub kenten_character: Option<String>,
     /// `KentenFontSize` — emphasis-mark size as a % of base size.
     pub kenten_font_size: Option<f32>,
-    /// Phase 4 typography — IDML `Ligatures="true|false"`. Standard
-    /// + contextual OpenType ligatures (`liga`, `clig`). Default
-    /// (when None and bottom of cascade) is `true`, matching
-    /// InDesign's CharacterStyle default.
+    /// Phase 4 typography — IDML `Ligatures="true|false"`. Standard +
+    /// contextual OpenType ligatures (`liga`, `clig`). Default (when
+    /// None and bottom of cascade) is `true`, matching InDesign's
+    /// CharacterStyle default.
     pub ligatures_on: Option<bool>,
     /// IDML `KerningMethod="Metrics|Optical|None"`. Default
     /// (when None and bottom of cascade) is `Metrics`. `Optical`

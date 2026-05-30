@@ -555,11 +555,12 @@ fn write_table(b: &mut XmlBuilder, t: &Table) {
             }
             let name = format!("{c}:{r}");
             let cell_self = format!("{}_{c}_{r}", t.self_id);
-            let mut a: Vec<(&str, String)> = Vec::new();
-            a.push(("Self", cell_self));
-            a.push(("Name", name));
-            a.push(("RowSpan", cell.row_span.max(1).to_string()));
-            a.push(("ColumnSpan", cell.column_span.max(1).to_string()));
+            let mut a: Vec<(&str, String)> = vec![
+                ("Self", cell_self),
+                ("Name", name),
+                ("RowSpan", cell.row_span.max(1).to_string()),
+                ("ColumnSpan", cell.column_span.max(1).to_string()),
+            ];
             if let Some(fc) = &cell.fill_color {
                 a.push(("FillColor", fc.clone()));
             }
