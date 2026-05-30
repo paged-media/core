@@ -2053,7 +2053,7 @@ fn build_overprint_batches(list: &DisplayList) -> Vec<OverprintBatch> {
             // did we treat the paint as 100% K knockout (the same
             // visible result as the pre-parity Vello fallback).
             Paint::Solid(c) => {
-                let (_, _, _, k) = crate::cpu::rgb_to_naive_cmyk_8bit(
+                let (_, _, _, k) = crate::rgb_to_naive_cmyk_8bit(
                     (c.r.clamp(0.0, 1.0) * 255.0) as u8,
                     (c.g.clamp(0.0, 1.0) * 255.0) as u8,
                     (c.b.clamp(0.0, 1.0) * 255.0) as u8,

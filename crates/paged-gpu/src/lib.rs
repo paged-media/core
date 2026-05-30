@@ -52,6 +52,26 @@ pub fn cmyk_unit_to_linear_rgb(c: f32, m: f32, y: f32, k: f32) -> Color {
     Color::rgba(srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b), 1.0)
 }
 
+/// Naive 8-bit RGB→CMYK (Adobe-style: K = 255 - max(R,G,B), then the
+/// chromatic channels relative to the remaining range). Lives at the
+/// crate root — not in `cpu` — because both the CPU rasterizer and the
+/// Vello/`vello-backend` overprint-compute path need it, and the latter
+/// must build without the `cpu` feature (WebGPU-only SDK builds). Pure
+/// integer math, no rasterizer dependency.
+pub(crate) fn rgb_to_naive_cmyk_8bit(r: u8, g: u8, b: u8) -> (u8, u8, u8, u8) {
+    let max_rgb = r.max(g).max(b);
+    let k = 255u8.saturating_sub(max_rgb);
+    if k == 255 {
+        return (0, 0, 0, 255);
+    }
+    let denom = (255u16 - k as u16).max(1);
+    let calc = |v: u8| {
+        let num = 255u16.saturating_sub(v as u16).saturating_sub(k as u16);
+        ((num * 255 + denom / 2) / denom).min(255) as u8
+    };
+    (calc(r), calc(g), calc(b), k)
+}
+
 #[cfg(feature = "cpu")]
 pub mod cpu;
 #[cfg(all(feature = "vello-backend", target_arch = "wasm32"))]

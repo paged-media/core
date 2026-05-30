@@ -2245,13 +2245,14 @@ name = "paged-sdk"
 version = "0.0.0"
 dependencies = [
  "console_error_panic_hook",
- "image",
  "js-sys",
  "paged-compose",
  "paged-gpu",
- "paged-parse",
  "paged-renderer",
+ "serde",
+ "tsify-next",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 

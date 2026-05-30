@@ -85,8 +85,10 @@ touched. `Cargo.lock` **is** tracked here (reproducible public build).
   back the editor; `paged-canvas-wasm` / `paged-introspect-wasm` are the
   wasm-bindgen surfaces it consumes.
 - `crates/paged-gen/` — IDML fixture generator (the `paged-gen` bin).
-- `crates/paged-sdk/` — published SDK wasm surface (`render_to_png`,
-  `parse_summary`; npm `@paged-media/sdk`).
+- `crates/paged-sdk/` — published SDK wasm surface: a WebGPU
+  `ViewerSession` (load IDML → present to OffscreenCanvas/Canvas via
+  Vello → headless RGBA readback); npm `@paged-media/sdk`. WebGPU-only
+  (no CPU page rasterizer); see `crates/paged-sdk/WEBGPU.md`.
 - `corpus/generated/` — license-clear generator fixtures (IDML + paired
   InDesign-exported PDF + meta JSON). Hard fidelity gate runs over these via
   `diff.sh` + `fidelity-thresholds.json`.

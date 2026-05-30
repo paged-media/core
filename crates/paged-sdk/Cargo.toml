@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "wasm-bindgen surface and browser glue for the renderer."
+description = "WebGPU renderer-core session (`ViewerSession`) for the browser. Published as @paged-media/sdk; the engine the public viewer + docs live-preview wrap."
 
 [lints]
 workspace = true
@@ -13,15 +13,28 @@ workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+# Pulls in paged-gpu's Vello + WebGPU backend so `ViewerSession` can
+# present to a canvas and read back off-surface. The only meaningful
+# build for wasm32 — `viewer/build-wasm.sh` always enables it. The
+# forward SDK is WebGPU-only; tiny-skia is NOT linked (see the
+# `default-features = false` on paged-renderer below).
+gpu = ["paged-gpu/vello-backend", "dep:paged-gpu", "dep:wasm-bindgen-futures"]
+
 [dependencies]
-paged-renderer = { path = "../paged-renderer" }
-paged-parse = { path = "../paged-parse" }
+# default-features = false drops `cpu` (= paged-gpu/cpu = tiny-skia).
+# `build_document` is not cpu-gated, so parse + layout still work; only
+# the legacy CPU rasterizer is excluded.
+paged-renderer = { path = "../paged-renderer", default-features = false }
 paged-compose = { path = "../paged-compose" }
-paged-gpu = { path = "../paged-gpu" }
-image = { workspace = true }
+paged-gpu = { path = "../paged-gpu", optional = true, default-features = false }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2"
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["console"] }
+web-sys = { version = "0.3", features = ["console", "OffscreenCanvas", "HtmlCanvasElement"] }
 console_error_panic_hook = "0.1"
+serde = { workspace = true }
+tsify-next = { workspace = true }

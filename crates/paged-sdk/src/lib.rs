@@ -12,24 +12,39 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! wasm-bindgen surface.
+//! WebGPU renderer-core session — the `@paged-media/sdk` surface.
 //!
-//! Wraps `paged-renderer` behind a small browser-facing API:
+//! A small stateful **session** over `paged-renderer` (parse + layout) and
+//! `paged-gpu` (Vello/WebGPU present + off-surface readback). It links
+//! **nothing from the editor** (`paged-mutate`/`paged-canvas`/`paged-script`)
+//! — the "sibling, not a shrunk app" boundary. It is the engine the public
+//! viewer wraps and the docs `<live preview>` embeds.
+//!
+//! Forward rendering is **WebGPU-only**: there is no tiny-skia/CPU fallback
+//! in this binary (`paged-renderer` is linked with `default-features = false`,
+//! so its `cpu` rasterizer is excluded). When `navigator.gpu` is absent,
+//! [`ViewerSession::new`] rejects and the consumer shows a "requires WebGPU"
+//! message. The design spec is `WEBGPU.md` alongside this file.
 //!
 //! ```ts
-//! import init, { render_to_png, parse_summary } from 'paged-sdk';
+//! import init, { ViewerSession } from '@paged-media/sdk';
 //! await init();
-//! const png = render_to_png(idmlBytes, fontBytes, 144);
+//! const session = await ViewerSession.new();   // rejects if no WebGPU
+//! const diags = session.load(idmlBytes, fontBytes);
+//! await session.render_to_canvas(offscreenCanvas);
 //! ```
 //!
 //! Native builds expose a plain library target so the crate can still
 //! participate in `cargo check --workspace`.
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "gpu"))]
 mod wasm {
     use paged_compose::Color;
-    use paged_renderer::{pipeline, Document, PipelineOptions};
-    use image::{codecs::png::PngEncoder, ImageEncoder};
+    use paged_gpu::vello_kurbo::Affine;
+    use paged_gpu::{SurfacePresenter, VelloScene};
+    use paged_renderer::{pipeline, BuiltDocument, BytesResolver, Document, PipelineOptions};
+    use serde::Serialize;
+    use tsify_next::Tsify;
     use wasm_bindgen::prelude::*;
 
     #[wasm_bindgen(start)]
@@ -38,144 +53,330 @@ mod wasm {
         web_sys::console::log_1(&"paged-sdk: init".into());
     }
 
-    /// Render an IDML to a PNG.
-    ///
-    /// `idml` is the container bytes. `font` is optional — when absent,
-    /// text is skipped and only frame rectangles are drawn. `dpi`
-    /// controls output resolution (72 = 1 px per pt, 300 = print).
-    #[wasm_bindgen]
-    pub fn render_to_png(
-        idml: &[u8],
-        font: Option<Box<[u8]>>,
-        dpi: f32,
-    ) -> Result<Vec<u8>, JsError> {
-        let mut pngs = render_pages_inner(idml, font, dpi)?;
-        if pngs.is_empty() {
-            return Err(JsError::new("document has no pages"));
-        }
-        Ok(pngs.swap_remove(0))
+    /// Structured, JSON-serialisable result of `load` / `render_*`. Unlike
+    /// the legacy free functions, recoverable parse/layout problems are
+    /// reported here (so the docs preview can surface them inline) rather
+    /// than thrown as an opaque `JsError`.
+    #[derive(Serialize, Tsify)]
+    #[tsify(into_wasm_abi)]
+    pub struct Diagnostics {
+        pub ok: bool,
+        pub messages: Vec<Diagnostic>,
     }
 
-    /// Render every page of an IDML and return the PNG bytes as a
-    /// JS `Array<Uint8Array>`. Hosts iterate this to display the
-    /// document page-by-page; the array order matches body-page
-    /// order in the IDML manifest.
-    #[wasm_bindgen]
-    pub fn render_pages(
-        idml: &[u8],
-        font: Option<Box<[u8]>>,
-        dpi: f32,
-    ) -> Result<js_sys::Array, JsError> {
-        let pngs = render_pages_inner(idml, font, dpi)?;
-        let arr = js_sys::Array::new();
-        for png in pngs {
-            let u8a = js_sys::Uint8Array::new_with_length(png.len() as u32);
-            u8a.copy_from(&png);
-            arr.push(&u8a);
-        }
-        Ok(arr)
+    #[derive(Serialize, Tsify)]
+    pub struct Diagnostic {
+        /// `"error" | "warning" | "info"`.
+        pub severity: String,
+        /// Short machine code, e.g. `"open"`, `"build"`, `"no_gpu"`.
+        pub code: String,
+        pub message: String,
+        /// IDML part the problem originates from, when known.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub part: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub line: Option<u32>,
     }
 
-    /// Lightweight structural report — page sizes + pipeline stats —
-    /// without rasterising. Hosts can size canvases and show counts
-    /// before kicking off a full render.
-    #[wasm_bindgen]
-    pub fn render_report(idml: &[u8]) -> Result<String, JsError> {
-        let document =
-            Document::open(idml).map_err(|e| JsError::new(&format!("open IDML: {e}")))?;
-        let opts = PipelineOptions::default();
-        let built = pipeline::build_document(&document, &opts)
-            .map_err(|e| JsError::new(&format!("build: {e}")))?;
-        let mut pages = String::from("[");
-        for (i, page) in built.pages.iter().enumerate() {
-            if i > 0 {
-                pages.push(',');
+    impl Diagnostics {
+        fn ok() -> Self {
+            Self {
+                ok: true,
+                messages: Vec::new(),
             }
-            pages.push_str(&format!(
-                "{{\"index\":{},\"width_pt\":{:.3},\"height_pt\":{:.3}}}",
-                i, page.width_pt, page.height_pt,
-            ));
         }
-        pages.push(']');
-        Ok(format!(
-            "{{\"pages\":{pages},\"stats\":{{\"spreads\":{},\"pages\":{},\
-             \"frames\":{},\"stories\":{},\"paragraphs\":{},\"runs\":{}}}}}",
-            built.stats.spreads,
-            built.stats.pages,
-            built.stats.frames,
-            built.stats.stories,
-            built.stats.paragraphs,
-            built.stats.runs,
-        ))
+
+        fn error(code: &str, message: &str) -> Self {
+            Self {
+                ok: false,
+                messages: vec![Diagnostic {
+                    severity: "error".to_string(),
+                    code: code.to_string(),
+                    message: message.to_string(),
+                    part: None,
+                    line: None,
+                }],
+            }
+        }
     }
 
-    fn render_pages_inner(
-        idml: &[u8],
-        font: Option<Box<[u8]>>,
-        dpi: f32,
-    ) -> Result<Vec<Vec<u8>>, JsError> {
-        let document =
-            Document::open(idml).map_err(|e| JsError::new(&format!("open IDML: {e}")))?;
-        let font_slice = font.as_deref();
-        let opts = PipelineOptions {
-            font: font_slice,
-            ..PipelineOptions::default()
-        };
-        let (_built, images) = pipeline::render_document(&document, &opts, dpi, Color::WHITE)
-            .map_err(|e| JsError::new(&format!("render: {e}")))?;
-        let mut out = Vec::with_capacity(images.len());
-        for img in images {
-            let mut buf = Vec::with_capacity((img.width() * img.height() * 4) as usize);
-            PngEncoder::new(&mut buf)
-                .write_image(
-                    img.as_raw(),
-                    img.width(),
-                    img.height(),
-                    image::ExtendedColorType::Rgba8,
-                )
-                .map_err(|e| JsError::new(&format!("png encode: {e}")))?;
-            out.push(buf);
-        }
-        Ok(out)
+    /// Headless readback result. `rgba` is tightly-packed RGBA8
+    /// (`width * height * 4`), surfaced to JS as a `Uint8Array`.
+    #[wasm_bindgen(getter_with_clone)]
+    pub struct RenderedRaster {
+        pub width: u32,
+        pub height: u32,
+        pub rgba: Vec<u8>,
     }
 
-    /// Report parse + pipeline stats as a JSON string. Useful for the
-    /// host to display counts without running a full raster.
+    /// Renderer-core session. Holds the parsed+laid-out document and a
+    /// lazily-created WebGPU presenter (device + surface). One per viewer
+    /// instance / preview component.
     #[wasm_bindgen]
-    pub fn parse_summary(idml: &[u8]) -> Result<String, JsError> {
-        let document =
-            Document::open(idml).map_err(|e| JsError::new(&format!("open IDML: {e}")))?;
-        let opts = PipelineOptions::default();
-        let built = pipeline::build_document(&document, &opts)
-            .map_err(|e| JsError::new(&format!("build: {e}")))?;
-        let total_cmds: usize = built.pages.iter().map(|p| p.list.commands.len()).sum();
-        let total_paths: usize = built.pages.iter().map(|p| p.list.paths.len()).sum();
-        Ok(format!(
-            "{{\"page_count\":{},\"commands\":{},\"paths\":{},\
-             \"spreads\":{},\"pages\":{},\"frames\":{},\
-             \"stories\":{},\"paragraphs\":{},\"runs\":{}}}",
-            built.pages.len(),
-            total_cmds,
-            total_paths,
-            built.stats.spreads,
-            built.stats.pages,
-            built.stats.frames,
-            built.stats.stories,
-            built.stats.paragraphs,
-            built.stats.runs,
-        ))
+    pub struct ViewerSession {
+        built: Option<BuiltDocument>,
+        /// Created on first `render_to_canvas` (bound to that canvas) or
+        /// lazily for headless `render_to_bytes` (1×1 backing canvas).
+        presenter: Option<SurfacePresenter>,
+        /// Per-(family, style) font payloads accumulated via
+        /// `register_font`, consulted at `load` time. The same
+        /// `BytesResolver` the engine, `paged-inspect`, and the editor use.
+        fonts: BytesResolver,
+        /// Current page index into `built.pages`.
+        page: usize,
+    }
+
+    #[wasm_bindgen]
+    impl ViewerSession {
+        /// Acquire the session, gating on WebGPU availability. Rejects when
+        /// `navigator.gpu` is absent so the consumer can map that to the
+        /// WebGPU-absent note. Exposed to JS as `ViewerSession.new()`
+        /// returning a `Promise`.
+        #[allow(clippy::new_without_default)]
+        pub async fn new() -> Result<ViewerSession, JsError> {
+            console_error_panic_hook::set_once();
+            if !webgpu_available() {
+                return Err(JsError::new(
+                    "WebGPU is not available (navigator.gpu is undefined)",
+                ));
+            }
+            Ok(ViewerSession {
+                built: None,
+                presenter: None,
+                fonts: BytesResolver::new(),
+                page: 0,
+            })
+        }
+
+        /// Register a font for an IDML `AppliedFont` family (and optional
+        /// style such as `"Bold"` / `"Italic"`). Accumulates across calls
+        /// and is consulted on the next `load`; real documents reference
+        /// many faces, so call this once per face before `load`. Mirrors
+        /// the editor's `RegisterFont` and `paged-inspect`'s
+        /// `--font-family "Family[/Style]=PATH"`.
+        pub fn register_font(&mut self, family: String, style: Option<String>, bytes: Box<[u8]>) {
+            self.fonts
+                .add_font(&family, style.as_deref(), bytes.into_vec());
+        }
+
+        /// Parse + build a complete IDML package. `font` is optional. Caches
+        /// the built document and resets the current page to 0. Returns
+        /// structured diagnostics; does not throw on recoverable problems.
+        pub fn load(&mut self, idml: &[u8], font: Option<Box<[u8]>>) -> Diagnostics {
+            let document = match Document::open(idml) {
+                Ok(d) => d,
+                Err(e) => return Diagnostics::error("open", &format!("open IDML: {e}")),
+            };
+            // Scope the resolver borrow so it ends before we touch
+            // `self.built` — `font` is the last-resort fallback, the
+            // registered `fonts` resolver handles per-family lookup.
+            let built = {
+                let opts = PipelineOptions {
+                    font: font.as_deref(),
+                    assets: Some(&self.fonts),
+                    ..PipelineOptions::default()
+                };
+                match pipeline::build_document(&document, &opts) {
+                    Ok(built) => built,
+                    Err(e) => return Diagnostics::error("build", &format!("build: {e}")),
+                }
+            };
+            self.built = Some(built);
+            self.page = 0;
+            Diagnostics::ok()
+        }
+
+        pub fn page_count(&self) -> u32 {
+            self.built.as_ref().map(|b| b.pages.len() as u32).unwrap_or(0)
+        }
+
+        pub fn set_page(&mut self, index: u32) {
+            self.page = index as usize;
+        }
+
+        /// Present the current page to a worker-owned `OffscreenCanvas` via
+        /// WebGPU. The presenter is created (bound to `canvas`) on the first
+        /// call; later calls reuse it and re-present — pass the same canvas.
+        pub async fn render_to_canvas(&mut self, canvas: web_sys::OffscreenCanvas) -> Diagnostics {
+            if self.presenter.is_none() {
+                let w = canvas.width().max(1);
+                let h = canvas.height().max(1);
+                match SurfacePresenter::new_offscreen(canvas, w, h).await {
+                    Ok(p) => self.presenter = Some(p),
+                    Err(e) => {
+                        return Diagnostics::error("gpu_init", &format!("WebGPU init failed: {e}"))
+                    }
+                }
+            }
+            self.present_current()
+        }
+
+        /// Main-thread variant of [`Self::render_to_canvas`] for embedders
+        /// that render on an `HtmlCanvasElement` instead of a worker
+        /// `OffscreenCanvas`.
+        pub async fn render_to_canvas_main(
+            &mut self,
+            canvas: web_sys::HtmlCanvasElement,
+        ) -> Diagnostics {
+            if self.presenter.is_none() {
+                let w = canvas.width().max(1);
+                let h = canvas.height().max(1);
+                match SurfacePresenter::new(canvas, w, h).await {
+                    Ok(p) => self.presenter = Some(p),
+                    Err(e) => {
+                        return Diagnostics::error("gpu_init", &format!("WebGPU init failed: {e}"))
+                    }
+                }
+            }
+            self.present_current()
+        }
+
+        /// Headless path: render the current page off-surface and read it
+        /// back as RGBA8 (replaces the legacy `render_to_png`). For
+        /// screenshots / SSR. `dpi` controls resolution (72 = 1px per pt).
+        pub async fn render_to_bytes(&mut self, dpi: f32) -> Result<RenderedRaster, JsError> {
+            self.ensure_presenter()
+                .await
+                .map_err(|e| JsError::new(&e))?;
+
+            // Build the scaled scene while borrowing `built`, then drop the
+            // borrow before taking `&mut presenter` for the async readback —
+            // the borrow dance `paged-canvas-wasm::render_page_vello_png` uses.
+            let (scene, width_px, height_px) = {
+                let built = self
+                    .built
+                    .as_ref()
+                    .ok_or_else(|| JsError::new("no document loaded"))?;
+                let page = built
+                    .pages
+                    .get(self.page)
+                    .ok_or_else(|| JsError::new("page index out of range"))?;
+                let page_scene =
+                    SurfacePresenter::build_page_scene(&page.list, page.width_pt, page.height_pt);
+                let scale = (dpi / 72.0) as f64;
+                let mut scene = VelloScene::new();
+                scene.append(&page_scene, Some(Affine::scale(scale)));
+                let width_px = ((page.width_pt * dpi / 72.0).ceil() as u32).max(1);
+                let height_px = ((page.height_pt * dpi / 72.0).ceil() as u32).max(1);
+                (scene, width_px, height_px)
+            };
+
+            let presenter = self
+                .presenter
+                .as_mut()
+                .ok_or_else(|| JsError::new("GPU not initialised"))?;
+            let rgba = presenter
+                .render_scene_to_rgba(&scene, width_px, height_px)
+                .await
+                .map_err(|e| JsError::new(&format!("readback: {e}")))?;
+            Ok(RenderedRaster {
+                width: width_px,
+                height: height_px,
+                rgba,
+            })
+        }
+
+        /// Resize the bound GPU surface. `width`/`height` are CSS pixels;
+        /// `device_pixel_ratio` brings them to device pixels. No-op until a
+        /// presenter exists.
+        pub fn resize(&mut self, width: u32, height: u32, device_pixel_ratio: f32) {
+            if let Some(p) = self.presenter.as_mut() {
+                let w = ((width as f32 * device_pixel_ratio).round() as u32).max(1);
+                let h = ((height as f32 * device_pixel_ratio).round() as u32).max(1);
+                p.resize(w, h);
+            }
+        }
+    }
+
+    // Non-exported helpers — kept out of the `#[wasm_bindgen]` impl.
+    impl ViewerSession {
+        /// Compose the current page's scene fit-and-centred into the bound
+        /// surface and present it. Builds the scene under a short borrow of
+        /// `built`, releases it, then presents with `&mut presenter`.
+        fn present_current(&mut self) -> Diagnostics {
+            let (scene, transform) = {
+                let Some(built) = self.built.as_ref() else {
+                    return Diagnostics::error("no_document", "no document loaded");
+                };
+                let Some(page) = built.pages.get(self.page) else {
+                    return Diagnostics::error("page_range", "page index out of range");
+                };
+                let Some(presenter) = self.presenter.as_ref() else {
+                    return Diagnostics::error("no_gpu", "GPU not initialised");
+                };
+                let scene =
+                    SurfacePresenter::build_page_scene(&page.list, page.width_pt, page.height_pt);
+                // The page scene is in points; fit it to the surface
+                // (device px) with a small margin and centre it.
+                let sw = presenter.width() as f32;
+                let sh = presenter.height() as f32;
+                let pw = page.width_pt.max(1.0);
+                let ph = page.height_pt.max(1.0);
+                let scale = (sw / pw).min(sh / ph) * 0.95;
+                let scale = scale.max(0.0);
+                let tx = (sw - pw * scale) * 0.5;
+                let ty = (sh - ph * scale) * 0.5;
+                (scene, [scale, 0.0, 0.0, scale, tx, ty])
+            };
+
+            let Some(presenter) = self.presenter.as_mut() else {
+                return Diagnostics::error("no_gpu", "GPU not initialised");
+            };
+            // Light-grey surround behind the page (page body + border come
+            // from `build_page_scene`).
+            let bg = Color::rgba(0.898, 0.905, 0.922, 1.0);
+            match presenter.present_scenes(&[(&scene, transform)], bg) {
+                Ok(()) => Diagnostics::ok(),
+                Err(e) => Diagnostics::error("present", &format!("present: {e}")),
+            }
+        }
+
+        /// Ensure a presenter (hence a wgpu device) exists for headless
+        /// readback. Reuses the on-screen presenter if one is bound; else
+        /// creates a throwaway 1×1 `OffscreenCanvas` purely for its device —
+        /// `render_scene_to_rgba` renders to its own target texture, so the
+        /// backing canvas size is irrelevant.
+        async fn ensure_presenter(&mut self) -> Result<(), String> {
+            if self.presenter.is_some() {
+                return Ok(());
+            }
+            let canvas = web_sys::OffscreenCanvas::new(1, 1)
+                .map_err(|e| format!("OffscreenCanvas::new: {e:?}"))?;
+            let presenter = SurfacePresenter::new_offscreen(canvas, 1, 1)
+                .await
+                .map_err(|e| format!("WebGPU init: {e}"))?;
+            self.presenter = Some(presenter);
+            Ok(())
+        }
+    }
+
+    /// True when `globalThis.navigator.gpu` is present. Works in both the
+    /// window and worker scopes (read via `Reflect`, so no Window-vs-Worker
+    /// web-sys feature split).
+    fn webgpu_available() -> bool {
+        let global = js_sys::global();
+        let Ok(nav) = js_sys::Reflect::get(&global, &JsValue::from_str("navigator")) else {
+            return false;
+        };
+        if nav.is_undefined() || nav.is_null() {
+            return false;
+        }
+        match js_sys::Reflect::get(&nav, &JsValue::from_str("gpu")) {
+            Ok(gpu) => !gpu.is_undefined() && !gpu.is_null(),
+            Err(_) => false,
+        }
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "gpu"))]
 pub use wasm::*;
 
 // Non-wasm builds keep the library buildable — important for
-// `cargo check --workspace` on native hosts and for `cargo doc`.
-#[cfg(not(target_arch = "wasm32"))]
+// `cargo check --workspace` on native hosts and for `cargo doc`. The real
+// API is only available when built for `wasm32` with `--features gpu`.
+#[cfg(not(all(target_arch = "wasm32", feature = "gpu")))]
 pub mod native_shim {
-    //! Stub surface that makes the crate compile on native targets.
-    //! The real API is only available when built for wasm32.
+    //! Stub surface that makes the crate compile off the wasm/GPU target.
 
     pub fn is_wasm() -> bool {
         false

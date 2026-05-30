@@ -2285,19 +2285,12 @@ fn compose_cmyk_overprint_at(
 /// `(C, M, Y, K)` that was itself produced by that forward map (the
 /// common "this destination pixel was painted by a CMYK swatch" case
 /// the Stage A path is designed to handle correctly).
-pub(crate) fn rgb_to_naive_cmyk_8bit(r: u8, g: u8, b: u8) -> (u8, u8, u8, u8) {
-    let max_rgb = r.max(g).max(b);
-    let k = 255u8.saturating_sub(max_rgb);
-    if k == 255 {
-        return (0, 0, 0, 255);
-    }
-    let denom = (255u16 - k as u16).max(1);
-    let calc = |v: u8| {
-        let num = 255u16.saturating_sub(v as u16).saturating_sub(k as u16);
-        ((num * 255 + denom / 2) / denom).min(255) as u8
-    };
-    (calc(r), calc(g), calc(b), k)
-}
+///
+/// The implementation was hoisted to the crate root so the
+/// `vello-backend` overprint path can use it without the `cpu` feature;
+/// re-exported here so this module's call sites (and `super::` in tests)
+/// keep resolving unqualified.
+pub(crate) use crate::rgb_to_naive_cmyk_8bit;
 
 /// Forward naive CMYK→RGB in 8-bit space. R = (255-C) * (255-K) / 255
 /// etc. The integer math matches `cmyk_unit_to_linear_rgb`'s float

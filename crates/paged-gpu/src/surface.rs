@@ -516,16 +516,19 @@ impl SurfacePresenter {
         Ok(())
     }
 
-    /// Sub-phase D — render a pre-built Vello `Scene` off-surface to
-    /// a PNG. The caller is responsible for building the scene
-    /// (typically via `SurfacePresenter::build_page_scene` + an
-    /// optional pt→px scale transform), so this method can run with
-    /// only a mutable borrow on the presenter — no second borrow on
-    /// the document model.
+    /// Sub-phase D — render a pre-built Vello `Scene` off-surface and
+    /// read it back as tightly-packed RGBA8 (`width_px * height_px * 4`
+    /// bytes, row stride already de-padded). The caller is responsible
+    /// for building the scene (typically via
+    /// `SurfacePresenter::build_page_scene` + an optional pt→px scale
+    /// transform), so this method can run with only a mutable borrow on
+    /// the presenter — no second borrow on the document model.
     ///
     /// Reuses the presenter's device + queue + renderer; the wgpu
-    /// adapter init isn't paid per call.
-    pub async fn render_scene_to_png(
+    /// adapter init isn't paid per call. This is the shared core of
+    /// [`Self::render_scene_to_png`]; the SDK's headless
+    /// `render_to_bytes` returns this raw buffer directly (no encode).
+    pub async fn render_scene_to_rgba(
         &mut self,
         scene: &Scene,
         width_px: u32,
@@ -635,6 +638,21 @@ impl SurfacePresenter {
         }
         readback.unmap();
 
+        Ok(rgba)
+    }
+
+    /// Off-surface render of a pre-built scene to PNG. Thin wrapper over
+    /// [`Self::render_scene_to_rgba`] that PNG-encodes the readback —
+    /// the fidelity suite (`renderPageVelloPng`) consumes this.
+    pub async fn render_scene_to_png(
+        &mut self,
+        scene: &Scene,
+        width_px: u32,
+        height_px: u32,
+    ) -> Result<Vec<u8>, SurfaceError> {
+        let width_px = width_px.max(1);
+        let height_px = height_px.max(1);
+        let rgba = self.render_scene_to_rgba(scene, width_px, height_px).await?;
         let mut png_bytes = Vec::with_capacity(rgba.len() / 4);
         image::codecs::png::PngEncoder::new(&mut png_bytes)
             .write_image(&rgba, width_px, height_px, image::ExtendedColorType::Rgba8)

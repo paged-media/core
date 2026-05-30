@@ -65,7 +65,7 @@ named; the published artifact is the SDK.
 | `paged-script` | embedded scripting (Boa); the `paged.*` global API |
 | `paged-canvas-wasm`, `paged-introspect-wasm` | wasm-bindgen surfaces for the editor |
 | `paged-gen` | IDML fixture generator (the `paged-gen` bin) |
-| `paged-sdk` | the published SDK wasm surface (`render_to_png`, `parse_summary`; npm `@paged-media/sdk`) |
+| `paged-sdk` | the published SDK wasm surface — a WebGPU `ViewerSession` (load → present to canvas → headless RGBA readback); npm `@paged-media/sdk` |
 
 `spikes/` — Vello eval, composer calibration, WASM size.
 `tools/indesign-export/` — drives InDesign to export reference PDFs for the
