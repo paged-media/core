@@ -2003,13 +2003,15 @@ mod tests {
         assert!(matches!(&applied.inverse, Operation::Batch { ops } if ops.len() == 2));
     }
 
-    /// Whole-run-only constraint: a range cutting inside a run
-    /// returns `InvalidValue` with a descriptive reason. Phase 3.x
-    /// replaces this with run-splitting + story-snapshot inverse.
+    /// SDK Phase 3.x — partial-range splitting. A range that cuts
+    /// inside a `CharacterRun` now splits the run; the inverse
+    /// Batch restores the property per (now-split-)run without
+    /// re-merging. Verifies the first run "Hello " (0..6) splits
+    /// at offset 2 and offset 4 into three pieces: "He" (0..2,
+    /// unchanged), "ll" (2..4, mutated), "o " (4..6, unchanged).
     #[test]
-    fn character_set_property_against_partial_run_is_unimplemented() {
+    fn character_set_property_splits_runs_on_partial_range() {
         let mut project = Project::new(document_with_one_story("Story/u1"));
-        // The first run is "Hello " (0..6); a range [2, 4) cuts inside it.
         let op = Operation::SetProperty {
             node: NodeId::StoryRange {
                 story_id: "Story/u1".to_string(),
@@ -2019,11 +2021,114 @@ mod tests {
             path: PropertyPath::CharacterFontSize,
             value: Value::Length(Some(14.0)),
         };
-        let err = project.apply(op).expect_err("partial-run range");
-        assert!(
-            matches!(err, OperationError::InvalidValue { .. }),
-            "expected InvalidValue, got: {err:?}"
-        );
+        let applied = project.apply(op).expect("apply must succeed");
+
+        // Paragraph 0 now has 4 runs: "He" + "ll" + "o " + "world".
+        // The original "Hello " (0..6) split into three; "world"
+        // (6..11) is untouched.
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].runs.len(), 4);
+        assert_eq!(story.paragraphs[0].runs[0].text, "He");
+        assert_eq!(story.paragraphs[0].runs[0].point_size, Some(10.0));
+        assert_eq!(story.paragraphs[0].runs[1].text, "ll");
+        assert_eq!(story.paragraphs[0].runs[1].point_size, Some(14.0));
+        assert_eq!(story.paragraphs[0].runs[2].text, "o ");
+        assert_eq!(story.paragraphs[0].runs[2].point_size, Some(10.0));
+        assert_eq!(story.paragraphs[0].runs[3].text, "world");
+        assert_eq!(story.paragraphs[0].runs[3].point_size, Some(10.0));
+
+        // Inverse restores the mutated piece's point_size to 10.0.
+        // It addresses range [2, 4) — the same range the forward op
+        // mutated. Undo doesn't re-merge the splits; the document
+        // keeps the boundary structure.
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        // Run count stays at 4 (no re-merge).
+        assert_eq!(story.paragraphs[0].runs.len(), 4);
+        // Every run's point_size is back to 10.0.
+        for run in &story.paragraphs[0].runs {
+            assert_eq!(run.point_size, Some(10.0));
+        }
+    }
+
+    /// Left-only split: the range starts inside a run but extends
+    /// past it. The run splits into [pre-start] [in-range], the
+    /// second piece gets mutated.
+    #[test]
+    fn character_set_property_splits_left_only_when_range_ends_at_run_boundary() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        // Range [3, 6): cuts inside "Hello " at offset 3, ends at
+        // its boundary. Should split into "Hel" + "lo ".
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 3,
+                end: 6,
+            },
+            path: PropertyPath::CharacterFontSize,
+            value: Value::Length(Some(20.0)),
+        };
+        project.apply(op).expect("apply");
+        let story = &project.document().stories[0].story;
+        // Paragraph 0: "Hel" "lo " "world".
+        assert_eq!(story.paragraphs[0].runs.len(), 3);
+        assert_eq!(story.paragraphs[0].runs[0].text, "Hel");
+        assert_eq!(story.paragraphs[0].runs[0].point_size, Some(10.0));
+        assert_eq!(story.paragraphs[0].runs[1].text, "lo ");
+        assert_eq!(story.paragraphs[0].runs[1].point_size, Some(20.0));
+    }
+
+    /// Right-only split: range starts at a run boundary, ends inside.
+    #[test]
+    fn character_set_property_splits_right_only_when_range_starts_at_run_boundary() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        // Range [6, 9): starts at "world"'s boundary, ends inside it.
+        // Should split "world" into "wor" + "ld".
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 6,
+                end: 9,
+            },
+            path: PropertyPath::CharacterFontSize,
+            value: Value::Length(Some(30.0)),
+        };
+        project.apply(op).expect("apply");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].runs.len(), 3);
+        assert_eq!(story.paragraphs[0].runs[2].text, "ld");
+        assert_eq!(story.paragraphs[0].runs[1].text, "wor");
+        assert_eq!(story.paragraphs[0].runs[1].point_size, Some(30.0));
+        assert_eq!(story.paragraphs[0].runs[2].point_size, Some(10.0));
+    }
+
+    /// Cross-paragraph range: covers part of paragraph 0's last run
+    /// PLUS all of paragraph 1's content. Verifies the per-paragraph
+    /// walk correctly handles ranges that span paragraph boundaries.
+    #[test]
+    fn character_set_property_spans_paragraphs() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        // Range [9, 12): cuts inside "world" at offset 3 (from para
+        // start 6), then covers "!" (para 1, offset 11..12).
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 9,
+                end: 12,
+            },
+            path: PropertyPath::CharacterFontSize,
+            value: Value::Length(Some(40.0)),
+        };
+        project.apply(op).expect("apply");
+        let story = &project.document().stories[0].story;
+        // Paragraph 0: "Hello " + "wor" + "ld".
+        assert_eq!(story.paragraphs[0].runs.len(), 3);
+        assert_eq!(story.paragraphs[0].runs[2].text, "ld");
+        assert_eq!(story.paragraphs[0].runs[2].point_size, Some(40.0));
+        // Paragraph 1: "!" (whole-run mutation).
+        assert_eq!(story.paragraphs[1].runs.len(), 1);
+        assert_eq!(story.paragraphs[1].runs[0].text, "!");
+        assert_eq!(story.paragraphs[1].runs[0].point_size, Some(40.0));
     }
 
     /// Missing story: a SetProperty against a `StoryRange` whose

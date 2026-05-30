@@ -499,56 +499,165 @@ fn apply_character_property(
         });
     }
 
-    // Find the story by self_id.
     let story_idx = doc
         .stories
         .iter()
         .position(|s| s.self_id == story_id)
         .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
 
-    // Collect (paragraph_index, run_index, run_start, run_end) for
-    // every run that intersects [start, end). Walk in one pass to
-    // accumulate the running character offset.
-    let mut affected: Vec<(usize, usize)> = Vec::new();
-    {
-        let story = &doc.stories[story_idx].story;
-        let mut char_offset: u32 = 0;
-        for (para_idx, para) in story.paragraphs.iter().enumerate() {
-            for (run_idx, run) in para.runs.iter().enumerate() {
-                let run_len = run.text.chars().count() as u32;
-                let run_start = char_offset;
-                let run_end = char_offset + run_len;
-                char_offset = run_end;
+    let story = &mut doc.stories[story_idx].story;
+    let mut inverse_ops: Vec<Operation> = Vec::new();
+    let mut char_offset: u32 = 0;
 
-                // Whole-run-only constraint: a run intersects the
-                // requested range either entirely or not at all.
-                let intersects = run_end > start && run_start < end;
-                if !intersects {
-                    continue;
-                }
-                let aligned = run_start >= start && run_end <= end;
-                if !aligned {
-                    return Err(OperationError::InvalidValue {
-                        node: node.clone(),
+    // Per-paragraph walk. Runs that intersect [start, end) are
+    // split as needed and the "middle" piece (the one fully inside
+    // [start, end)) receives the new property value. Inverse is a
+    // Batch of per-(now-split-)run SetProperty restorations
+    // addressed at the post-split range — undo restores each
+    // affected run's previous value without re-merging the splits.
+    // A future "merge consecutive runs with identical properties"
+    // pass can canonicalize the document; today's correctness is
+    // bytewise even with extra boundaries.
+    for para in story.paragraphs.iter_mut() {
+        let para_chars: u32 = para
+            .runs
+            .iter()
+            .map(|r| r.text.chars().count() as u32)
+            .sum();
+        let para_start = char_offset;
+        let para_end = char_offset + para_chars;
+        char_offset = para_end;
+
+        // Skip paragraphs entirely outside [start, end).
+        if para_end <= start || para_start >= end {
+            continue;
+        }
+
+        // Rebuild this paragraph's runs vec, splitting as needed.
+        let original_runs: Vec<idml_parse::CharacterRun> = para.runs.drain(..).collect();
+        let mut new_runs: Vec<idml_parse::CharacterRun> =
+            Vec::with_capacity(original_runs.len() * 2);
+        let mut local_offset: u32 = 0;
+
+        for run in original_runs {
+            let run_len = run.text.chars().count() as u32;
+            let run_start = para_start + local_offset;
+            let run_end = run_start + run_len;
+            local_offset += run_len;
+
+            let intersects = run_end > start && run_start < end;
+            if !intersects {
+                new_runs.push(run);
+                continue;
+            }
+
+            // Local split offsets within the run (in characters):
+            // - left split at `local_left` if run starts BEFORE the
+            //   requested range — everything before it stays as the
+            //   pre-mutation value.
+            // - right split at `local_right` if run ends AFTER the
+            //   range — everything past it stays as well.
+            let local_left = if run_start < start {
+                Some(start - run_start)
+            } else {
+                None
+            };
+            let local_right = if run_end > end {
+                Some(end - run_start)
+            } else {
+                None
+            };
+
+            match (local_left, local_right) {
+                (None, None) => {
+                    // Whole run in range. Mutate in place.
+                    let mut mutated = run;
+                    let (prev_value, _new_set) =
+                        apply_character_field_on_run(&mut mutated, path, value)?;
+                    inverse_ops.push(Operation::SetProperty {
+                        node: NodeId::StoryRange {
+                            story_id: story_id.to_string(),
+                            start: run_start,
+                            end: run_end,
+                        },
                         path,
-                        reason: format!(
-                            "range [{start}, {end}) cuts inside CharacterRun \
-                             [paragraph {para_idx}, run {run_idx}] spanning \
-                             [{run_start}, {run_end}); whole-run-aligned ranges \
-                             only in this build (Phase 3.x extends to partial \
-                             ranges via run-splitting + story-snapshot inverse)"
-                        ),
+                        value: prev_value,
                     });
+                    new_runs.push(mutated);
                 }
-                affected.push((para_idx, run_idx));
+                (Some(split_at), None) => {
+                    // Run starts before the range; one split at
+                    // `start`. Left piece stays; right piece gets
+                    // mutated.
+                    let (left, mut right) = split_run_at(run, split_at);
+                    let mid_start = run_start + split_at;
+                    let mid_end = run_end;
+                    let (prev_value, _) =
+                        apply_character_field_on_run(&mut right, path, value)?;
+                    inverse_ops.push(Operation::SetProperty {
+                        node: NodeId::StoryRange {
+                            story_id: story_id.to_string(),
+                            start: mid_start,
+                            end: mid_end,
+                        },
+                        path,
+                        value: prev_value,
+                    });
+                    new_runs.push(left);
+                    new_runs.push(right);
+                }
+                (None, Some(split_at)) => {
+                    // Run ends after the range; one split at `end`.
+                    // Left piece gets mutated; right piece stays.
+                    let (mut left, right) = split_run_at(run, split_at);
+                    let mid_start = run_start;
+                    let mid_end = run_start + split_at;
+                    let (prev_value, _) =
+                        apply_character_field_on_run(&mut left, path, value)?;
+                    inverse_ops.push(Operation::SetProperty {
+                        node: NodeId::StoryRange {
+                            story_id: story_id.to_string(),
+                            start: mid_start,
+                            end: mid_end,
+                        },
+                        path,
+                        value: prev_value,
+                    });
+                    new_runs.push(left);
+                    new_runs.push(right);
+                }
+                (Some(left_at), Some(right_at)) => {
+                    // Run straddles both ends of the range; two
+                    // splits — three pieces. Middle gets mutated.
+                    let (left, rest) = split_run_at(run, left_at);
+                    let (mut mid, right) = split_run_at(rest, right_at - left_at);
+                    let mid_start = run_start + left_at;
+                    let mid_end = run_start + right_at;
+                    let (prev_value, _) =
+                        apply_character_field_on_run(&mut mid, path, value)?;
+                    inverse_ops.push(Operation::SetProperty {
+                        node: NodeId::StoryRange {
+                            story_id: story_id.to_string(),
+                            start: mid_start,
+                            end: mid_end,
+                        },
+                        path,
+                        value: prev_value,
+                    });
+                    new_runs.push(left);
+                    new_runs.push(mid);
+                    new_runs.push(right);
+                }
             }
         }
+
+        para.runs = new_runs;
     }
 
-    if affected.is_empty() {
-        // No runs in the range — nothing to mutate. Return a no-op
-        // applied operation so the caller's undo stack stays
-        // consistent (the inverse is the same SetProperty op).
+    if inverse_ops.is_empty() {
+        // No runs in the range — empty story or pre/post the
+        // entire content. Return a no-op AppliedOperation so the
+        // caller's undo stack stays consistent.
         return Ok(AppliedOperation {
             op: Operation::SetProperty {
                 node: node.clone(),
@@ -562,45 +671,6 @@ fn apply_character_property(
             },
             invalidation: InvalidationHint::default(),
         });
-    }
-
-    // Apply the new value to each affected run, capturing the
-    // previous value for the inverse Batch. The inverse is a sequence
-    // of SetProperty Ops each addressing the SAME (story_id, run's
-    // character range), so undo restores per-run values without
-    // re-running the alignment check.
-    let story = &mut doc.stories[story_idx].story;
-    let mut inverse_ops: Vec<Operation> = Vec::with_capacity(affected.len());
-    let mut char_offset: u32 = 0;
-    // Walk again to know each run's [run_start, run_end) so we can
-    // address it precisely in the inverse. The two-pass design keeps
-    // the borrow checker happy: the first pass borrowed `&story`,
-    // here we hold `&mut story`.
-    for (para_idx, para) in story.paragraphs.iter_mut().enumerate() {
-        for (run_idx, run) in para.runs.iter_mut().enumerate() {
-            let run_len = run.text.chars().count() as u32;
-            let run_start = char_offset;
-            let run_end = char_offset + run_len;
-            char_offset = run_end;
-            if !affected.contains(&(para_idx, run_idx)) {
-                continue;
-            }
-            let (prev_value, new_set) = apply_character_field_on_run(run, path, value)?;
-            inverse_ops.push(Operation::SetProperty {
-                node: NodeId::StoryRange {
-                    story_id: story_id.to_string(),
-                    start: run_start,
-                    end: run_end,
-                },
-                path,
-                value: prev_value,
-            });
-            // `new_set` is the actually-written value; if the caller
-            // sent a `Length(None)` for "clear", `new_set` reflects
-            // that. We don't use it directly here but keep the local
-            // for clarity / future logging.
-            let _ = new_set;
-        }
     }
 
     // Build an InvalidationHint targeting the host text frame so the
@@ -640,6 +710,39 @@ fn apply_character_property(
         inverse,
         invalidation,
     })
+}
+
+/// SDK Phase 3.x — split a `CharacterRun` at character offset
+/// `char_idx`. The left piece contains the first `char_idx`
+/// characters of `run.text`; the right piece contains the rest.
+/// Every other field is duplicated via `Clone` so the two pieces
+/// inherit identical properties pre-mutation. `char_idx` must lie
+/// strictly inside the run (0 < char_idx < run.text.chars().count()) —
+/// the caller is responsible for that constraint; this function
+/// produces undefined byte boundaries otherwise.
+fn split_run_at(
+    run: idml_parse::CharacterRun,
+    char_idx: u32,
+) -> (idml_parse::CharacterRun, idml_parse::CharacterRun) {
+    // Find the byte position of the char_idx'th character. char_indices
+    // yields each char's byte offset; chars past the end map to the
+    // string's total byte length.
+    let mut byte_idx = run.text.len();
+    let mut chars_seen: u32 = 0;
+    for (byte, _) in run.text.char_indices() {
+        if chars_seen == char_idx {
+            byte_idx = byte;
+            break;
+        }
+        chars_seen += 1;
+    }
+    let left_text = run.text[..byte_idx].to_string();
+    let right_text = run.text[byte_idx..].to_string();
+    let mut left = run.clone();
+    left.text = left_text;
+    let mut right = run;
+    right.text = right_text;
+    (left, right)
 }
 
 /// Apply one character property to one `CharacterRun`. Returns
