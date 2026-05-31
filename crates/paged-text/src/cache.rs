@@ -310,6 +310,7 @@ pub fn layout_runs_key(runs: &[StyledRun], options: &LayoutOptions) -> [u8; 32] 
         h.add_bool(r.strikethru);
         h.add_f32(r.baseline_shift_pt);
         h.add_f32(r.horizontal_scale_pct);
+        h.add_f32(r.vertical_scale_pct);
         h.add_u32(r.fallback_faces.len() as u32);
         h.add_bool(r.shaping_features.ligatures_on);
         h.add_u32(match r.shaping_features.kerning {

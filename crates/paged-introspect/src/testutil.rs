@@ -90,6 +90,7 @@ pub fn document_with_one_textframe(self_id: &str) -> Document {
         applied_master: None,
         master_page_transform: None,
         override_list: Vec::new(),
+        show_master_items: None,
     });
     Document {
         container: Container {

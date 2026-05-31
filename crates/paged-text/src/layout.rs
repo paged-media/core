@@ -64,6 +64,10 @@ pub struct PositionedGlyph {
     /// the glyph-emit affine x-scale so painted glyphs are stretched
     /// to match the breaker's advance (P-08).
     pub x_scale: f32,
+    /// IDML `VerticalScale` as a multiplier (1.0 = identity). Drives the
+    /// glyph-emit affine y-scale (twin of `x_scale`); scales glyph
+    /// height without changing the line's advance or leading.
+    pub y_scale: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -239,6 +243,7 @@ pub fn position_line(
             underline: false,
             strikethru: false,
             x_scale: 1.0,
+            y_scale: 1.0,
         });
         pen_x += g.x_advance;
     }
@@ -341,6 +346,12 @@ pub struct StyledRun<'a> {
     /// into the shaped glyph x-advances so the breaker sees the
     /// requested glyph width (P-08).
     pub horizontal_scale_pct: f32,
+    /// IDML `VerticalScale` percentage (100 = identity). Twin of
+    /// `horizontal_scale_pct`, but vertical scale does **not** change
+    /// the advance/leading, so it is carried straight through to the
+    /// per-glyph emit affine as `y_scale` rather than folded into
+    /// shaping.
+    pub vertical_scale_pct: f32,
     /// Per-cluster glyph-fallback faces. When `face` shapes a cluster
     /// to `.notdef` (glyph id 0), the composer retries that cluster
     /// against each face in this slice in order, taking the first
@@ -806,6 +817,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                 underline: run.underline,
                 strikethru: run.strikethru,
                 x_scale: (run.horizontal_scale_pct / 100.0).max(0.0),
+                y_scale: (run.vertical_scale_pct / 100.0).max(0.0),
             });
             pen_x += fg.x_advance;
             last_run_idx = Some(fg.run_idx);
@@ -831,6 +843,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                         underline: r.underline,
                         strikethru: r.strikethru,
                         x_scale: (r.horizontal_scale_pct / 100.0).max(0.0),
+                        y_scale: (r.vertical_scale_pct / 100.0).max(0.0),
                     });
                     pen_x += g.x_advance;
                 }
@@ -1223,6 +1236,7 @@ impl<'a, 'b> LeaderContext<'a, 'b> {
                     underline: false,
                     strikethru: false,
                     x_scale: (run.horizontal_scale_pct / 100.0).max(0.0),
+                    y_scale: (run.vertical_scale_pct / 100.0).max(0.0),
                 });
                 pen_x += g.x_advance;
             }
@@ -1660,6 +1674,7 @@ mod tests {
             underline: false,
             strikethru: false,
             x_scale: 1.0,
+            y_scale: 1.0,
         }
     }
 
@@ -1694,6 +1709,7 @@ mod tests {
                 underline: false,
                 strikethru: false,
                 x_scale: 1.0,
+                y_scale: 1.0,
             });
             pen += adv;
         }
@@ -1902,6 +1918,7 @@ mod tests {
                 underline: false,
                 strikethru: false,
                 x_scale: 1.0,
+                y_scale: 1.0,
             });
             x += advance;
         }

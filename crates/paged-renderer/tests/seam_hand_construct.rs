@@ -85,6 +85,7 @@ fn build_document_accepts_a_hand_constructed_single_page_document() {
         applied_master: None,
         master_page_transform: None,
         override_list: Vec::new(),
+        show_master_items: None,
     });
 
     let document = Document {

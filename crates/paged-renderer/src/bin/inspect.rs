@@ -164,6 +164,9 @@ fn main() -> Result<()> {
     if !args.json {
         println!("file          {}", args.file.display());
         println!("mimetype      {}", document.container.mimetype);
+        if let Some(v) = document.container.designmap.dom_version.as_deref() {
+            println!("DOMVersion    {v}");
+        }
         println!(
             "manifest      {} spread(s), {} story ref(s), {} master(s)",
             document.container.designmap.spreads.len(),
@@ -457,6 +460,16 @@ fn main() -> Result<()> {
             g = built.stats.glyphs,
             l = built.stats.lines,
         );
+        // Overset signal: lines that fell past the last frame in a chain
+        // are dropped (matching InDesign's clipped PDF), but silently
+        // dropping them hides genuine overflow. Surface the count so the
+        // caller can tell "fit exactly" from "text was clipped".
+        if built.stats.dropped_overflow_lines > 0 {
+            println!(
+                "  overset: {} line(s) dropped past the last frame (text clipped, not lost)",
+                built.stats.dropped_overflow_lines,
+            );
+        }
         if want_display_list {
             println!(
                 "  display-list: {} command(s) total across {} page(s), {} path(s) total",
@@ -558,6 +571,7 @@ fn build_json_report(
     json!({
         "file": args.file,
         "mimetype": document.container.mimetype,
+        "dom_version": document.container.designmap.dom_version,
         "manifest": {
             "spreads": document.container.designmap.spreads.len(),
             "stories": document.container.designmap.stories.len(),
@@ -580,6 +594,7 @@ fn build_json_report(
             "glyphs": built.stats.glyphs,
             "lines": built.stats.lines,
             "decoded_images": built.stats.decoded_images,
+            "dropped_overflow_lines": built.stats.dropped_overflow_lines,
             "commands": total_cmds,
             "unique_paths": total_paths,
         },

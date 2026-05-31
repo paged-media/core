@@ -696,13 +696,20 @@ pub fn build_document(
         if master.spread.pages.is_empty() {
             continue;
         }
-        // Body-page OverrideList enumerates master items the body has
-        // replaced with its own copies — skip them here so we don't
-        // stamp the placeholder under the body's override.
         let body_page = document.spreads[geom.host_spread_idx]
             .spread
             .pages
             .get(geom.local_page_idx);
+        // `ShowMasterItems="false"` hides every master overlay item for
+        // this page (InDesign's per-page "Hide Master Items"). Skipping
+        // the whole loop body suppresses master frames, lines, and the
+        // master-story page-number text (all stamped below) at once.
+        if body_page.and_then(|p| p.show_master_items) == Some(false) {
+            continue;
+        }
+        // Body-page OverrideList enumerates master items the body has
+        // replaced with its own copies — skip them here so we don't
+        // stamp the placeholder under the body's override.
         let override_set: std::collections::HashSet<&str> = body_page
             .map(|p| p.override_list.iter().map(String::as_str).collect())
             .unwrap_or_default();
@@ -727,15 +734,24 @@ pub fn build_document(
         );
         let target_origin = pages[i].spread_origin;
         // MasterPageTransform sits between master-spread coords and
-        // live-page coords; for sample.idml this is identity.
+        // live-page coords (for sample.idml it is identity). Build the
+        // full outer transform once for this page — `translate(live
+        // origin) ∘ MPT ∘ translate(-master origin)` — so a MPT carrying
+        // rotation/scale (not just translation) is honoured. With an
+        // identity MPT this collapses to the plain origin shift the
+        // common case relies on. Each master item below is stamped as
+        // `mpt_outer ∘ item_transform`.
         let mpt = document.spreads[geom.host_spread_idx]
             .spread
             .pages
             .get(geom.local_page_idx)
             .and_then(|p| p.master_page_transform);
-        let (mpt_tx, mpt_ty) = mpt.map(|m| (m[4], m[5])).unwrap_or((0.0, 0.0));
-        let dx = target_origin.0 - master_page_origin.0 + mpt_tx;
-        let dy = target_origin.1 - master_page_origin.1 + mpt_ty;
+        let mpt_outer = Transform::translate(target_origin.0, target_origin.1)
+            .compose(&Transform(mpt.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])))
+            .compose(&Transform::translate(
+                -master_page_origin.0,
+                -master_page_origin.1,
+            ));
 
         // Pick the master page index that contains the centroid of
         // the given spread-coord bounds; falls back to the nearest
@@ -808,7 +824,7 @@ pub fn build_document(
             // PathGeometry-derived shapes carry geometry in inner
             // space.
             let mut copy = frame.clone();
-            copy.item_transform = Some(compose_outer_translation(copy.item_transform, dx, dy));
+            copy.item_transform = Some(compose_outer_matrix(mpt_outer, copy.item_transform));
             emit_text_frame_into(
                 &mut pages[i],
                 &copy,
@@ -841,7 +857,7 @@ pub fn build_document(
             }
             total_stats.frames += 1;
             let mut copy = rect.clone();
-            copy.item_transform = Some(compose_outer_translation(copy.item_transform, dx, dy));
+            copy.item_transform = Some(compose_outer_matrix(mpt_outer, copy.item_transform));
             emit_rectangle_into(
                 &mut pages[i],
                 &copy,
@@ -871,7 +887,7 @@ pub fn build_document(
             }
             total_stats.frames += 1;
             let mut copy = poly.clone();
-            copy.item_transform = Some(compose_outer_translation(copy.item_transform, dx, dy));
+            copy.item_transform = Some(compose_outer_matrix(mpt_outer, copy.item_transform));
             emit_polygon_into(
                 &mut pages[i],
                 &copy,
@@ -895,7 +911,7 @@ pub fn build_document(
             }
             total_stats.frames += 1;
             let mut copy = oval.clone();
-            copy.item_transform = Some(compose_outer_translation(copy.item_transform, dx, dy));
+            copy.item_transform = Some(compose_outer_matrix(mpt_outer, copy.item_transform));
             emit_oval_into(
                 &mut pages[i],
                 &copy,
@@ -919,7 +935,7 @@ pub fn build_document(
             }
             total_stats.frames += 1;
             let mut copy = line.clone();
-            copy.item_transform = Some(compose_outer_translation(copy.item_transform, dx, dy));
+            copy.item_transform = Some(compose_outer_matrix(mpt_outer, copy.item_transform));
             emit_line_into(
                 &mut pages[i],
                 &copy,
@@ -3206,15 +3222,29 @@ fn emit_paragraph_into_chain(
                 &run.text
             },
             face: shaping_faces[unique_idx[i]].unwrap(),
-            point_size: resolved_runs[i]
-                .point_size
-                .unwrap_or(em.options.default_point_size),
+            point_size: {
+                // `Position` (super/subscript) shrinks the run to a
+                // fraction of its base size — see `position_metrics`.
+                let base = resolved_runs[i]
+                    .point_size
+                    .unwrap_or(em.options.default_point_size);
+                base * position_metrics(resolved_runs[i].position.as_deref()).0
+            },
             tracking: resolved_runs[i].tracking,
             font_id: font_ids[i],
             underline: resolved_runs[i].underline.unwrap_or(false),
             strikethru: resolved_runs[i].strikethru.unwrap_or(false),
-            baseline_shift_pt: resolved_runs[i].baseline_shift.unwrap_or(0.0),
+            baseline_shift_pt: {
+                // Add the `Position` (super/subscript) baseline offset
+                // on top of any explicit `BaselineShift`.
+                let base = resolved_runs[i]
+                    .point_size
+                    .unwrap_or(em.options.default_point_size);
+                resolved_runs[i].baseline_shift.unwrap_or(0.0)
+                    + base * position_metrics(resolved_runs[i].position.as_deref()).1
+            },
             horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
+            vertical_scale_pct: resolved_runs[i].vertical_scale.unwrap_or(100.0),
             fallback_faces: &fallback_faces_pool,
             shaping_features: shaping_features_from(
                 resolved_runs[i].ligatures_on,
@@ -3476,6 +3506,7 @@ fn emit_paragraph_into_chain(
                 strikethru: r.strikethru,
                 baseline_shift_pt: r.baseline_shift_pt,
                 horizontal_scale_pct: r.horizontal_scale_pct,
+                vertical_scale_pct: r.vertical_scale_pct,
                 fallback_faces: r.fallback_faces,
                 shaping_features: r.shaping_features,
             });
@@ -4439,6 +4470,7 @@ fn emit_paragraph_into_chain(
                 underline: false,
                 strikethru: false,
                 x_scale: 1.0,
+                y_scale: 1.0,
             });
             pen_x += g.x_advance;
         }
@@ -6090,11 +6122,16 @@ impl WrapShape {
 /// point, then translate shifts it by (dx, dy). Used by the master-
 /// overlay pass to push master-spread coords into the live spread.
 /// `None` becomes a pure translation.
-fn compose_outer_translation(inner: Option<[f32; 6]>, dx: f32, dy: f32) -> [f32; 6] {
-    match inner {
-        Some([a, b, c, d, e, f]) => [a, b, c, d, e + dx, f + dy],
-        None => [1.0, 0.0, 0.0, 1.0, dx, dy],
-    }
+/// Stamp a master item: compose its inner `item_transform` (item →
+/// master-spread coords) under the page's outer master-overlay
+/// transform (`translate(live origin) ∘ MasterPageTransform ∘
+/// translate(-master origin)`), yielding the item's transform in
+/// live-page space. Generalises the former translation-only stamp so a
+/// `MasterPageTransform` carrying rotation/scale is honoured; an
+/// identity MPT reduces to the same `(dx, dy)` shift as before.
+fn compose_outer_matrix(outer: Transform, inner: Option<[f32; 6]>) -> [f32; 6] {
+    let inner_t = inner.map(Transform).unwrap_or(Transform::IDENTITY);
+    outer.compose(&inner_t).0
 }
 
 /// Walk the document's spreads and build per-page wrap-exclusion
@@ -8396,15 +8433,29 @@ fn measure_cell_paragraph(
         .map(|(i, run)| paged_text::StyledRun {
             text: &run.text,
             face: shaping_faces[unique_idx[i]].unwrap(),
-            point_size: resolved_runs[i]
-                .point_size
-                .unwrap_or(em.options.default_point_size),
+            point_size: {
+                // `Position` (super/subscript) shrinks the run to a
+                // fraction of its base size — see `position_metrics`.
+                let base = resolved_runs[i]
+                    .point_size
+                    .unwrap_or(em.options.default_point_size);
+                base * position_metrics(resolved_runs[i].position.as_deref()).0
+            },
             tracking: resolved_runs[i].tracking,
             font_id: font_ids[i],
             underline: resolved_runs[i].underline.unwrap_or(false),
             strikethru: resolved_runs[i].strikethru.unwrap_or(false),
-            baseline_shift_pt: resolved_runs[i].baseline_shift.unwrap_or(0.0),
+            baseline_shift_pt: {
+                // Add the `Position` (super/subscript) baseline offset
+                // on top of any explicit `BaselineShift`.
+                let base = resolved_runs[i]
+                    .point_size
+                    .unwrap_or(em.options.default_point_size);
+                resolved_runs[i].baseline_shift.unwrap_or(0.0)
+                    + base * position_metrics(resolved_runs[i].position.as_deref()).1
+            },
             horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
+            vertical_scale_pct: resolved_runs[i].vertical_scale.unwrap_or(100.0),
             fallback_faces: &[],
             shaping_features: shaping_features_from(
                 resolved_runs[i].ligatures_on,
@@ -8572,15 +8623,29 @@ fn emit_cell_paragraph(
         .map(|(i, run)| paged_text::StyledRun {
             text: &run.text,
             face: shaping_faces[unique_idx[i]].unwrap(),
-            point_size: resolved_runs[i]
-                .point_size
-                .unwrap_or(em.options.default_point_size),
+            point_size: {
+                // `Position` (super/subscript) shrinks the run to a
+                // fraction of its base size — see `position_metrics`.
+                let base = resolved_runs[i]
+                    .point_size
+                    .unwrap_or(em.options.default_point_size);
+                base * position_metrics(resolved_runs[i].position.as_deref()).0
+            },
             tracking: resolved_runs[i].tracking,
             font_id: font_ids[i],
             underline: resolved_runs[i].underline.unwrap_or(false),
             strikethru: resolved_runs[i].strikethru.unwrap_or(false),
-            baseline_shift_pt: resolved_runs[i].baseline_shift.unwrap_or(0.0),
+            baseline_shift_pt: {
+                // Add the `Position` (super/subscript) baseline offset
+                // on top of any explicit `BaselineShift`.
+                let base = resolved_runs[i]
+                    .point_size
+                    .unwrap_or(em.options.default_point_size);
+                resolved_runs[i].baseline_shift.unwrap_or(0.0)
+                    + base * position_metrics(resolved_runs[i].position.as_deref()).1
+            },
             horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
+            vertical_scale_pct: resolved_runs[i].vertical_scale.unwrap_or(100.0),
             fallback_faces: &[],
             shaping_features: shaping_features_from(
                 resolved_runs[i].ligatures_on,
@@ -9505,12 +9570,47 @@ fn emit_line_into(
     if stroke_width <= 0.0 {
         return;
     }
-    // GraphicLine.bounds is in inner coords; ItemTransform maps it
-    // to spread coords. Without the transform pass the line draws
-    // at its untransformed inner-coord origin (typically (0, 0))
-    // and disappears off-page when the spread has any origin offset.
-    // The adapter packs endpoints into Geometry::Line in inner
-    // coords; we reapply the inner→spread→page math here.
+    let stroke = stroke_for(
+        resolved.stroke_type,
+        stroke_width,
+        resolved.end_cap,
+        resolved.end_join,
+        resolved.miter_limit,
+        Some(&document.styles.stroke_styles),
+    );
+    // A multi-segment / curved / open line carries real path anchors;
+    // stroke the actual outline (mirrors `emit_polygon_into`) instead
+    // of the corner-to-corner diagonal of its bounds. The anchor path
+    // is in inner coords and `frame_outer_transform` maps inner → page
+    // (ItemTransform composed with the page-origin shift) — exactly the
+    // mapping the diagonal fallback below gets via `transform_bounds`.
+    if line.anchors.len() >= 2 {
+        // A GraphicLine is an open path by definition; default any
+        // contour the parser didn't explicitly flag to *open* so the
+        // builder doesn't synthesise a closing segment back to start.
+        let open_flags: Vec<bool> = (0..line.anchors.len())
+            .map(|i| line.subpath_open.get(i).copied().unwrap_or(true))
+            .collect();
+        let path =
+            polygon_path_from_anchors_with_open(&line.anchors, &line.subpath_starts, &open_flags);
+        let cache_key = match resolved.self_id {
+            Some(id) => fnv_1a_u64(id.as_bytes()),
+            None => path_signature(&line.anchors),
+        };
+        let (path_id, _) = page.list.paths.intern(cache_key, path);
+        let outer = frame_outer_transform(page, resolved.item_transform);
+        page.list.push(paged_compose::DisplayCommand::StrokePath {
+            path_id,
+            paint: stroke_paint,
+            stroke,
+            transform: outer,
+        });
+        return;
+    }
+    // Anchorless line (synthetic `GeometricBounds`-only): rasterise the
+    // corner-to-corner diagonal. GraphicLine.bounds is in inner coords;
+    // ItemTransform maps it to spread coords, then the page subtracts
+    // its spread_origin so the endpoints land in page-local coords.
     let spread_bounds = transform_bounds(line.bounds, resolved.item_transform);
     let (ox, oy) = page.spread_origin;
     emit_line(
@@ -9518,14 +9618,7 @@ fn emit_line_into(
         spread_bounds.top - oy,
         spread_bounds.right - ox,
         spread_bounds.bottom - oy,
-        stroke_for(
-            resolved.stroke_type,
-            stroke_width,
-            resolved.end_cap,
-            resolved.end_join,
-            resolved.miter_limit,
-            Some(&document.styles.stroke_styles),
-        ),
+        stroke,
         stroke_paint,
         &mut page.list,
     );
@@ -12483,9 +12576,33 @@ pub(crate) fn stroke_for(
     // slot directly without the `* w` scaling below.
     if let Some(styles) = stroke_styles {
         if let Some(def) = styles.get(name) {
-            if def.kind == paged_parse::StrokeStyleKind::Dashed && !def.pattern.is_empty() {
-                s.dash = paged_compose::DashPattern::from_slice(&def.pattern);
-                return s;
+            use paged_parse::StrokeStyleKind as K;
+            match def.kind {
+                K::Dashed if !def.pattern.is_empty() => {
+                    s.dash = paged_compose::DashPattern::from_slice(&def.pattern);
+                    return s;
+                }
+                K::Dotted if !def.pattern.is_empty() => {
+                    // A custom `<DottedStrokeStyle>` carries its on/off
+                    // pattern in absolute pt just like Dashed; honour it
+                    // directly. Round caps render the zero-length "on"
+                    // as a dot (matching the built-in Dotted handling).
+                    s.dash = paged_compose::DashPattern::from_slice(&def.pattern);
+                    if end_cap.is_none() {
+                        s.cap = paged_compose::LineCap::Round;
+                    }
+                    return s;
+                }
+                // Striped (parallel rules) and Wavy (sine) cannot be
+                // expressed by the single-line `Stroke` model (width +
+                // cap/join + dash). They intentionally render as a solid
+                // stroke of the declared width — a reasonable footprint —
+                // until a dedicated multi-line / sine stroke capability
+                // lands in the rasterizer (tracked in renderer-gaps.md).
+                // Returning here also stops the built-in name table below
+                // from mis-mapping a same-named custom style.
+                K::Striped | K::Wavy => return s,
+                _ => {}
             }
         }
     }
@@ -12516,6 +12633,10 @@ pub(crate) fn stroke_for(
         // InDesign's "Japanese Dots" is denser than the standard
         // Dotted (smaller gap, same on-zero-length).
         "Japanese Dots" => Some(&[0.0, 1.5]),
+        // Built-in Striped ("Thick - Thin", "Triple", …) and "Wavy"
+        // names land here → no dash → a solid stroke of the declared
+        // width. True multi-line / sine rendering needs a new rasterizer
+        // capability (deferred; see renderer-gaps.md).
         _ => None,
     };
     if let Some(p) = pattern {
@@ -12802,6 +12923,7 @@ fn emit_ruby_for_line(
                 underline: false,
                 strikethru: false,
                 x_scale: 1.0,
+                y_scale: 1.0,
             });
             cursor = cursor.saturating_add(g.x_advance);
         }
@@ -13177,6 +13299,33 @@ pub fn split_runs_for_nested_styles(
 /// `Optical` even though the renderer currently shapes it the same as
 /// `Metrics` — the cache key still distinguishes the two so the
 /// optical-kerning pass can land later without invalidating the cache.
+/// Resolve an IDML `Position` (super/subscript) into a `(size_factor,
+/// baseline_offset_fraction)` pair, both relative to the run's base
+/// point size. A positive offset lifts the glyphs (superscript); a
+/// negative one drops them (subscript) — matching `baseline_shift_pt`'s
+/// sign convention in the layout emit.
+///
+/// InDesign derives the exact factors from the document's Superscript /
+/// Subscript Size & Position text preferences; we use its factory
+/// defaults (58.3 % size, ±33.3 % of the base size) because
+/// `Resources/Preferences.xml` is not parsed yet (a separate gap). The
+/// OpenType variants (`OT*`, `Numerator`/`Denominator`) reuse the same
+/// geometric fallback until real OT feature lookup lands.
+pub fn position_metrics(position: Option<&str>) -> (f32, f32) {
+    const SIZE_FACTOR: f32 = 0.583;
+    const OFFSET_FACTOR: f32 = 0.333;
+    match position {
+        Some("Superscript") | Some("OTSuperscript") | Some("OTNumerator") => {
+            (SIZE_FACTOR, OFFSET_FACTOR)
+        }
+        Some("Subscript") | Some("OTSubscript") | Some("OTDenominator") => {
+            (SIZE_FACTOR, -OFFSET_FACTOR)
+        }
+        // `Normal` / `None` / unknown ⇒ identity.
+        _ => (1.0, 0.0),
+    }
+}
+
 pub fn shaping_features_from(
     ligatures_on: Option<bool>,
     kerning_method: Option<&str>,
@@ -13949,6 +14098,78 @@ fn fnv_1a_u32(bytes: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn position_metrics_super_sub_and_normal() {
+        // Superscript / numerator lift (positive offset); subscript /
+        // denominator drop (negative); both shrink to 58.3 %.
+        assert_eq!(position_metrics(Some("Superscript")), (0.583, 0.333));
+        assert_eq!(position_metrics(Some("OTSuperscript")), (0.583, 0.333));
+        assert_eq!(position_metrics(Some("OTNumerator")), (0.583, 0.333));
+        assert_eq!(position_metrics(Some("Subscript")), (0.583, -0.333));
+        assert_eq!(position_metrics(Some("OTDenominator")), (0.583, -0.333));
+        // Normal / absent / unknown ⇒ identity (no scale, no shift).
+        assert_eq!(position_metrics(Some("Normal")), (1.0, 0.0));
+        assert_eq!(position_metrics(None), (1.0, 0.0));
+    }
+
+    #[test]
+    fn stroke_for_custom_styles_dashed_dotted_striped_wavy() {
+        use paged_parse::{StrokeStyleDef, StrokeStyleKind as K};
+        let mk = |kind, pattern: &[f32]| {
+            let mut m = std::collections::BTreeMap::new();
+            m.insert(
+                "S".to_string(),
+                StrokeStyleDef {
+                    self_id: "S".to_string(),
+                    name: None,
+                    kind,
+                    pattern: pattern.to_vec(),
+                },
+            );
+            m
+        };
+        let go = |kind, pat: &[f32]| {
+            let m = mk(kind, pat);
+            stroke_for(Some("S"), 2.0, None, None, None, Some(&m))
+        };
+        // Custom Dashed + Dotted patterns are consumed (a real dash).
+        assert!(!go(K::Dashed, &[3.0, 2.0]).dash.is_solid(), "dashed");
+        assert!(!go(K::Dotted, &[0.0, 2.0]).dash.is_solid(), "dotted");
+        // Striped / Wavy can't be modelled by a single Stroke → solid
+        // stroke of the declared width.
+        assert!(go(K::Striped, &[]).dash.is_solid(), "striped → solid");
+        assert!(go(K::Wavy, &[]).dash.is_solid(), "wavy → solid");
+    }
+
+    #[test]
+    fn compose_outer_matrix_identity_mpt_is_origin_shift() {
+        // Identity MasterPageTransform: outer collapses to
+        // translate(target - master_origin), matching the legacy
+        // translation-only stamp. master_origin (10,20), target (100,50).
+        let outer = Transform::translate(100.0, 50.0)
+            .compose(&Transform::IDENTITY)
+            .compose(&Transform::translate(-10.0, -20.0));
+        // Master item sitting at inner translate(3, 4).
+        let m = compose_outer_matrix(outer, Some([1.0, 0.0, 0.0, 1.0, 3.0, 4.0]));
+        assert_eq!([m[0], m[1], m[2], m[3]], [1.0, 0.0, 0.0, 1.0], "linear part untouched");
+        assert!((m[4] - 93.0).abs() < 1e-4, "tx={} (100-10+3)", m[4]);
+        assert!((m[5] - 34.0).abs() < 1e-4, "ty={} (50-20+4)", m[5]);
+    }
+
+    #[test]
+    fn compose_outer_matrix_applies_mpt_scale() {
+        // A 2× MasterPageTransform about a master origin at (0,0) scales
+        // the stamped item's linear part *and* its offset — the part the
+        // old translation-only stamp silently dropped.
+        let outer = Transform::translate(0.0, 0.0)
+            .compose(&Transform([2.0, 0.0, 0.0, 2.0, 0.0, 0.0]))
+            .compose(&Transform::translate(0.0, 0.0));
+        let m = compose_outer_matrix(outer, Some([1.0, 0.0, 0.0, 1.0, 5.0, 7.0]));
+        assert!((m[0] - 2.0).abs() < 1e-4 && (m[3] - 2.0).abs() < 1e-4, "linear scaled");
+        assert!((m[4] - 10.0).abs() < 1e-4, "tx={} (5×2)", m[4]);
+        assert!((m[5] - 14.0).abs() < 1e-4, "ty={} (7×2)", m[5]);
+    }
 
     fn attrs(
         list_type: Option<&str>,
