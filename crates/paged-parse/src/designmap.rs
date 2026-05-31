@@ -29,6 +29,11 @@ pub struct DesignMap {
     pub spreads: Vec<SpreadRef>,
     pub stories: Vec<StoryRef>,
     pub master_spreads: Vec<String>,
+    /// `DOMVersion` attribute on the root `<Document>` element (e.g.
+    /// `"18.5"` for InDesign 2023). Surfaced read-only so tooling can
+    /// report the authoring DOM; the parser is version-agnostic and
+    /// does **not** branch on it yet (no version negotiation).
+    pub dom_version: Option<String>,
     /// Document-level color management settings, extracted from the
     /// root `<Document>` element. Drives ICC transform construction —
     /// the renderer matches `color_settings.cmyk_profile` against its
@@ -199,6 +204,7 @@ impl DesignMap {
             match reader.read_event_into(&mut buf)? {
                 Event::Start(e) | Event::Empty(e) => {
                     if e.name().as_ref() == b"Document" {
+                        out.dom_version = attr(&e, b"DOMVersion");
                         out.color_settings = ColorSettings {
                             cmyk_profile: attr(&e, b"CMYKProfile"),
                             rgb_profile: attr(&e, b"RGBProfile"),
@@ -359,5 +365,22 @@ mod tests {
         assert_eq!(printable, vec![true, false, true, true]);
         let visible: Vec<bool> = dm.layers.iter().map(|l| l.visible).collect();
         assert_eq!(visible, vec![true, true, false, true]);
+    }
+
+    #[test]
+    fn reads_dom_version_when_present() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="18.5">
+  <idPkg:Spread src="Spreads/Spread_u1.xml"/>
+</Document>"#;
+        let dm = DesignMap::parse(xml).unwrap();
+        assert_eq!(dm.dom_version.as_deref(), Some("18.5"));
+    }
+
+    #[test]
+    fn dom_version_absent_is_none() {
+        // SAMPLE's <Document> carries no DOMVersion attribute.
+        let dm = DesignMap::parse(SAMPLE).unwrap();
+        assert_eq!(dm.dom_version, None);
     }
 }

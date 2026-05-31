@@ -168,7 +168,11 @@ pub fn emit_glyph_slice_blend<O, F>(
         // into the glyph affine (P-08); the breaker already accounted
         // for the advance, so glyphs are merely stretched in place.
         let sx = scale * g.x_scale;
-        let transform = Transform([sx, 0.0, 0.0, -scale, gx, gy]);
+        // `y_scale` folds IDML `VerticalScale` into the glyph affine's
+        // y-axis (the `-scale` y-flip term), scaling glyph height about
+        // the baseline (`gy`) without touching the advance or leading.
+        let sy = scale * g.y_scale;
+        let transform = Transform([sx, 0.0, 0.0, -sy, gx, gy]);
         if normal {
             list.push(DisplayCommand::FillPath {
                 path_id,
@@ -225,7 +229,11 @@ pub fn emit_glyph_slice_stroke<O, S>(
         // than transforming through `scale`. `x_scale` mirrors the fill
         // path so a stretched run keeps its stroke aligned (P-08).
         let sx = scale * g.x_scale;
-        let transform = Transform([sx, 0.0, 0.0, -scale, gx, gy]);
+        // `y_scale` folds IDML `VerticalScale` into the glyph affine's
+        // y-axis (the `-scale` y-flip term), scaling glyph height about
+        // the baseline (`gy`) without touching the advance or leading.
+        let sy = scale * g.y_scale;
+        let transform = Transform([sx, 0.0, 0.0, -sy, gx, gy]);
         list.push(DisplayCommand::StrokePath {
             path_id,
             paint,
@@ -400,6 +408,47 @@ mod tests {
     }
 
     #[test]
+    fn vertical_scale_scales_glyph_affine_y_axis() {
+        // `y_scale` folds IDML VerticalScale into the affine's d term
+        // (the y-flip), independent of `x_scale` (HorizontalScale → a).
+        let glyph = |x_scale: f32, y_scale: f32| PositionedGlyph {
+            glyph_id: 65,
+            cluster: 0,
+            x: 0,
+            y: 0,
+            x_advance: 0,
+            font_id: 0,
+            point_size: 0.0,
+            underline: false,
+            strikethru: false,
+            x_scale,
+            y_scale,
+        };
+        let mut list = DisplayList::new();
+        for g in [glyph(1.0, 1.0), glyph(1.0, 2.0)] {
+            emit_glyph_slice(
+                &[g],
+                1,
+                12.0,
+                |_| Paint::Solid(Color::BLACK),
+                (0.0, 0.0),
+                &UnitSquareOutliner::default(),
+                &mut list,
+            );
+        }
+        let aff = |i: usize| match &list.commands[i] {
+            DisplayCommand::FillPath { transform, .. } => transform.0,
+            other => panic!("expected FillPath, got {other:?}"),
+        };
+        let (m1, m2) = (aff(0), aff(1));
+        // d (y-scale) doubles with VerticalScale=200%; a (x-scale) is
+        // untouched. Both d's stay negative (the page-down y-flip).
+        assert!(m1[3] < 0.0 && m2[3] < 0.0);
+        assert!((m2[3] - 2.0 * m1[3]).abs() < 1e-4, "d1={} d2={}", m1[3], m2[3]);
+        assert!((m1[0] - m2[0]).abs() < 1e-4, "x-scale must not change");
+    }
+
+    #[test]
     fn emit_glyph_slice_caches_per_font_id() {
         // Two glyph slices with the same glyph_id but different
         // font_ids must intern two distinct outlines — otherwise a
@@ -416,6 +465,7 @@ mod tests {
             underline: false,
             strikethru: false,
             x_scale: 1.0,
+            y_scale: 1.0,
         }];
         let glyphs_b = vec![PositionedGlyph {
             glyph_id: 65,
@@ -428,6 +478,7 @@ mod tests {
             underline: false,
             strikethru: false,
             x_scale: 1.0,
+            y_scale: 1.0,
         }];
         emit_glyph_slice(
             &glyphs_a,

@@ -264,6 +264,12 @@ pub struct Page {
     /// auto-page-number markers; if absent, it falls back to the
     /// 1-based body page index.
     pub name: Option<String>,
+    /// `ShowMasterItems` attribute on the `<Page>` element. When
+    /// `Some(false)` the page hides **all** master-spread overlay
+    /// items (InDesign's "Hide Master Items" per-page toggle); the
+    /// renderer skips stamping master frames/lines/text onto it.
+    /// `None`/`Some(true)` ⇒ stamp as usual.
+    pub show_master_items: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1690,6 +1696,8 @@ impl Spread {
                                     .map(|s| s.split_whitespace().map(str::to_string).collect())
                                     .unwrap_or_default(),
                                 name: attr(&e, b"Name"),
+                                show_master_items: attr(&e, b"ShowMasterItems")
+                                    .and_then(|s| s.parse().ok()),
                             });
                         }
                     }
@@ -3158,6 +3166,23 @@ mod tests {
             Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
         );
         assert_eq!(s.text_frames[1].item_transform, None);
+    }
+
+    #[test]
+    fn parses_show_master_items_flag() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Page Self="p1" GeometricBounds="0 0 792 612" ShowMasterItems="false"/>
+            <Page Self="p2" GeometricBounds="0 0 792 612" ShowMasterItems="true"/>
+            <Page Self="p3" GeometricBounds="0 0 792 612"/>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        assert_eq!(s.pages.len(), 3);
+        assert_eq!(s.pages[0].show_master_items, Some(false));
+        assert_eq!(s.pages[1].show_master_items, Some(true));
+        assert_eq!(s.pages[2].show_master_items, None, "absent ⇒ stamp as usual");
     }
 
     #[test]
