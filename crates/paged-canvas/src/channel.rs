@@ -63,7 +63,7 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(22);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(23);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -1456,6 +1456,124 @@ pub enum Mutation {
         others: Vec<crate::element_selection::ElementId>,
         kind: paged_mutate::PathfinderKind,
     },
+
+    // ── Collection mutations (swatches / gradients / colour groups /
+    //    styles) — route 1:1 to the matching `paged_mutate::Operation`.
+    //    The Swatches / Styles / Gradients panels emit these on their
+    //    new / edit / delete affordances. `restore_json` (style delete
+    //    undo) is engine-internal and never travels from the editor.
+    CreateSwatch {
+        spec: paged_mutate::SwatchSpec,
+    },
+    EditSwatch {
+        swatch_id: String,
+        spec: paged_mutate::SwatchSpec,
+    },
+    DeleteSwatch {
+        swatch_id: String,
+    },
+    CreateGradient {
+        spec: paged_mutate::GradientSpec,
+    },
+    EditGradient {
+        gradient_id: String,
+        spec: paged_mutate::GradientSpec,
+    },
+    DeleteGradient {
+        gradient_id: String,
+    },
+    CreateColorGroup {
+        spec: paged_mutate::ColorGroupSpec,
+    },
+    EditColorGroup {
+        group_id: String,
+        spec: paged_mutate::ColorGroupSpec,
+    },
+    DeleteColorGroup {
+        group_id: String,
+    },
+    CreateParagraphStyle {
+        #[serde(default)]
+        self_id: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        based_on: Option<String>,
+    },
+    RenameParagraphStyle {
+        style_id: String,
+        name: String,
+    },
+    DeleteParagraphStyle {
+        style_id: String,
+    },
+    CreateCharacterStyle {
+        #[serde(default)]
+        self_id: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        based_on: Option<String>,
+    },
+    RenameCharacterStyle {
+        style_id: String,
+        name: String,
+    },
+    DeleteCharacterStyle {
+        style_id: String,
+    },
+    CreateObjectStyle {
+        #[serde(default)]
+        self_id: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        based_on: Option<String>,
+    },
+    RenameObjectStyle {
+        style_id: String,
+        name: String,
+    },
+    DeleteObjectStyle {
+        style_id: String,
+    },
+    CreateCellStyle {
+        #[serde(default)]
+        self_id: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        based_on: Option<String>,
+    },
+    RenameCellStyle {
+        style_id: String,
+        name: String,
+    },
+    DeleteCellStyle {
+        style_id: String,
+    },
+    CreateTableStyle {
+        #[serde(default)]
+        self_id: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        based_on: Option<String>,
+    },
+    RenameTableStyle {
+        style_id: String,
+        name: String,
+    },
+    DeleteTableStyle {
+        style_id: String,
+    },
+    /// Style-options editing — set one property on a style definition.
+    SetStyleProperty {
+        collection: paged_mutate::StyleCollection,
+        style_id: String,
+        path: paged_mutate::PropertyPath,
+        value: paged_mutate::Value,
+    },
 }
 
 impl Mutation {
@@ -1488,6 +1606,31 @@ impl Mutation {
             Self::LayerRemove { .. } => "LayerRemove",
             Self::SetElementProperty { .. } => "SetElementProperty",
             Self::PathfinderBoolean { .. } => "PathfinderBoolean",
+            Self::CreateSwatch { .. } => "CreateSwatch",
+            Self::EditSwatch { .. } => "EditSwatch",
+            Self::DeleteSwatch { .. } => "DeleteSwatch",
+            Self::CreateGradient { .. } => "CreateGradient",
+            Self::EditGradient { .. } => "EditGradient",
+            Self::DeleteGradient { .. } => "DeleteGradient",
+            Self::CreateColorGroup { .. } => "CreateColorGroup",
+            Self::EditColorGroup { .. } => "EditColorGroup",
+            Self::DeleteColorGroup { .. } => "DeleteColorGroup",
+            Self::CreateParagraphStyle { .. } => "CreateParagraphStyle",
+            Self::RenameParagraphStyle { .. } => "RenameParagraphStyle",
+            Self::DeleteParagraphStyle { .. } => "DeleteParagraphStyle",
+            Self::CreateCharacterStyle { .. } => "CreateCharacterStyle",
+            Self::RenameCharacterStyle { .. } => "RenameCharacterStyle",
+            Self::DeleteCharacterStyle { .. } => "DeleteCharacterStyle",
+            Self::CreateObjectStyle { .. } => "CreateObjectStyle",
+            Self::RenameObjectStyle { .. } => "RenameObjectStyle",
+            Self::DeleteObjectStyle { .. } => "DeleteObjectStyle",
+            Self::CreateCellStyle { .. } => "CreateCellStyle",
+            Self::RenameCellStyle { .. } => "RenameCellStyle",
+            Self::DeleteCellStyle { .. } => "DeleteCellStyle",
+            Self::CreateTableStyle { .. } => "CreateTableStyle",
+            Self::RenameTableStyle { .. } => "RenameTableStyle",
+            Self::DeleteTableStyle { .. } => "DeleteTableStyle",
+            Self::SetStyleProperty { .. } => "SetStyleProperty",
         }
     }
 }

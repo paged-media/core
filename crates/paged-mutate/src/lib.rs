@@ -59,8 +59,9 @@ pub use error::OperationError;
 pub use history::{History, DEFAULT_HISTORY_CAPACITY};
 pub use notify::Notifier;
 pub use operation::{
-    AppliedOperation, InvalidationHint, NodeId, NodeSpec, Operation, PathPointAddress,
-    PathPointRole, PathfinderKind, PropertyPath, Value,
+    AppliedOperation, ColorGroupSpec, GradientSpec, GradientStopSpec, InvalidationHint, NodeId,
+    NodeSpec, Operation, PathPointAddress, PathPointRole, PathfinderKind, PropertyPath,
+    StyleCollection, SwatchSpec, Value,
 };
 
 /// Holds a [`Document`] plus the Operation surface, undo/redo
@@ -492,6 +493,494 @@ mod tests {
         assert_eq!(frame.bounds.left, 0.0);
         assert_eq!(frame.bounds.bottom, 100.0);
         assert_eq!(frame.bounds.right, 200.0);
+    }
+
+    // ---- Swatch collection CRUD ------------------------------------------
+
+    fn cmyk_swatch(self_id: Option<&str>, name: &str, cmyk: [f32; 4]) -> crate::operation::SwatchSpec {
+        crate::operation::SwatchSpec {
+            self_id: self_id.map(String::from),
+            name: Some(name.to_string()),
+            space: "CMYK".to_string(),
+            value: cmyk.to_vec(),
+            model: None,
+            alternate_space: None,
+            alternate_value: Vec::new(),
+            tint: None,
+            alpha: None,
+        }
+    }
+
+    #[test]
+    fn create_swatch_inserts_and_inverse_deletes() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let applied = project
+            .apply(Operation::CreateSwatch {
+                spec: cmyk_swatch(Some("Color/Sky"), "Sky", [80.0, 20.0, 0.0, 0.0]),
+            })
+            .expect("create");
+        assert!(project.document().palette.colors.contains_key("Color/Sky"));
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        assert!(!project.document().palette.colors.contains_key("Color/Sky"));
+    }
+
+    #[test]
+    fn create_swatch_assigns_id_when_none() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let applied = project
+            .apply(Operation::CreateSwatch {
+                spec: cmyk_swatch(None, "Auto", [0.0, 0.0, 0.0, 100.0]),
+            })
+            .expect("create");
+        assert_eq!(project.document().palette.colors.len(), 1);
+        let resolved = match &applied.op {
+            Operation::CreateSwatch { spec } => spec.self_id.clone().expect("id assigned"),
+            _ => panic!("expected CreateSwatch"),
+        };
+        assert!(resolved.starts_with("Color/u"));
+        assert!(project.document().palette.colors.contains_key(&resolved));
+    }
+
+    #[test]
+    fn edit_swatch_replaces_and_undo_restores() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        project
+            .apply(Operation::CreateSwatch {
+                spec: cmyk_swatch(Some("Color/A"), "A", [10.0, 20.0, 30.0, 40.0]),
+            })
+            .unwrap();
+        project
+            .apply(Operation::EditSwatch {
+                swatch_id: "Color/A".to_string(),
+                spec: cmyk_swatch(Some("Color/A"), "A-renamed", [1.0, 2.0, 3.0, 4.0]),
+            })
+            .unwrap();
+        {
+            let e = &project.document().palette.colors["Color/A"];
+            assert_eq!(e.name.as_deref(), Some("A-renamed"));
+            assert_eq!(e.value, vec![1.0, 2.0, 3.0, 4.0]);
+        }
+        project.undo().unwrap().expect("undo edit");
+        let e = &project.document().palette.colors["Color/A"];
+        assert_eq!(e.name.as_deref(), Some("A"));
+        assert_eq!(e.value, vec![10.0, 20.0, 30.0, 40.0]);
+    }
+
+    #[test]
+    fn delete_swatch_undo_recreates_lossless_including_spot_fields() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        // Spot swatch with a CMYK alternate + tint — exercises lossless capture.
+        let spot = crate::operation::SwatchSpec {
+            self_id: Some("Color/Pantone".to_string()),
+            name: Some("PANTONE 286".to_string()),
+            space: "LAB".to_string(),
+            value: vec![20.0, 10.0, -60.0],
+            model: Some("Spot".to_string()),
+            alternate_space: Some("CMYK".to_string()),
+            alternate_value: vec![100.0, 75.0, 0.0, 0.0],
+            tint: Some(80.0),
+            alpha: None,
+        };
+        project.apply(Operation::CreateSwatch { spec: spot }).unwrap();
+        project
+            .apply(Operation::DeleteSwatch {
+                swatch_id: "Color/Pantone".to_string(),
+            })
+            .unwrap();
+        assert!(!project.document().palette.colors.contains_key("Color/Pantone"));
+        project.undo().unwrap().expect("undo delete");
+        let e = &project.document().palette.colors["Color/Pantone"];
+        assert_eq!(e.name.as_deref(), Some("PANTONE 286"));
+        assert_eq!(e.space, paged_parse::ColorSpace::Lab);
+        assert_eq!(e.model, paged_parse::ColorModel::Spot);
+        assert_eq!(e.alternate_space, Some(paged_parse::ColorSpace::Cmyk));
+        assert_eq!(e.alternate_value, vec![100.0, 75.0, 0.0, 0.0]);
+        assert_eq!(e.tint, Some(80.0));
+    }
+
+    #[test]
+    fn edit_and_delete_missing_swatch_error() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        assert!(project
+            .apply(Operation::EditSwatch {
+                swatch_id: "Color/Nope".to_string(),
+                spec: cmyk_swatch(None, "x", [0.0, 0.0, 0.0, 0.0]),
+            })
+            .is_err());
+        assert!(project
+            .apply(Operation::DeleteSwatch {
+                swatch_id: "Color/Nope".to_string(),
+            })
+            .is_err());
+    }
+
+    // ---- Style collection CRUD -------------------------------------------
+
+    #[test]
+    fn create_paragraph_style_inserts_and_inverse_deletes() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let applied = project
+            .apply(Operation::CreateParagraphStyle {
+                self_id: Some("ParagraphStyle/Heading".to_string()),
+                name: Some("Heading".to_string()),
+                based_on: Some("ParagraphStyle/$ID/[No paragraph style]".to_string()),
+                restore_json: None,
+            })
+            .expect("create");
+        {
+            let s = &project.document().styles.paragraph_styles["ParagraphStyle/Heading"];
+            assert_eq!(s.name.as_deref(), Some("Heading"));
+            assert_eq!(
+                s.based_on.as_deref(),
+                Some("ParagraphStyle/$ID/[No paragraph style]")
+            );
+        }
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        assert!(!project
+            .document()
+            .styles
+            .paragraph_styles
+            .contains_key("ParagraphStyle/Heading"));
+    }
+
+    #[test]
+    fn create_paragraph_style_assigns_id_when_none() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let applied = project
+            .apply(Operation::CreateParagraphStyle {
+                self_id: None,
+                name: Some("Auto".to_string()),
+                based_on: None,
+                restore_json: None,
+            })
+            .expect("create");
+        let id = match &applied.op {
+            Operation::CreateParagraphStyle { self_id, .. } => {
+                self_id.clone().expect("id assigned")
+            }
+            _ => panic!("expected CreateParagraphStyle"),
+        };
+        assert!(id.starts_with("ParagraphStyle/u"));
+        assert!(project.document().styles.paragraph_styles.contains_key(&id));
+    }
+
+    #[test]
+    fn rename_paragraph_style_and_undo_restores_prior_name() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        project
+            .apply(Operation::CreateParagraphStyle {
+                self_id: Some("ParagraphStyle/A".to_string()),
+                name: Some("Body".to_string()),
+                based_on: None,
+                restore_json: None,
+            })
+            .unwrap();
+        project
+            .apply(Operation::RenameParagraphStyle {
+                style_id: "ParagraphStyle/A".to_string(),
+                name: "Body Copy".to_string(),
+            })
+            .unwrap();
+        assert_eq!(
+            project.document().styles.paragraph_styles["ParagraphStyle/A"]
+                .name
+                .as_deref(),
+            Some("Body Copy")
+        );
+        project.undo().unwrap().expect("undo rename");
+        assert_eq!(
+            project.document().styles.paragraph_styles["ParagraphStyle/A"]
+                .name
+                .as_deref(),
+            Some("Body")
+        );
+    }
+
+    #[test]
+    fn delete_paragraph_style_undo_is_lossless_for_rich_def() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        project
+            .apply(Operation::CreateParagraphStyle {
+                self_id: Some("ParagraphStyle/Rich".to_string()),
+                name: Some("Rich".to_string()),
+                based_on: None,
+                restore_json: None,
+            })
+            .unwrap();
+        // Simulate a richly-populated style (as a parsed document would
+        // carry) by setting non-default fields directly, then prove a
+        // delete→undo restores them — not just name/based_on.
+        {
+            let s = project
+                .document_mut()
+                .styles
+                .paragraph_styles
+                .get_mut("ParagraphStyle/Rich")
+                .unwrap();
+            s.point_size = Some(42.0);
+            s.space_before = Some(12.0);
+            s.justification = Some(paged_parse::story::Justification::CenterAlign);
+        }
+        project
+            .apply(Operation::DeleteParagraphStyle {
+                style_id: "ParagraphStyle/Rich".to_string(),
+            })
+            .unwrap();
+        assert!(!project
+            .document()
+            .styles
+            .paragraph_styles
+            .contains_key("ParagraphStyle/Rich"));
+        project.undo().unwrap().expect("undo delete");
+        let s = &project.document().styles.paragraph_styles["ParagraphStyle/Rich"];
+        assert_eq!(s.point_size, Some(42.0));
+        assert_eq!(s.space_before, Some(12.0));
+        assert_eq!(
+            s.justification,
+            Some(paged_parse::story::Justification::CenterAlign)
+        );
+    }
+
+    #[test]
+    fn character_style_create_and_delete_round_trip() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        project
+            .apply(Operation::CreateCharacterStyle {
+                self_id: Some("CharacterStyle/Emph".to_string()),
+                name: Some("Emphasis".to_string()),
+                based_on: None,
+                restore_json: None,
+            })
+            .unwrap();
+        assert!(project
+            .document()
+            .styles
+            .character_styles
+            .contains_key("CharacterStyle/Emph"));
+        project
+            .apply(Operation::DeleteCharacterStyle {
+                style_id: "CharacterStyle/Emph".to_string(),
+            })
+            .unwrap();
+        assert!(!project
+            .document()
+            .styles
+            .character_styles
+            .contains_key("CharacterStyle/Emph"));
+        project.undo().unwrap().expect("undo delete");
+        assert!(project
+            .document()
+            .styles
+            .character_styles
+            .contains_key("CharacterStyle/Emph"));
+    }
+
+    #[test]
+    fn rename_and_delete_missing_style_error() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        assert!(project
+            .apply(Operation::RenameParagraphStyle {
+                style_id: "ParagraphStyle/Nope".to_string(),
+                name: "x".to_string(),
+            })
+            .is_err());
+        assert!(project
+            .apply(Operation::DeleteCharacterStyle {
+                style_id: "CharacterStyle/Nope".to_string(),
+            })
+            .is_err());
+    }
+
+    #[test]
+    fn object_cell_table_style_crud_round_trips() {
+        // The object/cell/table styles share the style_crud! macro with
+        // paragraph/character (already exhaustively tested); these
+        // confirm the dispatch arm + target map are wired per kind.
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+
+        project
+            .apply(Operation::CreateObjectStyle {
+                self_id: Some("ObjectStyle/Card".to_string()),
+                name: Some("Card".to_string()),
+                based_on: None,
+                restore_json: None,
+            })
+            .unwrap();
+        project
+            .apply(Operation::CreateCellStyle {
+                self_id: Some("CellStyle/Head".to_string()),
+                name: Some("Head".to_string()),
+                based_on: None,
+                restore_json: None,
+            })
+            .unwrap();
+        project
+            .apply(Operation::CreateTableStyle {
+                self_id: Some("TableStyle/Grid".to_string()),
+                name: Some("Grid".to_string()),
+                based_on: None,
+                restore_json: None,
+            })
+            .unwrap();
+        assert!(project.document().styles.object_styles.contains_key("ObjectStyle/Card"));
+        assert!(project.document().styles.cell_styles.contains_key("CellStyle/Head"));
+        assert!(project.document().styles.table_styles.contains_key("TableStyle/Grid"));
+
+        // Delete the table style then undo — lands back in the right map.
+        project
+            .apply(Operation::DeleteTableStyle {
+                style_id: "TableStyle/Grid".to_string(),
+            })
+            .unwrap();
+        assert!(!project.document().styles.table_styles.contains_key("TableStyle/Grid"));
+        project.undo().unwrap().expect("undo");
+        assert!(project.document().styles.table_styles.contains_key("TableStyle/Grid"));
+    }
+
+    #[test]
+    fn gradient_crud_round_trips() {
+        use crate::operation::{GradientSpec, GradientStopSpec};
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let spec = GradientSpec {
+            self_id: Some("Gradient/Sunset".to_string()),
+            name: Some("Sunset".to_string()),
+            kind: "Linear".to_string(),
+            stops: vec![
+                GradientStopSpec { stop_color: "Color/Red".into(), location_pct: 0.0, midpoint_pct: Some(40.0) },
+                GradientStopSpec { stop_color: "Color/Yellow".into(), location_pct: 100.0, midpoint_pct: None },
+            ],
+        };
+        project.apply(Operation::CreateGradient { spec }).unwrap();
+        assert_eq!(project.document().palette.gradients["Gradient/Sunset"].stops.len(), 2);
+        // Edit (reverse to radial, drop a stop) then undo restores.
+        project
+            .apply(Operation::EditGradient {
+                gradient_id: "Gradient/Sunset".to_string(),
+                spec: GradientSpec {
+                    self_id: None,
+                    name: Some("Sunset".to_string()),
+                    kind: "Radial".to_string(),
+                    stops: vec![GradientStopSpec { stop_color: "Color/Blue".into(), location_pct: 0.0, midpoint_pct: None }],
+                },
+            })
+            .unwrap();
+        assert_eq!(project.document().palette.gradients["Gradient/Sunset"].kind, paged_parse::GradientKind::Radial);
+        project.undo().unwrap().expect("undo edit");
+        let g = &project.document().palette.gradients["Gradient/Sunset"];
+        assert_eq!(g.kind, paged_parse::GradientKind::Linear);
+        assert_eq!(g.stops.len(), 2);
+        assert_eq!(g.stops[0].midpoint_pct, Some(40.0));
+        // Delete then undo recreates.
+        project.apply(Operation::DeleteGradient { gradient_id: "Gradient/Sunset".to_string() }).unwrap();
+        assert!(!project.document().palette.gradients.contains_key("Gradient/Sunset"));
+        project.undo().unwrap().expect("undo delete");
+        assert!(project.document().palette.gradients.contains_key("Gradient/Sunset"));
+    }
+
+    #[test]
+    fn color_group_crud_round_trips() {
+        use crate::operation::ColorGroupSpec;
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        project
+            .apply(Operation::CreateColorGroup {
+                spec: ColorGroupSpec {
+                    self_id: Some("ColorGroup/Brand".to_string()),
+                    name: Some("Brand".to_string()),
+                    members: vec!["Color/Red".into(), "Color/Blue".into()],
+                },
+            })
+            .unwrap();
+        assert_eq!(project.document().palette.color_groups["ColorGroup/Brand"].members.len(), 2);
+        project.apply(Operation::DeleteColorGroup { group_id: "ColorGroup/Brand".to_string() }).unwrap();
+        assert!(!project.document().palette.color_groups.contains_key("ColorGroup/Brand"));
+        project.undo().unwrap().expect("undo");
+        assert_eq!(
+            project.document().palette.color_groups["ColorGroup/Brand"].members,
+            vec!["Color/Red".to_string(), "Color/Blue".to_string()]
+        );
+    }
+
+    #[test]
+    fn set_style_property_edits_paragraph_def_and_inverts() {
+        use crate::operation::StyleCollection;
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        project
+            .apply(Operation::CreateParagraphStyle {
+                self_id: Some("ParagraphStyle/H1".to_string()),
+                name: Some("H1".to_string()),
+                based_on: None,
+                restore_json: None,
+            })
+            .unwrap();
+        // Set point size on the style.
+        project
+            .apply(Operation::SetStyleProperty {
+                collection: StyleCollection::Paragraph,
+                style_id: "ParagraphStyle/H1".to_string(),
+                path: PropertyPath::CharacterFontSize,
+                value: Value::Length(Some(36.0)),
+            })
+            .unwrap();
+        assert_eq!(
+            project.document().styles.paragraph_styles["ParagraphStyle/H1"].point_size,
+            Some(36.0)
+        );
+        // Set justification (Value::Text round-trips through Justification).
+        project
+            .apply(Operation::SetStyleProperty {
+                collection: StyleCollection::Paragraph,
+                style_id: "ParagraphStyle/H1".to_string(),
+                path: PropertyPath::ParagraphJustification,
+                value: Value::Text("CenterAlign".to_string()),
+            })
+            .unwrap();
+        assert_eq!(
+            project.document().styles.paragraph_styles["ParagraphStyle/H1"].justification,
+            Some(paged_parse::story::Justification::CenterAlign)
+        );
+        // Undo justification, then point size — both revert.
+        project.undo().unwrap().expect("undo justification");
+        assert_eq!(
+            project.document().styles.paragraph_styles["ParagraphStyle/H1"].justification,
+            None
+        );
+        project.undo().unwrap().expect("undo size");
+        assert_eq!(
+            project.document().styles.paragraph_styles["ParagraphStyle/H1"].point_size,
+            None
+        );
+    }
+
+    #[test]
+    fn set_style_property_paragraph_only_path_on_character_style_errors() {
+        use crate::operation::StyleCollection;
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        project
+            .apply(Operation::CreateCharacterStyle {
+                self_id: Some("CharacterStyle/C".to_string()),
+                name: Some("C".to_string()),
+                based_on: None,
+                restore_json: None,
+            })
+            .unwrap();
+        // Character defs support CharacterFontSize…
+        assert!(project
+            .apply(Operation::SetStyleProperty {
+                collection: StyleCollection::Character,
+                style_id: "CharacterStyle/C".to_string(),
+                path: PropertyPath::CharacterFontSize,
+                value: Value::Length(Some(11.0)),
+            })
+            .is_ok());
+        // …but not a paragraph-only path.
+        assert!(project
+            .apply(Operation::SetStyleProperty {
+                collection: StyleCollection::Character,
+                style_id: "CharacterStyle/C".to_string(),
+                path: PropertyPath::ParagraphSpaceBefore,
+                value: Value::Length(Some(6.0)),
+            })
+            .is_err());
     }
 
     // ---- Undo / redo -----------------------------------------------------

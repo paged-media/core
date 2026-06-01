@@ -647,8 +647,97 @@ impl NodeSpec {
     }
 }
 
-/// The canonical mutation primitive. Five variants, closed set,
-/// extended only with deliberation.
+/// Wire-format description of a colour swatch (`<Color>`), mirroring
+/// the editable fields of `paged_parse::ColorEntry` with primitive,
+/// `Deserialize`-able types (the AST `ColorEntry` is `Serialize`-only).
+/// Carried by the swatch-collection mutations so create / edit /
+/// delete-undo are lossless. `space` / `model` / `alternate_space` are
+/// the IDML attribute strings (`ColorSpace::as_attr` etc.).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct SwatchSpec {
+    /// IDML `Self` id. `None` on create ⇒ the apply layer assigns a
+    /// deterministic non-colliding `Color/u<n>`.
+    #[serde(default)]
+    pub self_id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `Space` attribute: `"CMYK"` | `"RGB"` | `"LAB"` | `"Gray"`.
+    pub space: String,
+    /// Channel values in `space` (4 for CMYK, 3 for RGB/Lab, 1 for Gray).
+    pub value: Vec<f32>,
+    /// `Model`: `"Process"` (default) | `"Spot"`.
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub alternate_space: Option<String>,
+    #[serde(default)]
+    pub alternate_value: Vec<f32>,
+    #[serde(default)]
+    pub tint: Option<f32>,
+    #[serde(default)]
+    pub alpha: Option<f32>,
+}
+
+/// Which style collection a `SetStyleProperty` targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "camelCase")]
+pub enum StyleCollection {
+    Paragraph,
+    Character,
+    Object,
+    Cell,
+    Table,
+}
+
+/// One stop of a gradient on the wire. Mirrors `GradientStopRef`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct GradientStopSpec {
+    /// `Color/<id>` reference for this stop.
+    pub stop_color: String,
+    /// 0..=100 position along the ramp.
+    pub location_pct: f32,
+    /// 0..=100 midpoint to the next stop; `None` ⇒ linear (50).
+    #[serde(default)]
+    pub midpoint_pct: Option<f32>,
+}
+
+/// Wire description of a gradient swatch, mirroring `GradientEntry`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct GradientSpec {
+    #[serde(default)]
+    pub self_id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `Type`: `"Linear"` | `"Radial"`.
+    pub kind: String,
+    pub stops: Vec<GradientStopSpec>,
+}
+
+/// Wire description of a colour group, mirroring `ColorGroupEntry`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct ColorGroupSpec {
+    #[serde(default)]
+    pub self_id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `Color/<id>` (or `Swatch/<id>`) member refs, in order.
+    #[serde(default)]
+    pub members: Vec<String>,
+}
+
+/// The canonical mutation primitive. A closed set, extended only with
+/// deliberation. Collection mutations (swatches, styles) operate on the
+/// document's `BTreeMap` palettes/stylesheets rather than the scene
+/// tree, so they're top-level variants rather than `InsertNode`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(tag = "kind")]
@@ -700,6 +789,171 @@ pub enum Operation {
     /// name + flags + position bytewise.
     RemoveLayer {
         layer_id: String,
+    },
+    /// Collection mutation — create a `<Color>` swatch in the document
+    /// palette. When `spec.self_id` is `None` the apply layer assigns a
+    /// deterministic `Color/u<n>`. Inverse: `DeleteSwatch`.
+    CreateSwatch {
+        spec: SwatchSpec,
+    },
+    /// Collection mutation — replace a swatch's editable fields
+    /// (colour, name, model, …) in place. `swatch_id` is the target's
+    /// `Self`; `spec.self_id` is ignored. Covers rename (edit with a
+    /// new name). Inverse: `EditSwatch` carrying the prior spec.
+    EditSwatch {
+        swatch_id: String,
+        spec: SwatchSpec,
+    },
+    /// Collection mutation — delete a swatch. The apply layer captures
+    /// the full entry so the inverse (`CreateSwatch`) restores it
+    /// losslessly at its original id.
+    DeleteSwatch {
+        swatch_id: String,
+    },
+    /// Collection mutation — create a paragraph style. The editor sends
+    /// `name` / `based_on` (the apply layer builds a default def, the
+    /// rest inheriting via the cascade). `restore_json` is **inverse-
+    /// only**: the `DeleteParagraphStyle` inverse fills it with the
+    /// serialized captured def so undo is lossless; when present, the
+    /// other fields are ignored. Inverse: `DeleteParagraphStyle`.
+    CreateParagraphStyle {
+        #[serde(default)]
+        self_id: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        based_on: Option<String>,
+        #[serde(default)]
+        restore_json: Option<String>,
+    },
+    /// Collection mutation — rename a paragraph style. Inverse restores
+    /// the prior name.
+    RenameParagraphStyle {
+        style_id: String,
+        name: String,
+    },
+    /// Collection mutation — delete a paragraph style. Inverse:
+    /// `CreateParagraphStyle` carrying the captured def (`restore_json`).
+    DeleteParagraphStyle {
+        style_id: String,
+    },
+    /// Character-style analogue of `CreateParagraphStyle`.
+    CreateCharacterStyle {
+        #[serde(default)]
+        self_id: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        based_on: Option<String>,
+        #[serde(default)]
+        restore_json: Option<String>,
+    },
+    /// Character-style analogue of `RenameParagraphStyle`.
+    RenameCharacterStyle {
+        style_id: String,
+        name: String,
+    },
+    /// Character-style analogue of `DeleteParagraphStyle`.
+    DeleteCharacterStyle {
+        style_id: String,
+    },
+    /// Object-style analogue of `CreateParagraphStyle`.
+    CreateObjectStyle {
+        #[serde(default)]
+        self_id: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        based_on: Option<String>,
+        #[serde(default)]
+        restore_json: Option<String>,
+    },
+    RenameObjectStyle {
+        style_id: String,
+        name: String,
+    },
+    DeleteObjectStyle {
+        style_id: String,
+    },
+    /// Cell-style analogue of `CreateParagraphStyle`.
+    CreateCellStyle {
+        #[serde(default)]
+        self_id: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        based_on: Option<String>,
+        #[serde(default)]
+        restore_json: Option<String>,
+    },
+    RenameCellStyle {
+        style_id: String,
+        name: String,
+    },
+    DeleteCellStyle {
+        style_id: String,
+    },
+    /// Table-style analogue of `CreateParagraphStyle`.
+    CreateTableStyle {
+        #[serde(default)]
+        self_id: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        based_on: Option<String>,
+        #[serde(default)]
+        restore_json: Option<String>,
+    },
+    RenameTableStyle {
+        style_id: String,
+        name: String,
+    },
+    DeleteTableStyle {
+        style_id: String,
+    },
+    /// Collection mutation — create a gradient swatch. `spec.self_id`
+    /// `None` ⇒ assigned `Gradient/u<n>`. Inverse: `DeleteGradient`.
+    CreateGradient {
+        spec: GradientSpec,
+    },
+    /// Replace a gradient's stops / kind / name in place. Inverse:
+    /// `EditGradient` carrying the prior spec.
+    EditGradient {
+        gradient_id: String,
+        spec: GradientSpec,
+    },
+    /// Delete a gradient; inverse `CreateGradient` restores it.
+    DeleteGradient {
+        gradient_id: String,
+    },
+    /// Collection mutation — create a colour group. Inverse:
+    /// `DeleteColorGroup`.
+    CreateColorGroup {
+        spec: ColorGroupSpec,
+    },
+    /// Replace a colour group's name / members in place. Inverse:
+    /// `EditColorGroup` carrying the prior spec.
+    EditColorGroup {
+        group_id: String,
+        spec: ColorGroupSpec,
+    },
+    /// Delete a colour group; inverse `CreateColorGroup` restores it.
+    DeleteColorGroup {
+        group_id: String,
+    },
+    /// Style-options editing — set one property on a *style definition*
+    /// (not the selection). Reuses the `PropertyPath` + `Value`
+    /// vocabulary of `SetProperty`, so the style-editor panel renders
+    /// with the same primitive leaves as the Character / Paragraph
+    /// panels (per the panel-catalog plan §5.3). `collection` picks the
+    /// target stylesheet; `style_id` the entry. Inverse carries the
+    /// prior value. Paragraph + character defs are covered; object /
+    /// cell / table style property editing is a follow-up.
+    SetStyleProperty {
+        collection: StyleCollection,
+        style_id: String,
+        path: PropertyPath,
+        value: Value,
     },
     /// SDK Phase 5 (v1 sweep) — multi-target Bezier boolean op.
     /// `kept` is the survivor (its path is replaced with the

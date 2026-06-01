@@ -71,6 +71,12 @@ pub enum OperationError {
     #[error("duplicate self_id {id:?} — IDML node IDs must be unique")]
     DuplicateNodeId { id: String },
 
+    /// A document-collection entry (swatch, style, …) addressed by id
+    /// doesn't exist at apply time. Collections aren't `NodeId`s, so
+    /// they use this rather than `NodeNotFound`.
+    #[error("{collection} entry {id:?} not found")]
+    CollectionEntryNotFound { collection: String, id: String },
+
     #[error("batch failed at index {failed_at}: {source}")]
     BatchFailed {
         failed_at: usize,

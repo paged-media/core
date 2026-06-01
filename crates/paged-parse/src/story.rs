@@ -629,7 +629,7 @@ impl TableCell {
 
 /// One stop in a paragraph's `<TabList>`. Position is in pt from
 /// the column's left edge.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TabStop {
     pub position: f32,
     /// IDML alignment string: `LeftAlign`, `RightAlign`,

@@ -206,7 +206,7 @@ pub enum ColorModel {
 }
 
 impl ColorModel {
-    fn from_attr(s: &str) -> Self {
+    pub fn from_attr(s: &str) -> Self {
         match s {
             "Process" => ColorModel::Process,
             "Spot" => ColorModel::Spot,
@@ -214,16 +214,37 @@ impl ColorModel {
             _ => ColorModel::Unknown,
         }
     }
+
+    /// IDML `Model` attribute string, round-trippable with `from_attr`.
+    pub fn as_attr(self) -> &'static str {
+        match self {
+            ColorModel::Process => "Process",
+            ColorModel::Spot => "Spot",
+            ColorModel::MixedInk => "MixedInk",
+            ColorModel::Unknown => "Unknown",
+        }
+    }
 }
 
 impl ColorSpace {
-    fn from_attr(s: &str) -> Self {
+    pub fn from_attr(s: &str) -> Self {
         match s {
             "CMYK" => ColorSpace::Cmyk,
             "RGB" => ColorSpace::Rgb,
             "LAB" | "Lab" => ColorSpace::Lab,
             "Gray" => ColorSpace::Gray,
             _ => ColorSpace::Unknown,
+        }
+    }
+
+    /// IDML `Space` attribute string, round-trippable with `from_attr`.
+    pub fn as_attr(self) -> &'static str {
+        match self {
+            ColorSpace::Cmyk => "CMYK",
+            ColorSpace::Rgb => "RGB",
+            ColorSpace::Lab => "LAB",
+            ColorSpace::Gray => "Gray",
+            ColorSpace::Unknown => "Unknown",
         }
     }
 }

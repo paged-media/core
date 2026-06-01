@@ -49,8 +49,9 @@ use crate::invert::{
     invert_set_property,
 };
 use crate::operation::{
-    AppliedOperation, InvalidationHint, NodeId, NodeSpec, Operation, PathAnchorSpec,
-    PathfinderKind, PropertyPath, Value,
+    AppliedOperation, ColorGroupSpec, GradientSpec, GradientStopSpec, InvalidationHint, NodeId,
+    NodeSpec, Operation, PathAnchorSpec, PathfinderKind, PropertyPath, StyleCollection, SwatchSpec,
+    Value,
 };
 use crate::pathfinder::{pathfinder_boolean, PathfinderKind as InternalPathfinderKind};
 
@@ -77,6 +78,109 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             self_id,
         } => apply_insert_layer(doc, *position, name, self_id.as_deref()),
         Operation::RemoveLayer { layer_id } => apply_remove_layer(doc, layer_id),
+        Operation::CreateSwatch { spec } => apply_create_swatch(doc, spec),
+        Operation::EditSwatch { swatch_id, spec } => apply_edit_swatch(doc, swatch_id, spec),
+        Operation::DeleteSwatch { swatch_id } => apply_delete_swatch(doc, swatch_id),
+        Operation::CreateParagraphStyle {
+            self_id,
+            name,
+            based_on,
+            restore_json,
+        } => apply_create_paragraph_style(
+            doc,
+            self_id.clone(),
+            name.clone(),
+            based_on.clone(),
+            restore_json.as_deref(),
+        ),
+        Operation::RenameParagraphStyle { style_id, name } => {
+            apply_rename_paragraph_style(doc, style_id, name)
+        }
+        Operation::DeleteParagraphStyle { style_id } => {
+            apply_delete_paragraph_style(doc, style_id)
+        }
+        Operation::CreateCharacterStyle {
+            self_id,
+            name,
+            based_on,
+            restore_json,
+        } => apply_create_character_style(
+            doc,
+            self_id.clone(),
+            name.clone(),
+            based_on.clone(),
+            restore_json.as_deref(),
+        ),
+        Operation::RenameCharacterStyle { style_id, name } => {
+            apply_rename_character_style(doc, style_id, name)
+        }
+        Operation::DeleteCharacterStyle { style_id } => {
+            apply_delete_character_style(doc, style_id)
+        }
+        Operation::CreateObjectStyle {
+            self_id,
+            name,
+            based_on,
+            restore_json,
+        } => apply_create_object_style(
+            doc,
+            self_id.clone(),
+            name.clone(),
+            based_on.clone(),
+            restore_json.as_deref(),
+        ),
+        Operation::RenameObjectStyle { style_id, name } => {
+            apply_rename_object_style(doc, style_id, name)
+        }
+        Operation::DeleteObjectStyle { style_id } => apply_delete_object_style(doc, style_id),
+        Operation::CreateCellStyle {
+            self_id,
+            name,
+            based_on,
+            restore_json,
+        } => apply_create_cell_style(
+            doc,
+            self_id.clone(),
+            name.clone(),
+            based_on.clone(),
+            restore_json.as_deref(),
+        ),
+        Operation::RenameCellStyle { style_id, name } => {
+            apply_rename_cell_style(doc, style_id, name)
+        }
+        Operation::DeleteCellStyle { style_id } => apply_delete_cell_style(doc, style_id),
+        Operation::CreateTableStyle {
+            self_id,
+            name,
+            based_on,
+            restore_json,
+        } => apply_create_table_style(
+            doc,
+            self_id.clone(),
+            name.clone(),
+            based_on.clone(),
+            restore_json.as_deref(),
+        ),
+        Operation::RenameTableStyle { style_id, name } => {
+            apply_rename_table_style(doc, style_id, name)
+        }
+        Operation::DeleteTableStyle { style_id } => apply_delete_table_style(doc, style_id),
+        Operation::CreateGradient { spec } => apply_create_gradient(doc, spec),
+        Operation::EditGradient { gradient_id, spec } => {
+            apply_edit_gradient(doc, gradient_id, spec)
+        }
+        Operation::DeleteGradient { gradient_id } => apply_delete_gradient(doc, gradient_id),
+        Operation::CreateColorGroup { spec } => apply_create_color_group(doc, spec),
+        Operation::EditColorGroup { group_id, spec } => {
+            apply_edit_color_group(doc, group_id, spec)
+        }
+        Operation::DeleteColorGroup { group_id } => apply_delete_color_group(doc, group_id),
+        Operation::SetStyleProperty {
+            collection,
+            style_id,
+            path,
+            value,
+        } => apply_set_style_property(doc, *collection, style_id, *path, value),
         Operation::PathfinderBoolean {
             kept,
             others,
@@ -2203,6 +2307,823 @@ fn apply_remove_layer(
             layer_id: layer_id.to_string(),
         },
         inverse,
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+// ── Swatch collection mutations ───────────────────────────────────
+//
+// A "swatch" in the editor's Swatches panel is a `<Color>` entry in
+// `doc.palette.colors` (a `BTreeMap` keyed by `Self` id). Create / edit
+// / delete mirror the layer-op pattern: each builds its own lossless
+// inverse so a single Cmd-Z reverses it. A palette change can affect any
+// frame that references the swatch, and we don't track which, so the
+// invalidation is the conservative `structural` (forces a rebuild that
+// re-resolves the palette) — there's no finer per-NodeId palette hint.
+
+/// Build a `ColorEntry` from a wire `SwatchSpec` at a resolved id.
+fn color_entry_from_spec(self_id: String, spec: &SwatchSpec) -> paged_parse::ColorEntry {
+    paged_parse::ColorEntry {
+        self_id,
+        name: spec.name.clone(),
+        space: paged_parse::ColorSpace::from_attr(&spec.space),
+        value: spec.value.clone(),
+        model: spec
+            .model
+            .as_deref()
+            .map(paged_parse::ColorModel::from_attr)
+            .unwrap_or(paged_parse::ColorModel::Process),
+        alternate_space: spec
+            .alternate_space
+            .as_deref()
+            .map(paged_parse::ColorSpace::from_attr),
+        alternate_value: spec.alternate_value.clone(),
+        tint: spec.tint,
+        alpha: spec.alpha,
+    }
+}
+
+/// Capture a `ColorEntry` back into a `SwatchSpec` (for lossless
+/// inverses). `self_id` is carried so a delete→undo recreates the
+/// swatch at its original id.
+fn swatch_spec_from_entry(entry: &paged_parse::ColorEntry) -> SwatchSpec {
+    SwatchSpec {
+        self_id: Some(entry.self_id.clone()),
+        name: entry.name.clone(),
+        space: entry.space.as_attr().to_string(),
+        value: entry.value.clone(),
+        model: Some(entry.model.as_attr().to_string()),
+        alternate_space: entry.alternate_space.map(|s| s.as_attr().to_string()),
+        alternate_value: entry.alternate_value.clone(),
+        tint: entry.tint,
+        alpha: entry.alpha,
+    }
+}
+
+fn apply_create_swatch(
+    doc: &mut Document,
+    spec: &SwatchSpec,
+) -> Result<AppliedOperation, OperationError> {
+    let colors = &mut doc.palette.colors;
+    let self_id = match &spec.self_id {
+        Some(s) => {
+            if colors.contains_key(s) {
+                return Err(OperationError::DuplicateNodeId { id: s.clone() });
+            }
+            s.clone()
+        }
+        None => {
+            // Deterministic, non-colliding `Color/u<n>` — mirrors the
+            // layer-op id assignment.
+            let mut n = colors.len();
+            let mut id = format!("Color/u{n}");
+            while colors.contains_key(&id) {
+                n += 1;
+                id = format!("Color/u{n}");
+            }
+            id
+        }
+    };
+    let entry = color_entry_from_spec(self_id.clone(), spec);
+    colors.insert(self_id.clone(), entry);
+    // Echo the resolved id back in the recorded op so a redo (or a
+    // remote replay) reuses it verbatim.
+    let mut resolved_spec = spec.clone();
+    resolved_spec.self_id = Some(self_id.clone());
+    Ok(AppliedOperation {
+        op: Operation::CreateSwatch {
+            spec: resolved_spec,
+        },
+        inverse: Operation::DeleteSwatch { swatch_id: self_id },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+fn apply_edit_swatch(
+    doc: &mut Document,
+    swatch_id: &str,
+    spec: &SwatchSpec,
+) -> Result<AppliedOperation, OperationError> {
+    let colors = &mut doc.palette.colors;
+    let existing = colors.get(swatch_id).ok_or_else(|| {
+        OperationError::CollectionEntryNotFound {
+            collection: "swatch".to_string(),
+            id: swatch_id.to_string(),
+        }
+    })?;
+    // Capture the prior state for the inverse before overwriting.
+    let prior = swatch_spec_from_entry(existing);
+    // Replace the editable fields in place; the id (map key) is the
+    // identity and never changes here.
+    let updated = color_entry_from_spec(swatch_id.to_string(), spec);
+    colors.insert(swatch_id.to_string(), updated);
+    Ok(AppliedOperation {
+        op: Operation::EditSwatch {
+            swatch_id: swatch_id.to_string(),
+            spec: spec.clone(),
+        },
+        inverse: Operation::EditSwatch {
+            swatch_id: swatch_id.to_string(),
+            spec: prior,
+        },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+fn apply_delete_swatch(
+    doc: &mut Document,
+    swatch_id: &str,
+) -> Result<AppliedOperation, OperationError> {
+    let colors = &mut doc.palette.colors;
+    let captured = colors.remove(swatch_id).ok_or_else(|| {
+        OperationError::CollectionEntryNotFound {
+            collection: "swatch".to_string(),
+            id: swatch_id.to_string(),
+        }
+    })?;
+    // Inverse recreates the swatch at its original id with every field.
+    let inverse = Operation::CreateSwatch {
+        spec: swatch_spec_from_entry(&captured),
+    };
+    Ok(AppliedOperation {
+        op: Operation::DeleteSwatch {
+            swatch_id: swatch_id.to_string(),
+        },
+        inverse,
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+// ── Gradient + colour-group collection mutations ──────────────────
+//
+// Same shape as swatches (typed spec ↔ entry; create/edit/delete with
+// lossless inverses), over `doc.palette.gradients` / `.color_groups`.
+
+fn gradient_kind_from_attr(s: &str) -> paged_parse::GradientKind {
+    match s {
+        "Linear" => paged_parse::GradientKind::Linear,
+        "Radial" => paged_parse::GradientKind::Radial,
+        _ => paged_parse::GradientKind::Unknown,
+    }
+}
+
+fn gradient_kind_as_attr(k: paged_parse::GradientKind) -> &'static str {
+    match k {
+        paged_parse::GradientKind::Linear => "Linear",
+        paged_parse::GradientKind::Radial => "Radial",
+        paged_parse::GradientKind::Unknown => "Unknown",
+    }
+}
+
+fn gradient_entry_from_spec(self_id: String, spec: &GradientSpec) -> paged_parse::GradientEntry {
+    paged_parse::GradientEntry {
+        self_id,
+        name: spec.name.clone(),
+        kind: gradient_kind_from_attr(&spec.kind),
+        stops: spec
+            .stops
+            .iter()
+            .map(|s| paged_parse::GradientStopRef {
+                stop_color: s.stop_color.clone(),
+                location_pct: s.location_pct,
+                midpoint_pct: s.midpoint_pct,
+            })
+            .collect(),
+    }
+}
+
+fn gradient_spec_from_entry(entry: &paged_parse::GradientEntry) -> GradientSpec {
+    GradientSpec {
+        self_id: Some(entry.self_id.clone()),
+        name: entry.name.clone(),
+        kind: gradient_kind_as_attr(entry.kind).to_string(),
+        stops: entry
+            .stops
+            .iter()
+            .map(|s| GradientStopSpec {
+                stop_color: s.stop_color.clone(),
+                location_pct: s.location_pct,
+                midpoint_pct: s.midpoint_pct,
+            })
+            .collect(),
+    }
+}
+
+fn apply_create_gradient(
+    doc: &mut Document,
+    spec: &GradientSpec,
+) -> Result<AppliedOperation, OperationError> {
+    let gradients = &mut doc.palette.gradients;
+    let self_id = match &spec.self_id {
+        Some(s) => {
+            if gradients.contains_key(s) {
+                return Err(OperationError::DuplicateNodeId { id: s.clone() });
+            }
+            s.clone()
+        }
+        None => {
+            let mut n = gradients.len();
+            let mut id = format!("Gradient/u{n}");
+            while gradients.contains_key(&id) {
+                n += 1;
+                id = format!("Gradient/u{n}");
+            }
+            id
+        }
+    };
+    gradients.insert(self_id.clone(), gradient_entry_from_spec(self_id.clone(), spec));
+    let mut resolved = spec.clone();
+    resolved.self_id = Some(self_id.clone());
+    Ok(AppliedOperation {
+        op: Operation::CreateGradient { spec: resolved },
+        inverse: Operation::DeleteGradient {
+            gradient_id: self_id,
+        },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+fn apply_edit_gradient(
+    doc: &mut Document,
+    gradient_id: &str,
+    spec: &GradientSpec,
+) -> Result<AppliedOperation, OperationError> {
+    let gradients = &mut doc.palette.gradients;
+    let existing = gradients.get(gradient_id).ok_or_else(|| {
+        OperationError::CollectionEntryNotFound {
+            collection: "gradient".to_string(),
+            id: gradient_id.to_string(),
+        }
+    })?;
+    let prior = gradient_spec_from_entry(existing);
+    gradients.insert(
+        gradient_id.to_string(),
+        gradient_entry_from_spec(gradient_id.to_string(), spec),
+    );
+    Ok(AppliedOperation {
+        op: Operation::EditGradient {
+            gradient_id: gradient_id.to_string(),
+            spec: spec.clone(),
+        },
+        inverse: Operation::EditGradient {
+            gradient_id: gradient_id.to_string(),
+            spec: prior,
+        },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+fn apply_delete_gradient(
+    doc: &mut Document,
+    gradient_id: &str,
+) -> Result<AppliedOperation, OperationError> {
+    let captured = doc.palette.gradients.remove(gradient_id).ok_or_else(|| {
+        OperationError::CollectionEntryNotFound {
+            collection: "gradient".to_string(),
+            id: gradient_id.to_string(),
+        }
+    })?;
+    Ok(AppliedOperation {
+        op: Operation::DeleteGradient {
+            gradient_id: gradient_id.to_string(),
+        },
+        inverse: Operation::CreateGradient {
+            spec: gradient_spec_from_entry(&captured),
+        },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+fn color_group_entry_from_spec(
+    self_id: String,
+    spec: &ColorGroupSpec,
+) -> paged_parse::graphic::ColorGroupEntry {
+    paged_parse::graphic::ColorGroupEntry {
+        self_id,
+        name: spec.name.clone(),
+        members: spec.members.clone(),
+    }
+}
+
+fn apply_create_color_group(
+    doc: &mut Document,
+    spec: &ColorGroupSpec,
+) -> Result<AppliedOperation, OperationError> {
+    let groups = &mut doc.palette.color_groups;
+    let self_id = match &spec.self_id {
+        Some(s) => {
+            if groups.contains_key(s) {
+                return Err(OperationError::DuplicateNodeId { id: s.clone() });
+            }
+            s.clone()
+        }
+        None => {
+            let mut n = groups.len();
+            let mut id = format!("ColorGroup/u{n}");
+            while groups.contains_key(&id) {
+                n += 1;
+                id = format!("ColorGroup/u{n}");
+            }
+            id
+        }
+    };
+    groups.insert(
+        self_id.clone(),
+        color_group_entry_from_spec(self_id.clone(), spec),
+    );
+    let mut resolved = spec.clone();
+    resolved.self_id = Some(self_id.clone());
+    Ok(AppliedOperation {
+        op: Operation::CreateColorGroup { spec: resolved },
+        inverse: Operation::DeleteColorGroup { group_id: self_id },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+fn apply_edit_color_group(
+    doc: &mut Document,
+    group_id: &str,
+    spec: &ColorGroupSpec,
+) -> Result<AppliedOperation, OperationError> {
+    let groups = &mut doc.palette.color_groups;
+    let existing = groups.get(group_id).ok_or_else(|| {
+        OperationError::CollectionEntryNotFound {
+            collection: "color group".to_string(),
+            id: group_id.to_string(),
+        }
+    })?;
+    let prior = ColorGroupSpec {
+        self_id: Some(existing.self_id.clone()),
+        name: existing.name.clone(),
+        members: existing.members.clone(),
+    };
+    groups.insert(
+        group_id.to_string(),
+        color_group_entry_from_spec(group_id.to_string(), spec),
+    );
+    Ok(AppliedOperation {
+        op: Operation::EditColorGroup {
+            group_id: group_id.to_string(),
+            spec: spec.clone(),
+        },
+        inverse: Operation::EditColorGroup {
+            group_id: group_id.to_string(),
+            spec: prior,
+        },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+fn apply_delete_color_group(
+    doc: &mut Document,
+    group_id: &str,
+) -> Result<AppliedOperation, OperationError> {
+    let captured = doc.palette.color_groups.remove(group_id).ok_or_else(|| {
+        OperationError::CollectionEntryNotFound {
+            collection: "color group".to_string(),
+            id: group_id.to_string(),
+        }
+    })?;
+    Ok(AppliedOperation {
+        op: Operation::DeleteColorGroup {
+            group_id: group_id.to_string(),
+        },
+        inverse: Operation::CreateColorGroup {
+            spec: ColorGroupSpec {
+                self_id: Some(captured.self_id.clone()),
+                name: captured.name.clone(),
+                members: captured.members.clone(),
+            },
+        },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+// ── Style collection mutations ────────────────────────────────────
+//
+// Paragraph + character styles live in `doc.styles.{paragraph,character}_styles`
+// (`BTreeMap` keyed by `Self` id). The two kinds are structurally
+// identical for CRUD — same `self_id`/`name`/`based_on` fields — so a
+// macro emits both, differing only in the def type, the map, the id
+// prefix, and the `Operation` variants. Lossless delete-undo serialises
+// the captured def to JSON (`restore_json`) and the create path
+// deserialises it back verbatim (the defs are `Serialize + Deserialize`).
+// Like swatches, a style change can affect many frames we don't track,
+// so the invalidation is the conservative `structural`.
+
+macro_rules! style_crud {
+    (
+        $def:path, $map:ident, $prefix:literal,
+        $create_fn:ident, $rename_fn:ident, $delete_fn:ident,
+        $CreateOp:ident, $DeleteOp:ident, $RenameOp:ident, $label:literal
+    ) => {
+        fn $create_fn(
+            doc: &mut Document,
+            self_id: Option<String>,
+            name: Option<String>,
+            based_on: Option<String>,
+            restore_json: Option<&str>,
+        ) -> Result<AppliedOperation, OperationError> {
+            let map = &mut doc.styles.$map;
+            // Lossless-restore path (the delete inverse): the def is
+            // carried whole as JSON and inserted verbatim.
+            if let Some(json) = restore_json {
+                let def: $def = serde_json::from_str(json).map_err(|e| {
+                    OperationError::InvalidValue {
+                        node: NodeId::Layer(String::new()),
+                        path: PropertyPath::LayerName,
+                        reason: format!("malformed {} restore payload: {e}", $label),
+                    }
+                })?;
+                let id = def.self_id.clone();
+                if map.contains_key(&id) {
+                    return Err(OperationError::DuplicateNodeId { id });
+                }
+                map.insert(id.clone(), def);
+                return Ok(AppliedOperation {
+                    op: Operation::$CreateOp {
+                        self_id: Some(id.clone()),
+                        name: None,
+                        based_on: None,
+                        restore_json: Some(json.to_string()),
+                    },
+                    inverse: Operation::$DeleteOp { style_id: id },
+                    invalidation: InvalidationHint {
+                        structural: true,
+                        ..Default::default()
+                    },
+                });
+            }
+            // Fresh create: build a default def carrying name/based_on;
+            // every other field defaults and resolves via the cascade.
+            let id = match self_id {
+                Some(s) => {
+                    if map.contains_key(&s) {
+                        return Err(OperationError::DuplicateNodeId { id: s });
+                    }
+                    s
+                }
+                None => {
+                    let mut n = map.len();
+                    let mut id = format!(concat!($prefix, "/u{}"), n);
+                    while map.contains_key(&id) {
+                        n += 1;
+                        id = format!(concat!($prefix, "/u{}"), n);
+                    }
+                    id
+                }
+            };
+            // Build via `default()` + field assignment rather than a
+            // struct literal: a macro `$def:path` fragment can't head a
+            // struct literal in expression position.
+            let mut def = <$def>::default();
+            def.self_id = id.clone();
+            def.name = name.clone();
+            def.based_on = based_on.clone();
+            map.insert(id.clone(), def);
+            Ok(AppliedOperation {
+                op: Operation::$CreateOp {
+                    self_id: Some(id.clone()),
+                    name,
+                    based_on,
+                    restore_json: None,
+                },
+                inverse: Operation::$DeleteOp { style_id: id },
+                invalidation: InvalidationHint {
+                    structural: true,
+                    ..Default::default()
+                },
+            })
+        }
+
+        fn $rename_fn(
+            doc: &mut Document,
+            style_id: &str,
+            name: &str,
+        ) -> Result<AppliedOperation, OperationError> {
+            let map = &mut doc.styles.$map;
+            let def = map.get_mut(style_id).ok_or_else(|| {
+                OperationError::CollectionEntryNotFound {
+                    collection: $label.to_string(),
+                    id: style_id.to_string(),
+                }
+            })?;
+            let prior = def.name.clone();
+            def.name = Some(name.to_string());
+            Ok(AppliedOperation {
+                op: Operation::$RenameOp {
+                    style_id: style_id.to_string(),
+                    name: name.to_string(),
+                },
+                inverse: Operation::$RenameOp {
+                    style_id: style_id.to_string(),
+                    name: prior.unwrap_or_default(),
+                },
+                invalidation: InvalidationHint {
+                    structural: true,
+                    ..Default::default()
+                },
+            })
+        }
+
+        fn $delete_fn(
+            doc: &mut Document,
+            style_id: &str,
+        ) -> Result<AppliedOperation, OperationError> {
+            let map = &mut doc.styles.$map;
+            let captured = map.remove(style_id).ok_or_else(|| {
+                OperationError::CollectionEntryNotFound {
+                    collection: $label.to_string(),
+                    id: style_id.to_string(),
+                }
+            })?;
+            // Serialize the captured def for a lossless create-inverse.
+            let json = serde_json::to_string(&captured).map_err(|e| {
+                OperationError::InvalidValue {
+                    node: NodeId::Layer(String::new()),
+                    path: PropertyPath::LayerName,
+                    reason: format!("failed to capture {} for undo: {e}", $label),
+                }
+            })?;
+            Ok(AppliedOperation {
+                op: Operation::$DeleteOp {
+                    style_id: style_id.to_string(),
+                },
+                inverse: Operation::$CreateOp {
+                    self_id: None,
+                    name: None,
+                    based_on: None,
+                    restore_json: Some(json),
+                },
+                invalidation: InvalidationHint {
+                    structural: true,
+                    ..Default::default()
+                },
+            })
+        }
+    };
+}
+
+style_crud!(
+    paged_parse::styles::ParagraphStyleDef,
+    paragraph_styles,
+    "ParagraphStyle",
+    apply_create_paragraph_style,
+    apply_rename_paragraph_style,
+    apply_delete_paragraph_style,
+    CreateParagraphStyle,
+    DeleteParagraphStyle,
+    RenameParagraphStyle,
+    "paragraph style"
+);
+
+style_crud!(
+    paged_parse::styles::CharacterStyleDef,
+    character_styles,
+    "CharacterStyle",
+    apply_create_character_style,
+    apply_rename_character_style,
+    apply_delete_character_style,
+    CreateCharacterStyle,
+    DeleteCharacterStyle,
+    RenameCharacterStyle,
+    "character style"
+);
+
+style_crud!(
+    paged_parse::styles::ObjectStyleDef,
+    object_styles,
+    "ObjectStyle",
+    apply_create_object_style,
+    apply_rename_object_style,
+    apply_delete_object_style,
+    CreateObjectStyle,
+    DeleteObjectStyle,
+    RenameObjectStyle,
+    "object style"
+);
+
+style_crud!(
+    paged_parse::styles::CellStyleDef,
+    cell_styles,
+    "CellStyle",
+    apply_create_cell_style,
+    apply_rename_cell_style,
+    apply_delete_cell_style,
+    CreateCellStyle,
+    DeleteCellStyle,
+    RenameCellStyle,
+    "cell style"
+);
+
+style_crud!(
+    paged_parse::styles::TableStyleDef,
+    table_styles,
+    "TableStyle",
+    apply_create_table_style,
+    apply_rename_table_style,
+    apply_delete_table_style,
+    CreateTableStyle,
+    DeleteTableStyle,
+    RenameTableStyle,
+    "table style"
+);
+
+// ── Style-property editing (SetStyleProperty) ─────────────────────
+//
+// Edits one field on a *style definition*, reusing the PropertyPath +
+// Value vocabulary so the style-options panel shares the Character /
+// Paragraph leaves. Each helper returns the prior `Value` so the
+// inverse is a SetStyleProperty back to it. Paragraph + character defs
+// are covered (the shipped style panels); object/cell/table editing
+// raises `UnsupportedProperty` for now (extensible the same way).
+
+/// Placeholder NodeId for style-targeted errors (styles aren't nodes);
+/// keeps the error's `path` meaningful while signalling the target.
+fn style_node_marker(style_id: &str) -> NodeId {
+    NodeId::Layer(style_id.to_string())
+}
+
+fn set_paragraph_style_field(
+    def: &mut paged_parse::styles::ParagraphStyleDef,
+    path: PropertyPath,
+    value: &Value,
+    style_id: &str,
+) -> Result<Value, OperationError> {
+    let type_err = || OperationError::TypeMismatch {
+        path,
+        expected: "value kind for this style property".to_string(),
+    };
+    match path {
+        PropertyPath::CharacterFontSize => {
+            let Value::Length(n) = value else { return Err(type_err()) };
+            let prior = Value::Length(def.point_size);
+            def.point_size = *n;
+            Ok(prior)
+        }
+        PropertyPath::CharacterTracking => {
+            let Value::Length(n) = value else { return Err(type_err()) };
+            let prior = Value::Length(def.tracking);
+            def.tracking = *n;
+            Ok(prior)
+        }
+        PropertyPath::CharacterFillColor => {
+            let Value::ColorRef(c) = value else { return Err(type_err()) };
+            let prior = Value::ColorRef(def.fill_color.clone());
+            def.fill_color = c.clone();
+            Ok(prior)
+        }
+        PropertyPath::ParagraphSpaceBefore => {
+            let Value::Length(n) = value else { return Err(type_err()) };
+            let prior = Value::Length(def.space_before);
+            def.space_before = *n;
+            Ok(prior)
+        }
+        PropertyPath::ParagraphSpaceAfter => {
+            let Value::Length(n) = value else { return Err(type_err()) };
+            let prior = Value::Length(def.space_after);
+            def.space_after = *n;
+            Ok(prior)
+        }
+        PropertyPath::ParagraphFirstLineIndent => {
+            let Value::Length(n) = value else { return Err(type_err()) };
+            let prior = Value::Length(def.first_line_indent);
+            def.first_line_indent = *n;
+            Ok(prior)
+        }
+        PropertyPath::ParagraphJustification => {
+            let Value::Text(s) = value else { return Err(type_err()) };
+            let prior = Value::Text(
+                def.justification
+                    .map(|j| j.as_idml().to_string())
+                    .unwrap_or_default(),
+            );
+            def.justification = paged_parse::story::Justification::from_idml(s);
+            Ok(prior)
+        }
+        _ => Err(OperationError::UnsupportedProperty {
+            node: style_node_marker(style_id),
+            path,
+        }),
+    }
+}
+
+fn set_character_style_field(
+    def: &mut paged_parse::styles::CharacterStyleDef,
+    path: PropertyPath,
+    value: &Value,
+    style_id: &str,
+) -> Result<Value, OperationError> {
+    let type_err = || OperationError::TypeMismatch {
+        path,
+        expected: "value kind for this style property".to_string(),
+    };
+    match path {
+        PropertyPath::CharacterFontSize => {
+            let Value::Length(n) = value else { return Err(type_err()) };
+            let prior = Value::Length(def.point_size);
+            def.point_size = *n;
+            Ok(prior)
+        }
+        PropertyPath::CharacterTracking => {
+            let Value::Length(n) = value else { return Err(type_err()) };
+            let prior = Value::Length(def.tracking);
+            def.tracking = *n;
+            Ok(prior)
+        }
+        PropertyPath::CharacterFillColor => {
+            let Value::ColorRef(c) = value else { return Err(type_err()) };
+            let prior = Value::ColorRef(def.fill_color.clone());
+            def.fill_color = c.clone();
+            Ok(prior)
+        }
+        _ => Err(OperationError::UnsupportedProperty {
+            node: style_node_marker(style_id),
+            path,
+        }),
+    }
+}
+
+fn apply_set_style_property(
+    doc: &mut Document,
+    collection: StyleCollection,
+    style_id: &str,
+    path: PropertyPath,
+    value: &Value,
+) -> Result<AppliedOperation, OperationError> {
+    let not_found = || OperationError::CollectionEntryNotFound {
+        collection: "style".to_string(),
+        id: style_id.to_string(),
+    };
+    let prior = match collection {
+        StyleCollection::Paragraph => {
+            let def = doc
+                .styles
+                .paragraph_styles
+                .get_mut(style_id)
+                .ok_or_else(not_found)?;
+            set_paragraph_style_field(def, path, value, style_id)?
+        }
+        StyleCollection::Character => {
+            let def = doc
+                .styles
+                .character_styles
+                .get_mut(style_id)
+                .ok_or_else(not_found)?;
+            set_character_style_field(def, path, value, style_id)?
+        }
+        // Object / cell / table style-property editing is a follow-up;
+        // their panels are not yet built.
+        StyleCollection::Object | StyleCollection::Cell | StyleCollection::Table => {
+            return Err(OperationError::UnsupportedProperty {
+                node: style_node_marker(style_id),
+                path,
+            });
+        }
+    };
+    Ok(AppliedOperation {
+        op: Operation::SetStyleProperty {
+            collection,
+            style_id: style_id.to_string(),
+            path,
+            value: value.clone(),
+        },
+        inverse: Operation::SetStyleProperty {
+            collection,
+            style_id: style_id.to_string(),
+            path,
+            value: prior,
+        },
         invalidation: InvalidationHint {
             structural: true,
             ..Default::default()

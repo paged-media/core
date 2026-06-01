@@ -38,7 +38,7 @@
 use std::collections::BTreeMap;
 
 use quick_xml::events::Event;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::spread::{CornerOption, CornerSpec};
 use crate::story::{Justification, TabStop};
@@ -216,7 +216,7 @@ pub struct TOCStyleEntryDef {
 /// `<ObjectStyle>` — the page-item analogue of paragraph/character
 /// styles. Carries fill + stroke defaults that flow into a frame
 /// when it carries no per-element override.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ObjectStyleDef {
     pub self_id: String,
     pub name: Option<String>,
@@ -258,7 +258,7 @@ pub struct ResolvedObject {
 /// vertical justification. Cells can override individual fields
 /// inline; missing fields cascade through `BasedOn` and finally
 /// fall through to renderer defaults.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CellStyleDef {
     pub self_id: String,
     pub name: Option<String>,
@@ -282,7 +282,7 @@ pub struct CellStyleDef {
 /// Footer / Left / Right column regions) plus the table border
 /// strokes. BasedOn cascade applies the same way as the other
 /// resolvers.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct TableStyleDef {
     pub self_id: String,
     pub name: Option<String>,
@@ -352,7 +352,7 @@ pub struct ResolvedCell {
     pub right_edge_stroke_weight: Option<f32>,
 }
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CharacterStyleDef {
     pub self_id: String,
     pub name: Option<String>,
@@ -424,7 +424,7 @@ pub struct CharacterStyleDef {
 /// cascade can inherit from `BasedOn`. The decorative per-corner
 /// options + radii live alongside the bag in case a future cycle
 /// renders rounded shading bands.
-#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ParagraphShading {
     pub on: Option<bool>,
     pub color: Option<String>,
@@ -452,7 +452,7 @@ pub struct ParagraphShading {
 /// below the last line (RuleBelow) of the paragraph when `on` is
 /// true. Only the fields actually consumed by the renderer are
 /// listed; gap / stroke-style / overprint variants are queued.
-#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ParagraphRule {
     pub on: Option<bool>,
     pub color: Option<String>,
@@ -502,7 +502,7 @@ impl ParagraphRule {
 /// Per-corner `CornerOption` / `CornerRadius` attrs are honoured via
 /// `corners` (Track 4d) — order matches `Rectangle::corners`:
 /// `[top_left, top_right, bottom_right, bottom_left]`.
-#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ParagraphBorder {
     pub on: Option<bool>,
     pub color: Option<String>,
@@ -580,7 +580,7 @@ impl ParagraphShading {
     }
 }
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ParagraphStyleDef {
     pub self_id: String,
     pub name: Option<String>,
@@ -749,7 +749,7 @@ pub struct ParagraphStyleDef {
 /// portion of a paragraph, bounded by a delimiter (count of
 /// words / sentences / characters, a literal char, or a special
 /// "any digit / letter / quote" matcher).
-#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NestedStyle {
     /// `AppliedCharacterStyle="CharacterStyle/<id>"`. The named style
     /// applies to the entry's range. Resolved by the renderer
@@ -767,7 +767,7 @@ pub struct NestedStyle {
 }
 
 /// What delimits the end of a `<NestedStyle>` range.
-#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub enum NestedDelimiter {
     /// `Words` — N whitespace-delimited words.
     Words,

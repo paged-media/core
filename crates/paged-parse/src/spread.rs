@@ -30,7 +30,7 @@
 //! y-axis grows downward from page origin).
 
 use quick_xml::events::Event;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::util::{attr, parse_f, parse_tint_attr};
 use crate::ParseError;
@@ -40,7 +40,7 @@ use crate::ParseError;
 /// and the other three corners. When both fields are `None` the
 /// renderer falls back to the legacy single `corner_option` /
 /// `corner_radius` pair (which itself defaults to "no rounding").
-#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CornerSpec {
     pub option: Option<CornerOption>,
     pub radius: Option<f32>,
@@ -50,7 +50,7 @@ pub struct CornerSpec {
 /// renderer emits bespoke geometry per variant (Rounded / Inverse /
 /// Bevel / Inset / Fancy); `Inset` and `Fancy` are approximations
 /// pending reference-PDF calibration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CornerOption {
     /// IDML defaults: square corners.
     None,

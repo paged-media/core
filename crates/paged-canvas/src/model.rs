@@ -957,6 +957,138 @@ impl CanvasModel {
             Mutation::LayerRemove { layer_id } => Some(Operation::RemoveLayer {
                 layer_id: layer_id.clone(),
             }),
+            // ── Collection mutations — 1:1 with the matching Operation
+            //    (no NodeId resolution; they target collections by id).
+            Mutation::CreateSwatch { spec } => {
+                Some(Operation::CreateSwatch { spec: spec.clone() })
+            }
+            Mutation::EditSwatch { swatch_id, spec } => Some(Operation::EditSwatch {
+                swatch_id: swatch_id.clone(),
+                spec: spec.clone(),
+            }),
+            Mutation::DeleteSwatch { swatch_id } => Some(Operation::DeleteSwatch {
+                swatch_id: swatch_id.clone(),
+            }),
+            Mutation::CreateGradient { spec } => {
+                Some(Operation::CreateGradient { spec: spec.clone() })
+            }
+            Mutation::EditGradient { gradient_id, spec } => Some(Operation::EditGradient {
+                gradient_id: gradient_id.clone(),
+                spec: spec.clone(),
+            }),
+            Mutation::DeleteGradient { gradient_id } => Some(Operation::DeleteGradient {
+                gradient_id: gradient_id.clone(),
+            }),
+            Mutation::CreateColorGroup { spec } => {
+                Some(Operation::CreateColorGroup { spec: spec.clone() })
+            }
+            Mutation::EditColorGroup { group_id, spec } => Some(Operation::EditColorGroup {
+                group_id: group_id.clone(),
+                spec: spec.clone(),
+            }),
+            Mutation::DeleteColorGroup { group_id } => Some(Operation::DeleteColorGroup {
+                group_id: group_id.clone(),
+            }),
+            Mutation::CreateParagraphStyle {
+                self_id,
+                name,
+                based_on,
+            } => Some(Operation::CreateParagraphStyle {
+                self_id: self_id.clone(),
+                name: name.clone(),
+                based_on: based_on.clone(),
+                restore_json: None,
+            }),
+            Mutation::RenameParagraphStyle { style_id, name } => {
+                Some(Operation::RenameParagraphStyle {
+                    style_id: style_id.clone(),
+                    name: name.clone(),
+                })
+            }
+            Mutation::DeleteParagraphStyle { style_id } => Some(Operation::DeleteParagraphStyle {
+                style_id: style_id.clone(),
+            }),
+            Mutation::CreateCharacterStyle {
+                self_id,
+                name,
+                based_on,
+            } => Some(Operation::CreateCharacterStyle {
+                self_id: self_id.clone(),
+                name: name.clone(),
+                based_on: based_on.clone(),
+                restore_json: None,
+            }),
+            Mutation::RenameCharacterStyle { style_id, name } => {
+                Some(Operation::RenameCharacterStyle {
+                    style_id: style_id.clone(),
+                    name: name.clone(),
+                })
+            }
+            Mutation::DeleteCharacterStyle { style_id } => Some(Operation::DeleteCharacterStyle {
+                style_id: style_id.clone(),
+            }),
+            Mutation::CreateObjectStyle {
+                self_id,
+                name,
+                based_on,
+            } => Some(Operation::CreateObjectStyle {
+                self_id: self_id.clone(),
+                name: name.clone(),
+                based_on: based_on.clone(),
+                restore_json: None,
+            }),
+            Mutation::RenameObjectStyle { style_id, name } => Some(Operation::RenameObjectStyle {
+                style_id: style_id.clone(),
+                name: name.clone(),
+            }),
+            Mutation::DeleteObjectStyle { style_id } => Some(Operation::DeleteObjectStyle {
+                style_id: style_id.clone(),
+            }),
+            Mutation::CreateCellStyle {
+                self_id,
+                name,
+                based_on,
+            } => Some(Operation::CreateCellStyle {
+                self_id: self_id.clone(),
+                name: name.clone(),
+                based_on: based_on.clone(),
+                restore_json: None,
+            }),
+            Mutation::RenameCellStyle { style_id, name } => Some(Operation::RenameCellStyle {
+                style_id: style_id.clone(),
+                name: name.clone(),
+            }),
+            Mutation::DeleteCellStyle { style_id } => Some(Operation::DeleteCellStyle {
+                style_id: style_id.clone(),
+            }),
+            Mutation::CreateTableStyle {
+                self_id,
+                name,
+                based_on,
+            } => Some(Operation::CreateTableStyle {
+                self_id: self_id.clone(),
+                name: name.clone(),
+                based_on: based_on.clone(),
+                restore_json: None,
+            }),
+            Mutation::RenameTableStyle { style_id, name } => Some(Operation::RenameTableStyle {
+                style_id: style_id.clone(),
+                name: name.clone(),
+            }),
+            Mutation::DeleteTableStyle { style_id } => Some(Operation::DeleteTableStyle {
+                style_id: style_id.clone(),
+            }),
+            Mutation::SetStyleProperty {
+                collection,
+                style_id,
+                path,
+                value,
+            } => Some(Operation::SetStyleProperty {
+                collection: *collection,
+                style_id: style_id.clone(),
+                path: *path,
+                value: value.clone(),
+            }),
             _ => None,
         }
     }
