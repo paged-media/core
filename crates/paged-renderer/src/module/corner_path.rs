@@ -25,7 +25,7 @@ use paged_compose::PathId;
 
 use super::{Geometry, ResolvedFrame};
 use crate::pipeline::{
-    fnv_1a_u64, inset_rect, per_corner_radii, rounded_rect_path_per_corner,
+    corner_rect_path, fnv_1a_u64, inset_rect, per_corner_kinds, per_corner_radii,
     stroke_alignment_offset, BuiltPage,
 };
 
@@ -54,7 +54,11 @@ pub(crate) fn corner_path_module(frame: &ResolvedFrame<'_>, page: &mut BuiltPage
     if radii.iter().all(|r| r.is_none()) {
         return CornerPaths::none();
     }
-    let path = rounded_rect_path_per_corner(rect, radii);
+    // Per-corner shape (Rounded / Inverse / Bevel / Inset / Fancy). The
+    // decorative variants are now emitted with bespoke geometry rather
+    // than collapsing to Rounded.
+    let kinds = per_corner_kinds(frame.corner_option, &frame.corners);
+    let path = corner_rect_path(rect, radii, kinds);
     let key_bytes = frame
         .self_id
         .map(|s| s.as_bytes().to_vec())
@@ -64,7 +68,15 @@ pub(crate) fn corner_path_module(frame: &ResolvedFrame<'_>, page: &mut BuiltPage
         let v = r.unwrap_or(0.0).to_bits().to_le_bytes();
         radii_bits[i * 4..i * 4 + 4].copy_from_slice(&v);
     }
-    let fill_key = fnv_1a_u64(&[key_bytes.as_slice(), &radii_bits].concat());
+    // Fold the corner kinds into the cache key so a Bevel and a Rounded
+    // of the same radius don't collide on one interned path.
+    let kind_bytes: [u8; 4] = [
+        kinds[0] as u8,
+        kinds[1] as u8,
+        kinds[2] as u8,
+        kinds[3] as u8,
+    ];
+    let fill_key = fnv_1a_u64(&[key_bytes.as_slice(), &radii_bits, &kind_bytes].concat());
     let (fill_id, _) = page.list.paths.intern(fill_key, path);
 
     // Stroke alignment shifts the stroke path inward (Inside) /
@@ -80,7 +92,7 @@ pub(crate) fn corner_path_module(frame: &ResolvedFrame<'_>, page: &mut BuiltPage
         radii[2].map(|r| (r - stroke_offset).max(0.0)),
         radii[3].map(|r| (r - stroke_offset).max(0.0)),
     ];
-    let stroke_path = rounded_rect_path_per_corner(stroke_rect, stroke_radii);
+    let stroke_path = corner_rect_path(stroke_rect, stroke_radii, kinds);
     let mut stroke_bits = [0u8; 16];
     for (i, r) in stroke_radii.iter().enumerate() {
         let v = r.unwrap_or(0.0).to_bits().to_le_bytes();
@@ -90,6 +102,7 @@ pub(crate) fn corner_path_module(frame: &ResolvedFrame<'_>, page: &mut BuiltPage
         &[
             key_bytes.as_slice(),
             &stroke_bits,
+            &kind_bytes,
             &stroke_offset.to_bits().to_le_bytes(),
             b"sa",
         ]

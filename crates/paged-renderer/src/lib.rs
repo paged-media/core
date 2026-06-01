@@ -18,11 +18,13 @@
 //! GPU raster. Mirrors the TypeScript surface described in idea.md §14.
 
 pub mod asset;
+pub mod diagnostics;
 pub mod pipeline;
 
 mod module;
 
 pub use asset::{AssetResolver, BytesResolver};
+pub use diagnostics::{Diagnostic, DiagnosticCode, RenderDiagnostics, Severity};
 pub use pipeline::{
     build, build_document, build_run_paint_picker, resolve_fill, resolve_stroke,
     BodyStoryEmissionDelta, BodyStoryPageDelta, BuiltDocument, BuiltPage, ClusterPos,

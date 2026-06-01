@@ -175,6 +175,10 @@ pub struct GradientStopRef {
     pub stop_color: String,
     /// `Location` attribute, 0..=100 in IDML.
     pub location_pct: f32,
+    /// `Midpoint` attribute, 0..=100 (default 50): where, *within the
+    /// segment to the next stop*, the colour reaches the halfway blend.
+    /// `None` ⇒ the file omitted it ⇒ treat as the linear 50.
+    pub midpoint_pct: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -384,9 +388,11 @@ fn parse_gradient_stop(e: &quick_xml::events::BytesStart) -> Option<GradientStop
     let location_pct = attr(e, b"Location")
         .and_then(|s| s.parse::<f32>().ok())
         .unwrap_or(0.0);
+    let midpoint_pct = attr(e, b"Midpoint").and_then(|s| s.parse::<f32>().ok());
     Some(GradientStopRef {
         stop_color,
         location_pct,
+        midpoint_pct,
     })
 }
 

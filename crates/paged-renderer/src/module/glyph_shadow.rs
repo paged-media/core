@@ -181,6 +181,7 @@ mod tests {
             stats: Default::default(),
             story_layout: Vec::new(),
             footnotes: Vec::new(),
+            diagnostics: Vec::new(),
         }
     }
 

@@ -74,6 +74,127 @@ pub struct DesignMap {
     /// document's index. Flat list (the IDML schema's nested
     /// topics are flattened to one entry per Self for v1).
     pub index_topics: Vec<IndexTopic>,
+    /// `<Section>` definitions, in document order. Each anchors at a
+    /// `<Page>` (via `PageStart`) and carries the numbering style /
+    /// start value / prefix InDesign uses to label that section's
+    /// pages. The renderer consults these to compute a page label when
+    /// the `<Page>` itself carries no baked `Name` (and they feed the
+    /// auto-page-number marker reflow). When `Name` is present it stays
+    /// authoritative.
+    pub sections: Vec<Section>,
+}
+
+/// Page-numbering style for a `<Section>` (`PageNumberStyle`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum NumberingStyle {
+    Arabic,
+    UpperRoman,
+    LowerRoman,
+    UpperAlpha,
+    LowerAlpha,
+}
+
+impl NumberingStyle {
+    /// Map an IDML `PageNumberStyle` value. Unknown / unsupported
+    /// styles (Kanji, Katakana, …) fall back to Arabic.
+    pub fn from_idml(s: &str) -> Self {
+        match s {
+            "UpperRoman" => NumberingStyle::UpperRoman,
+            "LowerRoman" => NumberingStyle::LowerRoman,
+            "UpperLetters" => NumberingStyle::UpperAlpha,
+            "LowerLetters" => NumberingStyle::LowerAlpha,
+            _ => NumberingStyle::Arabic,
+        }
+    }
+
+    /// Format a 1-based page number in this style. `0` (or anything
+    /// the roman/alpha encoders can't represent) renders as the bare
+    /// Arabic digits so the label is never empty.
+    pub fn format(self, n: u32) -> String {
+        match self {
+            NumberingStyle::Arabic => n.to_string(),
+            NumberingStyle::UpperRoman => to_roman(n).unwrap_or_else(|| n.to_string()),
+            NumberingStyle::LowerRoman => to_roman(n)
+                .map(|r| r.to_lowercase())
+                .unwrap_or_else(|| n.to_string()),
+            NumberingStyle::UpperAlpha => to_alpha(n).unwrap_or_else(|| n.to_string()),
+            NumberingStyle::LowerAlpha => to_alpha(n)
+                .map(|a| a.to_lowercase())
+                .unwrap_or_else(|| n.to_string()),
+        }
+    }
+}
+
+/// Classic additive Roman numerals (1..=3999). Returns `None` outside
+/// that range so callers fall back to Arabic.
+fn to_roman(mut n: u32) -> Option<String> {
+    if n == 0 || n > 3999 {
+        return None;
+    }
+    const TABLE: [(u32, &str); 13] = [
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
+    ];
+    let mut out = String::new();
+    for (value, sym) in TABLE {
+        while n >= value {
+            out.push_str(sym);
+            n -= value;
+        }
+    }
+    Some(out)
+}
+
+/// Spreadsheet-style alphabetic numbering: 1→A, 26→Z, 27→AA, 28→AB.
+/// `None` for 0.
+fn to_alpha(mut n: u32) -> Option<String> {
+    if n == 0 {
+        return None;
+    }
+    let mut out = Vec::new();
+    while n > 0 {
+        let rem = ((n - 1) % 26) as u8;
+        out.push(b'A' + rem);
+        n = (n - 1) / 26;
+    }
+    out.reverse();
+    Some(String::from_utf8(out).expect("ascii"))
+}
+
+/// IDML `<Section>` definition.
+#[derive(Debug, Clone, Serialize)]
+pub struct Section {
+    pub self_id: String,
+    /// `PageStart` — the `Self` of the `<Page>` this section begins at.
+    pub page_start: Option<String>,
+    /// `ContinueNumbering="true"` — the section continues the running
+    /// page number from the previous section rather than restarting.
+    pub continue_numbering: bool,
+    /// `PageNumberStart` — the number the section's first page takes
+    /// when `continue_numbering` is false. Defaults to 1.
+    pub start_at: Option<u32>,
+    /// `PageNumberStyle`, defaulting to Arabic.
+    pub numbering_style: NumberingStyle,
+    /// `SectionPrefix` — prepended to the formatted number when
+    /// `include_prefix` is set (e.g. `"A-"` → "A-1").
+    pub section_prefix: Option<String>,
+    /// `Marker` — the section marker text (chapter marker). Captured
+    /// for round-trip / tooling; not used in the page label today.
+    pub marker: Option<String>,
+    /// `IncludeSectionPrefix="true"` — whether the prefix shows in the
+    /// page label.
+    pub include_prefix: bool,
 }
 
 /// IDML `<Article>` definition. Members reference stories via
@@ -159,6 +280,14 @@ pub struct Layer {
     /// `Printable="true|false"` — InDesign's "Print Layer" checkbox.
     /// Non-printable layers are skipped during rendering.
     pub printable: bool,
+    /// `Self` of the enclosing `<Layer>` when this layer is nested
+    /// inside a layer group (folder) in InDesign's Layers panel.
+    /// `None` for a top-level layer — the overwhelmingly common case,
+    /// where every `<Layer>` is a self-closing peer. The render-time
+    /// visibility / lock resolution ANDs/ORs a layer with its ancestors
+    /// so an item on a visible child layer inside a hidden parent group
+    /// is still hidden.
+    pub parent_id: Option<String>,
 }
 
 /// Document-level color management config. Mirrors the attributes that
@@ -199,9 +328,22 @@ impl DesignMap {
 
         let mut out = DesignMap::default();
         let mut buf = Vec::new();
+        // Stack of currently-open `<Layer Self=...>` ids, so a nested
+        // `<Layer>` (layer group / folder) records its parent. Only
+        // `Event::Start` opens a scope; a self-closing `<Layer/>` (the
+        // flat common case) records `parent_id` from the stack top but
+        // doesn't push, keeping flat documents byte-identical.
+        let mut layer_stack: Vec<String> = Vec::new();
 
         loop {
-            match reader.read_event_into(&mut buf)? {
+            let ev = reader.read_event_into(&mut buf)?;
+            if let Event::End(ref e) = ev {
+                if e.name().as_ref() == b"Layer" {
+                    layer_stack.pop();
+                }
+            }
+            let is_start = matches!(ev, Event::Start(_));
+            match ev {
                 Event::Start(e) | Event::Empty(e) => {
                     if e.name().as_ref() == b"Document" {
                         out.dom_version = attr(&e, b"DOMVersion");
@@ -216,7 +358,7 @@ impl DesignMap {
                     if e.name().as_ref() == b"Layer" {
                         if let Some(self_id) = attr(&e, b"Self") {
                             out.layers.push(Layer {
-                                self_id,
+                                self_id: self_id.clone(),
                                 name: attr(&e, b"Name"),
                                 visible: attr(&e, b"Visible")
                                     .and_then(|s| s.parse().ok())
@@ -227,7 +369,13 @@ impl DesignMap {
                                 printable: attr(&e, b"Printable")
                                     .and_then(|s| s.parse().ok())
                                     .unwrap_or(true),
+                                parent_id: layer_stack.last().cloned(),
                             });
+                            // A non-self-closing <Layer> opens a group
+                            // scope; its descendant layers inherit it.
+                            if is_start {
+                                layer_stack.push(self_id);
+                            }
                         }
                     }
                     if e.name().as_ref() == b"TextVariable" {
@@ -236,6 +384,27 @@ impl DesignMap {
                                 self_id,
                                 name: attr(&e, b"Name"),
                                 variable_type: attr(&e, b"VariableType"),
+                            });
+                        }
+                    }
+                    if e.name().as_ref() == b"Section" {
+                        if let Some(self_id) = attr(&e, b"Self") {
+                            out.sections.push(Section {
+                                self_id,
+                                page_start: attr(&e, b"PageStart"),
+                                continue_numbering: attr(&e, b"ContinueNumbering")
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(false),
+                                start_at: attr(&e, b"PageNumberStart")
+                                    .and_then(|s| s.parse().ok()),
+                                numbering_style: attr(&e, b"PageNumberStyle")
+                                    .map(|s| NumberingStyle::from_idml(&s))
+                                    .unwrap_or(NumberingStyle::Arabic),
+                                section_prefix: attr(&e, b"SectionPrefix"),
+                                marker: attr(&e, b"Marker"),
+                                include_prefix: attr(&e, b"IncludeSectionPrefix")
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(false),
                             });
                         }
                     }
@@ -365,6 +534,66 @@ mod tests {
         assert_eq!(printable, vec![true, false, true, true]);
         let visible: Vec<bool> = dm.layers.iter().map(|l| l.visible).collect();
         assert_eq!(visible, vec![true, true, false, true]);
+    }
+
+    #[test]
+    fn flat_layers_have_no_parent() {
+        let dm = DesignMap::parse(LAYERS_SAMPLE).unwrap();
+        assert!(dm.layers.iter().all(|l| l.parent_id.is_none()));
+    }
+
+    #[test]
+    fn nested_layers_capture_parent() {
+        // A layer group (folder): the non-self-closing <Layer> opens a
+        // scope; its child <Layer> records the parent's Self. A sibling
+        // top-level layer after the group closes is parentless again.
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Layer Self="grp" Name="Group">
+    <Layer Self="child1" Name="Child 1"/>
+    <Layer Self="child2" Name="Child 2"/>
+  </Layer>
+  <Layer Self="peer" Name="Peer"/>
+</Document>"#;
+        let dm = DesignMap::parse(xml).unwrap();
+        assert_eq!(dm.layers.len(), 4);
+        let by_id = |id: &str| dm.layers.iter().find(|l| l.self_id == id).unwrap();
+        assert_eq!(by_id("grp").parent_id, None);
+        assert_eq!(by_id("child1").parent_id.as_deref(), Some("grp"));
+        assert_eq!(by_id("child2").parent_id.as_deref(), Some("grp"));
+        assert_eq!(by_id("peer").parent_id, None);
+    }
+
+    #[test]
+    fn numbering_style_formats() {
+        assert_eq!(NumberingStyle::Arabic.format(3), "3");
+        assert_eq!(NumberingStyle::UpperRoman.format(4), "IV");
+        assert_eq!(NumberingStyle::LowerRoman.format(3), "iii");
+        assert_eq!(NumberingStyle::LowerRoman.format(9), "ix");
+        assert_eq!(NumberingStyle::UpperAlpha.format(1), "A");
+        assert_eq!(NumberingStyle::UpperAlpha.format(27), "AA");
+        assert_eq!(NumberingStyle::LowerAlpha.format(2), "b");
+        // 0 / out-of-range fall back to Arabic digits, never empty.
+        assert_eq!(NumberingStyle::UpperRoman.format(0), "0");
+    }
+
+    #[test]
+    fn parses_section_definitions() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Section Self="sec1" PageStart="page1" PageNumberStyle="LowerRoman"
+           PageNumberStart="1" ContinueNumbering="false"/>
+  <Section Self="sec2" PageStart="page3" PageNumberStyle="Arabic"
+           SectionPrefix="A-" IncludeSectionPrefix="true" PageNumberStart="1"/>
+</Document>"#;
+        let dm = DesignMap::parse(xml).unwrap();
+        assert_eq!(dm.sections.len(), 2);
+        assert_eq!(dm.sections[0].page_start.as_deref(), Some("page1"));
+        assert_eq!(dm.sections[0].numbering_style, NumberingStyle::LowerRoman);
+        assert_eq!(dm.sections[0].start_at, Some(1));
+        assert_eq!(dm.sections[1].numbering_style, NumberingStyle::Arabic);
+        assert_eq!(dm.sections[1].section_prefix.as_deref(), Some("A-"));
+        assert!(dm.sections[1].include_prefix);
     }
 
     #[test]

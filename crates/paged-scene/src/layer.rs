@@ -40,25 +40,82 @@ use std::collections::HashMap;
 
 use paged_parse::DesignMap;
 
+/// True iff `layer_id` AND every ancestor layer (via `parent_id`) is
+/// visible-and-printable. A layer nested inside a hidden or
+/// non-printable group (folder) is itself suppressed, matching
+/// InDesign's Layers panel. An unknown / dangling id resolves to `true`
+/// (visible) — same default as a missing `ItemLayer`. Bounded by the
+/// layer count so a malformed parent cycle terminates.
+fn chain_render_visible(designmap: &DesignMap, layer_id: &str) -> bool {
+    let mut id = layer_id.to_string();
+    let mut guard = designmap.layers.len() + 1;
+    loop {
+        if guard == 0 {
+            return true;
+        }
+        guard -= 1;
+        match designmap.layers.iter().find(|l| l.self_id == id) {
+            Some(l) => {
+                if !(l.visible && l.printable) {
+                    return false;
+                }
+                match &l.parent_id {
+                    Some(p) => id = p.clone(),
+                    None => return true,
+                }
+            }
+            None => return true,
+        }
+    }
+}
+
+/// True iff `layer_id` OR any ancestor layer is locked. A layer nested
+/// inside a locked group is itself locked. Unknown id ⇒ unlocked.
+fn chain_locked(designmap: &DesignMap, layer_id: &str) -> bool {
+    let mut id = layer_id.to_string();
+    let mut guard = designmap.layers.len() + 1;
+    loop {
+        if guard == 0 {
+            return false;
+        }
+        guard -= 1;
+        match designmap.layers.iter().find(|l| l.self_id == id) {
+            Some(l) => {
+                if l.locked {
+                    return true;
+                }
+                match &l.parent_id {
+                    Some(p) => id = p.clone(),
+                    None => return false,
+                }
+            }
+            None => return false,
+        }
+    }
+}
+
 /// Precompute the `layer_id → (visible && printable)` map used by the
-/// renderer to skip suppressed items. Lookup defaults to `true` for
-/// items with no `ItemLayer` ref or a ref that doesn't resolve.
+/// renderer to skip suppressed items. The value folds in the ancestor
+/// chain (a visible child inside a hidden group is `false`). Lookup
+/// defaults to `true` for items with no `ItemLayer` ref or a ref that
+/// doesn't resolve.
 pub fn build_layer_render_map(designmap: &DesignMap) -> HashMap<&str, bool> {
     designmap
         .layers
         .iter()
-        .map(|l| (l.self_id.as_str(), l.visible && l.printable))
+        .map(|l| (l.self_id.as_str(), chain_render_visible(designmap, &l.self_id)))
         .collect()
 }
 
 /// Precompute the `layer_id → locked` map used by the canvas selection
-/// layer to filter out items the user must not be able to grab.
+/// layer to filter out items the user must not be able to grab. Folds
+/// in the ancestor chain (a child inside a locked group is locked).
 /// The renderer ignores this; it is a selection-layer concern.
 pub fn build_layer_locked_map(designmap: &DesignMap) -> HashMap<&str, bool> {
     designmap
         .layers
         .iter()
-        .map(|l| (l.self_id.as_str(), l.locked))
+        .map(|l| (l.self_id.as_str(), chain_locked(designmap, &l.self_id)))
         .collect()
 }
 
@@ -98,12 +155,7 @@ pub fn lookup_layer_locked(map: &HashMap<&str, bool>, item_layer_ref: Option<&st
 /// printable)? Items with no `ItemLayer` ref default to visible.
 pub fn layer_render_visible(designmap: &DesignMap, item_layer_ref: Option<&str>) -> bool {
     match item_layer_ref {
-        Some(id) => designmap
-            .layers
-            .iter()
-            .find(|l| l.self_id == id)
-            .map(|l| l.visible && l.printable)
-            .unwrap_or(true),
+        Some(id) => chain_render_visible(designmap, id),
         None => true,
     }
 }
@@ -112,12 +164,7 @@ pub fn layer_render_visible(designmap: &DesignMap, item_layer_ref: Option<&str>)
 /// with no `ItemLayer` default to unlocked.
 pub fn layer_locked(designmap: &DesignMap, item_layer_ref: Option<&str>) -> bool {
     match item_layer_ref {
-        Some(id) => designmap
-            .layers
-            .iter()
-            .find(|l| l.self_id == id)
-            .map(|l| l.locked)
-            .unwrap_or(false),
+        Some(id) => chain_locked(designmap, id),
         None => false,
     }
 }
@@ -156,6 +203,20 @@ mod tests {
             visible,
             locked,
             printable,
+            parent_id: None,
+        }
+    }
+
+    fn child_layer(
+        id: &str,
+        parent: &str,
+        visible: bool,
+        locked: bool,
+        printable: bool,
+    ) -> Layer {
+        Layer {
+            parent_id: Some(parent.to_string()),
+            ..layer(id, visible, locked, printable)
         }
     }
 
@@ -199,6 +260,42 @@ mod tests {
         assert_eq!(layer_z(&d, Some("top")), 0);
         assert_eq!(layer_z(&d, Some("missing")), usize::MAX);
         assert_eq!(layer_z(&d, None), usize::MAX);
+    }
+
+    #[test]
+    fn child_hidden_by_ancestor() {
+        // A visible+printable child layer inside a hidden parent group
+        // must resolve hidden; inside a non-printable group too. A
+        // visible child of a visible group stays visible.
+        let d = dm(vec![
+            layer("grp_hidden", false, false, true),
+            child_layer("child_vis", "grp_hidden", true, false, true),
+            layer("grp_noprint", true, false, false),
+            child_layer("child2", "grp_noprint", true, false, true),
+            layer("grp_ok", true, false, true),
+            child_layer("child_ok", "grp_ok", true, false, true),
+        ]);
+        assert!(!layer_render_visible(&d, Some("child_vis")));
+        assert!(!layer_render_visible(&d, Some("child2")));
+        assert!(layer_render_visible(&d, Some("child_ok")));
+        // The precomputed map must agree with the one-shot.
+        let render = build_layer_render_map(&d);
+        assert_eq!(render["child_vis"], false);
+        assert_eq!(render["child2"], false);
+        assert_eq!(render["child_ok"], true);
+    }
+
+    #[test]
+    fn child_locked_by_ancestor() {
+        // A child layer inside a locked group is locked even if its own
+        // Locked flag is false.
+        let d = dm(vec![
+            layer("grp_locked", true, true, true),
+            child_layer("child", "grp_locked", true, false, true),
+        ]);
+        assert!(layer_locked(&d, Some("child")));
+        let locked = build_layer_locked_map(&d);
+        assert_eq!(locked["child"], true);
     }
 
     #[test]

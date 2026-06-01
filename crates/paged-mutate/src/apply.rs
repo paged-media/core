@@ -2132,6 +2132,9 @@ fn apply_insert_layer(
             visible: true,
             locked: false,
             printable: true,
+            // Editor-inserted layers are top-level peers; nested
+            // layer-group authoring isn't a mutation op yet.
+            parent_id: None,
         },
     );
     let inverse = Operation::RemoveLayer {

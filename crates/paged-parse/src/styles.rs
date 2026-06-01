@@ -265,6 +265,8 @@ pub struct CellStyleDef {
     pub based_on: Option<String>,
     pub fill_color: Option<String>,
     pub vertical_justification: Option<String>,
+    /// `RotationAngle` (degrees) for the cell's content.
+    pub rotation_angle: Option<f32>,
     pub top_edge_stroke_color: Option<String>,
     pub top_edge_stroke_weight: Option<f32>,
     pub bottom_edge_stroke_color: Option<String>,
@@ -339,6 +341,7 @@ pub struct ResolvedTable {
 pub struct ResolvedCell {
     pub fill_color: Option<String>,
     pub vertical_justification: Option<String>,
+    pub rotation_angle: Option<f32>,
     pub top_edge_stroke_color: Option<String>,
     pub top_edge_stroke_weight: Option<f32>,
     pub bottom_edge_stroke_color: Option<String>,
@@ -1463,6 +1466,7 @@ impl ResolvedCell {
         if self.vertical_justification.is_none() {
             self.vertical_justification = def.vertical_justification.clone();
         }
+        self.rotation_angle = self.rotation_angle.or(def.rotation_angle);
         if self.top_edge_stroke_color.is_none() {
             self.top_edge_stroke_color = def.top_edge_stroke_color.clone();
         }
@@ -1882,6 +1886,7 @@ fn parse_cell_style(e: &quick_xml::events::BytesStart) -> Option<CellStyleDef> {
         based_on: attr(e, b"BasedOn"),
         fill_color: normalize(attr(e, b"FillColor")),
         vertical_justification: attr(e, b"VerticalJustification"),
+        rotation_angle: attr(e, b"RotationAngle").and_then(|s| s.parse().ok()),
         top_edge_stroke_color: normalize(attr(e, b"TopEdgeStrokeColor")),
         top_edge_stroke_weight: attr(e, b"TopEdgeStrokeWeight").and_then(|s| s.parse().ok()),
         bottom_edge_stroke_color: normalize(attr(e, b"BottomEdgeStrokeColor")),

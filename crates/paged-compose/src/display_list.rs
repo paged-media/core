@@ -183,6 +183,14 @@ impl Transform {
         Transform([sx, 0.0, 0.0, sy, 0.0, 0.0])
     }
 
+    /// Rotation by `deg` degrees clockwise about the origin (y grows
+    /// downward, so a positive angle turns clockwise on screen).
+    pub fn rotate_deg(deg: f32) -> Self {
+        let r = deg.to_radians();
+        let (s, c) = r.sin_cos();
+        Transform([c, s, -s, c, 0.0, 0.0])
+    }
+
     /// Apply to a point.
     pub fn apply(&self, x: f32, y: f32) -> (f32, f32) {
         let [a, b, c, d, tx, ty] = self.0;

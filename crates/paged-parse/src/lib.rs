@@ -41,7 +41,7 @@ pub use graphic::{
     SwatchEntry,
 };
 pub use spread::{
-    AutoSizingReferencePoint, AutoSizingType, Bounds, CornerOption, CornerSpec,
+    ArrowheadType, AutoSizingReferencePoint, AutoSizingType, Bounds, CornerOption, CornerSpec,
     DirectionalFeatherParams, DropShadowSetting, FirstBaselineOffset, FrameEffects,
     FrameFittingOption, FrameRef, GradientFeatherParams, GradientFeatherStop, GraphicLine, Group,
     GroupTransparency, GuideOrientation, Oval, Page, PathAnchor, Polygon, Rectangle, RulerGuide,

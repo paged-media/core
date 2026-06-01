@@ -589,6 +589,11 @@ pub struct TableCell {
     /// top-right → bottom-left. Stored as a small bag because all
     /// fields are optional and most cells have neither.
     pub diagonal: CellDiagonal,
+    /// `RotationAngle` (degrees, clockwise) applied to the cell's
+    /// content. In practice InDesign quantises this to 0/90/180/270.
+    /// `None` ⇒ inherit from the cell-style cascade, then default 0.
+    /// Borders/fills are not rotated — only the cell content.
+    pub rotation_angle: Option<f32>,
     /// Cell content — paragraphs, parsed identically to top-level
     /// story paragraphs.
     pub paragraphs: Vec<Paragraph>,
@@ -1255,6 +1260,8 @@ impl Story {
                                 diagonal_in_front: attr(&e, b"DiagonalLineInFront")
                                     .and_then(|s| s.parse().ok()),
                             },
+                            rotation_angle: attr(&e, b"RotationAngle")
+                                .and_then(|s| s.parse().ok()),
                             paragraphs: Vec::new(),
                         });
                     }

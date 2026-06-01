@@ -558,6 +558,10 @@ mod tests {
             effects: None,
             overprint_stroke: false,
             nonprinting: false,
+            start_arrow: paged_parse::ArrowheadType::None,
+            end_arrow: paged_parse::ArrowheadType::None,
+            start_arrow_scale: 100.0,
+            end_arrow_scale: 100.0,
         };
         let frame = ResolvedFrame::from_graphic_line(&line);
         assert_eq!(frame.stroke_type, Some("CustomDashStyle"));

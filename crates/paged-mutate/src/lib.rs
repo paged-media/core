@@ -1619,6 +1619,7 @@ mod tests {
             visible: true,
             locked: false,
             printable: true,
+            parent_id: None,
         });
         Document {
             container: Container {
@@ -1722,6 +1723,7 @@ mod tests {
                     visible: true,
                     locked: false,
                     printable: true,
+                    parent_id: None,
                 });
             p
         };

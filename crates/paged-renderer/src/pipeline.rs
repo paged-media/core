@@ -34,6 +34,7 @@ use paged_parse::{
 };
 use paged_scene::Document;
 
+use crate::diagnostics::{Diagnostic, DiagnosticCode, RenderDiagnostics};
 use crate::module::geometry::rewrite_tail_for_overprint;
 use crate::module::{Geometry, ResolvedFrame};
 use crate::AssetResolver;
@@ -355,13 +356,20 @@ pub struct BuiltPage {
     pub story_layout: Vec<LineLayout>,
     /// Phase 5 — footnotes anchored on paragraphs that landed on this
     /// page. Each entry preserves the host paragraph's identity and
-    /// the footnote body. Today the renderer doesn't yet draw the
-    /// footnote bodies into the page's display list (that's queued —
-    /// it needs a per-frame bottom-pool layout pass); however
-    /// surfacing the captures here lets downstream tools observe
-    /// footnote distribution and lets a future per-page pass plug
-    /// in without re-walking the source paragraphs.
+    /// the footnote body. The renderer draws these bodies bottom-up at
+    /// the host frame's content area in a post-pass
+    /// ([`emit_footnote_pools`]); the captures stay here so downstream
+    /// tools can observe footnote distribution. Remaining work:
+    /// reserving the pool's space *before* the main text fills (so
+    /// bodies don't overlap the last lines) and per-run styling — see
+    /// the pool emitter's docs.
     pub footnotes: Vec<EmittedFootnote>,
+    /// Lossy-render signals collected while emitting this page (missing
+    /// image links, decode failures). Aggregated into
+    /// [`BuiltDocument::diagnostics`] with `page_index` backfilled. Empty
+    /// for a clean page. Story-level signals (overset) ride the emit
+    /// channel instead, so this stays untouched by the body-story cache.
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// Phase 5 — a footnote captured at emit time on the page where its
@@ -454,6 +462,12 @@ pub struct BuiltDocument {
     /// compare candidate-side break decisions against PDF-derived
     /// references.
     pub breaks: Vec<BreakRecord>,
+    /// Structured signals for lossy / degraded renders (overset text
+    /// dropped, missing image links, section-numbering fallback).
+    /// Empty for a fully-faithful render. Aggregated from the
+    /// per-page collectors plus the per-story emit channel; the
+    /// underlying `tracing::warn!` calls still fire too.
+    pub diagnostics: RenderDiagnostics,
 }
 
 impl BuiltDocument {
@@ -552,6 +566,79 @@ pub struct PipelineStats {
     pub dropped_overflow_lines: usize,
 }
 
+/// Walks body pages in document order, computing each page's
+/// user-visible label from the document's `<Section>` numbering rules.
+/// `<Page Name>` (the label InDesign baked at export) stays
+/// authoritative when present; the section rules fill the gap for
+/// `Name`-absent pages and keep the running counter coherent so a later
+/// `Name`-absent page still numbers correctly. With no sections and no
+/// `Name`, this reproduces the historical 1-based body-page fallback
+/// exactly (`current_number == pages.len() + 1`).
+struct SectionWalk<'a> {
+    sections: &'a [paged_parse::designmap::Section],
+    /// page `Self` → index into `sections` for the section starting there.
+    starts: HashMap<&'a str, usize>,
+    active: Option<usize>,
+    /// Number assigned to the most recently processed page (0 before any).
+    current_number: u32,
+    /// True once any page fell back to a computed (non-`Name`) label.
+    used_fallback: bool,
+}
+
+impl<'a> SectionWalk<'a> {
+    fn new(sections: &'a [paged_parse::designmap::Section]) -> Self {
+        let mut starts = HashMap::new();
+        for (i, s) in sections.iter().enumerate() {
+            if let Some(ps) = s.page_start.as_deref() {
+                starts.entry(ps).or_insert(i);
+            }
+        }
+        Self {
+            sections,
+            starts,
+            active: None,
+            current_number: 0,
+            used_fallback: false,
+        }
+    }
+
+    /// Advance to the next body page and return its label.
+    fn next_label(&mut self, page_self_id: Option<&str>, page_name: Option<&str>) -> String {
+        // A section starting at this page reseeds the counter; otherwise
+        // it just advances by one within the active (or implicit) section.
+        match page_self_id.and_then(|sid| self.starts.get(sid).copied()) {
+            Some(si) => {
+                let sec = &self.sections[si];
+                self.active = Some(si);
+                self.current_number = if sec.continue_numbering {
+                    self.current_number + 1
+                } else {
+                    sec.start_at.unwrap_or(1)
+                };
+            }
+            None => self.current_number += 1,
+        }
+
+        if let Some(name) = page_name {
+            return name.to_string();
+        }
+        self.used_fallback = true;
+        let style = self
+            .active
+            .map(|si| self.sections[si].numbering_style)
+            .unwrap_or(paged_parse::designmap::NumberingStyle::Arabic);
+        let mut label = style.format(self.current_number);
+        if let Some(sec) = self.active.map(|si| &self.sections[si]) {
+            if sec.include_prefix {
+                if let Some(prefix) = &sec.section_prefix {
+                    label = format!("{prefix}{label}");
+                }
+            }
+        }
+        label
+    }
+}
+
 /// Build one `BuiltPage` per `<Page>` in the document. Each page's
 /// display list contains only frames whose centres fall inside the
 /// page's `GeometricBounds`. Frames placed entirely on the pasteboard
@@ -579,6 +666,10 @@ pub fn build_document(
     let mut pages: Vec<BuiltPage> = Vec::new();
     let mut total_stats = PipelineStats::default();
     let mut breaks: Vec<BreakRecord> = Vec::new();
+    // Document-level diagnostics drained from per-story emitters
+    // (overset) and from page-label computation (section fallback).
+    // Per-page image diagnostics are aggregated separately at the end.
+    let mut emit_diagnostics: Vec<Diagnostic> = Vec::new();
 
     // Walk every page in every spread. We capture each page's bounds,
     // origin, and applied-master reference so the next passes can
@@ -590,6 +681,7 @@ pub fn build_document(
     // coordinate system and two spreads' page bounds can collide.
     let mut page_geometries: Vec<PageGeom> = Vec::new();
     let mut page_labels: Vec<String> = Vec::new();
+    let mut section_walk = SectionWalk::new(&document.container.designmap.sections);
     let mut spread_page_ranges: Vec<std::ops::Range<usize>> =
         Vec::with_capacity(document.spreads.len());
     for (spread_idx, parsed) in document.spreads.iter().enumerate() {
@@ -609,14 +701,11 @@ pub fn build_document(
             });
             // Page.Name carries the user-visible label as InDesign
             // rendered it (Arabic / Roman / arbitrary section
-            // override). Falling back to the 1-based body-page index
-            // matches the pre-Section behaviour for IDMLs that omit
-            // Name (rare; mostly synthetic test fixtures).
-            page_labels.push(
-                p.name
-                    .clone()
-                    .unwrap_or_else(|| (pages.len() + 1).to_string()),
-            );
+            // override) and stays authoritative. When absent, the
+            // section walk computes the label from the document's
+            // `<Section>` numbering rules (falling back to the 1-based
+            // body-page index when no section applies).
+            page_labels.push(section_walk.next_label(p.self_id.as_deref(), p.name.as_deref()));
             let page_id = p
                 .self_id
                 .clone()
@@ -633,11 +722,26 @@ pub fn build_document(
                 stats: PipelineStats::default(),
                 story_layout: Vec::new(),
                 footnotes: Vec::new(),
+                diagnostics: Vec::new(),
             });
         }
         spread_page_ranges.push(start..pages.len());
     }
     total_stats.pages = pages.len();
+    // Surface that one or more page labels were computed rather than
+    // read from a baked `<Page Name>` — an honest signal that numbering
+    // came from section rules / the 1-based fallback, not InDesign.
+    if section_walk.used_fallback {
+        let detail = if document.container.designmap.sections.is_empty() {
+            "page label(s) computed via 1-based fallback (no <Page Name>, no <Section>)"
+        } else {
+            "page label(s) computed from <Section> numbering rules (no baked <Page Name>)"
+        };
+        emit_diagnostics.push(Diagnostic::new(
+            DiagnosticCode::SectionNumberingFallback,
+            detail,
+        ));
+    }
     if pages.is_empty() {
         // Documents without a page (rare but valid) get a single
         // letter-sized canvas so callers always see a renderable output.
@@ -652,6 +756,7 @@ pub fn build_document(
             stats: PipelineStats::default(),
             story_layout: Vec::new(),
             footnotes: Vec::new(),
+            diagnostics: Vec::new(),
         });
         page_geometries.push(PageGeom {
             bounds_in_spread: paged_parse::Bounds {
@@ -1506,8 +1611,10 @@ pub fn build_document(
         emitter.apply_blend_groups(&mut pages);
         let anchored_q = emitter.take_anchored_image_queue();
         let new_breaks = emitter.take_breaks();
+        let new_diags = emitter.take_diagnostics();
         anchored_image_queue.extend(anchored_q.iter().cloned());
         breaks.extend(new_breaks.iter().cloned());
+        emit_diagnostics.extend(new_diags.iter().cloned());
 
         // Perf-MasterText — capture the delta if the emit didn't
         // touch the gradient / image / anchored / breaks side
@@ -1520,7 +1627,8 @@ pub fn build_document(
             || list.radial_gradients.len() != rad_grad_base
             || list.images.len() != image_base
             || !anchored_q.is_empty()
-            || !new_breaks.is_empty();
+            || !new_breaks.is_empty()
+            || !new_diags.is_empty();
         if let (Some(ref key), Some(rc), false) = (&cache_key, options.master_text_emit_cache, uncacheable) {
             let new_paths: Vec<paged_compose::PathData> =
                 list.paths.slice(path_base, list.paths.len()).to_vec();
@@ -1836,8 +1944,10 @@ pub fn build_document(
         }
         let new_anchored = emitter.take_anchored_image_queue();
         let new_breaks = emitter.take_breaks();
+        let new_diags = emitter.take_diagnostics();
         anchored_image_queue.extend(new_anchored.iter().cloned());
         breaks.extend(new_breaks.iter().cloned());
+        emit_diagnostics.extend(new_diags.iter().cloned());
 
         // Perf-BodyStory — capture the per-page delta if the emit
         // didn't touch gradient/image pools. Same conservative
@@ -1845,7 +1955,10 @@ pub fn build_document(
         // image entries were added, since the cached splice path
         // only renumbers path-ids.
         if let (Some(ref key), Some(rc)) = (&cache_key, options.body_story_emit_cache) {
-            let mut uncacheable = false;
+            // Diagnostics (overset) ride the emit channel, not the
+            // cached delta — a story that produced any is left
+            // uncacheable so a future hit re-emits and re-reports.
+            let mut uncacheable = !new_diags.is_empty();
             let mut per_page: Vec<(usize, BodyStoryPageDelta)> = Vec::new();
             for (page_idx, snap) in pre_snapshot.iter().enumerate() {
                 let page = &pages[page_idx];
@@ -1933,10 +2046,28 @@ pub fn build_document(
     let footnote_options = options.clone();
     emit_footnote_pools(&mut pages, &font_table, &footnote_options);
 
+    // Aggregate diagnostics: the per-story emit channel (overset,
+    // section fallback) already carries page indices; the per-page
+    // collectors (missing image, footnote overflow) get their flat
+    // page index backfilled here.
+    let mut diagnostics = RenderDiagnostics {
+        items: emit_diagnostics,
+    };
+    for (page_idx, p) in pages.iter().enumerate() {
+        for d in &p.diagnostics {
+            let mut d = d.clone();
+            if d.page_index.is_none() {
+                d.page_index = Some(page_idx);
+            }
+            diagnostics.push(d);
+        }
+    }
+
     Ok(BuiltDocument {
         pages,
         stats: total_stats,
         breaks,
+        diagnostics,
     })
 }
 
@@ -2081,6 +2212,14 @@ struct StoryEmitter<'a> {
     /// Track 2: monotonically incremented as `emit_paragraph` fires.
     /// Resets to 0 per emitter (i.e. per story).
     paragraph_idx: u32,
+    /// Lossy-render signals collected during this story's emit (overset
+    /// drop). Drained by `take_diagnostics` into the document-level
+    /// collector, mirroring `breaks`. A non-empty drain marks the emit
+    /// uncacheable so a body-story cache hit can't silently swallow it.
+    diagnostics: Vec<Diagnostic>,
+    /// Set once a story-overflow drop has been reported so the overset
+    /// diagnostic fires once per story, not once per dropped line.
+    overset_reported: bool,
 }
 
 /// One image-bearing anchored Rectangle captured during the body /
@@ -2257,6 +2396,8 @@ impl<'a> StoryEmitter<'a> {
             breaks: Vec::new(),
             current_story_id: String::new(),
             paragraph_idx: 0,
+            diagnostics: Vec::new(),
+            overset_reported: false,
         }
     }
 
@@ -2267,6 +2408,10 @@ impl<'a> StoryEmitter<'a> {
 
     fn take_breaks(&mut self) -> Vec<BreakRecord> {
         std::mem::take(&mut self.breaks)
+    }
+
+    fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
+        std::mem::take(&mut self.diagnostics)
     }
 
     /// Cycle 6 Track 1: gate per-line break collection on the
@@ -3931,14 +4076,45 @@ fn emit_paragraph_into_chain(
             }
             line.baseline_y = new_baseline;
         }
+        // A-09 (AutoSizing height): a frame whose AutoSizingType grows
+        // height is authored undersized and expected to grow to fit its
+        // text. Rather than dropping the overflow (below), keep placing
+        // lines — the frame effectively extends downward (the common
+        // Top* reference point). The visible fill/stroke box growth +
+        // the text-wrap cascade for neighbouring frames are Phase B.
+        let last_frame_grows_height = em
+            .chain
+            .get(em.frame_idx)
+            .and_then(|f| f.auto_sizing)
+            .map(|a| a.grows_height())
+            .unwrap_or(false);
         // P-13 short-term: when the last frame in the chain overflows
         // (typically because a font substitute is wider than the
         // requested face), drop the overflow lines rather than letting
         // them spill across following frames/pages with no clip. The
         // reference PDFs hide the overflow via the same out-of-frame
         // clip; matching this prevents large ΔE regions.
-        if line.baseline_y > frame_height_64 && em.frame_idx + 1 >= em.chain.len() {
+        if line.baseline_y > frame_height_64
+            && em.frame_idx + 1 >= em.chain.len()
+            && !last_frame_grows_height
+        {
             dropped_overflow_lines += 1;
+            // Report once per story: the count of dropped lines isn't
+            // known until the paragraph finishes, but a single signal
+            // that this story is overset is the actionable bit.
+            if !em.overset_reported {
+                em.overset_reported = true;
+                let page = em.chain_pages[em.frame_idx];
+                let mut d = Diagnostic::new(
+                    DiagnosticCode::OversetTextDropped,
+                    "text overflows the last frame in its chain; trailing lines clipped (overset)",
+                )
+                .with_page(page);
+                if !em.current_story_id.is_empty() {
+                    d = d.with_story(em.current_story_id.clone());
+                }
+                em.diagnostics.push(d);
+            }
             continue;
         }
 
@@ -4368,6 +4544,7 @@ fn emit_paragraph_into_chain(
                     text_origin_pt.1 + baseline_pt_local + line_h_pt_local * 0.2 + off_bottom;
                 if x_right > x_left && y_bot > y_top {
                     let radii = per_corner_radii(None, None, &b.corners);
+                    let kinds = per_corner_kinds(None, &b.corners);
                     let any_rounded = radii.iter().any(|r| r.map(|v| v > 0.0).unwrap_or(false));
                     if any_rounded {
                         let outline_rect = paged_compose::Rect {
@@ -4376,7 +4553,7 @@ fn emit_paragraph_into_chain(
                             w: x_right - x_left,
                             h: y_bot - y_top,
                         };
-                        let path = rounded_rect_path_per_corner(outline_rect, radii);
+                        let path = corner_rect_path(outline_rect, radii, kinds);
                         let path_id = pages[target_page].list.paths.push_anon(path);
                         pages[target_page].list.push(
                             paged_compose::DisplayCommand::StrokePath {
@@ -7040,6 +7217,26 @@ fn emit_table_into_chain(
                 }
             }
         }
+        // Cell RotationAngle: rotate the (already vertically-justified)
+        // content about the cell's centre. Borders / fills are emitted
+        // outside `emitted_extents`, so they stay unrotated — matching
+        // InDesign, which rotates only the cell's content. Cardinal
+        // angles (90/180/270) are the real-world case; arbitrary angles
+        // rotate too but may need content re-fit (a follow-up).
+        let cell_rotation = cell.rotation_angle.or(resolved_cell.rotation_angle);
+        if let Some(deg) = cell_rotation.filter(|a| a.abs() > f32::EPSILON) {
+            let cx = cell_x_pt + cell_w_pt * 0.5;
+            let cy = cell_y_pt + cell_h_pt * 0.5;
+            let rot = Transform::translate(cx, cy)
+                .compose(&Transform::rotate_deg(deg))
+                .compose(&Transform::translate(-cx, -cy));
+            for (s, e) in &emitted_extents {
+                for cmd in &mut pages[target_page].list.commands[*s..*e] {
+                    let t = cmd.transform_mut();
+                    *t = rot.compose(t);
+                }
+            }
+        }
         } // close inner `for c in 0..col_widths.len()`
     } // close outer `for prow_i in 0..physical_rows.len()`
 
@@ -7166,6 +7363,42 @@ fn emit_table_into_chain(
         }
     };
 
+    // Interior column dividers. IDML serialises these via
+    // `Start/EndColumnStroke*` on the `<Table>` — previously only the
+    // per-cell left/right edges were drawn, so a table-style column
+    // divider rendered nothing. A divider sits at the left edge of
+    // columns 1..N (the interior boundaries), spanning each frame the
+    // table touches. Emitted BEFORE the row dividers so the horizontal
+    // row strokes paint over them at crossings — InDesign's default
+    // cell-stroke precedence. (True `StrokeOrder` honouring is a
+    // queued follow-up.)
+    let col_decl = resolve_table_line_strokes(&table.column_strokes);
+    for (_chain_idx, fp_target_page, frame_table_left, top_y, bottom_y) in frame_extents.iter() {
+        let segment_h = bottom_y - top_y;
+        if segment_h <= 0.0 {
+            continue;
+        }
+        for c in 1..col_widths.len() {
+            let (stype, scolor, sweight) = col_decl.pick(c - 1);
+            let Some(color_id) = scolor else { continue };
+            if sweight <= 0.0 {
+                continue;
+            }
+            let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) else {
+                continue;
+            };
+            emit_table_vertical_edge(
+                *frame_table_left + col_x[c],
+                *top_y,
+                segment_h,
+                stype,
+                sweight,
+                paint,
+                &mut pages[*fp_target_page].list,
+            );
+        }
+    }
+
     // Emit row dividers. A divider sits at the bottom edge of a
     // physical row when the next physical row sits in the same
     // frame. The dividing-stroke pick still cycles via the *template*
@@ -7286,6 +7519,70 @@ fn emit_table_into_chain(
     total_stats.paragraphs += 1;
     let stat_page = em.chain_pages[em.frame_idx];
     pages[stat_page].stats.paragraphs += 1;
+}
+
+/// Resolved row / column divider stroke decl: the start/end style
+/// alternation IDML serialises via `Start*StrokeType` /
+/// `End*StrokeType` + counts. Shared by the row-divider and the
+/// column-divider emit so both honour the same "black default when a
+/// type is declared without a colour" + alternation rules.
+struct ResolvedLineStroke {
+    start_type: Option<String>,
+    start_color: Option<String>,
+    start_weight: f32,
+    end_type: Option<String>,
+    end_color: Option<String>,
+    end_weight: f32,
+    start_count: usize,
+    end_count: usize,
+}
+
+fn resolve_table_line_strokes(decl: &paged_parse::TableLineStrokes) -> ResolvedLineStroke {
+    let start_type = decl.start_type.clone();
+    let start_color_raw = decl.start_color.clone();
+    let has_decl = start_type.is_some()
+        || start_color_raw.is_some()
+        || decl.end_type.is_some()
+        || decl.end_color.is_some();
+    // A declared type with no colour means black (IDML's documented
+    // default), matching the row-divider behaviour.
+    let start_color = if has_decl && start_color_raw.is_none() {
+        Some("Color/Black".to_string())
+    } else {
+        start_color_raw
+    };
+    let start_weight = decl.start_weight.unwrap_or(if has_decl { 1.0 } else { 0.0 });
+    ResolvedLineStroke {
+        end_type: decl.end_type.clone().or_else(|| start_type.clone()),
+        end_color: decl.end_color.clone().or_else(|| start_color.clone()),
+        end_weight: decl.end_weight.unwrap_or(start_weight),
+        start_type,
+        start_color,
+        start_weight,
+        start_count: decl.start_count.unwrap_or(0) as usize,
+        end_count: decl.end_count.unwrap_or(0) as usize,
+    }
+}
+
+impl ResolvedLineStroke {
+    /// Pick the (type, color, weight) for the i-th divider, cycling
+    /// `start_count` start-styled then `end_count` end-styled.
+    fn pick(&self, i: usize) -> (Option<&str>, Option<&str>, f32) {
+        let cycle = self.start_count + self.end_count;
+        if cycle == 0 || (i % cycle) < self.start_count {
+            (
+                self.start_type.as_deref(),
+                self.start_color.as_deref(),
+                self.start_weight,
+            )
+        } else {
+            (
+                self.end_type.as_deref(),
+                self.end_color.as_deref(),
+                self.end_weight,
+            )
+        }
+    }
 }
 
 /// Strip `StrokeStyle/$ID/` and an optional leading `Canned ` so the
@@ -7760,8 +8057,11 @@ fn split_paragraph_at_breaks(paragraph: &paged_parse::Paragraph) -> Vec<paged_pa
 /// - Per-run character styling (different fonts / italics inside a
 ///   footnote body),
 /// - Anchor superscript substitution at the host paragraph,
-/// - Cross-page overflow (a footnote pool taller than the host
-///   frame currently overruns above the body content),
+/// - Reserving the pool's height in the main text area *before* the
+///   body fills, so bodies don't overlap the last lines (the
+///   measure-then-place pass); a pool taller than its host frame is
+///   now *reported* via a `FootnoteOverflow` diagnostic, but still
+///   drawn (no clip / cross-frame continuation yet),
 /// - Footnote separator rule (the thin horizontal line InDesign
 ///   draws between body text and the footnote pool).
 /// Perf-BodyStory — signature for a story's emission inputs. Hashes
@@ -7928,7 +8228,7 @@ fn emit_footnote_pools(
         b: 0.0,
         a: 1.0,
     });
-    for page in pages.iter_mut() {
+    for (page_idx, page) in pages.iter_mut().enumerate() {
         if page.footnotes.is_empty() {
             continue;
         }
@@ -7985,6 +8285,22 @@ fn emit_footnote_pools(
                 total_h_pt += h;
             }
             let mut cursor_y_pt = frame_bottom_pt - total_h_pt;
+            // The pool stacks upward from the frame bottom; when its
+            // top rises above the frame's content top it can't fit and
+            // overruns the body text. Report it (previously silent) so
+            // callers know the render is lossy. The bodies are still
+            // drawn — clipping/continuation to the next frame is the
+            // queued follow-up (it needs the reserve-before-fill pass).
+            if cursor_y_pt < rect.y - 0.5 {
+                page.diagnostics.push(
+                    Diagnostic::new(
+                        DiagnosticCode::FootnoteOverflow,
+                        "footnote pool is taller than its host frame; bodies overrun the text",
+                    )
+                    .with_page(page_idx)
+                    .with_story(group[0].host_story_id.clone()),
+                );
+            }
             for h in &per_fn_h {
                 tops_pt.push(cursor_y_pt);
                 cursor_y_pt += *h;
@@ -9214,17 +9530,10 @@ fn frame_spread_top_left(b: paged_parse::Bounds, m: Option<[f32; 6]>) -> (f32, f
 /// unknown id) defaults to visible so single-layer IDMLs that omit
 /// ItemLayer still emit.
 fn is_layer_visible(document: &Document, layer_ref: Option<&str>) -> bool {
-    let Some(id) = layer_ref else {
-        return true;
-    };
-    document
-        .container
-        .designmap
-        .layers
-        .iter()
-        .find(|l| l.self_id == id)
-        .map(|l| l.visible && l.printable)
-        .unwrap_or(true)
+    // Route through the scene helper so the renderer and the canvas
+    // hit-tester agree, including the layer-group ancestor walk (a
+    // visible child inside a hidden group resolves hidden).
+    paged_scene::layer_render_visible(&document.container.designmap, layer_ref)
 }
 
 fn page_for_frame(frame: &paged_parse::Bounds, pages: &[PageGeom]) -> Option<usize> {
@@ -9528,6 +9837,135 @@ fn emit_oval_into(
     }
 }
 
+/// Emit a filled arrowhead of `kind` at `tip`, pointing along the
+/// outward direction `dir` at that line end. Size derives from the
+/// stroke weight × `scale_pct`, matching InDesign's stroke-relative
+/// arrowheads. Filled with `paint` (the stroke colour). `transform`
+/// maps local coords to the page (inner→page for anchored lines,
+/// identity for the page-local diagonal fallback). Emitted as a plain
+/// `FillPath`, so the CPU and Vello backends both draw it.
+#[allow(clippy::too_many_arguments)]
+fn emit_arrowhead(
+    page: &mut BuiltPage,
+    kind: paged_parse::ArrowheadType,
+    tip: (f32, f32),
+    dir: (f32, f32),
+    stroke_width: f32,
+    scale_pct: f32,
+    paint: Paint,
+    transform: Transform,
+) {
+    use paged_compose::PathSegment::*;
+    use paged_parse::ArrowheadType as A;
+    if !kind.draws() || stroke_width <= 0.0 {
+        return;
+    }
+    let len = (dir.0 * dir.0 + dir.1 * dir.1).sqrt();
+    if len < 1e-6 {
+        return;
+    }
+    let (dx, dy) = (dir.0 / len, dir.1 / len); // unit outward
+    let (px, py) = (-dy, dx); // unit perpendicular
+    let scale = (scale_pct / 100.0).max(0.05);
+    // Arrowheads scale off the stroke weight (InDesign-like).
+    let s = stroke_width * 4.0 * scale;
+    let mut segs: Vec<paged_compose::PathSegment> = Vec::new();
+    match kind {
+        A::Triangle | A::TriangleWide | A::Simple | A::Other => {
+            let half_w = if matches!(kind, A::TriangleWide) {
+                s * 0.8
+            } else {
+                s * 0.5
+            };
+            let back = (tip.0 - dx * s, tip.1 - dy * s);
+            segs.push(MoveTo { x: tip.0, y: tip.1 });
+            segs.push(LineTo {
+                x: back.0 + px * half_w,
+                y: back.1 + py * half_w,
+            });
+            segs.push(LineTo {
+                x: back.0 - px * half_w,
+                y: back.1 - py * half_w,
+            });
+            segs.push(Close);
+        }
+        A::Bar => {
+            let half_w = s * 0.7; // extent each side, perpendicular
+            let half_t = (stroke_width * 0.6).max(0.5); // thickness along line
+            let (ax, ay) = (dx * half_t, dy * half_t);
+            let (bx, by) = (px * half_w, py * half_w);
+            segs.push(MoveTo {
+                x: tip.0 + bx + ax,
+                y: tip.1 + by + ay,
+            });
+            segs.push(LineTo {
+                x: tip.0 + bx - ax,
+                y: tip.1 + by - ay,
+            });
+            segs.push(LineTo {
+                x: tip.0 - bx - ax,
+                y: tip.1 - by - ay,
+            });
+            segs.push(LineTo {
+                x: tip.0 - bx + ax,
+                y: tip.1 - by + ay,
+            });
+            segs.push(Close);
+        }
+        A::CircleSolid => {
+            let r = s * 0.5;
+            // Cap the line end: centre the disc one radius back.
+            let c = (tip.0 - dx * r, tip.1 - dy * r);
+            const KAPPA: f32 = 0.552_284_8;
+            let k = r * KAPPA;
+            segs.push(MoveTo { x: c.0 + r, y: c.1 });
+            segs.push(CubicTo {
+                cx1: c.0 + r,
+                cy1: c.1 + k,
+                cx2: c.0 + k,
+                cy2: c.1 + r,
+                x: c.0,
+                y: c.1 + r,
+            });
+            segs.push(CubicTo {
+                cx1: c.0 - k,
+                cy1: c.1 + r,
+                cx2: c.0 - r,
+                cy2: c.1 + k,
+                x: c.0 - r,
+                y: c.1,
+            });
+            segs.push(CubicTo {
+                cx1: c.0 - r,
+                cy1: c.1 - k,
+                cx2: c.0 - k,
+                cy2: c.1 - r,
+                x: c.0,
+                y: c.1 - r,
+            });
+            segs.push(CubicTo {
+                cx1: c.0 + k,
+                cy1: c.1 - r,
+                cx2: c.0 + r,
+                cy2: c.1 - k,
+                x: c.0 + r,
+                y: c.1,
+            });
+            segs.push(Close);
+        }
+        A::None => return,
+    }
+    let path_id = page
+        .list
+        .paths
+        .push_anon(paged_compose::PathData { segments: segs });
+    page.list.push(paged_compose::DisplayCommand::FillPath {
+        path_id,
+        paint,
+        transform,
+    });
+}
+
 fn emit_line_into(
     page: &mut BuiltPage,
     line: &GraphicLine,
@@ -9605,6 +10043,38 @@ fn emit_line_into(
             stroke,
             transform: outer,
         });
+        // Arrowheads at the first / last anchor, oriented outward along
+        // each end's tangent. Built in inner coords and emitted through
+        // the same `outer` transform as the stroke.
+        let n = line.anchors.len();
+        if line.start_arrow.draws() {
+            let a0 = line.anchors[0].anchor;
+            let a1 = line.anchors[1].anchor;
+            emit_arrowhead(
+                page,
+                line.start_arrow,
+                a0,
+                (a0.0 - a1.0, a0.1 - a1.1),
+                stroke_width,
+                line.start_arrow_scale,
+                stroke_paint,
+                outer,
+            );
+        }
+        if line.end_arrow.draws() {
+            let an = line.anchors[n - 1].anchor;
+            let am = line.anchors[n - 2].anchor;
+            emit_arrowhead(
+                page,
+                line.end_arrow,
+                an,
+                (an.0 - am.0, an.1 - am.1),
+                stroke_width,
+                line.end_arrow_scale,
+                stroke_paint,
+                outer,
+            );
+        }
         return;
     }
     // Anchorless line (synthetic `GeometricBounds`-only): rasterise the
@@ -9613,15 +10083,36 @@ fn emit_line_into(
     // its spread_origin so the endpoints land in page-local coords.
     let spread_bounds = transform_bounds(line.bounds, resolved.item_transform);
     let (ox, oy) = page.spread_origin;
-    emit_line(
-        spread_bounds.left - ox,
-        spread_bounds.top - oy,
-        spread_bounds.right - ox,
-        spread_bounds.bottom - oy,
-        stroke,
-        stroke_paint,
-        &mut page.list,
-    );
+    let (sx, sy) = (spread_bounds.left - ox, spread_bounds.top - oy);
+    let (ex, ey) = (spread_bounds.right - ox, spread_bounds.bottom - oy);
+    emit_line(sx, sy, ex, ey, stroke, stroke_paint, &mut page.list);
+    // Arrowheads at the diagonal's endpoints, in page-local coords
+    // (identity transform). Start points back toward (sx,sy); end
+    // points forward toward (ex,ey).
+    if line.start_arrow.draws() {
+        emit_arrowhead(
+            page,
+            line.start_arrow,
+            (sx, sy),
+            (sx - ex, sy - ey),
+            stroke_width,
+            line.start_arrow_scale,
+            stroke_paint,
+            Transform::IDENTITY,
+        );
+    }
+    if line.end_arrow.draws() {
+        emit_arrowhead(
+            page,
+            line.end_arrow,
+            (ex, ey),
+            (ex - sx, ey - sy),
+            stroke_width,
+            line.end_arrow_scale,
+            stroke_paint,
+            Transform::IDENTITY,
+        );
+    }
 }
 
 /// Emit a Rectangle whose Q-11 multi-anchor PathGeometry adapter
@@ -10016,88 +10507,231 @@ pub(crate) fn per_corner_radii(
 /// and ItemTransform composition the same way it does for polygons.
 /// Walks clockwise from the top edge.
 pub(crate) fn rounded_rect_path(rect: Rect, radius: f32) -> paged_compose::PathData {
-    rounded_rect_path_per_corner(rect, [Some(radius); 4])
+    corner_rect_path(
+        rect,
+        [Some(radius); 4],
+        [paged_parse::CornerOption::Rounded; 4],
+    )
 }
 
-/// Q-16: rounded-rect path with per-corner radii. The array order is
-/// `[top_left, top_right, bottom_right, bottom_left]` — matches
-/// `Rectangle::corners` and the clockwise walk this function emits.
-/// `None` (or `Some(0)`) for a corner produces a sharp 90° angle.
-/// Each radius is clamped to `min(width/2, height/2)` independently
-/// so a tall narrow rect with one large corner still fits.
-pub(crate) fn rounded_rect_path_per_corner(
+/// Resolve the per-corner `CornerOption` *kind* (shape), `[tl, tr, br,
+/// bl]`, parallel to [`per_corner_radii`]. Per-corner `spec.option`
+/// wins; otherwise the global `corner_option` applies; otherwise the
+/// corner is square (`None`).
+pub(crate) fn per_corner_kinds(
+    corner_option: Option<&str>,
+    corners: &[paged_parse::CornerSpec; 4],
+) -> [paged_parse::CornerOption; 4] {
+    let global = corner_option
+        .and_then(paged_parse::CornerOption::from_idml)
+        .unwrap_or(paged_parse::CornerOption::None);
+    let mut out = [paged_parse::CornerOption::None; 4];
+    for (i, spec) in corners.iter().enumerate() {
+        out[i] = spec.option.unwrap_or(global);
+    }
+    out
+}
+
+/// Rect path with per-corner radius AND per-corner `CornerOption`
+/// shape. Walks clockwise from the top-left's top-edge point. Each
+/// corner is a sharp 90° when its radius is `None`/`0` or its kind is
+/// `None`; otherwise it emits the kind's geometry:
+///
+/// * `Rounded` — convex quarter-circle (control offset = `r·0.5523`).
+/// * `Inverse` (inverse-rounded) — concave quarter-circle cut inward.
+/// * `Bevel` — a straight 45° chamfer (the chord).
+/// * `Inset` — a square notch stepping inward to the rounding centre.
+/// * `Fancy` — an ogee (concave-then-convex double curve); an
+///   approximation pending reference-PDF calibration.
+///
+/// The shape is emitted as backend-agnostic `PathData`, so the CPU and
+/// Vello rasterizers both honour it with no per-backend work.
+pub(crate) fn corner_rect_path(
     rect: Rect,
     radii: [Option<f32>; 4],
+    kinds: [paged_parse::CornerOption; 4],
 ) -> paged_compose::PathData {
     use paged_compose::PathSegment::*;
+    use paged_parse::CornerOption;
+    const KAPPA: f32 = 0.552_284_8;
     let max_r = rect.w.min(rect.h) * 0.5;
-    let r = |i: usize| -> f32 {
+    // Effective radius: 0 when the corner is square (`None` kind) or
+    // its radius is absent / non-positive.
+    let eff_r = |i: usize| -> f32 {
+        if matches!(kinds[i], CornerOption::None) {
+            return 0.0;
+        }
         radii[i].map(|v| v.min(max_r).max(0.0)).unwrap_or(0.0)
     };
-    let (tl, tr, br, bl) = (r(0), r(1), r(2), r(3));
-    let l = rect.x;
-    let t = rect.y;
-    let right = rect.x + rect.w;
-    let bot = rect.y + rect.h;
-    // Cubic-Bezier control offset for a quarter-circle: KAPPA × radius.
-    const KAPPA: f32 = 0.552_284_8;
-    let mut segments = Vec::with_capacity(13);
-    // Start at the top edge, just past the top-left corner's rounding.
-    segments.push(MoveTo { x: l + tl, y: t });
-    // Top edge → top-right corner.
-    segments.push(LineTo { x: right - tr, y: t });
-    if tr > 0.0 {
-        let k = tr * KAPPA;
-        segments.push(CubicTo {
-            cx1: right - tr + k,
-            cy1: t,
-            cx2: right,
-            cy2: t + tr - k,
-            x: right,
-            y: t + tr,
+    let (l, t) = (rect.x, rect.y);
+    let (right, bot) = (rect.x + rect.w, rect.y + rect.h);
+
+    // Per corner: incoming edge end `p_in`, outgoing edge start
+    // `p_out`, the sharp vertex `c`, and the inner rounding centre `m`.
+    // Clockwise order TL, TR, BR, BL.
+    let tl = eff_r(0);
+    let tr = eff_r(1);
+    let br = eff_r(2);
+    let bl = eff_r(3);
+    let geom = [
+        // TL: from left edge to top edge.
+        ((l, t + tl), (l + tl, t), (l, t), (l + tl, t + tl)),
+        // TR: from top edge to right edge.
+        ((right - tr, t), (right, t + tr), (right, t), (right - tr, t + tr)),
+        // BR: from right edge to bottom edge.
+        ((right, bot - br), (right - br, bot), (right, bot), (right - br, bot - br)),
+        // BL: from bottom edge to left edge.
+        ((l + bl, bot), (l, bot - bl), (l, bot), (l + bl, bot - bl)),
+    ];
+
+    // Emit one corner's segments (assuming the path's current point is
+    // already at `p_in`), ending at `p_out`.
+    let emit_corner =
+        |segs: &mut Vec<paged_compose::PathSegment>,
+         kind: CornerOption,
+         r: f32,
+         p_in: (f32, f32),
+         p_out: (f32, f32),
+         c: (f32, f32),
+         m: (f32, f32)| {
+            if r <= 0.0 || matches!(kind, CornerOption::None) {
+                // Sharp: p_in == p_out == vertex; nothing to add.
+                return;
+            }
+            // Control point a fraction `f` of the way from `p` toward
+            // `toward` (the corner vertex `c` for convex, the inner
+            // centre `m` for concave).
+            let ctl = |p: (f32, f32), toward: (f32, f32), f: f32| {
+                (p.0 + (toward.0 - p.0) * f, p.1 + (toward.1 - p.1) * f)
+            };
+            match kind {
+                CornerOption::Rounded => {
+                    let c1 = ctl(p_in, c, KAPPA);
+                    let c2 = ctl(p_out, c, KAPPA);
+                    segs.push(CubicTo {
+                        cx1: c1.0,
+                        cy1: c1.1,
+                        cx2: c2.0,
+                        cy2: c2.1,
+                        x: p_out.0,
+                        y: p_out.1,
+                    });
+                }
+                CornerOption::Inverse => {
+                    // Concave: same endpoints, controls pulled toward
+                    // the inner centre so the arc bulges inward.
+                    let c1 = ctl(p_in, m, KAPPA);
+                    let c2 = ctl(p_out, m, KAPPA);
+                    segs.push(CubicTo {
+                        cx1: c1.0,
+                        cy1: c1.1,
+                        cx2: c2.0,
+                        cy2: c2.1,
+                        x: p_out.0,
+                        y: p_out.1,
+                    });
+                }
+                CornerOption::Bevel => {
+                    segs.push(LineTo {
+                        x: p_out.0,
+                        y: p_out.1,
+                    });
+                }
+                CornerOption::Inset => {
+                    // Step inward to the rounding centre, then out to
+                    // the outgoing edge — a square notch.
+                    segs.push(LineTo { x: m.0, y: m.1 });
+                    segs.push(LineTo {
+                        x: p_out.0,
+                        y: p_out.1,
+                    });
+                }
+                CornerOption::Fancy => {
+                    // Ogee: convex half toward the vertex to the chord
+                    // midpoint, then concave half toward the inner
+                    // centre. Approximation pending calibration.
+                    let mid = ((p_in.0 + p_out.0) * 0.5, (p_in.1 + p_out.1) * 0.5);
+                    let c1 = ctl(p_in, c, 0.5);
+                    let c2 = ctl(mid, c, 0.5);
+                    segs.push(CubicTo {
+                        cx1: c1.0,
+                        cy1: c1.1,
+                        cx2: c2.0,
+                        cy2: c2.1,
+                        x: mid.0,
+                        y: mid.1,
+                    });
+                    let c3 = ctl(mid, m, 0.5);
+                    let c4 = ctl(p_out, m, 0.5);
+                    segs.push(CubicTo {
+                        cx1: c3.0,
+                        cy1: c3.1,
+                        cx2: c4.0,
+                        cy2: c4.1,
+                        x: p_out.0,
+                        y: p_out.1,
+                    });
+                }
+                CornerOption::None => {}
+            }
+        };
+
+    let radius_of = [tl, tr, br, bl];
+    let mut segments = Vec::with_capacity(17);
+    // Start at TL's outgoing point on the top edge.
+    let (_tl_in, tl_out, _tl_c, _tl_m) = geom[0];
+    segments.push(MoveTo {
+        x: tl_out.0,
+        y: tl_out.1,
+    });
+    // Walk TR → BR → BL, each preceded by the edge LineTo to its p_in,
+    // then TL last to close.
+    for &i in &[1usize, 2, 3, 0] {
+        let (p_in, p_out, c, m) = geom[i];
+        segments.push(LineTo {
+            x: p_in.0,
+            y: p_in.1,
         });
-    }
-    // Right edge → bottom-right corner.
-    segments.push(LineTo { x: right, y: bot - br });
-    if br > 0.0 {
-        let k = br * KAPPA;
-        segments.push(CubicTo {
-            cx1: right,
-            cy1: bot - br + k,
-            cx2: right - br + k,
-            cy2: bot,
-            x: right - br,
-            y: bot,
-        });
-    }
-    // Bottom edge → bottom-left corner.
-    segments.push(LineTo { x: l + bl, y: bot });
-    if bl > 0.0 {
-        let k = bl * KAPPA;
-        segments.push(CubicTo {
-            cx1: l + bl - k,
-            cy1: bot,
-            cx2: l,
-            cy2: bot - bl + k,
-            x: l,
-            y: bot - bl,
-        });
-    }
-    // Left edge → top-left corner (closes back to MoveTo's point).
-    segments.push(LineTo { x: l, y: t + tl });
-    if tl > 0.0 {
-        let k = tl * KAPPA;
-        segments.push(CubicTo {
-            cx1: l,
-            cy1: t + tl - k,
-            cx2: l + tl - k,
-            cy2: t,
-            x: l + tl,
-            y: t,
-        });
+        emit_corner(&mut segments, kinds[i], radius_of[i], p_in, p_out, c, m);
     }
     segments.push(Close);
     paged_compose::PathData { segments }
+}
+
+/// Record a render diagnostic for a placed image that didn't resolve.
+/// Shared by the rectangle / polygon / oval image emitters so the
+/// "missing link" / "decode failed" signals are reported consistently.
+/// A no-op for `Resolved`, for non-image frames, and for the inline-PDF
+/// fall-through (which intentionally renders the frame fill instead of a
+/// placeholder). Pushes onto `page.diagnostics`; the document-level
+/// aggregator backfills `page_index`.
+fn report_image_resolution(
+    page: &mut BuiltPage,
+    resolution: &ImageResolution,
+    has_image_element: bool,
+    has_inline_pdf: bool,
+    uri: Option<&str>,
+    frame_id: Option<&str>,
+) {
+    let (code, msg) = match resolution {
+        ImageResolution::DecodeFailed if has_image_element => (
+            DiagnosticCode::ImageDecodeFailed,
+            "placed image could not be decoded; frame fill used instead",
+        ),
+        ImageResolution::LinkMissing if has_image_element && !has_inline_pdf => (
+            DiagnosticCode::ImageLinkMissing,
+            "placed image link could not be resolved; placeholder drawn",
+        ),
+        _ => return,
+    };
+    let mut d = Diagnostic::new(code, msg);
+    if let Some(u) = uri {
+        d = d.with_uri(u);
+    }
+    if let Some(f) = frame_id {
+        d = d.with_frame(f);
+    }
+    page.diagnostics.push(d);
 }
 
 /// Resolve, decode, and emit a placed image for a rectangle. Skips
@@ -10143,6 +10777,14 @@ fn emit_rectangle_image(
             None => ImageResolution::LinkMissing,
         }
     };
+    report_image_resolution(
+        page,
+        &resolved,
+        rect.has_image_element,
+        rect.has_inline_pdf,
+        rect.image_link.as_deref(),
+        rect.self_id.as_deref(),
+    );
     let outer = frame_outer_transform(page, rect.item_transform);
     let (id, img_w, img_h) = match resolved {
         ImageResolution::Resolved(id, w, h) => (id, w, h),
@@ -10246,6 +10888,14 @@ fn emit_polygon_image(
             None => ImageResolution::LinkMissing,
         }
     };
+    report_image_resolution(
+        page,
+        &resolved,
+        poly.has_image_element,
+        poly.has_inline_pdf,
+        poly.image_link.as_deref(),
+        poly.self_id.as_deref(),
+    );
     let outer = frame_outer_transform(page, poly.item_transform);
     let (id, img_w, img_h) = match resolved {
         ImageResolution::Resolved(id, w, h) => (id, w, h),
@@ -10382,6 +11032,14 @@ fn emit_oval_image(
             None => ImageResolution::LinkMissing,
         }
     };
+    report_image_resolution(
+        page,
+        &resolved,
+        oval.has_image_element,
+        oval.has_inline_pdf,
+        oval.image_link.as_deref(),
+        oval.self_id.as_deref(),
+    );
     let outer = frame_outer_transform(page, oval.item_transform);
     let (id, img_w, img_h) = match resolved {
         ImageResolution::Resolved(id, w, h) => (id, w, h),
@@ -11465,6 +12123,14 @@ fn rotate_transform_around(
 fn frame_outer_transform(page: &BuiltPage, item_transform: Option<[f32; 6]>) -> Transform {
     let (ox, oy) = page.spread_origin;
     let page_origin = Transform::translate(-ox, -oy);
+    // NB the spread-level `<Spread ItemTransform>` is NOT composed here.
+    // InDesign only ever emits a translation (+ 0/90/180/270) on a
+    // spread; a translation cancels exactly against `spread_origin`
+    // (both live in spread-inner coords), so per-page output is already
+    // faithful for the real-world case. Composing a spread-level
+    // rotation/scale would require lowering pages in pasteboard space
+    // (page dimensions swap under 90°) and rerouting frames there — its
+    // own project, deferred. See `Spread::item_transform`.
     match item_transform {
         Some(m) => page_origin.compose(&Transform(m)),
         None => page_origin,
@@ -11769,6 +12435,7 @@ pub fn build(document: &Document, options: &PipelineOptions) -> anyhow::Result<B
         stats,
         story_layout: Vec::new(),
         footnotes: Vec::new(),
+        diagnostics: Vec::new(),
     })
 }
 
@@ -12023,6 +12690,31 @@ pub fn color_id_to_paint_with_list(
 /// default — gradient line through `(0.5, 0.5)` along the angle, with
 /// half-vector magnitude `0.5` in unit-rect coords (still serviceable
 /// for callers that don't have geometry, e.g. text-frame strokes).
+/// InDesign gradient midpoint remap. Given the linear parameter `t`
+/// across a stop-to-next-stop segment and the segment's midpoint `mid`
+/// (0..1; 0.5 = linear), return the colour-blend fraction `f` so that
+/// `f == 0.5` exactly at `t == mid`. This is the standard PostScript /
+/// SVG midpoint emulation `f = t^(ln 0.5 / ln mid)` — the *colour*
+/// follows this curve while the stop's geometric `offset` stays linear
+/// in `t`. A near-0.5 midpoint short-circuits to linear so the common
+/// (no-midpoint) path is unchanged.
+fn midpoint_blend(t: f32, mid: f32) -> f32 {
+    if (mid - 0.5).abs() < 1e-4 {
+        return t;
+    }
+    let exponent = (0.5f32).ln() / mid.ln();
+    t.powf(exponent)
+}
+
+fn color_lerp(a: paged_compose::Color, b: paged_compose::Color, f: f32) -> paged_compose::Color {
+    paged_compose::Color::rgba(
+        a.r * (1.0 - f) + b.r * f,
+        a.g * (1.0 - f) + b.g * f,
+        a.b * (1.0 - f) + b.b * f,
+        a.a * (1.0 - f) + b.a * f,
+    )
+}
+
 pub fn color_id_to_paint_with_list_dir(
     id: &str,
     palette: &Graphic,
@@ -12046,6 +12738,9 @@ pub fn color_id_to_paint_with_list_dir(
             // participate in CMYK-space gradient interpolation just
             // like a process CMYK swatch would.
             cmyk: Option<[f32; 4]>,
+            /// Midpoint (0..1) governing the blend curve toward the
+            /// NEXT stop. 0.5 = linear (the default when omitted).
+            midpoint: f32,
         }
         let raw_stops: Vec<StopRef> = grad
             .stops
@@ -12059,9 +12754,14 @@ pub fn color_id_to_paint_with_list_dir(
                     offset: (s.location_pct / 100.0).clamp(0.0, 1.0),
                     color,
                     cmyk,
+                    midpoint: s
+                        .midpoint_pct
+                        .map(|m| (m / 100.0).clamp(0.01, 0.99))
+                        .unwrap_or(0.5),
                 })
             })
             .collect();
+        let has_midpoint = raw_stops.iter().any(|s| (s.midpoint - 0.5).abs() > 1e-4);
         if raw_stops.len() < 2 {
             return None;
         }
@@ -12111,11 +12811,14 @@ pub fn color_id_to_paint_with_list_dir(
                 let cmyk_b = b.cmyk.unwrap_or_else(|| rgb_to_cmyk_naive(b.color));
                 for i in 0..SUB_STOPS {
                     let t = i as f32 / SUB_STOPS as f32;
+                    // Geometry stays linear in `t`; the CMYK channel
+                    // blend follows the midpoint curve.
+                    let f = midpoint_blend(t, a.midpoint);
                     let interp = paged_color::Cmyk {
-                        c: cmyk_a[0] * (1.0 - t) + cmyk_b[0] * t,
-                        m: cmyk_a[1] * (1.0 - t) + cmyk_b[1] * t,
-                        y: cmyk_a[2] * (1.0 - t) + cmyk_b[2] * t,
-                        k: cmyk_a[3] * (1.0 - t) + cmyk_b[3] * t,
+                        c: cmyk_a[0] * (1.0 - f) + cmyk_b[0] * f,
+                        m: cmyk_a[1] * (1.0 - f) + cmyk_b[1] * f,
+                        y: cmyk_a[2] * (1.0 - f) + cmyk_b[2] * f,
+                        k: cmyk_a[3] * (1.0 - f) + cmyk_b[3] * f,
                     };
                     let paged_color::LinearRgb([r, g, b_]) =
                         xform.cmyk_percent_to_linear_rgb(interp);
@@ -12126,6 +12829,33 @@ pub fn color_id_to_paint_with_list_dir(
                 }
             }
             // Always include the final stop exactly.
+            let last = raw_stops.last().unwrap();
+            out.push(paged_compose::GradientStop {
+                offset: last.offset,
+                color: last.color,
+            });
+            out
+        } else if has_midpoint {
+            // sRGB blend with a non-default midpoint on at least one
+            // segment: tessellate so the colour follows the midpoint
+            // power curve. Offset stays linear in `t`. Segments whose
+            // midpoint is the default 0.5 tessellate to a straight ramp
+            // (midpoint_blend is the identity there), so the extra
+            // sub-stops are harmless.
+            const SUB_STOPS: usize = 16;
+            let mut out: Vec<paged_compose::GradientStop> = Vec::new();
+            for win in raw_stops.windows(2) {
+                let a = &win[0];
+                let b = &win[1];
+                for i in 0..SUB_STOPS {
+                    let t = i as f32 / SUB_STOPS as f32;
+                    let f = midpoint_blend(t, a.midpoint);
+                    out.push(paged_compose::GradientStop {
+                        offset: a.offset * (1.0 - t) + b.offset * t,
+                        color: color_lerp(a.color, b.color, f),
+                    });
+                }
+            }
             let last = raw_stops.last().unwrap();
             out.push(paged_compose::GradientStop {
                 offset: last.offset,
@@ -15441,6 +16171,474 @@ mod tests {
             "expected nested-table cmds (≥20 for grid + INNER-A + INNER-B), \
              got {cmd_count}"
         );
+    }
+
+    #[test]
+    fn missing_image_link_emits_diagnostic() {
+        // A Rectangle hosting an <Image> whose LinkResourceURI can't be
+        // resolved (no AssetResolver wired) should render a placeholder
+        // AND surface exactly one ImageLinkMissing diagnostic with the
+        // URI attached — previously this was a silent tracing::warn!.
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+        let buf = std::io::Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+        zip.start_file("mimetype", stored).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+        zip.start_file("designmap.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+</Document>"#,
+        )
+        .unwrap();
+        zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 200"/>
+    <Rectangle Self="r1" GeometricBounds="20 20 120 120">
+      <Image LinkResourceURI="file:///nonexistent/photo.jpg"/>
+    </Rectangle>
+  </Spread>
+</idPkg:Spread>"#,
+        )
+        .unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+
+        let built = build_document(&doc, &PipelineOptions::default()).expect("build");
+        let missing: Vec<_> = built
+            .diagnostics
+            .items
+            .iter()
+            .filter(|d| d.code == crate::diagnostics::DiagnosticCode::ImageLinkMissing)
+            .collect();
+        assert_eq!(
+            missing.len(),
+            1,
+            "expected one ImageLinkMissing diagnostic, got {:?}",
+            built.diagnostics.items
+        );
+        assert_eq!(missing[0].page_index, Some(0));
+        assert_eq!(missing[0].uri.as_deref(), Some("file:///nonexistent/photo.jpg"));
+    }
+
+    fn test_section(
+        self_id: &str,
+        page_start: &str,
+        style: paged_parse::designmap::NumberingStyle,
+        start_at: u32,
+    ) -> paged_parse::designmap::Section {
+        paged_parse::designmap::Section {
+            self_id: self_id.to_string(),
+            page_start: Some(page_start.to_string()),
+            continue_numbering: false,
+            start_at: Some(start_at),
+            numbering_style: style,
+            section_prefix: None,
+            marker: None,
+            include_prefix: false,
+        }
+    }
+
+    #[test]
+    fn section_walk_computes_roman_then_arabic_labels() {
+        use paged_parse::designmap::NumberingStyle;
+        let sections = vec![
+            test_section("sec1", "p1", NumberingStyle::LowerRoman, 1),
+            test_section("sec2", "p3", NumberingStyle::Arabic, 1),
+        ];
+        let mut w = SectionWalk::new(&sections);
+        // 4 Name-less pages: roman section p1..p2, then arabic from p3.
+        let labels: Vec<String> = ["p1", "p2", "p3", "p4"]
+            .iter()
+            .map(|id| w.next_label(Some(id), None))
+            .collect();
+        assert_eq!(labels, vec!["i", "ii", "1", "2"]);
+        assert!(w.used_fallback);
+    }
+
+    #[test]
+    fn section_walk_name_is_authoritative() {
+        // No sections: a baked Name wins; a Name-less page uses the
+        // 1-based fallback that matches the historical behaviour.
+        let mut w = SectionWalk::new(&[]);
+        assert_eq!(w.next_label(Some("p1"), Some("iii")), "iii");
+        assert_eq!(w.next_label(Some("p2"), None), "2");
+    }
+
+    /// Build a one-page IDML with a single 1-row × 3-col table in a
+    /// text frame, interpolating `table_attrs` onto `<Table>` and
+    /// `cell_attrs` onto each `<Cell>`. Shared by the column-divider
+    /// and cell-rotation tests.
+    fn build_single_table_idml(table_attrs: &str, cell_attrs: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+        let buf = std::io::Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        zip.start_file("mimetype", stored).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+        zip.start_file("designmap.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_s1.xml"/>
+</Document>"#,
+        )
+        .unwrap();
+        zip.start_file("Resources/Graphic.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Color Self="Color/Black" Space="CMYK" ColorValue="0 0 0 100"/>
+</idPkg:Graphic>"#,
+        )
+        .unwrap();
+        zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 400 400"/>
+    <TextFrame Self="frameA" ParentStory="s1" GeometricBounds="10 10 390 390"/>
+  </Spread>
+</idPkg:Spread>"#,
+        )
+        .unwrap();
+        let cell = |name: &str, content: &str| {
+            format!(
+                r#"<Cell Self="{name}" Name="{name}"{cell_attrs}><ParagraphStyleRange><CharacterStyleRange AppliedFont="Inter" PointSize="10"><Content>{content}</Content></CharacterStyleRange></ParagraphStyleRange></Cell>"#
+            )
+        };
+        let story = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="s1">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="10">
+        <Table Self="t" HeaderRowCount="0" FooterRowCount="0" BodyRowCount="1" ColumnCount="3"{table_attrs}>
+          <Row Self="r0" Name="0" SingleRowHeight="40"/>
+          <Column Self="cc0" Name="0" SingleColumnWidth="100"/>
+          <Column Self="cc1" Name="1" SingleColumnWidth="100"/>
+          <Column Self="cc2" Name="2" SingleColumnWidth="100"/>
+          {c0}{c1}{c2}
+        </Table>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+            c0 = cell("0:0", "A"),
+            c1 = cell("1:0", "B"),
+            c2 = cell("2:0", "C"),
+        );
+        zip.start_file("Stories/Story_s1.xml", deflated).unwrap();
+        zip.write_all(story.as_bytes()).unwrap();
+        zip.finish().unwrap().into_inner()
+    }
+
+    fn inter_font_bytes() -> Vec<u8> {
+        std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts/Inter.ttf"),
+        )
+        .expect("Inter.ttf fixture")
+    }
+
+    #[test]
+    fn table_column_dividers_emit_extra_edges() {
+        // A table-style column-stroke decl must draw interior column
+        // dividers — previously nothing rendered for it. Differential:
+        // the same table with the decl emits more commands than without.
+        let font = inter_font_bytes();
+        let count = |table_attrs: &str| -> usize {
+            let bytes = build_single_table_idml(table_attrs, "");
+            let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+            let options = PipelineOptions {
+                font: Some(&font),
+                ..PipelineOptions::default()
+            };
+            let built = build_document(&doc, &options).expect("build");
+            built.pages[0].list.commands.len()
+        };
+        let with = count(
+            r#" StartColumnStrokeColor="Color/Black" StartColumnStrokeType="Solid" StartColumnStrokeWeight="1""#,
+        );
+        let without = count("");
+        // Two interior dividers (3 columns) → at least two extra edges.
+        assert!(
+            with >= without + 2,
+            "column dividers should add ≥2 edge commands: with={with} without={without}",
+        );
+    }
+
+    #[test]
+    fn cell_rotation_rotates_content() {
+        // A cell with RotationAngle="90" rotates its content: at least
+        // one emitted command's transform gains a non-zero `b` term
+        // (sin 90° = 1). Without rotation, content stays axis-aligned.
+        let font = inter_font_bytes();
+        let max_b = |cell_attrs: &str| -> f32 {
+            let bytes = build_single_table_idml("", cell_attrs);
+            let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+            let options = PipelineOptions {
+                font: Some(&font),
+                ..PipelineOptions::default()
+            };
+            let mut built = build_document(&doc, &options).expect("build");
+            built.pages[0]
+                .list
+                .commands
+                .iter_mut()
+                .map(|c| c.transform_mut().0[1].abs())
+                .fold(0.0f32, f32::max)
+        };
+        // Glyph command transforms carry the font scale on the
+        // diagonal (a/d ≈ 1/units_per_em·size); a 90° rotation moves
+        // that scale onto the off-diagonal (b). So rotated |b| ≈ the
+        // glyph scale (clearly > 0), while upright |b| ≈ 0.
+        let rotated = max_b(r#" RotationAngle="90""#);
+        let upright = max_b("");
+        assert!(
+            upright < 1e-4,
+            "unrotated cell content should be axis-aligned, got |b|={upright}"
+        );
+        assert!(
+            rotated > 1e-3 && rotated > upright * 100.0,
+            "RotationAngle=90 should rotate content (|b| ≈ glyph scale), got |b|={rotated}"
+        );
+    }
+
+    #[test]
+    fn autosize_height_prevents_overset_drop() {
+        // A short frame with lots of text drops overset lines. The same
+        // frame with AutoSizingType="HeightOnly" grows to fit instead —
+        // no lines dropped, more lines rendered.
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+        let font = inter_font_bytes();
+        let build = |auto: &str| -> (usize, usize) {
+            let buf = std::io::Cursor::new(Vec::new());
+            let mut zip = ZipWriter::new(buf);
+            let stored =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            let deflated =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            zip.start_file("mimetype", stored).unwrap();
+            zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+                .unwrap();
+            zip.start_file("designmap.xml", deflated).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_s1.xml"/>
+</Document>"#,
+            )
+            .unwrap();
+            let spread = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 800 400"/>
+    <TextFrame Self="frameA" ParentStory="s1" GeometricBounds="20 20 60 200">
+      <Properties/>
+      <TextFramePreference{auto}/>
+    </TextFrame>
+  </Spread>
+</idPkg:Spread>"#
+            );
+            zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+            zip.write_all(spread.as_bytes()).unwrap();
+            // Many short paragraphs so the 40pt-tall frame overflows.
+            let mut story = String::from(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="s1">"#,
+            );
+            for i in 0..12 {
+                story.push_str(&format!(
+                    r#"<ParagraphStyleRange><CharacterStyleRange AppliedFont="Inter" PointSize="10"><Content>Line {i}</Content></CharacterStyleRange></ParagraphStyleRange>"#
+                ));
+            }
+            story.push_str("</Story></idPkg:Story>");
+            zip.start_file("Stories/Story_s1.xml", deflated).unwrap();
+            zip.write_all(story.as_bytes()).unwrap();
+            let bytes = zip.finish().unwrap().into_inner();
+            let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+            let options = PipelineOptions {
+                font: Some(&font),
+                ..PipelineOptions::default()
+            };
+            let built = build_document(&doc, &options).expect("build");
+            (built.stats.lines, built.stats.dropped_overflow_lines)
+        };
+        let (plain_lines, plain_dropped) = build("");
+        let (grown_lines, grown_dropped) =
+            build(r#" AutoSizingType="HeightOnly" AutoSizingReferencePoint="TopLeftPoint""#);
+        assert!(
+            plain_dropped > 0,
+            "the undersized frame should overset without autosizing"
+        );
+        assert_eq!(
+            grown_dropped, 0,
+            "HeightOnly autosizing should drop nothing (frame grows)"
+        );
+        assert!(
+            grown_lines > plain_lines,
+            "autosized frame should render more lines: grown={grown_lines} plain={plain_lines}"
+        );
+    }
+
+    #[test]
+    fn graphic_line_arrowhead_emits_fill() {
+        // A GraphicLine with a RightLineEnd arrowhead emits an extra
+        // FillPath (the arrowhead) on top of the stroked line.
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+        let count_fills = |right_line_end: &str| -> usize {
+            let buf = std::io::Cursor::new(Vec::new());
+            let mut zip = ZipWriter::new(buf);
+            let stored =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            let deflated =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            zip.start_file("mimetype", stored).unwrap();
+            zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+                .unwrap();
+            zip.start_file("designmap.xml", deflated).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+</Document>"#,
+            )
+            .unwrap();
+            zip.start_file("Resources/Graphic.xml", deflated).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Color Self="Color/Black" Space="CMYK" ColorValue="0 0 0 100"/>
+</idPkg:Graphic>"#,
+            )
+            .unwrap();
+            let spread = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 200"/>
+    <GraphicLine Self="gl" GeometricBounds="20 20 180 180" StrokeColor="Color/Black" StrokeWeight="3"{right_line_end}/>
+  </Spread>
+</idPkg:Spread>"#
+            );
+            zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+            zip.write_all(spread.as_bytes()).unwrap();
+            let bytes = zip.finish().unwrap().into_inner();
+            let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+            let built = build_document(&doc, &PipelineOptions::default()).expect("build");
+            built.pages[0]
+                .list
+                .commands
+                .iter()
+                .filter(|c| matches!(c, paged_compose::DisplayCommand::FillPath { .. }))
+                .count()
+        };
+        let with_arrow = count_fills(r#" RightLineEnd="TriangleHead""#);
+        let without = count_fills("");
+        assert_eq!(without, 0, "plain line draws no fill");
+        assert_eq!(with_arrow, 1, "arrowhead should add one FillPath");
+    }
+
+    #[test]
+    fn corner_rect_path_shapes_per_kind() {
+        use paged_compose::PathSegment::{CubicTo, LineTo};
+        use paged_parse::CornerOption;
+        let rect = paged_compose::Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 100.0,
+        };
+        let radii = [Some(20.0); 4];
+        let segs = |kind| corner_rect_path(rect, radii, [kind; 4]).segments;
+        let cubics = |kind| {
+            segs(kind)
+                .iter()
+                .filter(|s| matches!(s, CubicTo { .. }))
+                .count()
+        };
+        // Rounded / Inverse: one quarter-arc cubic per corner.
+        assert_eq!(cubics(CornerOption::Rounded), 4);
+        assert_eq!(cubics(CornerOption::Inverse), 4);
+        // Bevel: straight chamfers, no cubics.
+        assert_eq!(cubics(CornerOption::Bevel), 0);
+        // Inset: square notches — no cubics, but extra LineTos vs Bevel.
+        assert_eq!(cubics(CornerOption::Inset), 0);
+        let line_count = |kind| {
+            segs(kind)
+                .iter()
+                .filter(|s| matches!(s, LineTo { .. }))
+                .count()
+        };
+        assert!(
+            line_count(CornerOption::Inset) > line_count(CornerOption::Bevel),
+            "inset notch should add extra line segments"
+        );
+        // Fancy: an ogee — two cubics per corner.
+        assert_eq!(cubics(CornerOption::Fancy), 8);
+        // None / zero radius: sharp corners, no cubics.
+        assert_eq!(cubics(CornerOption::None), 0);
+    }
+
+    #[test]
+    fn midpoint_blend_curve() {
+        // Default midpoint is exactly linear.
+        assert!((midpoint_blend(0.3, 0.5) - 0.3).abs() < 1e-6);
+        // At t == mid, the colour-blend fraction is exactly 0.5.
+        assert!((midpoint_blend(0.25, 0.25) - 0.5).abs() < 1e-4);
+        assert!((midpoint_blend(0.75, 0.75) - 0.5).abs() < 1e-4);
+        // A 0.25 midpoint pushes the colour past halfway by the time
+        // geometry reaches t == 0.5.
+        assert!(midpoint_blend(0.5, 0.25) > 0.5);
+        // Endpoints are fixed regardless of midpoint.
+        assert!((midpoint_blend(0.0, 0.25)).abs() < 1e-6);
+        assert!((midpoint_blend(1.0, 0.25) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn color_lerp_midpoint_is_average() {
+        let black = paged_compose::Color::rgba(0.0, 0.0, 0.0, 1.0);
+        let white = paged_compose::Color::rgba(1.0, 1.0, 1.0, 1.0);
+        let mid = color_lerp(black, white, 0.5);
+        assert!((mid.r - 0.5).abs() < 1e-6 && (mid.g - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn section_walk_applies_prefix() {
+        use paged_parse::designmap::{NumberingStyle, Section};
+        let sections = vec![Section {
+            self_id: "sec".into(),
+            page_start: Some("p1".into()),
+            continue_numbering: false,
+            start_at: Some(1),
+            numbering_style: NumberingStyle::Arabic,
+            section_prefix: Some("A-".into()),
+            marker: None,
+            include_prefix: true,
+        }];
+        let mut w = SectionWalk::new(&sections);
+        assert_eq!(w.next_label(Some("p1"), None), "A-1");
+        assert_eq!(w.next_label(Some("p2"), None), "A-2");
     }
 
     #[test]

@@ -470,6 +470,22 @@ fn main() -> Result<()> {
                 built.stats.dropped_overflow_lines,
             );
         }
+        // Structured render diagnostics: lossy / degraded outcomes
+        // (missing image links, decode failures, section-numbering
+        // fallback, footnote overflow) that were previously log-only.
+        if !built.diagnostics.is_empty() {
+            let (errors, warnings, infos) = built.diagnostics.counts();
+            println!(
+                "  diagnostics: {} ({} error(s), {} warning(s), {} info)",
+                built.diagnostics.len(),
+                errors,
+                warnings,
+                infos,
+            );
+            for (code, n) in built.diagnostics.by_code() {
+                println!("    {code:?}: {n}");
+            }
+        }
         if want_display_list {
             println!(
                 "  display-list: {} command(s) total across {} page(s), {} path(s) total",
@@ -599,6 +615,7 @@ fn build_json_report(
             "unique_paths": total_paths,
         },
         "renders": renders,
+        "diagnostics": built.diagnostics.items,
     })
 }
 

@@ -47,9 +47,9 @@ pub struct CornerSpec {
 }
 
 /// IDML `CornerOption` enum (per-corner or document-default). The
-/// renderer treats every non-`None`, non-`Square` variant as
-/// `Rounded` for the time being — the decorative shapes (Fancy,
-/// Bevel, Inset, etc.) need bespoke path generators.
+/// renderer emits bespoke geometry per variant (Rounded / Inverse /
+/// Bevel / Inset / Fancy); `Inset` and `Fancy` are approximations
+/// pending reference-PDF calibration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum CornerOption {
     /// IDML defaults: square corners.
@@ -74,10 +74,45 @@ impl CornerOption {
         }
     }
 
-    /// Whether this corner option actually rounds (i.e. produces a
-    /// non-square corner). The decorative variants all fall back to
-    /// `Rounded` shape in the renderer for now, so they all return true.
+    /// Whether this corner option produces a non-square corner (i.e.
+    /// consumes the corner radius). Every variant except `None` does.
     pub fn rounds(self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
+
+/// IDML `<GraphicLine>` arrowhead style (`LeftLineEnd` / `RightLineEnd`).
+/// The renderer maps the rich IDML vocabulary onto a pragmatic set of
+/// drawable shapes; unrecognised-but-present names become `Other`
+/// (drawn as a triangle and counted as approximated).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ArrowheadType {
+    None,
+    /// Open / simple arrow — drawn as a filled triangle.
+    Simple,
+    Triangle,
+    TriangleWide,
+    CircleSolid,
+    Bar,
+    /// A recognised-but-unmapped end style; drawn as a triangle.
+    Other,
+}
+
+impl ArrowheadType {
+    pub fn from_idml(s: &str) -> Self {
+        match s {
+            "None" => Self::None,
+            "SimpleArrowHead" | "SimpleWideArrowHead" | "Simple" => Self::Simple,
+            "TriangleHead" | "Triangle" => Self::Triangle,
+            "TriangleWideHead" | "TriangleWide" => Self::TriangleWide,
+            "CircleSolidHead" | "CircleHead" | "Circle" => Self::CircleSolid,
+            "BarHead" | "Bar" | "SquareSolidHead" => Self::Bar,
+            _ => Self::Other,
+        }
+    }
+
+    /// Whether this end actually draws an arrowhead.
+    pub fn draws(self) -> bool {
         !matches!(self, Self::None)
     }
 }
@@ -1034,6 +1069,16 @@ pub struct GraphicLine {
     /// SDK Phase 5 (v1 sweep) — `Nonprinting`. See
     /// [`TextFrame::nonprinting`].
     pub nonprinting: bool,
+    /// `LeftLineEnd` — arrowhead at the line's start anchor. Defaults
+    /// to `None`.
+    pub start_arrow: ArrowheadType,
+    /// `RightLineEnd` — arrowhead at the line's end anchor.
+    pub end_arrow: ArrowheadType,
+    /// `LeftArrowHeadScale` / `RightArrowHeadScale` (percent, default
+    /// 100). Scales the arrowhead size, which is otherwise derived from
+    /// the stroke weight.
+    pub start_arrow_scale: f32,
+    pub end_arrow_scale: f32,
 }
 
 /// One point on an IDML `<PathGeometry>` path. `anchor` is the
@@ -2626,6 +2671,18 @@ impl Spread {
                             effects: None,
                             overprint_stroke: common.overprint_stroke,
                             nonprinting: common.nonprinting,
+                            start_arrow: attr(&e, b"LeftLineEnd")
+                                .map(|s| ArrowheadType::from_idml(&s))
+                                .unwrap_or(ArrowheadType::None),
+                            end_arrow: attr(&e, b"RightLineEnd")
+                                .map(|s| ArrowheadType::from_idml(&s))
+                                .unwrap_or(ArrowheadType::None),
+                            start_arrow_scale: attr(&e, b"LeftArrowHeadScale")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(100.0),
+                            end_arrow_scale: attr(&e, b"RightArrowHeadScale")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(100.0),
                         });
                         let idx = out.graphic_lines.len() - 1;
                         register_with_group(
