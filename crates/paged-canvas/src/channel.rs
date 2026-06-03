@@ -454,9 +454,11 @@ pub enum WorkerToMainKind {
         /// number of paragraphs that ran through the layout pass.
         cache_stats: LayoutCacheStats,
         /// Editor-ops — the element created by a structural insert
-        /// (`InsertFrame` / `InsertLine` / `InsertPath`), or the new
-        /// page id for `InsertPage`. The editor uses it to select the
-        /// fresh element. `None` for every other mutation kind.
+        /// (`InsertFrame` / `InsertLine` / `InsertPath`). The editor
+        /// uses it to select the fresh element. `None` for every
+        /// other mutation kind — including `InsertPage`: pages are
+        /// not elements (`ElementId` has no Page variant); the new
+        /// page is discoverable from `page_ids` + `page_sizes_pt`.
         #[serde(default)]
         created_id: Option<crate::element_selection::ElementId>,
         /// Editor-ops — `true` when the mutation changed the page
@@ -486,6 +488,15 @@ pub enum WorkerToMainKind {
         applied_seq: u64,
         page_ids: Vec<PageId>,
         cache_stats: LayoutCacheStats,
+        /// Editor-ops — same page-grid refresh contract as
+        /// `MutationApplied`: undoing a page mutation changes the
+        /// page list and the editor must not need a reload to see
+        /// it. The worker diffs the built page table across the
+        /// undo to populate these.
+        #[serde(default)]
+        page_structure_changed: bool,
+        #[serde(default)]
+        page_sizes_pt: Option<Vec<(f32, f32)>>,
     },
     /// Phase 3 Item 7 — redo applied.
     RedoApplied {
@@ -493,6 +504,10 @@ pub enum WorkerToMainKind {
         applied_seq: u64,
         page_ids: Vec<PageId>,
         cache_stats: LayoutCacheStats,
+        #[serde(default)]
+        page_structure_changed: bool,
+        #[serde(default)]
+        page_sizes_pt: Option<Vec<(f32, f32)>>,
     },
     /// `RegisterFont` reply: the font is now part of the worker's
     /// asset resolver.

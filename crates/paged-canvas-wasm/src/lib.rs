@@ -46,6 +46,18 @@ mod wasm {
         snap_lines: Vec<SnapLine>,
     }
 
+    /// Editor-ops — snapshot of the built page table (id + size),
+    /// diffed across undo/redo so page-mutation reversals carry the
+    /// same page-grid refresh fields as `MutationApplied`.
+    fn page_table(model: &CanvasModel) -> Vec<(PageId, (f32, f32))> {
+        model
+            .built()
+            .pages
+            .iter()
+            .map(|p| (p.id.clone(), (p.width_pt, p.height_pt)))
+            .collect()
+    }
+
     #[wasm_bindgen(start)]
     pub fn on_start() {
         console_error_panic_hook::set_once();
@@ -692,7 +704,7 @@ mod wasm {
                             // its page grid without a document reload.
                             let page_sizes_pt = outcome.page_structure_changed.then(|| {
                                 model
-                                    .built
+                                    .built()
                                     .pages
                                     .iter()
                                     .map(|p| (p.width_pt, p.height_pt))
@@ -838,6 +850,10 @@ mod wasm {
                         };
                     };
                     let t0 = js_sys::Date::now();
+                    // Editor-ops — diff the built page table across the
+                    // undo so page-mutation undos refresh the editor's
+                    // page grid (same contract as MutationApplied).
+                    let pages_before = page_table(model);
                     match model.undo() {
                         Some(outcome) => {
                             #[cfg(feature = "gpu")]
@@ -856,11 +872,16 @@ mod wasm {
                             let mut stats: LayoutCacheStats =
                                 model.layout_cache_stats().into();
                             stats.rebuild_ms = (js_sys::Date::now() - t0) as f32;
+                            let pages_after = page_table(model);
+                            let page_structure_changed = pages_before != pages_after;
                             WorkerToMainKind::UndoApplied {
                                 undone_seq: outcome.undone_seq,
                                 applied_seq: outcome.applied_seq,
                                 page_ids: outcome.page_ids,
                                 cache_stats: stats,
+                                page_structure_changed,
+                                page_sizes_pt: page_structure_changed
+                                    .then(|| pages_after.into_iter().map(|p| p.1).collect()),
                             }
                         }
                         None => WorkerToMainKind::MutationFailed {
@@ -954,6 +975,9 @@ mod wasm {
                             color_mode: String::new(),
                             document_name: String::new(),
                             dirty: false,
+                            default_fill_color: None,
+                            default_stroke_color: None,
+                            default_stroke_weight: None,
                         });
                     WorkerToMainKind::DocumentMetaReply { meta }
                 }
@@ -1105,6 +1129,8 @@ mod wasm {
                         };
                     };
                     let t0 = js_sys::Date::now();
+                    // Editor-ops — page-table diff, same as Undo.
+                    let pages_before = page_table(model);
                     match model.redo() {
                         Some(outcome) => {
                             #[cfg(feature = "gpu")]
@@ -1123,11 +1149,16 @@ mod wasm {
                             let mut stats: LayoutCacheStats =
                                 model.layout_cache_stats().into();
                             stats.rebuild_ms = (js_sys::Date::now() - t0) as f32;
+                            let pages_after = page_table(model);
+                            let page_structure_changed = pages_before != pages_after;
                             WorkerToMainKind::RedoApplied {
                                 redone_seq: outcome.undone_seq,
                                 applied_seq: outcome.applied_seq,
                                 page_ids: outcome.page_ids,
                                 cache_stats: stats,
+                                page_structure_changed,
+                                page_sizes_pt: page_structure_changed
+                                    .then(|| pages_after.into_iter().map(|p| p.1).collect()),
                             }
                         }
                         None => WorkerToMainKind::MutationFailed {
