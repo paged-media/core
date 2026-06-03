@@ -391,6 +391,41 @@ mod tests {
     }
 
     #[test]
+    fn fit_straight_line_keeps_endpoints_on_the_line() {
+        let pts: Vec<PathAnchorSpec> = (0..10)
+            .map(|i| {
+                let x = i as f32 * 10.0;
+                PathAnchorSpec {
+                    anchor: [x, 0.0],
+                    left: [x, 0.0],
+                    right: [x, 0.0],
+                }
+            })
+            .collect();
+        let fitted = fit_polyline_to_anchors(&pts);
+        assert!(
+            fitted.len() < pts.len(),
+            "a straight line fits with few anchors (got {})",
+            fitted.len()
+        );
+        assert_eq!(fitted.first().unwrap().anchor, [0.0, 0.0]);
+        assert_eq!(fitted.last().unwrap().anchor, [90.0, 0.0]);
+        for a in &fitted {
+            assert!(a.anchor[1].abs() < 1e-3, "anchor off the line: {:?}", a.anchor);
+            assert!(a.left[1].abs() < 1.0 && a.right[1].abs() < 1.0);
+        }
+    }
+
+    #[test]
+    fn fit_declines_below_three_points() {
+        let pts = vec![
+            PathAnchorSpec { anchor: [0.0, 0.0], left: [0.0, 0.0], right: [0.0, 0.0] },
+            PathAnchorSpec { anchor: [10.0, 5.0], left: [10.0, 5.0], right: [10.0, 5.0] },
+        ];
+        assert_eq!(fit_polyline_to_anchors(&pts), pts);
+    }
+
+    #[test]
     fn anchor_from_split_wires_fields() {
         let s = SegmentSplit {
             start_right: [1.0, 1.0],

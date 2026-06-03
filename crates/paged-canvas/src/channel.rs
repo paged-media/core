@@ -1427,6 +1427,16 @@ pub enum Mutation {
         element_id: crate::element_selection::ElementId,
         index: u32,
     },
+    /// Editor-ops (Scissors) — cut the path at the anchor at flat
+    /// `index`: a closed contour opens there (the anchor splits into
+    /// two coincident endpoints); an open contour splits into two.
+    /// For a mid-segment cut the editor sends
+    /// `Batch [PathPointInsert (the de Casteljau split), PathOpenAt]`
+    /// so the whole cut is one undo step.
+    PathOpenAt {
+        element_id: crate::element_selection::ElementId,
+        index: u32,
+    },
     /// Track J — toggle the curve type of an anchor between corner
     /// (handles equal to anchor) and smooth (handles derived from
     /// neighbour tangents). UI dispatches from a double-click on
@@ -1655,6 +1665,7 @@ impl Mutation {
             Self::SetDocumentDefaults { .. } => "SetDocumentDefaults",
             Self::PathPointInsert { .. } => "PathPointInsert",
             Self::PathPointRemove { .. } => "PathPointRemove",
+            Self::PathOpenAt { .. } => "PathOpenAt",
             Self::PathPointCurveType { .. } => "PathPointCurveType",
             Self::PathPointSet { .. } => "PathPointSet",
             Self::Batch { .. } => "Batch",

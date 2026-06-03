@@ -404,6 +404,15 @@ fn apply_set_property(
         ) => {
             return apply_path_point_curve_type(doc, node, value);
         }
+        (
+            NodeId::Polygon(_)
+            | NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::PathOpenAt,
+        ) => {
+            return apply_path_open_at(doc, node, value);
+        }
         _ => {}
     }
     let (previous, invalidation) = match (node, path) {
@@ -600,6 +609,51 @@ fn apply_set_property(
                 },
             )
         }
+        // Editor-ops — the remaining page-item kinds join the
+        // transform path (closes the latent Rotate/Scale gap; the
+        // Shear gesture needs all of them).
+        (NodeId::Polygon(id), PropertyPath::FrameTransform) => {
+            let new_transform = expect_transform(path, value)?;
+            let poly = find_polygon_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = poly.item_transform;
+            poly.item_transform = new_transform;
+            (
+                Value::Transform(prev),
+                InvalidationHint {
+                    frame_geometry: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Oval(id), PropertyPath::FrameTransform) => {
+            let new_transform = expect_transform(path, value)?;
+            let oval = find_oval_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = oval.item_transform;
+            oval.item_transform = new_transform;
+            (
+                Value::Transform(prev),
+                InvalidationHint {
+                    frame_geometry: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::GraphicLine(id), PropertyPath::FrameTransform) => {
+            let new_transform = expect_transform(path, value)?;
+            let line = find_graphic_line_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = line.item_transform;
+            line.item_transform = new_transform;
+            (
+                Value::Transform(prev),
+                InvalidationHint {
+                    frame_geometry: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         // ---- Phase H: FramePathPoint (any path-bearing kind) -----
         // Track J fan-out — accepts Polygon, TextFrame, Rectangle,
         // GraphicLine. All four kinds share the anchor field shape.
@@ -611,7 +665,7 @@ fn apply_set_property(
             PropertyPath::FramePathPoint,
         ) => {
             let (address, position) = expect_path_point(path, value)?;
-            let (anchors, _starts) = find_path_anchors_mut(doc, node)
+            let (anchors, _starts, _open) = find_path_anchors_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let Some(anchor) = anchors.get_mut(address.index) else {
                 return Err(OperationError::NodeNotFound(node.clone()));
@@ -821,7 +875,7 @@ fn apply_set_property(
                     })
                 }
             };
-            let (anchors, starts) = find_path_anchors_mut(doc, node)
+            let (anchors, starts, _open) = find_path_anchors_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let prev_anchors: Vec<crate::operation::PathAnchorSpec> = anchors
                 .iter()
@@ -3524,6 +3578,23 @@ fn find_polygon_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mut 
     None
 }
 
+fn find_graphic_line_mut<'a>(
+    doc: &'a mut Document,
+    self_id: &str,
+) -> Option<&'a mut GraphicLine> {
+    for parsed in &mut doc.spreads {
+        if let Some(l) = parsed
+            .spread
+            .graphic_lines
+            .iter_mut()
+            .find(|l| l.self_id.as_deref() == Some(self_id))
+        {
+            return Some(l);
+        }
+    }
+    None
+}
+
 fn find_oval_mut<'a>(
     doc: &'a mut Document,
     self_id: &str,
@@ -3987,6 +4058,7 @@ fn find_path_anchors_mut<'a>(
 ) -> Option<(
     &'a mut Vec<paged_parse::PathAnchor>,
     &'a mut Vec<usize>,
+    &'a mut Vec<bool>,
 )> {
     let raw = node.self_id();
     for parsed in doc.spreads.iter_mut() {
@@ -3998,7 +4070,7 @@ fn find_path_anchors_mut<'a>(
                     .iter_mut()
                     .find(|p| p.self_id.as_deref() == Some(raw))
                 {
-                    return Some((&mut p.anchors, &mut p.subpath_starts));
+                    return Some((&mut p.anchors, &mut p.subpath_starts, &mut p.subpath_open));
                 }
             }
             NodeId::TextFrame(_) => {
@@ -4008,7 +4080,7 @@ fn find_path_anchors_mut<'a>(
                     .iter_mut()
                     .find(|p| p.self_id.as_deref() == Some(raw))
                 {
-                    return Some((&mut p.anchors, &mut p.subpath_starts));
+                    return Some((&mut p.anchors, &mut p.subpath_starts, &mut p.subpath_open));
                 }
             }
             NodeId::Rectangle(_) => {
@@ -4018,7 +4090,7 @@ fn find_path_anchors_mut<'a>(
                     .iter_mut()
                     .find(|p| p.self_id.as_deref() == Some(raw))
                 {
-                    return Some((&mut p.anchors, &mut p.subpath_starts));
+                    return Some((&mut p.anchors, &mut p.subpath_starts, &mut p.subpath_open));
                 }
             }
             NodeId::GraphicLine(_) => {
@@ -4028,7 +4100,7 @@ fn find_path_anchors_mut<'a>(
                     .iter_mut()
                     .find(|p| p.self_id.as_deref() == Some(raw))
                 {
-                    return Some((&mut p.anchors, &mut p.subpath_starts));
+                    return Some((&mut p.anchors, &mut p.subpath_starts, &mut p.subpath_open));
                 }
             }
             _ => {}
@@ -4069,6 +4141,151 @@ fn decrement_subpath_starts(starts: &mut Vec<usize>, n: usize, new_anchors_len: 
     starts.dedup();
 }
 
+/// Editor-ops (Scissors) — cut the path at the anchor at flat
+/// `index`. Closed subpath → opens there (the cut anchor splits into
+/// two coincident endpoints, every original edge survives). Open
+/// subpath, interior anchor → splits into two open subpaths sharing
+/// duplicated endpoints. Inverse = verbatim restore of the snapshot
+/// `(anchors, subpath_starts, subpath_open)` triple — the one path
+/// topology `FramePath` cannot express (it lacks `subpath_open`).
+fn apply_path_open_at(
+    doc: &mut paged_scene::Document,
+    node: &NodeId,
+    value: &Value,
+) -> Result<AppliedOperation, OperationError> {
+    let (index, prev_anchors, prev_starts, prev_open) = match value {
+        Value::PathOpenAt {
+            index,
+            prev_anchors,
+            prev_subpath_starts,
+            prev_subpath_open,
+        } => (
+            *index,
+            prev_anchors.clone(),
+            prev_subpath_starts.clone(),
+            prev_subpath_open.clone(),
+        ),
+        _ => {
+            return Err(OperationError::TypeMismatch {
+                path: PropertyPath::PathOpenAt,
+                expected: "PathOpenAt".to_string(),
+            })
+        }
+    };
+    let (anchors, subpath_starts, subpath_open) = find_path_anchors_mut(doc, node)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+
+    // Snapshot for the inverse (and for the restore branch's own
+    // inverse, keeping redo working).
+    let snap_anchors: Vec<PathAnchorSpec> =
+        anchors.iter().map(PathAnchorSpec::from_parse).collect();
+    let snap_starts = subpath_starts.clone();
+    let snap_open = subpath_open.clone();
+
+    if let (Some(ra), Some(rs), Some(ro)) = (prev_anchors, prev_starts, prev_open) {
+        // Inverse/redo path — restore the carried triple verbatim.
+        *anchors = ra.iter().map(PathAnchorSpec::to_parse).collect();
+        *subpath_starts = rs;
+        *subpath_open = ro;
+    } else {
+        if anchors.is_empty() || index >= anchors.len() {
+            return Err(OperationError::InvalidValue {
+                node: node.clone(),
+                path: PropertyPath::PathOpenAt,
+                reason: format!("anchor index {index} out of range"),
+            });
+        }
+        // Normalise the parallel tables: a path with no explicit
+        // boundaries is one closed contour starting at 0.
+        if subpath_starts.is_empty() {
+            subpath_starts.push(0);
+        }
+        if subpath_open.len() < subpath_starts.len() {
+            subpath_open.resize(subpath_starts.len(), false);
+        }
+        // Locate the subpath containing `index`.
+        let s = subpath_starts
+            .iter()
+            .rposition(|&start| start <= index)
+            .unwrap_or(0);
+        let start = subpath_starts[s];
+        let end = subpath_starts.get(s + 1).copied().unwrap_or(anchors.len());
+        let len = end - start;
+        if len < 2 {
+            return Err(OperationError::InvalidValue {
+                node: node.clone(),
+                path: PropertyPath::PathOpenAt,
+                reason: "cannot cut a degenerate single-anchor contour".to_string(),
+            });
+        }
+
+        if !subpath_open[s] {
+            // CLOSED → open at `index`: rotate the slice so the cut
+            // anchor leads, then append its coincident twin so every
+            // original edge survives (InDesign scissors-at-anchor).
+            anchors[start..end].rotate_left(index - start);
+            let mut head = anchors[start].clone();
+            let mut tail = head.clone();
+            // The head keeps the outgoing handle; the tail keeps the
+            // incoming one. The severed sides collapse to endpoints.
+            head.left = head.anchor;
+            tail.right = tail.anchor;
+            anchors[start] = head;
+            anchors.insert(end, tail);
+            subpath_open[s] = true;
+            // Later subpath boundaries shift by the inserted twin.
+            for boundary in subpath_starts.iter_mut().skip(s + 1) {
+                *boundary += 1;
+            }
+        } else {
+            // OPEN → split at an interior anchor into two open halves
+            // sharing duplicated endpoints.
+            if index == start || index == end - 1 {
+                return Err(OperationError::InvalidValue {
+                    node: node.clone(),
+                    path: PropertyPath::PathOpenAt,
+                    reason: "cutting an open contour at its endpoint is a no-op".to_string(),
+                });
+            }
+            let mut first_half_end = anchors[index].clone();
+            let mut second_half_start = first_half_end.clone();
+            first_half_end.right = first_half_end.anchor;
+            second_half_start.left = second_half_start.anchor;
+            anchors[index] = first_half_end;
+            anchors.insert(index + 1, second_half_start);
+            // New boundary where the second half begins.
+            subpath_starts.insert(s + 1, index + 1);
+            subpath_open.insert(s + 1, true);
+            for boundary in subpath_starts.iter_mut().skip(s + 2) {
+                *boundary += 1;
+            }
+        }
+    }
+
+    let inverse = Operation::SetProperty {
+        node: node.clone(),
+        path: PropertyPath::PathOpenAt,
+        value: Value::PathOpenAt {
+            index,
+            prev_anchors: Some(snap_anchors),
+            prev_subpath_starts: Some(snap_starts),
+            prev_subpath_open: Some(snap_open),
+        },
+    };
+    Ok(AppliedOperation {
+        op: Operation::SetProperty {
+            node: node.clone(),
+            path: PropertyPath::PathOpenAt,
+            value: value.clone(),
+        },
+        inverse,
+        invalidation: InvalidationHint {
+            frame_geometry: vec![node.clone()],
+            ..Default::default()
+        },
+    })
+}
+
 fn apply_path_point_insert(
     doc: &mut paged_scene::Document,
     node: &NodeId,
@@ -4087,7 +4304,7 @@ fn apply_path_point_insert(
             })
         }
     };
-    let (anchors, subpath_starts) = find_path_anchors_mut(doc, node)
+    let (anchors, subpath_starts, _open) = find_path_anchors_mut(doc, node)
         .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
     // Insert is allowed at end (index == len), not past it.
     if index > anchors.len() {
@@ -4143,7 +4360,7 @@ fn apply_path_point_remove(
             })
         }
     };
-    let (anchors, subpath_starts) = find_path_anchors_mut(doc, node)
+    let (anchors, subpath_starts, _open) = find_path_anchors_mut(doc, node)
         .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
     if index >= anchors.len() {
         return Err(OperationError::NodeNotFound(node.clone()));
@@ -4199,7 +4416,7 @@ fn apply_path_point_curve_type(
             })
         }
     };
-    let (anchors, subpath_starts) = find_path_anchors_mut(doc, node)
+    let (anchors, subpath_starts, _open) = find_path_anchors_mut(doc, node)
         .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
     if index >= anchors.len() {
         return Err(OperationError::NodeNotFound(node.clone()));

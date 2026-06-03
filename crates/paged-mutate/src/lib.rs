@@ -3368,6 +3368,124 @@ mod tests {
         );
     }
 
+    // ---- Editor-ops: Scissors (PathOpenAt) --------------------------------
+
+    fn open_at_op(self_id: &str, index: usize) -> Operation {
+        Operation::SetProperty {
+            node: NodeId::Polygon(self_id.to_string()),
+            path: PropertyPath::PathOpenAt,
+            value: Value::PathOpenAt {
+                index,
+                prev_anchors: None,
+                prev_subpath_starts: None,
+                prev_subpath_open: None,
+            },
+        }
+    }
+
+    /// Closed triangle cut at anchor 1: the contour opens there, the
+    /// cut anchor splits into coincident head/tail endpoints, and
+    /// every original edge survives.
+    #[test]
+    fn scissors_opens_closed_contour_at_anchor() {
+        let mut project = project_with_polygon(
+            "Polygon/p1",
+            vec![
+                anchor_at(0.0, 0.0),
+                anchor_at(60.0, 0.0),
+                anchor_at(30.0, 50.0),
+            ],
+            vec![0],
+        );
+        project.apply(open_at_op("Polygon/p1", 1)).expect("cut");
+        let poly = polygon_of(&project);
+        assert_eq!(
+            anchor_positions(poly),
+            vec![(60.0, 0.0), (30.0, 50.0), (0.0, 0.0), (60.0, 0.0)],
+            "rotated so the cut anchor leads, with its twin appended"
+        );
+        assert_eq!(poly.subpath_starts, vec![0]);
+        assert_eq!(poly.subpath_open, vec![true]);
+        // Head lost its incoming handle; tail lost its outgoing one.
+        assert_eq!(poly.anchors[0].left, poly.anchors[0].anchor);
+        assert_eq!(poly.anchors[3].right, poly.anchors[3].anchor);
+    }
+
+    /// Open polyline cut at an interior anchor: two open subpaths
+    /// sharing duplicated endpoints.
+    #[test]
+    fn scissors_splits_open_contour_into_two() {
+        let mut project = project_with_polygon(
+            "Polygon/p1",
+            vec![
+                anchor_at(0.0, 0.0),
+                anchor_at(40.0, 10.0),
+                anchor_at(80.0, 0.0),
+                anchor_at(120.0, 10.0),
+            ],
+            vec![0],
+        );
+        // The fixture builds closed contours; flip this one open.
+        project.document_mut().spreads[0].spread.polygons[0].subpath_open = vec![true];
+        project.apply(open_at_op("Polygon/p1", 1)).expect("cut");
+        let poly = polygon_of(&project);
+        assert_eq!(
+            anchor_positions(poly),
+            vec![
+                (0.0, 0.0),
+                (40.0, 10.0),
+                (40.0, 10.0),
+                (80.0, 0.0),
+                (120.0, 10.0),
+            ],
+        );
+        assert_eq!(poly.subpath_starts, vec![0, 2]);
+        assert_eq!(poly.subpath_open, vec![true, true]);
+    }
+
+    /// THE regression guard: the inverse must restore `subpath_open`
+    /// (which `FramePath` cannot express) byte-identically; redo
+    /// re-cuts identically.
+    #[test]
+    fn scissors_undo_restores_subpath_open_byte_identically() {
+        let mut project = project_with_polygon(
+            "Polygon/p1",
+            vec![
+                anchor_at(0.0, 0.0),
+                anchor_at(60.0, 0.0),
+                anchor_at(30.0, 50.0),
+            ],
+            vec![0],
+        );
+        let before = format!("{:?}", project.document().spreads);
+        project.apply(open_at_op("Polygon/p1", 1)).expect("cut");
+        let after_cut = format!("{:?}", project.document().spreads);
+        project.undo().expect("undo");
+        assert_eq!(format!("{:?}", project.document().spreads), before);
+        project.redo().expect("redo");
+        assert_eq!(format!("{:?}", project.document().spreads), after_cut);
+    }
+
+    #[test]
+    fn scissors_rejects_endpoint_and_degenerate_cuts() {
+        // Endpoint cut on an OPEN contour is a no-op → InvalidValue.
+        let mut project = project_with_polygon(
+            "Polygon/p1",
+            vec![anchor_at(0.0, 0.0), anchor_at(40.0, 10.0)],
+            vec![0],
+        );
+        project.document_mut().spreads[0].spread.polygons[0].subpath_open = vec![true];
+        let err = project
+            .apply(open_at_op("Polygon/p1", 0))
+            .expect_err("endpoint cut");
+        assert!(matches!(err, OperationError::InvalidValue { .. }));
+        // Out-of-range index.
+        let err = project
+            .apply(open_at_op("Polygon/p1", 9))
+            .expect_err("oob index");
+        assert!(matches!(err, OperationError::InvalidValue { .. }));
+    }
+
     // ---- Editor-ops: frames_in_order maintenance + new NodeSpec kinds ----
 
     /// Like real parsed documents, the spread carries a populated

@@ -280,6 +280,10 @@ pub enum PropertyPath {
     /// Editor-ops — the stroke-gradient analogues.
     FrameGradientStrokeAngle,
     FrameGradientStrokeLength,
+    /// Editor-ops (Scissors) — open/split the path at an anchor.
+    /// `Value::PathOpenAt`; any path-bearing kind. See the Value
+    /// variant for the cut semantics + the snapshot inverse.
+    PathOpenAt,
     /// SDK Phase 5 (v1 sweep) — drop-shadow per-field editors.
     /// All five operate on the frame's `drop_shadow:
     /// Option<DropShadowSetting>`. Writing to any of them
@@ -462,6 +466,7 @@ impl PropertyPath {
             PropertyPath::FrameGradientFillLength => "frame.gradientFillLength",
             PropertyPath::FrameGradientStrokeAngle => "frame.gradientStrokeAngle",
             PropertyPath::FrameGradientStrokeLength => "frame.gradientStrokeLength",
+            PropertyPath::PathOpenAt => "path.openAt",
             PropertyPath::FrameNonprinting => "frame.nonprinting",
             PropertyPath::FrameDropShadowMode => "frame.dropShadowMode",
             PropertyPath::FrameDropShadowXOffset => "frame.dropShadowXOffset",
@@ -596,6 +601,28 @@ pub enum Value {
     FramePath {
         anchors: Vec<PathAnchorSpec>,
         subpath_starts: Vec<usize>,
+    },
+    /// Editor-ops (Scissors) — cut the path at the anchor at flat
+    /// `index`. On a CLOSED subpath the contour opens there: the cut
+    /// anchor splits into two coincident endpoints (every original
+    /// edge survives; the contour just no longer closes). On an OPEN
+    /// subpath an interior cut splits it into two open subpaths
+    /// sharing duplicated endpoints. Mid-segment cuts are expressed
+    /// editor-side as a Batch of `PathPointInsert` (the de Casteljau
+    /// split) followed by `PathOpenAt` at the new anchor.
+    ///
+    /// The `prev_*` triple is inverse-only: the apply layer snapshots
+    /// `(anchors, subpath_starts, subpath_open)` before cutting and
+    /// the inverse restores all three verbatim — `FramePath` cannot
+    /// serve as the inverse because it does not carry `subpath_open`.
+    PathOpenAt {
+        index: usize,
+        #[serde(default)]
+        prev_anchors: Option<Vec<PathAnchorSpec>>,
+        #[serde(default)]
+        prev_subpath_starts: Option<Vec<usize>>,
+        #[serde(default)]
+        prev_subpath_open: Option<Vec<bool>>,
     },
 }
 

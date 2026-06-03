@@ -90,6 +90,7 @@ pub enum PropertyPathJson {
     FrameGradientFillLength,
     FrameGradientStrokeAngle,
     FrameGradientStrokeLength,
+    PathOpenAt,
 }
 
 impl From<PropertyPath> for PropertyPathJson {
@@ -146,6 +147,7 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::FrameGradientStrokeLength => {
                 PropertyPathJson::FrameGradientStrokeLength
             }
+            PropertyPath::PathOpenAt => PropertyPathJson::PathOpenAt,
         }
     }
 }
@@ -204,6 +206,7 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::FrameGradientStrokeLength => {
                 PropertyPath::FrameGradientStrokeLength
             }
+            PropertyPathJson::PathOpenAt => PropertyPath::PathOpenAt,
         }
     }
 }
@@ -265,7 +268,8 @@ impl From<Value> for AuthoredValue {
             | Value::PathPointInsert { .. }
             | Value::PathPointRemove { .. }
             | Value::PathPointCurveType { .. }
-            | Value::FramePath { .. } => AuthoredValue::None,
+            | Value::FramePath { .. }
+            | Value::PathOpenAt { .. } => AuthoredValue::None,
         }
     }
 }

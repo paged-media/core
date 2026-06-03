@@ -1083,6 +1083,16 @@ impl CanvasModel {
                     prev_subpath_starts: None,
                 },
             }),
+            Mutation::PathOpenAt { element_id, index } => Some(Operation::SetProperty {
+                node: path_node_id_for(element_id)?,
+                path: PropertyPath::PathOpenAt,
+                value: Value::PathOpenAt {
+                    index: *index as usize,
+                    prev_anchors: None,
+                    prev_subpath_starts: None,
+                    prev_subpath_open: None,
+                },
+            }),
             Mutation::PathPointCurveType {
                 element_id,
                 index,
