@@ -613,6 +613,10 @@ fn parse_property_path(s: &str) -> Option<paged_mutate::PropertyPath> {
         "framePath" => FramePath,
         "frameFillTint" => FrameFillTint,
         "frameNonprinting" => FrameNonprinting,
+        "frameGradientFillAngle" => FrameGradientFillAngle,
+        "frameGradientFillLength" => FrameGradientFillLength,
+        "frameGradientStrokeAngle" => FrameGradientStrokeAngle,
+        "frameGradientStrokeLength" => FrameGradientStrokeLength,
         _ => return None,
     })
 }
@@ -665,6 +669,10 @@ fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
         FramePath => "framePath",
         FrameFillTint => "frameFillTint",
         FrameNonprinting => "frameNonprinting",
+        FrameGradientFillAngle => "frameGradientFillAngle",
+        FrameGradientFillLength => "frameGradientFillLength",
+        FrameGradientStrokeAngle => "frameGradientStrokeAngle",
+        FrameGradientStrokeLength => "frameGradientStrokeLength",
     }
 }
 

@@ -63,7 +63,7 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(23);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(24);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -453,6 +453,23 @@ pub enum WorkerToMainKind {
         /// the rebuild that just finished. `hits + misses` equals the
         /// number of paragraphs that ran through the layout pass.
         cache_stats: LayoutCacheStats,
+        /// Editor-ops — the element created by a structural insert
+        /// (`InsertFrame` / `InsertLine` / `InsertPath`), or the new
+        /// page id for `InsertPage`. The editor uses it to select the
+        /// fresh element. `None` for every other mutation kind.
+        #[serde(default)]
+        created_id: Option<crate::element_selection::ElementId>,
+        /// Editor-ops — `true` when the mutation changed the page
+        /// LIST itself (insert/delete/resize page); the editor must
+        /// refresh its page grid from `page_sizes_pt` + `page_ids`
+        /// instead of only repainting.
+        #[serde(default)]
+        page_structure_changed: bool,
+        /// Editor-ops — the post-mutation per-page sizes, populated
+        /// only when `page_structure_changed` (ordered like
+        /// `page_ids`).
+        #[serde(default)]
+        page_sizes_pt: Option<Vec<(f32, f32)>>,
     },
     /// Phase 3 Item 4 — rect-per-line geometry for a selection range.
     SelectionGeometry {
@@ -876,6 +893,15 @@ pub struct DocumentMeta {
     /// `true` when the worker has applied a mutation since
     /// `LoadDocument`. Reset on save/export when that path lands.
     pub dirty: bool,
+    /// Editor-ops — document defaults for newly-created objects (the
+    /// triple `SetDocumentDefaults` writes). `None` = no fill / no
+    /// stroke / engine-default weight.
+    #[serde(default)]
+    pub default_fill_color: Option<String>,
+    #[serde(default)]
+    pub default_stroke_color: Option<String>,
+    #[serde(default)]
+    pub default_stroke_weight: Option<f32>,
 }
 
 /// SDK Phase 3 — one swatch's identity + display name + kind.
@@ -1339,6 +1365,38 @@ pub enum Mutation {
     DeleteFrame {
         frame_id: String,
     },
+    /// Editor-ops — the Line tool. `start`/`end` are page-local pt;
+    /// the model converts to spread coordinates, mints a self id, and
+    /// inserts a two-anchor open `GraphicLine` (document-default
+    /// stroke applied).
+    InsertLine {
+        page_id: PageId,
+        start: (f32, f32),
+        end: (f32, f32),
+    },
+    /// Editor-ops — the Pencil tool (and any caller with explicit
+    /// path geometry). `anchors` are page-local; `open` marks an open
+    /// contour. `smooth: true` runs the engine's Bezier fitter over
+    /// the (typically RDP-simplified) polyline so freehand strokes
+    /// land as curves rather than corner chains.
+    InsertPath {
+        page_id: PageId,
+        anchors: Vec<paged_mutate::operation::PathAnchorSpec>,
+        open: bool,
+        #[serde(default)]
+        smooth: bool,
+    },
+    /// Editor-ops — document defaults for NEWLY-CREATED objects (the
+    /// fill/stroke wells with nothing selected). Whole-triple
+    /// semantics: every field IS the new default (`None` = no fill /
+    /// no stroke / engine-default weight) — the editor reads the
+    /// current triple from `DocumentMeta` and writes it back
+    /// modified. App-level state: not undoable, no scene rebuild.
+    SetDocumentDefaults {
+        fill_color: Option<String>,
+        stroke_color: Option<String>,
+        stroke_weight: Option<f32>,
+    },
     /// Track J — insert a new anchor into a path-bearing element's
     /// PathPointArray at flat `index`. UI dispatches from a segment
     /// click in path-edit mode; `anchor` is the de Casteljau split
@@ -1592,6 +1650,9 @@ impl Mutation {
             Self::DeletePage { .. } => "DeletePage",
             Self::InsertFrame { .. } => "InsertFrame",
             Self::DeleteFrame { .. } => "DeleteFrame",
+            Self::InsertLine { .. } => "InsertLine",
+            Self::InsertPath { .. } => "InsertPath",
+            Self::SetDocumentDefaults { .. } => "SetDocumentDefaults",
             Self::PathPointInsert { .. } => "PathPointInsert",
             Self::PathPointRemove { .. } => "PathPointRemove",
             Self::PathPointCurveType { .. } => "PathPointCurveType",

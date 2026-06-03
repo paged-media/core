@@ -907,6 +907,31 @@ fn apply_set_property(
                 },
             )
         }
+        // ---- Editor-ops — gradient axis (Gradient Swatch tool) ----
+        // One arm for all four angle/length fields across every
+        // path-bearing kind; the field dispatch lives in
+        // `find_gradient_field_mut`. Style-only invalidation — the
+        // renderer re-reads the fields on the next rebuild.
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Polygon(_) | NodeId::Oval(_),
+            PropertyPath::FrameGradientFillAngle
+            | PropertyPath::FrameGradientFillLength
+            | PropertyPath::FrameGradientStrokeAngle
+            | PropertyPath::FrameGradientStrokeLength,
+        ) => {
+            let new_val = expect_length(path, value)?;
+            let slot = find_gradient_field_mut(doc, node, path)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = *slot;
+            *slot = new_val;
+            (
+                Value::Length(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         // ---- SDK Phase 5 (v1 sweep) — drop-shadow per-field ----
         // Six fields on `frame.drop_shadow`. Each materialises a
         // default DropShadowSetting if the prior was `None`, then
@@ -3483,6 +3508,66 @@ fn find_text_frame_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a m
         }
     }
     None
+}
+
+fn find_polygon_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mut Polygon> {
+    for parsed in &mut doc.spreads {
+        if let Some(p) = parsed
+            .spread
+            .polygons
+            .iter_mut()
+            .find(|p| p.self_id.as_deref() == Some(self_id))
+        {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn find_oval_mut<'a>(
+    doc: &'a mut Document,
+    self_id: &str,
+) -> Option<&'a mut paged_parse::Oval> {
+    for parsed in &mut doc.spreads {
+        if let Some(o) = parsed
+            .spread
+            .ovals
+            .iter_mut()
+            .find(|o| o.self_id.as_deref() == Some(self_id))
+        {
+            return Some(o);
+        }
+    }
+    None
+}
+
+/// Editor-ops — resolve the gradient angle/length field a
+/// `FrameGradient*` path addresses on whichever kind hosts `node`.
+fn find_gradient_field_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+    path: PropertyPath,
+) -> Option<&'a mut Option<f32>> {
+    macro_rules! pick {
+        ($item:expr) => {
+            match path {
+                PropertyPath::FrameGradientFillAngle => Some(&mut $item.gradient_fill_angle),
+                PropertyPath::FrameGradientFillLength => Some(&mut $item.gradient_fill_length),
+                PropertyPath::FrameGradientStrokeAngle => Some(&mut $item.gradient_stroke_angle),
+                PropertyPath::FrameGradientStrokeLength => {
+                    Some(&mut $item.gradient_stroke_length)
+                }
+                _ => None,
+            }
+        };
+    }
+    match node {
+        NodeId::TextFrame(id) => find_text_frame_mut(doc, id).and_then(|f| pick!(f)),
+        NodeId::Rectangle(id) => find_rectangle_mut(doc, id).and_then(|r| pick!(r)),
+        NodeId::Polygon(id) => find_polygon_mut(doc, id).and_then(|p| pick!(p)),
+        NodeId::Oval(id) => find_oval_mut(doc, id).and_then(|o| pick!(o)),
+        _ => None,
+    }
 }
 
 fn find_rectangle_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mut Rectangle> {

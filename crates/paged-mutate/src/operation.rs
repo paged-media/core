@@ -268,6 +268,18 @@ pub enum PropertyPath {
     /// renderer uses the swatch at full strength. Tints scale the
     /// resolved colour toward paper white at composition time.
     FrameFillTint,
+    /// Editor-ops (Gradient Swatch tool) — the gradient axis on a
+    /// frame whose fill references a `Gradient/<id>` swatch. Angle in
+    /// degrees (renderer convention: 0° = left→right, 90° =
+    /// top→bottom); length in pt (`None` = renderer default — the
+    /// bbox-derived axis). `Value::Length`. Carried on every
+    /// path-bearing page-item kind; no-ops visually while the fill is
+    /// a solid swatch.
+    FrameGradientFillAngle,
+    FrameGradientFillLength,
+    /// Editor-ops — the stroke-gradient analogues.
+    FrameGradientStrokeAngle,
+    FrameGradientStrokeLength,
     /// SDK Phase 5 (v1 sweep) — drop-shadow per-field editors.
     /// All five operate on the frame's `drop_shadow:
     /// Option<DropShadowSetting>`. Writing to any of them
@@ -446,6 +458,10 @@ impl PropertyPath {
             PropertyPath::FrameDropShadow => "frame.dropShadow",
             PropertyPath::FramePath => "frame.path",
             PropertyPath::FrameFillTint => "frame.fillTint",
+            PropertyPath::FrameGradientFillAngle => "frame.gradientFillAngle",
+            PropertyPath::FrameGradientFillLength => "frame.gradientFillLength",
+            PropertyPath::FrameGradientStrokeAngle => "frame.gradientStrokeAngle",
+            PropertyPath::FrameGradientStrokeLength => "frame.gradientStrokeLength",
             PropertyPath::FrameNonprinting => "frame.nonprinting",
             PropertyPath::FrameDropShadowMode => "frame.dropShadowMode",
             PropertyPath::FrameDropShadowXOffset => "frame.dropShadowXOffset",

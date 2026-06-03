@@ -148,6 +148,58 @@ pub struct MutationOutcome {
     pub applied_seq: u64,
     pub page_ids: Vec<PageId>,
     pub inverse: crate::mutate::TextOp,
+    /// Editor-ops — the element a structural insert created (or the
+    /// new page id for `InsertPage`); `None` for every other kind.
+    /// Threaded into the `MutationApplied` reply so the editor can
+    /// select the fresh element.
+    pub created_id: Option<crate::element_selection::ElementId>,
+    /// Editor-ops — `true` when the page LIST changed (insert /
+    /// delete / resize page); the reply then carries the refreshed
+    /// per-page sizes.
+    pub page_structure_changed: bool,
+}
+
+/// Editor-ops — document defaults for newly-created objects. The
+/// whole triple is replaced by `Mutation::SetDocumentDefaults`;
+/// `None` means no fill / no stroke / engine-default weight.
+#[derive(Debug, Clone, Default)]
+pub struct DocumentDefaults {
+    pub fill_color: Option<String>,
+    pub stroke_color: Option<String>,
+    pub stroke_weight: Option<f32>,
+}
+
+/// Editor-ops — the element a structural-insert Operation created,
+/// mapped to the channel's `ElementId` so the `MutationApplied` reply
+/// can carry it (the editor selects the fresh element).
+fn created_element_id(
+    op: &paged_mutate::Operation,
+) -> Option<crate::element_selection::ElementId> {
+    use crate::element_selection::ElementId;
+    if let paged_mutate::Operation::InsertNode { node, .. } = op {
+        return match node.node_id() {
+            paged_mutate::NodeId::TextFrame(id) => Some(ElementId::TextFrame(id)),
+            paged_mutate::NodeId::Rectangle(id) => Some(ElementId::Rectangle(id)),
+            paged_mutate::NodeId::GraphicLine(id) => Some(ElementId::GraphicLine(id)),
+            paged_mutate::NodeId::Polygon(id) => Some(ElementId::Polygon(id)),
+            paged_mutate::NodeId::Oval(id) => Some(ElementId::Oval(id)),
+            paged_mutate::NodeId::Group(id) => Some(ElementId::Group(id)),
+            _ => None,
+        };
+    }
+    None
+}
+
+/// Editor-ops — id-minting scan helper: track the max `u<hex>` suffix.
+fn scan_page_item_id(max: &mut u64, id: Option<&str>) {
+    let Some(id) = id else { return };
+    let Some(hex) = id.strip_prefix('u') else { return };
+    if hex.is_empty() || hex.len() > 12 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return;
+    }
+    if let Ok(v) = u64::from_str_radix(hex, 16) {
+        *max = (*max).max(v);
+    }
 }
 
 /// Phase B — frame-mutation analogue of [`MutationOutcome`]. Carries
@@ -369,6 +421,11 @@ pub struct CanvasModel {
     last_applied_seq: u64,
     /// Active text selection mirrored from the main thread.
     pub current_selection: Option<crate::selection::ContentSelection>,
+    /// Editor-ops — document defaults for newly-created objects
+    /// (`InsertFrame` / `InsertLine` / `InsertPath`). App-level state
+    /// written by `Mutation::SetDocumentDefaults`: not undoable, never
+    /// enters the Operation log, surfaced through `DocumentMeta`.
+    pub document_defaults: DocumentDefaults,
     /// Phase A — active element selection (frames, images, vectors).
     /// Mirrored from the main thread, never enters the Operation log.
     /// Survives mutations and re-layout; the main thread is responsible
@@ -564,6 +621,7 @@ impl CanvasModel {
             initial_state_hash,
             last_applied_seq: 0,
             current_selection: None,
+            document_defaults: DocumentDefaults::default(),
             element_selection: crate::element_selection::ElementSelection::new(),
             active_gesture: None,
             next_gesture_handle: 0,
@@ -705,6 +763,33 @@ impl CanvasModel {
         &mut self,
         mutation: &Mutation,
     ) -> Result<MutationOutcome, crate::channel::WorkerError> {
+        // Editor-ops — document defaults are app-level state, not a
+        // scene edit: no rebuild, no undo entry, no pixel change. The
+        // editor reads the triple back via `DocumentMeta`.
+        if let Mutation::SetDocumentDefaults {
+            fill_color,
+            stroke_color,
+            stroke_weight,
+        } = mutation
+        {
+            self.document_defaults = DocumentDefaults {
+                fill_color: fill_color.clone(),
+                stroke_color: stroke_color.clone(),
+                stroke_weight: *stroke_weight,
+            };
+            let applied_seq = self.bump_applied_seq();
+            return Ok(MutationOutcome {
+                applied_seq,
+                page_ids: Vec::new(),
+                inverse: crate::mutate::TextOp::InsertText {
+                    story_id: String::new(),
+                    offset: 0,
+                    text: String::new(),
+                },
+                created_id: None,
+                page_structure_changed: false,
+            });
+        }
         // Phase B — route frame-shape mutations through the canonical
         // `paged_mutate::apply` path; only the text mutations stay on
         // the legacy `TextOp` log. The `MutationOutcome` is text-only
@@ -713,6 +798,13 @@ impl CanvasModel {
         // convergence folds both into one shape.
         if let Some(op) = self.try_translate_frame_mutation_to_operation(mutation) {
             let outcome = self.apply_operation(op)?;
+            let created_id = created_element_id(&outcome.applied.op);
+            // Page-list mutations (M7 extends this set with ResizePage)
+            // require the editor to rebuild its page grid.
+            let page_structure_changed = matches!(
+                mutation,
+                Mutation::InsertPage { .. } | Mutation::DeletePage { .. }
+            );
             return Ok(MutationOutcome {
                 applied_seq: outcome.applied_seq,
                 page_ids: outcome.page_ids,
@@ -723,6 +815,8 @@ impl CanvasModel {
                     offset: 0,
                     text: String::new(),
                 },
+                created_id,
+                page_structure_changed,
             });
         }
         let text_op: crate::mutate::TextOp = match mutation {
@@ -801,6 +895,8 @@ impl CanvasModel {
             applied_seq,
             page_ids,
             inverse: applied.inverse,
+            created_id: None,
+            page_structure_changed: false,
         })
     }
 
@@ -822,6 +918,125 @@ impl CanvasModel {
                     // Channel carries `(top, left, bottom, right)`;
                     // `Value::Bounds` is `[top, left, bottom, right]`.
                     value: Value::Bounds([bounds.0, bounds.1, bounds.2, bounds.3]),
+                })
+            }
+            Mutation::InsertFrame { page_id, bounds } => {
+                let (spread_id, (ox, oy), idx) = self.page_insert_context(page_id)?;
+                // Append to the kind vec = top of the z-order.
+                let position = self.scene.spreads[idx].spread.rectangles.len();
+                let d = &self.document_defaults;
+                Some(Operation::InsertNode {
+                    parent: NodeId::Spread(spread_id),
+                    position,
+                    node: paged_mutate::NodeSpec::Rectangle {
+                        self_id: self.mint_page_item_id(),
+                        // Page-local (top, left, bottom, right) →
+                        // spread coords (the marquee_hits rule: y axes
+                        // shift by origin.y, x axes by origin.x).
+                        bounds: [
+                            bounds.0 + oy,
+                            bounds.1 + ox,
+                            bounds.2 + oy,
+                            bounds.3 + ox,
+                        ],
+                        fill_color: d.fill_color.clone(),
+                        stroke_color: d.stroke_color.clone(),
+                        stroke_weight: d.stroke_weight,
+                    },
+                    z_slot: None,
+                })
+            }
+            Mutation::InsertLine { page_id, start, end } => {
+                let (spread_id, (ox, oy), idx) = self.page_insert_context(page_id)?;
+                let position = self.scene.spreads[idx].spread.graphic_lines.len();
+                let s = [start.0 + ox, start.1 + oy];
+                let e = [end.0 + ox, end.1 + oy];
+                let corner = |p: [f32; 2]| paged_mutate::operation::PathAnchorSpec {
+                    anchor: p,
+                    left: p,
+                    right: p,
+                };
+                let d = &self.document_defaults;
+                Some(Operation::InsertNode {
+                    parent: NodeId::Spread(spread_id),
+                    position,
+                    node: paged_mutate::NodeSpec::GraphicLine {
+                        self_id: self.mint_page_item_id(),
+                        bounds: [
+                            s[1].min(e[1]),
+                            s[0].min(e[0]),
+                            s[1].max(e[1]),
+                            s[0].max(e[0]),
+                        ],
+                        anchors: vec![corner(s), corner(e)],
+                        subpath_starts: vec![0],
+                        subpath_open: vec![true],
+                        // A strokeless line is invisible — fall back to
+                        // a 1pt black stroke when no default is set.
+                        stroke_color: d
+                            .stroke_color
+                            .clone()
+                            .or_else(|| Some("Color/Black".to_string())),
+                        stroke_weight: d.stroke_weight.or(Some(1.0)),
+                    },
+                    z_slot: None,
+                })
+            }
+            Mutation::InsertPath {
+                page_id,
+                anchors,
+                open,
+                smooth,
+            } => {
+                let (spread_id, (ox, oy), idx) = self.page_insert_context(page_id)?;
+                let position = self.scene.spreads[idx].spread.polygons.len();
+                let mut conv: Vec<paged_mutate::operation::PathAnchorSpec> = anchors
+                    .iter()
+                    .map(|a| paged_mutate::operation::PathAnchorSpec {
+                        anchor: [a.anchor[0] + ox, a.anchor[1] + oy],
+                        left: [a.left[0] + ox, a.left[1] + oy],
+                        right: [a.right[0] + ox, a.right[1] + oy],
+                    })
+                    .collect();
+                if *smooth {
+                    conv = paged_mutate::fit_polyline_to_anchors(&conv);
+                }
+                if conv.is_empty() {
+                    return None;
+                }
+                // Bounding box over anchors + handles (handles cover
+                // the curve's extent after smoothing).
+                let mut top = f32::MAX;
+                let mut left = f32::MAX;
+                let mut bottom = f32::MIN;
+                let mut right = f32::MIN;
+                for a in &conv {
+                    for p in [a.anchor, a.left, a.right] {
+                        left = left.min(p[0]);
+                        right = right.max(p[0]);
+                        top = top.min(p[1]);
+                        bottom = bottom.max(p[1]);
+                    }
+                }
+                let d = &self.document_defaults;
+                Some(Operation::InsertNode {
+                    parent: NodeId::Spread(spread_id),
+                    position,
+                    node: paged_mutate::NodeSpec::Polygon {
+                        self_id: self.mint_page_item_id(),
+                        bounds: [top, left, bottom, right],
+                        anchors: conv,
+                        subpath_starts: vec![0],
+                        subpath_open: vec![*open],
+                        fill_color: d.fill_color.clone(),
+                        // Pencil strokes need a visible stroke too.
+                        stroke_color: d
+                            .stroke_color
+                            .clone()
+                            .or_else(|| Some("Color/Black".to_string())),
+                        stroke_weight: d.stroke_weight.or(Some(1.0)),
+                    },
+                    z_slot: None,
                 })
             }
             Mutation::DeleteFrame { frame_id } => {
@@ -1096,6 +1311,62 @@ impl CanvasModel {
     /// Phase B — look up a frame's `NodeId` by its raw `Self` id.
     /// Searches text frames first, then rectangles. Phase D extends
     /// to ovals / polygons / graphic lines as `apply.rs` graduates.
+    /// Editor-ops — mint a fresh, document-wide-unique page-item
+    /// `Self` id (`u<hex>`, the bare style real IDML page items use).
+    /// Scans every page-item id across all spreads for the highest
+    /// `u<hex>` suffix and returns the successor — collision-safe by
+    /// construction.
+    pub(crate) fn mint_page_item_id(&self) -> String {
+        let mut max: u64 = 0;
+        for parsed in &self.scene.spreads {
+            let s = &parsed.spread;
+            for f in &s.text_frames {
+                scan_page_item_id(&mut max, f.self_id.as_deref());
+            }
+            for r in &s.rectangles {
+                scan_page_item_id(&mut max, r.self_id.as_deref());
+            }
+            for o in &s.ovals {
+                scan_page_item_id(&mut max, o.self_id.as_deref());
+            }
+            for l in &s.graphic_lines {
+                scan_page_item_id(&mut max, l.self_id.as_deref());
+            }
+            for p in &s.polygons {
+                scan_page_item_id(&mut max, p.self_id.as_deref());
+            }
+            for g in &s.groups {
+                scan_page_item_id(&mut max, g.self_id.as_deref());
+            }
+        }
+        format!("u{:x}", max + 1)
+    }
+
+    /// Editor-ops — resolve the spread hosting `page_id` plus the
+    /// page's spread-origin (for the page-local → spread-coordinate
+    /// conversion the structural inserts need; same rule as
+    /// `marquee_hits`). Returns `(spread self_id, origin, spread idx)`.
+    pub(crate) fn page_insert_context(
+        &self,
+        page_id: &PageId,
+    ) -> Option<(String, (f32, f32), usize)> {
+        let origin = self.page(page_id)?.spread_origin;
+        let (idx, parsed) = self.scene.spreads.iter().enumerate().find(|(_, parsed)| {
+            parsed.spread.pages.iter().any(|p| {
+                p.self_id.as_deref() == Some(page_id.as_str()) || p.self_id.is_none()
+            })
+        })?;
+        // Well-formed IDMLs always carry a spread self_id; synthetic
+        // docs fall back to the manifest src (mirrors spread_parent_id
+        // on the apply side).
+        let spread_id = parsed
+            .spread
+            .self_id
+            .clone()
+            .unwrap_or_else(|| parsed.src.clone());
+        Some((spread_id, origin, idx))
+    }
+
     pub(crate) fn resolve_frame_node_id(
         &self,
         frame_id: &str,
@@ -1107,6 +1378,17 @@ impl CanvasModel {
             }
             if s.rectangles.iter().any(|f| f.self_id.as_deref() == Some(frame_id)) {
                 return Some(paged_mutate::NodeId::Rectangle(frame_id.to_string()));
+            }
+            // Editor-ops — the insert ops create lines/polygons, so
+            // ResizeFrame/DeleteFrame must resolve them too.
+            if s.graphic_lines.iter().any(|l| l.self_id.as_deref() == Some(frame_id)) {
+                return Some(paged_mutate::NodeId::GraphicLine(frame_id.to_string()));
+            }
+            if s.polygons.iter().any(|p| p.self_id.as_deref() == Some(frame_id)) {
+                return Some(paged_mutate::NodeId::Polygon(frame_id.to_string()));
+            }
+            if s.ovals.iter().any(|o| o.self_id.as_deref() == Some(frame_id)) {
+                return Some(paged_mutate::NodeId::Oval(frame_id.to_string()));
             }
         }
         None
@@ -2353,6 +2635,9 @@ impl CanvasModel {
             color_mode: String::new(),
             document_name: String::new(),
             dirty: false,
+            default_fill_color: self.document_defaults.fill_color.clone(),
+            default_stroke_color: self.document_defaults.stroke_color.clone(),
+            default_stroke_weight: self.document_defaults.stroke_weight,
         }
     }
 

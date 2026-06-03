@@ -687,11 +687,25 @@ mod wasm {
                             let mut stats: LayoutCacheStats =
                                 model.layout_cache_stats().into();
                             stats.rebuild_ms = (js_sys::Date::now() - t0) as f32;
+                            // Editor-ops — page-list mutations carry the
+                            // refreshed sizes so the editor can rebuild
+                            // its page grid without a document reload.
+                            let page_sizes_pt = outcome.page_structure_changed.then(|| {
+                                model
+                                    .built
+                                    .pages
+                                    .iter()
+                                    .map(|p| (p.width_pt, p.height_pt))
+                                    .collect()
+                            });
                             WorkerToMainKind::MutationApplied {
                                 client_seq: msg.seq,
                                 applied_seq: outcome.applied_seq,
                                 page_ids: outcome.page_ids,
                                 cache_stats: stats,
+                                created_id: outcome.created_id,
+                                page_structure_changed: outcome.page_structure_changed,
+                                page_sizes_pt,
                             }
                         }
                         Err(error) => WorkerToMainKind::MutationFailed { error },
