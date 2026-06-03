@@ -1,0 +1,750 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * This file is part of paged (https://paged.media) and is additionally
+ * available under the Paged Media Enterprise License (PMEL). Full
+ * copyright and license information is available in LICENSE.md which is
+ * distributed with this source code.
+ *
+ *  @copyright  Copyright (c) And The Next GmbH
+ *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
+ */
+
+//! Anchored (inline / above-line / custom-positioned) frame emission:
+//! per-paragraph anchored TextFrames recurse into their stories,
+//! anchored Rectangles emit fills and deferred images via
+//! [`AnchoredImageEmit`], bounded by `MAX_ANCHORED_STORY_RECURSION`.
+
+use super::*;
+
+/// One image-bearing anchored Rectangle captured during the body /
+/// master story pass. The post-pass in `build_document` drains
+/// these and routes each through `emit_rectangle_image` with the
+/// per-page + decoded caches already in scope. Made `pub` so the
+/// Perf-BodyStory cache can hold these entries between rebuilds —
+/// see `BodyStoryEmissionDelta`.
+#[derive(Debug, Clone)]
+pub struct AnchoredImageEmit {
+    pub target_page: usize,
+    pub place_x: f32,
+    pub place_y: f32,
+    pub width: f32,
+    pub height: f32,
+    /// Cloned so the post-pass doesn't borrow the source
+    /// `AnchoredFrame` (which lives inside the parsed Story tree). We
+    /// only need image_link / image_item_transform / self_id for the
+    /// rectangle synthesis below, so the clone is cheap.
+    pub af: paged_parse::AnchoredFrame,
+}
+
+/// Hard cap on `anchored_recursion_depth`. Real-world IDMLs nest at
+/// most 1–2 deep (a sidebar with an inline figure containing a caption
+/// frame); 4 leaves headroom while still bounding pathological docs.
+pub(super) const MAX_ANCHORED_STORY_RECURSION: u32 = 4;
+
+/// Best-effort emission of the paragraph's anchored frames. Supports
+/// `InlinePosition` (default) by placing the frame at the
+/// paragraph's first-baseline anchor offset by `anchor_x_offset` /
+/// `anchor_y_offset`. `AbovePosition` puts it above the paragraph's
+/// origin; `Custom` honours the offsets verbatim. Unrecognised
+/// positions log a TODO and fall through to InlinePosition placement.
+///
+/// Anchored TextFrames recurse into their story via the document's
+/// frame_chain lookup; anchored Rectangles emit through
+/// `emit_rectangle_into` if the parser surfaced bounds for them. We
+/// don't yet thread images on anchored rectangles; those land when
+/// the parser surfaces image_link on AnchoredFrame.
+pub(super) fn emit_anchored_frames_for_paragraph(
+    em: &mut StoryEmitter,
+    paragraph: &paged_parse::Paragraph,
+    pages: &mut [BuiltPage],
+    _total_stats: &mut PipelineStats,
+) {
+    let target_page = em.chain_pages[em.frame_idx];
+    let frame = em.chain[em.frame_idx];
+    let (ox, oy) = pages[target_page].spread_origin;
+    let frame_insets = frame.inset_spacing.unwrap_or([0.0; 4]);
+    let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
+    let para_origin_x = sx - ox + frame_insets[1] + em.column_x_shift_pt;
+    let para_origin_y = sy - oy;
+    // Paragraph baseline (page-local pt). y_cursor is in 1/64 pt
+    // relative to the host frame's inner origin, so convert + add
+    // the frame's spread top-left to get a page-local baseline.
+    let baseline_y_pt = if em.y_cursor >= 0 {
+        para_origin_y + em.y_cursor as f32 / paged_text::shape::ADVANCE_PRECISION
+    } else {
+        para_origin_y
+    };
+
+    for af in &paragraph.anchored_frames {
+        let setting = af.setting.as_ref();
+        let position = setting
+            .and_then(|s| s.anchored_position.as_deref())
+            .unwrap_or("InlinePosition");
+        let (offset_x, offset_y) = setting
+            .map(|s| (s.anchor_x_offset, s.anchor_y_offset))
+            .unwrap_or((0.0, 0.0));
+        let frame_w = af.bounds.map(|b| b.width()).unwrap_or(0.0);
+        let frame_h = af.bounds.map(|b| b.height()).unwrap_or(0.0);
+        // Anchor reference point on the frame — the corner / edge the
+        // AnchoredObjectSetting offset attaches to (`TopLeftAnchor`,
+        // `TopRightAnchor`, `CenterAnchor`, …). For inline frames
+        // we resolve the *vertical* component of the anchor point
+        // strictly: a Top anchor sits the frame's top on the line
+        // baseline, a Bottom anchor sits the frame's bottom on the
+        // baseline (the legacy default), Center splits the diff.
+        // The horizontal component currently degenerates because we
+        // don't yet thread the per-anchor advance offset out of the
+        // composer — both `BottomLeftAnchor` and `BottomRightAnchor`
+        // place the frame at the column-left edge of the paragraph
+        // (real InDesign would shift `BottomRightAnchor` by the
+        // anchor character's full advance, which equals the frame's
+        // own width when the anchor is the lone character on the
+        // line). Once the composer surfaces the U+FFFC advance
+        // position the horizontal degenerates collapse — see the
+        // TODO below.
+        let anchor_point = setting
+            .and_then(|s| s.anchor_point.as_deref())
+            .unwrap_or("BottomLeftAnchor");
+        let vertical_corner_dy = anchor_vertical_corner_offset(anchor_point, frame_h);
+        // TODO(anchored-position): once paragraph_breaker exposes
+        // the anchor character's advance-from-line-start, replace
+        // `para_origin_x` with that advance so `InlinePosition` lands
+        // at the actual inline position. The horizontal anchor-corner
+        // offset (Left / Center / Right) then becomes meaningful too.
+        let (place_x, place_y) = match position {
+            "InlinePosition" => {
+                if frame_w > 0.0 && frame_h > 0.0 {
+                    tracing::debug!(
+                        target: "paged_renderer::pipeline",
+                        anchor_point,
+                        "InlinePosition: anchored at paragraph origin (per-anchor advance offset queued)"
+                    );
+                }
+                // Frame top-left placed so the named anchor corner
+                // sits at (paragraph origin x, baseline y) plus the
+                // anchor offsets. The horizontal anchor-corner
+                // component currently collapses to 0 until
+                // paragraph_breaker exposes the per-anchor advance
+                // position; the vertical component drives Top vs
+                // Bottom anchoring.
+                (
+                    para_origin_x + offset_x,
+                    baseline_y_pt + offset_y - vertical_corner_dy,
+                )
+            }
+            // Both `AbovePosition` and the (newer) `AboveLine` enum
+            // value place the frame above the host line; treat them
+            // identically until line-by-line vertical resolution lands.
+            "AbovePosition" | "AboveLine" => (
+                para_origin_x + offset_x,
+                para_origin_y + offset_y - vertical_corner_dy,
+            ),
+            // `Custom` / `Anchored` — honour HorizontalReferencePoint
+            // and VerticalReferencePoint with their alignments so the
+            // frame anchors against the column / text-frame / page-
+            // edge rectangles the IDML declares. IDML 14+ writes
+            // `Anchored`; older docs write `Custom`. Treat both the
+            // same.
+            "Custom" | "Anchored" => {
+                let ref_x = horizontal_reference_x(
+                    setting,
+                    para_origin_x,
+                    frame,
+                    &pages[target_page],
+                    em.column_x_shift_pt,
+                );
+                let ref_y = vertical_reference_y(
+                    setting,
+                    baseline_y_pt,
+                    frame,
+                    &pages[target_page],
+                    para_origin_y,
+                );
+                (
+                    ref_x + offset_x,
+                    ref_y + offset_y - vertical_corner_dy,
+                )
+            }
+            _ => {
+                tracing::debug!(
+                    target: "paged_renderer::pipeline",
+                    position = position,
+                    "unrecognised anchored position; defaulting to InlinePosition"
+                );
+                (
+                    para_origin_x + offset_x,
+                    baseline_y_pt + offset_y - vertical_corner_dy,
+                )
+            }
+        };
+        emit_one_anchored_frame(em, af, target_page, place_x, place_y, pages);
+    }
+}
+
+/// Phase 5 — resolve the horizontal reference x for a `Custom`-
+/// positioned anchored frame, accounting for `HorizontalReferencePoint`
+/// + `HorizontalAlignment`. Returns the page-local pt x that the
+/// frame's anchor corner attaches to BEFORE the AnchoredObjectSetting
+/// offset and the corner-of-frame correction are applied.
+///
+/// Supported references:
+/// - `AnchorLocation` (default): the anchor character's x. Today we
+///   approximate this as the paragraph origin x (the composer doesn't
+///   yet surface per-glyph advance; same limitation as InlinePosition).
+/// - `ColumnEdge`: the paragraph's column left edge.
+/// - `TextFrame`: the host text frame's spread-projected left edge,
+///   page-local.
+/// - `PageMargins` / `PageEdge`: the page bounds (margins not yet
+///   surfaced through the geometry pipeline; both resolve to the page
+///   edge for now).
+///
+/// `HorizontalAlignment` shifts the resolved x by the reference
+/// rectangle's width: `LeftAlign` keeps the left, `CenterAlign`
+/// centers, `RightAlign` snaps to the right.
+fn horizontal_reference_x(
+    setting: Option<&paged_parse::AnchoredObjectSetting>,
+    para_origin_x: f32,
+    frame: &paged_parse::TextFrame,
+    page: &BuiltPage,
+    column_x_shift_pt: f32,
+) -> f32 {
+    let _ = column_x_shift_pt;
+    let reference = setting
+        .and_then(|s| s.horizontal_reference_point.as_deref())
+        .unwrap_or("AnchorLocation");
+    let alignment = setting
+        .and_then(|s| s.horizontal_alignment.as_deref())
+        .unwrap_or("LeftAlign");
+    let frame_spread_bounds = transform_bounds(frame.bounds, frame.item_transform);
+    let (ref_left, ref_right) = match reference {
+        "AnchorLocation" => (para_origin_x, para_origin_x),
+        "ColumnEdge" => {
+            // Column edges = the paragraph's effective text box; for
+            // single-column frames that's the inset-adjusted frame.
+            let insets = frame.inset_spacing.unwrap_or([0.0; 4]);
+            let (sx, _sy) = (frame_spread_bounds.left, frame_spread_bounds.top);
+            let left_page = sx - page.spread_origin.0 + insets[1];
+            let width = (frame_spread_bounds.right - frame_spread_bounds.left)
+                .max(0.0)
+                - insets[1]
+                - insets[3];
+            (left_page, left_page + width)
+        }
+        "TextFrame" => {
+            let left = frame_spread_bounds.left - page.spread_origin.0;
+            let right = frame_spread_bounds.right - page.spread_origin.0;
+            (left, right)
+        }
+        // PageMargins falls through to PageEdge until margins are
+        // surfaced through the geometry pipeline.
+        "PageMargins" | "PageEdge" => (0.0, page.width_pt),
+        _ => (para_origin_x, para_origin_x),
+    };
+    match alignment {
+        "CenterAlign" => (ref_left + ref_right) * 0.5,
+        "RightAlign" | "AwayFromBindingSide" => ref_right,
+        // LeftAlign / TextAlign / ToBindingSide / unknown ⇒ left.
+        _ => ref_left,
+    }
+}
+
+/// Phase 5 — vertical analogue of [`horizontal_reference_x`]. Maps
+/// `VerticalReferencePoint` + `VerticalAlignment` to the y the frame's
+/// anchor corner sits against.
+///
+/// Supported references:
+/// - `LineBaseline` (default): the anchor line's baseline.
+/// - `LineXHeight` / `LineCapHeight` / `TopOfLeading`: degenerate to
+///   the baseline today; the per-line metric isn't surfaced.
+/// - `Column`: the host text frame's top (≈ column top).
+/// - `TextFrame`: the host text frame's top.
+/// - `PageMargins` / `PageEdge`: page bounds.
+fn vertical_reference_y(
+    setting: Option<&paged_parse::AnchoredObjectSetting>,
+    baseline_y_pt: f32,
+    frame: &paged_parse::TextFrame,
+    page: &BuiltPage,
+    para_origin_y: f32,
+) -> f32 {
+    let _ = para_origin_y;
+    let reference = setting
+        .and_then(|s| s.vertical_reference_point.as_deref())
+        .unwrap_or("LineBaseline");
+    let alignment = setting
+        .and_then(|s| s.vertical_alignment.as_deref())
+        .unwrap_or("TopAlign");
+    let frame_spread_bounds = transform_bounds(frame.bounds, frame.item_transform);
+    let (ref_top, ref_bottom) = match reference {
+        "LineBaseline" | "LineXHeight" | "LineCapHeight" | "TopOfLeading" => {
+            (baseline_y_pt, baseline_y_pt)
+        }
+        "Column" | "TextFrame" => {
+            let top = frame_spread_bounds.top - page.spread_origin.1;
+            let bottom = frame_spread_bounds.bottom - page.spread_origin.1;
+            (top, bottom)
+        }
+        "PageMargins" | "PageEdge" => (0.0, page.height_pt),
+        _ => (baseline_y_pt, baseline_y_pt),
+    };
+    match alignment {
+        "CenterAlign" => (ref_top + ref_bottom) * 0.5,
+        "BottomAlign" => ref_bottom,
+        // TopAlign / unknown ⇒ top.
+        _ => ref_top,
+    }
+}
+
+/// Vertical offset from an anchored frame's top to the reference
+/// edge / center named by `anchor_point`. Returns `0` for any
+/// `Top*Anchor` (frame's top at the anchor's y), `h/2` for any
+/// `*CenterAnchor`, and `h` for any `Bottom*Anchor` / unknown values
+/// (frame's bottom at the anchor's y — the legacy default that
+/// matched the original anchored-frame placement).
+fn anchor_vertical_corner_offset(anchor_point: &str, h: f32) -> f32 {
+    match anchor_point {
+        "TopLeftAnchor" | "TopCenterAnchor" | "TopRightAnchor" => 0.0,
+        "LeftCenterAnchor" | "CenterAnchor" | "RightCenterAnchor" => h * 0.5,
+        // Bottom* and unknown values fall through to the legacy
+        // bottom-anchored placement (frame's bottom at the anchor y).
+        _ => h,
+    }
+}
+
+/// Emit a single anchored frame (or recurse through a Group). Splits
+/// out of `emit_anchored_frames_for_paragraph` so anchored Groups can
+/// reuse the same placement logic for each child without duplicating
+/// the position-resolution preamble.
+///
+/// `place_x` / `place_y` are the page-local pt coordinates of the
+/// frame's top-left as resolved from the AnchoredObjectSetting
+/// (InlinePosition / AbovePosition / Custom). For Group children, the
+/// caller offsets these by the child's bounds delta within the group.
+fn emit_one_anchored_frame(
+    em: &mut StoryEmitter,
+    af: &paged_parse::AnchoredFrame,
+    target_page: usize,
+    place_x: f32,
+    place_y: f32,
+    pages: &mut [BuiltPage],
+) {
+    let frame_w = af.bounds.map(|b| b.width()).unwrap_or(0.0);
+    let frame_h = af.bounds.map(|b| b.height()).unwrap_or(0.0);
+    match af.frame_kind {
+        paged_parse::AnchoredFrameKind::Rectangle
+        | paged_parse::AnchoredFrameKind::TextFrame => {
+            // Rectangles AND TextFrames render the frame's box +
+            // fill / stroke through the same `emit_rectangle_into`
+            // pipeline used by spread-level Rectangles. TextFrames
+            // additionally host a story; the story-recursion layer
+            // is queued (anchored.idml's TextFrame variants ship
+            // FillColor=Color/Paper which makes the frame visible
+            // even without the inner text). The synthesizer below
+            // bakes the page-local placement into a Rectangle whose
+            // bounds sit in spread coords so `frame_outer_transform`
+            // unwinds back to the right page-local position.
+            if frame_w > 0.0 && frame_h > 0.0 {
+                emit_anchored_rect_via_pipeline(
+                    em,
+                    af,
+                    target_page,
+                    place_x,
+                    place_y,
+                    frame_w,
+                    frame_h,
+                    pages,
+                );
+            }
+            // Capture image-bearing anchored Rectangles (incl. Group
+            // children). Rendering routes through the per-page +
+            // decoded-image caches owned by `build_document`, so
+            // we record placement here and the post-pass replays via
+            // `emit_rectangle_image`. Anchored TextFrames don't carry
+            // an `image_link` (the parser only sets it for Rectangles
+            // / Groups), but the guard is symmetric for safety.
+            if af.image_link.is_some() && frame_w > 0.0 && frame_h > 0.0 {
+                em.anchored_image_queue.push(AnchoredImageEmit {
+                    target_page,
+                    place_x,
+                    place_y,
+                    width: frame_w,
+                    height: frame_h,
+                    af: af.clone(),
+                });
+            }
+            if matches!(af.frame_kind, paged_parse::AnchoredFrameKind::TextFrame) {
+                if let Some(story_id) = af.parent_story.as_deref() {
+                    if frame_w > 0.0 && frame_h > 0.0 {
+                        emit_anchored_textframe_story(
+                            em,
+                            af,
+                            story_id,
+                            target_page,
+                            place_x,
+                            place_y,
+                            frame_w,
+                            frame_h,
+                            pages,
+                        );
+                    }
+                }
+            }
+        }
+        paged_parse::AnchoredFrameKind::Group => {
+            // Recurse through the group's children. The group's own
+            // ItemTransform (typically a pure translate of the form
+            // `[1 0 0 1 tx ty]`) shifts every child by `(tx, ty)` in
+            // page-local pt. Each child's `bounds.left` /
+            // `bounds.top` are relative to the group's inner-coord
+            // origin; we offset by the difference between the
+            // child's and the group's `bounds` so the children land
+            // at the right spot inside the group's placement rect.
+            // Image-link emission for Group children is deferred —
+            // the per-page image cache lives outside StoryEmitter.
+            let (group_tx, group_ty) = af
+                .item_transform
+                .map(|m| (m[4], m[5]))
+                .unwrap_or((0.0, 0.0));
+            let (group_bx, group_by) = af
+                .bounds
+                .map(|b| (b.left, b.top))
+                .unwrap_or((0.0, 0.0));
+            for child in &af.children {
+                // Child's offset within the group's inner coord
+                // system is `child.bounds.{left,top} - group.bounds.{left,top}`.
+                // Plus the child's own item_transform (translate
+                // component) and the group's item_transform.
+                let (child_bx, child_by) = child
+                    .bounds
+                    .map(|b| (b.left, b.top))
+                    .unwrap_or((0.0, 0.0));
+                let (child_tx, child_ty) = child
+                    .item_transform
+                    .map(|m| (m[4], m[5]))
+                    .unwrap_or((0.0, 0.0));
+                let child_place_x =
+                    place_x + group_tx + child_tx + (child_bx - group_bx);
+                let child_place_y =
+                    place_y + group_ty + child_ty + (child_by - group_by);
+                emit_one_anchored_frame(
+                    em,
+                    child,
+                    target_page,
+                    child_place_x,
+                    child_place_y,
+                    pages,
+                );
+            }
+        }
+    }
+}
+
+/// Synthesize a Rectangle for an anchored frame placed at
+/// `(place_x, place_y)` page-local pt with size `(w, h)` and route it
+/// through `emit_rectangle_into` so fill / stroke / drop-shadow
+/// modules emit identically to a spread-level Rectangle. The
+/// synthetic Rectangle's bounds sit in spread coords (page-local +
+/// spread_origin) so `frame_outer_transform` produces a translate of
+/// `-spread_origin` and lands the geometry back on `(place_x, place_y)`.
+fn emit_anchored_rect_via_pipeline(
+    em: &StoryEmitter,
+    af: &paged_parse::AnchoredFrame,
+    target_page: usize,
+    place_x: f32,
+    place_y: f32,
+    w: f32,
+    h: f32,
+    pages: &mut [BuiltPage],
+) {
+    let (ox, oy) = pages[target_page].spread_origin;
+    let bounds = paged_parse::Bounds {
+        top: place_y + oy,
+        left: place_x + ox,
+        bottom: place_y + oy + h,
+        right: place_x + ox + w,
+    };
+    let synthetic = Rectangle {
+        self_id: af.self_id.clone(),
+        bounds,
+        item_transform: None,
+        fill_color: af.fill_color.clone(),
+        fill_tint: af.fill_tint,
+        stroke_color: af.stroke_color.clone(),
+        stroke_weight: af.stroke_weight,
+        drop_shadow: None,
+        stroke_drop_shadow: None,
+        // Image emission for anchored Rectangles is deferred — the
+        // per-page image cache lives in the pre-pass scope, outside
+        // StoryEmitter. The parser still surfaces image_link /
+        // image_item_transform on AnchoredFrame so a future renderer
+        // pass can pick them up. Today's anchored.idml ships no
+        // image-bearing anchored Rectangles.
+        image_link: None,
+        image_bytes: None,
+        has_image_element: false,
+        has_inline_pdf: false,
+        image_item_transform: None,
+        applied_object_style: af.applied_object_style.clone(),
+        text_wrap: None,
+        frame_fitting: None,
+        stroke_type: None,
+        stroke_alignment: None,
+        end_cap: None,
+        end_join: None,
+        miter_limit: None,
+        item_layer: None,
+        corner_radius: None,
+        corner_option: None,
+        corners: Default::default(),
+        is_anchored: true,
+        opacity: None,
+        blend_mode: None,
+        effects: None,
+        gradient_fill_angle: af.gradient_fill_angle,
+        gradient_fill_length: None,
+        gradient_stroke_angle: None,
+        gradient_stroke_length: None,
+        text_paths: Vec::new(),
+        // Anchored frames don't currently carry overprint attrs in our
+        // AnchoredFrame mirror; default to knockout (the IDML default).
+        overprint_fill: false,
+        overprint_stroke: false,
+        nonprinting: false,
+        anchors: Vec::new(),
+        subpath_starts: Vec::new(),
+        subpath_open: Vec::new(),
+    };
+    // `emit_rectangle_into` increments `page.stats.frames` internally.
+    emit_rectangle_into(
+        &mut pages[target_page],
+        &synthetic,
+        em.document,
+        em.palette,
+        em.options.fallback_frame_fill,
+        em.cmyk_xform,
+        None,
+    );
+}
+
+/// Image-emit pass for an anchored Rectangle whose `image_link` is
+/// populated. Synthesises a Rectangle in spread coords (mirroring
+/// `emit_anchored_rect_via_pipeline`'s placement math, plus the
+/// image fields the parent helper drops) and hands it to
+/// `emit_rectangle_image` so the per-page + decoded-image caches in
+/// `build_document`'s scope are reused.
+///
+/// The image stamps *on top* of the rectangle's own fill / stroke
+/// emitted earlier by the body / master story pass — same z-order
+/// as a spread-level Rectangle whose `<Image>` child overlays the
+/// rectangle's solid fill.
+pub(super) fn emit_anchored_rect_image(
+    page: &mut BuiltPage,
+    af: &paged_parse::AnchoredFrame,
+    place_x: f32,
+    place_y: f32,
+    w: f32,
+    h: f32,
+    options: &PipelineOptions,
+    page_image_cache: &mut HashMap<String, paged_compose::ImageId>,
+    decoded_cache: &mut HashMap<String, paged_compose::DecodedImage>,
+) {
+    let (ox, oy) = page.spread_origin;
+    let bounds = paged_parse::Bounds {
+        top: place_y + oy,
+        left: place_x + ox,
+        bottom: place_y + oy + h,
+        right: place_x + ox + w,
+    };
+    let synthetic = Rectangle {
+        self_id: af.self_id.clone(),
+        bounds,
+        item_transform: None,
+        fill_color: af.fill_color.clone(),
+        fill_tint: af.fill_tint,
+        stroke_color: af.stroke_color.clone(),
+        stroke_weight: af.stroke_weight,
+        drop_shadow: None,
+        stroke_drop_shadow: None,
+        image_link: af.image_link.clone(),
+        has_image_element: af.image_link.is_some(),
+        has_inline_pdf: false,
+        image_item_transform: af.image_item_transform,
+        image_bytes: None,
+        applied_object_style: af.applied_object_style.clone(),
+        text_wrap: None,
+        frame_fitting: None,
+        stroke_type: None,
+        stroke_alignment: None,
+        end_cap: None,
+        end_join: None,
+        miter_limit: None,
+        item_layer: None,
+        corner_radius: None,
+        corner_option: None,
+        corners: Default::default(),
+        is_anchored: true,
+        opacity: None,
+        blend_mode: None,
+        effects: None,
+        gradient_fill_angle: af.gradient_fill_angle,
+        gradient_fill_length: None,
+        gradient_stroke_angle: None,
+        gradient_stroke_length: None,
+        text_paths: Vec::new(),
+        // Anchored frames don't currently carry overprint attrs in our
+        // AnchoredFrame mirror; default to knockout (the IDML default).
+        overprint_fill: false,
+        overprint_stroke: false,
+        nonprinting: false,
+        anchors: Vec::new(),
+        subpath_starts: Vec::new(),
+        subpath_open: Vec::new(),
+    };
+    emit_rectangle_image(page, &synthetic, options, page_image_cache, decoded_cache);
+}
+
+/// Flow the story referenced by an anchored TextFrame into the
+/// placed rectangle. Synthesises a single-frame chain whose `bounds`
+/// sit in spread coords (so `frame_outer_transform` produces a
+/// `-spread_origin` translate that lands the geometry on
+/// `(place_x, place_y)`), then runs the existing per-paragraph emit
+/// loop on a fresh sub-`StoryEmitter`. The sub-emitter inherits the
+/// parent's document / palette / font_table / cmyk / hyphenator
+/// borrows so no extra plumbing is needed.
+///
+/// Recursion is bounded by [`MAX_ANCHORED_STORY_RECURSION`]: an
+/// anchored TextFrame inside an anchored TextFrame is fine, but a
+/// pathological cycle (anchored TextFrame whose story re-references
+/// itself) is short-circuited with a `tracing::warn!`.
+///
+/// Inset spacing on the synthetic frame is `[0; 4]` because parsed
+/// `AnchoredFrame` records don't carry `<TextFramePreference
+/// InsetSpacing>` — anchored frames in real-world IDMLs typically
+/// rely on the ObjectStyle cascade for insets, which the renderer's
+/// `emit_text_frame_into` pre-pass already drew the box from. The
+/// inner story flows edge-to-edge inside the frame's bounds.
+pub(super) fn emit_anchored_textframe_story<'a>(
+    em: &mut StoryEmitter<'a>,
+    af: &paged_parse::AnchoredFrame,
+    story_id: &str,
+    target_page: usize,
+    place_x: f32,
+    place_y: f32,
+    w: f32,
+    h: f32,
+    pages: &mut [BuiltPage],
+) {
+    if em.anchored_recursion_depth >= MAX_ANCHORED_STORY_RECURSION {
+        tracing::warn!(
+            target: "paged_renderer::pipeline",
+            depth = em.anchored_recursion_depth,
+            story_id = story_id,
+            "anchored TextFrame recursion depth cap hit; skipping inner story"
+        );
+        return;
+    }
+    let Some(parsed) = em
+        .document
+        .stories
+        .iter()
+        .find(|s| s.self_id == story_id)
+    else {
+        return;
+    };
+    // Build the synthetic TextFrame's bounds in spread coords. The
+    // sub-emitter's per-line walk transforms `bounds` through the
+    // (None) item_transform and subtracts the page's spread_origin —
+    // the shape of `emit_anchored_rect_via_pipeline` for fill /
+    // stroke, but here driving the StoryEmitter rather than
+    // `emit_rectangle_into`.
+    let (ox, oy) = pages[target_page].spread_origin;
+    let bounds = paged_parse::Bounds {
+        top: place_y + oy,
+        left: place_x + ox,
+        bottom: place_y + oy + h,
+        right: place_x + ox + w,
+    };
+    let synthetic = TextFrame {
+        self_id: af.self_id.clone(),
+        parent_story: Some(story_id.to_string()),
+        bounds,
+        item_transform: None,
+        fill_color: None,
+        fill_tint: None,
+        stroke_color: None,
+        stroke_weight: None,
+        stroke_type: None,
+        drop_shadow: None,
+        stroke_drop_shadow: None,
+        next_text_frame: None,
+        vertical_justification: None,
+        first_baseline_offset: None,
+        minimum_first_baseline_offset: None,
+        inset_spacing: None,
+        auto_sizing: None,
+        auto_sizing_reference_point: None,
+        minimum_width_for_auto_sizing: None,
+        minimum_height_for_auto_sizing: None,
+        use_minimum_height_for_auto_sizing: None,
+        applied_object_style: af.applied_object_style.clone(),
+        text_wrap: None,
+        item_layer: None,
+        is_anchored: true,
+        opacity: None,
+        blend_mode: None,
+        anchors: Vec::new(),
+        subpath_starts: Vec::new(),
+        subpath_open: Vec::new(),
+        effects: None,
+        gradient_fill_angle: None,
+        gradient_fill_length: None,
+        gradient_stroke_angle: None,
+        gradient_stroke_length: None,
+        applied_toc_style: None,
+        overprint_fill: false,
+        overprint_stroke: false,
+        nonprinting: false,
+    };
+    // Sub-emitter borrows from the parent's `'a` so the document /
+    // palette / font_table refs share lifetimes with the body pass.
+    // The synthetic frame lives on this stack frame; the sub-emitter
+    // is dropped before this function returns, so the chain's
+    // `&TextFrame` borrow is sound.
+    let chain: Vec<&TextFrame> = vec![&synthetic];
+    let chain_pages: Vec<usize> = vec![target_page];
+    let head_wrap_rects: &[WrapShape] = &[];
+    let chain_wrap_rects: Vec<&[WrapShape]> = vec![&[]];
+    let mut sub = StoryEmitter::new(
+        em.document,
+        em.options,
+        em.palette,
+        em.cmyk_xform,
+        em.font_table,
+        chain,
+        chain_pages,
+        em.page_labels,
+        em.hyphenator,
+        head_wrap_rects,
+        chain_wrap_rects,
+    )
+    .with_optical_margin(
+        parsed.story.optical_margin_alignment,
+        parsed.story.optical_margin_size,
+    )
+    .with_anchored_recursion_depth(em.anchored_recursion_depth + 1);
+    // The story-pass entry point uses a fresh PipelineStats per call
+    // for stat aggregation; we accumulate into a discard local rather
+    // than the document-wide `total_stats` because anchored stories
+    // already counted into `frames` via the synthetic-rect emission.
+    // The user-visible counters that matter (paragraphs / runs /
+    // glyphs) get added to the page stats by the body emit functions
+    // directly.
+    let mut sub_stats = PipelineStats::default();
+    for paragraph in &parsed.story.paragraphs {
+        sub.emit_paragraph(paragraph, pages, &mut sub_stats);
+    }
+    sub.apply_vertical_justification(pages);
+    sub.apply_blend_groups(pages);
+}
