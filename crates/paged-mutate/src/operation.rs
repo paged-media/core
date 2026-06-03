@@ -598,12 +598,59 @@ pub enum NodeSpec {
         bounds: [f32; 4],
         #[serde(default)]
         fill_color: Option<String>,
+        #[serde(default)]
+        stroke_color: Option<String>,
+        #[serde(default)]
+        stroke_weight: Option<f32>,
     },
     Rectangle {
         self_id: String,
         bounds: [f32; 4],
         #[serde(default)]
         fill_color: Option<String>,
+        #[serde(default)]
+        stroke_color: Option<String>,
+        #[serde(default)]
+        stroke_weight: Option<f32>,
+    },
+    /// Editor-ops — a graphic line. `anchors` carries the explicit
+    /// path (two corner anchors for the Line tool; possibly more for
+    /// captured lines) in spread coordinates with an identity
+    /// `item_transform`; empty anchors fall back to the renderer's
+    /// bounds-diagonal. `bounds` is the anchors' bounding box (used
+    /// for hit-testing / selection chrome).
+    GraphicLine {
+        self_id: String,
+        bounds: [f32; 4],
+        #[serde(default)]
+        anchors: Vec<PathAnchorSpec>,
+        #[serde(default)]
+        subpath_starts: Vec<usize>,
+        #[serde(default)]
+        subpath_open: Vec<bool>,
+        #[serde(default)]
+        stroke_color: Option<String>,
+        #[serde(default)]
+        stroke_weight: Option<f32>,
+    },
+    /// Editor-ops — a polygon (the Pencil/freehand and captured-path
+    /// kind). Carries the full path tables so `RemoveNode` → undo
+    /// round-trips compound/open paths byte-identically.
+    Polygon {
+        self_id: String,
+        bounds: [f32; 4],
+        #[serde(default)]
+        anchors: Vec<PathAnchorSpec>,
+        #[serde(default)]
+        subpath_starts: Vec<usize>,
+        #[serde(default)]
+        subpath_open: Vec<bool>,
+        #[serde(default)]
+        fill_color: Option<String>,
+        #[serde(default)]
+        stroke_color: Option<String>,
+        #[serde(default)]
+        stroke_weight: Option<f32>,
     },
     /// Phase H — deep-clone the `source` node into a new node with
     /// `self_id`, shifting its bounds (or its item_transform's tx/ty
@@ -636,6 +683,8 @@ impl NodeSpec {
         match self {
             NodeSpec::TextFrame { self_id, .. } => NodeId::TextFrame(self_id.clone()),
             NodeSpec::Rectangle { self_id, .. } => NodeId::Rectangle(self_id.clone()),
+            NodeSpec::GraphicLine { self_id, .. } => NodeId::GraphicLine(self_id.clone()),
+            NodeSpec::Polygon { self_id, .. } => NodeId::Polygon(self_id.clone()),
             NodeSpec::CloneTranslate { self_id, source, .. } => match source {
                 NodeId::TextFrame(_) => NodeId::TextFrame(self_id.clone()),
                 NodeId::Rectangle(_) => NodeId::Rectangle(self_id.clone()),
@@ -751,6 +800,14 @@ pub enum Operation {
         parent: NodeId,
         position: usize,
         node: NodeSpec,
+        /// Editor-ops — slot in the spread's `frames_in_order` z-order
+        /// table. `None` ⇒ on top (new creations). `Some(slot)` is set
+        /// by the `RemoveNode` inverse so undo-of-delete restores the
+        /// exact stacking position, not just the kind-vec position.
+        /// Ignored on spreads whose `frames_in_order` is empty (the
+        /// renderer's legacy vec-walk fallback covers those).
+        #[serde(default)]
+        z_slot: Option<usize>,
     },
     RemoveNode {
         node: NodeId,

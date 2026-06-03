@@ -44,11 +44,19 @@ pub fn invert_insert_node(spec: &NodeSpec) -> Operation {
     }
 }
 
-pub fn invert_remove_node(parent: NodeId, position: usize, captured: NodeSpec) -> Operation {
+pub fn invert_remove_node(
+    parent: NodeId,
+    position: usize,
+    captured: NodeSpec,
+    z_slot: Option<usize>,
+) -> Operation {
     Operation::InsertNode {
         parent,
         position,
         node: captured,
+        // Restore the exact `frames_in_order` stacking slot the node
+        // occupied, not just its kind-vec position.
+        z_slot,
     }
 }
 
@@ -93,6 +101,8 @@ mod tests {
     #[test]
     fn insert_inverse_is_remove_with_matching_id() {
         let spec = NodeSpec::TextFrame {
+            stroke_color: None,
+            stroke_weight: None,
             self_id: "TextFrame/new".to_string(),
             bounds: [0.0, 0.0, 10.0, 10.0],
             fill_color: None,

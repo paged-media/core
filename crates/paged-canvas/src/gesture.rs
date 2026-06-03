@@ -1856,6 +1856,7 @@ fn build_alt_duplicate_ops(
                     dy: delta.1,
                     destination_spread_id: destination_spread_id.clone(),
                 },
+                z_slot: None, // duplicates stack on top
             }
         })
         .collect()

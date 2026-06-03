@@ -40,7 +40,7 @@
 //!     Page-level routing, and the other shape kinds (Oval, Polygon,
 //!     GraphicLine) come as later stages.
 
-use paged_parse::{Bounds, Rectangle, TextFrame};
+use paged_parse::{Bounds, FrameRef, GraphicLine, Polygon, Rectangle, Spread, TextFrame};
 use paged_scene::Document;
 
 use crate::error::OperationError;
@@ -61,8 +61,8 @@ use crate::pathfinder::{pathfinder_boolean, PathfinderKind as InternalPathfinder
 pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, OperationError> {
     match op {
         Operation::SetProperty { node, path, value } => apply_set_property(doc, node, *path, value),
-        Operation::InsertNode { parent, position, node } => {
-            apply_insert_node(doc, parent, *position, node)
+        Operation::InsertNode { parent, position, node, z_slot } => {
+            apply_insert_node(doc, parent, *position, *z_slot, node)
         }
         Operation::RemoveNode { node } => apply_remove_node(doc, node),
         Operation::MoveNode { node, new_parent, position } => {
@@ -1871,10 +1871,106 @@ fn apply_character_field_on_run(
 // InsertNode
 // ---------------------------------------------------------------------------
 
+/// `frames_in_order` bookkeeping for structural inserts/removals.
+///
+/// The renderer, hit-tester, and scene-tree all walk a spread's
+/// `frames_in_order` (cross-shape z-order) whenever it is non-empty —
+/// a page item present in its kind vec but absent from the table is
+/// invisible AND unclickable, and inserting/removing mid-vec shifts
+/// every later same-kind `FrameRef` index. These helpers keep the
+/// table consistent. On spreads whose table is EMPTY they do nothing:
+/// the consumers' legacy fallback synthesises the walk order from the
+/// kind vecs directly, and making the table non-empty with a single
+/// entry would hide every other frame.
+fn fr_index(fr: &FrameRef) -> usize {
+    match fr {
+        FrameRef::TextFrame(i)
+        | FrameRef::Rectangle(i)
+        | FrameRef::Oval(i)
+        | FrameRef::GraphicLine(i)
+        | FrameRef::Polygon(i)
+        | FrameRef::Group(i) => *i,
+    }
+}
+
+fn fr_with_index(fr: &FrameRef, i: usize) -> FrameRef {
+    match fr {
+        FrameRef::TextFrame(_) => FrameRef::TextFrame(i),
+        FrameRef::Rectangle(_) => FrameRef::Rectangle(i),
+        FrameRef::Oval(_) => FrameRef::Oval(i),
+        FrameRef::GraphicLine(_) => FrameRef::GraphicLine(i),
+        FrameRef::Polygon(_) => FrameRef::Polygon(i),
+        FrameRef::Group(_) => FrameRef::Group(i),
+    }
+}
+
+fn fr_same_kind(a: &FrameRef, b: &FrameRef) -> bool {
+    std::mem::discriminant(a) == std::mem::discriminant(b)
+}
+
+/// Register a page item inserted at `vec_pos` of its kind vec:
+/// same-kind refs at `>= vec_pos` shift up by one, then the new ref
+/// lands at `z_slot` (or on top when `None` — new creations stack
+/// like InDesign's draw tools).
+fn register_frame_ref(
+    spread: &mut Spread,
+    template: FrameRef,
+    vec_pos: usize,
+    z_slot: Option<usize>,
+) {
+    if spread.frames_in_order.is_empty() {
+        return; // legacy vec-walk fallback covers this spread
+    }
+    for fr in spread.frames_in_order.iter_mut() {
+        if fr_same_kind(fr, &template) {
+            let i = fr_index(fr);
+            if i >= vec_pos {
+                *fr = fr_with_index(fr, i + 1);
+            }
+        }
+    }
+    let len = spread.frames_in_order.len();
+    let slot = z_slot.unwrap_or(len).min(len);
+    spread
+        .frames_in_order
+        .insert(slot, fr_with_index(&template, vec_pos));
+}
+
+/// Unregister a page item removed from `vec_pos` of its kind vec;
+/// returns the z slot it occupied so the `RemoveNode` inverse can
+/// restore the exact stacking position.
+fn unregister_frame_ref(
+    spread: &mut Spread,
+    template: FrameRef,
+    vec_pos: usize,
+) -> Option<usize> {
+    if spread.frames_in_order.is_empty() {
+        return None;
+    }
+    let target = fr_with_index(&template, vec_pos);
+    let slot = spread
+        .frames_in_order
+        .iter()
+        .position(|fr| fr_same_kind(fr, &target) && fr_index(fr) == vec_pos);
+    if let Some(s) = slot {
+        spread.frames_in_order.remove(s);
+    }
+    for fr in spread.frames_in_order.iter_mut() {
+        if fr_same_kind(fr, &template) {
+            let i = fr_index(fr);
+            if i > vec_pos {
+                *fr = fr_with_index(fr, i - 1);
+            }
+        }
+    }
+    slot
+}
+
 fn apply_insert_node(
     doc: &mut Document,
     parent: &NodeId,
     position: usize,
+    z_slot: Option<usize>,
     spec: &NodeSpec,
 ) -> Result<AppliedOperation, OperationError> {
     // Phase H — CloneTranslate is a special "find the source, copy
@@ -1915,6 +2011,8 @@ fn apply_insert_node(
             self_id,
             bounds,
             fill_color,
+            stroke_color,
+            stroke_weight,
         } => {
             let len = spread.spread.text_frames.len();
             if position > len {
@@ -1924,15 +2022,19 @@ fn apply_insert_node(
                     len,
                 });
             }
-            spread.spread.text_frames.insert(
-                position,
-                new_text_frame(self_id.clone(), bounds_from_array(*bounds), fill_color.clone()),
-            );
+            let mut frame =
+                new_text_frame(self_id.clone(), bounds_from_array(*bounds), fill_color.clone());
+            frame.stroke_color = stroke_color.clone();
+            frame.stroke_weight = *stroke_weight;
+            spread.spread.text_frames.insert(position, frame);
+            register_frame_ref(&mut spread.spread, FrameRef::TextFrame(0), position, z_slot);
         }
         NodeSpec::Rectangle {
             self_id,
             bounds,
             fill_color,
+            stroke_color,
+            stroke_weight,
         } => {
             let len = spread.spread.rectangles.len();
             if position > len {
@@ -1942,10 +2044,76 @@ fn apply_insert_node(
                     len,
                 });
             }
-            spread.spread.rectangles.insert(
+            let mut rect =
+                new_rectangle(self_id.clone(), bounds_from_array(*bounds), fill_color.clone());
+            rect.stroke_color = stroke_color.clone();
+            rect.stroke_weight = *stroke_weight;
+            spread.spread.rectangles.insert(position, rect);
+            register_frame_ref(&mut spread.spread, FrameRef::Rectangle(0), position, z_slot);
+        }
+        NodeSpec::GraphicLine {
+            self_id,
+            bounds,
+            anchors,
+            subpath_starts,
+            subpath_open,
+            stroke_color,
+            stroke_weight,
+        } => {
+            let len = spread.spread.graphic_lines.len();
+            if position > len {
+                return Err(OperationError::InvalidPosition {
+                    parent: parent.clone(),
+                    position,
+                    len,
+                });
+            }
+            spread.spread.graphic_lines.insert(
                 position,
-                new_rectangle(self_id.clone(), bounds_from_array(*bounds), fill_color.clone()),
+                new_graphic_line(
+                    self_id.clone(),
+                    bounds_from_array(*bounds),
+                    anchors.iter().map(PathAnchorSpec::to_parse).collect(),
+                    subpath_starts.clone(),
+                    subpath_open.clone(),
+                    stroke_color.clone(),
+                    *stroke_weight,
+                ),
             );
+            register_frame_ref(&mut spread.spread, FrameRef::GraphicLine(0), position, z_slot);
+        }
+        NodeSpec::Polygon {
+            self_id,
+            bounds,
+            anchors,
+            subpath_starts,
+            subpath_open,
+            fill_color,
+            stroke_color,
+            stroke_weight,
+        } => {
+            let len = spread.spread.polygons.len();
+            if position > len {
+                return Err(OperationError::InvalidPosition {
+                    parent: parent.clone(),
+                    position,
+                    len,
+                });
+            }
+            spread.spread.polygons.insert(
+                position,
+                new_polygon(
+                    self_id.clone(),
+                    bounds_from_array(*bounds),
+                    anchors.iter().map(PathAnchorSpec::to_parse).collect(),
+                    subpath_starts.clone(),
+                    subpath_open.clone(),
+                    fill_color.clone(),
+                    stroke_color.clone(),
+                    *stroke_weight,
+                ),
+            );
+            register_frame_ref(&mut spread.spread, FrameRef::Polygon(0), position, z_slot);
         }
         NodeSpec::CloneTranslate { .. } => {
             // Handled by `apply_insert_clone_translate` above.
@@ -1959,6 +2127,7 @@ fn apply_insert_node(
             parent: parent.clone(),
             position,
             node: spec.clone(),
+            z_slot,
         },
         inverse,
         invalidation,
@@ -1973,8 +2142,8 @@ fn apply_remove_node(
     doc: &mut Document,
     node: &NodeId,
 ) -> Result<AppliedOperation, OperationError> {
-    let (parent, position, captured) = remove_and_capture(doc, node)?;
-    let inverse = invert_remove_node(parent, position, captured);
+    let (parent, position, captured, z_slot) = remove_and_capture(doc, node)?;
+    let inverse = invert_remove_node(parent, position, captured, z_slot);
     Ok(AppliedOperation {
         op: Operation::RemoveNode { node: node.clone() },
         inverse,
@@ -1986,12 +2155,13 @@ fn apply_remove_node(
 }
 
 /// Locate `node` in its containing spread, snapshot its current state
-/// into a `NodeSpec`, and remove it. Returns `(parent_id, position,
-/// spec)` for the caller to feed into the inverse.
+/// into a `NodeSpec`, and remove it (including its `frames_in_order`
+/// entry). Returns `(parent_id, position, spec, z_slot)` for the
+/// caller to feed into the inverse.
 fn remove_and_capture(
     doc: &mut Document,
     node: &NodeId,
-) -> Result<(NodeId, usize, NodeSpec), OperationError> {
+) -> Result<(NodeId, usize, NodeSpec, Option<usize>), OperationError> {
     match node {
         NodeId::TextFrame(id) => {
             for parsed in &mut doc.spreads {
@@ -2002,13 +2172,17 @@ fn remove_and_capture(
                     .position(|f| f.self_id.as_deref() == Some(id.as_str()))
                 {
                     let frame = parsed.spread.text_frames.remove(pos);
+                    let z_slot =
+                        unregister_frame_ref(&mut parsed.spread, FrameRef::TextFrame(0), pos);
                     let parent = spread_parent_id(parsed);
                     let spec = NodeSpec::TextFrame {
                         self_id: id.clone(),
                         bounds: bounds_to_array(frame.bounds),
                         fill_color: frame.fill_color,
+                        stroke_color: frame.stroke_color,
+                        stroke_weight: frame.stroke_weight,
                     };
-                    return Ok((parent, pos, spec));
+                    return Ok((parent, pos, spec, z_slot));
                 }
             }
             Err(OperationError::NodeNotFound(node.clone()))
@@ -2022,13 +2196,70 @@ fn remove_and_capture(
                     .position(|r| r.self_id.as_deref() == Some(id.as_str()))
                 {
                     let rect = parsed.spread.rectangles.remove(pos);
+                    let z_slot =
+                        unregister_frame_ref(&mut parsed.spread, FrameRef::Rectangle(0), pos);
                     let parent = spread_parent_id(parsed);
                     let spec = NodeSpec::Rectangle {
                         self_id: id.clone(),
                         bounds: bounds_to_array(rect.bounds),
                         fill_color: rect.fill_color,
+                        stroke_color: rect.stroke_color,
+                        stroke_weight: rect.stroke_weight,
                     };
-                    return Ok((parent, pos, spec));
+                    return Ok((parent, pos, spec, z_slot));
+                }
+            }
+            Err(OperationError::NodeNotFound(node.clone()))
+        }
+        NodeId::GraphicLine(id) => {
+            for parsed in &mut doc.spreads {
+                if let Some(pos) = parsed
+                    .spread
+                    .graphic_lines
+                    .iter()
+                    .position(|l| l.self_id.as_deref() == Some(id.as_str()))
+                {
+                    let line = parsed.spread.graphic_lines.remove(pos);
+                    let z_slot =
+                        unregister_frame_ref(&mut parsed.spread, FrameRef::GraphicLine(0), pos);
+                    let parent = spread_parent_id(parsed);
+                    let spec = NodeSpec::GraphicLine {
+                        self_id: id.clone(),
+                        bounds: bounds_to_array(line.bounds),
+                        anchors: line.anchors.iter().map(PathAnchorSpec::from_parse).collect(),
+                        subpath_starts: line.subpath_starts,
+                        subpath_open: line.subpath_open,
+                        stroke_color: line.stroke_color,
+                        stroke_weight: line.stroke_weight,
+                    };
+                    return Ok((parent, pos, spec, z_slot));
+                }
+            }
+            Err(OperationError::NodeNotFound(node.clone()))
+        }
+        NodeId::Polygon(id) => {
+            for parsed in &mut doc.spreads {
+                if let Some(pos) = parsed
+                    .spread
+                    .polygons
+                    .iter()
+                    .position(|p| p.self_id.as_deref() == Some(id.as_str()))
+                {
+                    let poly = parsed.spread.polygons.remove(pos);
+                    let z_slot =
+                        unregister_frame_ref(&mut parsed.spread, FrameRef::Polygon(0), pos);
+                    let parent = spread_parent_id(parsed);
+                    let spec = NodeSpec::Polygon {
+                        self_id: id.clone(),
+                        bounds: bounds_to_array(poly.bounds),
+                        anchors: poly.anchors.iter().map(PathAnchorSpec::from_parse).collect(),
+                        subpath_starts: poly.subpath_starts,
+                        subpath_open: poly.subpath_open,
+                        fill_color: poly.fill_color,
+                        stroke_color: poly.stroke_color,
+                        stroke_weight: poly.stroke_weight,
+                    };
+                    return Ok((parent, pos, spec, z_slot));
                 }
             }
             Err(OperationError::NodeNotFound(node.clone()))
@@ -2062,7 +2293,8 @@ fn apply_move_node(
 
     // Capture before state by removing, then re-insert at the target.
     // If insertion fails, restore in place so the doc state is intact.
-    let (previous_parent, previous_position, captured) = remove_and_capture(doc, node)?;
+    let (previous_parent, previous_position, captured, previous_z_slot) =
+        remove_and_capture(doc, node)?;
 
     // Read destination spread length without holding a borrow across
     // the potentially-rollback path.
@@ -2070,22 +2302,24 @@ fn apply_move_node(
         Some(dest) => match &captured {
             NodeSpec::TextFrame { .. } => dest.spread.text_frames.len(),
             NodeSpec::Rectangle { .. } => dest.spread.rectangles.len(),
+            NodeSpec::GraphicLine { .. } => dest.spread.graphic_lines.len(),
+            NodeSpec::Polygon { .. } => dest.spread.polygons.len(),
             // CloneTranslate is never captured from the doc — it's
             // an input-only spec for Phase H's Alt-duplicate. Treat
             // as a programmer error if it ever surfaces here.
             NodeSpec::CloneTranslate { .. } => {
-                restore_capture(doc, &previous_parent, previous_position, captured);
+                restore_capture(doc, &previous_parent, previous_position, captured, previous_z_slot);
                 return Err(OperationError::NodeNotFound(node.clone()));
             }
         },
         None => {
-            restore_capture(doc, &previous_parent, previous_position, captured);
+            restore_capture(doc, &previous_parent, previous_position, captured, previous_z_slot);
             return Err(OperationError::NodeNotFound(new_parent.clone()));
         }
     };
 
     if position > target_len {
-        restore_capture(doc, &previous_parent, previous_position, captured);
+        restore_capture(doc, &previous_parent, previous_position, captured, previous_z_slot);
         return Err(OperationError::InvalidPosition {
             parent: new_parent.clone(),
             position,
@@ -2093,7 +2327,9 @@ fn apply_move_node(
         });
     }
 
-    insert_captured(doc, &new_parent_id, position, captured)?;
+    // Forward move lands on top of the destination's z-order; the
+    // origin slot only matters for the undo path (restore_capture).
+    insert_captured(doc, &new_parent_id, position, captured, None)?;
 
     let inverse = invert_move_node(node.clone(), previous_parent, previous_position);
     Ok(AppliedOperation {
@@ -2112,8 +2348,14 @@ fn apply_move_node(
 
 /// Put the captured node back exactly where it was. Infallible — the
 /// position came from the doc itself moments ago.
-fn restore_capture(doc: &mut Document, parent: &NodeId, position: usize, spec: NodeSpec) {
-    let _ = insert_captured(doc, parent.self_id(), position, spec);
+fn restore_capture(
+    doc: &mut Document,
+    parent: &NodeId,
+    position: usize,
+    spec: NodeSpec,
+    z_slot: Option<usize>,
+) {
+    let _ = insert_captured(doc, parent.self_id(), position, spec, z_slot);
 }
 
 fn insert_captured(
@@ -2121,6 +2363,7 @@ fn insert_captured(
     parent_self_id: &str,
     position: usize,
     spec: NodeSpec,
+    z_slot: Option<usize>,
 ) -> Result<(), OperationError> {
     let spread = find_spread_mut(doc, parent_self_id).ok_or_else(|| {
         OperationError::NodeNotFound(NodeId::Spread(parent_self_id.to_string()))
@@ -2130,21 +2373,75 @@ fn insert_captured(
             self_id,
             bounds,
             fill_color,
+            stroke_color,
+            stroke_weight,
         } => {
-            spread
-                .spread
-                .text_frames
-                .insert(position, new_text_frame(self_id, bounds_from_array(bounds), fill_color));
+            let mut frame = new_text_frame(self_id, bounds_from_array(bounds), fill_color);
+            frame.stroke_color = stroke_color;
+            frame.stroke_weight = stroke_weight;
+            spread.spread.text_frames.insert(position, frame);
+            register_frame_ref(&mut spread.spread, FrameRef::TextFrame(0), position, z_slot);
         }
         NodeSpec::Rectangle {
             self_id,
             bounds,
             fill_color,
+            stroke_color,
+            stroke_weight,
         } => {
-            spread
-                .spread
-                .rectangles
-                .insert(position, new_rectangle(self_id, bounds_from_array(bounds), fill_color));
+            let mut rect = new_rectangle(self_id, bounds_from_array(bounds), fill_color);
+            rect.stroke_color = stroke_color;
+            rect.stroke_weight = stroke_weight;
+            spread.spread.rectangles.insert(position, rect);
+            register_frame_ref(&mut spread.spread, FrameRef::Rectangle(0), position, z_slot);
+        }
+        NodeSpec::GraphicLine {
+            self_id,
+            bounds,
+            anchors,
+            subpath_starts,
+            subpath_open,
+            stroke_color,
+            stroke_weight,
+        } => {
+            spread.spread.graphic_lines.insert(
+                position,
+                new_graphic_line(
+                    self_id,
+                    bounds_from_array(bounds),
+                    anchors.iter().map(PathAnchorSpec::to_parse).collect(),
+                    subpath_starts,
+                    subpath_open,
+                    stroke_color,
+                    stroke_weight,
+                ),
+            );
+            register_frame_ref(&mut spread.spread, FrameRef::GraphicLine(0), position, z_slot);
+        }
+        NodeSpec::Polygon {
+            self_id,
+            bounds,
+            anchors,
+            subpath_starts,
+            subpath_open,
+            fill_color,
+            stroke_color,
+            stroke_weight,
+        } => {
+            spread.spread.polygons.insert(
+                position,
+                new_polygon(
+                    self_id,
+                    bounds_from_array(bounds),
+                    anchors.iter().map(PathAnchorSpec::to_parse).collect(),
+                    subpath_starts,
+                    subpath_open,
+                    fill_color,
+                    stroke_color,
+                    stroke_weight,
+                ),
+            );
+            register_frame_ref(&mut spread.spread, FrameRef::Polygon(0), position, z_slot);
         }
         // Same rationale as in apply_move_node: CloneTranslate is
         // never re-inserted via this path.
@@ -3464,6 +3761,36 @@ fn node_exists(doc: &Document, node: &NodeId) -> bool {
                     return true;
                 }
             }
+            NodeId::GraphicLine(_) => {
+                if parsed
+                    .spread
+                    .graphic_lines
+                    .iter()
+                    .any(|l| l.self_id.as_deref() == Some(target))
+                {
+                    return true;
+                }
+            }
+            NodeId::Polygon(_) => {
+                if parsed
+                    .spread
+                    .polygons
+                    .iter()
+                    .any(|p| p.self_id.as_deref() == Some(target))
+                {
+                    return true;
+                }
+            }
+            NodeId::Oval(_) => {
+                if parsed
+                    .spread
+                    .ovals
+                    .iter()
+                    .any(|o| o.self_id.as_deref() == Some(target))
+                {
+                    return true;
+                }
+            }
             _ => {}
         }
     }
@@ -3988,6 +4315,8 @@ fn apply_insert_clone_translate(
             let len = dest_spread.spread.text_frames.len();
             let pos = position.min(len);
             dest_spread.spread.text_frames.insert(pos, clone);
+            // Duplicates stack on top, like InDesign's Alt-drag.
+            register_frame_ref(&mut dest_spread.spread, FrameRef::TextFrame(0), pos, None);
         }
         NodeId::Rectangle(src_id) => {
             let src_rect: Rectangle = doc.spreads[src_idx]
@@ -4009,6 +4338,8 @@ fn apply_insert_clone_translate(
             let len = dest_spread.spread.rectangles.len();
             let pos = position.min(len);
             dest_spread.spread.rectangles.insert(pos, clone);
+            // Duplicates stack on top, like InDesign's Alt-drag.
+            register_frame_ref(&mut dest_spread.spread, FrameRef::Rectangle(0), pos, None);
         }
         other => {
             return Err(OperationError::UnsupportedProperty {
@@ -4027,6 +4358,7 @@ fn apply_insert_clone_translate(
             parent: NodeId::Spread(parent_spread_id),
             position,
             node: spec.clone(),
+            z_slot: None,
         },
         inverse,
         invalidation,
@@ -4137,6 +4469,84 @@ fn new_text_frame(self_id: String, bounds: Bounds, fill_color: Option<String>) -
         gradient_stroke_angle: None,
         gradient_stroke_length: None,
         applied_toc_style: None,
+        overprint_fill: false,
+        overprint_stroke: false,
+        nonprinting: false,
+    }
+}
+
+fn new_graphic_line(
+    self_id: String,
+    bounds: Bounds,
+    anchors: Vec<paged_parse::PathAnchor>,
+    subpath_starts: Vec<usize>,
+    subpath_open: Vec<bool>,
+    stroke_color: Option<String>,
+    stroke_weight: Option<f32>,
+) -> GraphicLine {
+    GraphicLine {
+        self_id: Some(self_id),
+        bounds,
+        item_transform: None,
+        stroke_color,
+        stroke_weight,
+        stroke_type: None,
+        applied_object_style: None,
+        text_wrap: None,
+        item_layer: None,
+        anchors,
+        subpath_starts,
+        subpath_open,
+        text_paths: Vec::new(),
+        effects: None,
+        overprint_stroke: false,
+        nonprinting: false,
+        start_arrow: paged_parse::ArrowheadType::None,
+        end_arrow: paged_parse::ArrowheadType::None,
+        start_arrow_scale: 100.0,
+        end_arrow_scale: 100.0,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn new_polygon(
+    self_id: String,
+    bounds: Bounds,
+    anchors: Vec<paged_parse::PathAnchor>,
+    subpath_starts: Vec<usize>,
+    subpath_open: Vec<bool>,
+    fill_color: Option<String>,
+    stroke_color: Option<String>,
+    stroke_weight: Option<f32>,
+) -> Polygon {
+    Polygon {
+        self_id: Some(self_id),
+        bounds,
+        item_transform: None,
+        fill_color,
+        fill_tint: None,
+        stroke_color,
+        stroke_weight,
+        stroke_type: None,
+        applied_object_style: None,
+        anchors,
+        subpath_starts,
+        subpath_open,
+        text_wrap: None,
+        item_layer: None,
+        effects: None,
+        gradient_fill_angle: None,
+        gradient_fill_length: None,
+        gradient_stroke_angle: None,
+        gradient_stroke_length: None,
+        opacity: None,
+        blend_mode: None,
+        text_paths: Vec::new(),
+        image_link: None,
+        has_image_element: false,
+        has_inline_pdf: false,
+        image_item_transform: None,
+        image_bytes: None,
         overprint_fill: false,
         overprint_stroke: false,
         nonprinting: false,

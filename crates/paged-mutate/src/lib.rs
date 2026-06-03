@@ -160,8 +160,8 @@ mod tests {
 
     use bytes::Bytes;
     use paged_parse::{
-        Bounds, Container, DesignMap, Graphic, PathAnchor, Polygon, Spread, StyleSheet,
-        TextFrame as ParsedTextFrame,
+        Bounds, Container, DesignMap, FrameRef, Graphic, PathAnchor, Polygon, Spread,
+        StyleSheet, TextFrame as ParsedTextFrame,
     };
     use paged_scene::{ParsedSpread, ParsedStory};
     use crate::operation::PathAnchorSpec;
@@ -337,6 +337,7 @@ mod tests {
         let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
         let applied = project
             .apply(Operation::InsertNode {
+                z_slot: None,
                 parent: NodeId::Spread("Spread/u_main".to_string()),
                 position: 1,
                 node: NodeSpec::CloneTranslate {
@@ -385,9 +386,12 @@ mod tests {
         // Insert a Rectangle into the spread.
         project
             .apply(Operation::InsertNode {
+                z_slot: None,
                 parent: NodeId::Spread("Spread/u_main".to_string()),
                 position: 0,
                 node: NodeSpec::Rectangle {
+                    stroke_color: None,
+                    stroke_weight: None,
                     self_id: "Rectangle/r1".to_string(),
                     bounds: [0.0, 0.0, 100.0, 100.0],
                     fill_color: None,
@@ -1135,9 +1139,12 @@ mod tests {
     fn insert_node_adds_a_text_frame_to_the_spread() {
         let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
         let op = Operation::InsertNode {
+            z_slot: None,
             parent: NodeId::Spread("Spread/u_main".to_string()),
             position: 1,
             node: NodeSpec::TextFrame {
+                stroke_color: None,
+                stroke_weight: None,
                 self_id: "TextFrame/u_new".to_string(),
                 bounds: [10.0, 20.0, 30.0, 40.0],
                 fill_color: None,
@@ -1157,9 +1164,12 @@ mod tests {
     fn insert_with_duplicate_self_id_fails() {
         let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
         let op = Operation::InsertNode {
+            z_slot: None,
             parent: NodeId::Spread("Spread/u_main".to_string()),
             position: 0,
             node: NodeSpec::TextFrame {
+                stroke_color: None,
+                stroke_weight: None,
                 self_id: "TextFrame/u1".to_string(),
                 bounds: [0.0, 0.0, 1.0, 1.0],
                 fill_color: None,
@@ -1197,9 +1207,12 @@ mod tests {
         let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
         project
             .apply(Operation::InsertNode {
+                z_slot: None,
                 parent: NodeId::Spread("Spread/u_main".to_string()),
                 position: 1,
                 node: NodeSpec::TextFrame {
+                    stroke_color: None,
+                    stroke_weight: None,
                     self_id: "TextFrame/u2".to_string(),
                     bounds: [0.0, 0.0, 1.0, 1.0],
                     fill_color: None,
@@ -1243,9 +1256,12 @@ mod tests {
             set_bounds_op("TextFrame/u1", [1.0, 2.0, 3.0, 4.0]),
             set_fill_op("TextFrame/u1", Some("Color/Red")),
             Operation::InsertNode {
+                z_slot: None,
                 parent: NodeId::Spread("Spread/u_main".to_string()),
                 position: 1,
                 node: NodeSpec::TextFrame {
+                    stroke_color: None,
+                    stroke_weight: None,
                     self_id: "TextFrame/u_new".to_string(),
                     bounds: [10.0, 20.0, 30.0, 40.0],
                     fill_color: Some("Color/Blue".to_string()),
@@ -1370,6 +1386,7 @@ mod tests {
         ));
         project
             .apply(Operation::InsertNode {
+                z_slot: None,
                 parent: NodeId::Spread("Spread/u_src".to_string()),
                 position: 1,
                 node: NodeSpec::CloneTranslate {
@@ -1416,6 +1433,7 @@ mod tests {
         ));
         project
             .apply(Operation::InsertNode {
+                z_slot: None,
                 parent: NodeId::Spread("Spread/u_dest".to_string()),
                 position: 0,
                 node: NodeSpec::CloneTranslate {
@@ -1465,6 +1483,7 @@ mod tests {
         ));
         project
             .apply(Operation::InsertNode {
+                z_slot: None,
                 parent: NodeId::Spread("Spread/u_dest".to_string()),
                 position: 0,
                 node: NodeSpec::CloneTranslate {
@@ -2861,9 +2880,12 @@ mod tests {
         // A \ B is an L-shape of 6 corner vertices.
         project
             .apply(Operation::InsertNode {
+                z_slot: None,
                 parent: NodeId::Spread("Spread/u_main".to_string()),
                 position: 0,
                 node: NodeSpec::Rectangle {
+                    stroke_color: None,
+                    stroke_weight: None,
                     self_id: "Rectangle/a".to_string(),
                     bounds: [0.0, 0.0, 20.0, 20.0],
                     fill_color: None,
@@ -2872,9 +2894,12 @@ mod tests {
             .expect("insert a");
         project
             .apply(Operation::InsertNode {
+                z_slot: None,
                 parent: NodeId::Spread("Spread/u_main".to_string()),
                 position: 1,
                 node: NodeSpec::Rectangle {
+                    stroke_color: None,
+                    stroke_weight: None,
                     self_id: "Rectangle/b".to_string(),
                     bounds: [10.0, 10.0, 30.0, 30.0],
                     fill_color: None,
@@ -3178,9 +3203,12 @@ mod tests {
         // full struct including default `end_cap: None`).
         project
             .apply(Operation::InsertNode {
+                z_slot: None,
                 parent: NodeId::Spread("Spread/u_main".to_string()),
                 position: 0,
                 node: NodeSpec::Rectangle {
+                    stroke_color: None,
+                    stroke_weight: None,
                     self_id: "Rectangle/u1".to_string(),
                     bounds: [0.0, 0.0, 100.0, 100.0],
                     fill_color: None,
@@ -3337,5 +3365,215 @@ mod tests {
             story.paragraphs[0].runs[1].fill_color.as_deref(),
             Some("Color/Black")
         );
+    }
+
+    // ---- Editor-ops: frames_in_order maintenance + new NodeSpec kinds ----
+
+    /// Like real parsed documents, the spread carries a populated
+    /// `frames_in_order` (the empty-table fixtures above exercise the
+    /// legacy vec-walk fallback instead).
+    fn document_with_ordered_textframes() -> Document {
+        let mut doc = document_with_one_textframe("TextFrame/a");
+        doc.spreads[0].spread.text_frames.push(empty_text_frame(
+            "TextFrame/b",
+            Bounds {
+                top: 200.0,
+                left: 0.0,
+                bottom: 300.0,
+                right: 200.0,
+            },
+        ));
+        doc.spreads[0].spread.frames_in_order =
+            vec![FrameRef::TextFrame(0), FrameRef::TextFrame(1)];
+        doc
+    }
+
+    /// Inserting registers the new frame in `frames_in_order` (on top
+    /// when `z_slot: None`) and remaps the kind-vec indices of every
+    /// later same-kind ref — the renderer/hit-tester walk ONLY this
+    /// table when it is non-empty, so a missing or stale entry means
+    /// an invisible or wrongly-stacked frame.
+    #[test]
+    fn insert_node_registers_in_frames_in_order_and_remaps_indices() {
+        let mut project = Project::new(document_with_ordered_textframes());
+        let rect = |id: &str| NodeSpec::Rectangle {
+            self_id: id.to_string(),
+            bounds: [0.0, 0.0, 50.0, 50.0],
+            fill_color: None,
+            stroke_color: None,
+            stroke_weight: None,
+        };
+        project
+            .apply(Operation::InsertNode {
+                parent: NodeId::Spread("Spread/u_main".to_string()),
+                position: 0,
+                node: rect("Rectangle/r1"),
+                z_slot: None,
+            })
+            .expect("insert r1");
+        assert_eq!(
+            project.document().spreads[0].spread.frames_in_order,
+            vec![
+                FrameRef::TextFrame(0),
+                FrameRef::TextFrame(1),
+                FrameRef::Rectangle(0),
+            ],
+        );
+        // Insert a second rectangle at the FRONT of the kind vec: the
+        // existing Rectangle(0) ref must remap to Rectangle(1).
+        project
+            .apply(Operation::InsertNode {
+                parent: NodeId::Spread("Spread/u_main".to_string()),
+                position: 0,
+                node: rect("Rectangle/r2"),
+                z_slot: None,
+            })
+            .expect("insert r2");
+        let spread = &project.document().spreads[0].spread;
+        assert_eq!(spread.rectangles[0].self_id.as_deref(), Some("Rectangle/r2"));
+        assert_eq!(
+            spread.frames_in_order,
+            vec![
+                FrameRef::TextFrame(0),
+                FrameRef::TextFrame(1),
+                FrameRef::Rectangle(1), // r1, shifted by the front insert
+                FrameRef::Rectangle(0), // r2, on top
+            ],
+        );
+    }
+
+    /// Remove → undo must restore the document byte-identically,
+    /// including the removed frame's exact `frames_in_order` slot —
+    /// the regression guard for the z-order bookkeeping.
+    #[test]
+    fn remove_node_undo_round_trips_frames_in_order_byte_identically() {
+        let mut project = Project::new(document_with_ordered_textframes());
+        let before = format!("{:?}", project.document().spreads);
+        let removed = project
+            .apply(Operation::RemoveNode {
+                node: NodeId::TextFrame("TextFrame/a".to_string()),
+            })
+            .expect("remove a");
+        assert!(removed.invalidation.structural);
+        // b's kind-vec index shifted 1 → 0 and a's slot is gone.
+        assert_eq!(
+            project.document().spreads[0].spread.frames_in_order,
+            vec![FrameRef::TextFrame(0)],
+        );
+        project.undo().expect("undo");
+        let after = format!("{:?}", project.document().spreads);
+        assert_eq!(before, after, "undo of remove must be byte-identical");
+        // Redo removes it again, with the same table shape.
+        project.redo().expect("redo");
+        assert_eq!(
+            project.document().spreads[0].spread.frames_in_order,
+            vec![FrameRef::TextFrame(0)],
+        );
+    }
+
+    #[test]
+    fn insert_graphic_line_round_trips() {
+        let mut project = Project::new(document_with_ordered_textframes());
+        let anchors = vec![
+            PathAnchorSpec {
+                anchor: [10.0, 20.0],
+                left: [10.0, 20.0],
+                right: [10.0, 20.0],
+            },
+            PathAnchorSpec {
+                anchor: [110.0, 80.0],
+                left: [110.0, 80.0],
+                right: [110.0, 80.0],
+            },
+        ];
+        let before = format!("{:?}", project.document().spreads);
+        project
+            .apply(Operation::InsertNode {
+                parent: NodeId::Spread("Spread/u_main".to_string()),
+                position: 0,
+                node: NodeSpec::GraphicLine {
+                    self_id: "GraphicLine/l1".to_string(),
+                    bounds: [20.0, 10.0, 80.0, 110.0],
+                    anchors: anchors.clone(),
+                    subpath_starts: vec![0],
+                    subpath_open: vec![true],
+                    stroke_color: Some("Color/Black".to_string()),
+                    stroke_weight: Some(1.0),
+                },
+                z_slot: None,
+            })
+            .expect("insert line");
+        let spread = &project.document().spreads[0].spread;
+        let line = &spread.graphic_lines[0];
+        assert_eq!(line.self_id.as_deref(), Some("GraphicLine/l1"));
+        assert_eq!(line.anchors.len(), 2);
+        assert_eq!(line.anchors[1].anchor, (110.0, 80.0));
+        assert_eq!(line.subpath_open, vec![true]);
+        assert_eq!(line.stroke_color.as_deref(), Some("Color/Black"));
+        assert_eq!(
+            spread.frames_in_order.last(),
+            Some(&FrameRef::GraphicLine(0)),
+        );
+        // Undo removes it byte-identically; redo brings it back.
+        project.undo().expect("undo");
+        let after = format!("{:?}", project.document().spreads);
+        assert_eq!(before, after);
+        project.redo().expect("redo");
+        assert_eq!(
+            project.document().spreads[0].spread.graphic_lines.len(),
+            1
+        );
+    }
+
+    #[test]
+    fn insert_polygon_round_trips_with_path_tables() {
+        let mut project = Project::new(document_with_ordered_textframes());
+        let anchors = vec![
+            PathAnchorSpec {
+                anchor: [0.0, 0.0],
+                left: [0.0, 0.0],
+                right: [0.0, 0.0],
+            },
+            PathAnchorSpec {
+                anchor: [60.0, 0.0],
+                left: [60.0, 0.0],
+                right: [60.0, 0.0],
+            },
+            PathAnchorSpec {
+                anchor: [30.0, 50.0],
+                left: [30.0, 50.0],
+                right: [30.0, 50.0],
+            },
+        ];
+        let before = format!("{:?}", project.document().spreads);
+        project
+            .apply(Operation::InsertNode {
+                parent: NodeId::Spread("Spread/u_main".to_string()),
+                position: 0,
+                node: NodeSpec::Polygon {
+                    self_id: "Polygon/p1".to_string(),
+                    bounds: [0.0, 0.0, 50.0, 60.0],
+                    anchors,
+                    subpath_starts: vec![0],
+                    subpath_open: vec![false],
+                    fill_color: Some("Color/Red".to_string()),
+                    stroke_color: None,
+                    stroke_weight: None,
+                },
+                z_slot: None,
+            })
+            .expect("insert polygon");
+        let spread = &project.document().spreads[0].spread;
+        let poly = &spread.polygons[0];
+        assert_eq!(poly.anchors.len(), 3);
+        assert_eq!(poly.subpath_starts, vec![0]);
+        assert_eq!(poly.subpath_open, vec![false]);
+        assert_eq!(poly.fill_color.as_deref(), Some("Color/Red"));
+        assert_eq!(spread.frames_in_order.last(), Some(&FrameRef::Polygon(0)));
+        project.undo().expect("undo");
+        let after = format!("{:?}", project.document().spreads);
+        assert_eq!(before, after);
+        project.redo().expect("redo");
+        assert_eq!(project.document().spreads[0].spread.polygons.len(), 1);
     }
 }
