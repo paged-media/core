@@ -1358,6 +1358,13 @@ pub enum Mutation {
     DeletePage {
         page_id: PageId,
     },
+    /// Editor-ops (Page tool) — resize the page's GeometricBounds
+    /// (page-inner coords, `(top, left, bottom, right)`). Items keep
+    /// their coordinates; spread origins re-derive on rebuild.
+    ResizePage {
+        page_id: PageId,
+        bounds: (f32, f32, f32, f32),
+    },
     InsertFrame {
         page_id: PageId,
         bounds: (f32, f32, f32, f32),
@@ -1658,6 +1665,7 @@ impl Mutation {
             Self::UnlinkFrames { .. } => "UnlinkFrames",
             Self::InsertPage { .. } => "InsertPage",
             Self::DeletePage { .. } => "DeletePage",
+            Self::ResizePage { .. } => "ResizePage",
             Self::InsertFrame { .. } => "InsertFrame",
             Self::DeleteFrame { .. } => "DeleteFrame",
             Self::InsertLine { .. } => "InsertLine",

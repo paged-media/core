@@ -674,6 +674,8 @@ fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
         FrameGradientStrokeAngle => "frameGradientStrokeAngle",
         FrameGradientStrokeLength => "frameGradientStrokeLength",
         PathOpenAt => "pathOpenAt",
+        PageBounds => "pageBounds",
+        FrameGradientFeather => "frameGradientFeather",
     }
 }
 

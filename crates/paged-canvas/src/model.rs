@@ -803,7 +803,9 @@ impl CanvasModel {
             // require the editor to rebuild its page grid.
             let page_structure_changed = matches!(
                 mutation,
-                Mutation::InsertPage { .. } | Mutation::DeletePage { .. }
+                Mutation::InsertPage { .. }
+                    | Mutation::DeletePage { .. }
+                    | Mutation::ResizePage { .. }
             );
             return Ok(MutationOutcome {
                 applied_seq: outcome.applied_seq,
@@ -1039,6 +1041,24 @@ impl CanvasModel {
                     z_slot: None,
                 })
             }
+            Mutation::InsertPage {
+                after_page_id,
+                master_id,
+            } => Some(Operation::InsertPage {
+                after_page_id: after_page_id.as_ref().map(|p| p.0.clone()),
+                master_id: master_id.clone(),
+                spread_self_id: None,
+                page_self_id: None,
+                restore_spread_json: None,
+            }),
+            Mutation::DeletePage { page_id } => Some(Operation::RemovePage {
+                page_id: page_id.0.clone(),
+            }),
+            Mutation::ResizePage { page_id, bounds } => Some(Operation::SetProperty {
+                node: NodeId::Page(page_id.0.clone()),
+                path: PropertyPath::PageBounds,
+                value: Value::Bounds([bounds.0, bounds.1, bounds.2, bounds.3]),
+            }),
             Mutation::DeleteFrame { frame_id } => {
                 let node = self.resolve_frame_node_id(frame_id)?;
                 Some(Operation::RemoveNode { node })
@@ -1686,6 +1706,17 @@ impl CanvasModel {
                                 )),
                             },
                             PropertyEntry {
+                                path: PropertyPath::FrameGradientFeather,
+                                value: Some(Value::GradientFeather(
+                                    f.effects
+                                        .as_ref()
+                                        .and_then(|e| e.gradient_feather.as_ref())
+                                        .map(
+                                            paged_mutate::operation::GradientFeatherSpec::from_parse,
+                                        ),
+                                )),
+                            },
+                            PropertyEntry {
                                 path: PropertyPath::FrameDropShadowMode,
                                 value: Some(Value::Text(
                                     f.drop_shadow
@@ -1803,6 +1834,17 @@ impl CanvasModel {
                                 path: PropertyPath::FrameDropShadow,
                                 value: Some(Value::Bool(
                                     f.drop_shadow.is_some(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientFeather,
+                                value: Some(Value::GradientFeather(
+                                    f.effects
+                                        .as_ref()
+                                        .and_then(|e| e.gradient_feather.as_ref())
+                                        .map(
+                                            paged_mutate::operation::GradientFeatherSpec::from_parse,
+                                        ),
                                 )),
                             },
                             PropertyEntry {

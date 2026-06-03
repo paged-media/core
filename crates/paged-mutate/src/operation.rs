@@ -284,6 +284,17 @@ pub enum PropertyPath {
     /// `Value::PathOpenAt`; any path-bearing kind. See the Value
     /// variant for the cut semantics + the snapshot inverse.
     PathOpenAt,
+    /// Editor-ops — whole gradient-feather replacement on an
+    /// effect-bearing page item (`Value::GradientFeather`). One path
+    /// for the whole struct — kind + axis + the stop LIST edit
+    /// together, and per-field shapes can't carry a list.
+    FrameGradientFeather,
+    /// Editor-ops (Page tool) — a page's `GeometricBounds`
+    /// `[top, left, bottom, right]` in the page's INNER coordinate
+    /// system (`Value::Bounds`). Only `NodeId::Page` carries it.
+    /// Items keep their coordinates (InDesign's layout-adjust off);
+    /// `spread_origin` re-derives on rebuild.
+    PageBounds,
     /// SDK Phase 5 (v1 sweep) — drop-shadow per-field editors.
     /// All five operate on the frame's `drop_shadow:
     /// Option<DropShadowSetting>`. Writing to any of them
@@ -467,6 +478,8 @@ impl PropertyPath {
             PropertyPath::FrameGradientStrokeAngle => "frame.gradientStrokeAngle",
             PropertyPath::FrameGradientStrokeLength => "frame.gradientStrokeLength",
             PropertyPath::PathOpenAt => "path.openAt",
+            PropertyPath::FrameGradientFeather => "frame.gradientFeather",
+            PropertyPath::PageBounds => "page.bounds",
             PropertyPath::FrameNonprinting => "frame.nonprinting",
             PropertyPath::FrameDropShadowMode => "frame.dropShadowMode",
             PropertyPath::FrameDropShadowXOffset => "frame.dropShadowXOffset",
@@ -506,6 +519,83 @@ impl PathAnchorSpec {
             anchor: (self.anchor[0], self.anchor[1]),
             left: (self.left[0], self.left[1]),
             right: (self.right[0], self.right[1]),
+        }
+    }
+}
+
+/// Editor-ops — wire mirror of `paged_parse::GradientFeatherStop`
+/// (the AST type predates `PartialEq`/`Tsify`; the mirror keeps the
+/// op wire-shaped, the `PathAnchorSpec` precedent).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct GradientFeatherStopSpec {
+    #[serde(default)]
+    pub stop_color: Option<String>,
+    pub location_pct: f32,
+    pub alpha_pct: f32,
+    #[serde(default)]
+    pub midpoint_pct: f32,
+}
+
+/// Editor-ops — wire mirror of `paged_parse::GradientFeatherParams`.
+/// Whole-struct authoring (kind + axis + stop LIST change together;
+/// `Value` has no generic list form, so the drop-shadow per-field
+/// shape doesn't fit). The renderer already draws this effect; only
+/// authoring was missing. `stop_color` round-trips faithfully but the
+/// rasterizer currently consumes `alpha_pct` only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct GradientFeatherSpec {
+    /// `"Linear"` or `"Radial"`.
+    #[serde(default)]
+    pub gradient_type: Option<String>,
+    #[serde(default)]
+    pub start_point: Option<[f32; 2]>,
+    #[serde(default)]
+    pub end_point: Option<[f32; 2]>,
+    #[serde(default)]
+    pub angle_deg: Option<f32>,
+    #[serde(default)]
+    pub stops: Vec<GradientFeatherStopSpec>,
+}
+
+impl GradientFeatherSpec {
+    pub fn from_parse(p: &paged_parse::GradientFeatherParams) -> Self {
+        Self {
+            gradient_type: p.gradient_type.clone(),
+            start_point: p.start_point.map(|(x, y)| [x, y]),
+            end_point: p.end_point.map(|(x, y)| [x, y]),
+            angle_deg: p.angle_deg,
+            stops: p
+                .stops
+                .iter()
+                .map(|s| GradientFeatherStopSpec {
+                    stop_color: s.stop_color.clone(),
+                    location_pct: s.location_pct,
+                    alpha_pct: s.alpha_pct,
+                    midpoint_pct: s.midpoint_pct,
+                })
+                .collect(),
+        }
+    }
+    pub fn to_parse(&self) -> paged_parse::GradientFeatherParams {
+        paged_parse::GradientFeatherParams {
+            gradient_type: self.gradient_type.clone(),
+            start_point: self.start_point.map(|[x, y]| (x, y)),
+            end_point: self.end_point.map(|[x, y]| (x, y)),
+            angle_deg: self.angle_deg,
+            stops: self
+                .stops
+                .iter()
+                .map(|s| paged_parse::GradientFeatherStop {
+                    stop_color: s.stop_color.clone(),
+                    location_pct: s.location_pct,
+                    alpha_pct: s.alpha_pct,
+                    midpoint_pct: s.midpoint_pct,
+                })
+                .collect(),
         }
     }
 }
@@ -624,6 +714,10 @@ pub enum Value {
         #[serde(default)]
         prev_subpath_open: Option<Vec<bool>>,
     },
+    /// Editor-ops — whole gradient-feather struct (`None` clears the
+    /// effect). The inverse carries the prior `Option<spec>` so undo
+    /// round-trips bytewise.
+    GradientFeather(Option<GradientFeatherSpec>),
 }
 
 /// Description of a node about to be inserted. Carries the minimal
@@ -862,6 +956,39 @@ pub enum Operation {
     },
     Batch {
         ops: Vec<Operation>,
+    },
+    /// Editor-ops (Page tool) — insert a new SINGLE-PAGE SPREAD
+    /// immediately after the spread hosting `after_page_id` (or at
+    /// the end when `None`). Page size clones the reference page
+    /// (Letter 612×792 fallback); `master_id` is applied when given.
+    /// `spread_self_id` / `page_self_id` are normally `None` (the
+    /// apply layer mints fresh ids) — they are filled on the op echo
+    /// so redo re-creates the exact ids. `restore_spread_json` is
+    /// inverse-only: the `RemovePage` undo carries the full captured
+    /// spread (lossless, including every page item) and the apply
+    /// layer reinserts it verbatim at its original index.
+    ///
+    /// Kept top-level (like the layer ops) rather than `InsertNode`:
+    /// a new spread has no pre-existing parent `NodeId` to address.
+    InsertPage {
+        #[serde(default)]
+        after_page_id: Option<String>,
+        #[serde(default)]
+        master_id: Option<String>,
+        #[serde(default)]
+        spread_self_id: Option<String>,
+        #[serde(default)]
+        page_self_id: Option<String>,
+        #[serde(default)]
+        restore_spread_json: Option<String>,
+    },
+    /// Editor-ops (Page tool) — remove the page `page_id`. v1
+    /// supports single-page spreads only (the hosting spread is
+    /// removed wholesale and captured for undo); deleting a page out
+    /// of a multi-page spread, or the document's only page, is
+    /// rejected with `InvalidValue`.
+    RemovePage {
+        page_id: String,
     },
     /// Track M — reorder a layer to a new zero-based index in
     /// `designmap.layers`. Inverse moves it back. Layer-affecting

@@ -85,7 +85,7 @@ impl CornerOption {
 /// The renderer maps the rich IDML vocabulary onto a pragmatic set of
 /// drawable shapes; unrecognised-but-present names become `Other`
 /// (drawn as a triangle and counted as approximated).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ArrowheadType {
     None,
     /// Open / simple arrow — drawn as a filled triangle.
@@ -117,7 +117,7 @@ impl ArrowheadType {
     }
 }
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Spread {
     pub self_id: Option<String>,
     /// `ItemTransform` on the `<Spread>` (or `<MasterSpread>`)
@@ -186,7 +186,7 @@ pub struct Spread {
 }
 
 /// Ruler guide on a spread. See [`Spread::guides`].
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct RulerGuide {
     pub orientation: GuideOrientation,
     /// Coordinate (pt) along the perpendicular axis. For
@@ -200,7 +200,7 @@ pub struct RulerGuide {
     pub page_index: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GuideOrientation {
     Vertical,
     Horizontal,
@@ -210,7 +210,7 @@ pub enum GuideOrientation {
 /// know which frames sit inside this group, and `transparency` to
 /// decide whether to bracket the range with a transparency-group
 /// composite.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Group {
     pub self_id: Option<String>,
     /// Page items wrapped by this group, in document order.
@@ -227,7 +227,7 @@ pub struct Group {
 /// Reference to one of a `Spread`'s page-item vecs. Carries the
 /// integer index back into the matching `Vec<...>` so the renderer
 /// can look up the frame's data without a name search.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FrameRef {
     TextFrame(usize),
     Rectangle(usize),
@@ -245,7 +245,7 @@ pub enum FrameRef {
 /// [`TextFrame`] but applies to every member of the group at once.
 /// Empty (`Default::default()`) when the group carried no
 /// transparency block.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct GroupTransparency {
     /// `<BlendingSetting BlendMode="…" />`. Same value space as
     /// `Rectangle::blend_mode` — `Normal | Multiply | Screen | …`.
@@ -258,7 +258,7 @@ pub struct GroupTransparency {
     pub drop_shadow: Option<DropShadowSetting>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Page {
     pub self_id: Option<String>,
     /// Page bounds in the page's *inner* coordinate system. Per the
@@ -307,7 +307,7 @@ pub struct Page {
     pub show_master_items: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextFrame {
     pub self_id: Option<String>,
     /// Story reference (e.g. `u10`). Maps to a `Stories/Story_<id>.xml`
@@ -459,7 +459,7 @@ pub struct TextFrame {
 
 /// IDML `<TextFramePreference VerticalJustification="...">` values.
 /// `Top` is the IDML default.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VerticalJustification {
     Top,
     Center,
@@ -487,7 +487,7 @@ impl VerticalJustification {
 /// IDML `<TextFramePreference FirstBaselineOffset="...">` values.
 /// Drives where the first line's baseline sits inside the frame's
 /// inset box.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FirstBaselineOffset {
     /// IDML default. Baseline at one ascender below the top inset.
     AscentOffset,
@@ -522,7 +522,7 @@ impl FirstBaselineOffset {
 /// whether the frame's bounds grow at composition time so display
 /// headlines / dynamic copy don't clip against their authored bounds.
 /// `Off` is the IDML default (static frame).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoSizingType {
     /// Static frame — bounds are authoritative.
     Off,
@@ -569,7 +569,7 @@ impl AutoSizingType {
 /// IDML `<TextFramePreference AutoSizingReferencePoint="...">` values.
 /// Pins which corner / midpoint of the frame stays fixed when the
 /// frame grows. `TopLeftPoint` is the IDML default.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoSizingReferencePoint {
     TopLeftPoint,
     TopCenterPoint,
@@ -601,7 +601,7 @@ impl AutoSizingReferencePoint {
 
 /// Drop shadow as carried in the IDML XML. Distances are in pt;
 /// `opacity_pct` is 0..=100; `effect_color` is a Color id reference.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DropShadowSetting {
     pub mode: String,
     pub x_offset: f32,
@@ -614,7 +614,7 @@ pub struct DropShadowSetting {
 /// Vector-only frame (no story). Mirrors `TextFrame` minus the
 /// `parent_story` field; shares the same paint / stroke handling
 /// downstream.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rectangle {
     pub self_id: Option<String>,
     pub bounds: Bounds,
@@ -784,7 +784,7 @@ pub struct Rectangle {
 /// absent or explicitly disabled. The renderer's compose-layer
 /// equivalents (`paged_compose::InnerShadow`, etc.) consume these
 /// parameters directly.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct FrameEffects {
     pub inner_shadow: Option<InnerShadowParams>,
     pub outer_glow: Option<OuterGlowParams>,
@@ -806,7 +806,7 @@ pub struct FrameEffects {
 /// `(Angle, Distance)` may be set; the renderer uses XOffset/YOffset
 /// directly when present, otherwise computes them from the polar
 /// pair: `XOffset = Distance * cos(Angle)`, `YOffset = -Distance * sin(Angle)`.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct InnerShadowParams {
     pub x_offset: Option<f32>,
     pub y_offset: Option<f32>,
@@ -821,7 +821,7 @@ pub struct InnerShadowParams {
 }
 
 /// `<OuterGlowSetting>` parameters.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct OuterGlowParams {
     pub size: Option<f32>,
     pub opacity_pct: Option<f32>,
@@ -834,7 +834,7 @@ pub struct OuterGlowParams {
 /// `<InnerGlowSetting>` parameters. `source` selects center-out vs
 /// edge-in glow (IDML's `Source="EdgeGlow"`/`"CenterGlow"`); the
 /// renderer assumes edge-in when absent.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct InnerGlowParams {
     pub size: Option<f32>,
     pub opacity_pct: Option<f32>,
@@ -848,7 +848,7 @@ pub struct InnerGlowParams {
 /// `<BevelAndEmbossSetting>` parameters. `style` and `direction` steer
 /// between bevel / emboss / pillow variants; the rasterizer uses the
 /// Lambertian light at `(angle_deg, altitude_deg)` regardless.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct BevelEmbossParams {
     pub depth_pct: Option<f32>,
     pub size: Option<f32>,
@@ -866,7 +866,7 @@ pub struct BevelEmbossParams {
 
 /// `<SatinSetting>` parameters. `Distance` + `Angle` set the wave
 /// direction and spacing.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct SatinParams {
     pub size: Option<f32>,
     pub angle_deg: Option<f32>,
@@ -880,7 +880,7 @@ pub struct SatinParams {
 /// `<FeatherSetting>` parameters. `corner_type` is `Sharp`/`Rounded`/
 /// `Diffusion`; the rasterizer only branches on Diffusion (which adds
 /// noise) at the moment.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct FeatherParams {
     pub width: Option<f32>,
     pub corner_type: Option<String>,
@@ -893,7 +893,7 @@ pub struct FeatherParams {
 /// directions. The renderer currently approximates this with a
 /// uniform feather using the max of the four widths — angle is
 /// captured but unused.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct DirectionalFeatherParams {
     pub left_width: Option<f32>,
     pub right_width: Option<f32>,
@@ -911,7 +911,7 @@ pub struct DirectionalFeatherParams {
 /// captures the `<GradientStop>` children; each stop's alpha
 /// (extracted from the `<Color>` referenced by `StopColor`) is the
 /// feather opacity at that location.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct GradientFeatherParams {
     /// `Type` attribute: `"Linear"` or `"Radial"`. Defaults to
     /// `"Linear"` when absent or unrecognised at the renderer.
@@ -927,7 +927,7 @@ pub struct GradientFeatherParams {
 /// resolves the swatch's alpha later. Until then `alpha_pct` is
 /// initialised to 100 and the stop color id is preserved for
 /// downstream resolution.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct GradientFeatherStop {
     /// Color id referenced by `StopColor`. Resolved by the renderer
     /// to extract the alpha component. Black + alpha = "opaque
@@ -952,7 +952,7 @@ pub struct GradientFeatherStop {
 /// image is scaled to cover the frame and the overflow is meant to be
 /// clipped). InDesign bakes these out when the user picks a fit, so
 /// the renderer just trusts whatever number lands here.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct FrameFittingOption {
     pub left_crop: Option<f32>,
     pub top_crop: Option<f32>,
@@ -968,7 +968,7 @@ pub struct FrameFittingOption {
 
 /// Axis-aligned ellipse — `<Oval>` in IDML. Same fill/stroke story as
 /// Rectangle; geometry is the ellipse inscribed in `GeometricBounds`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Oval {
     pub self_id: Option<String>,
     pub bounds: Bounds,
@@ -1029,7 +1029,7 @@ pub struct Oval {
 /// Straight line — `<GraphicLine>` in IDML. The endpoints are the
 /// `GeometricBounds` rect's top-left and bottom-right corners (IDML
 /// stores the endpoints implicitly via the bounds).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphicLine {
     pub self_id: Option<String>,
     pub bounds: Bounds,
@@ -1085,7 +1085,7 @@ pub struct GraphicLine {
 /// on-curve point; `left` / `right` are the incoming / outgoing
 /// Bezier control points respectively. Coordinates are in the
 /// owning page item's *inner* coordinate system.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PathAnchor {
     pub anchor: (f32, f32),
     pub left: (f32, f32),
@@ -1096,7 +1096,7 @@ pub struct PathAnchor {
 /// every shape (TextFrame / Rectangle / Oval / Polygon /
 /// GraphicLine). The renderer uses the AABB plus offsets as a
 /// per-page wrap exclusion when laying out other text frames.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct TextWrap {
     pub mode: TextWrapMode,
     /// IDML order: `[top, left, bottom, right]`, in pt. Inflates the
@@ -1114,7 +1114,7 @@ impl TextWrap {
 /// `TextWrapMode` enum value. Values not in the IDML spec collapse
 /// to `Other` so the cascade still records *something* the renderer
 /// can decide to ignore.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TextWrapMode {
     None,
     BoundingBoxTextWrap,
@@ -1165,7 +1165,7 @@ impl TextWrapMode {
 /// the renderer needs only the story reference today; richer
 /// alignment / spacing / effect attributes can land later without
 /// a struct breaking change.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextPath {
     pub self_id: Option<String>,
     /// Story reference (e.g. `u3ae`). Same shape as
@@ -1194,7 +1194,7 @@ pub struct TextPath {
 /// rasterise the actual curved path; `bounds` is still the AABB so
 /// page-routing and emit paths that haven't been switched over keep
 /// working.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Polygon {
     pub self_id: Option<String>,
     pub bounds: Bounds,
@@ -1270,7 +1270,7 @@ pub struct Polygon {
     pub nonprinting: bool,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Bounds {
     pub top: f32,
     pub left: f32,

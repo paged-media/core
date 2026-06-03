@@ -3069,6 +3069,151 @@ mod tests {
             .is_none());
     }
 
+    /// Editor-ops — gradient feather whole-struct authoring. Set on
+    /// a frame with no effects (materialises `FrameEffects`), undo
+    /// clears back to None; clear-then-undo restores the prior spec
+    /// bytewise.
+    #[test]
+    fn gradient_feather_set_clear_round_trips() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        assert!(project.document().spreads[0].spread.text_frames[0]
+            .effects
+            .is_none());
+
+        let spec = crate::operation::GradientFeatherSpec {
+            gradient_type: Some("Linear".to_string()),
+            start_point: Some([0.0, 0.0]),
+            end_point: Some([100.0, 0.0]),
+            angle_deg: Some(45.0),
+            stops: vec![
+                crate::operation::GradientFeatherStopSpec {
+                    stop_color: None,
+                    location_pct: 0.0,
+                    alpha_pct: 100.0,
+                    midpoint_pct: 50.0,
+                },
+                crate::operation::GradientFeatherStopSpec {
+                    stop_color: None,
+                    location_pct: 100.0,
+                    alpha_pct: 0.0,
+                    midpoint_pct: 50.0,
+                },
+            ],
+        };
+        let applied = project
+            .apply(Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FrameGradientFeather,
+                value: Value::GradientFeather(Some(spec.clone())),
+            })
+            .expect("set feather");
+        // Effects materialised from None; feather landed.
+        let gf = project.document().spreads[0].spread.text_frames[0]
+            .effects
+            .as_ref()
+            .expect("effects materialised")
+            .gradient_feather
+            .as_ref()
+            .expect("feather set");
+        assert_eq!(gf.angle_deg, Some(45.0));
+        assert_eq!(gf.stops.len(), 2);
+        assert_eq!(gf.stops[1].alpha_pct, 0.0);
+
+        // Inverse captured prior None → undo clears the feather.
+        assert!(matches!(
+            &applied.inverse,
+            Operation::SetProperty {
+                value: Value::GradientFeather(None),
+                ..
+            }
+        ));
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo set");
+        assert!(project.document().spreads[0].spread.text_frames[0]
+            .effects
+            .as_ref()
+            .is_none_or(|e| e.gradient_feather.is_none()));
+
+        // Re-set, then clear via `GradientFeather(None)`; the clear's
+        // inverse restores the full spec bytewise.
+        project
+            .apply(Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FrameGradientFeather,
+                value: Value::GradientFeather(Some(spec.clone())),
+            })
+            .expect("re-set feather");
+        let cleared = project
+            .apply(Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FrameGradientFeather,
+                value: Value::GradientFeather(None),
+            })
+            .expect("clear feather");
+        assert!(project.document().spreads[0].spread.text_frames[0]
+            .effects
+            .as_ref()
+            .expect("effects struct survives the clear")
+            .gradient_feather
+            .is_none());
+        crate::apply(project.document_mut(), &cleared.inverse).expect("undo clear");
+        let restored = project.document().spreads[0].spread.text_frames[0]
+            .effects
+            .as_ref()
+            .expect("effects")
+            .gradient_feather
+            .as_ref()
+            .expect("feather restored");
+        assert_eq!(
+            crate::operation::GradientFeatherSpec::from_parse(restored),
+            spec,
+            "clear-undo restores the prior spec bytewise"
+        );
+    }
+
+    /// Editor-ops — gradient feather is fill-based; GraphicLine has
+    /// no fill, so the property is rejected rather than silently
+    /// stored.
+    #[test]
+    fn gradient_feather_rejected_on_graphic_line() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        // Insert a line to target.
+        project
+            .apply(Operation::InsertNode {
+                parent: NodeId::Spread("Spread/u_main".to_string()),
+                position: 0,
+                z_slot: None,
+                node: crate::operation::NodeSpec::GraphicLine {
+                    self_id: "GraphicLine/u9".to_string(),
+                    bounds: [0.0, 0.0, 100.0, 100.0],
+                    anchors: vec![
+                        crate::operation::PathAnchorSpec {
+                            anchor: [0.0, 0.0],
+                            left: [0.0, 0.0],
+                            right: [0.0, 0.0],
+                        },
+                        crate::operation::PathAnchorSpec {
+                            anchor: [100.0, 100.0],
+                            left: [100.0, 100.0],
+                            right: [100.0, 100.0],
+                        },
+                    ],
+                    subpath_starts: vec![],
+                    subpath_open: vec![],
+                    stroke_color: Some("Color/Black".to_string()),
+                    stroke_weight: Some(1.0),
+                },
+            })
+            .expect("insert line");
+        let err = project
+            .apply(Operation::SetProperty {
+                node: NodeId::GraphicLine("GraphicLine/u9".to_string()),
+                path: PropertyPath::FrameGradientFeather,
+                value: Value::GradientFeather(None),
+            })
+            .expect_err("feather on a line");
+        assert!(matches!(err, OperationError::UnsupportedProperty { .. }));
+    }
+
     /// SDK Phase 5 (v1 sweep) — text-wrap mode + offsets apply +
     /// undo. The two paths share the same `Option<TextWrap>` field
     /// but write distinct halves; both preserve the other half on
