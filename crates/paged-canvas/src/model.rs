@@ -1706,6 +1706,22 @@ impl CanvasModel {
                                 )),
                             },
                             PropertyEntry {
+                                path: PropertyPath::FrameGradientFillAngle,
+                                value: Some(Value::Length(f.gradient_fill_angle)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientFillLength,
+                                value: Some(Value::Length(f.gradient_fill_length)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientStrokeAngle,
+                                value: Some(Value::Length(f.gradient_stroke_angle)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientStrokeLength,
+                                value: Some(Value::Length(f.gradient_stroke_length)),
+                            },
+                            PropertyEntry {
                                 path: PropertyPath::FrameGradientFeather,
                                 value: Some(Value::GradientFeather(
                                     f.effects
@@ -1835,6 +1851,22 @@ impl CanvasModel {
                                 value: Some(Value::Bool(
                                     f.drop_shadow.is_some(),
                                 )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientFillAngle,
+                                value: Some(Value::Length(f.gradient_fill_angle)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientFillLength,
+                                value: Some(Value::Length(f.gradient_fill_length)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientStrokeAngle,
+                                value: Some(Value::Length(f.gradient_stroke_angle)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientStrokeLength,
+                                value: Some(Value::Length(f.gradient_stroke_length)),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameGradientFeather,
