@@ -31,6 +31,7 @@
 //!   gate matched the PDF via lcms2, producing a uniform ~9 ΔE gap
 //!   on every CMYK pack. Routing through qcms closes that gap.
 
+pub mod ase;
 pub mod cmm;
 pub mod lab;
 

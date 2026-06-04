@@ -288,6 +288,15 @@ pub enum MainToWorkerKind {
     /// `GradientSummary` collection stays stop-free; detail is
     /// fetched per selected gradient. Reply: `GradientDetailReply`.
     RequestGradientDetail { gradient_id: String },
+    /// Concept 2 — serialise swatches back to `.ase` (the Swatches
+    /// panel's "Save .ase…"; lossless raw channel values, core owns
+    /// the format both ways). `group_id: Some` exports one
+    /// ColorGroup; `None` exports the whole palette grouped by the
+    /// document's ColorGroups. Reply: `SwatchLibraryExported`.
+    ExportSwatchLibrary {
+        #[serde(default)]
+        group_id: Option<String>,
+    },
     /// Scripting Stage 2 — execute a JS source string against the
     /// loaded document. The script's mutations route through
     /// `Operation::SetProperty` (same channel as gestures + REPL)
@@ -624,6 +633,11 @@ pub enum WorkerToMainKind {
     GradientDetailReply {
         result: Option<GradientDetail>,
     },
+    /// Concept 2 — `ExportSwatchLibrary` reply.
+    SwatchLibraryExported {
+        #[tsify(type = "number[]")]
+        ase_bytes: ByteBuf,
+    },
     /// Inspector P1 — `RequestElementProperties` reply. `None` when
     /// the id doesn't resolve.
     ElementProperties {
@@ -869,6 +883,9 @@ pub enum CollectionName {
     ConditionSets,
     Fonts,
     IndexTopics,
+    /// Concept 2 — the Ink Manager's ink list (one row per spot
+    /// swatch, carrying its output-time settings).
+    Inks,
 }
 
 impl CollectionName {
@@ -898,6 +915,7 @@ impl CollectionName {
             Self::ConditionSets => "conditionSets",
             Self::Fonts => "fonts",
             Self::IndexTopics => "indexTopics",
+            Self::Inks => "inks",
         }
     }
 
@@ -924,6 +942,7 @@ impl CollectionName {
             "conditionSets" => Self::ConditionSets,
             "fonts" => Self::Fonts,
             "indexTopics" => Self::IndexTopics,
+            "inks" => Self::Inks,
             _ => return None,
         })
     }
@@ -986,6 +1005,10 @@ pub struct DocumentMeta {
     pub proof_profile_name: Option<String>,
     #[serde(default)]
     pub proof_simulate_paper_white: Option<bool>,
+    /// Concept 2 (Ink Manager) — global "Use Standard Lab Values
+    /// for Spots" toggle.
+    #[serde(default)]
+    pub use_standard_lab_for_spots: Option<bool>,
 }
 
 /// SDK Phase 3 — one swatch's identity + display name + kind.
@@ -1180,6 +1203,26 @@ pub struct GradientStopWire {
     pub location_pct: f32,
     /// 0..=100 blend midpoint toward the NEXT stop; `None` = 50.
     pub midpoint_pct: Option<f32>,
+}
+
+/// Concept 2 — one ink row for the Ink Manager: a spot swatch's
+/// identity + its OUTPUT-TIME settings. Converting to process or
+/// aliasing never edits the swatch itself (AC-8) — these are
+/// separations decisions consumed by Concept 3's export encoding
+/// (and, for `useStandardLabForSpots`, by the preview resolver).
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct InkSummary {
+    /// The spot swatch's `Color/<id>`.
+    pub spot_id: String,
+    /// The ink/colourant name (the swatch name — for spots this IS
+    /// the colourant identity).
+    pub name: String,
+    pub convert_to_process: bool,
+    /// Output as another ink's plate (`Color/<id>` of the alias
+    /// target). `None` = own plate.
+    pub alias_to: Option<String>,
 }
 
 /// SDK Phase 5 (v1 sweep) — one `<Article>` summary. Backs
@@ -1564,6 +1607,36 @@ pub enum Mutation {
         simulate_paper_white: bool,
         intent: Option<String>,
     },
+    /// Concept 2 — import an Adobe Swatch Exchange (`.ase`) library
+    /// (the freieFarbe HLC atlas, arbitrary user libraries). The
+    /// worker parses the raw bytes; every colour lands as a swatch
+    /// and every `.ase` group becomes a ColorGroup, all inside ONE
+    /// undoable operation (a single Cmd-Z removes the whole
+    /// import). `group_name` overrides the group for entries the
+    /// file leaves ungrouped. Names are preserved verbatim (for HLC
+    /// the name IS the colour identity / provenance).
+    ImportSwatchLibrary {
+        #[tsify(type = "number[]")]
+        bytes: ByteBuf,
+        #[serde(default)]
+        group_name: Option<String>,
+    },
+    /// Concept 2 (Ink Manager) — replace one ink's output-time
+    /// settings (whole-row semantics). Not undoable; never touches
+    /// the swatch. Settings surface through the `inks` collection;
+    /// separations consume them at export (Concept 3).
+    SetInkSetting {
+        spot_id: String,
+        #[serde(default)]
+        convert_to_process: bool,
+        #[serde(default)]
+        alias_to: Option<String>,
+    },
+    /// Concept 2 (Ink Manager) — prefer a spot's device-independent
+    /// Lab PRIMARY over its CMYK alternate when resolving previews
+    /// (InDesign's "Use Standard Lab Values for Spots"). Repaints
+    /// previews; not undoable.
+    SetUseStandardLabForSpots { enabled: bool },
     /// Track J — insert a new anchor into a path-bearing element's
     /// PathPointArray at flat `index`. UI dispatches from a segment
     /// click in path-edit mode; `anchor` is the de Casteljau split
@@ -1833,6 +1906,9 @@ impl Mutation {
             Self::SetDocumentDefaults { .. } => "SetDocumentDefaults",
             Self::SetColorSettings { .. } => "SetColorSettings",
             Self::SetProofSetup { .. } => "SetProofSetup",
+            Self::ImportSwatchLibrary { .. } => "ImportSwatchLibrary",
+            Self::SetInkSetting { .. } => "SetInkSetting",
+            Self::SetUseStandardLabForSpots { .. } => "SetUseStandardLabForSpots",
             Self::PathPointInsert { .. } => "PathPointInsert",
             Self::PathPointRemove { .. } => "PathPointRemove",
             Self::PathOpenAt { .. } => "PathOpenAt",

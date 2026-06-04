@@ -5132,7 +5132,10 @@ fn is_none_style_id(id: &str) -> bool {
 /// stroke override to fall through to the cascaded cell-style colour
 /// when the inline `<Cell>` attribute carries `Swatch/None`.
 fn is_none_swatch_id(id: &str) -> bool {
-    id == "Swatch/None" || id == "n" || id.is_empty()
+    // Concept 2 — routed through the shared reserved-swatch
+    // classifier; behaviour identical (plus the `Color/None`
+    // spelling the canvas-side sites match).
+    paged_parse::graphic::ReservedSwatch::is_none(id)
 }
 
 /// True when an `Option<String>` FillColor on a page item should be

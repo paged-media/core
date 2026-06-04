@@ -1017,6 +1017,14 @@ mod wasm {
                         .and_then(|m| m.color_preview(&swatch_id));
                     WorkerToMainKind::ColorPreviewReply { result }
                 }
+                MainToWorkerKind::ExportSwatchLibrary { group_id } => match self.model.as_ref() {
+                    Some(m) => WorkerToMainKind::SwatchLibraryExported {
+                        ase_bytes: m.export_ase(group_id.as_deref()).into(),
+                    },
+                    None => WorkerToMainKind::MutationFailed {
+                        error: WorkerError::NoDocument,
+                    },
+                },
                 MainToWorkerKind::RequestGradientDetail { gradient_id } => {
                     let result = self
                         .model

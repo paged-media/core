@@ -84,6 +84,13 @@ pub struct ColorSettingsState {
     pub bpc: bool,
 }
 
+/// Concept 2 (Ink Manager) — one ink's output-time settings.
+#[derive(Debug, Clone, Default)]
+pub struct InkSetting {
+    pub convert_to_process: bool,
+    pub alias_to: Option<String>,
+}
+
 /// Concept 2 — resolved soft-proof condition. The bytes are cloned
 /// out of the profile registry at SetProofSetup time so a later
 /// re-registration doesn't silently change the active proof.
@@ -472,6 +479,13 @@ pub struct CanvasModel {
     pub color_settings: ColorSettingsState,
     /// Concept 2 — active soft-proof state (`None` = proofing off).
     proof_state: Option<ProofState>,
+    /// Concept 2 (Ink Manager) — per-spot output-time settings,
+    /// keyed by the spot swatch's `Color/<id>`. Never edits the
+    /// swatch (AC-8); consumed by Concept 3's separations encoding.
+    ink_settings: std::collections::BTreeMap<String, InkSetting>,
+    /// Concept 2 (Ink Manager) — prefer spot Lab primaries over
+    /// CMYK alternates in preview resolution.
+    use_standard_lab_for_spots: bool,
     /// Concept 2 — lazily-built CMM for preview/compute reads
     /// (transform creation is expensive; the SwatchPicker previews
     /// every swatch per refresh). Cleared by `SetColorSettings`.
@@ -717,6 +731,8 @@ impl CanvasModel {
             color_profiles,
             color_settings,
             proof_state: None,
+            ink_settings: Default::default(),
+            use_standard_lab_for_spots: false,
             cmm_cache: std::cell::RefCell::new(None),
             initial_state_hash,
             last_applied_seq: 0,
@@ -992,6 +1008,64 @@ impl CanvasModel {
             return Ok(MutationOutcome {
                 applied_seq,
                 page_ids,
+                inverse: crate::mutate::TextOp::InsertText {
+                    story_id: String::new(),
+                    offset: 0,
+                    text: String::new(),
+                },
+                created_id: None,
+                page_structure_changed: false,
+            });
+        }
+        // Concept 2 (Ink Manager) — output-time ink settings.
+        // Whole-row replace; not undoable; swatch identity untouched.
+        if let Mutation::SetInkSetting {
+            spot_id,
+            convert_to_process,
+            alias_to,
+        } = mutation
+        {
+            let is_spot = self
+                .scene
+                .palette
+                .colors
+                .get(spot_id)
+                .is_some_and(|c| c.model == paged_parse::graphic::ColorModel::Spot);
+            if !is_spot {
+                return Err(crate::channel::WorkerError::NotImplemented {
+                    what: format!("{spot_id:?} is not a spot swatch"),
+                });
+            }
+            self.ink_settings.insert(
+                spot_id.clone(),
+                InkSetting {
+                    convert_to_process: *convert_to_process,
+                    alias_to: alias_to.clone(),
+                },
+            );
+            let applied_seq = self.bump_applied_seq();
+            return Ok(MutationOutcome {
+                applied_seq,
+                page_ids: Vec::new(),
+                inverse: crate::mutate::TextOp::InsertText {
+                    story_id: String::new(),
+                    offset: 0,
+                    text: String::new(),
+                },
+                created_id: None,
+                page_structure_changed: false,
+            });
+        }
+        if let Mutation::SetUseStandardLabForSpots { enabled } = mutation {
+            self.use_standard_lab_for_spots = *enabled;
+            // Preview resolution changes for Lab-primary spots; the
+            // canvas itself repaints with Concept 3's separations
+            // threading. Clear the preview CMM so reads see the flag.
+            self.cmm_cache.borrow_mut().take();
+            let applied_seq = self.bump_applied_seq();
+            return Ok(MutationOutcome {
+                applied_seq,
+                page_ids: Vec::new(),
                 inverse: crate::mutate::TextOp::InsertText {
                     story_id: String::new(),
                     offset: 0,
@@ -1417,6 +1491,86 @@ impl CanvasModel {
             //    (no NodeId resolution; they target collections by id).
             Mutation::CreateSwatch { spec } => {
                 Some(Operation::CreateSwatch { spec: spec.clone() })
+            }
+            // Concept 2 — one undoable Batch: every .ase colour as a
+            // CreateSwatch (+ one CreateColorGroup per .ase group).
+            // Ids are minted HERE (translate time) so the group
+            // member lists are known before apply; the Batch's
+            // inverse removes the whole import in one Cmd-Z.
+            Mutation::ImportSwatchLibrary { bytes, group_name } => {
+                let lib = match paged_color::ase::parse_ase(bytes.as_slice()) {
+                    Ok(lib) => lib,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "ImportSwatchLibrary: bad .ase payload");
+                        return None;
+                    }
+                };
+                let mut ops: Vec<Operation> = Vec::new();
+                let mut next_n = self.scene.palette.colors.len();
+                let mut mint = |taken: &mut std::collections::HashSet<String>| -> String {
+                    let mut id = format!("Color/u{next_n}");
+                    while self.scene.palette.colors.contains_key(&id) || taken.contains(&id) {
+                        next_n += 1;
+                        id = format!("Color/u{next_n}");
+                    }
+                    taken.insert(id.clone());
+                    id
+                };
+                let mut taken: std::collections::HashSet<String> = Default::default();
+                let spec_of = |entry: &paged_color::ase::AseEntry, id: String| {
+                    use paged_color::ase::{AseKind, AseSpace};
+                    paged_mutate::operation::SwatchSpec {
+                        self_id: Some(id),
+                        name: Some(entry.name.clone()),
+                        space: match entry.space {
+                            AseSpace::Rgb => "RGB".into(),
+                            AseSpace::Cmyk => "CMYK".into(),
+                            AseSpace::Lab => "LAB".into(),
+                            AseSpace::Gray => "Gray".into(),
+                        },
+                        value: entry.value.clone(),
+                        model: Some(match entry.kind {
+                            AseKind::Spot => "Spot".into(),
+                            _ => "Process".into(),
+                        }),
+                        alternate_space: None,
+                        alternate_value: Vec::new(),
+                        tint: None,
+                        alpha: None,
+                    }
+                };
+                let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+                for g in &lib.groups {
+                    let mut members = Vec::new();
+                    for entry in &g.entries {
+                        let id = mint(&mut taken);
+                        members.push(id.clone());
+                        ops.push(Operation::CreateSwatch { spec: spec_of(entry, id) });
+                    }
+                    groups.push((g.name.clone(), members));
+                }
+                let mut loose_members = Vec::new();
+                for entry in &lib.loose {
+                    let id = mint(&mut taken);
+                    loose_members.push(id.clone());
+                    ops.push(Operation::CreateSwatch { spec: spec_of(entry, id) });
+                }
+                if let (Some(name), false) = (group_name.as_ref(), loose_members.is_empty()) {
+                    groups.push((name.clone(), loose_members));
+                }
+                for (name, members) in groups {
+                    ops.push(Operation::CreateColorGroup {
+                        spec: paged_mutate::operation::ColorGroupSpec {
+                            self_id: None,
+                            name: Some(name),
+                            members,
+                        },
+                    });
+                }
+                if ops.is_empty() {
+                    return None;
+                }
+                Some(Operation::Batch { ops })
             }
             Mutation::EditSwatch { swatch_id, spec } => Some(Operation::EditSwatch {
                 swatch_id: swatch_id.clone(),
@@ -2362,12 +2516,9 @@ impl CanvasModel {
         use paged_parse::ColorModel;
         let mut out = Vec::with_capacity(self.scene.palette.colors.len());
         for (self_id, color) in self.scene.palette.colors.iter() {
-            let kind = match self_id.as_str() {
-                "Color/None" => "none",
-                "Color/Paper" => "paper",
-                "Color/Black" => "black",
-                "Color/Registration" => "registration",
-                _ => match color.model {
+            let kind = match paged_parse::graphic::ReservedSwatch::classify(self_id) {
+                Some(r) => r.label(),
+                None => match color.model {
                     ColorModel::Process => "process",
                     ColorModel::Spot => "spot",
                     ColorModel::MixedInk => "mixedInk",
@@ -2428,7 +2579,7 @@ impl CanvasModel {
         &self,
         swatch_id: &str,
     ) -> Option<crate::channel::ColorPreview> {
-        use paged_parse::graphic::{to_linear_rgb, ColorModel};
+        use paged_parse::graphic::ColorModel;
         let color = self.scene.palette.colors.get(swatch_id)?;
         let model = match color.model {
             ColorModel::Process => "process",
@@ -2436,12 +2587,9 @@ impl CanvasModel {
             ColorModel::MixedInk => "mixedInk",
             ColorModel::Unknown => "unknown",
         };
-        let model_str = match swatch_id {
-            "Color/None" => "none",
-            "Color/Paper" => "paper",
-            "Color/Black" => "black",
-            "Color/Registration" => "registration",
-            _ => model,
+        let model_str = match paged_parse::graphic::ReservedSwatch::classify(swatch_id) {
+            Some(r) => r.label(),
+            None => model,
         };
         // `effective_cmyk` already returns IDML percentages
         // (0..=100); the old `* 100.0` here clamped every mid-tone
@@ -2459,7 +2607,7 @@ impl CanvasModel {
         // analytic Lab instead of the 50% grey placeholder, plus the
         // out-of-gamut verdict for the mixer/swatch badges.
         let cmm = self.active_cmm();
-        let working = working_color_of(color);
+        let working = working_color_of_with(color, self.use_standard_lab_for_spots);
         let rgb = match working {
             Some(w) => {
                 use paged_color::Cmm as _;
@@ -2890,6 +3038,97 @@ impl CanvasModel {
         })
     }
 
+    /// Concept 2 — serialise swatches to `.ase` bytes ("Save
+    /// .ase…"). `group_id: Some` exports one ColorGroup's members;
+    /// `None` exports every user colour, grouped by the document's
+    /// ColorGroups (ungrouped colours land loose). Reserved
+    /// swatches and unknown spaces are skipped.
+    pub fn export_ase(&self, group_id: Option<&str>) -> Vec<u8> {
+        use paged_color::ase::{AseEntry, AseGroup, AseKind, AseLibrary, AseSpace};
+        use paged_parse::graphic::{ColorModel, ColorSpace};
+        let entry_of = |id: &str| -> Option<AseEntry> {
+            // Reserved swatches aren't exchange material.
+            if matches!(
+                id,
+                "Color/None" | "Color/Paper" | "Color/Black" | "Color/Registration"
+            ) {
+                return None;
+            }
+            let c = self.scene.palette.colors.get(id)?;
+            let space = match c.space {
+                ColorSpace::Rgb => AseSpace::Rgb,
+                ColorSpace::Cmyk => AseSpace::Cmyk,
+                ColorSpace::Lab => AseSpace::Lab,
+                ColorSpace::Gray => AseSpace::Gray,
+                ColorSpace::Unknown => return None,
+            };
+            Some(AseEntry {
+                name: c.name.clone().unwrap_or_else(|| id.to_string()),
+                space,
+                value: c.value.clone(),
+                kind: match c.model {
+                    ColorModel::Spot => AseKind::Spot,
+                    _ => AseKind::Process,
+                },
+            })
+        };
+        let mut lib = AseLibrary::default();
+        match group_id {
+            Some(gid) => {
+                if let Some(g) = self.scene.palette.color_groups.get(gid) {
+                    lib.groups.push(AseGroup {
+                        name: g.name.clone().unwrap_or_else(|| gid.to_string()),
+                        entries: g.members.iter().filter_map(|m| entry_of(m)).collect(),
+                    });
+                }
+            }
+            None => {
+                let mut grouped: std::collections::HashSet<&str> = Default::default();
+                for (gid, g) in &self.scene.palette.color_groups {
+                    let entries: Vec<AseEntry> =
+                        g.members.iter().filter_map(|m| entry_of(m)).collect();
+                    for m in &g.members {
+                        grouped.insert(m.as_str());
+                    }
+                    if !entries.is_empty() {
+                        lib.groups.push(AseGroup {
+                            name: g.name.clone().unwrap_or_else(|| gid.clone()),
+                            entries,
+                        });
+                    }
+                }
+                for id in self.scene.palette.colors.keys() {
+                    if !grouped.contains(id.as_str()) {
+                        if let Some(e) = entry_of(id) {
+                            lib.loose.push(e);
+                        }
+                    }
+                }
+            }
+        }
+        paged_color::ase::write_ase(&lib)
+    }
+
+    /// Concept 2 (Ink Manager) — the ink list: one row per spot
+    /// swatch, settings folded in.
+    pub fn inks(&self) -> Vec<crate::channel::InkSummary> {
+        self.scene
+            .palette
+            .colors
+            .iter()
+            .filter(|(_, c)| c.model == paged_parse::graphic::ColorModel::Spot)
+            .map(|(id, c)| {
+                let setting = self.ink_settings.get(id);
+                crate::channel::InkSummary {
+                    spot_id: id.clone(),
+                    name: c.name.clone().unwrap_or_else(|| id.clone()),
+                    convert_to_process: setting.is_some_and(|s| s.convert_to_process),
+                    alias_to: setting.and_then(|s| s.alias_to.clone()),
+                }
+            })
+            .collect()
+    }
+
     /// SDK Phase 3 — list every story's self_id + character count.
     /// Used by `paged.stories()` (the script host fn) and by tests
     /// that need a valid story id to address a StoryRange edit.
@@ -2976,6 +3215,7 @@ impl CanvasModel {
             IndexTopics => {
                 serde_json::to_value(self.index_topics()).unwrap_or_default()
             }
+            Inks => serde_json::to_value(self.inks()).unwrap_or_default(),
         }
     }
 
@@ -3024,6 +3264,7 @@ impl CanvasModel {
                 .proof_state
                 .as_ref()
                 .map(|p| p.simulate_paper_white),
+            use_standard_lab_for_spots: Some(self.use_standard_lab_for_spots),
         }
     }
 
@@ -3535,7 +3776,7 @@ impl CanvasModel {
             alpha: None,
         };
         let cmm = self.active_cmm();
-        let working = working_color_of(&entry);
+        let working = working_color_of_with(&entry, self.use_standard_lab_for_spots);
         let rgb = match working {
             Some(w) => {
                 use paged_color::Cmm as _;
@@ -3604,7 +3845,32 @@ fn phase_log(label: &str, start: std::time::Instant) {
 /// directly. `None` = unresolvable (e.g. a spot with no CMYK
 /// alternate and a non-Lab primary).
 fn working_color_of(entry: &paged_parse::graphic::ColorEntry) -> Option<paged_color::WorkingColor> {
+    working_color_of_with(entry, false)
+}
+
+/// Like [`working_color_of`] but honouring the Ink Manager's "Use
+/// Standard Lab Values for Spots": a spot whose PRIMARY space is
+/// Lab resolves device-independently instead of via its CMYK
+/// alternate.
+fn working_color_of_with(
+    entry: &paged_parse::graphic::ColorEntry,
+    use_standard_lab_for_spots: bool,
+) -> Option<paged_color::WorkingColor> {
     use paged_parse::graphic::ColorSpace;
+    if use_standard_lab_for_spots
+        && entry.model == paged_parse::graphic::ColorModel::Spot
+        && entry.space == ColorSpace::Lab
+        && entry.value.len() == 3
+    {
+        // Swatch-level tint scales toward paper white in Lab: only
+        // L* lightens, chroma fades proportionally.
+        let t = entry.tint.map(|v| (v / 100.0).clamp(0.0, 1.0)).unwrap_or(1.0);
+        return Some(paged_color::WorkingColor::Lab {
+            l: 100.0 - (100.0 - entry.value[0]) * t,
+            a: entry.value[1] * t,
+            b: entry.value[2] * t,
+        });
+    }
     if let Some([c, m, y, k]) = entry.effective_cmyk() {
         return Some(paged_color::WorkingColor::Cmyk(paged_color::Cmyk { c, m, y, k }));
     }
