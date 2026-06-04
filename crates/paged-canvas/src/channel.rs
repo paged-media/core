@@ -1172,6 +1172,13 @@ pub struct ColorPreview {
     /// working space (false when no working profile is configured).
     #[serde(default)]
     pub out_of_gamut: bool,
+    /// Concept 2 — the RAW authored space + channels (IDML units),
+    /// so the swatch editor seeds losslessly (a Lab swatch edits in
+    /// Lab, not via its display RGB).
+    #[serde(default)]
+    pub space: Option<String>,
+    #[serde(default)]
+    pub value: Option<Vec<f32>>,
 }
 
 /// Concept 2 — full gradient detail: the stop table the ramp

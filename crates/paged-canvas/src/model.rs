@@ -2630,6 +2630,17 @@ impl CanvasModel {
             cmyk,
             rgb_hex: rgb_to_hex(rgb),
             out_of_gamut,
+            space: Some(
+                match color.space {
+                    paged_parse::graphic::ColorSpace::Cmyk => "CMYK",
+                    paged_parse::graphic::ColorSpace::Rgb => "RGB",
+                    paged_parse::graphic::ColorSpace::Lab => "LAB",
+                    paged_parse::graphic::ColorSpace::Gray => "Gray",
+                    paged_parse::graphic::ColorSpace::Unknown => "Unknown",
+                }
+                .to_string(),
+            ),
+            value: Some(color.value.clone()),
         })
     }
 
