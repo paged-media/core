@@ -31,6 +31,12 @@
 //!   gate matched the PDF via lcms2, producing a uniform ~9 ΔE gap
 //!   on every CMYK pack. Routing through qcms closes that gap.
 
+pub mod ase;
+pub mod cmm;
+pub mod lab;
+
+pub use cmm::{Cmm, DisplaySetup, GamutStatus, IccCmm, Intent, WorkingColor};
+
 #[derive(Debug, thiserror::Error)]
 pub enum IccError {
     #[cfg(not(target_arch = "wasm32"))]
@@ -90,8 +96,31 @@ impl IccTransform {
     /// constructed via `lcms2::Profile::new_rgb` with linear TRCs.
     /// Rendering intent is Relative Colorimetric with black-point
     /// compensation (idea.md §9.2 default).
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Back-compat shim — today's hardcoded behaviour, preserved
+    /// verbatim so an unconfigured pipeline renders bit-identically:
+    /// native = Relative Colorimetric + BPC; wasm32 = qcms
+    /// Perceptual. New callers use [`Self::cmyk_to_linear_rgb_with`].
     pub fn cmyk_to_linear_rgb(cmyk_profile: &[u8]) -> Result<Self, IccError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Self::cmyk_to_linear_rgb_with(
+                cmyk_profile,
+                cmm::Intent::RelativeColorimetric,
+                true,
+            )
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Self::cmyk_to_linear_rgb_with(cmyk_profile, cmm::Intent::Perceptual, true)
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn cmyk_to_linear_rgb_with(
+        cmyk_profile: &[u8],
+        intent: cmm::Intent,
+        bpc: bool,
+    ) -> Result<Self, IccError> {
         use lcms2::{Flags, Intent, PixelFormat, Profile};
         let src = Profile::new_icc(cmyk_profile).map_err(|_| IccError::Invalid)?;
         // Mimic poppler's GfxICCBasedColorSpace transform setup so our
@@ -115,21 +144,42 @@ impl IccTransform {
         // (lcms2-flat-linear → sRGB ≈(29,29,27); poppler-style →
         // ≈(35,31,32) matching pdftoppm's reference rasterisation).
         let dst = Profile::new_srgb();
+        // Concept 2 — intent + BPC are now per-document settings;
+        // the defaults reproduce the previously hardcoded
+        // RelativeColorimetric + BLACKPOINT_COMPENSATION exactly.
+        let lcms_intent = match intent {
+            cmm::Intent::Perceptual => Intent::Perceptual,
+            cmm::Intent::RelativeColorimetric => Intent::RelativeColorimetric,
+            cmm::Intent::Saturation => Intent::Saturation,
+            cmm::Intent::AbsoluteColorimetric => Intent::AbsoluteColorimetric,
+        };
+        let flags = if bpc {
+            Flags::BLACKPOINT_COMPENSATION
+        } else {
+            Flags::default()
+        };
         let transform = lcms2::Transform::new_flags(
             &src,
             PixelFormat::CMYK_8,
             &dst,
             PixelFormat::RGB_8,
-            Intent::RelativeColorimetric,
-            Flags::BLACKPOINT_COMPENSATION,
+            lcms_intent,
+            flags,
         )?;
         Ok(IccTransform {
             inner: TransformInner { transform },
         })
     }
 
+    /// wasm32 — qcms has no BPC flag (the parameter is accepted and
+    /// ignored); Saturation/Absolute intents map onto qcms's
+    /// corresponding tags, with qcms's own internal degradation.
     #[cfg(target_arch = "wasm32")]
-    pub fn cmyk_to_linear_rgb(cmyk_profile: &[u8]) -> Result<Self, IccError> {
+    pub fn cmyk_to_linear_rgb_with(
+        cmyk_profile: &[u8],
+        intent: cmm::Intent,
+        _bpc: bool,
+    ) -> Result<Self, IccError> {
         // Mirror the lcms2 path's destination choice: sRGB with the
         // standard TRC, decode-to-linear after the trip. qcms's
         // `Transform::new` builds an sRGB destination internally; we
@@ -141,12 +191,18 @@ impl IccTransform {
         // CMYK lookups; without it the transform LUT stays unpopulated
         // and `transform_pixels` returns black.
         dst.precache_output_transform();
+        let qcms_intent = match intent {
+            cmm::Intent::Perceptual => qcms::Intent::Perceptual,
+            cmm::Intent::RelativeColorimetric => qcms::Intent::RelativeColorimetric,
+            cmm::Intent::Saturation => qcms::Intent::Saturation,
+            cmm::Intent::AbsoluteColorimetric => qcms::Intent::AbsoluteColorimetric,
+        };
         let transform = qcms::Transform::new_to(
             &src,
             &dst,
             qcms::DataType::CMYK,
             qcms::DataType::RGB8,
-            qcms::Intent::Perceptual,
+            qcms_intent,
         )
         .ok_or(IccError::Invalid)?;
         Ok(IccTransform {

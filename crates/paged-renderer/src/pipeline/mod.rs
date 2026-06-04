@@ -140,6 +140,13 @@ pub struct PipelineOptions<'a> {
     /// through ICC instead of the naive math in `paged-parse::graphic`.
     /// None → naive conversion (existing behaviour).
     pub cmyk_icc_profile: Option<&'a [u8]>,
+    /// Concept 2 — rendering intent for the CMYK display transform.
+    /// The default reproduces the previously hardcoded behaviour
+    /// (Relative Colorimetric on native; qcms maps it per target).
+    pub cmyk_intent: paged_color::Intent,
+    /// Concept 2 — black-point compensation for the CMYK display
+    /// transform. Default `true` (the previously hardcoded value).
+    pub cmyk_bpc: bool,
     /// Synthetic drop shadow applied to every TextFrame and
     /// Rectangle. Useful for tooling demos and as a stopgap until
     /// `<TransparencySetting>` parsing lands and per-frame effects
@@ -299,6 +306,8 @@ impl Default for PipelineOptions<'_> {
             fallback_frame_fill: Paint::Solid(Color::rgba(0.92, 0.92, 0.92, 1.0)),
             fallback_text_paint: Paint::Solid(Color::BLACK),
             cmyk_icc_profile: None,
+            cmyk_intent: paged_color::Intent::RelativeColorimetric,
+            cmyk_bpc: true,
             frame_drop_shadow: None,
             font_metrics_overrides: &[],
             missing_image_placeholder: true,
@@ -690,7 +699,22 @@ pub fn build_document(
     // logged + swallowed: if the profile is malformed we silently
     // fall back to naive math so the render still produces output.
     let cmyk_xform = options.cmyk_icc_profile.and_then(|bytes| {
-        match paged_color::IccTransform::cmyk_to_linear_rgb(bytes) {
+        // Default settings route through the back-compat shim so the
+        // per-target intent defaults (native RelColorimetric+BPC,
+        // wasm Perceptual) stay bit-identical; explicit document
+        // colour settings take the parameterised path.
+        let default_settings = options.cmyk_intent == paged_color::Intent::RelativeColorimetric
+            && options.cmyk_bpc;
+        let built = if default_settings {
+            paged_color::IccTransform::cmyk_to_linear_rgb(bytes)
+        } else {
+            paged_color::IccTransform::cmyk_to_linear_rgb_with(
+                bytes,
+                options.cmyk_intent,
+                options.cmyk_bpc,
+            )
+        };
+        match built {
             Ok(t) => Some(t),
             Err(e) => {
                 tracing::warn!(error = %e, "failed to build CMYK ICC transform; using naive conversion");
@@ -5108,7 +5132,10 @@ fn is_none_style_id(id: &str) -> bool {
 /// stroke override to fall through to the cascaded cell-style colour
 /// when the inline `<Cell>` attribute carries `Swatch/None`.
 fn is_none_swatch_id(id: &str) -> bool {
-    id == "Swatch/None" || id == "n" || id.is_empty()
+    // Concept 2 — routed through the shared reserved-swatch
+    // classifier; behaviour identical (plus the `Color/None`
+    // spelling the canvas-side sites match).
+    paged_parse::graphic::ReservedSwatch::is_none(id)
 }
 
 /// True when an `Option<String>` FillColor on a page item should be

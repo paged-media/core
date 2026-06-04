@@ -145,7 +145,29 @@ pub fn color_id_to_paint(
             });
         }
     }
-    let [r, g, b] = graphic::to_linear_rgb(entry)?;
+    if let Some([r, g, b]) = graphic::to_linear_rgb(entry) {
+        return Some(Paint::Solid(Color::rgba(r, g, b, 1.0)));
+    }
+    // Concept 2 — Lab swatches. `to_linear_rgb` is the parse
+    // layer's no-ICC stopgap and returns None for Lab; resolve here
+    // analytically (Lab is device-independent: D50→D65 Bradford →
+    // linear sRGB, no profile needed for display). Previously these
+    // swatches dropped out entirely and rendered as missing paint.
+    lab_entry_to_paint(entry)
+}
+
+/// Lab(D50) swatch → solid paint, or None when the entry isn't a
+/// 3-channel Lab colour. Shared by the direct resolver above and
+/// the canvas-side preview path.
+pub fn lab_entry_to_paint(entry: &paged_parse::graphic::ColorEntry) -> Option<Paint> {
+    if entry.space != paged_parse::graphic::ColorSpace::Lab || entry.value.len() != 3 {
+        return None;
+    }
+    let paged_color::LinearRgb([r, g, b]) = paged_color::lab::lab_d50_to_linear_srgb(
+        entry.value[0],
+        entry.value[1],
+        entry.value[2],
+    );
     Some(Paint::Solid(Color::rgba(r, g, b, 1.0)))
 }
 
@@ -868,5 +890,55 @@ pub(crate) fn apply_fill_tint(paint: Paint, tint_pct: Option<f32>) -> Paint {
             spot,
         },
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Concept 2's load-bearing invariant: `PipelineOptions::default()`
+    /// must reproduce the pre-Concept-2 hardcoded colour behaviour
+    /// exactly (the fidelity corpus thresholds depend on it). The
+    /// default intent/BPC route the transform build through the
+    /// back-compat shim path.
+    #[test]
+    fn default_pipeline_options_preserve_the_legacy_transform_inputs() {
+        let opts = crate::PipelineOptions::default();
+        assert_eq!(opts.cmyk_intent, paged_color::Intent::RelativeColorimetric);
+        assert!(opts.cmyk_bpc);
+        assert!(opts.cmyk_icc_profile.is_none());
+    }
+
+    /// Lab swatches resolve analytically at the chokepoint — and
+    /// every previously-resolvable space is untouched by the new
+    /// fallthrough.
+    #[test]
+    fn lab_entry_resolves_to_a_solid_paint() {
+        let entry = paged_parse::graphic::ColorEntry {
+            self_id: "Color/lab".into(),
+            name: None,
+            space: paged_parse::graphic::ColorSpace::Lab,
+            value: vec![50.0, 29.5, 5.2],
+            model: paged_parse::graphic::ColorModel::Process,
+            alternate_space: None,
+            alternate_value: vec![],
+            tint: None,
+            alpha: None,
+        };
+        let paint = lab_entry_to_paint(&entry).expect("lab resolves");
+        match paint {
+            Paint::Solid(c) => {
+                assert!(c.r > 0.0 && c.r < 1.0, "in-gamut mid tone: {c:?}");
+            }
+            other => panic!("expected solid, got {other:?}"),
+        }
+        // Non-Lab entries fall through (the pre-existing paths own them).
+        let cmyk = paged_parse::graphic::ColorEntry {
+            space: paged_parse::graphic::ColorSpace::Cmyk,
+            value: vec![0.0, 0.0, 0.0, 100.0],
+            ..entry
+        };
+        assert!(lab_entry_to_paint(&cmyk).is_none());
     }
 }

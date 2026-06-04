@@ -92,8 +92,8 @@ pub struct SelectionRect {
     pub height_pt: f32,
 }
 pub use model::{
-    AppliedRecord, CanvasModel, CanvasOptions, DocumentHandle, DocumentStats, FontEntry,
-    FrameMutationOutcome, LoggedMutation,
+    AppliedRecord, CanvasModel, CanvasOptions, ColorProfileEntry, ColorSettingsState,
+    DocumentHandle, DocumentStats, FontEntry, FrameMutationOutcome, LoggedMutation,
 };
 pub use resolve::{
     resolve, AnchorPosition, FieldChange, NumberingMap, ResolutionResult, ResolveOptions,

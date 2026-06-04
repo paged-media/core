@@ -53,6 +53,64 @@ pub struct CanvasOptions {
     /// CMYK ICC profile bytes for accurate colour. Optional; the
     /// renderer falls back to naive conversion when absent.
     pub cmyk_icc_profile: Option<Vec<u8>>,
+    /// Concept 2 — named ICC profiles registered before load (the
+    /// `RegisterColorProfile` registry, font-registry pattern).
+    /// `SetColorSettings` resolves working-space names against
+    /// these; a designmap naming one of them activates it at load
+    /// when no explicit `cmyk_icc_profile` is supplied.
+    pub color_profiles: Vec<ColorProfileEntry>,
+}
+
+/// Concept 2 — one named ICC profile payload.
+#[derive(Debug, Clone)]
+pub struct ColorProfileEntry {
+    /// Display / lookup name, e.g. "Coated FOGRA39 (ISO 12647-2:2004)".
+    pub name: String,
+    pub bytes: Vec<u8>,
+}
+
+/// Concept 2 — the document's active colour-management settings
+/// (mirrors InDesign's Color Settings). Written whole by
+/// `Mutation::SetColorSettings`; surfaced through `DocumentMeta`.
+/// `Default` reproduces the pre-Concept-2 hardcoded behaviour.
+#[derive(Debug, Clone)]
+pub struct ColorSettingsState {
+    /// Name of the ACTIVE registered profile, `None` when running on
+    /// the load-time bytes (or no profile at all).
+    pub cmyk_profile_name: Option<String>,
+    /// Concept-3 seam — "preserve" | "convertToWorkingSpace" | "off".
+    pub rgb_policy: Option<String>,
+    pub intent: paged_color::Intent,
+    pub bpc: bool,
+}
+
+/// Concept 2 (Ink Manager) — one ink's output-time settings.
+#[derive(Debug, Clone, Default)]
+pub struct InkSetting {
+    pub convert_to_process: bool,
+    pub alias_to: Option<String>,
+}
+
+/// Concept 2 — resolved soft-proof condition. The bytes are cloned
+/// out of the profile registry at SetProofSetup time so a later
+/// re-registration doesn't silently change the active proof.
+#[derive(Debug, Clone)]
+struct ProofState {
+    name: String,
+    bytes: Vec<u8>,
+    intent: paged_color::Intent,
+    simulate_paper_white: bool,
+}
+
+impl Default for ColorSettingsState {
+    fn default() -> Self {
+        Self {
+            cmyk_profile_name: None,
+            rgb_policy: None,
+            intent: paged_color::Intent::RelativeColorimetric,
+            bpc: true,
+        }
+    }
 }
 
 /// Named font payload used to populate the renderer's per-family
@@ -410,6 +468,28 @@ pub struct CanvasModel {
     /// borrowed in `PipelineOptions` doesn't need lifetimes leaking out.
     font_registry: Vec<FontEntry>,
     icc_bytes: Option<Vec<u8>>,
+    /// Concept 2 — the load-time profile bytes (explicit
+    /// `CanvasOptions::cmyk_icc_profile` or the designmap-name
+    /// registry hit). `SetColorSettings { cmyk_profile_name: None }`
+    /// restores these.
+    initial_icc_bytes: Option<Vec<u8>>,
+    /// Concept 2 — named profile registry (name → ICC bytes).
+    color_profiles: std::collections::BTreeMap<String, Vec<u8>>,
+    /// Concept 2 — active colour-management settings.
+    pub color_settings: ColorSettingsState,
+    /// Concept 2 — active soft-proof state (`None` = proofing off).
+    proof_state: Option<ProofState>,
+    /// Concept 2 (Ink Manager) — per-spot output-time settings,
+    /// keyed by the spot swatch's `Color/<id>`. Never edits the
+    /// swatch (AC-8); consumed by Concept 3's separations encoding.
+    ink_settings: std::collections::BTreeMap<String, InkSetting>,
+    /// Concept 2 (Ink Manager) — prefer spot Lab primaries over
+    /// CMYK alternates in preview resolution.
+    use_standard_lab_for_spots: bool,
+    /// Concept 2 — lazily-built CMM for preview/compute reads
+    /// (transform creation is expensive; the SwatchPicker previews
+    /// every swatch per refresh). Cleared by `SetColorSettings`.
+    cmm_cache: std::cell::RefCell<Option<std::rc::Rc<paged_color::IccCmm>>>,
     /// Phase 3 Item 6 — content hash of the scene at load time.
     /// Drives determinism tests: replaying the recorded mutation log
     /// against the same `initial_state_hash` must produce a matching
@@ -545,8 +625,37 @@ impl CanvasModel {
         // up-front so the model is self-contained — no caller-managed
         // lifetimes leaking through.
         let font_bytes = opts.fonts.into_iter().next();
-        let icc_bytes = opts.cmyk_icc_profile;
         let font_registry = opts.font_registry;
+        // Concept 2 — profile registry + activation precedence:
+        // explicit CanvasOptions::cmyk_icc_profile wins; else a
+        // registered profile whose name matches the designmap's
+        // CMYKProfile attribute activates automatically (the
+        // document "names" its working space and the editor shipped
+        // it); else no profile (naive conversion, as before).
+        let color_profiles: std::collections::BTreeMap<String, Vec<u8>> = opts
+            .color_profiles
+            .into_iter()
+            .map(|p| (p.name, p.bytes))
+            .collect();
+        // The ACTIVE intent stays RelativeColorimetric+BPC until an
+        // explicit SetColorSettings: poppler (the fidelity
+        // reference) hardcodes RelCol, and our lcms2 setup is
+        // calibrated against pdftoppm — honouring a designmap-
+        // declared Perceptual at load would silently diverge the
+        // default render from the reference. The declared name is
+        // still surfaced via DocumentMeta for the settings dialog.
+        let mut color_settings = ColorSettingsState::default();
+        let designmap_settings = scene.container.designmap.color_settings.clone();
+        let icc_bytes = match opts.cmyk_icc_profile {
+            Some(bytes) => Some(bytes),
+            None => designmap_settings.cmyk_profile.as_ref().and_then(|name| {
+                let hit = color_profiles.get(name).cloned();
+                if hit.is_some() {
+                    color_settings.cmyk_profile_name = Some(name.clone());
+                }
+                hit
+            }),
+        };
         let resolver = build_font_resolver(&font_registry, font_bytes.as_deref());
 
         let t_build = phase_now();
@@ -617,7 +726,14 @@ impl CanvasModel {
             page_index,
             font_bytes,
             font_registry,
+            initial_icc_bytes: icc_bytes.clone(),
             icc_bytes,
+            color_profiles,
+            color_settings,
+            proof_state: None,
+            ink_settings: Default::default(),
+            use_standard_lab_for_spots: false,
+            cmm_cache: std::cell::RefCell::new(None),
             initial_state_hash,
             last_applied_seq: 0,
             current_selection: None,
@@ -777,6 +893,175 @@ impl CanvasModel {
                 stroke_color: stroke_color.clone(),
                 stroke_weight: *stroke_weight,
             };
+            let applied_seq = self.bump_applied_seq();
+            return Ok(MutationOutcome {
+                applied_seq,
+                page_ids: Vec::new(),
+                inverse: crate::mutate::TextOp::InsertText {
+                    story_id: String::new(),
+                    offset: 0,
+                    text: String::new(),
+                },
+                created_id: None,
+                page_structure_changed: false,
+            });
+        }
+        // Concept 2 — colour-management settings: whole-state app
+        // config like SetDocumentDefaults (not undoable, no log
+        // entry) but with a FORCED full rebuild — the working space
+        // / intent / BPC change what every CMYK swatch resolves to
+        // on screen (AC-3).
+        if let Mutation::SetColorSettings {
+            cmyk_profile_name,
+            rgb_policy,
+            intent,
+            bpc,
+        } = mutation
+        {
+            let next_bytes = match cmyk_profile_name {
+                Some(name) => Some(self.color_profiles.get(name).cloned().ok_or_else(
+                    || crate::channel::WorkerError::NotImplemented {
+                        what: format!(
+                            "unknown color profile {name:?} — register it via RegisterColorProfile first"
+                        ),
+                    },
+                )?),
+                None => None,
+            };
+            self.icc_bytes = match next_bytes {
+                Some(bytes) => Some(bytes),
+                // Name cleared → back to the load-time profile.
+                None => self.initial_icc_bytes.clone(),
+            };
+            self.color_settings = ColorSettingsState {
+                cmyk_profile_name: cmyk_profile_name.clone(),
+                rgb_policy: rgb_policy.clone(),
+                intent: intent
+                    .as_deref()
+                    .and_then(paged_color::Intent::from_name)
+                    .unwrap_or(paged_color::Intent::RelativeColorimetric),
+                bpc: bpc.unwrap_or(true),
+            };
+            // The transform inputs changed out from under every
+            // cached paint — full rebuild, everything repaints. The
+            // preview CMM rebuilds lazily from the new state.
+            self.cmm_cache.borrow_mut().take();
+            self.rebuild_after_mutation().map_err(|e| {
+                crate::channel::WorkerError::NotImplemented {
+                    what: format!("rebuild after SetColorSettings: {e}"),
+                }
+            })?;
+            let applied_seq = self.bump_applied_seq();
+            let page_ids: Vec<PageId> =
+                self.built.pages.iter().map(|p| p.id.clone()).collect();
+            return Ok(MutationOutcome {
+                applied_seq,
+                page_ids,
+                inverse: crate::mutate::TextOp::InsertText {
+                    story_id: String::new(),
+                    offset: 0,
+                    text: String::new(),
+                },
+                created_id: None,
+                page_structure_changed: false,
+            });
+        }
+        // Concept 2 — soft-proof toggle/setup: swap the display
+        // transform's inputs (proof profile + absolute intent for
+        // paper white) and repaint. Not undoable; view-state like
+        // colour settings.
+        if let Mutation::SetProofSetup {
+            profile_name,
+            simulate_paper_white,
+            intent,
+        } = mutation
+        {
+            self.proof_state = match profile_name {
+                Some(name) => {
+                    let bytes = self.color_profiles.get(name).cloned().ok_or_else(|| {
+                        crate::channel::WorkerError::NotImplemented {
+                            what: format!(
+                                "unknown proof profile {name:?} — register it via RegisterColorProfile first"
+                            ),
+                        }
+                    })?;
+                    Some(ProofState {
+                        name: name.clone(),
+                        bytes,
+                        intent: intent
+                            .as_deref()
+                            .and_then(paged_color::Intent::from_name)
+                            .unwrap_or(paged_color::Intent::RelativeColorimetric),
+                        simulate_paper_white: *simulate_paper_white,
+                    })
+                }
+                None => None,
+            };
+            self.rebuild_after_mutation().map_err(|e| {
+                crate::channel::WorkerError::NotImplemented {
+                    what: format!("rebuild after SetProofSetup: {e}"),
+                }
+            })?;
+            let applied_seq = self.bump_applied_seq();
+            let page_ids: Vec<PageId> =
+                self.built.pages.iter().map(|p| p.id.clone()).collect();
+            return Ok(MutationOutcome {
+                applied_seq,
+                page_ids,
+                inverse: crate::mutate::TextOp::InsertText {
+                    story_id: String::new(),
+                    offset: 0,
+                    text: String::new(),
+                },
+                created_id: None,
+                page_structure_changed: false,
+            });
+        }
+        // Concept 2 (Ink Manager) — output-time ink settings.
+        // Whole-row replace; not undoable; swatch identity untouched.
+        if let Mutation::SetInkSetting {
+            spot_id,
+            convert_to_process,
+            alias_to,
+        } = mutation
+        {
+            let is_spot = self
+                .scene
+                .palette
+                .colors
+                .get(spot_id)
+                .is_some_and(|c| c.model == paged_parse::graphic::ColorModel::Spot);
+            if !is_spot {
+                return Err(crate::channel::WorkerError::NotImplemented {
+                    what: format!("{spot_id:?} is not a spot swatch"),
+                });
+            }
+            self.ink_settings.insert(
+                spot_id.clone(),
+                InkSetting {
+                    convert_to_process: *convert_to_process,
+                    alias_to: alias_to.clone(),
+                },
+            );
+            let applied_seq = self.bump_applied_seq();
+            return Ok(MutationOutcome {
+                applied_seq,
+                page_ids: Vec::new(),
+                inverse: crate::mutate::TextOp::InsertText {
+                    story_id: String::new(),
+                    offset: 0,
+                    text: String::new(),
+                },
+                created_id: None,
+                page_structure_changed: false,
+            });
+        }
+        if let Mutation::SetUseStandardLabForSpots { enabled } = mutation {
+            self.use_standard_lab_for_spots = *enabled;
+            // Preview resolution changes for Lab-primary spots; the
+            // canvas itself repaints with Concept 3's separations
+            // threading. Clear the preview CMM so reads see the flag.
+            self.cmm_cache.borrow_mut().take();
             let applied_seq = self.bump_applied_seq();
             return Ok(MutationOutcome {
                 applied_seq,
@@ -1206,6 +1491,86 @@ impl CanvasModel {
             //    (no NodeId resolution; they target collections by id).
             Mutation::CreateSwatch { spec } => {
                 Some(Operation::CreateSwatch { spec: spec.clone() })
+            }
+            // Concept 2 — one undoable Batch: every .ase colour as a
+            // CreateSwatch (+ one CreateColorGroup per .ase group).
+            // Ids are minted HERE (translate time) so the group
+            // member lists are known before apply; the Batch's
+            // inverse removes the whole import in one Cmd-Z.
+            Mutation::ImportSwatchLibrary { bytes, group_name } => {
+                let lib = match paged_color::ase::parse_ase(bytes.as_slice()) {
+                    Ok(lib) => lib,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "ImportSwatchLibrary: bad .ase payload");
+                        return None;
+                    }
+                };
+                let mut ops: Vec<Operation> = Vec::new();
+                let mut next_n = self.scene.palette.colors.len();
+                let mut mint = |taken: &mut std::collections::HashSet<String>| -> String {
+                    let mut id = format!("Color/u{next_n}");
+                    while self.scene.palette.colors.contains_key(&id) || taken.contains(&id) {
+                        next_n += 1;
+                        id = format!("Color/u{next_n}");
+                    }
+                    taken.insert(id.clone());
+                    id
+                };
+                let mut taken: std::collections::HashSet<String> = Default::default();
+                let spec_of = |entry: &paged_color::ase::AseEntry, id: String| {
+                    use paged_color::ase::{AseKind, AseSpace};
+                    paged_mutate::operation::SwatchSpec {
+                        self_id: Some(id),
+                        name: Some(entry.name.clone()),
+                        space: match entry.space {
+                            AseSpace::Rgb => "RGB".into(),
+                            AseSpace::Cmyk => "CMYK".into(),
+                            AseSpace::Lab => "LAB".into(),
+                            AseSpace::Gray => "Gray".into(),
+                        },
+                        value: entry.value.clone(),
+                        model: Some(match entry.kind {
+                            AseKind::Spot => "Spot".into(),
+                            _ => "Process".into(),
+                        }),
+                        alternate_space: None,
+                        alternate_value: Vec::new(),
+                        tint: None,
+                        alpha: None,
+                    }
+                };
+                let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+                for g in &lib.groups {
+                    let mut members = Vec::new();
+                    for entry in &g.entries {
+                        let id = mint(&mut taken);
+                        members.push(id.clone());
+                        ops.push(Operation::CreateSwatch { spec: spec_of(entry, id) });
+                    }
+                    groups.push((g.name.clone(), members));
+                }
+                let mut loose_members = Vec::new();
+                for entry in &lib.loose {
+                    let id = mint(&mut taken);
+                    loose_members.push(id.clone());
+                    ops.push(Operation::CreateSwatch { spec: spec_of(entry, id) });
+                }
+                if let (Some(name), false) = (group_name.as_ref(), loose_members.is_empty()) {
+                    groups.push((name.clone(), loose_members));
+                }
+                for (name, members) in groups {
+                    ops.push(Operation::CreateColorGroup {
+                        spec: paged_mutate::operation::ColorGroupSpec {
+                            self_id: None,
+                            name: Some(name),
+                            members,
+                        },
+                    });
+                }
+                if ops.is_empty() {
+                    return None;
+                }
+                Some(Operation::Batch { ops })
             }
             Mutation::EditSwatch { swatch_id, spec } => Some(Operation::EditSwatch {
                 swatch_id: swatch_id.clone(),
@@ -2151,12 +2516,9 @@ impl CanvasModel {
         use paged_parse::ColorModel;
         let mut out = Vec::with_capacity(self.scene.palette.colors.len());
         for (self_id, color) in self.scene.palette.colors.iter() {
-            let kind = match self_id.as_str() {
-                "Color/None" => "none",
-                "Color/Paper" => "paper",
-                "Color/Black" => "black",
-                "Color/Registration" => "registration",
-                _ => match color.model {
+            let kind = match paged_parse::graphic::ReservedSwatch::classify(self_id) {
+                Some(r) => r.label(),
+                None => match color.model {
                     ColorModel::Process => "process",
                     ColorModel::Spot => "spot",
                     ColorModel::MixedInk => "mixedInk",
@@ -2217,7 +2579,7 @@ impl CanvasModel {
         &self,
         swatch_id: &str,
     ) -> Option<crate::channel::ColorPreview> {
-        use paged_parse::graphic::{to_linear_rgb, ColorModel};
+        use paged_parse::graphic::ColorModel;
         let color = self.scene.palette.colors.get(swatch_id)?;
         let model = match color.model {
             ColorModel::Process => "process",
@@ -2225,33 +2587,60 @@ impl CanvasModel {
             ColorModel::MixedInk => "mixedInk",
             ColorModel::Unknown => "unknown",
         };
-        let model_str = match swatch_id {
-            "Color/None" => "none",
-            "Color/Paper" => "paper",
-            "Color/Black" => "black",
-            "Color/Registration" => "registration",
-            _ => model,
+        let model_str = match paged_parse::graphic::ReservedSwatch::classify(swatch_id) {
+            Some(r) => r.label(),
+            None => model,
         };
+        // `effective_cmyk` already returns IDML percentages
+        // (0..=100); the old `* 100.0` here clamped every mid-tone
+        // channel to 100% in the preview readout (pre-existing bug,
+        // caught by the Concept-2 mixer work).
         let cmyk = color.effective_cmyk().map(|c| [
-            (c[0] * 100.0).clamp(0.0, 100.0),
-            (c[1] * 100.0).clamp(0.0, 100.0),
-            (c[2] * 100.0).clamp(0.0, 100.0),
-            (c[3] * 100.0).clamp(0.0, 100.0),
+            c[0].clamp(0.0, 100.0),
+            c[1].clamp(0.0, 100.0),
+            c[2].clamp(0.0, 100.0),
+            c[3].clamp(0.0, 100.0),
         ]);
-        let rgb = to_linear_rgb(color).unwrap_or([0.5, 0.5, 0.5]);
-        let to_byte = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
-        let rgb_hex = format!(
-            "#{:02x}{:02x}{:02x}",
-            to_byte(rgb[0]),
-            to_byte(rgb[1]),
-            to_byte(rgb[2]),
-        );
+        // Concept 2 — resolve through the active CMM: ICC-accurate
+        // when a CMYK working profile is configured (the unconfigured
+        // path inside IccCmm is the exact pre-existing naive math),
+        // analytic Lab instead of the 50% grey placeholder, plus the
+        // out-of-gamut verdict for the mixer/swatch badges.
+        let cmm = self.active_cmm();
+        let working = working_color_of_with(color, self.use_standard_lab_for_spots);
+        let rgb = match working {
+            Some(w) => {
+                use paged_color::Cmm as _;
+                let paged_color::LinearRgb(rgb) = cmm.resolve_display(w);
+                rgb
+            }
+            None => [0.5, 0.5, 0.5],
+        };
+        let out_of_gamut = match working {
+            Some(w) => {
+                use paged_color::Cmm as _;
+                !matches!(cmm.check_gamut(w), paged_color::GamutStatus::InGamut)
+            }
+            None => false,
+        };
         Some(crate::channel::ColorPreview {
             self_id: swatch_id.to_string(),
             name: color.name.clone().unwrap_or_else(|| swatch_id.to_string()),
             model: model_str.to_string(),
             cmyk,
-            rgb_hex,
+            rgb_hex: rgb_to_hex(rgb),
+            out_of_gamut,
+            space: Some(
+                match color.space {
+                    paged_parse::graphic::ColorSpace::Cmyk => "CMYK",
+                    paged_parse::graphic::ColorSpace::Rgb => "RGB",
+                    paged_parse::graphic::ColorSpace::Lab => "LAB",
+                    paged_parse::graphic::ColorSpace::Gray => "Gray",
+                    paged_parse::graphic::ColorSpace::Unknown => "Unknown",
+                }
+                .to_string(),
+            ),
+            value: Some(color.value.clone()),
         })
     }
 
@@ -2613,6 +3002,144 @@ impl CanvasModel {
             .collect()
     }
 
+    /// Concept 2 — full stop detail for one gradient. Stops carry
+    /// the swatch REF (the model identity) plus a display hex
+    /// resolved through the active CMM, so the ramp editor paints
+    /// faithfully under the current working space.
+    pub fn gradient_detail(
+        &self,
+        gradient_id: &str,
+    ) -> Option<crate::channel::GradientDetail> {
+        use paged_parse::GradientKind;
+        let g = self.scene.palette.gradients.get(gradient_id)?;
+        let kind = match g.kind {
+            GradientKind::Linear => "linear",
+            GradientKind::Radial => "radial",
+            GradientKind::Unknown => "unknown",
+        };
+        let cmm = self.active_cmm();
+        let stops = g
+            .stops
+            .iter()
+            .map(|s| {
+                let resolved_rgb_hex = self
+                    .scene
+                    .palette
+                    .resolve(&s.stop_color)
+                    .and_then(working_color_of)
+                    .map(|w| {
+                        use paged_color::Cmm as _;
+                        let paged_color::LinearRgb(rgb) = cmm.resolve_display(w);
+                        rgb_to_hex(rgb)
+                    })
+                    .unwrap_or_else(|| "#808080".to_string());
+                crate::channel::GradientStopWire {
+                    stop_color_ref: s.stop_color.clone(),
+                    resolved_rgb_hex,
+                    location_pct: s.location_pct,
+                    midpoint_pct: s.midpoint_pct,
+                }
+            })
+            .collect();
+        Some(crate::channel::GradientDetail {
+            self_id: gradient_id.to_string(),
+            name: g.name.clone().unwrap_or_else(|| gradient_id.to_string()),
+            kind: kind.to_string(),
+            stops,
+        })
+    }
+
+    /// Concept 2 — serialise swatches to `.ase` bytes ("Save
+    /// .ase…"). `group_id: Some` exports one ColorGroup's members;
+    /// `None` exports every user colour, grouped by the document's
+    /// ColorGroups (ungrouped colours land loose). Reserved
+    /// swatches and unknown spaces are skipped.
+    pub fn export_ase(&self, group_id: Option<&str>) -> Vec<u8> {
+        use paged_color::ase::{AseEntry, AseGroup, AseKind, AseLibrary, AseSpace};
+        use paged_parse::graphic::{ColorModel, ColorSpace};
+        let entry_of = |id: &str| -> Option<AseEntry> {
+            // Reserved swatches aren't exchange material.
+            if matches!(
+                id,
+                "Color/None" | "Color/Paper" | "Color/Black" | "Color/Registration"
+            ) {
+                return None;
+            }
+            let c = self.scene.palette.colors.get(id)?;
+            let space = match c.space {
+                ColorSpace::Rgb => AseSpace::Rgb,
+                ColorSpace::Cmyk => AseSpace::Cmyk,
+                ColorSpace::Lab => AseSpace::Lab,
+                ColorSpace::Gray => AseSpace::Gray,
+                ColorSpace::Unknown => return None,
+            };
+            Some(AseEntry {
+                name: c.name.clone().unwrap_or_else(|| id.to_string()),
+                space,
+                value: c.value.clone(),
+                kind: match c.model {
+                    ColorModel::Spot => AseKind::Spot,
+                    _ => AseKind::Process,
+                },
+            })
+        };
+        let mut lib = AseLibrary::default();
+        match group_id {
+            Some(gid) => {
+                if let Some(g) = self.scene.palette.color_groups.get(gid) {
+                    lib.groups.push(AseGroup {
+                        name: g.name.clone().unwrap_or_else(|| gid.to_string()),
+                        entries: g.members.iter().filter_map(|m| entry_of(m)).collect(),
+                    });
+                }
+            }
+            None => {
+                let mut grouped: std::collections::HashSet<&str> = Default::default();
+                for (gid, g) in &self.scene.palette.color_groups {
+                    let entries: Vec<AseEntry> =
+                        g.members.iter().filter_map(|m| entry_of(m)).collect();
+                    for m in &g.members {
+                        grouped.insert(m.as_str());
+                    }
+                    if !entries.is_empty() {
+                        lib.groups.push(AseGroup {
+                            name: g.name.clone().unwrap_or_else(|| gid.clone()),
+                            entries,
+                        });
+                    }
+                }
+                for id in self.scene.palette.colors.keys() {
+                    if !grouped.contains(id.as_str()) {
+                        if let Some(e) = entry_of(id) {
+                            lib.loose.push(e);
+                        }
+                    }
+                }
+            }
+        }
+        paged_color::ase::write_ase(&lib)
+    }
+
+    /// Concept 2 (Ink Manager) — the ink list: one row per spot
+    /// swatch, settings folded in.
+    pub fn inks(&self) -> Vec<crate::channel::InkSummary> {
+        self.scene
+            .palette
+            .colors
+            .iter()
+            .filter(|(_, c)| c.model == paged_parse::graphic::ColorModel::Spot)
+            .map(|(id, c)| {
+                let setting = self.ink_settings.get(id);
+                crate::channel::InkSummary {
+                    spot_id: id.clone(),
+                    name: c.name.clone().unwrap_or_else(|| id.clone()),
+                    convert_to_process: setting.is_some_and(|s| s.convert_to_process),
+                    alias_to: setting.and_then(|s| s.alias_to.clone()),
+                }
+            })
+            .collect()
+    }
+
     /// SDK Phase 3 — list every story's self_id + character count.
     /// Used by `paged.stories()` (the script host fn) and by tests
     /// that need a valid story id to address a StoryRange edit.
@@ -2699,6 +3226,7 @@ impl CanvasModel {
             IndexTopics => {
                 serde_json::to_value(self.index_topics()).unwrap_or_default()
             }
+            Inks => serde_json::to_value(self.inks()).unwrap_or_default(),
         }
     }
 
@@ -2722,6 +3250,32 @@ impl CanvasModel {
             default_fill_color: self.document_defaults.fill_color.clone(),
             default_stroke_color: self.document_defaults.stroke_color.clone(),
             default_stroke_weight: self.document_defaults.stroke_weight,
+            // Concept 2 — active colour-management settings. The
+            // profile NAME falls back to the designmap's declared
+            // working space so the settings dialog can show what the
+            // document asks for even before a registered profile
+            // activates it.
+            cmyk_profile_name: self
+                .color_settings
+                .cmyk_profile_name
+                .clone()
+                .or_else(|| {
+                    self.scene
+                        .container
+                        .designmap
+                        .color_settings
+                        .cmyk_profile
+                        .clone()
+                }),
+            rgb_policy: self.color_settings.rgb_policy.clone(),
+            rendering_intent: Some(self.color_settings.intent.name().to_string()),
+            black_point_compensation: Some(self.color_settings.bpc),
+            proof_profile_name: self.proof_state.as_ref().map(|p| p.name.clone()),
+            proof_simulate_paper_white: self
+                .proof_state
+                .as_ref()
+                .map(|p| p.simulate_paper_white),
+            use_standard_lab_for_spots: Some(self.use_standard_lab_for_spots),
         }
     }
 
@@ -3085,7 +3639,26 @@ impl CanvasModel {
         let options = PipelineOptions {
             font: self.font_bytes.as_deref(),
             assets: resolver.as_ref().map(|r| r as &dyn paged_renderer::AssetResolver),
-            cmyk_icc_profile: self.icc_bytes.as_deref(),
+            // Soft-proof active => CMYK renders through the PROOF
+            // condition (paper white = absolute colorimetric);
+            // otherwise the working space + document settings.
+            cmyk_icc_profile: match &self.proof_state {
+                Some(p) => Some(p.bytes.as_slice()),
+                None => self.icc_bytes.as_deref(),
+            },
+            cmyk_intent: match &self.proof_state {
+                Some(p) if p.simulate_paper_white => {
+                    paged_color::Intent::AbsoluteColorimetric
+                }
+                Some(p) => p.intent,
+                None => self.color_settings.intent,
+            },
+            cmyk_bpc: match &self.proof_state {
+                // Paper-white simulation wants the true media white:
+                // BPC would re-anchor the black point and dilute it.
+                Some(p) => !p.simulate_paper_white && self.color_settings.bpc,
+                None => self.color_settings.bpc,
+            },
             // Perf-S — reuse the persistent image-decode cache so
             // placed images don't re-decode on every gesture rebuild.
             image_decode_cache: Some(&self.image_decode_cache),
@@ -3150,6 +3723,97 @@ impl CanvasModel {
     pub fn icc_bytes(&self) -> Option<&[u8]> {
         self.icc_bytes.as_deref()
     }
+
+    /// Concept 2 — add (or replace) a named ICC profile in the live
+    /// registry. Post-load registrations become resolvable by the
+    /// next `SetColorSettings`; they do NOT retroactively activate.
+    pub fn register_color_profile(&mut self, name: String, bytes: Vec<u8>) {
+        self.color_profiles.insert(name, bytes);
+    }
+
+    /// Concept 2 — the CMM matching the active colour settings,
+    /// built lazily and cached until `SetColorSettings` changes the
+    /// inputs.
+    fn active_cmm(&self) -> std::rc::Rc<paged_color::IccCmm> {
+        if let Some(cmm) = self.cmm_cache.borrow().as_ref() {
+            return cmm.clone();
+        }
+        let cmm = std::rc::Rc::new(paged_color::IccCmm::new(
+            self.icc_bytes.as_deref(),
+            paged_color::DisplaySetup {
+                intent: self.color_settings.intent,
+                bpc: self.color_settings.bpc,
+            },
+        ));
+        *self.cmm_cache.borrow_mut() = Some(cmm.clone());
+        cmm
+    }
+
+    /// Concept 2 — resolve an ARBITRARY colour value (mixer slider
+    /// state, not a swatch ref) through the active colour
+    /// management. Returns display hex + the effective CMYK (when
+    /// the value resolves through CMYK) + the gamut verdict.
+    pub fn color_compute(
+        &self,
+        space: &str,
+        value: &[f32],
+        tint: Option<f32>,
+        model: Option<&str>,
+        alternate_space: Option<&str>,
+        alternate_value: Option<&[f32]>,
+    ) -> (String, Option<[f32; 4]>, bool) {
+        use paged_parse::graphic::{ColorEntry, ColorModel, ColorSpace};
+        let parse_space = |s: &str| match s {
+            "CMYK" | "cmyk" => ColorSpace::Cmyk,
+            "RGB" | "rgb" => ColorSpace::Rgb,
+            "LAB" | "Lab" | "lab" => ColorSpace::Lab,
+            "Gray" | "gray" | "GRAY" => ColorSpace::Gray,
+            _ => ColorSpace::Unknown,
+        };
+        // Ephemeral ColorEntry so spot/tint folding reuses the
+        // exact swatch semantics (`effective_cmyk`).
+        let entry = ColorEntry {
+            self_id: String::new(),
+            name: None,
+            space: parse_space(space),
+            value: value.to_vec(),
+            model: match model {
+                Some("Spot" | "spot") => ColorModel::Spot,
+                _ => ColorModel::Process,
+            },
+            alternate_space: alternate_space.map(parse_space),
+            alternate_value: alternate_value.map(|v| v.to_vec()).unwrap_or_default(),
+            tint,
+            alpha: None,
+        };
+        let cmm = self.active_cmm();
+        let working = working_color_of_with(&entry, self.use_standard_lab_for_spots);
+        let rgb = match working {
+            Some(w) => {
+                use paged_color::Cmm as _;
+                let paged_color::LinearRgb(rgb) = cmm.resolve_display(w);
+                rgb
+            }
+            None => [0.5, 0.5, 0.5],
+        };
+        let out_of_gamut = match working {
+            Some(w) => {
+                use paged_color::Cmm as _;
+                !matches!(cmm.check_gamut(w), paged_color::GamutStatus::InGamut)
+            }
+            None => false,
+        };
+        // `effective_cmyk` returns IDML percentages (0..=100).
+        let cmyk = entry.effective_cmyk().map(|c| {
+            [
+                c[0].clamp(0.0, 100.0),
+                c[1].clamp(0.0, 100.0),
+                c[2].clamp(0.0, 100.0),
+                c[3].clamp(0.0, 100.0),
+            ]
+        });
+        (rgb_to_hex(rgb), cmyk, out_of_gamut)
+    }
 }
 
 /// Phase 4 Step 3 — build `story_id → Vec<PageId>` from the freshly
@@ -3186,6 +3850,72 @@ fn phase_log(label: &str, start: std::time::Instant) {
 /// the registry is empty AND no default font is provided — the
 /// pipeline already handles `assets: None` cleanly, so we save the
 /// allocation in the common single-font dev path.
+/// Concept 2 — adapt a parsed swatch to the CMM's input. Spot
+/// alternates + swatch-level tints fold via `effective_cmyk` (the
+/// exact swatch semantics the renderer uses); non-CMYK spaces map
+/// directly. `None` = unresolvable (e.g. a spot with no CMYK
+/// alternate and a non-Lab primary).
+fn working_color_of(entry: &paged_parse::graphic::ColorEntry) -> Option<paged_color::WorkingColor> {
+    working_color_of_with(entry, false)
+}
+
+/// Like [`working_color_of`] but honouring the Ink Manager's "Use
+/// Standard Lab Values for Spots": a spot whose PRIMARY space is
+/// Lab resolves device-independently instead of via its CMYK
+/// alternate.
+fn working_color_of_with(
+    entry: &paged_parse::graphic::ColorEntry,
+    use_standard_lab_for_spots: bool,
+) -> Option<paged_color::WorkingColor> {
+    use paged_parse::graphic::ColorSpace;
+    if use_standard_lab_for_spots
+        && entry.model == paged_parse::graphic::ColorModel::Spot
+        && entry.space == ColorSpace::Lab
+        && entry.value.len() == 3
+    {
+        // Swatch-level tint scales toward paper white in Lab: only
+        // L* lightens, chroma fades proportionally.
+        let t = entry.tint.map(|v| (v / 100.0).clamp(0.0, 1.0)).unwrap_or(1.0);
+        return Some(paged_color::WorkingColor::Lab {
+            l: 100.0 - (100.0 - entry.value[0]) * t,
+            a: entry.value[1] * t,
+            b: entry.value[2] * t,
+        });
+    }
+    if let Some([c, m, y, k]) = entry.effective_cmyk() {
+        return Some(paged_color::WorkingColor::Cmyk(paged_color::Cmyk { c, m, y, k }));
+    }
+    match entry.space {
+        ColorSpace::Rgb if entry.value.len() == 3 => Some(paged_color::WorkingColor::Rgb([
+            entry.value[0] / 255.0,
+            entry.value[1] / 255.0,
+            entry.value[2] / 255.0,
+        ])),
+        ColorSpace::Lab if entry.value.len() == 3 => Some(paged_color::WorkingColor::Lab {
+            l: entry.value[0],
+            a: entry.value[1],
+            b: entry.value[2],
+        }),
+        ColorSpace::Gray if entry.value.len() == 1 => {
+            Some(paged_color::WorkingColor::Gray(entry.value[0]))
+        }
+        _ => None,
+    }
+}
+
+/// Linear RGB → `#rrggbb` (sRGB-encoded, the wire convention).
+fn rgb_to_hex(rgb: [f32; 3]) -> String {
+    let to_byte = |v: f32| -> u8 {
+        let s = if v <= 0.003_130_8 {
+            12.92 * v
+        } else {
+            1.055 * v.powf(1.0 / 2.4) - 0.055
+        };
+        (s.clamp(0.0, 1.0) * 255.0).round() as u8
+    };
+    format!("#{:02x}{:02x}{:02x}", to_byte(rgb[0]), to_byte(rgb[1]), to_byte(rgb[2]))
+}
+
 fn build_font_resolver(
     registry: &[FontEntry],
     default_font: Option<&[u8]>,

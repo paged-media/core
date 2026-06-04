@@ -63,7 +63,7 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(24);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(25);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -124,6 +124,19 @@ pub enum MainToWorkerKind {
     /// `FontRegistryCleared`. Useful between two consecutive packs in a
     /// long-running worker.
     ClearFontRegistry,
+    /// Concept 2 — register a named ICC profile with the worker's
+    /// colour-profile registry (the `RegisterFont` pattern: sent any
+    /// time, persists across loads). Profiles are assets shipped by
+    /// the editor and loaded over the wire — never baked into the
+    /// wasm binary. `Mutation::SetColorSettings` resolves working-
+    /// space names against this registry; a document whose designmap
+    /// names a registered profile picks it up at load automatically.
+    /// Reply: `ColorProfileRegistered`.
+    RegisterColorProfile {
+        name: String,
+        #[tsify(type = "number[]")]
+        bytes: ByteBuf,
+    },
     /// Apply a content mutation. Phase 1 returns `MutationFailed`
     /// (NotImplemented). The message exists so the JS side can plumb
     /// it end-to-end now.
@@ -249,6 +262,40 @@ pub enum MainToWorkerKind {
     /// `Operation::SetSwatchValue` + a Color NodeId variant.
     RequestColorPreview {
         swatch_id: String,
+    },
+    /// Concept 2 — resolve an ARBITRARY colour value (not a swatch
+    /// ref) through the document's active colour management:
+    /// display RGB + out-of-gamut verdict. Powers the mixer's live
+    /// preview + warning triangle while the user drags sliders,
+    /// BEFORE any swatch exists. `space` is the SwatchSpec
+    /// vocabulary ("CMYK" | "RGB" | "LAB" | "Gray"); `value` its
+    /// channels; `tint` 0..=100; spot alternates resolve like a
+    /// swatch would. Reply: `ColorComputeReply`.
+    RequestColorCompute {
+        space: String,
+        value: Vec<f32>,
+        #[serde(default)]
+        tint: Option<f32>,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        alternate_space: Option<String>,
+        #[serde(default)]
+        alternate_value: Option<Vec<f32>>,
+    },
+    /// Concept 2 — full stop detail for ONE gradient (the ramp
+    /// editor + faithful gradient chips). The lightweight
+    /// `GradientSummary` collection stays stop-free; detail is
+    /// fetched per selected gradient. Reply: `GradientDetailReply`.
+    RequestGradientDetail { gradient_id: String },
+    /// Concept 2 — serialise swatches back to `.ase` (the Swatches
+    /// panel's "Save .ase…"; lossless raw channel values, core owns
+    /// the format both ways). `group_id: Some` exports one
+    /// ColorGroup; `None` exports the whole palette grouped by the
+    /// document's ColorGroups. Reply: `SwatchLibraryExported`.
+    ExportSwatchLibrary {
+        #[serde(default)]
+        group_id: Option<String>,
     },
     /// Scripting Stage 2 — execute a JS source string against the
     /// loaded document. The script's mutations route through
@@ -514,6 +561,8 @@ pub enum WorkerToMainKind {
     FontRegistered { family: String },
     /// `ClearFontRegistry` reply.
     FontRegistryCleared,
+    /// Concept 2 — `RegisterColorProfile` reply.
+    ColorProfileRegistered { name: String },
     /// Phase A — `SetElementSelection` reply. Echoes the post-update
     /// selection so the main thread can reconcile if its optimistic
     /// update drifted.
@@ -572,6 +621,22 @@ pub enum WorkerToMainKind {
     /// `result` is `None` when the swatch id doesn't resolve.
     ColorPreviewReply {
         result: Option<ColorPreview>,
+    },
+    /// Concept 2 — `RequestColorCompute` reply.
+    ColorComputeReply {
+        rgb_hex: String,
+        cmyk: Option<[f32; 4]>,
+        out_of_gamut: bool,
+    },
+    /// Concept 2 — `RequestGradientDetail` reply. `None` when the
+    /// id doesn't resolve to a gradient.
+    GradientDetailReply {
+        result: Option<GradientDetail>,
+    },
+    /// Concept 2 — `ExportSwatchLibrary` reply.
+    SwatchLibraryExported {
+        #[tsify(type = "number[]")]
+        ase_bytes: ByteBuf,
     },
     /// Inspector P1 — `RequestElementProperties` reply. `None` when
     /// the id doesn't resolve.
@@ -818,6 +883,9 @@ pub enum CollectionName {
     ConditionSets,
     Fonts,
     IndexTopics,
+    /// Concept 2 — the Ink Manager's ink list (one row per spot
+    /// swatch, carrying its output-time settings).
+    Inks,
 }
 
 impl CollectionName {
@@ -847,6 +915,7 @@ impl CollectionName {
             Self::ConditionSets => "conditionSets",
             Self::Fonts => "fonts",
             Self::IndexTopics => "indexTopics",
+            Self::Inks => "inks",
         }
     }
 
@@ -873,6 +942,7 @@ impl CollectionName {
             "conditionSets" => Self::ConditionSets,
             "fonts" => Self::Fonts,
             "indexTopics" => Self::IndexTopics,
+            "inks" => Self::Inks,
             _ => return None,
         })
     }
@@ -917,6 +987,28 @@ pub struct DocumentMeta {
     pub default_stroke_color: Option<String>,
     #[serde(default)]
     pub default_stroke_weight: Option<f32>,
+    /// Concept 2 — active colour-management settings (the state
+    /// `SetColorSettings` writes; seeded from the IDML designmap's
+    /// `CMYKProfile`/`SolidColorIntent` at load). `cmyk_profile_name`
+    /// is `None` until a registered profile is active by name.
+    #[serde(default)]
+    pub cmyk_profile_name: Option<String>,
+    #[serde(default)]
+    pub rgb_policy: Option<String>,
+    #[serde(default)]
+    pub rendering_intent: Option<String>,
+    #[serde(default)]
+    pub black_point_compensation: Option<bool>,
+    /// Concept 2 — active soft-proof condition (`None` = proofing
+    /// off) + its paper-white flag.
+    #[serde(default)]
+    pub proof_profile_name: Option<String>,
+    #[serde(default)]
+    pub proof_simulate_paper_white: Option<bool>,
+    /// Concept 2 (Ink Manager) — global "Use Standard Lab Values
+    /// for Spots" toggle.
+    #[serde(default)]
+    pub use_standard_lab_for_spots: Option<bool>,
 }
 
 /// SDK Phase 3 — one swatch's identity + display name + kind.
@@ -1076,6 +1168,68 @@ pub struct ColorPreview {
     /// Display RGB as `#rrggbb`. Always present (the renderer
     /// computes a fallback RGB for every swatch).
     pub rgb_hex: String,
+    /// Concept 2 — out-of-gamut against the document's active CMYK
+    /// working space (false when no working profile is configured).
+    #[serde(default)]
+    pub out_of_gamut: bool,
+    /// Concept 2 — the RAW authored space + channels (IDML units),
+    /// so the swatch editor seeds losslessly (a Lab swatch edits in
+    /// Lab, not via its display RGB).
+    #[serde(default)]
+    pub space: Option<String>,
+    #[serde(default)]
+    pub value: Option<Vec<f32>>,
+}
+
+/// Concept 2 — full gradient detail: the stop table the ramp
+/// editor mutates and the chips render. Stops carry the swatch REF
+/// (gradients reference swatches, never inline colours — edits to a
+/// component swatch propagate, spot stops survive to Separation at
+/// export) plus a display-resolved hex for painting the ramp.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct GradientDetail {
+    pub self_id: String,
+    pub name: String,
+    /// "linear" | "radial" | "unknown".
+    pub kind: String,
+    pub stops: Vec<GradientStopWire>,
+}
+
+/// Concept 2 — one resolved gradient stop.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct GradientStopWire {
+    /// `Color/<id>` reference — the model identity.
+    pub stop_color_ref: String,
+    /// Display-resolved `#rrggbb` via the active CMM (ramp render).
+    pub resolved_rgb_hex: String,
+    /// 0..=100 position along the ramp.
+    pub location_pct: f32,
+    /// 0..=100 blend midpoint toward the NEXT stop; `None` = 50.
+    pub midpoint_pct: Option<f32>,
+}
+
+/// Concept 2 — one ink row for the Ink Manager: a spot swatch's
+/// identity + its OUTPUT-TIME settings. Converting to process or
+/// aliasing never edits the swatch itself (AC-8) — these are
+/// separations decisions consumed by Concept 3's export encoding
+/// (and, for `useStandardLabForSpots`, by the preview resolver).
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct InkSummary {
+    /// The spot swatch's `Color/<id>`.
+    pub spot_id: String,
+    /// The ink/colourant name (the swatch name — for spots this IS
+    /// the colourant identity).
+    pub name: String,
+    pub convert_to_process: bool,
+    /// Output as another ink's plate (`Color/<id>` of the alias
+    /// target). `None` = own plate.
+    pub alias_to: Option<String>,
 }
 
 /// SDK Phase 5 (v1 sweep) — one `<Article>` summary. Backs
@@ -1419,6 +1573,77 @@ pub enum Mutation {
         stroke_color: Option<String>,
         stroke_weight: Option<f32>,
     },
+    /// Concept 2 — replace the document's colour-management
+    /// settings. WHOLE-STATE semantics like `SetDocumentDefaults`
+    /// (the editor reads `DocumentMeta`, modifies, writes back the
+    /// full set). Not undoable (output/app configuration, not
+    /// content), but unlike the defaults it FORCES a full rebuild —
+    /// switching the CMYK working space must visibly change the
+    /// canvas (AC-3).
+    ///
+    /// `cmyk_profile_name` resolves against the
+    /// `RegisterColorProfile` registry; `None` restores the
+    /// load-time profile (the `LoadDocument` `cmykIccProfile` bytes
+    /// or a registry hit on the designmap's profile name). An
+    /// unknown name fails the mutation. `intent` is one of the four
+    /// ICC rendering-intent names; `None` ⇒ Relative Colorimetric.
+    /// `rgb_policy` is carried for Concept 3 ("preserve" |
+    /// "convertToWorkingSpace" | "off"); display ignores it today.
+    SetColorSettings {
+        cmyk_profile_name: Option<String>,
+        rgb_policy: Option<String>,
+        intent: Option<String>,
+        bpc: Option<bool>,
+    },
+    /// Concept 2 — soft-proofing (InDesign "Proof Colors" / "Proof
+    /// Setup"). `profile_name: Some` simulates the named output
+    /// condition on the canvas: CMYK content renders through the
+    /// PROOF profile instead of the working space (the numbers go
+    /// to the device unconverted — printing's native semantics);
+    /// `simulate_paper_white` switches the proof transform to
+    /// absolute-colorimetric so CMYK 0/0/0/0 lands on the
+    /// condition's media white instead of display white.
+    /// `profile_name: None` turns proofing off. Not undoable;
+    /// forces a full rebuild. v1 scope: CMYK content proofs on both
+    /// targets; RGB/Lab content stays display-resolved (the full
+    /// cross-space proofing transform is native-lcms2 territory and
+    /// lands with Concept 3's export work).
+    SetProofSetup {
+        profile_name: Option<String>,
+        #[serde(default)]
+        simulate_paper_white: bool,
+        intent: Option<String>,
+    },
+    /// Concept 2 — import an Adobe Swatch Exchange (`.ase`) library
+    /// (the freieFarbe HLC atlas, arbitrary user libraries). The
+    /// worker parses the raw bytes; every colour lands as a swatch
+    /// and every `.ase` group becomes a ColorGroup, all inside ONE
+    /// undoable operation (a single Cmd-Z removes the whole
+    /// import). `group_name` overrides the group for entries the
+    /// file leaves ungrouped. Names are preserved verbatim (for HLC
+    /// the name IS the colour identity / provenance).
+    ImportSwatchLibrary {
+        #[tsify(type = "number[]")]
+        bytes: ByteBuf,
+        #[serde(default)]
+        group_name: Option<String>,
+    },
+    /// Concept 2 (Ink Manager) — replace one ink's output-time
+    /// settings (whole-row semantics). Not undoable; never touches
+    /// the swatch. Settings surface through the `inks` collection;
+    /// separations consume them at export (Concept 3).
+    SetInkSetting {
+        spot_id: String,
+        #[serde(default)]
+        convert_to_process: bool,
+        #[serde(default)]
+        alias_to: Option<String>,
+    },
+    /// Concept 2 (Ink Manager) — prefer a spot's device-independent
+    /// Lab PRIMARY over its CMYK alternate when resolving previews
+    /// (InDesign's "Use Standard Lab Values for Spots"). Repaints
+    /// previews; not undoable.
+    SetUseStandardLabForSpots { enabled: bool },
     /// Track J — insert a new anchor into a path-bearing element's
     /// PathPointArray at flat `index`. UI dispatches from a segment
     /// click in path-edit mode; `anchor` is the de Casteljau split
@@ -1686,6 +1911,11 @@ impl Mutation {
             Self::InsertLine { .. } => "InsertLine",
             Self::InsertPath { .. } => "InsertPath",
             Self::SetDocumentDefaults { .. } => "SetDocumentDefaults",
+            Self::SetColorSettings { .. } => "SetColorSettings",
+            Self::SetProofSetup { .. } => "SetProofSetup",
+            Self::ImportSwatchLibrary { .. } => "ImportSwatchLibrary",
+            Self::SetInkSetting { .. } => "SetInkSetting",
+            Self::SetUseStandardLabForSpots { .. } => "SetUseStandardLabForSpots",
             Self::PathPointInsert { .. } => "PathPointInsert",
             Self::PathPointRemove { .. } => "PathPointRemove",
             Self::PathOpenAt { .. } => "PathOpenAt",

@@ -28,8 +28,9 @@ mod wasm {
     use paged_canvas::{
         channel::LayoutCacheStats,
         snap::SnapLine,
-        CanvasModel, CanvasOptions, FontEntry, LoadError, MainToWorker, MainToWorkerKind,
-        PageId, ProtocolVersion, WorkerError, WorkerToMain, WorkerToMainKind, PROTOCOL_VERSION,
+        CanvasModel, CanvasOptions, ColorProfileEntry, FontEntry, LoadError, MainToWorker,
+        MainToWorkerKind, PageId, ProtocolVersion, WorkerError, WorkerToMain,
+        WorkerToMainKind, PROTOCOL_VERSION,
     };
     use serde::Serialize;
     use wasm_bindgen::prelude::*;
@@ -75,6 +76,10 @@ mod wasm {
         /// can preload Inter / Poppins / Roboto once per worker, then
         /// step through every pack without re-uploading bytes.
         font_registry: Vec<FontEntry>,
+        /// Concept 2 — named ICC profiles registered via
+        /// `RegisterColorProfile`. Same lifecycle as the font
+        /// registry: survives across `LoadDocument` calls.
+        color_profiles: Vec<ColorProfileEntry>,
         #[cfg(feature = "gpu")]
         presenter: Option<paged_gpu::SurfacePresenter>,
         /// Per-page Vello scene cache (sub-phase D). LRU-bounded so
@@ -192,6 +197,7 @@ mod wasm {
             Self {
                 model: None,
                 font_registry: Vec::new(),
+                color_profiles: Vec::new(),
                 #[cfg(feature = "gpu")]
                 presenter: None,
                 #[cfg(feature = "gpu")]
@@ -285,6 +291,7 @@ mod wasm {
                 fonts: font.map(|b| vec![b]).unwrap_or_default(),
                 font_registry: self.font_registry.clone(),
                 cmyk_icc_profile,
+                color_profiles: self.color_profiles.clone(),
             };
             let doc_id = format!("doc-{}", seq);
             // u64 because `WorkerToMain.seq` is u64 to match the
@@ -637,6 +644,7 @@ mod wasm {
                         fonts: font.map(|b| vec![b.into_vec()]).unwrap_or_default(),
                         font_registry: self.font_registry.clone(),
                         cmyk_icc_profile: cmyk_icc_profile.map(|b| b.into_vec()),
+                        color_profiles: self.color_profiles.clone(),
                     };
                     let doc_id = format!("doc-{}", msg.seq);
                     match CanvasModel::load(doc_id, bytes.as_slice(), opts) {
@@ -907,6 +915,21 @@ mod wasm {
                     self.font_registry.clear();
                     WorkerToMainKind::FontRegistryCleared
                 }
+                MainToWorkerKind::RegisterColorProfile { name, bytes } => {
+                    let bytes = bytes.into_vec();
+                    self.color_profiles.push(ColorProfileEntry {
+                        name: name.clone(),
+                        bytes: bytes.clone(),
+                    });
+                    // Keep the LIVE model's registry in sync so a
+                    // profile registered after load is immediately
+                    // resolvable by SetColorSettings (the worker
+                    // copy seeds future loads).
+                    if let Some(model) = self.model.as_mut() {
+                        model.register_color_profile(name.clone(), bytes);
+                    }
+                    WorkerToMainKind::ColorProfileRegistered { name }
+                }
                 MainToWorkerKind::SetElementSelection { ids, mode } => {
                     if let Some(model) = self.model.as_mut() {
                         model.element_selection.apply_mode(&ids, mode);
@@ -978,6 +1001,13 @@ mod wasm {
                             default_fill_color: None,
                             default_stroke_color: None,
                             default_stroke_weight: None,
+                            cmyk_profile_name: None,
+                            rgb_policy: None,
+                            rendering_intent: None,
+                            black_point_compensation: None,
+                            proof_profile_name: None,
+                            proof_simulate_paper_white: None,
+                            use_standard_lab_for_spots: None,
                         });
                     WorkerToMainKind::DocumentMetaReply { meta }
                 }
@@ -988,6 +1018,48 @@ mod wasm {
                         .and_then(|m| m.color_preview(&swatch_id));
                     WorkerToMainKind::ColorPreviewReply { result }
                 }
+                MainToWorkerKind::ExportSwatchLibrary { group_id } => match self.model.as_ref() {
+                    Some(m) => WorkerToMainKind::SwatchLibraryExported {
+                        ase_bytes: m.export_ase(group_id.as_deref()).into(),
+                    },
+                    None => WorkerToMainKind::MutationFailed {
+                        error: WorkerError::NoDocument,
+                    },
+                },
+                MainToWorkerKind::RequestGradientDetail { gradient_id } => {
+                    let result = self
+                        .model
+                        .as_ref()
+                        .and_then(|m| m.gradient_detail(&gradient_id));
+                    WorkerToMainKind::GradientDetailReply { result }
+                }
+                MainToWorkerKind::RequestColorCompute {
+                    space,
+                    value,
+                    tint,
+                    model,
+                    alternate_space,
+                    alternate_value,
+                } => match self.model.as_ref() {
+                    Some(m) => {
+                        let (rgb_hex, cmyk, out_of_gamut) = m.color_compute(
+                            &space,
+                            &value,
+                            tint,
+                            model.as_deref(),
+                            alternate_space.as_deref(),
+                            alternate_value.as_deref(),
+                        );
+                        WorkerToMainKind::ColorComputeReply {
+                            rgb_hex,
+                            cmyk,
+                            out_of_gamut,
+                        }
+                    }
+                    None => WorkerToMainKind::MutationFailed {
+                        error: WorkerError::NoDocument,
+                    },
+                },
                 MainToWorkerKind::RequestElementProperties { id } => {
                     let result = self
                         .model

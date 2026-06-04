@@ -479,6 +479,51 @@ pub fn to_linear_rgb(c: &ColorEntry) -> Option<[f32; 3]> {
     }
 }
 
+/// Concept 2 — the reserved swatches (`[None]`, `[Paper]`,
+/// `[Black]`, `[Registration]`). Never editable or deletable;
+/// semantics: None = no paint, Paper = the substrate (knockout, not
+/// white ink), Black = 100% K process, Registration = prints on ALL
+/// plates. This is THE classifier — display sites and the none-fill
+/// fast paths route through it instead of scattering id matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReservedSwatch {
+    None,
+    Paper,
+    Black,
+    Registration,
+}
+
+impl ReservedSwatch {
+    /// Classify a swatch/colour reference. Handles both the
+    /// `Color/<name>` and `Swatch/<name>` spellings plus the legacy
+    /// `"n"` / empty forms IDML uses for "no paint".
+    pub fn classify(id: &str) -> Option<Self> {
+        match id {
+            "Color/None" | "Swatch/None" | "n" | "" => Some(Self::None),
+            "Color/Paper" | "Swatch/Paper" => Some(Self::Paper),
+            "Color/Black" | "Swatch/Black" => Some(Self::Black),
+            "Color/Registration" | "Swatch/Registration" => Some(Self::Registration),
+            _ => None,
+        }
+    }
+
+    /// True for any spelling of the no-paint swatch.
+    pub fn is_none(id: &str) -> bool {
+        matches!(Self::classify(id), Some(Self::None))
+    }
+
+    /// The wire/display label ("none" / "paper" / "black" /
+    /// "registration").
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Paper => "paper",
+            Self::Black => "black",
+            Self::Registration => "registration",
+        }
+    }
+}
+
 fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.040_45 {
         c / 12.92
