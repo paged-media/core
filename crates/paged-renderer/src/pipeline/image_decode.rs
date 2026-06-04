@@ -87,7 +87,7 @@ fn peek_image_lazy(bytes: &[u8], max_px: u32) -> Option<paged_compose::DecodedIm
         height,
         encoded: bytes::Bytes::copy_from_slice(bytes),
         rgba: bytes::Bytes::new(),
-        icc: None,
+        icc: extract_icc(bytes),
     })
 }
 
@@ -204,8 +204,95 @@ pub(super) fn decode_image_bytes_with_target_max(
         height,
         encoded: bytes::Bytes::copy_from_slice(bytes),
         rgba: bytes::Bytes::from(rgba.into_raw()),
-        icc: None,
+        icc: extract_icc(bytes),
     })
+}
+
+
+/// Extract an embedded ICC profile from JPEG (APP2 `ICC_PROFILE`
+/// segments, reassembled in chunk order) or PNG (`iCCP` chunk,
+/// zlib-inflated). Header-only scans — no pixel decode. The PDF
+/// exporter tags the image's /ColorSpace with this; the rasterizer
+/// keeps using its own decode-time conversion.
+pub(super) fn extract_icc(bytes: &[u8]) -> Option<bytes::Bytes> {
+    if is_jpeg_magic(bytes) {
+        return extract_jpeg_icc(bytes);
+    }
+    if bytes.len() > 8 && bytes[..8] == [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A] {
+        return extract_png_icc(bytes);
+    }
+    None
+}
+
+fn extract_jpeg_icc(bytes: &[u8]) -> Option<bytes::Bytes> {
+    const MARKER: &[u8] = b"ICC_PROFILE\0";
+    let mut chunks: Vec<(u8, &[u8])> = Vec::new();
+    let mut i = 2usize;
+    while i + 4 <= bytes.len() {
+        if bytes[i] != 0xFF {
+            break;
+        }
+        let marker = bytes[i + 1];
+        // Standalone markers without length.
+        if (0xD0..=0xD9).contains(&marker) || marker == 0x01 {
+            i += 2;
+            continue;
+        }
+        let len = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
+        if len < 2 || i + 2 + len > bytes.len() {
+            break;
+        }
+        let seg = &bytes[i + 4..i + 2 + len];
+        if marker == 0xE2 && seg.len() > MARKER.len() + 2 && seg.starts_with(MARKER) {
+            let seq = seg[MARKER.len()];
+            let data = &seg[MARKER.len() + 2..];
+            chunks.push((seq, data));
+        }
+        // Stop at start-of-scan: APP segments precede it.
+        if marker == 0xDA {
+            break;
+        }
+        i += 2 + len;
+    }
+    if chunks.is_empty() {
+        return None;
+    }
+    chunks.sort_by_key(|(seq, _)| *seq);
+    let total: usize = chunks.iter().map(|(_, d)| d.len()).sum();
+    let mut icc = Vec::with_capacity(total);
+    for (_, d) in chunks {
+        icc.extend_from_slice(d);
+    }
+    Some(bytes::Bytes::from(icc))
+}
+
+fn extract_png_icc(bytes: &[u8]) -> Option<bytes::Bytes> {
+    let mut i = 8usize;
+    while i + 8 <= bytes.len() {
+        let len = u32::from_be_bytes(bytes[i..i + 4].try_into().ok()?) as usize;
+        let kind = &bytes[i + 4..i + 8];
+        if kind == b"iCCP" {
+            let data = bytes.get(i + 8..i + 8 + len)?;
+            // profile name (latin1, NUL-terminated) + compression
+            // method byte (0 = zlib) + compressed profile.
+            let nul = data.iter().position(|b| *b == 0)?;
+            let method = *data.get(nul + 1)?;
+            if method != 0 {
+                return None;
+            }
+            let compressed = data.get(nul + 2..)?;
+            let mut out = Vec::new();
+            let mut dec = flate2::read::ZlibDecoder::new(compressed);
+            use std::io::Read as _;
+            dec.read_to_end(&mut out).ok()?;
+            return Some(bytes::Bytes::from(out));
+        }
+        if kind == b"IDAT" || kind == b"IEND" {
+            break;
+        }
+        i += 12 + len; // length + type + data + crc
+    }
+    None
 }
 
 fn is_jpeg_magic(bytes: &[u8]) -> bool {
@@ -275,6 +362,6 @@ fn decode_jpeg_scaled(bytes: &[u8], max_px: u32) -> Option<paged_compose::Decode
         height: h,
         encoded: bytes::Bytes::copy_from_slice(bytes),
         rgba: bytes::Bytes::from(rgba),
-        icc: None,
+        icc: icc_profile.map(bytes::Bytes::from),
     })
 }

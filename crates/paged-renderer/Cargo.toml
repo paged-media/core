@@ -41,6 +41,9 @@ tsify-next = { workspace = true }
 wasm-bindgen = { workspace = true }
 image = { workspace = true }
 jpeg-decoder = "0.3"
+# PNG iCCP inflation for the export-time ICC extraction (already a
+# transitive dep via the image crate's PNG decoder).
+flate2 = "1"
 # SVG rasterization. Pure-Rust, compiles on wasm32. We disable the
 # system-fonts / memmap-fonts features (browser sandbox can't read
 # system fonts; we'd serve them through the renderer's font resolver

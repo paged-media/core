@@ -2293,6 +2293,7 @@ dependencies = [
 name = "paged-export-pdf"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "bytes",
  "flate2",
  "image",
@@ -2301,6 +2302,7 @@ dependencies = [
  "paged-compose",
  "paged-parse",
  "paged-renderer",
+ "paged-scene",
  "pdf-writer",
  "subsetter",
  "thiserror 2.0.18",
@@ -2419,6 +2421,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "clap",
+ "flate2",
  "image",
  "jpeg-decoder",
  "paged-color",

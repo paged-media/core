@@ -439,10 +439,19 @@ impl Walker<'_, '_> {
                 }
                 DisplayCommand::Image { image_id, transform } => {
                     if let Some(img) = list.image(*image_id) {
+                        // Placed size for the downsampling gate: the
+                        // transform maps the unit square to the page.
+                        let t = transform.0;
+                        let placed = (
+                            (t[0] * t[0] + t[1] * t[1]).sqrt(),
+                            (t[2] * t[2] + t[3] * t[3]).sqrt(),
+                        );
                         if let Some(img_ref) = crate::image::write_image(
                             self.state,
                             img,
                             image_id.0,
+                            Some(placed),
+                            &input.options.images,
                             self.diagnostics,
                         ) {
                             let name = crate::image::image_resource_name(self.xobject_counter);

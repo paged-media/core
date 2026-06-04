@@ -40,6 +40,11 @@ pub struct DesignMap {
     /// bundled profile set and falls back to a naive CMYK→sRGB
     /// approximation when the named profile isn't shipped.
     pub color_settings: ColorSettings,
+    /// `<DocumentPreference>` bleed/slug offsets (points). Unread by
+    /// the renderer (pages rasterise at trim); the PDF exporter uses
+    /// them for BleedBox/MediaBox geometry. Zeros when the element
+    /// or attribute is absent.
+    pub document_preference: DocumentPreference,
     /// Document layers, in serialization order (which mirrors the
     /// stacking order — first layer = bottom of the z-stack). Each
     /// page item references its layer via `ItemLayer="<self_id>"`.
@@ -310,6 +315,23 @@ pub struct ColorSettings {
     pub default_image_intent: Option<String>,
 }
 
+/// `<DocumentPreference>` page-setup values the renderer ignores but
+/// print export needs. All offsets are points. NOTE the IDML quirk:
+/// bleed spells "…InsideOrLeft/…OutsideOrRight" while slug flips the
+/// word order to "SlugRightOrOutsideOffset" — that's faithful to the
+/// spec, not a typo.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
+pub struct DocumentPreference {
+    pub bleed_top: f32,
+    pub bleed_bottom: f32,
+    pub bleed_inside_or_left: f32,
+    pub bleed_outside_or_right: f32,
+    pub slug_top: f32,
+    pub slug_bottom: f32,
+    pub slug_inside_or_left: f32,
+    pub slug_right_or_outside: f32,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SpreadRef {
     pub src: String,
@@ -353,6 +375,21 @@ impl DesignMap {
                             solid_color_intent: attr(&e, b"SolidColorIntent"),
                             after_blending_intent: attr(&e, b"AfterBlendingIntent"),
                             default_image_intent: attr(&e, b"DefaultImageIntent"),
+                        };
+                    }
+                    if e.name().as_ref() == b"DocumentPreference" {
+                        let f = |name: &[u8]| -> f32 {
+                            attr(&e, name).and_then(|s| s.parse().ok()).unwrap_or(0.0)
+                        };
+                        out.document_preference = DocumentPreference {
+                            bleed_top: f(b"DocumentBleedTopOffset"),
+                            bleed_bottom: f(b"DocumentBleedBottomOffset"),
+                            bleed_inside_or_left: f(b"DocumentBleedInsideOrLeftOffset"),
+                            bleed_outside_or_right: f(b"DocumentBleedOutsideOrRightOffset"),
+                            slug_top: f(b"SlugTopOffset"),
+                            slug_bottom: f(b"SlugBottomOffset"),
+                            slug_inside_or_left: f(b"SlugInsideOrLeftOffset"),
+                            slug_right_or_outside: f(b"SlugRightOrOutsideOffset"),
                         };
                     }
                     if e.name().as_ref() == b"Layer" {
@@ -611,5 +648,39 @@ mod tests {
         // SAMPLE's <Document> carries no DOMVersion attribute.
         let dm = DesignMap::parse(SAMPLE).unwrap();
         assert_eq!(dm.dom_version, None);
+    }
+}
+
+#[cfg(test)]
+mod document_preference_tests {
+    use super::*;
+
+    #[test]
+    fn parses_bleed_and_slug_offsets() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document DOMVersion="18.5">
+  <DocumentPreference PageWidth="595.2755905511812" PageHeight="841.8897637795276"
+    DocumentBleedTopOffset="8.503937007874017"
+    DocumentBleedBottomOffset="8.503937007874017"
+    DocumentBleedInsideOrLeftOffset="8.503937007874017"
+    DocumentBleedOutsideOrRightOffset="8.503937007874017"
+    SlugTopOffset="14.173228346456694"
+    SlugBottomOffset="0"
+    SlugInsideOrLeftOffset="0"
+    SlugRightOrOutsideOffset="0"/>
+</Document>"#;
+        let dm = DesignMap::parse(xml).expect("parse");
+        let p = dm.document_preference;
+        assert!((p.bleed_top - 8.5039).abs() < 1e-3);
+        assert!((p.bleed_outside_or_right - 8.5039).abs() < 1e-3);
+        assert!((p.slug_top - 14.1732).abs() < 1e-3);
+        assert_eq!(p.slug_bottom, 0.0);
+    }
+
+    #[test]
+    fn absent_element_defaults_to_zero() {
+        let xml = br#"<?xml version="1.0"?><Document DOMVersion="18.5"/>"#;
+        let dm = DesignMap::parse(xml).expect("parse");
+        assert_eq!(dm.document_preference, DocumentPreference::default());
     }
 }
