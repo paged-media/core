@@ -145,7 +145,29 @@ pub fn color_id_to_paint(
             });
         }
     }
-    let [r, g, b] = graphic::to_linear_rgb(entry)?;
+    if let Some([r, g, b]) = graphic::to_linear_rgb(entry) {
+        return Some(Paint::Solid(Color::rgba(r, g, b, 1.0)));
+    }
+    // Concept 2 — Lab swatches. `to_linear_rgb` is the parse
+    // layer's no-ICC stopgap and returns None for Lab; resolve here
+    // analytically (Lab is device-independent: D50→D65 Bradford →
+    // linear sRGB, no profile needed for display). Previously these
+    // swatches dropped out entirely and rendered as missing paint.
+    lab_entry_to_paint(entry)
+}
+
+/// Lab(D50) swatch → solid paint, or None when the entry isn't a
+/// 3-channel Lab colour. Shared by the direct resolver above and
+/// the canvas-side preview path.
+pub fn lab_entry_to_paint(entry: &paged_parse::graphic::ColorEntry) -> Option<Paint> {
+    if entry.space != paged_parse::graphic::ColorSpace::Lab || entry.value.len() != 3 {
+        return None;
+    }
+    let paged_color::LinearRgb([r, g, b]) = paged_color::lab::lab_d50_to_linear_srgb(
+        entry.value[0],
+        entry.value[1],
+        entry.value[2],
+    );
     Some(Paint::Solid(Color::rgba(r, g, b, 1.0)))
 }
 

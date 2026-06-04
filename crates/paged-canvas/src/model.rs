@@ -2238,7 +2238,24 @@ impl CanvasModel {
             (c[2] * 100.0).clamp(0.0, 100.0),
             (c[3] * 100.0).clamp(0.0, 100.0),
         ]);
-        let rgb = to_linear_rgb(color).unwrap_or([0.5, 0.5, 0.5]);
+        // Concept 2 — Lab swatches resolve analytically (device-
+        // independent; no ICC needed for display) instead of falling
+        // to the 50% grey placeholder.
+        let rgb = to_linear_rgb(color)
+            .or_else(|| {
+                use paged_parse::graphic::ColorSpace;
+                if color.space == ColorSpace::Lab && color.value.len() == 3 {
+                    let paged_color::LinearRgb(rgb) = paged_color::lab::lab_d50_to_linear_srgb(
+                        color.value[0],
+                        color.value[1],
+                        color.value[2],
+                    );
+                    Some(rgb)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or([0.5, 0.5, 0.5]);
         let to_byte = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
         let rgb_hex = format!(
             "#{:02x}{:02x}{:02x}",

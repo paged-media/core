@@ -2025,6 +2025,7 @@ dependencies = [
  "bytes",
  "image",
  "js-sys",
+ "paged-color",
  "paged-compose",
  "paged-mutate",
  "paged-parse",
