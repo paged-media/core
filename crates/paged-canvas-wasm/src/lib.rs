@@ -1013,6 +1013,7 @@ mod wasm {
                             default_stroke_color: None,
                             default_stroke_weight: None,
                             cmyk_profile_name: None,
+                            cmyk_profile_active: false,
                             rgb_policy: None,
                             rendering_intent: None,
                             black_point_compensation: None,

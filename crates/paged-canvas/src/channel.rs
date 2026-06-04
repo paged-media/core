@@ -1079,6 +1079,12 @@ pub struct DocumentMeta {
     /// is `None` until a registered profile is active by name.
     #[serde(default)]
     pub cmyk_profile_name: Option<String>,
+    /// Concept 3 — true when ACTUAL profile bytes back the working
+    /// space (explicit load bytes or a registry hit). The NAME above
+    /// can be a designmap declaration with no bytes behind it — the
+    /// export dialog's X-4 gate needs this, not the name.
+    #[serde(default)]
+    pub cmyk_profile_active: bool,
     #[serde(default)]
     pub rgb_policy: Option<String>,
     #[serde(default)]

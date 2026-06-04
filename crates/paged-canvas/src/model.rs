@@ -3268,6 +3268,7 @@ impl CanvasModel {
                         .clone()
                 }),
             rgb_policy: self.color_settings.rgb_policy.clone(),
+            cmyk_profile_active: self.icc_bytes.is_some(),
             rendering_intent: Some(self.color_settings.intent.name().to_string()),
             black_point_compensation: Some(self.color_settings.bpc),
             proof_profile_name: self.proof_state.as_ref().map(|p| p.name.clone()),
