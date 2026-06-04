@@ -1005,6 +1005,8 @@ mod wasm {
                             rgb_policy: None,
                             rendering_intent: None,
                             black_point_compensation: None,
+                            proof_profile_name: None,
+                            proof_simulate_paper_white: None,
                         });
                     WorkerToMainKind::DocumentMetaReply { meta }
                 }
@@ -1014,6 +1016,13 @@ mod wasm {
                         .as_ref()
                         .and_then(|m| m.color_preview(&swatch_id));
                     WorkerToMainKind::ColorPreviewReply { result }
+                }
+                MainToWorkerKind::RequestGradientDetail { gradient_id } => {
+                    let result = self
+                        .model
+                        .as_ref()
+                        .and_then(|m| m.gradient_detail(&gradient_id));
+                    WorkerToMainKind::GradientDetailReply { result }
                 }
                 MainToWorkerKind::RequestColorCompute {
                     space,

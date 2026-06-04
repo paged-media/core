@@ -283,6 +283,11 @@ pub enum MainToWorkerKind {
         #[serde(default)]
         alternate_value: Option<Vec<f32>>,
     },
+    /// Concept 2 — full stop detail for ONE gradient (the ramp
+    /// editor + faithful gradient chips). The lightweight
+    /// `GradientSummary` collection stays stop-free; detail is
+    /// fetched per selected gradient. Reply: `GradientDetailReply`.
+    RequestGradientDetail { gradient_id: String },
     /// Scripting Stage 2 — execute a JS source string against the
     /// loaded document. The script's mutations route through
     /// `Operation::SetProperty` (same channel as gestures + REPL)
@@ -613,6 +618,11 @@ pub enum WorkerToMainKind {
         rgb_hex: String,
         cmyk: Option<[f32; 4]>,
         out_of_gamut: bool,
+    },
+    /// Concept 2 — `RequestGradientDetail` reply. `None` when the
+    /// id doesn't resolve to a gradient.
+    GradientDetailReply {
+        result: Option<GradientDetail>,
     },
     /// Inspector P1 — `RequestElementProperties` reply. `None` when
     /// the id doesn't resolve.
@@ -970,6 +980,12 @@ pub struct DocumentMeta {
     pub rendering_intent: Option<String>,
     #[serde(default)]
     pub black_point_compensation: Option<bool>,
+    /// Concept 2 — active soft-proof condition (`None` = proofing
+    /// off) + its paper-white flag.
+    #[serde(default)]
+    pub proof_profile_name: Option<String>,
+    #[serde(default)]
+    pub proof_simulate_paper_white: Option<bool>,
 }
 
 /// SDK Phase 3 — one swatch's identity + display name + kind.
@@ -1133,6 +1149,37 @@ pub struct ColorPreview {
     /// working space (false when no working profile is configured).
     #[serde(default)]
     pub out_of_gamut: bool,
+}
+
+/// Concept 2 — full gradient detail: the stop table the ramp
+/// editor mutates and the chips render. Stops carry the swatch REF
+/// (gradients reference swatches, never inline colours — edits to a
+/// component swatch propagate, spot stops survive to Separation at
+/// export) plus a display-resolved hex for painting the ramp.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct GradientDetail {
+    pub self_id: String,
+    pub name: String,
+    /// "linear" | "radial" | "unknown".
+    pub kind: String,
+    pub stops: Vec<GradientStopWire>,
+}
+
+/// Concept 2 — one resolved gradient stop.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct GradientStopWire {
+    /// `Color/<id>` reference — the model identity.
+    pub stop_color_ref: String,
+    /// Display-resolved `#rrggbb` via the active CMM (ramp render).
+    pub resolved_rgb_hex: String,
+    /// 0..=100 position along the ramp.
+    pub location_pct: f32,
+    /// 0..=100 blend midpoint toward the NEXT stop; `None` = 50.
+    pub midpoint_pct: Option<f32>,
 }
 
 /// SDK Phase 5 (v1 sweep) — one `<Article>` summary. Backs
@@ -1498,6 +1545,25 @@ pub enum Mutation {
         intent: Option<String>,
         bpc: Option<bool>,
     },
+    /// Concept 2 — soft-proofing (InDesign "Proof Colors" / "Proof
+    /// Setup"). `profile_name: Some` simulates the named output
+    /// condition on the canvas: CMYK content renders through the
+    /// PROOF profile instead of the working space (the numbers go
+    /// to the device unconverted — printing's native semantics);
+    /// `simulate_paper_white` switches the proof transform to
+    /// absolute-colorimetric so CMYK 0/0/0/0 lands on the
+    /// condition's media white instead of display white.
+    /// `profile_name: None` turns proofing off. Not undoable;
+    /// forces a full rebuild. v1 scope: CMYK content proofs on both
+    /// targets; RGB/Lab content stays display-resolved (the full
+    /// cross-space proofing transform is native-lcms2 territory and
+    /// lands with Concept 3's export work).
+    SetProofSetup {
+        profile_name: Option<String>,
+        #[serde(default)]
+        simulate_paper_white: bool,
+        intent: Option<String>,
+    },
     /// Track J — insert a new anchor into a path-bearing element's
     /// PathPointArray at flat `index`. UI dispatches from a segment
     /// click in path-edit mode; `anchor` is the de Casteljau split
@@ -1766,6 +1832,7 @@ impl Mutation {
             Self::InsertPath { .. } => "InsertPath",
             Self::SetDocumentDefaults { .. } => "SetDocumentDefaults",
             Self::SetColorSettings { .. } => "SetColorSettings",
+            Self::SetProofSetup { .. } => "SetProofSetup",
             Self::PathPointInsert { .. } => "PathPointInsert",
             Self::PathPointRemove { .. } => "PathPointRemove",
             Self::PathOpenAt { .. } => "PathOpenAt",

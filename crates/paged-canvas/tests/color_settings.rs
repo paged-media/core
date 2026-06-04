@@ -52,6 +52,10 @@ fn small_idml() -> Vec<u8> {
 <idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="13.1">
 <Color Self="Color/cyan" Model="Process" Space="CMYK" ColorValue="100 0 0 0" Name="Cyan"/>
 <Color Self="Color/labvivid" Model="Process" Space="LAB" ColorValue="50 85 -90" Name="Lab Vivid"/>
+<Gradient Self="Gradient/g1" Type="Linear" Name="Cyan Fade">
+<GradientStop StopColor="Color/cyan" Location="0" Midpoint="30"/>
+<GradientStop StopColor="Color/labvivid" Location="100"/>
+</Gradient>
 </idPkg:Graphic>"#,
         )
         .unwrap();
@@ -228,4 +232,69 @@ fn swatch_tint_folds_into_compute() {
     let (_, cmyk, _) =
         model.color_compute("CMYK", &[100.0, 0.0, 0.0, 0.0], Some(50.0), None, None, None);
     assert_eq!(cmyk, Some([50.0, 0.0, 0.0, 0.0]));
+}
+
+#[test]
+fn proof_setup_swaps_the_display_condition_and_back() {
+    let Some(profile) = find_profile() else {
+        eprintln!("color_settings: no CMYK profile available — skipping");
+        return;
+    };
+    let mut model =
+        CanvasModel::load("doc1", &small_idml(), CanvasOptions::default()).expect("load");
+    model.register_color_profile("Proof Condition".into(), profile);
+    let unproofed = model.color_preview("Color/cyan").expect("preview").rgb_hex;
+
+    // Proof ON: CMYK renders through the proof condition; with
+    // paper-white simulation the transform goes absolute-
+    // colorimetric, so even CMYK 100/0/0/0 lands elsewhere than the
+    // naive display path.
+    let outcome = model
+        .apply_mutation(&Mutation::SetProofSetup {
+            profile_name: Some("Proof Condition".into()),
+            simulate_paper_white: true,
+            intent: None,
+        })
+        .expect("proof on");
+    assert!(!outcome.page_ids.is_empty(), "proof toggling repaints");
+    let meta = model.document_meta();
+    assert_eq!(meta.proof_profile_name.as_deref(), Some("Proof Condition"));
+    assert_eq!(meta.proof_simulate_paper_white, Some(true));
+
+    // Proof OFF restores the exact pre-proof rendering inputs.
+    model
+        .apply_mutation(&Mutation::SetProofSetup {
+            profile_name: None,
+            simulate_paper_white: false,
+            intent: None,
+        })
+        .expect("proof off");
+    assert_eq!(
+        model.color_preview("Color/cyan").expect("preview").rgb_hex,
+        unproofed,
+        "proof off restores the working-space rendering"
+    );
+    assert_eq!(model.document_meta().proof_profile_name, None);
+}
+
+#[test]
+fn gradient_detail_resolves_stops_with_refs_and_midpoints() {
+    let model =
+        CanvasModel::load("doc1", &small_idml(), CanvasOptions::default()).expect("load");
+    let detail = model.gradient_detail("Gradient/g1").expect("detail");
+    assert_eq!(detail.kind, "linear");
+    assert_eq!(detail.name, "Cyan Fade");
+    assert_eq!(detail.stops.len(), 2);
+    // Stops carry the swatch REF, not an inline colour.
+    assert_eq!(detail.stops[0].stop_color_ref, "Color/cyan");
+    assert_eq!(detail.stops[0].location_pct, 0.0);
+    assert_eq!(detail.stops[0].midpoint_pct, Some(30.0));
+    assert_eq!(detail.stops[1].stop_color_ref, "Color/labvivid");
+    assert_eq!(detail.stops[1].location_pct, 100.0);
+    assert_eq!(detail.stops[1].midpoint_pct, None);
+    // The Lab stop resolves through the analytic path (not the
+    // grey placeholder).
+    assert_ne!(detail.stops[1].resolved_rgb_hex, "#808080");
+    // Unknown id => None.
+    assert!(model.gradient_detail("Gradient/nope").is_none());
 }

@@ -84,6 +84,17 @@ pub struct ColorSettingsState {
     pub bpc: bool,
 }
 
+/// Concept 2 — resolved soft-proof condition. The bytes are cloned
+/// out of the profile registry at SetProofSetup time so a later
+/// re-registration doesn't silently change the active proof.
+#[derive(Debug, Clone)]
+struct ProofState {
+    name: String,
+    bytes: Vec<u8>,
+    intent: paged_color::Intent,
+    simulate_paper_white: bool,
+}
+
 impl Default for ColorSettingsState {
     fn default() -> Self {
         Self {
@@ -459,6 +470,8 @@ pub struct CanvasModel {
     color_profiles: std::collections::BTreeMap<String, Vec<u8>>,
     /// Concept 2 — active colour-management settings.
     pub color_settings: ColorSettingsState,
+    /// Concept 2 — active soft-proof state (`None` = proofing off).
+    proof_state: Option<ProofState>,
     /// Concept 2 — lazily-built CMM for preview/compute reads
     /// (transform creation is expensive; the SwatchPicker previews
     /// every swatch per refresh). Cleared by `SetColorSettings`.
@@ -703,6 +716,7 @@ impl CanvasModel {
             icc_bytes,
             color_profiles,
             color_settings,
+            proof_state: None,
             cmm_cache: std::cell::RefCell::new(None),
             initial_state_hash,
             last_applied_seq: 0,
@@ -919,6 +933,57 @@ impl CanvasModel {
             self.rebuild_after_mutation().map_err(|e| {
                 crate::channel::WorkerError::NotImplemented {
                     what: format!("rebuild after SetColorSettings: {e}"),
+                }
+            })?;
+            let applied_seq = self.bump_applied_seq();
+            let page_ids: Vec<PageId> =
+                self.built.pages.iter().map(|p| p.id.clone()).collect();
+            return Ok(MutationOutcome {
+                applied_seq,
+                page_ids,
+                inverse: crate::mutate::TextOp::InsertText {
+                    story_id: String::new(),
+                    offset: 0,
+                    text: String::new(),
+                },
+                created_id: None,
+                page_structure_changed: false,
+            });
+        }
+        // Concept 2 — soft-proof toggle/setup: swap the display
+        // transform's inputs (proof profile + absolute intent for
+        // paper white) and repaint. Not undoable; view-state like
+        // colour settings.
+        if let Mutation::SetProofSetup {
+            profile_name,
+            simulate_paper_white,
+            intent,
+        } = mutation
+        {
+            self.proof_state = match profile_name {
+                Some(name) => {
+                    let bytes = self.color_profiles.get(name).cloned().ok_or_else(|| {
+                        crate::channel::WorkerError::NotImplemented {
+                            what: format!(
+                                "unknown proof profile {name:?} — register it via RegisterColorProfile first"
+                            ),
+                        }
+                    })?;
+                    Some(ProofState {
+                        name: name.clone(),
+                        bytes,
+                        intent: intent
+                            .as_deref()
+                            .and_then(paged_color::Intent::from_name)
+                            .unwrap_or(paged_color::Intent::RelativeColorimetric),
+                        simulate_paper_white: *simulate_paper_white,
+                    })
+                }
+                None => None,
+            };
+            self.rebuild_after_mutation().map_err(|e| {
+                crate::channel::WorkerError::NotImplemented {
+                    what: format!("rebuild after SetProofSetup: {e}"),
                 }
             })?;
             let applied_seq = self.bump_applied_seq();
@@ -2778,6 +2843,53 @@ impl CanvasModel {
             .collect()
     }
 
+    /// Concept 2 — full stop detail for one gradient. Stops carry
+    /// the swatch REF (the model identity) plus a display hex
+    /// resolved through the active CMM, so the ramp editor paints
+    /// faithfully under the current working space.
+    pub fn gradient_detail(
+        &self,
+        gradient_id: &str,
+    ) -> Option<crate::channel::GradientDetail> {
+        use paged_parse::GradientKind;
+        let g = self.scene.palette.gradients.get(gradient_id)?;
+        let kind = match g.kind {
+            GradientKind::Linear => "linear",
+            GradientKind::Radial => "radial",
+            GradientKind::Unknown => "unknown",
+        };
+        let cmm = self.active_cmm();
+        let stops = g
+            .stops
+            .iter()
+            .map(|s| {
+                let resolved_rgb_hex = self
+                    .scene
+                    .palette
+                    .resolve(&s.stop_color)
+                    .and_then(working_color_of)
+                    .map(|w| {
+                        use paged_color::Cmm as _;
+                        let paged_color::LinearRgb(rgb) = cmm.resolve_display(w);
+                        rgb_to_hex(rgb)
+                    })
+                    .unwrap_or_else(|| "#808080".to_string());
+                crate::channel::GradientStopWire {
+                    stop_color_ref: s.stop_color.clone(),
+                    resolved_rgb_hex,
+                    location_pct: s.location_pct,
+                    midpoint_pct: s.midpoint_pct,
+                }
+            })
+            .collect();
+        Some(crate::channel::GradientDetail {
+            self_id: gradient_id.to_string(),
+            name: g.name.clone().unwrap_or_else(|| gradient_id.to_string()),
+            kind: kind.to_string(),
+            stops,
+        })
+    }
+
     /// SDK Phase 3 — list every story's self_id + character count.
     /// Used by `paged.stories()` (the script host fn) and by tests
     /// that need a valid story id to address a StoryRange edit.
@@ -2907,6 +3019,11 @@ impl CanvasModel {
             rgb_policy: self.color_settings.rgb_policy.clone(),
             rendering_intent: Some(self.color_settings.intent.name().to_string()),
             black_point_compensation: Some(self.color_settings.bpc),
+            proof_profile_name: self.proof_state.as_ref().map(|p| p.name.clone()),
+            proof_simulate_paper_white: self
+                .proof_state
+                .as_ref()
+                .map(|p| p.simulate_paper_white),
         }
     }
 
@@ -3270,9 +3387,26 @@ impl CanvasModel {
         let options = PipelineOptions {
             font: self.font_bytes.as_deref(),
             assets: resolver.as_ref().map(|r| r as &dyn paged_renderer::AssetResolver),
-            cmyk_icc_profile: self.icc_bytes.as_deref(),
-            cmyk_intent: self.color_settings.intent,
-            cmyk_bpc: self.color_settings.bpc,
+            // Soft-proof active => CMYK renders through the PROOF
+            // condition (paper white = absolute colorimetric);
+            // otherwise the working space + document settings.
+            cmyk_icc_profile: match &self.proof_state {
+                Some(p) => Some(p.bytes.as_slice()),
+                None => self.icc_bytes.as_deref(),
+            },
+            cmyk_intent: match &self.proof_state {
+                Some(p) if p.simulate_paper_white => {
+                    paged_color::Intent::AbsoluteColorimetric
+                }
+                Some(p) => p.intent,
+                None => self.color_settings.intent,
+            },
+            cmyk_bpc: match &self.proof_state {
+                // Paper-white simulation wants the true media white:
+                // BPC would re-anchor the black point and dilute it.
+                Some(p) => !p.simulate_paper_white && self.color_settings.bpc,
+                None => self.color_settings.bpc,
+            },
             // Perf-S — reuse the persistent image-decode cache so
             // placed images don't re-decode on every gesture rebuild.
             image_decode_cache: Some(&self.image_decode_cache),
