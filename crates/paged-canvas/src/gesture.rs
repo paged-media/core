@@ -171,6 +171,13 @@ pub enum GestureType {
     Rotate,
     /// Phase D — scale about a pivot.
     Scale,
+    /// Editor-ops — horizontal shear about the selection pivot (the
+    /// Shear tool). The drag's x-delta, normalised by the grabbed
+    /// point's lever arm from the pivot, becomes the shear factor
+    /// `k` in `x' = x + k·(y − pivot.y)`; Shift snaps the shear
+    /// angle to 15° steps. Commits as `FrameTransform`, like
+    /// Rotate/Scale.
+    Shear,
     /// Phase F — translate the image content *inside* a frame. Edits
     /// the Rectangle's `image_item_transform`'s tx/ty by the pointer
     /// delta; the frame's own bounds + ItemTransform stay put. This
@@ -412,6 +419,7 @@ impl CanvasModel {
                 | GestureType::Resize { .. }
                 | GestureType::Rotate
                 | GestureType::Scale
+                | GestureType::Shear
                 | GestureType::TranslateContent
                 | GestureType::RotateContent
                 | GestureType::ScaleContent
@@ -447,6 +455,7 @@ impl CanvasModel {
             gesture,
             GestureType::Rotate
                 | GestureType::Scale
+                | GestureType::Shear
                 | GestureType::RotateContent
                 | GestureType::ScaleContent
         );
@@ -807,6 +816,37 @@ impl CanvasModel {
                     });
                 }
             }
+            // Editor-ops — Ovals + GraphicLines join the transform
+            // gestures (Rotate / Scale / Shear) now that their
+            // FrameTransform apply arms exist.
+            if let ElementId::Oval(_) = id {
+                if let Some(o) = s.ovals.iter().find(|o| o.self_id.as_deref() == Some(raw)) {
+                    return Ok(NodeSnapshot {
+                        id: id.clone(),
+                        node_id: NodeId::Oval(raw.to_string()),
+                        bounds: o.bounds,
+                        item_transform: o.item_transform,
+                        image_item_transform: None,
+                        path_anchors: Vec::new(),
+                    });
+                }
+            }
+            if let ElementId::GraphicLine(_) = id {
+                if let Some(l) = s
+                    .graphic_lines
+                    .iter()
+                    .find(|l| l.self_id.as_deref() == Some(raw))
+                {
+                    return Ok(NodeSnapshot {
+                        id: id.clone(),
+                        node_id: NodeId::GraphicLine(raw.to_string()),
+                        bounds: l.bounds,
+                        item_transform: l.item_transform,
+                        image_item_transform: None,
+                        path_anchors: l.anchors.clone(),
+                    });
+                }
+            }
             if let ElementId::Group(_) = id {
                 if let Some(g) = s.groups.iter().find(|g| g.self_id.as_deref() == Some(raw)) {
                     // Track L — Groups don't carry geometric
@@ -1032,6 +1072,18 @@ fn compute_node_mutation(
             );
             NodeMutation::Transform(Some(new_m))
         }
+        GestureType::Shear => {
+            let pivot = session.pivot_spread.unwrap_or((0.0, 0.0));
+            let anchor = session.anchor_spread.unwrap_or(pivot);
+            let new_m = shear_about_pivot(
+                snap.item_transform.unwrap_or(IDENTITY),
+                anchor,
+                delta,
+                pivot,
+                session.modifiers,
+            );
+            NodeMutation::Transform(Some(new_m))
+        }
         GestureType::TranslateContent => {
             // Phase F — translate the placed image inside the frame.
             // The image_item_transform's tx/ty live in *frame-inner*
@@ -1236,6 +1288,44 @@ pub(crate) fn rotate_about_pivot(
     let new_tx = c * tx - s * ty + (1.0 - c) * pivot.0 + s * pivot.1;
     let new_ty = s * tx + c * ty - s * pivot.0 + (1.0 - c) * pivot.1;
     [new_a, new_b, new_c, new_d, new_tx, new_ty]
+}
+
+/// Editor-ops — compose a horizontal shear about `pivot` onto `m`.
+/// The shear factor is the pointer's x-delta normalised by the
+/// grabbed point's vertical lever arm from the pivot (so the grabbed
+/// edge follows the pointer); points on the pivot's horizontal axis
+/// can't shear (eps guard). Shift snaps the shear ANGLE — atan(k) —
+/// to 15° steps, mirroring Rotate's constraint. Shear-about-pivot:
+/// `x' = x + k·(y − pivot.y)`, `y' = y`, composed onto the IDML
+/// packing the same way `rotate_about_pivot` does.
+pub(crate) fn shear_about_pivot(
+    m: [f32; 6],
+    anchor: (f32, f32),
+    delta: (f32, f32),
+    pivot: (f32, f32),
+    modifiers: GestureModifiers,
+) -> [f32; 6] {
+    let lever = anchor.1 - pivot.1;
+    if lever.abs() < 1e-3 {
+        return m;
+    }
+    let mut k = delta.0 / lever;
+    if modifiers.shift {
+        let step = std::f32::consts::PI / 12.0; // 15° in radians
+        let angle = k.atan();
+        k = ((angle / step).round() * step).tan();
+    }
+    let [a, b, c, d, tx, ty] = m;
+    // S·M with S = [1 k; 0 1] (row form on column vectors), then the
+    // pivot correction keeps `pivot` a fixed point.
+    [
+        a + k * b,
+        b,
+        c + k * d,
+        d,
+        tx + k * ty - k * pivot.1,
+        ty,
+    ]
 }
 
 /// Phase G — signed angle (radians) from `from` to `to` about the
@@ -1856,6 +1946,7 @@ fn build_alt_duplicate_ops(
                     dy: delta.1,
                     destination_spread_id: destination_spread_id.clone(),
                 },
+                z_slot: None, // duplicates stack on top
             }
         })
         .collect()

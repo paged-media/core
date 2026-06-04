@@ -268,6 +268,33 @@ pub enum PropertyPath {
     /// renderer uses the swatch at full strength. Tints scale the
     /// resolved colour toward paper white at composition time.
     FrameFillTint,
+    /// Editor-ops (Gradient Swatch tool) — the gradient axis on a
+    /// frame whose fill references a `Gradient/<id>` swatch. Angle in
+    /// degrees (renderer convention: 0° = left→right, 90° =
+    /// top→bottom); length in pt (`None` = renderer default — the
+    /// bbox-derived axis). `Value::Length`. Carried on every
+    /// path-bearing page-item kind; no-ops visually while the fill is
+    /// a solid swatch.
+    FrameGradientFillAngle,
+    FrameGradientFillLength,
+    /// Editor-ops — the stroke-gradient analogues.
+    FrameGradientStrokeAngle,
+    FrameGradientStrokeLength,
+    /// Editor-ops (Scissors) — open/split the path at an anchor.
+    /// `Value::PathOpenAt`; any path-bearing kind. See the Value
+    /// variant for the cut semantics + the snapshot inverse.
+    PathOpenAt,
+    /// Editor-ops — whole gradient-feather replacement on an
+    /// effect-bearing page item (`Value::GradientFeather`). One path
+    /// for the whole struct — kind + axis + the stop LIST edit
+    /// together, and per-field shapes can't carry a list.
+    FrameGradientFeather,
+    /// Editor-ops (Page tool) — a page's `GeometricBounds`
+    /// `[top, left, bottom, right]` in the page's INNER coordinate
+    /// system (`Value::Bounds`). Only `NodeId::Page` carries it.
+    /// Items keep their coordinates (InDesign's layout-adjust off);
+    /// `spread_origin` re-derives on rebuild.
+    PageBounds,
     /// SDK Phase 5 (v1 sweep) — drop-shadow per-field editors.
     /// All five operate on the frame's `drop_shadow:
     /// Option<DropShadowSetting>`. Writing to any of them
@@ -446,6 +473,13 @@ impl PropertyPath {
             PropertyPath::FrameDropShadow => "frame.dropShadow",
             PropertyPath::FramePath => "frame.path",
             PropertyPath::FrameFillTint => "frame.fillTint",
+            PropertyPath::FrameGradientFillAngle => "frame.gradientFillAngle",
+            PropertyPath::FrameGradientFillLength => "frame.gradientFillLength",
+            PropertyPath::FrameGradientStrokeAngle => "frame.gradientStrokeAngle",
+            PropertyPath::FrameGradientStrokeLength => "frame.gradientStrokeLength",
+            PropertyPath::PathOpenAt => "path.openAt",
+            PropertyPath::FrameGradientFeather => "frame.gradientFeather",
+            PropertyPath::PageBounds => "page.bounds",
             PropertyPath::FrameNonprinting => "frame.nonprinting",
             PropertyPath::FrameDropShadowMode => "frame.dropShadowMode",
             PropertyPath::FrameDropShadowXOffset => "frame.dropShadowXOffset",
@@ -485,6 +519,83 @@ impl PathAnchorSpec {
             anchor: (self.anchor[0], self.anchor[1]),
             left: (self.left[0], self.left[1]),
             right: (self.right[0], self.right[1]),
+        }
+    }
+}
+
+/// Editor-ops — wire mirror of `paged_parse::GradientFeatherStop`
+/// (the AST type predates `PartialEq`/`Tsify`; the mirror keeps the
+/// op wire-shaped, the `PathAnchorSpec` precedent).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct GradientFeatherStopSpec {
+    #[serde(default)]
+    pub stop_color: Option<String>,
+    pub location_pct: f32,
+    pub alpha_pct: f32,
+    #[serde(default)]
+    pub midpoint_pct: f32,
+}
+
+/// Editor-ops — wire mirror of `paged_parse::GradientFeatherParams`.
+/// Whole-struct authoring (kind + axis + stop LIST change together;
+/// `Value` has no generic list form, so the drop-shadow per-field
+/// shape doesn't fit). The renderer already draws this effect; only
+/// authoring was missing. `stop_color` round-trips faithfully but the
+/// rasterizer currently consumes `alpha_pct` only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct GradientFeatherSpec {
+    /// `"Linear"` or `"Radial"`.
+    #[serde(default)]
+    pub gradient_type: Option<String>,
+    #[serde(default)]
+    pub start_point: Option<[f32; 2]>,
+    #[serde(default)]
+    pub end_point: Option<[f32; 2]>,
+    #[serde(default)]
+    pub angle_deg: Option<f32>,
+    #[serde(default)]
+    pub stops: Vec<GradientFeatherStopSpec>,
+}
+
+impl GradientFeatherSpec {
+    pub fn from_parse(p: &paged_parse::GradientFeatherParams) -> Self {
+        Self {
+            gradient_type: p.gradient_type.clone(),
+            start_point: p.start_point.map(|(x, y)| [x, y]),
+            end_point: p.end_point.map(|(x, y)| [x, y]),
+            angle_deg: p.angle_deg,
+            stops: p
+                .stops
+                .iter()
+                .map(|s| GradientFeatherStopSpec {
+                    stop_color: s.stop_color.clone(),
+                    location_pct: s.location_pct,
+                    alpha_pct: s.alpha_pct,
+                    midpoint_pct: s.midpoint_pct,
+                })
+                .collect(),
+        }
+    }
+    pub fn to_parse(&self) -> paged_parse::GradientFeatherParams {
+        paged_parse::GradientFeatherParams {
+            gradient_type: self.gradient_type.clone(),
+            start_point: self.start_point.map(|[x, y]| (x, y)),
+            end_point: self.end_point.map(|[x, y]| (x, y)),
+            angle_deg: self.angle_deg,
+            stops: self
+                .stops
+                .iter()
+                .map(|s| paged_parse::GradientFeatherStop {
+                    stop_color: s.stop_color.clone(),
+                    location_pct: s.location_pct,
+                    alpha_pct: s.alpha_pct,
+                    midpoint_pct: s.midpoint_pct,
+                })
+                .collect(),
         }
     }
 }
@@ -581,6 +692,32 @@ pub enum Value {
         anchors: Vec<PathAnchorSpec>,
         subpath_starts: Vec<usize>,
     },
+    /// Editor-ops (Scissors) — cut the path at the anchor at flat
+    /// `index`. On a CLOSED subpath the contour opens there: the cut
+    /// anchor splits into two coincident endpoints (every original
+    /// edge survives; the contour just no longer closes). On an OPEN
+    /// subpath an interior cut splits it into two open subpaths
+    /// sharing duplicated endpoints. Mid-segment cuts are expressed
+    /// editor-side as a Batch of `PathPointInsert` (the de Casteljau
+    /// split) followed by `PathOpenAt` at the new anchor.
+    ///
+    /// The `prev_*` triple is inverse-only: the apply layer snapshots
+    /// `(anchors, subpath_starts, subpath_open)` before cutting and
+    /// the inverse restores all three verbatim — `FramePath` cannot
+    /// serve as the inverse because it does not carry `subpath_open`.
+    PathOpenAt {
+        index: usize,
+        #[serde(default)]
+        prev_anchors: Option<Vec<PathAnchorSpec>>,
+        #[serde(default)]
+        prev_subpath_starts: Option<Vec<usize>>,
+        #[serde(default)]
+        prev_subpath_open: Option<Vec<bool>>,
+    },
+    /// Editor-ops — whole gradient-feather struct (`None` clears the
+    /// effect). The inverse carries the prior `Option<spec>` so undo
+    /// round-trips bytewise.
+    GradientFeather(Option<GradientFeatherSpec>),
 }
 
 /// Description of a node about to be inserted. Carries the minimal
@@ -598,12 +735,59 @@ pub enum NodeSpec {
         bounds: [f32; 4],
         #[serde(default)]
         fill_color: Option<String>,
+        #[serde(default)]
+        stroke_color: Option<String>,
+        #[serde(default)]
+        stroke_weight: Option<f32>,
     },
     Rectangle {
         self_id: String,
         bounds: [f32; 4],
         #[serde(default)]
         fill_color: Option<String>,
+        #[serde(default)]
+        stroke_color: Option<String>,
+        #[serde(default)]
+        stroke_weight: Option<f32>,
+    },
+    /// Editor-ops — a graphic line. `anchors` carries the explicit
+    /// path (two corner anchors for the Line tool; possibly more for
+    /// captured lines) in spread coordinates with an identity
+    /// `item_transform`; empty anchors fall back to the renderer's
+    /// bounds-diagonal. `bounds` is the anchors' bounding box (used
+    /// for hit-testing / selection chrome).
+    GraphicLine {
+        self_id: String,
+        bounds: [f32; 4],
+        #[serde(default)]
+        anchors: Vec<PathAnchorSpec>,
+        #[serde(default)]
+        subpath_starts: Vec<usize>,
+        #[serde(default)]
+        subpath_open: Vec<bool>,
+        #[serde(default)]
+        stroke_color: Option<String>,
+        #[serde(default)]
+        stroke_weight: Option<f32>,
+    },
+    /// Editor-ops — a polygon (the Pencil/freehand and captured-path
+    /// kind). Carries the full path tables so `RemoveNode` → undo
+    /// round-trips compound/open paths byte-identically.
+    Polygon {
+        self_id: String,
+        bounds: [f32; 4],
+        #[serde(default)]
+        anchors: Vec<PathAnchorSpec>,
+        #[serde(default)]
+        subpath_starts: Vec<usize>,
+        #[serde(default)]
+        subpath_open: Vec<bool>,
+        #[serde(default)]
+        fill_color: Option<String>,
+        #[serde(default)]
+        stroke_color: Option<String>,
+        #[serde(default)]
+        stroke_weight: Option<f32>,
     },
     /// Phase H — deep-clone the `source` node into a new node with
     /// `self_id`, shifting its bounds (or its item_transform's tx/ty
@@ -636,6 +820,8 @@ impl NodeSpec {
         match self {
             NodeSpec::TextFrame { self_id, .. } => NodeId::TextFrame(self_id.clone()),
             NodeSpec::Rectangle { self_id, .. } => NodeId::Rectangle(self_id.clone()),
+            NodeSpec::GraphicLine { self_id, .. } => NodeId::GraphicLine(self_id.clone()),
+            NodeSpec::Polygon { self_id, .. } => NodeId::Polygon(self_id.clone()),
             NodeSpec::CloneTranslate { self_id, source, .. } => match source {
                 NodeId::TextFrame(_) => NodeId::TextFrame(self_id.clone()),
                 NodeId::Rectangle(_) => NodeId::Rectangle(self_id.clone()),
@@ -751,6 +937,14 @@ pub enum Operation {
         parent: NodeId,
         position: usize,
         node: NodeSpec,
+        /// Editor-ops — slot in the spread's `frames_in_order` z-order
+        /// table. `None` ⇒ on top (new creations). `Some(slot)` is set
+        /// by the `RemoveNode` inverse so undo-of-delete restores the
+        /// exact stacking position, not just the kind-vec position.
+        /// Ignored on spreads whose `frames_in_order` is empty (the
+        /// renderer's legacy vec-walk fallback covers those).
+        #[serde(default)]
+        z_slot: Option<usize>,
     },
     RemoveNode {
         node: NodeId,
@@ -762,6 +956,39 @@ pub enum Operation {
     },
     Batch {
         ops: Vec<Operation>,
+    },
+    /// Editor-ops (Page tool) — insert a new SINGLE-PAGE SPREAD
+    /// immediately after the spread hosting `after_page_id` (or at
+    /// the end when `None`). Page size clones the reference page
+    /// (Letter 612×792 fallback); `master_id` is applied when given.
+    /// `spread_self_id` / `page_self_id` are normally `None` (the
+    /// apply layer mints fresh ids) — they are filled on the op echo
+    /// so redo re-creates the exact ids. `restore_spread_json` is
+    /// inverse-only: the `RemovePage` undo carries the full captured
+    /// spread (lossless, including every page item) and the apply
+    /// layer reinserts it verbatim at its original index.
+    ///
+    /// Kept top-level (like the layer ops) rather than `InsertNode`:
+    /// a new spread has no pre-existing parent `NodeId` to address.
+    InsertPage {
+        #[serde(default)]
+        after_page_id: Option<String>,
+        #[serde(default)]
+        master_id: Option<String>,
+        #[serde(default)]
+        spread_self_id: Option<String>,
+        #[serde(default)]
+        page_self_id: Option<String>,
+        #[serde(default)]
+        restore_spread_json: Option<String>,
+    },
+    /// Editor-ops (Page tool) — remove the page `page_id`. v1
+    /// supports single-page spreads only (the hosting spread is
+    /// removed wholesale and captured for undo); deleting a page out
+    /// of a multi-page spread, or the document's only page, is
+    /// rejected with `InvalidValue`.
+    RemovePage {
+        page_id: String,
     },
     /// Track M — reorder a layer to a new zero-based index in
     /// `designmap.layers`. Inverse moves it back. Layer-affecting

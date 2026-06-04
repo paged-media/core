@@ -86,6 +86,13 @@ pub enum PropertyPathJson {
     FrameStrokeEndCap,
     FrameInsetSpacing,
     AppliedConditions,
+    FrameGradientFillAngle,
+    FrameGradientFillLength,
+    FrameGradientStrokeAngle,
+    FrameGradientStrokeLength,
+    PathOpenAt,
+    PageBounds,
+    FrameGradientFeather,
 }
 
 impl From<PropertyPath> for PropertyPathJson {
@@ -136,6 +143,15 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::FrameStrokeEndCap => PropertyPathJson::FrameStrokeEndCap,
             PropertyPath::FrameInsetSpacing => PropertyPathJson::FrameInsetSpacing,
             PropertyPath::AppliedConditions => PropertyPathJson::AppliedConditions,
+            PropertyPath::FrameGradientFillAngle => PropertyPathJson::FrameGradientFillAngle,
+            PropertyPath::FrameGradientFillLength => PropertyPathJson::FrameGradientFillLength,
+            PropertyPath::FrameGradientStrokeAngle => PropertyPathJson::FrameGradientStrokeAngle,
+            PropertyPath::FrameGradientStrokeLength => {
+                PropertyPathJson::FrameGradientStrokeLength
+            }
+            PropertyPath::PathOpenAt => PropertyPathJson::PathOpenAt,
+            PropertyPath::PageBounds => PropertyPathJson::PageBounds,
+            PropertyPath::FrameGradientFeather => PropertyPathJson::FrameGradientFeather,
         }
     }
 }
@@ -188,6 +204,15 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::FrameStrokeEndCap => PropertyPath::FrameStrokeEndCap,
             PropertyPathJson::FrameInsetSpacing => PropertyPath::FrameInsetSpacing,
             PropertyPathJson::AppliedConditions => PropertyPath::AppliedConditions,
+            PropertyPathJson::FrameGradientFillAngle => PropertyPath::FrameGradientFillAngle,
+            PropertyPathJson::FrameGradientFillLength => PropertyPath::FrameGradientFillLength,
+            PropertyPathJson::FrameGradientStrokeAngle => PropertyPath::FrameGradientStrokeAngle,
+            PropertyPathJson::FrameGradientStrokeLength => {
+                PropertyPath::FrameGradientStrokeLength
+            }
+            PropertyPathJson::PathOpenAt => PropertyPath::PathOpenAt,
+            PropertyPathJson::PageBounds => PropertyPath::PageBounds,
+            PropertyPathJson::FrameGradientFeather => PropertyPath::FrameGradientFeather,
         }
     }
 }
@@ -249,7 +274,9 @@ impl From<Value> for AuthoredValue {
             | Value::PathPointInsert { .. }
             | Value::PathPointRemove { .. }
             | Value::PathPointCurveType { .. }
-            | Value::FramePath { .. } => AuthoredValue::None,
+            | Value::FramePath { .. }
+            | Value::PathOpenAt { .. }
+            | Value::GradientFeather(_) => AuthoredValue::None,
         }
     }
 }

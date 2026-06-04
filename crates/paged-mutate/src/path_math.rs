@@ -149,6 +149,55 @@ pub fn anchor_from_split(split: SegmentSplit) -> PathAnchorSpec {
     }
 }
 
+/// Editor-ops (Pencil) — fit a sampled polyline to smooth cubic
+/// Beziers (flo_curves' Schneider fitter) and convert the fitted
+/// segments back to `PathAnchorSpec`s: anchor `i` carries segment
+/// `i-1`'s incoming control as `left` and segment `i`'s outgoing
+/// control as `right`. Falls back to the input (corner anchors) when
+/// the fitter declines. The tolerance is in document pt — the editor
+/// pre-simplifies the raw pointer samples (RDP, camera-scaled) before
+/// sending, so this trades anchor count against shape error on an
+/// already-clean polyline.
+pub fn fit_polyline_to_anchors(points: &[PathAnchorSpec]) -> Vec<PathAnchorSpec> {
+    use flo_curves::bezier::Curve;
+    use flo_curves::Coord2;
+
+    const FIT_TOLERANCE_PT: f64 = 1.0;
+
+    if points.len() < 3 {
+        return points.to_vec();
+    }
+    let coords: Vec<Coord2> = points
+        .iter()
+        .map(|a| Coord2(f64::from(a.anchor[0]), f64::from(a.anchor[1])))
+        .collect();
+    let curves = match flo_curves::bezier::fit_curve::<Curve<Coord2>>(&coords, FIT_TOLERANCE_PT) {
+        Some(curves) if !curves.is_empty() => curves,
+        _ => return points.to_vec(),
+    };
+    let p = |c: Coord2| [c.0 as f32, c.1 as f32];
+    let mut anchors: Vec<PathAnchorSpec> = Vec::with_capacity(curves.len() + 1);
+    let first = p(curves[0].start_point);
+    anchors.push(PathAnchorSpec {
+        anchor: first,
+        left: first, // endpoints carry no incoming handle
+        right: p(curves[0].control_points.0),
+    });
+    for (i, curve) in curves.iter().enumerate() {
+        let end = p(curve.end_point);
+        let right = curves
+            .get(i + 1)
+            .map(|next| p(next.control_points.0))
+            .unwrap_or(end);
+        anchors.push(PathAnchorSpec {
+            anchor: end,
+            left: p(curve.control_points.1),
+            right,
+        });
+    }
+    anchors
+}
+
 // ---------------------------------------------------------------------------
 // Track L — affine matrix algebra
 // ---------------------------------------------------------------------------
@@ -339,6 +388,41 @@ mod tests {
         let delta = group_rebase_delta(None, g_new).expect("identity invertible");
         // delta == g_new * inv(I) == g_new.
         assert!(close6(delta, g_new, 1e-5));
+    }
+
+    #[test]
+    fn fit_straight_line_keeps_endpoints_on_the_line() {
+        let pts: Vec<PathAnchorSpec> = (0..10)
+            .map(|i| {
+                let x = i as f32 * 10.0;
+                PathAnchorSpec {
+                    anchor: [x, 0.0],
+                    left: [x, 0.0],
+                    right: [x, 0.0],
+                }
+            })
+            .collect();
+        let fitted = fit_polyline_to_anchors(&pts);
+        assert!(
+            fitted.len() < pts.len(),
+            "a straight line fits with few anchors (got {})",
+            fitted.len()
+        );
+        assert_eq!(fitted.first().unwrap().anchor, [0.0, 0.0]);
+        assert_eq!(fitted.last().unwrap().anchor, [90.0, 0.0]);
+        for a in &fitted {
+            assert!(a.anchor[1].abs() < 1e-3, "anchor off the line: {:?}", a.anchor);
+            assert!(a.left[1].abs() < 1.0 && a.right[1].abs() < 1.0);
+        }
+    }
+
+    #[test]
+    fn fit_declines_below_three_points() {
+        let pts = vec![
+            PathAnchorSpec { anchor: [0.0, 0.0], left: [0.0, 0.0], right: [0.0, 0.0] },
+            PathAnchorSpec { anchor: [10.0, 5.0], left: [10.0, 5.0], right: [10.0, 5.0] },
+        ];
+        assert_eq!(fit_polyline_to_anchors(&pts), pts);
     }
 
     #[test]

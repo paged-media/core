@@ -63,7 +63,7 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(23);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(24);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -453,6 +453,25 @@ pub enum WorkerToMainKind {
         /// the rebuild that just finished. `hits + misses` equals the
         /// number of paragraphs that ran through the layout pass.
         cache_stats: LayoutCacheStats,
+        /// Editor-ops — the element created by a structural insert
+        /// (`InsertFrame` / `InsertLine` / `InsertPath`). The editor
+        /// uses it to select the fresh element. `None` for every
+        /// other mutation kind — including `InsertPage`: pages are
+        /// not elements (`ElementId` has no Page variant); the new
+        /// page is discoverable from `page_ids` + `page_sizes_pt`.
+        #[serde(default)]
+        created_id: Option<crate::element_selection::ElementId>,
+        /// Editor-ops — `true` when the mutation changed the page
+        /// LIST itself (insert/delete/resize page); the editor must
+        /// refresh its page grid from `page_sizes_pt` + `page_ids`
+        /// instead of only repainting.
+        #[serde(default)]
+        page_structure_changed: bool,
+        /// Editor-ops — the post-mutation per-page sizes, populated
+        /// only when `page_structure_changed` (ordered like
+        /// `page_ids`).
+        #[serde(default)]
+        page_sizes_pt: Option<Vec<(f32, f32)>>,
     },
     /// Phase 3 Item 4 — rect-per-line geometry for a selection range.
     SelectionGeometry {
@@ -469,6 +488,15 @@ pub enum WorkerToMainKind {
         applied_seq: u64,
         page_ids: Vec<PageId>,
         cache_stats: LayoutCacheStats,
+        /// Editor-ops — same page-grid refresh contract as
+        /// `MutationApplied`: undoing a page mutation changes the
+        /// page list and the editor must not need a reload to see
+        /// it. The worker diffs the built page table across the
+        /// undo to populate these.
+        #[serde(default)]
+        page_structure_changed: bool,
+        #[serde(default)]
+        page_sizes_pt: Option<Vec<(f32, f32)>>,
     },
     /// Phase 3 Item 7 — redo applied.
     RedoApplied {
@@ -476,6 +504,10 @@ pub enum WorkerToMainKind {
         applied_seq: u64,
         page_ids: Vec<PageId>,
         cache_stats: LayoutCacheStats,
+        #[serde(default)]
+        page_structure_changed: bool,
+        #[serde(default)]
+        page_sizes_pt: Option<Vec<(f32, f32)>>,
     },
     /// `RegisterFont` reply: the font is now part of the worker's
     /// asset resolver.
@@ -876,6 +908,15 @@ pub struct DocumentMeta {
     /// `true` when the worker has applied a mutation since
     /// `LoadDocument`. Reset on save/export when that path lands.
     pub dirty: bool,
+    /// Editor-ops — document defaults for newly-created objects (the
+    /// triple `SetDocumentDefaults` writes). `None` = no fill / no
+    /// stroke / engine-default weight.
+    #[serde(default)]
+    pub default_fill_color: Option<String>,
+    #[serde(default)]
+    pub default_stroke_color: Option<String>,
+    #[serde(default)]
+    pub default_stroke_weight: Option<f32>,
 }
 
 /// SDK Phase 3 — one swatch's identity + display name + kind.
@@ -1332,12 +1373,51 @@ pub enum Mutation {
     DeletePage {
         page_id: PageId,
     },
+    /// Editor-ops (Page tool) — resize the page's GeometricBounds
+    /// (page-inner coords, `(top, left, bottom, right)`). Items keep
+    /// their coordinates; spread origins re-derive on rebuild.
+    ResizePage {
+        page_id: PageId,
+        bounds: (f32, f32, f32, f32),
+    },
     InsertFrame {
         page_id: PageId,
         bounds: (f32, f32, f32, f32),
     },
     DeleteFrame {
         frame_id: String,
+    },
+    /// Editor-ops — the Line tool. `start`/`end` are page-local pt;
+    /// the model converts to spread coordinates, mints a self id, and
+    /// inserts a two-anchor open `GraphicLine` (document-default
+    /// stroke applied).
+    InsertLine {
+        page_id: PageId,
+        start: (f32, f32),
+        end: (f32, f32),
+    },
+    /// Editor-ops — the Pencil tool (and any caller with explicit
+    /// path geometry). `anchors` are page-local; `open` marks an open
+    /// contour. `smooth: true` runs the engine's Bezier fitter over
+    /// the (typically RDP-simplified) polyline so freehand strokes
+    /// land as curves rather than corner chains.
+    InsertPath {
+        page_id: PageId,
+        anchors: Vec<paged_mutate::operation::PathAnchorSpec>,
+        open: bool,
+        #[serde(default)]
+        smooth: bool,
+    },
+    /// Editor-ops — document defaults for NEWLY-CREATED objects (the
+    /// fill/stroke wells with nothing selected). Whole-triple
+    /// semantics: every field IS the new default (`None` = no fill /
+    /// no stroke / engine-default weight) — the editor reads the
+    /// current triple from `DocumentMeta` and writes it back
+    /// modified. App-level state: not undoable, no scene rebuild.
+    SetDocumentDefaults {
+        fill_color: Option<String>,
+        stroke_color: Option<String>,
+        stroke_weight: Option<f32>,
     },
     /// Track J — insert a new anchor into a path-bearing element's
     /// PathPointArray at flat `index`. UI dispatches from a segment
@@ -1366,6 +1446,16 @@ pub enum Mutation {
     /// bearing element. UI dispatches from Backspace/Delete on the
     /// selected anchor.
     PathPointRemove {
+        element_id: crate::element_selection::ElementId,
+        index: u32,
+    },
+    /// Editor-ops (Scissors) — cut the path at the anchor at flat
+    /// `index`: a closed contour opens there (the anchor splits into
+    /// two coincident endpoints); an open contour splits into two.
+    /// For a mid-segment cut the editor sends
+    /// `Batch [PathPointInsert (the de Casteljau split), PathOpenAt]`
+    /// so the whole cut is one undo step.
+    PathOpenAt {
         element_id: crate::element_selection::ElementId,
         index: u32,
     },
@@ -1590,10 +1680,15 @@ impl Mutation {
             Self::UnlinkFrames { .. } => "UnlinkFrames",
             Self::InsertPage { .. } => "InsertPage",
             Self::DeletePage { .. } => "DeletePage",
+            Self::ResizePage { .. } => "ResizePage",
             Self::InsertFrame { .. } => "InsertFrame",
             Self::DeleteFrame { .. } => "DeleteFrame",
+            Self::InsertLine { .. } => "InsertLine",
+            Self::InsertPath { .. } => "InsertPath",
+            Self::SetDocumentDefaults { .. } => "SetDocumentDefaults",
             Self::PathPointInsert { .. } => "PathPointInsert",
             Self::PathPointRemove { .. } => "PathPointRemove",
+            Self::PathOpenAt { .. } => "PathOpenAt",
             Self::PathPointCurveType { .. } => "PathPointCurveType",
             Self::PathPointSet { .. } => "PathPointSet",
             Self::Batch { .. } => "Batch",
