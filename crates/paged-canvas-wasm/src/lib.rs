@@ -1007,6 +1007,7 @@ mod wasm {
                             black_point_compensation: None,
                             proof_profile_name: None,
                             proof_simulate_paper_white: None,
+                            use_standard_lab_for_spots: None,
                         });
                     WorkerToMainKind::DocumentMetaReply { meta }
                 }

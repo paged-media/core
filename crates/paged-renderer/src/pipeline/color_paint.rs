@@ -892,3 +892,53 @@ pub(crate) fn apply_fill_tint(paint: Paint, tint_pct: Option<f32>) -> Paint {
         other => other,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Concept 2's load-bearing invariant: `PipelineOptions::default()`
+    /// must reproduce the pre-Concept-2 hardcoded colour behaviour
+    /// exactly (the fidelity corpus thresholds depend on it). The
+    /// default intent/BPC route the transform build through the
+    /// back-compat shim path.
+    #[test]
+    fn default_pipeline_options_preserve_the_legacy_transform_inputs() {
+        let opts = crate::PipelineOptions::default();
+        assert_eq!(opts.cmyk_intent, paged_color::Intent::RelativeColorimetric);
+        assert!(opts.cmyk_bpc);
+        assert!(opts.cmyk_icc_profile.is_none());
+    }
+
+    /// Lab swatches resolve analytically at the chokepoint — and
+    /// every previously-resolvable space is untouched by the new
+    /// fallthrough.
+    #[test]
+    fn lab_entry_resolves_to_a_solid_paint() {
+        let entry = paged_parse::graphic::ColorEntry {
+            self_id: "Color/lab".into(),
+            name: None,
+            space: paged_parse::graphic::ColorSpace::Lab,
+            value: vec![50.0, 29.5, 5.2],
+            model: paged_parse::graphic::ColorModel::Process,
+            alternate_space: None,
+            alternate_value: vec![],
+            tint: None,
+            alpha: None,
+        };
+        let paint = lab_entry_to_paint(&entry).expect("lab resolves");
+        match paint {
+            Paint::Solid(c) => {
+                assert!(c.r > 0.0 && c.r < 1.0, "in-gamut mid tone: {c:?}");
+            }
+            other => panic!("expected solid, got {other:?}"),
+        }
+        // Non-Lab entries fall through (the pre-existing paths own them).
+        let cmyk = paged_parse::graphic::ColorEntry {
+            space: paged_parse::graphic::ColorSpace::Cmyk,
+            value: vec![0.0, 0.0, 0.0, 100.0],
+            ..entry
+        };
+        assert!(lab_entry_to_paint(&cmyk).is_none());
+    }
+}
