@@ -334,3 +334,68 @@ fn subset_tag(gids: &[u16]) -> String {
     }
     tag
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn use_glyph_remaps_in_first_use_order() {
+        let mut pool = FontPool::default();
+        let mut refs = crate::writer::RefAllocator::new();
+        // .notdef is pinned at 0, so the first real glyph gets 1,
+        // the second 2, and a REPEAT of the first stays 1.
+        let (_, _, a) = pool.use_glyph(&mut refs, 7, 42, Some('A'));
+        let (_, _, b) = pool.use_glyph(&mut refs, 7, 17, Some('B'));
+        let (_, _, a2) = pool.use_glyph(&mut refs, 7, 42, Some('A'));
+        assert_eq!((a, b, a2), (1, 2, 1));
+        // ToUnicode keys by the REMAPPED gid.
+        let usage = pool.fonts.get(&7).unwrap();
+        assert_eq!(usage.to_unicode.get(&1), Some(&'A'));
+        assert_eq!(usage.to_unicode.get(&2), Some(&'B'));
+        // Same font ⇒ same resource name + ref; other font differs.
+        let (name_a, ref_a, _) = pool.use_glyph(&mut refs, 7, 99, None);
+        let (name_b, ref_b, _) = pool.use_glyph(&mut refs, 8, 99, None);
+        assert_eq!(name_a, "F7");
+        assert_eq!(name_b, "F8");
+        assert_ne!(ref_a, ref_b);
+    }
+
+    #[test]
+    fn text_matrix_is_exact_for_the_glyph_affine() {
+        // Contract: Tm = glyph_transform_linear × (upem / font_size),
+        // translation untouched — so Tf(font_size) × Tm lands glyphs
+        // at IDENTICAL page coordinates to the outline path fill.
+        let mut content = Content::new();
+        let entry = paged_compose::GlyphRunEntry {
+            command_index: 0,
+            font_id: 1,
+            glyph_id: 5,
+            font_size: 12.0,
+            // sx = 12/1000 (point_size/upem), y negated, at (100, 200).
+            transform: paged_compose::Transform([0.012, 0.0, 0.0, -0.012, 100.0, 200.0]),
+            paint: paged_compose::Paint::Solid(paged_compose::Color::BLACK),
+            unicode: Some('x'),
+            is_stroke: false,
+        };
+        emit_text_slice(&mut content, "F1", 12.0, 1000.0, &[(&entry, 1)]);
+        let ops = String::from_utf8(content.finish().to_vec()).unwrap();
+        // 0.012 × (1000/12) = 1 exactly.
+        assert!(ops.contains("BT"), "{ops}");
+        assert!(ops.contains("/F1 12 Tf"), "{ops}");
+        assert!(ops.contains("1 0 0 -1 100 200 Tm"), "{ops}");
+        // pdf-writer encodes the 2-byte CID as a literal string.
+        assert!(ops.contains("(\\000\\001) Tj"), "{ops}");
+    }
+
+    #[test]
+    fn subset_tag_is_deterministic_and_wellformed() {
+        let a = subset_tag(&[0, 1, 2, 3]);
+        let b = subset_tag(&[0, 1, 2, 3]);
+        let c = subset_tag(&[0, 1, 2, 4]);
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(a.len(), 6);
+        assert!(a.chars().all(|ch| ch.is_ascii_uppercase()));
+    }
+}

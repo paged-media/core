@@ -25,6 +25,19 @@ image = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
+clap = { version = "4", features = ["derive"], optional = true }
+anyhow = { workspace = true, optional = true }
+paged-scene = { path = "../paged-scene", optional = true }
+
+[features]
+# The `paged-export` CLI (kept out of the library consumers' tree —
+# paged-canvas links the lib and must not pull clap into wasm).
+cli = ["dep:clap", "dep:anyhow", "dep:paged-scene"]
+
+[[bin]]
+name = "paged-export"
+required-features = ["cli"]
+
 [dev-dependencies]
 anyhow = { workspace = true }
 lopdf = "0.41"

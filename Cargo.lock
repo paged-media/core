@@ -2232,6 +2232,7 @@ dependencies = [
  "js-sys",
  "paged-color",
  "paged-compose",
+ "paged-export-pdf",
  "paged-mutate",
  "paged-parse",
  "paged-renderer",
@@ -2295,6 +2296,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "clap",
  "flate2",
  "image",
  "lopdf",

@@ -540,3 +540,46 @@ fn write_shading(
     sh.finish();
     shading_ref
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ink(alt: [u8; 4]) -> SpotInk {
+        SpotInk {
+            name: "Color/test".into(),
+            cmyk_alternate: alt,
+        }
+    }
+
+    #[test]
+    fn separation_tint_endpoints() {
+        // Full-strength paint over a full-strength alternate = 1.0.
+        let pantone = ink([255, 191, 0, 0]);
+        let full = separation_tint(&pantone, [1.0, 0.75, 0.0, 0.0]);
+        assert!((full - 1.0).abs() < 1e-4, "full = {full}");
+        // Paper (no ink painted) = 0.0.
+        let none = separation_tint(&pantone, [0.0, 0.0, 0.0, 0.0]);
+        assert!(none.abs() < 1e-4, "none = {none}");
+        // 50% swatch tint — channels at half the alternate.
+        let half = separation_tint(&pantone, [0.5, 0.375, 0.0, 0.0]);
+        assert!((half - 0.5).abs() < 1e-2, "half = {half}");
+        // Degenerate alternate (registration-ish): tint pins to 1.
+        let degenerate = ink([0, 0, 0, 0]);
+        assert!((separation_tint(&degenerate, [0.2, 0.0, 0.0, 0.0]) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn separation_colorant_names_sanitise() {
+        assert_eq!(sanitize_name("PANTONE 286 C"), "PANTONE-286-C");
+        assert_eq!(sanitize_name("Größe/50%"), "Gr--e-50-");
+    }
+
+    #[test]
+    fn linear_srgb_round_trip_endpoints() {
+        assert_eq!(linear_to_srgb(0.0), 0.0);
+        assert!((linear_to_srgb(1.0) - 1.0).abs() < 1e-6);
+        // The 0.5-linear grey encodes to ~0.7354 sRGB.
+        assert!((linear_to_srgb(0.5) - 0.7354).abs() < 1e-3);
+    }
+}

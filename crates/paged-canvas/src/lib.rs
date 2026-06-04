@@ -47,6 +47,7 @@
 pub mod camera;
 pub mod channel;
 pub mod element_selection;
+pub mod export;
 pub mod gesture;
 pub mod geometry;
 pub mod hit;

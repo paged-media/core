@@ -3634,6 +3634,68 @@ impl CanvasModel {
     /// change short-circuit Knuth-Plass. The first build (cold cache)
     /// pays the full layout cost; subsequent mutation rebuilds only
     /// recompose the touched paragraph(s).
+    /// Concept 3 — the export-time ONE-SHOT build: glyph side-channel
+    /// ON, splice caches OFF. The splice caches (master-text / body-
+    /// story emit deltas) re-append cached command RANGES, which would
+    /// desync the glyph table's `command_index` parallelism; the
+    /// export pays the full build cost instead (it happens once per
+    /// export, not per gesture frame). The live canvas build and its
+    /// caches are untouched. Proof simulation is deliberately ignored
+    /// — export always renders the WORKING space.
+    pub fn build_for_export(
+        &self,
+    ) -> Result<paged_renderer::BuiltDocument, crate::channel::LoadError> {
+        let resolver = build_font_resolver(&self.font_registry, self.font_bytes.as_deref());
+        let options = PipelineOptions {
+            font: self.font_bytes.as_deref(),
+            assets: resolver.as_ref().map(|r| r as &dyn paged_renderer::AssetResolver),
+            cmyk_icc_profile: self.icc_bytes.as_deref(),
+            cmyk_intent: self.color_settings.intent,
+            cmyk_bpc: self.color_settings.bpc,
+            collect_glyph_runs: true,
+            // Image decode cache is content-addressed (URI →
+            // DecodedImage), not positional — safe to share.
+            image_decode_cache: Some(&self.image_decode_cache),
+            pre_built_font_table: Some(&self.font_table),
+            ..PipelineOptions::default()
+        };
+        pipeline::build_document(&self.scene, &options)
+            .map_err(|e| crate::channel::LoadError::Build(e.to_string()))
+    }
+
+    /// Concept 3 — read accessors for the export session's begin.
+    pub fn font_table(&self) -> &paged_renderer::FontTable {
+        &self.font_table
+    }
+
+    pub fn active_cmyk_profile(&self) -> Option<&[u8]> {
+        self.icc_bytes.as_deref()
+    }
+
+    pub fn registered_profile(&self, name: &str) -> Option<&[u8]> {
+        self.color_profiles.get(name).map(|b| b.as_slice())
+    }
+
+    pub fn color_settings_state(&self) -> &ColorSettingsState {
+        &self.color_settings
+    }
+
+    pub fn ink_settings_map(&self) -> &std::collections::BTreeMap<String, InkSetting> {
+        &self.ink_settings
+    }
+
+    pub fn use_standard_lab_for_spots(&self) -> bool {
+        self.use_standard_lab_for_spots
+    }
+
+    pub fn document_preference(&self) -> paged_parse::DocumentPreference {
+        self.scene.container.designmap.document_preference
+    }
+
+    pub fn palette(&self) -> &paged_parse::graphic::Graphic {
+        &self.scene.palette
+    }
+
     pub fn rebuild_after_mutation(&mut self) -> Result<(), crate::channel::LoadError> {
         let resolver = build_font_resolver(&self.font_registry, self.font_bytes.as_deref());
         let options = PipelineOptions {

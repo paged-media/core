@@ -227,27 +227,33 @@ pub struct ExportResult {
 
 /// One-shot export over every page in range.
 pub fn export_pdf(input: ExportInput<'_>) -> Result<ExportResult, ExportError> {
-    let mut session = ExportSession::begin(input)?;
+    let mut session = ExportSession::begin(&input)?;
     while session.pages_remaining() > 0 {
-        session.export_next_page()?;
+        session.export_next_page(&input)?;
     }
-    session.finish()
+    session.finish(&input)
 }
 
 /// Incremental export session — one page per `export_next_page`
 /// call, so a synchronous worker can interleave progress replies and
 /// honour cancellation between pages (the protocol-26 wire drives
 /// this from the main thread).
-pub struct ExportSession<'a> {
-    input: ExportInput<'a>,
+///
+/// The session holds NO borrow of the inputs (so a worker can park
+/// it in a map across messages and own the BuiltDocument beside it);
+/// instead the SAME logical [`ExportInput`] must be passed to every
+/// call — the writer state indexes into `input.doc.pages` and pools
+/// fonts/profiles across pages, so swapping inputs mid-session
+/// produces a corrupt document.
+pub struct ExportSession {
     state: writer::DocState,
     page_indices: Vec<usize>,
     next: usize,
     diagnostics: Vec<ExportDiagnostic>,
 }
 
-impl<'a> ExportSession<'a> {
-    pub fn begin(input: ExportInput<'a>) -> Result<Self, ExportError> {
+impl ExportSession {
+    pub fn begin(input: &ExportInput<'_>) -> Result<Self, ExportError> {
         if input.options.standard == PdfStandard::PdfX4
             && input.profiles.output_intent.is_none()
         {
@@ -263,9 +269,8 @@ impl<'a> ExportSession<'a> {
             }
             None => (0..total).collect(),
         };
-        let state = writer::DocState::new(&input);
+        let state = writer::DocState::new(input);
         Ok(Self {
-            input,
             state,
             page_indices,
             next: 0,
@@ -285,21 +290,21 @@ impl<'a> ExportSession<'a> {
         self.page_indices.len() - self.next
     }
 
-    pub fn export_next_page(&mut self) -> Result<(), ExportError> {
+    pub fn export_next_page(&mut self, input: &ExportInput<'_>) -> Result<(), ExportError> {
         let Some(&page_index) = self.page_indices.get(self.next) else {
             return Err(ExportError::SessionState("no pages remaining"));
         };
-        let page = &self.input.doc.pages[page_index];
-        page::export_page(&mut self.state, &self.input, page, &mut self.diagnostics)?;
+        let page = &input.doc.pages[page_index];
+        page::export_page(&mut self.state, input, page, &mut self.diagnostics)?;
         self.next += 1;
         Ok(())
     }
 
-    pub fn finish(mut self) -> Result<ExportResult, ExportError> {
+    pub fn finish(mut self, input: &ExportInput<'_>) -> Result<ExportResult, ExportError> {
         if self.pages_remaining() > 0 {
             return Err(ExportError::SessionState("pages remaining; export them first"));
         }
-        let bytes = self.state.finish(&self.input, &mut self.diagnostics)?;
+        let bytes = self.state.finish(input, &mut self.diagnostics)?;
         Ok(ExportResult {
             bytes,
             diagnostics: self.diagnostics,

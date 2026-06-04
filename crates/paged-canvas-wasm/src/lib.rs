@@ -80,6 +80,12 @@ mod wasm {
         /// `RegisterColorProfile`. Same lifecycle as the font
         /// registry: survives across `LoadDocument` calls.
         color_profiles: Vec<ColorProfileEntry>,
+        /// Concept 3 — in-flight PDF export sessions, keyed by the
+        /// id handed out in `ExportPdfBegun`. Cleared on
+        /// `LoadDocument` (they own a build of the PREVIOUS scene).
+        export_sessions: std::collections::HashMap<u32, paged_canvas::export::CanvasExportSession>,
+        /// Monotone id source for export sessions.
+        next_export_session: u32,
         #[cfg(feature = "gpu")]
         presenter: Option<paged_gpu::SurfacePresenter>,
         /// Per-page Vello scene cache (sub-phase D). LRU-bounded so
@@ -198,6 +204,8 @@ mod wasm {
                 model: None,
                 font_registry: Vec::new(),
                 color_profiles: Vec::new(),
+                export_sessions: std::collections::HashMap::new(),
+                next_export_session: 1,
                 #[cfg(feature = "gpu")]
                 presenter: None,
                 #[cfg(feature = "gpu")]
@@ -651,6 +659,9 @@ mod wasm {
                         Ok(model) => {
                             let handle = model.handle();
                             self.model = Some(model);
+                            // Export sessions hold a build of the
+                            // PREVIOUS document — drop them.
+                            self.export_sessions.clear();
                             // Invalidate the per-page Vello scene
                             // cache — it was keyed to the previous
                             // model's BuiltPages.
@@ -1026,6 +1037,66 @@ mod wasm {
                         error: WorkerError::NoDocument,
                     },
                 },
+                MainToWorkerKind::ExportPdfBegin { options } => match self.model.as_ref() {
+                    Some(m) => {
+                        match paged_canvas::export::CanvasExportSession::begin(m, &options) {
+                            Ok((session, page_count)) => {
+                                let id = self.next_export_session;
+                                self.next_export_session += 1;
+                                self.export_sessions.insert(id, session);
+                                WorkerToMainKind::ExportPdfBegun {
+                                    session: id,
+                                    page_count: page_count as u32,
+                                }
+                            }
+                            Err(error) => WorkerToMainKind::ExportPdfFailed { error },
+                        }
+                    }
+                    None => WorkerToMainKind::ExportPdfFailed {
+                        error: "no document loaded".into(),
+                    },
+                },
+                MainToWorkerKind::ExportPdfPage { session } => {
+                    match self.export_sessions.get_mut(&session) {
+                        Some(s) => match s.export_next_page() {
+                            Ok((done, total)) => WorkerToMainKind::ExportPdfProgress {
+                                session,
+                                done: done as u32,
+                                total: total as u32,
+                            },
+                            Err(error) => {
+                                // A failed page poisons the writer
+                                // state — drop the session.
+                                self.export_sessions.remove(&session);
+                                WorkerToMainKind::ExportPdfFailed { error }
+                            }
+                        },
+                        None => WorkerToMainKind::ExportPdfFailed {
+                            error: format!("unknown export session: {session}"),
+                        },
+                    }
+                }
+                MainToWorkerKind::ExportPdfFinish { session } => {
+                    match self.export_sessions.remove(&session) {
+                        Some(s) => match s.finish() {
+                            Ok((bytes, diagnostics)) => WorkerToMainKind::PdfExported {
+                                pdf_bytes: bytes.into(),
+                                diagnostics,
+                            },
+                            Err(error) => WorkerToMainKind::ExportPdfFailed { error },
+                        },
+                        None => WorkerToMainKind::ExportPdfFailed {
+                            error: format!("unknown export session: {session}"),
+                        },
+                    }
+                }
+                MainToWorkerKind::ExportPdfCancel { session } => {
+                    // Removal IS the cancellation — the writer state
+                    // and the one-shot build drop here. Unknown ids
+                    // reply success (cancel must be idempotent).
+                    self.export_sessions.remove(&session);
+                    WorkerToMainKind::ExportPdfCancelled { session }
+                }
                 MainToWorkerKind::RequestGradientDetail { gradient_id } => {
                     let result = self
                         .model
