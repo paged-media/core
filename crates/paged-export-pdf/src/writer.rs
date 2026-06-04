@@ -56,6 +56,29 @@ pub struct FinishedPage {
     pub bleed_box: Rect,
     /// Resource names used on this page, mapped to object refs.
     pub resources: PageResources,
+    /// The page's ONE indirect /Resources dictionary — shared by the
+    /// page content stream and every transparency-group form
+    /// captured from it (allocated before the walk, written at
+    /// finish when the resource set is complete).
+    pub resources_ref: Ref,
+}
+
+/// A transparency-group / soft-mask Form XObject captured during the
+/// page walk, written after the walk completes (it references the
+/// page's shared /Resources by ref).
+pub struct PendingForm {
+    pub form_ref: Ref,
+    pub data: Vec<u8>,
+    pub bbox: Rect,
+    pub group: PendingFormGroup,
+}
+
+pub enum PendingFormGroup {
+    /// Non-isolated transparency group, blending colour space
+    /// inherited from the parent (the blend/opacity groups).
+    TransparencyInherit,
+    /// Isolated DeviceGray group (luminosity soft masks).
+    LuminosityGray,
 }
 
 /// Per-page resource dictionaries (name → object ref). Names are
@@ -137,6 +160,43 @@ impl DocState {
             tree.count(self.pages.len() as i32);
         }
         for page in &self.pages {
+            // The shared indirect /Resources dict (page + its forms).
+            {
+                let mut res = self
+                    .pdf
+                    .indirect(page.resources_ref)
+                    .start::<pdf_writer::writers::Resources>();
+                if !page.resources.ext_g_states.is_empty() {
+                    let mut d = res.ext_g_states();
+                    for (name, r) in &page.resources.ext_g_states {
+                        d.pair(Name(name.as_bytes()), *r);
+                    }
+                }
+                if !page.resources.color_spaces.is_empty() {
+                    let mut d = res.color_spaces();
+                    for (name, r) in &page.resources.color_spaces {
+                        d.pair(Name(name.as_bytes()), *r);
+                    }
+                }
+                if !page.resources.fonts.is_empty() {
+                    let mut d = res.fonts();
+                    for (name, r) in &page.resources.fonts {
+                        d.pair(Name(name.as_bytes()), *r);
+                    }
+                }
+                if !page.resources.x_objects.is_empty() {
+                    let mut d = res.x_objects();
+                    for (name, r) in &page.resources.x_objects {
+                        d.pair(Name(name.as_bytes()), *r);
+                    }
+                }
+                if !page.resources.shadings.is_empty() {
+                    let mut d = res.shadings();
+                    for (name, r) in &page.resources.shadings {
+                        d.pair(Name(name.as_bytes()), *r);
+                    }
+                }
+            }
             let mut p = self.pdf.page(page.page_ref);
             p.parent(self.page_tree_ref);
             p.media_box(page.media_box);
@@ -144,37 +204,7 @@ impl DocState {
             p.bleed_box(page.bleed_box);
             p.crop_box(page.media_box);
             p.contents(page.content_ref);
-            let mut res = p.resources();
-            if !page.resources.ext_g_states.is_empty() {
-                let mut d = res.ext_g_states();
-                for (name, r) in &page.resources.ext_g_states {
-                    d.pair(Name(name.as_bytes()), *r);
-                }
-            }
-            if !page.resources.color_spaces.is_empty() {
-                let mut d = res.color_spaces();
-                for (name, r) in &page.resources.color_spaces {
-                    d.pair(Name(name.as_bytes()), *r);
-                }
-            }
-            if !page.resources.fonts.is_empty() {
-                let mut d = res.fonts();
-                for (name, r) in &page.resources.fonts {
-                    d.pair(Name(name.as_bytes()), *r);
-                }
-            }
-            if !page.resources.x_objects.is_empty() {
-                let mut d = res.x_objects();
-                for (name, r) in &page.resources.x_objects {
-                    d.pair(Name(name.as_bytes()), *r);
-                }
-            }
-            if !page.resources.shadings.is_empty() {
-                let mut d = res.shadings();
-                for (name, r) in &page.resources.shadings {
-                    d.pair(Name(name.as_bytes()), *r);
-                }
-            }
+            p.pair(Name(b"Resources"), page.resources_ref);
         }
 
         // OutputIntent (required for X-4; emitted whenever a

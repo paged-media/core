@@ -35,7 +35,7 @@ pub mod ase;
 pub mod cmm;
 pub mod lab;
 
-pub use cmm::{Cmm, DisplaySetup, GamutStatus, IccCmm, Intent, WorkingColor};
+pub use cmm::{Cmm, DisplaySetup, ExportPolicy, GamutStatus, IccCmm, Intent, WorkingColor};
 
 #[derive(Debug, thiserror::Error)]
 pub enum IccError {

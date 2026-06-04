@@ -419,3 +419,162 @@ pub fn emit_shadow_stamp(
 
 #[allow(unused)]
 fn _color_check(_: Color, _: Ref) {}
+
+/// Gradient feather — the vector encoding. The rasterizer blends the
+/// already-drawn target toward paper inside the path by
+/// `1 − aa·(1 − gradient_alpha)` (see `apply_alpha_factor` in
+/// paged-gpu); the exact PDF equivalent at the same z-position is a
+/// paper-coloured fill of the path under a LUMINOSITY soft mask
+/// whose gray value is `1 − gradient_alpha` along the feather axis:
+/// overlay opacity = mask luminosity = 1 − gradient_alpha, i.e. the
+/// content underneath fades to paper precisely where the canvas
+/// fades it. Fully vector — no raster stamp.
+pub fn emit_gradient_feather(
+    content: &mut Content,
+    state: &mut DocState,
+    resources: &mut PageResources,
+    pending_forms: &mut Vec<crate::writer::PendingForm>,
+    path: &PathData,
+    transform: &Transform,
+    params: &paged_compose::GradientFeather,
+) {
+    if params.stops.is_empty() {
+        return;
+    }
+    // Everything in page space (the transform applied point-wise, as
+    // the rasterizer does for both path and axis).
+    let page_path = crate::page::transform_path(path, transform);
+    let bbox = crate::page::path_bbox(&page_path);
+    let t = transform.0;
+    let map = |x: f32, y: f32| -> (f32, f32) {
+        (t[0] * x + t[2] * y + t[4], t[1] * x + t[3] * y + t[5])
+    };
+    let (sx, sy) = map(params.start_x, params.start_y);
+    let (ex, ey) = map(params.end_x, params.end_y);
+
+    // Sorted (location, mask gray = 1 − alpha) stops.
+    let mut stops: Vec<(f32, f32)> = params
+        .stops
+        .iter()
+        .map(|s| (s.location.clamp(0.0, 1.0), 1.0 - s.alpha.clamp(0.0, 1.0)))
+        .collect();
+    stops.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // DeviceGray shading along the feather axis. Degenerate axis ⇒
+    // uniform first-stop value (rasterizer parity).
+    let degenerate = {
+        let dx = ex - sx;
+        let dy = ey - sy;
+        dx * dx + dy * dy < 1e-6
+    };
+    let fn_ref = state.refs.alloc();
+    if degenerate || stops.len() == 1 {
+        let g = stops[0].1;
+        let mut f = state.pdf.exponential_function(fn_ref);
+        f.domain([0.0, 1.0]);
+        f.range([0.0, 1.0]);
+        f.c0([g]);
+        f.c1([g]);
+        f.n(1.0);
+        f.finish();
+    } else if stops.len() == 2 {
+        let mut f = state.pdf.exponential_function(fn_ref);
+        f.domain([0.0, 1.0]);
+        f.range([0.0, 1.0]);
+        f.c0([stops[0].1]);
+        f.c1([stops[1].1]);
+        f.n(1.0);
+        f.finish();
+    } else {
+        let mut seg_refs = Vec::new();
+        for pair in stops.windows(2) {
+            let seg_ref = state.refs.alloc();
+            let mut f = state.pdf.exponential_function(seg_ref);
+            f.domain([0.0, 1.0]);
+            f.range([0.0, 1.0]);
+            f.c0([pair[0].1]);
+            f.c1([pair[1].1]);
+            f.n(1.0);
+            f.finish();
+            seg_refs.push(seg_ref);
+        }
+        let mut f = state.pdf.stitching_function(fn_ref);
+        f.domain([0.0, 1.0]);
+        f.range([0.0, 1.0]);
+        f.functions(seg_refs.iter().copied());
+        let bounds: Vec<f32> = stops[1..stops.len() - 1].iter().map(|s| s.0).collect();
+        f.bounds(bounds.iter().copied());
+        let encode: Vec<f32> = seg_refs.iter().flat_map(|_| [0.0, 1.0]).collect();
+        f.encode(encode.iter().copied());
+        f.finish();
+    }
+
+    let shading_ref = state.refs.alloc();
+    {
+        let mut sh = state.pdf.function_shading(shading_ref);
+        match params.kind {
+            paged_compose::GradientFeatherKind::Linear => {
+                sh.shading_type(pdf_writer::types::FunctionShadingType::Axial);
+                sh.coords([sx, sy, ex, ey]);
+            }
+            paged_compose::GradientFeatherKind::Radial => {
+                let r = ((ex - sx).powi(2) + (ey - sy).powi(2)).sqrt().max(1e-3);
+                sh.shading_type(pdf_writer::types::FunctionShadingType::Radial);
+                sh.coords([sx, sy, 0.0, sx, sy, r]);
+            }
+        }
+        sh.color_space().device_gray();
+        sh.function(fn_ref);
+        sh.extend([true, true]);
+        sh.finish();
+    }
+    let sh_name = format!("Sh{}", resources.shadings.len());
+    resources.shadings.insert(sh_name.clone(), shading_ref);
+
+    // The mask group: clip to the path, paint the gray shading. It
+    // shares the page's /Resources (written by ref at page finish).
+    let mut mask = Content::new();
+    crate::path::emit_path(&mut mask, &page_path);
+    mask.clip_nonzero();
+    mask.end_path();
+    mask.shading(Name(sh_name.as_bytes()));
+    let mask_ref = state.refs.alloc();
+    let pad = 1.0;
+    pending_forms.push(crate::writer::PendingForm {
+        form_ref: mask_ref,
+        data: mask.finish().to_vec(),
+        bbox: pdf_writer::Rect::new(
+            bbox.x - pad,
+            bbox.y - pad,
+            bbox.x + bbox.w + pad,
+            bbox.y + bbox.h + pad,
+        ),
+        group: crate::writer::PendingFormGroup::LuminosityGray,
+    });
+
+    // ExtGState carrying the soft mask (unique per feather — masks
+    // aren't poolable by the simple blend/alpha key).
+    let gs_ref = state.refs.alloc();
+    {
+        let mut gs = state.pdf.ext_graphics(gs_ref);
+        let mut sm = gs.soft_mask();
+        sm.subtype(pdf_writer::types::MaskType::Luminosity);
+        sm.group(mask_ref);
+        // Outside the BBox the mask evaluates to the backdrop:
+        // black ⇒ overlay alpha 0 ⇒ untouched (matches aa = 0).
+        sm.backdrop([0.0]);
+        sm.finish();
+        gs.finish();
+    }
+    let gs_name = format!("GsSm{}", resources.ext_g_states.len());
+    resources.ext_g_states.insert(gs_name.clone(), gs_ref);
+
+    // Paper overlay: 0/0/0/0 CMYK (no ink) under the mask. The gs —
+    // and with it the soft mask — dies with the Q.
+    content.save_state();
+    content.set_parameters(Name(gs_name.as_bytes()));
+    content.set_fill_cmyk(0.0, 0.0, 0.0, 0.0);
+    crate::path::emit_path(content, &page_path);
+    content.fill_nonzero();
+    content.restore_state();
+}

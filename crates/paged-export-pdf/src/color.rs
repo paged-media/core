@@ -103,7 +103,7 @@ pub fn set_fill_paint(
                     content.set_fill_color([t]);
                 }
                 None => {
-                    set_cmyk_fill(content, state, resources, input, [*c, *m, *y, *k]);
+                    set_cmyk(content, state, resources, input, [*c, *m, *y, *k], false);
                 }
             }
             true
@@ -140,14 +140,7 @@ pub fn set_stroke_paint(
                     content.set_stroke_color([t]);
                 }
                 None => {
-                    if let Some(name) = cmyk_space(state, resources, input) {
-                        content.set_stroke_color_space(
-                            pdf_writer::types::ColorSpaceOperand::Named(Name(name.as_bytes())),
-                        );
-                        content.set_stroke_color([*c, *m, *y, *k]);
-                    } else {
-                        content.set_stroke_cmyk(*c, *m, *y, *k);
-                    }
+                    set_cmyk(content, state, resources, input, [*c, *m, *y, *k], true);
                 }
             }
             true
@@ -164,41 +157,79 @@ fn set_solid(
     c: Color,
     stroke: bool,
 ) {
-    let [r, g, b] = srgb_of(c);
-    match srgb_space(state, resources, input) {
-        Some(name) => {
-            let operand = pdf_writer::types::ColorSpaceOperand::Named(Name(name.as_bytes()));
-            if stroke {
-                content.set_stroke_color_space(operand);
-                content.set_stroke_color([r, g, b]);
-            } else {
-                content.set_fill_color_space(operand);
-                content.set_fill_color([r, g, b]);
-            }
+    // The list carries linear light; encode to sRGB, then hand the
+    // value to the CMM's export seam — under ConvertToDestination
+    // it comes back as destination CMYK, under Preserve Numbers it
+    // passes through and encodes as sRGB ICCBased.
+    let rgb = srgb_of(c);
+    match input
+        .cmm
+        .convert_for_export(paged_color::WorkingColor::Rgb(rgb))
+    {
+        paged_color::WorkingColor::Cmyk(out) => {
+            let cmyk = [out.c / 100.0, out.m / 100.0, out.y / 100.0, out.k / 100.0];
+            set_cmyk(content, state, resources, input, cmyk, stroke);
         }
-        None => {
-            if stroke {
-                content.set_stroke_rgb(r, g, b);
-            } else {
-                content.set_fill_rgb(r, g, b);
+        paged_color::WorkingColor::Gray(pct) => {
+            // Defensive — the seam never returns Gray today.
+            set_cmyk(content, state, resources, input, [0.0, 0.0, 0.0, pct / 100.0], stroke);
+        }
+        // Rgb passthrough (and Lab, which cannot arise from an Rgb
+        // input — encode its analytic sRGB if it ever does).
+        wc => {
+            let [r, g, b] = match wc {
+                paged_color::WorkingColor::Rgb(rgb) => rgb,
+                paged_color::WorkingColor::Lab { l, a, b } => {
+                    paged_color::lab::lab_d50_to_srgb_encoded(l, a, b)
+                }
+                _ => unreachable!(),
+            };
+            match srgb_space(state, resources, input) {
+                Some(name) => {
+                    let operand =
+                        pdf_writer::types::ColorSpaceOperand::Named(Name(name.as_bytes()));
+                    if stroke {
+                        content.set_stroke_color_space(operand);
+                        content.set_stroke_color([r, g, b]);
+                    } else {
+                        content.set_fill_color_space(operand);
+                        content.set_fill_color([r, g, b]);
+                    }
+                }
+                None => {
+                    if stroke {
+                        content.set_stroke_rgb(r, g, b);
+                    } else {
+                        content.set_fill_rgb(r, g, b);
+                    }
+                }
             }
         }
     }
 }
 
-fn set_cmyk_fill(
+fn set_cmyk(
     content: &mut Content,
     state: &mut DocState,
     resources: &mut PageResources,
     input: &ExportInput<'_>,
     cmyk: [f32; 4],
+    stroke: bool,
 ) {
     match cmyk_space(state, resources, input) {
         Some(name) => {
-            content.set_fill_color_space(pdf_writer::types::ColorSpaceOperand::Named(Name(
-                name.as_bytes(),
-            )));
-            content.set_fill_color(cmyk);
+            let operand =
+                pdf_writer::types::ColorSpaceOperand::Named(Name(name.as_bytes()));
+            if stroke {
+                content.set_stroke_color_space(operand);
+                content.set_stroke_color(cmyk);
+            } else {
+                content.set_fill_color_space(operand);
+                content.set_fill_color(cmyk);
+            }
+        }
+        None if stroke => {
+            content.set_stroke_cmyk(cmyk[0], cmyk[1], cmyk[2], cmyk[3]);
         }
         None => {
             content.set_fill_cmyk(cmyk[0], cmyk[1], cmyk[2], cmyk[3]);

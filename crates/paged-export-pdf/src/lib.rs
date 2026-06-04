@@ -63,6 +63,18 @@ pub enum ExportColorPolicy {
     ConvertToDestination,
 }
 
+/// The caller configures the CMM with this BEFORE building
+/// [`ExportInput`] (`IccCmm::configure_export(profile, policy.into())`)
+/// — the exporter itself only holds `&dyn Cmm` and cannot mutate it.
+impl From<ExportColorPolicy> for paged_color::ExportPolicy {
+    fn from(p: ExportColorPolicy) -> Self {
+        match p {
+            ExportColorPolicy::PreserveNumbers => Self::PreserveNumbers,
+            ExportColorPolicy::ConvertToDestination => Self::ConvertToDestination,
+        }
+    }
+}
+
 /// Printer's marks selection. All drawn OUTSIDE the trim, by the
 /// exporter only — they never touch the document scene.
 #[derive(Debug, Clone, Copy, Default)]
