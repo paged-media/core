@@ -173,6 +173,21 @@ pub fn emit_glyph_slice_blend<O, F>(
         // the baseline (`gy`) without touching the advance or leading.
         let sy = scale * g.y_scale;
         let transform = Transform([sx, 0.0, 0.0, -sy, gx, gy]);
+        // Concept 3 — glyph-run side-channel (collect_glyph_runs
+        // builds only): record the parallel text-run entry BEFORE
+        // pushing, so command_index points at the outline command.
+        if let Some(runs) = list.glyph_runs.as_mut() {
+            runs.push(crate::display_list::GlyphRunEntry {
+                command_index: list.commands.len() as u32,
+                font_id,
+                glyph_id: g.glyph_id,
+                font_size: point_size,
+                transform,
+                paint,
+                unicode: g.ch,
+                is_stroke: false,
+            });
+        }
         if normal {
             list.push(DisplayCommand::FillPath {
                 path_id,
@@ -234,6 +249,21 @@ pub fn emit_glyph_slice_stroke<O, S>(
         // the baseline (`gy`) without touching the advance or leading.
         let sy = scale * g.y_scale;
         let transform = Transform([sx, 0.0, 0.0, -sy, gx, gy]);
+        // Concept 3 — glyph-run side-channel (stroked text keeps
+        // is_stroke so the exporter falls back to the outline: PDF
+        // text render mode 1 strokes are a refinement).
+        if let Some(runs) = list.glyph_runs.as_mut() {
+            runs.push(crate::display_list::GlyphRunEntry {
+                command_index: list.commands.len() as u32,
+                font_id,
+                glyph_id: g.glyph_id,
+                font_size: point_size,
+                transform,
+                paint,
+                unicode: g.ch,
+                is_stroke: true,
+            });
+        }
         list.push(DisplayCommand::StrokePath {
             path_id,
             paint,
@@ -423,6 +453,7 @@ mod tests {
             strikethru: false,
             x_scale,
             y_scale,
+            ch: None,
         };
         let mut list = DisplayList::new();
         for g in [glyph(1.0, 1.0), glyph(1.0, 2.0)] {
@@ -466,6 +497,7 @@ mod tests {
             strikethru: false,
             x_scale: 1.0,
             y_scale: 1.0,
+            ch: None,
         }];
         let glyphs_b = vec![PositionedGlyph {
             glyph_id: 65,
@@ -479,6 +511,7 @@ mod tests {
             strikethru: false,
             x_scale: 1.0,
             y_scale: 1.0,
+            ch: None,
         }];
         emit_glyph_slice(
             &glyphs_a,

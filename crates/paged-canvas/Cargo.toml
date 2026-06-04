@@ -25,6 +25,7 @@ paged-compose = { path = "../paged-compose" }
 paged-text = { path = "../paged-text" }
 paged-mutate = { path = "../paged-mutate" }
 paged-color = { path = "../paged-color" }
+paged-export-pdf = { path = "../paged-export-pdf" }
 serde = { workspace = true }
 serde_json = "1"
 tsify-next = { workspace = true }

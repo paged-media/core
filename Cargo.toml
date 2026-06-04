@@ -16,6 +16,7 @@ members = [
     "crates/paged-gen",
     "crates/paged-canvas",
     "crates/paged-canvas-wasm",
+    "crates/paged-export-pdf",
     "crates/paged-script",
     "spikes/vello-eval",
     "spikes/composer-calibration",

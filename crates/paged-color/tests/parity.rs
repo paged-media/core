@@ -191,3 +191,57 @@ fn pure_black_stays_black_on_both_cmms() {
         );
     }
 }
+
+/// Concept 3 — `ConvertToDestination` over a real profile: RGB
+/// primaries land at plausible CMYK separations, and the policy's
+/// number-preservation invariants hold with a destination present.
+#[test]
+fn convert_to_destination_over_real_profile() {
+    use paged_color::{Cmm, DisplaySetup, ExportPolicy, IccCmm, WorkingColor};
+    let Some(profile) = find_profile() else {
+        eprintln!("parity: no CMYK profile — skipping");
+        return;
+    };
+    let mut cmm = IccCmm::new(Some(&profile), DisplaySetup::default());
+    cmm.configure_export(Some(&profile), ExportPolicy::ConvertToDestination);
+
+    // White paper → (near-)zero everything.
+    match cmm.convert_for_export(WorkingColor::Rgb([1.0, 1.0, 1.0])) {
+        WorkingColor::Cmyk(out) => {
+            assert!(
+                out.c < 3.0 && out.m < 3.0 && out.y < 3.0 && out.k < 3.0,
+                "white → {out:?}"
+            );
+        }
+        other => panic!("expected Cmyk, got {other:?}"),
+    }
+    // Saturated red → magenta+yellow dominant, low cyan.
+    match cmm.convert_for_export(WorkingColor::Rgb([1.0, 0.0, 0.0])) {
+        WorkingColor::Cmyk(out) => {
+            assert!(
+                out.m > 50.0 && out.y > 50.0 && out.c < 20.0,
+                "red → {out:?}"
+            );
+        }
+        other => panic!("expected Cmyk, got {other:?}"),
+    }
+    // Lab mid-grey → roughly neutral separation.
+    match cmm.convert_for_export(WorkingColor::Lab { l: 50.0, a: 0.0, b: 0.0 }) {
+        WorkingColor::Cmyk(out) => {
+            let coverage = out.c + out.m + out.y + out.k;
+            assert!(
+                coverage > 20.0 && coverage < 250.0,
+                "Lab grey → {out:?}"
+            );
+        }
+        other => panic!("expected Cmyk, got {other:?}"),
+    }
+    // CMYK still byte-preserved with a destination configured.
+    let k100 = Cmyk { c: 0.0, m: 0.0, y: 0.0, k: 100.0 };
+    match cmm.convert_for_export(WorkingColor::Cmyk(k100)) {
+        WorkingColor::Cmyk(out) => {
+            assert_eq!((out.c, out.m, out.y, out.k), (0.0, 0.0, 0.0, 100.0));
+        }
+        other => panic!("expected Cmyk, got {other:?}"),
+    }
+}

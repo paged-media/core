@@ -63,11 +63,65 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(25);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(26);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 pub struct ProtocolVersion(pub u32);
+
+/// Concept 3 — PDF export options as the dialog sends them. Every
+/// field is optional/defaulted so the wire stays forward-compatible;
+/// the worker maps it onto `paged_export_pdf::ExportOptions`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportPdfWireOptions {
+    /// "pdf17" (default) | "pdfx4".
+    #[serde(default)]
+    pub standard: Option<String>,
+    /// Output-intent profile NAME, resolved against the worker's
+    /// registered profile registry. `None` ⇒ the active working
+    /// space profile.
+    #[serde(default)]
+    pub output_intent_profile: Option<String>,
+    /// Human-readable output condition for the OutputIntent dict.
+    #[serde(default)]
+    pub output_condition: Option<String>,
+    /// "preserveNumbers" (default) | "convertToDestination".
+    #[serde(default)]
+    pub color_policy: Option<String>,
+    /// 0-based inclusive page range; both `None` = all pages.
+    #[serde(default)]
+    pub page_from: Option<u32>,
+    #[serde(default)]
+    pub page_to: Option<u32>,
+    #[serde(default)]
+    pub crop_marks: bool,
+    #[serde(default)]
+    pub registration_marks: bool,
+    #[serde(default)]
+    pub color_bars: bool,
+    #[serde(default)]
+    pub page_info: bool,
+    #[serde(default)]
+    pub marks_offset_pt: Option<f32>,
+    /// Bleed override in pt (top, inside/left, bottom,
+    /// outside/right); `None` = the document's declared bleed.
+    #[serde(default)]
+    pub bleed_override_pt: Option<[f32; 4]>,
+    /// Resample images above this effective ppi; `None` = never.
+    #[serde(default)]
+    pub downsample_ppi: Option<f32>,
+    /// Raster resolution for effect soft-mask stamps (default 150).
+    #[serde(default)]
+    pub effect_dpi: Option<f32>,
+    /// "outline" (default) | "fail".
+    #[serde(default)]
+    pub restricted_font_policy: Option<String>,
+    /// Document title for Info/XMP.
+    #[serde(default)]
+    pub title: Option<String>,
+}
 
 /// One message from main → worker. (Tsify derive intentionally
 /// omitted; see `TS_ENVELOPES` above for the TS-side declaration.)
@@ -302,6 +356,21 @@ pub enum MainToWorkerKind {
     /// `Operation::SetProperty` (same channel as gestures + REPL)
     /// so undo/redo work identically. Reply: `ScriptResult`.
     ExecuteScript { source: String },
+    /// Concept 3 — open a PDF export session. The worker re-runs the
+    /// scene build one-shot (glyph side-channel on, splice caches
+    /// off) and parks the writer state under a session id. Reply:
+    /// `ExportPdfBegun` (or `ExportPdfFailed`).
+    ExportPdfBegin { options: ExportPdfWireOptions },
+    /// Concept 3 — export ONE page of the session. The main thread
+    /// drives this loop, which is what makes progress + cancellation
+    /// real on a synchronous worker. Reply: `ExportPdfProgress`.
+    ExportPdfPage { session: u32 },
+    /// Concept 3 — serialise the finished document and drop the
+    /// session. Reply: `PdfExported`.
+    ExportPdfFinish { session: u32 },
+    /// Concept 3 — abandon an in-flight session (dialog Cancel /
+    /// AbortSignal). Reply: `ExportPdfCancelled`.
+    ExportPdfCancel { session: u32 },
     /// Inspector P1 — return a property snapshot for one element so
     /// the Inspector panel can render typed editors. Reply:
     /// `ElementProperties`. Each entry carries the property path +
@@ -638,6 +707,23 @@ pub enum WorkerToMainKind {
         #[tsify(type = "number[]")]
         ase_bytes: ByteBuf,
     },
+    /// Concept 3 — `ExportPdfBegin` reply.
+    ExportPdfBegun { session: u32, page_count: u32 },
+    /// Concept 3 — `ExportPdfPage` reply (one page exported).
+    ExportPdfProgress { session: u32, done: u32, total: u32 },
+    /// Concept 3 — `ExportPdfFinish` reply. `diagnostics` carries
+    /// non-fatal findings (restricted fonts outlined, images with
+    /// missing bytes) for the dialog's summary line.
+    PdfExported {
+        #[tsify(type = "number[]")]
+        pdf_bytes: ByteBuf,
+        diagnostics: Vec<String>,
+    },
+    /// Concept 3 — `ExportPdfCancel` reply.
+    ExportPdfCancelled { session: u32 },
+    /// Concept 3 — any export request that could not be honoured
+    /// (unknown session, bad options, build/write failure).
+    ExportPdfFailed { error: String },
     /// Inspector P1 — `RequestElementProperties` reply. `None` when
     /// the id doesn't resolve.
     ElementProperties {
@@ -993,6 +1079,12 @@ pub struct DocumentMeta {
     /// is `None` until a registered profile is active by name.
     #[serde(default)]
     pub cmyk_profile_name: Option<String>,
+    /// Concept 3 — true when ACTUAL profile bytes back the working
+    /// space (explicit load bytes or a registry hit). The NAME above
+    /// can be a designmap declaration with no bytes behind it — the
+    /// export dialog's X-4 gate needs this, not the name.
+    #[serde(default)]
+    pub cmyk_profile_active: bool,
     #[serde(default)]
     pub rgb_policy: Option<String>,
     #[serde(default)]

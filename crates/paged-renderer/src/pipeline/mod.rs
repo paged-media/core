@@ -147,6 +147,11 @@ pub struct PipelineOptions<'a> {
     /// Concept 2 — black-point compensation for the CMYK display
     /// transform. Default `true` (the previously hardcoded value).
     pub cmyk_bpc: bool,
+    /// Concept 3 (PDF export) — record the glyph-run side-channel
+    /// on every page's display list so the exporter can emit real
+    /// text. Default `false`: the live canvas build never pays for
+    /// it and the command stream stays byte-identical.
+    pub collect_glyph_runs: bool,
     /// Synthetic drop shadow applied to every TextFrame and
     /// Rectangle. Useful for tooling demos and as a stopgap until
     /// `<TransparencySetting>` parsing lands and per-frame effects
@@ -308,6 +313,7 @@ impl Default for PipelineOptions<'_> {
             cmyk_icc_profile: None,
             cmyk_intent: paged_color::Intent::RelativeColorimetric,
             cmyk_bpc: true,
+            collect_glyph_runs: false,
             frame_drop_shadow: None,
             font_metrics_overrides: &[],
             missing_image_placeholder: true,
@@ -770,12 +776,16 @@ pub fn build_document(
                 .clone()
                 .map(PageId)
                 .unwrap_or_else(|| PageId::synthetic(spread_idx, local_idx));
+            let mut page_list = DisplayList::new();
+            if options.collect_glyph_runs {
+                page_list.glyph_runs = Some(paged_compose::GlyphRunTable::default());
+            }
             pages.push(BuiltPage {
                 id: page_id,
                 width_pt: bounds_in_spread.width(),
                 height_pt: bounds_in_spread.height(),
                 spread_origin: (bounds_in_spread.left, bounds_in_spread.top),
-                list: DisplayList::new(),
+                list: page_list,
                 layout_generation: 0,
                 numbering_generation: 0,
                 stats: PipelineStats::default(),
@@ -4682,6 +4692,7 @@ fn emit_paragraph_into_chain(
                 strikethru: false,
                 x_scale: 1.0,
                 y_scale: 1.0,
+                ch: None,
             });
             pen_x += g.x_advance;
         }
@@ -7164,6 +7175,7 @@ fn emit_ruby_for_line(
                 strikethru: false,
                 x_scale: 1.0,
                 y_scale: 1.0,
+                ch: None,
             });
             cursor = cursor.saturating_add(g.x_advance);
         }
@@ -7690,6 +7702,13 @@ struct FontMetrics {
 }
 
 impl FontTable {
+    /// Concept 3 (PDF export) — the ORIGINAL face bytes for a
+    /// font-table id, for subsetting/embedding. `None` for unknown
+    /// ids.
+    pub fn face_data(&self, font_id: u32) -> Option<&[u8]> {
+        self.face_bytes.get(&font_id).map(|b| b.as_ref())
+    }
+
     pub fn build(document: &Document, options: &PipelineOptions) -> Self {
         let fallback = options.font.map(Bytes::copy_from_slice);
         let mut cache: HashMap<(String, Option<String>), Bytes> = HashMap::new();
@@ -8050,6 +8069,16 @@ fn fnv_1a_u32(bytes: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_options_do_not_collect_glyph_runs() {
+        // Load-bearing invariant: the glyph side-channel is opt-in.
+        // With the default options every capture site no-ops, so the
+        // canvas/CI command stream stays byte-identical to before the
+        // PDF exporter existed. Flipping this default would silently
+        // change every consumer — do it only on purpose.
+        assert!(!PipelineOptions::default().collect_glyph_runs);
+    }
 
     #[test]
     fn position_metrics_super_sub_and_normal() {
