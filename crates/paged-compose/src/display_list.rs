@@ -1011,6 +1011,12 @@ pub struct DecodedImage {
     /// must equal `width * height * 4` when populated. Empty when
     /// the rasterizer is expected to decode `encoded` lazily.
     pub rgba: bytes::Bytes,
+    /// Concept 3 — the image's embedded ICC profile (JPEG APP2 /
+    /// PNG iCCP) when the decoder retained it. The PDF exporter
+    /// tags the image XObject with it so placed assets keep their
+    /// colour space (concept E7); rasterizers ignore it. `None`
+    /// default — every existing constructor stays valid.
+    pub icc: Option<bytes::Bytes>,
 }
 
 /// Stroke parameters. Widths are in pt.
@@ -1086,6 +1092,46 @@ pub enum LineJoin {
     Bevel,
 }
 
+/// Concept 3 (PDF export) — one captured glyph: the side-channel
+/// record paralleling the outline `FillPath`/`StrokePath` command at
+/// `command_index`. Captured ONLY when
+/// `PipelineOptions::collect_glyph_runs` is set (the canvas default
+/// is off — the live render path never pays for this); the PDF
+/// backend skips the outline command and emits real text (`Tf`/`Tm`/
+/// `TJ`) instead, with the unicode codepoint feeding `/ToUnicode`.
+#[derive(Debug, Clone)]
+pub struct GlyphRunEntry {
+    /// Index of the parallel outline command in
+    /// `DisplayList::commands`.
+    pub command_index: u32,
+    /// The renderer's font-table id (resolves to face bytes).
+    pub font_id: u32,
+    pub glyph_id: u32,
+    pub font_size: f32,
+    /// The EXACT affine the outline command received — reused
+    /// verbatim as the PDF text matrix so text lands
+    /// pixel-identical to the outline it replaces.
+    pub transform: Transform,
+    pub paint: Paint,
+    /// The character(s) this glyph represents, for `/ToUnicode`.
+    /// Single char covers the common case; ligatures carry the
+    /// first char v1 (multi-char mapping is a refinement).
+    pub unicode: Option<char>,
+    pub is_stroke: bool,
+}
+
+/// Concept 3 — the per-list glyph capture (see [`GlyphRunEntry`]).
+#[derive(Debug, Default)]
+pub struct GlyphRunTable {
+    pub entries: Vec<GlyphRunEntry>,
+}
+
+impl GlyphRunTable {
+    pub fn push(&mut self, entry: GlyphRunEntry) {
+        self.entries.push(entry);
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct DisplayList {
     pub paths: PathBuffer,
@@ -1099,6 +1145,11 @@ pub struct DisplayList {
     /// spot-on-same-spot overprints (which compose per-pixel `max`) vs.
     /// different-named-ink overprints (which accumulate independently).
     pub spot_inks: Vec<SpotInk>,
+    /// Concept 3 — glyph-run side-channel for the PDF exporter.
+    /// `None` unless the build ran with
+    /// `PipelineOptions::collect_glyph_runs`; rasterizers never read
+    /// it.
+    pub glyph_runs: Option<GlyphRunTable>,
 }
 
 impl DisplayList {

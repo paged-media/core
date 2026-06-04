@@ -28,7 +28,8 @@ pub mod text;
 pub use display_list::{
     BevelEmboss, BlendMode, Color, DashPattern, DecodedImage, DirectionalFeather, DisplayCommand,
     DisplayList, DropShadow, Feather, FeatherCornerType, GlyphCacheKey, GradientFeather,
-    GradientFeatherKind, GradientFeatherStop, GradientId, GradientStop, ImageId, InnerGlow,
+    GradientFeatherKind, GradientFeatherStop, GradientId, GradientStop, GlyphRunEntry,
+    GlyphRunTable, ImageId, InnerGlow,
     InnerShadow, LayerEffect, LineCap, LineJoin, LinearGradient, OuterGlow, Paint, PathBuffer,
     PathData, PathId, PathSegment, RadialGradient, Rect, Satin, SpotInk, SpotInkId, Stroke,
     Transform,

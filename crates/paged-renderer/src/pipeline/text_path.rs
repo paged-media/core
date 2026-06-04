@@ -619,6 +619,20 @@ pub(super) fn emit_text_path_into(
         let rs_d = r[1] * s_diag[2] + r[3] * s_diag[3];
         let inner = Transform([rs_a, rs_b, rs_c, rs_d, rtl_tx + px, rtl_ty + py]);
         let final_xf = outer.compose(&inner);
+        // Concept 3 — glyph-run side-channel (text-on-path glyphs
+        // carry a rotated affine; the exporter reuses it verbatim).
+        if let Some(runs) = page.list.glyph_runs.as_mut() {
+            runs.push(paged_compose::GlyphRunEntry {
+                command_index: page.list.commands.len() as u32,
+                font_id: face_font_ids[g.face_idx],
+                glyph_id: g.glyph_id,
+                font_size: g.point_size,
+                transform: final_xf,
+                paint: g.paint,
+                unicode: None,
+                is_stroke: false,
+            });
+        }
         page.list.push(paged_compose::DisplayCommand::FillPath {
             path_id,
             paint: g.paint,

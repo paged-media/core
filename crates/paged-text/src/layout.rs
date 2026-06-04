@@ -68,6 +68,11 @@ pub struct PositionedGlyph {
     /// glyph-emit affine y-scale (twin of `x_scale`); scales glyph
     /// height without changing the line's advance or leading.
     pub y_scale: f32,
+    /// Concept 3 (PDF export) — the source character at `cluster`,
+    /// captured at layout time (the only place the text is in
+    /// scope). Feeds the exporter's `/ToUnicode` CMap; rasterizers
+    /// ignore it. `None` for synthetic glyphs.
+    pub ch: Option<char>,
 }
 
 #[derive(Debug, Clone)]
@@ -238,6 +243,7 @@ pub fn position_line(
             x: pen_x + g.x_offset,
             y: baseline_y + g.y_offset,
             x_advance: g.x_advance,
+            ch: None,
             font_id: 0,
             point_size: 0.0,
             underline: false,
@@ -818,6 +824,10 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                 strikethru: run.strikethru,
                 x_scale: (run.horizontal_scale_pct / 100.0).max(0.0),
                 y_scale: (run.vertical_scale_pct / 100.0).max(0.0),
+                // Concept 3 — the source character, for /ToUnicode.
+                ch: paragraph_text
+                    .get(fg.cluster as usize..)
+                    .and_then(|s| s.chars().next()),
             });
             pen_x += fg.x_advance;
             last_run_idx = Some(fg.run_idx);
@@ -838,6 +848,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                         x: pen_x + g.x_offset,
                         y: baseline + g.y_offset - baseline_shift_64,
                         x_advance: g.x_advance,
+                        ch: Some('-'),
                         font_id: r.font_id,
                         point_size: r.point_size,
                         underline: r.underline,
@@ -1228,6 +1239,7 @@ impl<'a, 'b> LeaderContext<'a, 'b> {
                     x: pen_x + g.x_offset,
                     y: baseline_y + g.y_offset - baseline_shift_64,
                     x_advance: g.x_advance,
+                    ch: leader_str.chars().next(),
                     font_id: run.font_id,
                     point_size: run.point_size,
                     // Leaders don't carry underline / strikethrough —
@@ -1675,6 +1687,7 @@ mod tests {
             strikethru: false,
             x_scale: 1.0,
             y_scale: 1.0,
+            ch: None,
         }
     }
 
@@ -1710,6 +1723,7 @@ mod tests {
                 strikethru: false,
                 x_scale: 1.0,
                 y_scale: 1.0,
+                ch: None,
             });
             pen += adv;
         }
@@ -1919,6 +1933,7 @@ mod tests {
                 strikethru: false,
                 x_scale: 1.0,
                 y_scale: 1.0,
+                ch: None,
             });
             x += advance;
         }

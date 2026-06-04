@@ -87,6 +87,7 @@ fn peek_image_lazy(bytes: &[u8], max_px: u32) -> Option<paged_compose::DecodedIm
         height,
         encoded: bytes::Bytes::copy_from_slice(bytes),
         rgba: bytes::Bytes::new(),
+        icc: None,
     })
 }
 
@@ -125,6 +126,7 @@ fn decode_svg_bytes(bytes: &[u8], max_px: u32) -> Option<paged_compose::DecodedI
         height: h,
         encoded: bytes::Bytes::copy_from_slice(bytes),
         rgba: bytes::Bytes::from(pixmap.take()),
+        icc: None,
     })
 }
 
@@ -202,6 +204,7 @@ pub(super) fn decode_image_bytes_with_target_max(
         height,
         encoded: bytes::Bytes::copy_from_slice(bytes),
         rgba: bytes::Bytes::from(rgba.into_raw()),
+        icc: None,
     })
 }
 
@@ -272,5 +275,6 @@ fn decode_jpeg_scaled(bytes: &[u8], max_px: u32) -> Option<paged_compose::Decode
         height: h,
         encoded: bytes::Bytes::copy_from_slice(bytes),
         rgba: bytes::Bytes::from(rgba),
+        icc: None,
     })
 }
