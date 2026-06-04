@@ -124,6 +124,19 @@ pub enum MainToWorkerKind {
     /// `FontRegistryCleared`. Useful between two consecutive packs in a
     /// long-running worker.
     ClearFontRegistry,
+    /// Concept 2 — register a named ICC profile with the worker's
+    /// colour-profile registry (the `RegisterFont` pattern: sent any
+    /// time, persists across loads). Profiles are assets shipped by
+    /// the editor and loaded over the wire — never baked into the
+    /// wasm binary. `Mutation::SetColorSettings` resolves working-
+    /// space names against this registry; a document whose designmap
+    /// names a registered profile picks it up at load automatically.
+    /// Reply: `ColorProfileRegistered`.
+    RegisterColorProfile {
+        name: String,
+        #[tsify(type = "number[]")]
+        bytes: ByteBuf,
+    },
     /// Apply a content mutation. Phase 1 returns `MutationFailed`
     /// (NotImplemented). The message exists so the JS side can plumb
     /// it end-to-end now.
@@ -249,6 +262,26 @@ pub enum MainToWorkerKind {
     /// `Operation::SetSwatchValue` + a Color NodeId variant.
     RequestColorPreview {
         swatch_id: String,
+    },
+    /// Concept 2 — resolve an ARBITRARY colour value (not a swatch
+    /// ref) through the document's active colour management:
+    /// display RGB + out-of-gamut verdict. Powers the mixer's live
+    /// preview + warning triangle while the user drags sliders,
+    /// BEFORE any swatch exists. `space` is the SwatchSpec
+    /// vocabulary ("CMYK" | "RGB" | "LAB" | "Gray"); `value` its
+    /// channels; `tint` 0..=100; spot alternates resolve like a
+    /// swatch would. Reply: `ColorComputeReply`.
+    RequestColorCompute {
+        space: String,
+        value: Vec<f32>,
+        #[serde(default)]
+        tint: Option<f32>,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        alternate_space: Option<String>,
+        #[serde(default)]
+        alternate_value: Option<Vec<f32>>,
     },
     /// Scripting Stage 2 — execute a JS source string against the
     /// loaded document. The script's mutations route through
@@ -514,6 +547,8 @@ pub enum WorkerToMainKind {
     FontRegistered { family: String },
     /// `ClearFontRegistry` reply.
     FontRegistryCleared,
+    /// Concept 2 — `RegisterColorProfile` reply.
+    ColorProfileRegistered { name: String },
     /// Phase A — `SetElementSelection` reply. Echoes the post-update
     /// selection so the main thread can reconcile if its optimistic
     /// update drifted.
@@ -572,6 +607,12 @@ pub enum WorkerToMainKind {
     /// `result` is `None` when the swatch id doesn't resolve.
     ColorPreviewReply {
         result: Option<ColorPreview>,
+    },
+    /// Concept 2 — `RequestColorCompute` reply.
+    ColorComputeReply {
+        rgb_hex: String,
+        cmyk: Option<[f32; 4]>,
+        out_of_gamut: bool,
     },
     /// Inspector P1 — `RequestElementProperties` reply. `None` when
     /// the id doesn't resolve.
@@ -917,6 +958,18 @@ pub struct DocumentMeta {
     pub default_stroke_color: Option<String>,
     #[serde(default)]
     pub default_stroke_weight: Option<f32>,
+    /// Concept 2 — active colour-management settings (the state
+    /// `SetColorSettings` writes; seeded from the IDML designmap's
+    /// `CMYKProfile`/`SolidColorIntent` at load). `cmyk_profile_name`
+    /// is `None` until a registered profile is active by name.
+    #[serde(default)]
+    pub cmyk_profile_name: Option<String>,
+    #[serde(default)]
+    pub rgb_policy: Option<String>,
+    #[serde(default)]
+    pub rendering_intent: Option<String>,
+    #[serde(default)]
+    pub black_point_compensation: Option<bool>,
 }
 
 /// SDK Phase 3 — one swatch's identity + display name + kind.
@@ -1076,6 +1129,10 @@ pub struct ColorPreview {
     /// Display RGB as `#rrggbb`. Always present (the renderer
     /// computes a fallback RGB for every swatch).
     pub rgb_hex: String,
+    /// Concept 2 — out-of-gamut against the document's active CMYK
+    /// working space (false when no working profile is configured).
+    #[serde(default)]
+    pub out_of_gamut: bool,
 }
 
 /// SDK Phase 5 (v1 sweep) — one `<Article>` summary. Backs
@@ -1419,6 +1476,28 @@ pub enum Mutation {
         stroke_color: Option<String>,
         stroke_weight: Option<f32>,
     },
+    /// Concept 2 — replace the document's colour-management
+    /// settings. WHOLE-STATE semantics like `SetDocumentDefaults`
+    /// (the editor reads `DocumentMeta`, modifies, writes back the
+    /// full set). Not undoable (output/app configuration, not
+    /// content), but unlike the defaults it FORCES a full rebuild —
+    /// switching the CMYK working space must visibly change the
+    /// canvas (AC-3).
+    ///
+    /// `cmyk_profile_name` resolves against the
+    /// `RegisterColorProfile` registry; `None` restores the
+    /// load-time profile (the `LoadDocument` `cmykIccProfile` bytes
+    /// or a registry hit on the designmap's profile name). An
+    /// unknown name fails the mutation. `intent` is one of the four
+    /// ICC rendering-intent names; `None` ⇒ Relative Colorimetric.
+    /// `rgb_policy` is carried for Concept 3 ("preserve" |
+    /// "convertToWorkingSpace" | "off"); display ignores it today.
+    SetColorSettings {
+        cmyk_profile_name: Option<String>,
+        rgb_policy: Option<String>,
+        intent: Option<String>,
+        bpc: Option<bool>,
+    },
     /// Track J — insert a new anchor into a path-bearing element's
     /// PathPointArray at flat `index`. UI dispatches from a segment
     /// click in path-edit mode; `anchor` is the de Casteljau split
@@ -1686,6 +1765,7 @@ impl Mutation {
             Self::InsertLine { .. } => "InsertLine",
             Self::InsertPath { .. } => "InsertPath",
             Self::SetDocumentDefaults { .. } => "SetDocumentDefaults",
+            Self::SetColorSettings { .. } => "SetColorSettings",
             Self::PathPointInsert { .. } => "PathPointInsert",
             Self::PathPointRemove { .. } => "PathPointRemove",
             Self::PathOpenAt { .. } => "PathOpenAt",
