@@ -93,6 +93,33 @@ pub enum PropertyPathJson {
     PathOpenAt,
     PageBounds,
     FrameGradientFeather,
+    CharacterFontFamily,
+    CharacterFontStyle,
+    CharacterKerningMethod,
+    CharacterCase,
+    CharacterPosition,
+    CharacterLanguage,
+    CharacterBaselineShift,
+    CharacterHorizontalScale,
+    CharacterVerticalScale,
+    CharacterSkew,
+    CharacterUnderline,
+    CharacterStrikethru,
+    CharacterLigatures,
+    CharacterOtfFeatures,
+    ParagraphLeftIndent,
+    ParagraphRightIndent,
+    ParagraphDropCapCharacters,
+    ParagraphDropCapLines,
+    ParagraphHyphenation,
+    ParagraphKeepLinesTogether,
+    ParagraphKeepWithNext,
+    ParagraphRuleAbove,
+    ParagraphRuleBelow,
+    ParagraphTabStops,
+    ParagraphListType,
+    ParagraphBulletCharacter,
+    ParagraphNumberingFormat,
 }
 
 impl From<PropertyPath> for PropertyPathJson {
@@ -152,6 +179,37 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::PathOpenAt => PropertyPathJson::PathOpenAt,
             PropertyPath::PageBounds => PropertyPathJson::PageBounds,
             PropertyPath::FrameGradientFeather => PropertyPathJson::FrameGradientFeather,
+            PropertyPath::CharacterFontFamily => PropertyPathJson::CharacterFontFamily,
+            PropertyPath::CharacterFontStyle => PropertyPathJson::CharacterFontStyle,
+            PropertyPath::CharacterKerningMethod => PropertyPathJson::CharacterKerningMethod,
+            PropertyPath::CharacterCase => PropertyPathJson::CharacterCase,
+            PropertyPath::CharacterPosition => PropertyPathJson::CharacterPosition,
+            PropertyPath::CharacterLanguage => PropertyPathJson::CharacterLanguage,
+            PropertyPath::CharacterBaselineShift => PropertyPathJson::CharacterBaselineShift,
+            PropertyPath::CharacterHorizontalScale => PropertyPathJson::CharacterHorizontalScale,
+            PropertyPath::CharacterVerticalScale => PropertyPathJson::CharacterVerticalScale,
+            PropertyPath::CharacterSkew => PropertyPathJson::CharacterSkew,
+            PropertyPath::CharacterUnderline => PropertyPathJson::CharacterUnderline,
+            PropertyPath::CharacterStrikethru => PropertyPathJson::CharacterStrikethru,
+            PropertyPath::CharacterLigatures => PropertyPathJson::CharacterLigatures,
+            PropertyPath::CharacterOtfFeatures => PropertyPathJson::CharacterOtfFeatures,
+            PropertyPath::ParagraphLeftIndent => PropertyPathJson::ParagraphLeftIndent,
+            PropertyPath::ParagraphRightIndent => PropertyPathJson::ParagraphRightIndent,
+            PropertyPath::ParagraphDropCapCharacters => {
+                PropertyPathJson::ParagraphDropCapCharacters
+            }
+            PropertyPath::ParagraphDropCapLines => PropertyPathJson::ParagraphDropCapLines,
+            PropertyPath::ParagraphHyphenation => PropertyPathJson::ParagraphHyphenation,
+            PropertyPath::ParagraphKeepLinesTogether => {
+                PropertyPathJson::ParagraphKeepLinesTogether
+            }
+            PropertyPath::ParagraphKeepWithNext => PropertyPathJson::ParagraphKeepWithNext,
+            PropertyPath::ParagraphRuleAbove => PropertyPathJson::ParagraphRuleAbove,
+            PropertyPath::ParagraphRuleBelow => PropertyPathJson::ParagraphRuleBelow,
+            PropertyPath::ParagraphTabStops => PropertyPathJson::ParagraphTabStops,
+            PropertyPath::ParagraphListType => PropertyPathJson::ParagraphListType,
+            PropertyPath::ParagraphBulletCharacter => PropertyPathJson::ParagraphBulletCharacter,
+            PropertyPath::ParagraphNumberingFormat => PropertyPathJson::ParagraphNumberingFormat,
         }
     }
 }
@@ -213,6 +271,37 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::PathOpenAt => PropertyPath::PathOpenAt,
             PropertyPathJson::PageBounds => PropertyPath::PageBounds,
             PropertyPathJson::FrameGradientFeather => PropertyPath::FrameGradientFeather,
+            PropertyPathJson::CharacterFontFamily => PropertyPath::CharacterFontFamily,
+            PropertyPathJson::CharacterFontStyle => PropertyPath::CharacterFontStyle,
+            PropertyPathJson::CharacterKerningMethod => PropertyPath::CharacterKerningMethod,
+            PropertyPathJson::CharacterCase => PropertyPath::CharacterCase,
+            PropertyPathJson::CharacterPosition => PropertyPath::CharacterPosition,
+            PropertyPathJson::CharacterLanguage => PropertyPath::CharacterLanguage,
+            PropertyPathJson::CharacterBaselineShift => PropertyPath::CharacterBaselineShift,
+            PropertyPathJson::CharacterHorizontalScale => PropertyPath::CharacterHorizontalScale,
+            PropertyPathJson::CharacterVerticalScale => PropertyPath::CharacterVerticalScale,
+            PropertyPathJson::CharacterSkew => PropertyPath::CharacterSkew,
+            PropertyPathJson::CharacterUnderline => PropertyPath::CharacterUnderline,
+            PropertyPathJson::CharacterStrikethru => PropertyPath::CharacterStrikethru,
+            PropertyPathJson::CharacterLigatures => PropertyPath::CharacterLigatures,
+            PropertyPathJson::CharacterOtfFeatures => PropertyPath::CharacterOtfFeatures,
+            PropertyPathJson::ParagraphLeftIndent => PropertyPath::ParagraphLeftIndent,
+            PropertyPathJson::ParagraphRightIndent => PropertyPath::ParagraphRightIndent,
+            PropertyPathJson::ParagraphDropCapCharacters => {
+                PropertyPath::ParagraphDropCapCharacters
+            }
+            PropertyPathJson::ParagraphDropCapLines => PropertyPath::ParagraphDropCapLines,
+            PropertyPathJson::ParagraphHyphenation => PropertyPath::ParagraphHyphenation,
+            PropertyPathJson::ParagraphKeepLinesTogether => {
+                PropertyPath::ParagraphKeepLinesTogether
+            }
+            PropertyPathJson::ParagraphKeepWithNext => PropertyPath::ParagraphKeepWithNext,
+            PropertyPathJson::ParagraphRuleAbove => PropertyPath::ParagraphRuleAbove,
+            PropertyPathJson::ParagraphRuleBelow => PropertyPath::ParagraphRuleBelow,
+            PropertyPathJson::ParagraphTabStops => PropertyPath::ParagraphTabStops,
+            PropertyPathJson::ParagraphListType => PropertyPath::ParagraphListType,
+            PropertyPathJson::ParagraphBulletCharacter => PropertyPath::ParagraphBulletCharacter,
+            PropertyPathJson::ParagraphNumberingFormat => PropertyPath::ParagraphNumberingFormat,
         }
     }
 }
@@ -276,7 +365,13 @@ impl From<Value> for AuthoredValue {
             | Value::PathPointCurveType { .. }
             | Value::FramePath { .. }
             | Value::PathOpenAt { .. }
-            | Value::GradientFeather(_) => AuthoredValue::None,
+            | Value::GradientFeather(_)
+            // W0.2 — whole-struct / whole-list paragraph payloads,
+            // like the gradient-feather struct: no scalar
+            // authored-value widget renders them, so they collapse
+            // to `None` for this exhaustive conversion.
+            | Value::ParagraphRule(_)
+            | Value::TabStops(_) => AuthoredValue::None,
         }
     }
 }

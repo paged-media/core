@@ -2409,11 +2409,49 @@ impl CanvasModel {
         let mut trackings: Vec<Option<f32>> = Vec::new();
         let mut fill_colors: Vec<Option<String>> = Vec::new();
         let mut applied_character_styles: Vec<String> = Vec::new();
+        // W0.1 — character formatting read-side. One bucket per
+        // mutable run field so the toolbar can populate its current
+        // state (and show "mixed" via collapse_uniform) before
+        // writing. String-valued fields collapse on the raw IDML
+        // attribute string; Option<bool> fields collapse on the
+        // `Some(_)` value (None ⇒ inherit, surfaced as no override).
+        let mut font_families: Vec<Option<String>> = Vec::new();
+        let mut font_styles: Vec<Option<String>> = Vec::new();
+        let mut kerning_methods: Vec<Option<String>> = Vec::new();
+        let mut capitalizations: Vec<Option<String>> = Vec::new();
+        let mut positions: Vec<Option<String>> = Vec::new();
+        let mut languages: Vec<Option<String>> = Vec::new();
+        let mut otf_features: Vec<Option<String>> = Vec::new();
+        let mut baseline_shifts: Vec<Option<f32>> = Vec::new();
+        let mut horizontal_scales: Vec<Option<f32>> = Vec::new();
+        let mut vertical_scales: Vec<Option<f32>> = Vec::new();
+        let mut skews: Vec<Option<f32>> = Vec::new();
+        let mut underlines: Vec<Option<bool>> = Vec::new();
+        let mut strikethrus: Vec<Option<bool>> = Vec::new();
+        let mut ligatures: Vec<Option<bool>> = Vec::new();
         let mut space_before: Vec<Option<f32>> = Vec::new();
         let mut space_after: Vec<Option<f32>> = Vec::new();
         let mut first_line_indent: Vec<Option<f32>> = Vec::new();
         let mut applied_paragraph_styles: Vec<String> = Vec::new();
         let mut justifications: Vec<String> = Vec::new();
+        // W0.2 — paragraph formatting read-side. One bucket per
+        // mutable paragraph field so the toolbar can populate its
+        // current state (and show "mixed" via collapse_uniform)
+        // before writing. Drop-cap counts collapse on the raw `u32`;
+        // bool fields collapse on the `Some(_)` value (None ⇒ inherit).
+        let mut left_indent: Vec<Option<f32>> = Vec::new();
+        let mut right_indent: Vec<Option<f32>> = Vec::new();
+        let mut drop_cap_characters: Vec<u32> = Vec::new();
+        let mut drop_cap_lines: Vec<u32> = Vec::new();
+        let mut hyphenations: Vec<Option<bool>> = Vec::new();
+        let mut keep_lines_together: Vec<Option<bool>> = Vec::new();
+        let mut keep_with_next: Vec<Option<u32>> = Vec::new();
+        let mut list_types: Vec<Option<String>> = Vec::new();
+        let mut bullet_characters: Vec<Option<u32>> = Vec::new();
+        let mut numbering_formats: Vec<Option<String>> = Vec::new();
+        let mut rule_aboves: Vec<paged_parse::styles::ParagraphRule> = Vec::new();
+        let mut rule_belows: Vec<paged_parse::styles::ParagraphRule> = Vec::new();
+        let mut tab_lists: Vec<Vec<paged_parse::TabStop>> = Vec::new();
 
         let mut char_offset: u32 = 0;
         for para in &story.paragraphs {
@@ -2439,6 +2477,20 @@ impl CanvasModel {
                         .map(|j| j.as_idml().to_string())
                         .unwrap_or_default(),
                 );
+                // W0.2 — paragraph formatting.
+                left_indent.push(para.left_indent);
+                right_indent.push(para.right_indent);
+                drop_cap_characters.push(para.drop_cap_characters);
+                drop_cap_lines.push(para.drop_cap_lines);
+                hyphenations.push(para.hyphenation);
+                keep_lines_together.push(para.keep_lines_together);
+                keep_with_next.push(para.keep_with_next);
+                list_types.push(para.bullets_list_type.clone());
+                bullet_characters.push(para.bullet_character);
+                numbering_formats.push(para.numbering_format.clone());
+                rule_aboves.push(para.rule_above.clone());
+                rule_belows.push(para.rule_below.clone());
+                tab_lists.push(para.tab_list.clone());
             }
 
             // Character-level walk: per run inside the paragraph.
@@ -2456,6 +2508,20 @@ impl CanvasModel {
                 fill_colors.push(run.fill_color.clone());
                 applied_character_styles
                     .push(run.character_style.clone().unwrap_or_default());
+                font_families.push(run.font.clone());
+                font_styles.push(run.font_style.clone());
+                kerning_methods.push(run.kerning_method.clone());
+                capitalizations.push(run.capitalization.clone());
+                positions.push(run.position.clone());
+                languages.push(run.applied_language.clone());
+                otf_features.push(run.otf_features.clone());
+                baseline_shifts.push(run.baseline_shift);
+                horizontal_scales.push(run.horizontal_scale);
+                vertical_scales.push(run.vertical_scale);
+                skews.push(run.skew);
+                underlines.push(run.underline);
+                strikethrus.push(run.strikethru);
+                ligatures.push(run.ligatures_on);
             }
         }
 
@@ -2512,6 +2578,158 @@ impl CanvasModel {
             PropertyEntry {
                 path: PropertyPath::ParagraphJustification,
                 value: collapse_uniform(&justifications).map(Value::Text),
+            },
+            // W0.1 — character formatting. String fields surface the
+            // raw IDML attribute (empty string ⇒ no override, matching
+            // the apply-side empty-clears convention); bool fields
+            // surface `Some(_)` collapsed (None ⇒ inherit ⇒ false).
+            PropertyEntry {
+                path: PropertyPath::CharacterFontFamily,
+                value: collapse_uniform(&font_families)
+                    .map(|o| Value::Text(o.unwrap_or_default())),
+            },
+            PropertyEntry {
+                path: PropertyPath::CharacterFontStyle,
+                value: collapse_uniform(&font_styles)
+                    .map(|o| Value::Text(o.unwrap_or_default())),
+            },
+            PropertyEntry {
+                path: PropertyPath::CharacterKerningMethod,
+                value: collapse_uniform(&kerning_methods)
+                    .map(|o| Value::Text(o.unwrap_or_default())),
+            },
+            PropertyEntry {
+                path: PropertyPath::CharacterCase,
+                value: collapse_uniform(&capitalizations)
+                    .map(|o| Value::Text(o.unwrap_or_default())),
+            },
+            PropertyEntry {
+                path: PropertyPath::CharacterPosition,
+                value: collapse_uniform(&positions).map(|o| Value::Text(o.unwrap_or_default())),
+            },
+            PropertyEntry {
+                path: PropertyPath::CharacterLanguage,
+                value: collapse_uniform(&languages).map(|o| Value::Text(o.unwrap_or_default())),
+            },
+            PropertyEntry {
+                path: PropertyPath::CharacterOtfFeatures,
+                value: collapse_uniform(&otf_features)
+                    .map(|o| Value::Text(o.unwrap_or_default())),
+            },
+            PropertyEntry {
+                path: PropertyPath::CharacterBaselineShift,
+                value: collapse_uniform(&baseline_shifts).map(Value::Length),
+            },
+            PropertyEntry {
+                path: PropertyPath::CharacterHorizontalScale,
+                value: collapse_uniform(&horizontal_scales).map(Value::Length),
+            },
+            PropertyEntry {
+                path: PropertyPath::CharacterVerticalScale,
+                value: collapse_uniform(&vertical_scales).map(Value::Length),
+            },
+            PropertyEntry {
+                path: PropertyPath::CharacterSkew,
+                value: collapse_uniform(&skews).map(Value::Length),
+            },
+            PropertyEntry {
+                path: PropertyPath::CharacterUnderline,
+                value: collapse_uniform(&underlines).map(|o| Value::Bool(o.unwrap_or(false))),
+            },
+            PropertyEntry {
+                path: PropertyPath::CharacterStrikethru,
+                value: collapse_uniform(&strikethrus).map(|o| Value::Bool(o.unwrap_or(false))),
+            },
+            PropertyEntry {
+                path: PropertyPath::CharacterLigatures,
+                value: collapse_uniform(&ligatures).map(|o| Value::Bool(o.unwrap_or(false))),
+            },
+            // W0.2 — paragraph formatting. Length fields surface the
+            // `Option<f32>` collapsed; drop-cap counts surface as
+            // integer-Length; bool fields surface `Some(_)` collapsed
+            // (None ⇒ inherit ⇒ the field's IDML default); string
+            // fields surface the raw IDML attribute (empty ⇒ no
+            // override). Rule structs / the tab list surface as their
+            // whole-struct / whole-list wire forms.
+            PropertyEntry {
+                path: PropertyPath::ParagraphLeftIndent,
+                value: collapse_uniform(&left_indent).map(Value::Length),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphRightIndent,
+                value: collapse_uniform(&right_indent).map(Value::Length),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphDropCapCharacters,
+                value: collapse_uniform(&drop_cap_characters)
+                    .map(|n| Value::Length(Some(n as f32))),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphDropCapLines,
+                value: collapse_uniform(&drop_cap_lines)
+                    .map(|n| Value::Length(Some(n as f32))),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphHyphenation,
+                value: collapse_uniform(&hyphenations)
+                    .map(|o| Value::Bool(o.unwrap_or(true))),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphKeepLinesTogether,
+                value: collapse_uniform(&keep_lines_together)
+                    .map(|o| Value::Bool(o.unwrap_or(false))),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphKeepWithNext,
+                value: collapse_uniform(&keep_with_next)
+                    .map(|o| Value::Length(o.map(|n| n as f32))),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphListType,
+                value: collapse_uniform(&list_types)
+                    .map(|o| Value::Text(o.unwrap_or_default())),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphBulletCharacter,
+                value: collapse_uniform(&bullet_characters).map(|o| {
+                    Value::Text(
+                        o.and_then(char::from_u32)
+                            .map(|c| c.to_string())
+                            .unwrap_or_default(),
+                    )
+                }),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphNumberingFormat,
+                value: collapse_uniform(&numbering_formats)
+                    .map(|o| Value::Text(o.unwrap_or_default())),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphRuleAbove,
+                value: collapse_uniform(&rule_aboves).map(|r| {
+                    Value::ParagraphRule(Some(
+                        paged_mutate::operation::ParagraphRuleSpec::from_parse(&r),
+                    ))
+                }),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphRuleBelow,
+                value: collapse_uniform(&rule_belows).map(|r| {
+                    Value::ParagraphRule(Some(
+                        paged_mutate::operation::ParagraphRuleSpec::from_parse(&r),
+                    ))
+                }),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphTabStops,
+                value: collapse_uniform(&tab_lists).map(|stops| {
+                    Value::TabStops(
+                        stops
+                            .iter()
+                            .map(paged_mutate::operation::TabStopSpec::from_parse)
+                            .collect(),
+                    )
+                }),
             },
         ];
 

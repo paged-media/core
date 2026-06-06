@@ -417,23 +417,56 @@ fn paged_inspect_story_range_returns_character_entries() {
         .iter()
         .find(|l| l.starts_with("[log] entries"))
         .expect("no entries line");
-    // 4 character paths + 3 paragraph paths + 2 applied-style
-    // paths = 9 entries.
-    assert!(entries_line.contains("9"), "got: {entries_line}");
+    // Scalar character paths (fontSize/leading/tracking/fillColor) +
+    // W0.1 character formatting paths (14) + paragraph paths
+    // (spaceBefore/spaceAfter/firstLineIndent/justification) + 2
+    // applied-style paths + W0.2 paragraph formatting paths (13) =
+    // 37 entries.
+    assert!(entries_line.contains("37"), "got: {entries_line}");
     let path_lines: Vec<&String> = result
         .output
         .iter()
         .filter(|l| l.starts_with("[log] path"))
         .collect();
-    assert_eq!(path_lines.len(), 9, "got: {:?}", path_lines);
+    assert_eq!(path_lines.len(), 37, "got: {:?}", path_lines);
     for needle in [
         "characterFontSize",
         "characterLeading",
         "characterTracking",
         "characterFillColor",
+        // W0.1 character formatting.
+        "characterFontFamily",
+        "characterFontStyle",
+        "characterKerningMethod",
+        "characterCase",
+        "characterPosition",
+        "characterLanguage",
+        "characterOtfFeatures",
+        "characterBaselineShift",
+        "characterHorizontalScale",
+        "characterVerticalScale",
+        "characterSkew",
+        "characterUnderline",
+        "characterStrikethru",
+        "characterLigatures",
         "paragraphSpaceBefore",
         "paragraphSpaceAfter",
         "paragraphFirstLineIndent",
+        "paragraphJustification",
+        // W0.2 paragraph formatting.
+        "paragraphLeftIndent",
+        "paragraphRightIndent",
+        "paragraphDropCapCharacters",
+        "paragraphDropCapLines",
+        "paragraphHyphenation",
+        "paragraphKeepLinesTogether",
+        "paragraphKeepWithNext",
+        "paragraphRuleAbove",
+        "paragraphRuleBelow",
+        "paragraphTabStops",
+        "paragraphListType",
+        "paragraphBulletCharacter",
+        "paragraphNumberingFormat",
         "appliedParagraphStyle",
         "appliedCharacterStyle",
     ] {

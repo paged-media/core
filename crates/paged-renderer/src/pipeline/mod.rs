@@ -5251,11 +5251,22 @@ fn split_paragraph_at_breaks(paragraph: &paged_parse::Paragraph) -> Vec<paged_pa
         paragraph_style: paragraph.paragraph_style.clone(),
         justification: paragraph.justification,
         first_line_indent: paragraph.first_line_indent,
+        // W0.2 — left/right indent and the rule structs are
+        // whole-paragraph attributes; every split sub-paragraph
+        // inherits them (same convention as kinsoku / indents below).
+        left_indent: paragraph.left_indent,
+        right_indent: paragraph.right_indent,
+        hyphenation: paragraph.hyphenation,
+        keep_lines_together: paragraph.keep_lines_together,
+        keep_with_next: paragraph.keep_with_next,
+        rule_above: paragraph.rule_above.clone(),
+        rule_below: paragraph.rule_below.clone(),
         space_before: paragraph.space_before,
         space_after: None, // applied to last sub-paragraph only
         tab_list: paragraph.tab_list.clone(),
         bullets_list_type: paragraph.bullets_list_type.clone(),
         bullet_character: paragraph.bullet_character,
+        numbering_format: paragraph.numbering_format.clone(),
         // Drop-cap + anchored frames carry on the FIRST sub-paragraph
         // only; the splits below clone from the source paragraph and
         // overwrite these to defaults so the cap doesn't repeat.
@@ -5314,11 +5325,21 @@ fn split_paragraph_at_breaks(paragraph: &paged_parse::Paragraph) -> Vec<paged_pa
                     paragraph_style: paragraph.paragraph_style.clone(),
                     justification: paragraph.justification,
                     first_line_indent: paragraph.first_line_indent,
+                    // W0.2 — whole-paragraph attributes carry to every
+                    // split sub-paragraph (kinsoku convention).
+                    left_indent: paragraph.left_indent,
+                    right_indent: paragraph.right_indent,
+                    hyphenation: paragraph.hyphenation,
+                    keep_lines_together: paragraph.keep_lines_together,
+                    keep_with_next: paragraph.keep_with_next,
+                    rule_above: paragraph.rule_above.clone(),
+                    rule_below: paragraph.rule_below.clone(),
                     space_before: None,
                     space_after: None,
                     tab_list: paragraph.tab_list.clone(),
                     bullets_list_type: paragraph.bullets_list_type.clone(),
                     bullet_character: paragraph.bullet_character,
+                    numbering_format: paragraph.numbering_format.clone(),
                     // Drop cap + anchored frames are first-paragraph-only;
                     // sub-paragraphs after a `\n` reset to defaults.
                     drop_cap_characters: 0,
@@ -5392,11 +5413,20 @@ fn split_paragraph_at_breaks(paragraph: &paged_parse::Paragraph) -> Vec<paged_pa
             paragraph_style: paragraph.paragraph_style.clone(),
             justification: paragraph.justification,
             first_line_indent: paragraph.first_line_indent,
+            // W0.2 — whole-paragraph attributes (carry from source).
+            left_indent: paragraph.left_indent,
+            right_indent: paragraph.right_indent,
+            hyphenation: paragraph.hyphenation,
+            keep_lines_together: paragraph.keep_lines_together,
+            keep_with_next: paragraph.keep_with_next,
+            rule_above: paragraph.rule_above.clone(),
+            rule_below: paragraph.rule_below.clone(),
             space_before: paragraph.space_before,
             space_after: paragraph.space_after,
             tab_list: paragraph.tab_list.clone(),
             bullets_list_type: paragraph.bullets_list_type.clone(),
             bullet_character: paragraph.bullet_character,
+            numbering_format: paragraph.numbering_format.clone(),
             // All-`\n` source paragraph: defensive placeholder.
             // Drop cap + anchored frames don't apply to a glyph-less
             // paragraph; default them.

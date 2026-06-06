@@ -3522,6 +3522,553 @@ mod tests {
         );
     }
 
+    // ---- W0.1: character formatting paths ---------------------------------
+    //
+    // Each test proves the recipe acceptance: apply changes the run,
+    // undo restores byte-equal, and (where exercised) run-splitting at
+    // range boundaries works. The bool-field tests seed an explicit
+    // prior so the `Value::Bool` inverse round-trips bytewise (a
+    // prior-`None` would undo to `Some(false)` by design — see the
+    // path doc-comments).
+
+    /// `characterFontFamily` over the first run [0, 6): sets
+    /// `AppliedFont`, undo restores the prior `None`.
+    #[test]
+    fn character_font_family_round_trips() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::CharacterFontFamily,
+            value: Value::Text("Minion Pro".to_string()),
+        };
+        let applied = project.apply(op).expect("apply must succeed");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].runs[0].font.as_deref(), Some("Minion Pro"));
+        // Neighbour run untouched.
+        assert_eq!(story.paragraphs[0].runs[1].font, None);
+
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].runs[0].font, None);
+    }
+
+    /// Register a placeholder host text frame for `story_id` so the
+    /// character-property apply emits a non-default InvalidationHint
+    /// (the hint is keyed off `frame_for_story`). Returns nothing —
+    /// mutates the doc in place.
+    fn register_host_frame(project: &mut Project, story_id: &str, frame_self_id: &str) {
+        let frame = crate::apply::new_text_frame(
+            frame_self_id.to_string(),
+            paged_parse::Bounds::ZERO,
+            None,
+        );
+        project
+            .document_mut()
+            .frame_for_story
+            .insert(story_id.to_string(), frame);
+    }
+
+    /// `characterCase` over the second run [6, 11): sets
+    /// `Capitalization`, undo restores the prior `None`. Reflow path.
+    #[test]
+    fn character_case_round_trips() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        register_host_frame(&mut project, "Story/u1", "TextFrame/f1");
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 6,
+                end: 11,
+            },
+            path: PropertyPath::CharacterCase,
+            value: Value::Text("AllCaps".to_string()),
+        };
+        let applied = project.apply(op).expect("apply must succeed");
+        let story = &project.document().stories[0].story;
+        assert_eq!(
+            story.paragraphs[0].runs[1].capitalization.as_deref(),
+            Some("AllCaps")
+        );
+        // Reflow-affecting → text_reflow hint, not frame_style.
+        assert_eq!(applied.invalidation.text_reflow.len(), 1);
+        assert!(applied.invalidation.frame_style.is_empty());
+
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].runs[1].capitalization, None);
+    }
+
+    /// `characterPosition` over the first run: sets `Position`, undo
+    /// restores the prior `None`.
+    #[test]
+    fn character_position_round_trips() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::CharacterPosition,
+            value: Value::Text("Superscript".to_string()),
+        };
+        let applied = project.apply(op).expect("apply must succeed");
+        let story = &project.document().stories[0].story;
+        assert_eq!(
+            story.paragraphs[0].runs[0].position.as_deref(),
+            Some("Superscript")
+        );
+
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].runs[0].position, None);
+    }
+
+    /// `characterBaselineShift` over the second run: sets the f32,
+    /// undo restores the prior `None`. Covers the `Value::Length` arm.
+    #[test]
+    fn character_baseline_shift_round_trips() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 6,
+                end: 11,
+            },
+            path: PropertyPath::CharacterBaselineShift,
+            value: Value::Length(Some(3.5)),
+        };
+        let applied = project.apply(op).expect("apply must succeed");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].runs[1].baseline_shift, Some(3.5));
+        assert_eq!(story.paragraphs[0].runs[0].baseline_shift, None);
+
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].runs[1].baseline_shift, None);
+    }
+
+    /// `characterUnderline` over the first run, seeded with an
+    /// explicit `Some(false)` prior so the `Value::Bool` inverse
+    /// round-trips bytewise. Underline is paint-only → the
+    /// invalidation hint targets `frame_style`, not `text_reflow`.
+    #[test]
+    fn character_underline_round_trips_and_is_paint_only() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        register_host_frame(&mut project, "Story/u1", "TextFrame/f1");
+        // Seed an explicit prior so undo round-trips bytewise.
+        project.document_mut().stories[0].story.paragraphs[0].runs[0].underline = Some(false);
+
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::CharacterUnderline,
+            value: Value::Bool(true),
+        };
+        let applied = project.apply(op).expect("apply must succeed");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].runs[0].underline, Some(true));
+        // Paint-only → frame_style, never text_reflow.
+        assert_eq!(applied.invalidation.frame_style.len(), 1);
+        assert!(applied.invalidation.text_reflow.is_empty());
+
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].runs[0].underline, Some(false));
+    }
+
+    /// `characterLigatures` over the second run, seeded with an
+    /// explicit `Some(true)` prior (the cascade default) so the
+    /// inverse round-trips bytewise. Ligatures are reflow-affecting.
+    #[test]
+    fn character_ligatures_round_trips() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        register_host_frame(&mut project, "Story/u1", "TextFrame/f1");
+        project.document_mut().stories[0].story.paragraphs[0].runs[1].ligatures_on = Some(true);
+
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 6,
+                end: 11,
+            },
+            path: PropertyPath::CharacterLigatures,
+            value: Value::Bool(false),
+        };
+        let applied = project.apply(op).expect("apply must succeed");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].runs[1].ligatures_on, Some(false));
+        // Reflow-affecting → text_reflow hint.
+        assert_eq!(applied.invalidation.text_reflow.len(), 1);
+        assert!(applied.invalidation.frame_style.is_empty());
+
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].runs[1].ligatures_on, Some(true));
+    }
+
+    /// Mid-run range: `characterFontStyle` over [2, 4) splits the
+    /// first run "Hello " (0..6) into "He" / "ll" / "o ", mutating
+    /// only the middle piece. Undo restores the prior value per
+    /// (now-split-)run without re-merging.
+    #[test]
+    fn character_font_style_splits_runs_on_partial_range() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 2,
+                end: 4,
+            },
+            path: PropertyPath::CharacterFontStyle,
+            value: Value::Text("Bold".to_string()),
+        };
+        let applied = project.apply(op).expect("apply must succeed");
+
+        // "Hello " split into three; "world" untouched → 4 runs.
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].runs.len(), 4);
+        assert_eq!(story.paragraphs[0].runs[0].text, "He");
+        assert_eq!(story.paragraphs[0].runs[0].font_style, None);
+        assert_eq!(story.paragraphs[0].runs[1].text, "ll");
+        assert_eq!(story.paragraphs[0].runs[1].font_style.as_deref(), Some("Bold"));
+        assert_eq!(story.paragraphs[0].runs[2].text, "o ");
+        assert_eq!(story.paragraphs[0].runs[2].font_style, None);
+        assert_eq!(story.paragraphs[0].runs[3].text, "world");
+
+        // Undo restores the middle piece's prior None (splits stay).
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].runs.len(), 4);
+        assert_eq!(story.paragraphs[0].runs[1].font_style, None);
+    }
+
+    // ---- W0.2: paragraph formatting paths ---------------------------------
+    //
+    // Paragraph-scope analogues of the W0.1 tests. Each proves apply
+    // writes the field on every intersecting paragraph, undo restores
+    // byte-equal, and (where exercised) paragraph-boundary rounding
+    // and whole-struct / whole-list replacement work.
+
+    /// `paragraphLeftIndent` + `paragraphRightIndent` over the first
+    /// paragraph: sets both indents, undo restores the prior `None`.
+    #[test]
+    fn paragraph_indents_round_trip() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let left = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::ParagraphLeftIndent,
+            value: Value::Length(Some(18.0)),
+        };
+        let applied = project.apply(left).expect("apply left");
+        let right = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::ParagraphRightIndent,
+            value: Value::Length(Some(9.0)),
+        };
+        let applied_r = project.apply(right).expect("apply right");
+
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].left_indent, Some(18.0));
+        assert_eq!(story.paragraphs[0].right_indent, Some(9.0));
+        // Paragraph 1 untouched.
+        assert_eq!(story.paragraphs[1].left_indent, None);
+
+        crate::apply(project.document_mut(), &applied_r.inverse).expect("undo right");
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo left");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].left_indent, None);
+        assert_eq!(story.paragraphs[0].right_indent, None);
+    }
+
+    /// `paragraphDropCapCharacters` + `paragraphDropCapLines` carry
+    /// integers as `Value::Length`. The fields are non-`Option` `u32`
+    /// (0 ⇒ no drop cap); undo restores the prior 0.
+    #[test]
+    fn paragraph_drop_cap_round_trips() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let chars = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::ParagraphDropCapCharacters,
+            value: Value::Length(Some(1.0)),
+        };
+        let applied_c = project.apply(chars).expect("apply chars");
+        let lines = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::ParagraphDropCapLines,
+            value: Value::Length(Some(3.0)),
+        };
+        let applied_l = project.apply(lines).expect("apply lines");
+
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].drop_cap_characters, 1);
+        assert_eq!(story.paragraphs[0].drop_cap_lines, 3);
+
+        crate::apply(project.document_mut(), &applied_l.inverse).expect("undo lines");
+        crate::apply(project.document_mut(), &applied_c.inverse).expect("undo chars");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].drop_cap_characters, 0);
+        assert_eq!(story.paragraphs[0].drop_cap_lines, 0);
+    }
+
+    /// `paragraphHyphenation` toggle, seeded with an explicit
+    /// `Some(true)` prior so the `Value::Bool` inverse round-trips
+    /// bytewise. Reflow-affecting → the host-frame reflow hint fires.
+    #[test]
+    fn paragraph_hyphenation_round_trips() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        register_host_frame(&mut project, "Story/u1", "TextFrame/f1");
+        project.document_mut().stories[0].story.paragraphs[0].hyphenation = Some(true);
+
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::ParagraphHyphenation,
+            value: Value::Bool(false),
+        };
+        let applied = project.apply(op).expect("apply");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].hyphenation, Some(false));
+        // Paragraph properties are reflow-affecting.
+        assert_eq!(applied.invalidation.text_reflow.len(), 1);
+
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].hyphenation, Some(true));
+    }
+
+    /// `paragraphKeepWithNext` carries an `Option<u32>` line count.
+    /// Undo restores the prior `None`.
+    #[test]
+    fn paragraph_keep_with_next_round_trips() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::ParagraphKeepWithNext,
+            value: Value::Length(Some(2.0)),
+        };
+        let applied = project.apply(op).expect("apply");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].keep_with_next, Some(2));
+
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].keep_with_next, None);
+    }
+
+    /// `paragraphRuleAbove` whole-struct: sets the rule, undo restores
+    /// the prior all-`None` default. Proves the new `Value::ParagraphRule`
+    /// variant round-trips the rule bytewise.
+    #[test]
+    fn paragraph_rule_above_whole_struct_round_trips() {
+        use crate::operation::ParagraphRuleSpec;
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let spec = ParagraphRuleSpec {
+            on: Some(true),
+            color: Some("Color/Black".to_string()),
+            tint: None,
+            weight: Some(1.5),
+            offset: Some(3.0),
+            left_indent: None,
+            right_indent: None,
+            width: Some("ColumnWidth".to_string()),
+        };
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::ParagraphRuleAbove,
+            value: Value::ParagraphRule(Some(spec.clone())),
+        };
+        let applied = project.apply(op).expect("apply");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].rule_above.on, Some(true));
+        assert_eq!(story.paragraphs[0].rule_above.weight, Some(1.5));
+        assert_eq!(
+            story.paragraphs[0].rule_above.color.as_deref(),
+            Some("Color/Black")
+        );
+        // The inverse carries the prior rule (all-None default).
+        assert!(matches!(
+            &applied.inverse,
+            Operation::SetProperty {
+                value: Value::ParagraphRule(Some(_)),
+                ..
+            }
+        ));
+
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].rule_above.on, None);
+        assert_eq!(story.paragraphs[0].rule_above.weight, None);
+        assert_eq!(story.paragraphs[0].rule_above.color, None);
+    }
+
+    /// `paragraphTabStops` whole-list replacement: replaces the
+    /// paragraph's `<TabList>`; undo restores the prior (empty) list.
+    #[test]
+    fn paragraph_tab_stops_list_replace_round_trips() {
+        use crate::operation::TabStopSpec;
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let stops = vec![
+            TabStopSpec {
+                position: 36.0,
+                alignment: Some("LeftAlign".to_string()),
+                alignment_character: None,
+                leader: None,
+            },
+            TabStopSpec {
+                position: 144.0,
+                alignment: Some("RightAlign".to_string()),
+                alignment_character: None,
+                leader: Some(".".to_string()),
+            },
+        ];
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::ParagraphTabStops,
+            value: Value::TabStops(stops.clone()),
+        };
+        let applied = project.apply(op).expect("apply");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].tab_list.len(), 2);
+        assert_eq!(story.paragraphs[0].tab_list[0].position, 36.0);
+        assert_eq!(
+            story.paragraphs[0].tab_list[1].alignment.as_deref(),
+            Some("RightAlign")
+        );
+        assert_eq!(story.paragraphs[0].tab_list[1].leader.as_deref(), Some("."));
+
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        assert!(story.paragraphs[0].tab_list.is_empty());
+    }
+
+    /// `paragraphListType` + `paragraphBulletCharacter` +
+    /// `paragraphNumberingFormat`: list-authoring text paths. The
+    /// bullet character round-trips through the glyph<->codepoint
+    /// encoding; undo clears each override.
+    #[test]
+    fn paragraph_list_authoring_round_trips() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let list = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::ParagraphListType,
+            value: Value::Text("BulletList".to_string()),
+        };
+        let applied_list = project.apply(list).expect("apply list");
+        let bullet = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::ParagraphBulletCharacter,
+            value: Value::Text("\u{2022}".to_string()), // •
+        };
+        let applied_bullet = project.apply(bullet).expect("apply bullet");
+        let numfmt = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path: PropertyPath::ParagraphNumberingFormat,
+            value: Value::Text("^#.^t".to_string()),
+        };
+        let applied_num = project.apply(numfmt).expect("apply numfmt");
+
+        let story = &project.document().stories[0].story;
+        assert_eq!(
+            story.paragraphs[0].bullets_list_type.as_deref(),
+            Some("BulletList")
+        );
+        assert_eq!(story.paragraphs[0].bullet_character, Some(0x2022));
+        assert_eq!(
+            story.paragraphs[0].numbering_format.as_deref(),
+            Some("^#.^t")
+        );
+
+        crate::apply(project.document_mut(), &applied_num.inverse).expect("undo num");
+        crate::apply(project.document_mut(), &applied_bullet.inverse).expect("undo bullet");
+        crate::apply(project.document_mut(), &applied_list.inverse).expect("undo list");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].bullets_list_type, None);
+        assert_eq!(story.paragraphs[0].bullet_character, None);
+        assert_eq!(story.paragraphs[0].numbering_format, None);
+    }
+
+    /// Paragraph-boundary rounding: a range [5, 12) cuts inside
+    /// paragraph 0 ("Hello world" 0..11) and covers paragraph 1
+    /// ("!" 11..12). `paragraphLeftIndent` rounds to whole paragraphs
+    /// and writes BOTH; the inverse is a two-op Batch.
+    #[test]
+    fn paragraph_left_indent_rounds_to_whole_paragraphs() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 5,
+                end: 12,
+            },
+            path: PropertyPath::ParagraphLeftIndent,
+            value: Value::Length(Some(24.0)),
+        };
+        let applied = project.apply(op).expect("apply");
+        let story = &project.document().stories[0].story;
+        // Both paragraphs got the indent despite the range starting
+        // mid-paragraph-0.
+        assert_eq!(story.paragraphs[0].left_indent, Some(24.0));
+        assert_eq!(story.paragraphs[1].left_indent, Some(24.0));
+        // Inverse is a Batch of two per-paragraph restorations.
+        assert!(matches!(&applied.inverse, Operation::Batch { ops } if ops.len() == 2));
+
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].left_indent, None);
+        assert_eq!(story.paragraphs[1].left_indent, None);
+    }
+
     // ---- Editor-ops: Scissors (PathOpenAt) --------------------------------
 
     fn open_at_op(self_id: &str, index: usize) -> Operation {

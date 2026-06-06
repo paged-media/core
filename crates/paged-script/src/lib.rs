@@ -676,6 +676,33 @@ fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
         PathOpenAt => "pathOpenAt",
         PageBounds => "pageBounds",
         FrameGradientFeather => "frameGradientFeather",
+        CharacterFontFamily => "characterFontFamily",
+        CharacterFontStyle => "characterFontStyle",
+        CharacterKerningMethod => "characterKerningMethod",
+        CharacterCase => "characterCase",
+        CharacterPosition => "characterPosition",
+        CharacterLanguage => "characterLanguage",
+        CharacterBaselineShift => "characterBaselineShift",
+        CharacterHorizontalScale => "characterHorizontalScale",
+        CharacterVerticalScale => "characterVerticalScale",
+        CharacterSkew => "characterSkew",
+        CharacterUnderline => "characterUnderline",
+        CharacterStrikethru => "characterStrikethru",
+        CharacterLigatures => "characterLigatures",
+        CharacterOtfFeatures => "characterOtfFeatures",
+        ParagraphLeftIndent => "paragraphLeftIndent",
+        ParagraphRightIndent => "paragraphRightIndent",
+        ParagraphDropCapCharacters => "paragraphDropCapCharacters",
+        ParagraphDropCapLines => "paragraphDropCapLines",
+        ParagraphHyphenation => "paragraphHyphenation",
+        ParagraphKeepLinesTogether => "paragraphKeepLinesTogether",
+        ParagraphKeepWithNext => "paragraphKeepWithNext",
+        ParagraphRuleAbove => "paragraphRuleAbove",
+        ParagraphRuleBelow => "paragraphRuleBelow",
+        ParagraphTabStops => "paragraphTabStops",
+        ParagraphListType => "paragraphListType",
+        ParagraphBulletCharacter => "paragraphBulletCharacter",
+        ParagraphNumberingFormat => "paragraphNumberingFormat",
     }
 }
 
@@ -718,7 +745,22 @@ fn js_value_to_wire(
             | P::FrameStrokeEndCap
             | P::FrameTextWrapMode
             | P::FrameFittingType
-            | P::FrameDropShadowMode => W::Text(s),
+            | P::FrameDropShadowMode
+            // W0.1 — character text / enum-string paths.
+            | P::CharacterFontFamily
+            | P::CharacterFontStyle
+            | P::CharacterKerningMethod
+            | P::CharacterCase
+            | P::CharacterPosition
+            | P::CharacterLanguage
+            | P::CharacterOtfFeatures
+            // W0.2 — paragraph text / enum-string paths. The
+            // whole-struct rule paths and the tab-stop list arrive as
+            // `{ type, value }` objects, handled by the JSON
+            // round-trip branch below — not here.
+            | P::ParagraphListType
+            | P::ParagraphBulletCharacter
+            | P::ParagraphNumberingFormat => W::Text(s),
             // Color-ref paths.
             P::FrameFillColor
             | P::FrameStrokeColor

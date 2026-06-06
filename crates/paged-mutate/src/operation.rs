@@ -405,6 +405,174 @@ pub enum PropertyPath {
     /// id) are the caller's responsibility for v1; the value is
     /// written verbatim.
     AppliedConditions,
+    /// W0.1 — character font family (`AppliedFont`). Value is
+    /// `Value::Text`; the empty string clears the per-run override
+    /// (`None` ⇒ inherit from the applied character / paragraph
+    /// style cascade). Addressed against a `NodeId::StoryRange`;
+    /// runs split at the range boundaries. Reflow-affecting (a new
+    /// font remeasures every glyph), so the InvalidationHint targets
+    /// the host text frame's reflow.
+    CharacterFontFamily,
+    /// W0.1 — character font style (`FontStyle`, e.g. `"Bold"`,
+    /// `"Italic"`). `Value::Text`; empty clears the override.
+    /// Reflow-affecting. Addressed against a `NodeId::StoryRange`.
+    CharacterFontStyle,
+    /// W0.1 — kerning method (`KerningMethod`). `Value::Text`
+    /// carrying the IDML enum string (`"Metrics"`, `"Optical"`,
+    /// `"None"`); empty clears the override. Reflow-affecting
+    /// (kerning changes advances). Addressed against a
+    /// `NodeId::StoryRange`. The value is stored verbatim — the
+    /// toggle-group primitive ensures the UI never emits an
+    /// unknown string.
+    CharacterKerningMethod,
+    /// W0.1 — capitalization (`Capitalization`). `Value::Text`
+    /// carrying the IDML enum string (`"Normal"`, `"SmallCaps"`,
+    /// `"AllCaps"`, `"CapToSmallCap"`); empty clears the override.
+    /// Reflow-affecting (`AllCaps` shapes uppercased glyphs).
+    /// Addressed against a `NodeId::StoryRange`.
+    CharacterCase,
+    /// W0.1 — position (`Position`). `Value::Text` carrying the
+    /// IDML enum string (`"Normal"`, `"Superscript"`,
+    /// `"Subscript"`, …); empty clears the override.
+    /// Reflow-affecting (super/subscript scale glyphs and shift the
+    /// baseline). Addressed against a `NodeId::StoryRange`.
+    CharacterPosition,
+    /// W0.1 — applied language (`AppliedLanguage`). `Value::Text`
+    /// carrying the IDML language reference; empty clears the
+    /// override. Paint/reflow-neutral today (no renderer behaviour
+    /// is keyed off it yet) — the InvalidationHint targets reflow so
+    /// the host frame rebuilds when hyphenation eventually honours
+    /// it. Addressed against a `NodeId::StoryRange`.
+    CharacterLanguage,
+    /// W0.1 — baseline shift (`BaselineShift`) in points.
+    /// `Value::Length(Some(_))` lifts (positive) / drops (negative)
+    /// the glyphs; `Value::Length(None)` clears the override.
+    /// Reflow-affecting (shifted glyphs change the line's ink
+    /// bounds). Addressed against a `NodeId::StoryRange`.
+    CharacterBaselineShift,
+    /// W0.1 — horizontal glyph scale (`HorizontalScale`) as a
+    /// percentage (100 = identity). `Value::Length`; `None` clears
+    /// the override. Reflow-affecting (the x-scale changes
+    /// advances). Addressed against a `NodeId::StoryRange`.
+    CharacterHorizontalScale,
+    /// W0.1 — vertical glyph scale (`VerticalScale`) as a
+    /// percentage (100 = identity). `Value::Length`; `None` clears
+    /// the override. Reflow-affecting (the y-scale changes the
+    /// line's ink bounds). Addressed against a `NodeId::StoryRange`.
+    CharacterVerticalScale,
+    /// W0.1 — glyph skew (`Skew`) in degrees (positive =
+    /// right-leaning). `Value::Length`; `None` clears the override.
+    /// Reflow-affecting (the shear changes glyph extents).
+    /// Addressed against a `NodeId::StoryRange`.
+    CharacterSkew,
+    /// W0.1 — underline toggle (`Underline`). `Value::Bool`.
+    /// Paint-only (an underline decoration doesn't reflow text), so
+    /// the InvalidationHint targets the host frame's style/paint.
+    /// Addressed against a `NodeId::StoryRange`.
+    ///
+    /// Round-trip note: the run field is `Option<bool>` (`None` ⇒
+    /// inherit). `Value::Bool` carries no `None`, so undo of a write
+    /// whose prior was `None` restores `Some(false)` (the underline
+    /// default) rather than `None`. Writes over an explicit prior
+    /// round-trip bytewise. Same lossy-default precedent as
+    /// `FrameDropShadow`.
+    CharacterUnderline,
+    /// W0.1 — strikethrough toggle (`StrikeThru`). `Value::Bool`.
+    /// Paint-only, like `CharacterUnderline`. Addressed against a
+    /// `NodeId::StoryRange`. Same `None`→default undo note as
+    /// `CharacterUnderline`.
+    CharacterStrikethru,
+    /// W0.1 — ligatures toggle (`Ligatures`, the `ligatures_on`
+    /// field). `Value::Bool`. Reflow-affecting (toggling ligature
+    /// substitution changes glyph runs and advances). Addressed
+    /// against a `NodeId::StoryRange`. Same `None`→default undo note
+    /// as `CharacterUnderline` (the ligatures default is `true`).
+    CharacterLigatures,
+    /// W0.1 — OpenType feature tags as an opaque, space-separated
+    /// list (e.g. `"frac ordn ss01"`). `Value::Text`; empty clears
+    /// the override. IDML has no single tag-list attribute, so the
+    /// value is owned by the mutate API as a free-form authoring
+    /// string and written verbatim onto the run's `otf_features`.
+    /// Reflow-affecting (feature substitution changes glyph runs).
+    /// Addressed against a `NodeId::StoryRange`.
+    CharacterOtfFeatures,
+    /// W0.2 — paragraph left indent (`LeftIndent`) in points.
+    /// `Value::Length`; `None` clears the per-paragraph override
+    /// (inherit from the style cascade). Addressed against a
+    /// `NodeId::StoryRange`, rounded to whole paragraphs.
+    /// Reflow-affecting (the indent reshapes every line).
+    ParagraphLeftIndent,
+    /// W0.2 — paragraph right indent (`RightIndent`) in points.
+    /// `Value::Length`; `None` clears the override. Reflow-affecting.
+    ParagraphRightIndent,
+    /// W0.2 — drop-cap character count (`DropCapCharacters`). The
+    /// run field is a `u32`; the wire carries it as
+    /// `Value::Length(Some(count))` (the integer-as-Length convention
+    /// the inspector already uses for counts). `Length(None)` ⇒ 0
+    /// (no drop cap). Reflow-affecting (the drop cap reflows the
+    /// first lines). Addressed against a `NodeId::StoryRange`.
+    ParagraphDropCapCharacters,
+    /// W0.2 — drop-cap line span (`DropCapLines`). `Value::Length`
+    /// carrying the integer line count; `None` ⇒ 0. Reflow-affecting.
+    ParagraphDropCapLines,
+    /// W0.2 — hyphenation toggle (`Hyphenation`). `Value::Bool`.
+    /// Reflow-affecting (toggling hyphenation re-breaks lines).
+    /// Addressed against a `NodeId::StoryRange`.
+    ///
+    /// Round-trip note: the field is `Option<bool>` (`None` ⇒
+    /// inherit). `Value::Bool` carries no `None`, so undo of a write
+    /// whose prior was `None` restores `Some(true)` (the IDML
+    /// hyphenation default) rather than `None`. Writes over an
+    /// explicit prior round-trip bytewise.
+    ParagraphHyphenation,
+    /// W0.2 — keep-lines-together toggle (`KeepLinesTogether`).
+    /// `Value::Bool`. Reflow-affecting (changes column / frame
+    /// breaking). Same `None`→default undo note as
+    /// `ParagraphHyphenation`, but the keep-lines default is `false`.
+    ParagraphKeepLinesTogether,
+    /// W0.2 — keep-with-next line count (`KeepWithNext`). IDML
+    /// serialises a line count, not a boolean, so the wire carries
+    /// `Value::Length(Some(count))`; `Length(None)` clears the
+    /// override. Reflow-affecting. Addressed against a
+    /// `NodeId::StoryRange`.
+    ParagraphKeepWithNext,
+    /// W0.2 — whole `RuleAbove*` rule struct, mirroring the
+    /// `FrameGradientFeather` whole-struct pattern. Value is
+    /// `Value::ParagraphRule(Some(spec))` to set, or
+    /// `Value::ParagraphRule(None)` to clear the rule back to the
+    /// all-`None` default. Reflow-neutral but repaints the frame —
+    /// the InvalidationHint targets the host frame's reflow (the rule
+    /// can change line geometry via its offset). Addressed against a
+    /// `NodeId::StoryRange`.
+    ParagraphRuleAbove,
+    /// W0.2 — whole `RuleBelow*` rule struct. See
+    /// `ParagraphRuleAbove`.
+    ParagraphRuleBelow,
+    /// W0.2 — whole `<TabList>` replacement. Value is
+    /// `Value::TabStops(Vec<TabStopSpec>)` (the empty vec clears all
+    /// stops). Whole-list replacement, like the gradient-feather stop
+    /// list — `Value` has no per-element list-edit form, so the UI
+    /// sends the full new stop list. Reflow-affecting (tab stops
+    /// reposition tabbed content). Addressed against a
+    /// `NodeId::StoryRange`.
+    ParagraphTabStops,
+    /// W0.2 — bullets / numbering list type
+    /// (`BulletsAndNumberingListType`). `Value::Text` carrying the
+    /// IDML enum string (`"NoList"`, `"BulletList"`,
+    /// `"NumberedList"`); empty clears the override. Reflow-affecting
+    /// (a marker inserts / removes leading content). Addressed
+    /// against a `NodeId::StoryRange`.
+    ParagraphListType,
+    /// W0.2 — bullet glyph character. `Value::Text` carrying the
+    /// glyph itself (the run field is a `u32` codepoint; the wire
+    /// carries the single character). Empty clears the override.
+    /// Reflow-affecting. Addressed against a `NodeId::StoryRange`.
+    ParagraphBulletCharacter,
+    /// W0.2 — numbering-format expression (`NumberingFormat`, e.g.
+    /// `"^#.^t"`). `Value::Text`; empty clears the override.
+    /// Reflow-affecting (the marker text changes). Addressed against
+    /// a `NodeId::StoryRange`.
+    ParagraphNumberingFormat,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -487,6 +655,33 @@ impl PropertyPath {
             PropertyPath::FrameDropShadowSize => "frame.dropShadowSize",
             PropertyPath::FrameDropShadowOpacity => "frame.dropShadowOpacity",
             PropertyPath::FrameDropShadowColor => "frame.dropShadowColor",
+            PropertyPath::CharacterFontFamily => "character.fontFamily",
+            PropertyPath::CharacterFontStyle => "character.fontStyle",
+            PropertyPath::CharacterKerningMethod => "character.kerningMethod",
+            PropertyPath::CharacterCase => "character.case",
+            PropertyPath::CharacterPosition => "character.position",
+            PropertyPath::CharacterLanguage => "character.language",
+            PropertyPath::CharacterBaselineShift => "character.baselineShift",
+            PropertyPath::CharacterHorizontalScale => "character.horizontalScale",
+            PropertyPath::CharacterVerticalScale => "character.verticalScale",
+            PropertyPath::CharacterSkew => "character.skew",
+            PropertyPath::CharacterUnderline => "character.underline",
+            PropertyPath::CharacterStrikethru => "character.strikethru",
+            PropertyPath::CharacterLigatures => "character.ligatures",
+            PropertyPath::CharacterOtfFeatures => "character.otfFeatures",
+            PropertyPath::ParagraphLeftIndent => "paragraph.leftIndent",
+            PropertyPath::ParagraphRightIndent => "paragraph.rightIndent",
+            PropertyPath::ParagraphDropCapCharacters => "paragraph.dropCapCharacters",
+            PropertyPath::ParagraphDropCapLines => "paragraph.dropCapLines",
+            PropertyPath::ParagraphHyphenation => "paragraph.hyphenation",
+            PropertyPath::ParagraphKeepLinesTogether => "paragraph.keepLinesTogether",
+            PropertyPath::ParagraphKeepWithNext => "paragraph.keepWithNext",
+            PropertyPath::ParagraphRuleAbove => "paragraph.ruleAbove",
+            PropertyPath::ParagraphRuleBelow => "paragraph.ruleBelow",
+            PropertyPath::ParagraphTabStops => "paragraph.tabStops",
+            PropertyPath::ParagraphListType => "paragraph.listType",
+            PropertyPath::ParagraphBulletCharacter => "paragraph.bulletCharacter",
+            PropertyPath::ParagraphNumberingFormat => "paragraph.numberingFormat",
         }
     }
 }
@@ -596,6 +791,96 @@ impl GradientFeatherSpec {
                     midpoint_pct: s.midpoint_pct,
                 })
                 .collect(),
+        }
+    }
+}
+
+/// W0.2 — wire mirror of `paged_parse::styles::ParagraphRule` (the
+/// AST type predates `Tsify`; the mirror keeps the op wire-shaped,
+/// the `GradientFeatherSpec` precedent). Carries every field the
+/// parser models so the whole-struct `ParagraphRuleAbove` /
+/// `ParagraphRuleBelow` paths round-trip a paragraph's rule verbatim.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct ParagraphRuleSpec {
+    #[serde(default)]
+    pub on: Option<bool>,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub tint: Option<f32>,
+    #[serde(default)]
+    pub weight: Option<f32>,
+    #[serde(default)]
+    pub offset: Option<f32>,
+    #[serde(default)]
+    pub left_indent: Option<f32>,
+    #[serde(default)]
+    pub right_indent: Option<f32>,
+    #[serde(default)]
+    pub width: Option<String>,
+}
+
+impl ParagraphRuleSpec {
+    pub fn from_parse(p: &paged_parse::styles::ParagraphRule) -> Self {
+        Self {
+            on: p.on,
+            color: p.color.clone(),
+            tint: p.tint,
+            weight: p.weight,
+            offset: p.offset,
+            left_indent: p.left_indent,
+            right_indent: p.right_indent,
+            width: p.width.clone(),
+        }
+    }
+    pub fn to_parse(&self) -> paged_parse::styles::ParagraphRule {
+        paged_parse::styles::ParagraphRule {
+            on: self.on,
+            color: self.color.clone(),
+            tint: self.tint,
+            weight: self.weight,
+            offset: self.offset,
+            left_indent: self.left_indent,
+            right_indent: self.right_indent,
+            width: self.width.clone(),
+        }
+    }
+}
+
+/// W0.2 — wire mirror of `paged_parse::TabStop`. The `ParagraphTabStops`
+/// path replaces the paragraph's whole `<TabList>` in one op; `Value`
+/// has no per-element list-edit form, so the UI sends the full new
+/// stop list (the gradient-feather stop-list precedent).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct TabStopSpec {
+    pub position: f32,
+    #[serde(default)]
+    pub alignment: Option<String>,
+    #[serde(default)]
+    pub alignment_character: Option<String>,
+    #[serde(default)]
+    pub leader: Option<String>,
+}
+
+impl TabStopSpec {
+    pub fn from_parse(t: &paged_parse::TabStop) -> Self {
+        Self {
+            position: t.position,
+            alignment: t.alignment.clone(),
+            alignment_character: t.alignment_character.clone(),
+            leader: t.leader.clone(),
+        }
+    }
+    pub fn to_parse(&self) -> paged_parse::TabStop {
+        paged_parse::TabStop {
+            position: self.position,
+            alignment: self.alignment.clone(),
+            alignment_character: self.alignment_character.clone(),
+            leader: self.leader.clone(),
         }
     }
 }
@@ -718,6 +1003,15 @@ pub enum Value {
     /// effect). The inverse carries the prior `Option<spec>` so undo
     /// round-trips bytewise.
     GradientFeather(Option<GradientFeatherSpec>),
+    /// W0.2 — whole paragraph rule struct (`RuleAbove` / `RuleBelow`).
+    /// `None` clears the rule back to the all-`None` default. The
+    /// inverse carries the prior `Option<spec>` so undo round-trips
+    /// bytewise. Same whole-struct precedent as `GradientFeather`.
+    ParagraphRule(Option<ParagraphRuleSpec>),
+    /// W0.2 — whole `<TabList>` replacement. The empty vec clears all
+    /// stops. The inverse carries the prior stop list so undo
+    /// round-trips bytewise.
+    TabStops(Vec<TabStopSpec>),
 }
 
 /// Description of a node about to be inserted. Carries the minimal

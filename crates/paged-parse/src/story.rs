@@ -200,6 +200,16 @@ pub struct Paragraph {
     pub justification: Option<Justification>,
     /// `FirstLineIndent` in pt.
     pub first_line_indent: Option<f32>,
+    /// `LeftIndent` in pt — the paragraph's left margin offset.
+    /// `None` ⇒ inherit from the applied paragraph style cascade.
+    /// W0.2: surfaced as a paragraph-scope mutate path; the renderer
+    /// resolves indents through the style cascade today, so this
+    /// per-paragraph override is parser+mutate only until the
+    /// composer reads it off the instance.
+    pub left_indent: Option<f32>,
+    /// `RightIndent` in pt — the paragraph's right margin offset.
+    /// `None` ⇒ inherit. W0.2: see [`Paragraph::left_indent`].
+    pub right_indent: Option<f32>,
     /// `SpaceBefore` in pt.
     pub space_before: Option<f32>,
     /// `SpaceAfter` in pt.
@@ -217,6 +227,13 @@ pub struct Paragraph {
     /// Acts as a local override of the cascaded paragraph style's
     /// bullet character.
     pub bullet_character: Option<u32>,
+    /// `NumberingExpression` template for `NumberedList` paragraphs
+    /// (e.g. `"^#.^t"`). W0.2: a local override surfaced by the
+    /// mutate API. `None` ⇒ inherit from the cascade. The renderer
+    /// reads the numbering expression off the resolved style today;
+    /// this per-paragraph override is parser+mutate only until the
+    /// composer reads it off the instance.
+    pub numbering_format: Option<String>,
     /// `DropCapCharacters` count from `<ParagraphStyleRange>`. 0 ⇒ no
     /// drop cap (the IDML default). Local override of the cascaded
     /// paragraph style's drop-cap settings.
@@ -228,6 +245,31 @@ pub struct Paragraph {
     /// for drop caps. `0` is the default. Stored signed because the
     /// IDML serialisation allows negative values.
     pub drop_cap_detail: i32,
+    /// `Hyphenation` boolean override on the `<ParagraphStyleRange>`.
+    /// `None` ⇒ inherit (IDML default at the bottom of the cascade is
+    /// `true`). The composer keys hyphenation off the resolved style
+    /// today; W0.2 surfaces this per-paragraph override via the
+    /// mutate API.
+    pub hyphenation: Option<bool>,
+    /// `KeepLinesTogether` boolean — when `true`, InDesign tries to
+    /// keep all lines of the paragraph in the same column / frame.
+    /// `None` ⇒ inherit. Parser+mutate only (the frame-breaker does
+    /// not yet honour keep options).
+    pub keep_lines_together: Option<bool>,
+    /// `KeepWithNext` — the number of lines of the *following*
+    /// paragraph that InDesign keeps together with the end of this
+    /// one (IDML serialises a line count, not a boolean). `None` ⇒
+    /// inherit; `Some(0)` is the explicit "off". Parser+mutate only.
+    pub keep_with_next: Option<u32>,
+    /// `RuleAbove*` — the horizontal rule stroked above the first
+    /// line when `on` is true. W0.2: surfaced as a whole-struct
+    /// paragraph-scope mutate path. Defaults (all-`None`) mean "not
+    /// declared on this paragraph"; the cascade fills it in. Mirrors
+    /// the style-level [`crate::styles::ParagraphRule`].
+    pub rule_above: crate::styles::ParagraphRule,
+    /// `RuleBelow*` — the horizontal rule stroked below the last
+    /// line. W0.2: see [`Paragraph::rule_above`].
+    pub rule_below: crate::styles::ParagraphRule,
     pub runs: Vec<CharacterRun>,
     /// `KinsokuSet="KinsokuTable/$ID/PhotoshopKinsokuHard"` (or
     /// similar) reference. Identifies the set of CJK line-break
@@ -740,6 +782,22 @@ pub struct CharacterRun {
     /// `<CharacterStyleRange>`. None ⇒ inherit. Default at the
     /// bottom of the cascade is `Metrics`.
     pub kerning_method: Option<String>,
+    /// `AppliedLanguage="$ID/..."` on the `<CharacterStyleRange>` —
+    /// the run's language reference (drives hyphenation /
+    /// spell-check dictionaries). None ⇒ inherit from the applied
+    /// character / paragraph style cascade. Stored as the raw IDML
+    /// reference string; no renderer behaviour is keyed off it yet
+    /// (parser-only today), but the mutate API surfaces it so the
+    /// editor can author the value.
+    pub applied_language: Option<String>,
+    /// OpenType feature toggles as an opaque, space-separated tag
+    /// list (e.g. `"frac ordn ss01"`). IDML records OpenType
+    /// features as a spread of discrete attributes
+    /// (`OTFFractions`, `OTFStylisticSets`, …) rather than one tag
+    /// list, so the parser leaves this `None` and the mutate API
+    /// owns it as a free-form authoring string. None ⇒ no override;
+    /// no renderer behaviour is keyed off it yet.
+    pub otf_features: Option<String>,
     /// Phase 5 — `AppliedConditions="Condition/A Condition/B"`.
     /// Space-separated list of `<Condition>` references. Empty
     /// means "no condition gating" (always visible). A run with
@@ -1036,11 +1094,14 @@ impl Story {
                                 .and_then(Justification::from_idml),
                             first_line_indent: attr(&e, b"FirstLineIndent")
                                 .and_then(|s| s.parse().ok()),
+                            left_indent: attr(&e, b"LeftIndent").and_then(|s| s.parse().ok()),
+                            right_indent: attr(&e, b"RightIndent").and_then(|s| s.parse().ok()),
                             space_before: attr(&e, b"SpaceBefore").and_then(|s| s.parse().ok()),
                             space_after: attr(&e, b"SpaceAfter").and_then(|s| s.parse().ok()),
                             tab_list: Vec::new(),
                             bullets_list_type: attr(&e, b"BulletsAndNumberingListType"),
                             bullet_character: None,
+                            numbering_format: attr(&e, b"NumberingFormat"),
                             drop_cap_characters: attr(&e, b"DropCapCharacters")
                                 .and_then(|s| s.parse().ok())
                                 .unwrap_or(0),
@@ -1050,6 +1111,14 @@ impl Story {
                             drop_cap_detail: attr(&e, b"DropCapDetail")
                                 .and_then(|s| s.parse().ok())
                                 .unwrap_or(0),
+                            hyphenation: attr(&e, b"Hyphenation")
+                                .and_then(|s| s.parse::<bool>().ok()),
+                            keep_lines_together: attr(&e, b"KeepLinesTogether")
+                                .and_then(|s| s.parse::<bool>().ok()),
+                            keep_with_next: attr(&e, b"KeepWithNext")
+                                .and_then(|s| s.parse::<u32>().ok()),
+                            rule_above: crate::styles::ParagraphRule::from_attrs(&e, "RuleAbove"),
+                            rule_below: crate::styles::ParagraphRule::from_attrs(&e, "RuleBelow"),
                             kinsoku_set: attr(&e, b"KinsokuSet"),
                             kinsoku_type: attr(&e, b"KinsokuType"),
                             mojikumi_table: attr(&e, b"MojikumiTable"),
@@ -1321,6 +1390,12 @@ impl Story {
                             ligatures_on: attr(&e, b"Ligatures")
                                 .and_then(|s| s.parse::<bool>().ok()),
                             kerning_method: attr(&e, b"KerningMethod"),
+                            applied_language: attr(&e, b"AppliedLanguage"),
+                            // OpenType feature tags have no single IDML
+                            // attribute; left None at parse time and
+                            // owned by the mutate API as a free-form
+                            // authoring string.
+                            otf_features: None,
                             applied_conditions: attr(&e, b"AppliedConditions")
                                 .map(|s| {
                                     s.split_whitespace()
@@ -2836,6 +2911,61 @@ mod tests {
         assert!(p.kinsoku_type.is_none());
         assert!(p.mojikumi_table.is_none());
         assert!(p.mojikumi_set.is_none());
+    }
+
+    #[test]
+    fn paragraph_style_range_parses_w02_paragraph_attrs() {
+        // W0.2 — LeftIndent / RightIndent / Hyphenation /
+        // KeepLinesTogether / KeepWithNext / NumberingFormat and the
+        // RuleAbove* family land on the paragraph instance.
+        let xml = br#"<Story Self="u1">
+          <ParagraphStyleRange
+              LeftIndent="18"
+              RightIndent="9"
+              Hyphenation="false"
+              KeepLinesTogether="true"
+              KeepWithNext="2"
+              NumberingFormat="^#.^t"
+              RuleAbove="true"
+              RuleAboveLineWeight="1.5"
+              RuleAboveColor="Color/Black"
+              RuleAboveOffset="3">
+            <CharacterStyleRange><Content>body</Content></CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let p = &s.paragraphs[0];
+        assert_eq!(p.left_indent, Some(18.0));
+        assert_eq!(p.right_indent, Some(9.0));
+        assert_eq!(p.hyphenation, Some(false));
+        assert_eq!(p.keep_lines_together, Some(true));
+        assert_eq!(p.keep_with_next, Some(2));
+        assert_eq!(p.numbering_format.as_deref(), Some("^#.^t"));
+        assert_eq!(p.rule_above.on, Some(true));
+        assert_eq!(p.rule_above.weight, Some(1.5));
+        assert_eq!(p.rule_above.color.as_deref(), Some("Color/Black"));
+        assert_eq!(p.rule_above.offset, Some(3.0));
+        // Absent RuleBelow stays all-None.
+        assert_eq!(p.rule_below.on, None);
+    }
+
+    #[test]
+    fn w02_paragraph_attrs_default_to_none_when_absent() {
+        let xml = br#"<Story Self="u1">
+          <ParagraphStyleRange>
+            <CharacterStyleRange><Content>x</Content></CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let p = &s.paragraphs[0];
+        assert!(p.left_indent.is_none());
+        assert!(p.right_indent.is_none());
+        assert!(p.hyphenation.is_none());
+        assert!(p.keep_lines_together.is_none());
+        assert!(p.keep_with_next.is_none());
+        assert!(p.numbering_format.is_none());
+        assert_eq!(p.rule_above.on, None);
+        assert_eq!(p.rule_below.on, None);
     }
 
     #[test]
