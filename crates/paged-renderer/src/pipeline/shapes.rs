@@ -121,6 +121,30 @@ pub(super) fn emit_oval_into(
     }
 }
 
+/// Outward (off-the-end-of-the-path) direction at a line endpoint, for
+/// orienting its arrowhead. `endpoint` is the terminal anchor;
+/// `handle` is that anchor's adjacent Bezier control point (the
+/// endpoint's `right` at the start, its `left` at the end);
+/// `neighbour` is the next anchor inward. On a curved terminal segment
+/// the cubic's tangent at the endpoint runs along `endpoint - handle`,
+/// which is the correct arrowhead axis. IDML serialises a straight
+/// segment as `handle == endpoint`; that degenerates the tangent, so
+/// we fall back to the chord `endpoint - neighbour` (the old
+/// straight-line behaviour). Returns an un-normalised direction —
+/// `emit_arrowhead` normalises.
+fn path_end_outward_dir(
+    endpoint: (f32, f32),
+    handle: (f32, f32),
+    neighbour: (f32, f32),
+) -> (f32, f32) {
+    let (hx, hy) = (endpoint.0 - handle.0, endpoint.1 - handle.1);
+    if hx * hx + hy * hy > 1e-6 {
+        (hx, hy)
+    } else {
+        (endpoint.0 - neighbour.0, endpoint.1 - neighbour.1)
+    }
+}
+
 /// Emit a filled arrowhead of `kind` at `tip`, pointing along the
 /// outward direction `dir` at that line end. Size derives from the
 /// stroke weight × `scale_pct`, matching InDesign's stroke-relative
@@ -328,17 +352,25 @@ pub(super) fn emit_line_into(
             transform: outer,
         });
         // Arrowheads at the first / last anchor, oriented outward along
-        // each end's tangent. Built in inner coords and emitted through
-        // the same `outer` transform as the stroke.
+        // each end's *Bezier tangent*. Built in inner coords and emitted
+        // through the same `outer` transform as the stroke. On a curved
+        // final segment the chord between the last two anchors points
+        // the wrong way; `path_end_outward_dir` uses the endpoint's own
+        // control handle (the cubic's true tangent there) and only
+        // falls back to the chord when the handle coincides with the
+        // anchor (the straight-segment serialisation).
         let n = line.anchors.len();
         if line.start_arrow.draws() {
             let a0 = line.anchors[0].anchor;
-            let a1 = line.anchors[1].anchor;
             emit_arrowhead(
                 page,
                 line.start_arrow,
                 a0,
-                (a0.0 - a1.0, a0.1 - a1.1),
+                path_end_outward_dir(
+                    a0,
+                    line.anchors[0].right,
+                    line.anchors[1].anchor,
+                ),
                 stroke_width,
                 line.start_arrow_scale,
                 stroke_paint,
@@ -347,12 +379,15 @@ pub(super) fn emit_line_into(
         }
         if line.end_arrow.draws() {
             let an = line.anchors[n - 1].anchor;
-            let am = line.anchors[n - 2].anchor;
             emit_arrowhead(
                 page,
                 line.end_arrow,
                 an,
-                (an.0 - am.0, an.1 - am.1),
+                path_end_outward_dir(
+                    an,
+                    line.anchors[n - 1].left,
+                    line.anchors[n - 2].anchor,
+                ),
                 stroke_width,
                 line.end_arrow_scale,
                 stroke_paint,
@@ -1259,4 +1294,39 @@ fn emit_diagonal_under_transform(
         stroke,
         transform: outer,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::path_end_outward_dir;
+
+    /// W1.1: on a straight terminal segment (IDML serialises straight
+    /// segments with the handle coincident with its anchor), the
+    /// arrowhead axis falls back to the chord between the endpoint and
+    /// its inward neighbour — the legacy behaviour.
+    #[test]
+    fn arrowhead_dir_straight_segment_uses_chord() {
+        // Endpoint (0,0), handle on the anchor, neighbour to the right.
+        let dir = path_end_outward_dir((0.0, 0.0), (0.0, 0.0), (10.0, 0.0));
+        // Outward = endpoint - neighbour = (-10, 0): points left, away
+        // from the line body.
+        assert!((dir.0 + 10.0).abs() < 1e-6 && dir.1.abs() < 1e-6);
+    }
+
+    /// W1.1: on a curved terminal segment the chord points the wrong
+    /// way; the arrowhead must follow the cubic's true tangent, which
+    /// runs along `endpoint - handle`.
+    #[test]
+    fn arrowhead_dir_curved_segment_follows_handle_tangent() {
+        // Endpoint (0,0); its control handle sits above-right at (3,3)
+        // (the curve leaves the endpoint heading there). The neighbour
+        // anchor is straight right at (10,0) — its chord would give a
+        // purely horizontal axis, but the real tangent is the
+        // (endpoint - handle) = (-3,-3) diagonal.
+        let dir = path_end_outward_dir((0.0, 0.0), (3.0, 3.0), (10.0, 0.0));
+        assert!(
+            (dir.0 + 3.0).abs() < 1e-6 && (dir.1 + 3.0).abs() < 1e-6,
+            "curved end must use the handle tangent, got {dir:?}"
+        );
+    }
 }
