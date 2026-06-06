@@ -2786,8 +2786,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v29() {
-        assert_eq!(PROTOCOL_VERSION.0, 29);
+    fn protocol_version_is_v30() {
+        assert_eq!(PROTOCOL_VERSION.0, 30);
     }
 
     #[test]
