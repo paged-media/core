@@ -1809,6 +1809,13 @@ pub enum Mutation {
         page_id: PageId,
         bounds: (f32, f32, f32, f32),
     },
+    /// W2.0 (rides v28) — insert an EMPTY text frame (no story). The
+    /// threading target `LinkFrames` requires, and the Type tool's
+    /// frame-draw gesture. Same page-local bounds as `InsertFrame`.
+    InsertTextFrame {
+        page_id: PageId,
+        bounds: (f32, f32, f32, f32),
+    },
     DeleteFrame {
         frame_id: String,
     },
@@ -2248,6 +2255,7 @@ impl Mutation {
             Self::DeletePage { .. } => "DeletePage",
             Self::ResizePage { .. } => "ResizePage",
             Self::InsertFrame { .. } => "InsertFrame",
+            Self::InsertTextFrame { .. } => "InsertTextFrame",
             Self::DeleteFrame { .. } => "DeleteFrame",
             Self::InsertLine { .. } => "InsertLine",
             Self::InsertPath { .. } => "InsertPath",
@@ -2509,6 +2517,10 @@ mod tests {
                 field: paged_mutate::operation::FieldKind::PageNumber,
             },
             Mutation::InsertOval {
+                page_id: PageId("Page/u1".into()),
+                bounds: (1.0, 2.0, 3.0, 4.0),
+            },
+            Mutation::InsertTextFrame {
                 page_id: PageId("Page/u1".into()),
                 bounds: (1.0, 2.0, 3.0, 4.0),
             },

@@ -622,12 +622,26 @@ mod wasm {
             let msg: MainToWorker = match serde_json::from_str(input) {
                 Ok(m) => m,
                 Err(e) => {
+                    // Salvage the seq so the caller's pending promise
+                    // RESOLVES (as a failure) instead of hanging — the
+                    // client correlates replies by seq, and a seq-less
+                    // warning leaves `mutate()` waiting forever.
+                    let seq = serde_json::from_str::<serde_json::Value>(input)
+                        .ok()
+                        .and_then(|v| v.get("seq").and_then(|s| s.as_u64()));
                     let err = WorkerToMain {
-                        seq: None,
+                        seq,
                         protocol: PROTOCOL_VERSION,
-                        kind: WorkerToMainKind::Warning {
-                            kind: "protocol".into(),
-                            details: format!("malformed message: {e}"),
+                        kind: match seq {
+                            Some(_) => WorkerToMainKind::MutationFailed {
+                                error: WorkerError::NotImplemented {
+                                    what: format!("malformed message: {e}"),
+                                },
+                            },
+                            None => WorkerToMainKind::Warning {
+                                kind: "protocol".into(),
+                                details: format!("malformed message: {e}"),
+                            },
                         },
                     };
                     return serde_json::to_string(&err).unwrap_or_default();

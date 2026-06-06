@@ -1417,6 +1417,30 @@ impl CanvasModel {
                     z_slot: None,
                 })
             }
+            Mutation::InsertTextFrame { page_id, bounds } => {
+                let (spread_id, (ox, oy), idx) = self.page_insert_context(page_id)?;
+                let position = self.scene.spreads[idx].spread.text_frames.len();
+                Some(Operation::InsertNode {
+                    parent: NodeId::Spread(spread_id),
+                    position,
+                    node: paged_mutate::NodeSpec::TextFrame {
+                        self_id: self.mint_page_item_id(),
+                        bounds: [
+                            bounds.0 + oy,
+                            bounds.1 + ox,
+                            bounds.2 + oy,
+                            bounds.3 + ox,
+                        ],
+                        // Text frames carry no fill/stroke by default —
+                        // an empty threading/Type-tool target.
+                        fill_color: None,
+                        stroke_color: None,
+                        stroke_weight: None,
+                        item_transform: None,
+                    },
+                    z_slot: None,
+                })
+            }
             Mutation::InsertLine { page_id, start, end } => {
                 let (spread_id, (ox, oy), idx) = self.page_insert_context(page_id)?;
                 let position = self.scene.spreads[idx].spread.graphic_lines.len();
