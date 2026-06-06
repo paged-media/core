@@ -209,10 +209,37 @@ pub fn fonts_xml() -> Vec<u8> {
     b.into_bytes()
 }
 
+/// One custom `<…StrokeStyle>` resource to emit in `Resources/Styles.xml`.
+/// Covers the four W1.2 stroke-STYLE families. Only the fields each kind
+/// uses are honoured; the rest stay `None`.
+pub struct StrokeStyleSpec {
+    pub self_id: &'static str,
+    pub name: &'static str,
+    /// `"Dashed"`, `"Dotted"`, `"Striped"`, or `"Wavy"`.
+    pub kind: &'static str,
+    /// Dashed/Dotted `Pattern` attribute (space-separated pt lengths).
+    pub pattern: Option<&'static str>,
+    /// `GapColor` / `GapTint` for the gap-colour under-stroke pass.
+    pub gap_color: Option<&'static str>,
+    pub gap_tint: Option<&'static str>,
+    /// `<Stripe Left=… Width=…/>` children (0..1 ratios) for Striped.
+    pub stripes: &'static [(f32, f32)],
+    /// Wavy `Width` / `Wavelength` (0..1 ratios).
+    pub wave_width: Option<&'static str>,
+    pub wave_length: Option<&'static str>,
+}
+
 /// `Resources/Styles.xml` — declares the implicit `[No paragraph
 /// style]` and `[No character style]` plus a default Open Sans
 /// paragraph style for body text.
 pub fn styles_xml() -> Vec<u8> {
+    styles_xml_with_stroke_styles(&[])
+}
+
+/// Like [`styles_xml`] but also emits custom `<…StrokeStyle>` resources
+/// (W1.2) so a page item can reference a striped / wavy / gap-coloured
+/// dash via `StrokeType="StrokeStyle/<id>"`.
+pub fn styles_xml_with_stroke_styles(stroke_styles: &[StrokeStyleSpec]) -> Vec<u8> {
     let mut b = XmlBuilder::new();
     b.write_decl();
     b.start(
@@ -275,6 +302,46 @@ pub fn styles_xml() -> Vec<u8> {
         ],
     );
     b.end("RootObjectStyleGroup");
+    // Custom stroke-style resources (W1.2). InDesign serialises these as
+    // top-level children of `idPkg:Styles`; the parser keys them by
+    // `Self`, and page items reference them via `StrokeType`.
+    for ss in stroke_styles {
+        let elem = match ss.kind {
+            "Dashed" => "DashedStrokeStyle",
+            "Dotted" => "DottedStrokeStyle",
+            "Striped" => "StripedStrokeStyle",
+            "Wavy" => "WavyStrokeStyle",
+            other => panic!("unknown stroke style kind {other}"),
+        };
+        let mut attrs: Vec<(&str, &str)> =
+            vec![("Self", ss.self_id), ("Name", ss.name)];
+        if let Some(p) = ss.pattern {
+            attrs.push(("Pattern", p));
+        }
+        if let Some(gc) = ss.gap_color {
+            attrs.push(("GapColor", gc));
+        }
+        if let Some(gt) = ss.gap_tint {
+            attrs.push(("GapTint", gt));
+        }
+        if let Some(w) = ss.wave_width {
+            attrs.push(("Width", w));
+        }
+        if let Some(wl) = ss.wave_length {
+            attrs.push(("Wavelength", wl));
+        }
+        if ss.stripes.is_empty() {
+            b.empty(elem, &attrs);
+        } else {
+            b.start(elem, &attrs);
+            for &(left, width) in ss.stripes {
+                let left_s = crate::xml::format_f32(left);
+                let width_s = crate::xml::format_f32(width);
+                b.empty("Stripe", &[("Left", &left_s), ("Width", &width_s)]);
+            }
+            b.end(elem);
+        }
+    }
     b.end("idPkg:Styles");
     b.into_bytes()
 }

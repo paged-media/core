@@ -133,9 +133,11 @@ pub struct ConditionSetDef {
     pub conditions: Vec<String>,
 }
 
-/// Custom stroke-style definition. Today the renderer consumes the
-/// `Dashed` variant (the others are captured so we don't lose them
-/// during round-trips and so a future track can grow into them).
+/// Custom stroke-style definition. The renderer consumes the
+/// `Dashed`/`Dotted` patterns directly, the `Striped` stripe table as
+/// N parallel rules, and the `Wavy` width/wavelength as a sampled sine
+/// (W1.2). Anything still unused is captured so we don't lose it during
+/// round-trips.
 #[derive(Debug, Clone, Serialize)]
 pub struct StrokeStyleDef {
     pub self_id: String,
@@ -144,6 +146,35 @@ pub struct StrokeStyleDef {
     /// On/off pattern in pt for `Dashed` (the `Pattern` attribute
     /// parsed as space-separated floats). Empty for the other kinds.
     pub pattern: Vec<f32>,
+    /// `<Stripe>` children of a `<StripedStrokeStyle>`. Each entry is
+    /// `(left, width)` as fractions in `0.0..=1.0` of the *total*
+    /// stroke weight — InDesign serialises them as 0..1 ratios on the
+    /// `StartWidth` / `Width` attributes. Empty for non-striped kinds.
+    pub stripes: Vec<StripeDef>,
+    /// `<WavyStrokeStyle Width=… Wavelength=…>` — the wave amplitude
+    /// and period as fractions of the stroke weight (InDesign's 0..1
+    /// ratios). `None` when this isn't a wavy style or the attribute
+    /// was absent (the renderer then substitutes IDML defaults).
+    pub wave_width: Option<f32>,
+    pub wave_length: Option<f32>,
+    /// `GapColor` swatch ref painted in the gaps of a dashed / dotted /
+    /// striped stroke (W1.2). IDML carries this on the *stroke-style
+    /// definition*, not the page item. `Swatch/None` normalises to
+    /// `None` (no gap fill — the default).
+    pub gap_color: Option<String>,
+    /// `GapTint` — 0..100 dilution of the gap colour toward paper.
+    /// `None` ⇒ full strength.
+    pub gap_tint: Option<f32>,
+}
+
+/// One stripe of a `<StripedStrokeStyle>`. `left` and `width` are
+/// fractions of the total stroke weight (`0.0..=1.0`). The stripe's
+/// centreline sits at `left + width/2` measured from the stroke's
+/// upper edge, and its sub-weight is `width * total_weight`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct StripeDef {
+    pub left: f32,
+    pub width: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -990,6 +1021,9 @@ impl StyleSheet {
         // because they don't share the AppliedFont / BasedOn /
         // NumberingExpression property elements the others do.
         let mut current_toc_style: Option<String> = None;
+        // Track an open element-form `<StripedStrokeStyle>` so its
+        // `<Stripe>` children attach to the right definition (W1.2).
+        let mut current_stroke_style: Option<String> = None;
         let mut current_style: Option<CurrentStyle> = None;
         let mut pending_property: Option<CurrentProperty> = None;
         loop {
@@ -1042,8 +1076,11 @@ impl StyleSheet {
                     | b"WavyStrokeStyle" => {
                         // Real-world IDMLs emit these as self-closing
                         // (handled in the Empty branch) but the schema
-                        // permits child `<Properties>`; accept either.
+                        // permits child `<Properties>` and `<Stripe>`
+                        // children; accept either. Remember the open id
+                        // so `<Stripe>` children attach to it (W1.2).
                         if let Some(def) = parse_stroke_style(&e) {
+                            current_stroke_style = Some(def.self_id.clone());
                             out.stroke_styles.insert(def.self_id.clone(), def);
                         }
                     }
@@ -1247,6 +1284,19 @@ impl StyleSheet {
                             out.stroke_styles.insert(def.self_id.clone(), def);
                         }
                     }
+                    b"Stripe" => {
+                        // A `<Stripe Left=… Width=…/>` child of an open
+                        // `<StripedStrokeStyle>` (W1.2). Append in source
+                        // order so the renderer's perpendicular offsets
+                        // march top→bottom across the stroke width.
+                        if let (Some(id), Some(stripe)) =
+                            (current_stroke_style.as_deref(), parse_stripe(&e))
+                        {
+                            if let Some(def) = out.stroke_styles.get_mut(id) {
+                                def.stripes.push(stripe);
+                            }
+                        }
+                    }
                     b"Condition" => {
                         if let Some(def) = parse_condition(&e) {
                             out.conditions.insert(def.self_id.clone(), def);
@@ -1270,6 +1320,12 @@ impl StyleSheet {
                     _ => {}
                 },
                 Event::End(e) => match e.name().as_ref() {
+                    b"DashedStrokeStyle"
+                    | b"DottedStrokeStyle"
+                    | b"StripedStrokeStyle"
+                    | b"WavyStrokeStyle" => {
+                        current_stroke_style = None;
+                    }
                     b"ParagraphStyle" => {
                         current_paragraph_style = None;
                         if matches!(current_style, Some(CurrentStyle::Paragraph)) {
@@ -1947,11 +2003,13 @@ fn parse_toc_style_entry(e: &quick_xml::events::BytesStart) -> Option<TOCStyleEn
     })
 }
 
-/// Track 4a: parse a `<DashedStrokeStyle>` / `<DottedStrokeStyle>` /
-/// `<StripedStrokeStyle>` / `<WavyStrokeStyle>` element. Pulls the
-/// `Self` id and (for dashed) the `Pattern` attribute as a list of
-/// on/off lengths in pt. Returns `None` only when `Self` is missing
-/// — unrecognised element shapes are still useful to remember.
+/// Track 4a / W1.2: parse a `<DashedStrokeStyle>` / `<DottedStrokeStyle>`
+/// / `<StripedStrokeStyle>` / `<WavyStrokeStyle>` element. Pulls the
+/// `Self` id, the `Pattern` attribute (dashed/dotted) as a list of
+/// on/off lengths in pt, and the `<WavyStrokeStyle>` `Width` /
+/// `Wavelength` ratios. `<Stripe>` children are merged in afterward by
+/// the element walker. Returns `None` only when `Self` is missing —
+/// unrecognised element shapes are still useful to remember.
 fn parse_stroke_style(e: &quick_xml::events::BytesStart) -> Option<StrokeStyleDef> {
     let self_id = attr(e, b"Self")?;
     let kind = match e.name().as_ref() {
@@ -1973,7 +2031,27 @@ fn parse_stroke_style(e: &quick_xml::events::BytesStart) -> Option<StrokeStyleDe
         name: attr(e, b"Name"),
         kind,
         pattern,
+        stripes: Vec::new(),
+        wave_width: attr(e, b"Width").and_then(|s| s.parse().ok()),
+        wave_length: attr(e, b"Wavelength").and_then(|s| s.parse().ok()),
+        gap_color: match attr(e, b"GapColor").as_deref() {
+            Some("Swatch/None") | Some("n") | Some("") | None => None,
+            _ => attr(e, b"GapColor"),
+        },
+        gap_tint: attr(e, b"GapTint").and_then(|s| s.parse().ok()),
     })
+}
+
+/// W1.2: parse one `<Stripe Left="…" Width="…"/>` child of a
+/// `<StripedStrokeStyle>`. Both attributes are InDesign 0..1 ratios of
+/// the total stroke weight. Returns `None` when `Width` is absent (a
+/// zero-width stripe paints nothing).
+fn parse_stripe(e: &quick_xml::events::BytesStart) -> Option<StripeDef> {
+    let width = attr(e, b"Width").and_then(|s| s.parse::<f32>().ok())?;
+    let left = attr(e, b"Left")
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(0.0);
+    Some(StripeDef { left, width })
 }
 
 fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphStyleDef> {
@@ -2720,8 +2798,59 @@ mod tests {
         assert_eq!(dash.kind, StrokeStyleKind::Dashed);
         assert_eq!(dash.name.as_deref(), Some("Diag"));
         assert_eq!(dash.pattern, vec![3.5, 2.0, 1.0, 4.0]);
+        // `GapColor="Swatch/None"` normalises to None (no gap fill).
+        assert_eq!(dash.gap_color, None);
         let dot = s.stroke_styles.get("StrokeStyle/u164").unwrap();
         assert_eq!(dot.kind, StrokeStyleKind::Dotted);
         assert!(dot.pattern.is_empty());
+    }
+
+    #[test]
+    fn dashed_stroke_style_keeps_real_gap_color() {
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+            <DashedStrokeStyle Self="StrokeStyle/u165" Name="GapDash"
+                               GapColor="Color/Cyan" GapTint="60"
+                               Pattern="6 4"/>
+          </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let dash = s.stroke_styles.get("StrokeStyle/u165").unwrap();
+        assert_eq!(dash.gap_color.as_deref(), Some("Color/Cyan"));
+        assert_eq!(dash.gap_tint, Some(60.0));
+    }
+
+    // ---- W1.2: striped + wavy custom StrokeStyle parsing ----
+
+    #[test]
+    fn striped_stroke_style_parses_stripe_children() {
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+            <StripedStrokeStyle Self="StrokeStyle/u200" Name="ThickThin">
+              <Stripe Left="0" Width="0.6"/>
+              <Stripe Left="0.8" Width="0.2"/>
+            </StripedStrokeStyle>
+          </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let striped = s.stroke_styles.get("StrokeStyle/u200").unwrap();
+        assert_eq!(striped.kind, StrokeStyleKind::Striped);
+        assert_eq!(striped.name.as_deref(), Some("ThickThin"));
+        assert_eq!(striped.stripes.len(), 2);
+        assert_eq!(striped.stripes[0], StripeDef { left: 0.0, width: 0.6 });
+        assert_eq!(striped.stripes[1], StripeDef { left: 0.8, width: 0.2 });
+    }
+
+    #[test]
+    fn wavy_stroke_style_parses_width_and_wavelength() {
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+            <WavyStrokeStyle Self="StrokeStyle/u201" Name="Wave"
+                             Width="0.5" Wavelength="1.5"/>
+          </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let wavy = s.stroke_styles.get("StrokeStyle/u201").unwrap();
+        assert_eq!(wavy.kind, StrokeStyleKind::Wavy);
+        assert_eq!(wavy.wave_width, Some(0.5));
+        assert_eq!(wavy.wave_length, Some(1.5));
+        assert!(wavy.stripes.is_empty());
     }
 }
