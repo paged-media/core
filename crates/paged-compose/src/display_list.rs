@@ -1132,6 +1132,50 @@ impl GlyphRunTable {
     }
 }
 
+/// W1.4 — where a clickable link region points. Sourced from an IDML
+/// `<Hyperlink>` (or `<CrossReferenceSource>`) span resolved against
+/// the document's destination table at render time.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LinkTarget {
+    /// External URL — becomes a PDF `/URI` action.
+    Url(String),
+    /// In-document page (0-based flat body-page index) — becomes a PDF
+    /// `/GoTo` action with a `/Fit` page destination.
+    PageIndex(u32),
+    /// A source span whose destination could not be resolved (missing
+    /// or dangling ref). Kept so tooling can surface the dangling link;
+    /// the PDF backend skips it (no annotation for an unresolved
+    /// target). Carries the unresolved destination/source id for
+    /// diagnostics.
+    Unresolved(String),
+}
+
+/// W1.4 — one clickable region in PAGE-LOCAL pt space (origin at the
+/// page's top-left, y growing downward — the same space the display
+/// list's glyph commands live in). The PDF exporter flips it into
+/// y-up media coords when it writes the `/Annots` Link annotation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinkRegion {
+    pub rect: Rect,
+    pub target: LinkTarget,
+}
+
+/// W1.4 — the per-list link-region side-channel, paralleling
+/// [`GlyphRunTable`]. Populated during emit only when
+/// `PipelineOptions::collect_link_regions` is set (the live canvas
+/// build never pays for it); rasterizers never read it — only the PDF
+/// exporter consumes it to emit `/Annots` Link annotations.
+#[derive(Debug, Default, Clone)]
+pub struct LinkRegionTable {
+    pub regions: Vec<LinkRegion>,
+}
+
+impl LinkRegionTable {
+    pub fn push(&mut self, region: LinkRegion) {
+        self.regions.push(region);
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct DisplayList {
     pub paths: PathBuffer,
@@ -1150,6 +1194,11 @@ pub struct DisplayList {
     /// `PipelineOptions::collect_glyph_runs`; rasterizers never read
     /// it.
     pub glyph_runs: Option<GlyphRunTable>,
+    /// W1.4 — link-region side-channel for the PDF exporter's
+    /// `/Annots`. `None` unless the build ran with
+    /// `PipelineOptions::collect_link_regions`; rasterizers never read
+    /// it.
+    pub link_regions: Option<LinkRegionTable>,
 }
 
 impl DisplayList {

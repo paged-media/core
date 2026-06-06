@@ -349,6 +349,50 @@ fn anchored_round_trips_through_parser() {
 }
 
 #[test]
+fn markers_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::markers::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::markers::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+#[test]
+fn markers_round_trips_through_parser() {
+    let sample = paged_gen::samples::markers::build();
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let container = paged_parse::Container::open(&bytes).expect("Container::open");
+    // 2 spreads (body page + link-target page), 1 story.
+    assert_eq!(container.designmap.spreads.len(), 2);
+    assert_eq!(container.designmap.stories.len(), 1);
+    // Two text variables (custom + page-count) and two hyperlinks
+    // (URL + page) with their destination resources must parse.
+    assert_eq!(container.designmap.text_variables.len(), 2);
+    assert_eq!(container.designmap.hyperlinks.len(), 2);
+    assert_eq!(container.designmap.hyperlink_destinations.len(), 2);
+    // The custom variable carries its literal Contents.
+    assert!(container
+        .designmap
+        .text_variables
+        .iter()
+        .any(|v| v.variable_type.as_deref() == Some("CustomTextType")
+            && v.contents.as_deref() == Some("Spring 2026")));
+    // The story's runs carry hyperlink_source tags (the two link
+    // spans) and text_variable tags (the two variable instances).
+    let story_xml = container
+        .entries
+        .iter()
+        .find(|(k, _)| k.starts_with("Stories/"))
+        .map(|(_, v)| v)
+        .expect("a story entry");
+    let story = paged_parse::Story::parse(story_xml).expect("Story::parse");
+    let runs: Vec<&paged_parse::CharacterRun> =
+        story.paragraphs.iter().flat_map(|p| p.runs.iter()).collect();
+    let link_runs = runs.iter().filter(|r| r.hyperlink_source.is_some()).count();
+    let var_runs = runs.iter().filter(|r| r.text_variable.is_some()).count();
+    assert_eq!(link_runs, 2, "two hyperlink-source-tagged runs");
+    assert_eq!(var_runs, 2, "two text-variable-tagged runs");
+}
+
+#[test]
 fn images_emit_is_byte_deterministic() {
     let a = paged_gen::write_idml(&paged_gen::samples::images::build()).unwrap();
     let b = paged_gen::write_idml(&paged_gen::samples::images::build()).unwrap();

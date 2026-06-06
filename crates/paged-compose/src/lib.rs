@@ -30,7 +30,8 @@ pub use display_list::{
     DisplayList, DropShadow, Feather, FeatherCornerType, GlyphCacheKey, GradientFeather,
     GradientFeatherKind, GradientFeatherStop, GradientId, GradientStop, GlyphRunEntry,
     GlyphRunTable, ImageId, InnerGlow,
-    InnerShadow, LayerEffect, LineCap, LineJoin, LinearGradient, OuterGlow, Paint, PathBuffer,
+    InnerShadow, LayerEffect, LineCap, LineJoin, LinearGradient, LinkRegion, LinkRegionTable,
+    LinkTarget, OuterGlow, Paint, PathBuffer,
     PathData, PathId, PathSegment, RadialGradient, Rect, Satin, SpotInk, SpotInkId, Stroke,
     Transform,
 };

@@ -195,6 +195,34 @@ pub fn export_page(
         s.filter(pdf_writer::Filter::FlateDecode);
         s.finish();
     }
+    // W1.4 — harvest link regions into media-space Link annotations.
+    // The region rects are page-local pt (y-down, origin at the page's
+    // top-left); the page CTM flips them into the media box exactly the
+    // way the content stream is flipped, so a `/URI` / `/GoTo` rect lands
+    // over the glyphs it covers. Unresolved targets carry no PDF action
+    // and are skipped.
+    let mut link_annots: Vec<crate::writer::LinkAnnot> = Vec::new();
+    if let Some(table) = &list.link_regions {
+        use paged_compose::LinkTarget;
+        for region in &table.regions {
+            let target = match &region.target {
+                LinkTarget::Url(url) => crate::writer::LinkAnnotTarget::Uri(url.clone()),
+                LinkTarget::PageIndex(i) => crate::writer::LinkAnnotTarget::Page(*i),
+                LinkTarget::Unresolved(_) => continue,
+            };
+            let r = region.rect;
+            // Page-local y-down → media y-up (mirror the page CTM).
+            let x0 = off_left + r.x;
+            let x1 = off_left + r.x + r.w;
+            let y_top = off_bottom + trim_h - r.y;
+            let y_bottom = off_bottom + trim_h - r.y - r.h;
+            link_annots.push(crate::writer::LinkAnnot {
+                rect: pdf_writer::Rect::new(x0, y_bottom, x1, y_top),
+                target,
+            });
+        }
+    }
+
     let page_ref = state.refs.alloc();
     state.pages.push(FinishedPage {
         page_ref,
@@ -204,6 +232,7 @@ pub fn export_page(
         bleed_box,
         resources: page_resources,
         resources_ref,
+        link_annots,
     });
     Ok(())
 }

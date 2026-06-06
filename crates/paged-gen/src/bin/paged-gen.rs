@@ -61,9 +61,10 @@ fn emit_sample(name: &str, out_dir: &std::path::Path) -> Result<()> {
         "images" => paged_gen::samples::images::build(),
         "anchored" => paged_gen::samples::anchored::build(),
         "transparency" => paged_gen::samples::transparency::build(),
+        "markers" => paged_gen::samples::markers::build(),
         other => {
             anyhow::bail!(
-                "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, text-letterspacing, text-wrap, effects, gradients, tables, images, anchored, transparency"
+                "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, text-letterspacing, text-wrap, effects, gradients, tables, images, anchored, transparency, markers"
             )
         }
     };
