@@ -608,9 +608,14 @@ pub struct CellDiagonal {
     pub left_line_drawn: Option<bool>,
     pub left_line_color: Option<String>,
     pub left_line_weight: Option<f32>,
+    /// `LeftLineStrokeTint` percentage (0..=100). `None` ⇒ paint the
+    /// diagonal stroke swatch at full strength.
+    pub left_line_tint: Option<f32>,
     pub right_line_drawn: Option<bool>,
     pub right_line_color: Option<String>,
     pub right_line_weight: Option<f32>,
+    /// `RightLineStrokeTint` percentage (0..=100).
+    pub right_line_tint: Option<f32>,
     /// `DiagonalLineInFront` boolean — true means the diagonal paints
     /// on top of cell content. The renderer emits diagonals after
     /// content when this is true.
@@ -1252,11 +1257,13 @@ impl Story {
                                 left_line_color: attr(&e, b"LeftLineStrokeColor"),
                                 left_line_weight: attr(&e, b"LeftLineStrokeWeight")
                                     .and_then(|s| s.parse().ok()),
+                                left_line_tint: parse_tint_attr(&e, b"LeftLineStrokeTint"),
                                 right_line_drawn: attr(&e, b"RightLineDrawn")
                                     .and_then(|s| s.parse().ok()),
                                 right_line_color: attr(&e, b"RightLineStrokeColor"),
                                 right_line_weight: attr(&e, b"RightLineStrokeWeight")
                                     .and_then(|s| s.parse().ok()),
+                                right_line_tint: parse_tint_attr(&e, b"RightLineStrokeTint"),
                                 diagonal_in_front: attr(&e, b"DiagonalLineInFront")
                                     .and_then(|s| s.parse().ok()),
                             },
@@ -3043,5 +3050,57 @@ mod tests {
         assert_eq!(s.paragraphs[0].overprint_stroke, Some(false));
         assert_eq!(s.paragraphs[0].runs[0].overprint_fill, Some(true));
         assert_eq!(s.paragraphs[0].runs[1].overprint_fill, None);
+    }
+
+    #[test]
+    fn parses_cell_diagonal_strokes_with_tint_and_in_front() {
+        // Cell 0:0 carries a TL→BR ("Left") diagonal with a tint;
+        // cell 1:0 carries a TR→BL ("Right") diagonal painted in
+        // front of the content.
+        let xml =
+            br#"<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Story Self="s1">
+            <ParagraphStyleRange>
+              <CharacterStyleRange>
+                <Table Self="t1" BodyRowCount="1" ColumnCount="2">
+                  <Row Self="r0" Name="0" SingleRowHeight="20"/>
+                  <Column Self="c0" Name="0" SingleColumnWidth="100"/>
+                  <Column Self="c1" Name="1" SingleColumnWidth="100"/>
+                  <Cell Self="cell00" Name="0:0"
+                        LeftLineDrawn="true" LeftLineStrokeColor="Color/Red"
+                        LeftLineStrokeWeight="1.5" LeftLineStrokeTint="60">
+                    <ParagraphStyleRange><CharacterStyleRange>
+                      <Content>A</Content>
+                    </CharacterStyleRange></ParagraphStyleRange>
+                  </Cell>
+                  <Cell Self="cell10" Name="1:0"
+                        RightLineDrawn="true" RightLineStrokeColor="Color/Blue"
+                        RightLineStrokeWeight="2" RightLineStrokeTint="100"
+                        DiagonalLineInFront="true">
+                    <ParagraphStyleRange><CharacterStyleRange>
+                      <Content>B</Content>
+                    </CharacterStyleRange></ParagraphStyleRange>
+                  </Cell>
+                </Table>
+              </CharacterStyleRange>
+            </ParagraphStyleRange>
+          </Story>
+        </idPkg:Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let table = s.paragraphs[0].table.as_ref().unwrap();
+        let c00 = &table.cells[0].diagonal;
+        assert_eq!(c00.left_line_drawn, Some(true));
+        assert_eq!(c00.left_line_color.as_deref(), Some("Color/Red"));
+        assert_eq!(c00.left_line_weight, Some(1.5));
+        assert_eq!(c00.left_line_tint, Some(60.0));
+        assert_eq!(c00.right_line_drawn, None);
+        assert_eq!(c00.diagonal_in_front, None);
+        let c10 = &table.cells[1].diagonal;
+        assert_eq!(c10.right_line_drawn, Some(true));
+        assert_eq!(c10.right_line_color.as_deref(), Some("Color/Blue"));
+        assert_eq!(c10.right_line_weight, Some(2.0));
+        assert_eq!(c10.right_line_tint, Some(100.0));
+        assert_eq!(c10.diagonal_in_front, Some(true));
+        assert_eq!(c10.left_line_drawn, None);
     }
 }

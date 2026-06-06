@@ -19,6 +19,41 @@
 
 use super::*;
 
+/// Resolved Start/End fill pattern for one axis (rows or columns).
+/// Picks the (colour, tint) for the `line_idx`-th body line, honouring
+/// the Skip-First / Skip-Last counts and the Start-count / End-count
+/// alternation cycle. Returns `None` when the line is skipped or no
+/// pattern is configured.
+struct AlternatingFillAxis<'a> {
+    n_lines: usize,
+    skip_first: usize,
+    skip_last: usize,
+    start_color: Option<&'a str>,
+    start_count: usize,
+    start_tint: Option<f32>,
+    end_color: Option<&'a str>,
+    end_count: usize,
+    end_tint: Option<f32>,
+}
+
+impl<'a> AlternatingFillAxis<'a> {
+    fn fill_for(&self, line_idx: usize) -> Option<(&'a str, Option<f32>)> {
+        if line_idx < self.skip_first || line_idx + self.skip_last >= self.n_lines {
+            return None;
+        }
+        let cycle = self.start_count + self.end_count;
+        if cycle == 0 {
+            return None;
+        }
+        let pos = (line_idx - self.skip_first) % cycle;
+        if pos < self.start_count {
+            self.start_color.map(|c| (c, self.start_tint))
+        } else {
+            self.end_color.map(|c| (c, self.end_tint))
+        }
+    }
+}
+
 /// Lay out and emit a `<Table>` at the StoryEmitter's current
 /// cursor in the head frame. Treats every cell as a mini-frame:
 /// computes its rect from cumulative row heights + column widths,
@@ -439,57 +474,109 @@ pub(super) fn emit_table_into_chain(
     let final_chain_idx = chain_idx;
     let final_y_in_frame = row_top_y_in_frame;
 
-    // Alternating row fills. The TableStyle cycles between
-    // `start_row_fill_color` (count rows) and
-    // `end_row_fill_color` (count rows) starting from the first
-    // *body* row. Cells with their own cell-style fill paint over
-    // the alternating fill.
-    let alternating_fill_for_body_row = |body_row_idx: usize| -> Option<(&str, Option<f32>)> {
-        let start_n = resolved_table.start_row_fill_count.unwrap_or(0) as usize;
-        let end_n = resolved_table.end_row_fill_count.unwrap_or(0) as usize;
-        let cycle = start_n + end_n;
-        if cycle == 0 {
-            return None;
-        }
-        let pos = body_row_idx % cycle;
-        if pos < start_n {
-            resolved_table
-                .start_row_fill_color
-                .as_deref()
-                .map(|c| (c, resolved_table.start_row_fill_tint))
-        } else {
-            resolved_table
-                .end_row_fill_color
-                .as_deref()
-                .map(|c| (c, resolved_table.end_row_fill_tint))
-        }
-    };
-    // Alternating fills iterate the physical-row sequence: replayed
-    // headers / footers count from their *original* template index
-    // so the visual cycle stays coherent across frame splits.
-    for prow in &physical_rows {
-        let r = prow.template_idx;
-        if r < header_count {
-            continue;
-        }
-        if footer_count > 0 && r + footer_count >= total_rows {
-            continue;
-        }
-        let body_idx = r - header_count;
-        let Some((fill_id, tint)) = alternating_fill_for_body_row(body_idx) else {
-            continue;
+    // ── Alternating row / column fills ─────────────────────────────
+    //
+    // Cell-background precedence (lowest → highest), painted in this
+    // order so later layers cover earlier ones:
+    //   1. region default (CellStyle fill, resolved later per cell),
+    //   2. the table-style alternating pattern (THIS block),
+    //   3. a cell-local inline `FillColor` on the `<Cell>` (per-cell
+    //      loop below).
+    // i.e. effective precedence is  cell-local > alternating > region
+    // default. The alternating fill is emitted HERE — before the
+    // per-cell loop — so cell-local / region fills paint over it, and
+    // glyphs (emitted last) sit on top of everything.
+    //
+    // IDML's `AlternatingFills` discriminator picks the axis:
+    //   * "AlternatingRows"    → cycle the Start/End *row* fills,
+    //   * "AlternatingColumns" → cycle the Start/End *column* fills.
+    // An absent discriminator paired with a Start *row* fill colour is
+    // treated as AlternatingRows (older InDesign exports omit the
+    // discriminator). Each axis honours its Start/End count cycle plus
+    // the Skip-First / Skip-Last body-line counts.
+    let alt_axis = resolved_table.alternating_fills.as_deref();
+    let want_row_fill = matches!(alt_axis, Some("AlternatingRows"))
+        || (alt_axis.is_none() && resolved_table.start_row_fill_color.is_some());
+    let want_col_fill = matches!(alt_axis, Some("AlternatingColumns"));
+
+    let body_rows = total_rows.saturating_sub(header_count + footer_count);
+    if want_row_fill {
+        let axis = AlternatingFillAxis {
+            n_lines: body_rows,
+            skip_first: resolved_table.skip_first_alternating_fill_rows.unwrap_or(0) as usize,
+            skip_last: resolved_table.skip_last_alternating_fill_rows.unwrap_or(0) as usize,
+            start_color: resolved_table.start_row_fill_color.as_deref(),
+            start_count: resolved_table.start_row_fill_count.unwrap_or(0) as usize,
+            start_tint: resolved_table.start_row_fill_tint,
+            end_color: resolved_table.end_row_fill_color.as_deref(),
+            end_count: resolved_table.end_row_fill_count.unwrap_or(0) as usize,
+            end_tint: resolved_table.end_row_fill_tint,
         };
-        let Some(paint) = color_id_to_paint(fill_id, em.palette, em.cmyk_xform) else {
-            continue;
+        // Alternating row fills iterate the physical-row sequence:
+        // replayed headers / footers count from their *original*
+        // template index so the visual cycle stays coherent across
+        // frame splits.
+        for prow in &physical_rows {
+            let r = prow.template_idx;
+            if r < header_count {
+                continue;
+            }
+            if footer_count > 0 && r + footer_count >= total_rows {
+                continue;
+            }
+            let body_idx = r - header_count;
+            let Some((fill_id, tint)) = axis.fill_for(body_idx) else {
+                continue;
+            };
+            let Some(paint) = color_id_to_paint(fill_id, em.palette, em.cmyk_xform) else {
+                continue;
+            };
+            let paint = apply_fill_tint(paint, tint);
+            let rect = Rect {
+                x: prow.table_left_pt,
+                y: prow.row_top_in_page,
+                w: total_w,
+                h: prow.height,
+            };
+            emit_rect(rect, paint, &mut pages[prow.target_page].list);
+        }
+    }
+    if want_col_fill {
+        let axis = AlternatingFillAxis {
+            n_lines: col_widths.len(),
+            skip_first: resolved_table
+                .skip_first_alternating_fill_columns
+                .unwrap_or(0) as usize,
+            skip_last: resolved_table.skip_last_alternating_fill_columns.unwrap_or(0) as usize,
+            start_color: resolved_table.start_column_fill_color.as_deref(),
+            start_count: resolved_table.start_column_fill_count.unwrap_or(0) as usize,
+            start_tint: resolved_table.start_column_fill_tint,
+            end_color: resolved_table.end_column_fill_color.as_deref(),
+            end_count: resolved_table.end_column_fill_count.unwrap_or(0) as usize,
+            end_tint: resolved_table.end_column_fill_tint,
         };
-        let paint = apply_fill_tint(paint, tint);
-        let rect = Rect {
-            x: prow.table_left_pt,
-            y: prow.row_top_in_page,
-            w: total_w,
-            h: prow.height,
-        };
-        emit_rect(rect, paint, &mut pages[prow.target_page].list);
+        // Alternating column fills span the full height of each
+        // physical row, painted column-by-column. Columns have no
+        // header/footer concept, so every column 0..N participates
+        // (subject to skip-first / skip-last).
+        for prow in &physical_rows {
+            for c in 0..col_widths.len() {
+                let Some((fill_id, tint)) = axis.fill_for(c) else {
+                    continue;
+                };
+                let Some(paint) = color_id_to_paint(fill_id, em.palette, em.cmyk_xform) else {
+                    continue;
+                };
+                let paint = apply_fill_tint(paint, tint);
+                let rect = Rect {
+                    x: prow.table_left_pt + col_x[c],
+                    y: prow.row_top_in_page,
+                    w: col_x[c + 1] - col_x[c],
+                    h: prow.height,
+                };
+                emit_rect(rect, paint, &mut pages[prow.target_page].list);
+            }
+        }
     }
 
     // Iterate physical rows × cells. For each physical row, find
@@ -710,54 +797,67 @@ pub(super) fn emit_table_into_chain(
 
         // Diagonal cell strokes. IDML's "Left" diagonal goes
         // top-left → bottom-right; "Right" goes top-right →
-        // bottom-left. Emitted before content as the simpler default;
-        // `DiagonalLineInFront=true` semantics (paint over content)
-        // are queued — visually this only matters when content
-        // overlaps the diagonal, which is rare.
+        // bottom-left, each with its own colour / weight / tint. The
+        // `DiagonalLineInFront` flag decides the paint order relative
+        // to the cell content: when true the diagonal lands AFTER the
+        // glyphs (drawn over them); otherwise it sits behind, on top
+        // of the fill but under the text. We capture the closure here
+        // and invoke it at the chosen point below.
         let diag = &cell.diagonal;
-        let diag_emit = |drawn: Option<bool>,
-                         color: Option<&str>,
-                         weight: Option<f32>,
-                         (x1, y1): (f32, f32),
-                         (x2, y2): (f32, f32),
-                         pages: &mut [BuiltPage]| {
-            if drawn != Some(true) {
-                return;
-            }
-            let Some(weight) = weight.filter(|w| *w > 0.0) else {
-                return;
+        let emit_diagonals = |em: &StoryEmitter, pages: &mut [BuiltPage]| {
+            let one = |drawn: Option<bool>,
+                           color: Option<&str>,
+                           weight: Option<f32>,
+                           tint: Option<f32>,
+                           (x1, y1): (f32, f32),
+                           (x2, y2): (f32, f32),
+                           pages: &mut [BuiltPage]| {
+                if drawn != Some(true) {
+                    return;
+                }
+                let Some(weight) = weight.filter(|w| *w > 0.0) else {
+                    return;
+                };
+                let Some(color_id) = color else {
+                    return;
+                };
+                if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform)
+                    .map(|p| apply_fill_tint(p, tint))
+                {
+                    paged_compose::emit_line(
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                        Stroke::new(weight),
+                        paint,
+                        &mut pages[target_page].list,
+                    );
+                }
             };
-            let Some(color_id) = color else {
-                return;
-            };
-            if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) {
-                paged_compose::emit_line(
-                    x1,
-                    y1,
-                    x2,
-                    y2,
-                    Stroke::new(weight),
-                    paint,
-                    &mut pages[target_page].list,
-                );
-            }
+            one(
+                diag.left_line_drawn,
+                diag.left_line_color.as_deref(),
+                diag.left_line_weight,
+                diag.left_line_tint,
+                (cell_x_pt, cell_y_pt),
+                (cell_x_pt + cell_w_pt, cell_y_pt + cell_h_pt),
+                pages,
+            );
+            one(
+                diag.right_line_drawn,
+                diag.right_line_color.as_deref(),
+                diag.right_line_weight,
+                diag.right_line_tint,
+                (cell_x_pt + cell_w_pt, cell_y_pt),
+                (cell_x_pt, cell_y_pt + cell_h_pt),
+                pages,
+            );
         };
-        diag_emit(
-            diag.left_line_drawn,
-            diag.left_line_color.as_deref(),
-            diag.left_line_weight,
-            (cell_x_pt, cell_y_pt),
-            (cell_x_pt + cell_w_pt, cell_y_pt + cell_h_pt),
-            pages,
-        );
-        diag_emit(
-            diag.right_line_drawn,
-            diag.right_line_color.as_deref(),
-            diag.right_line_weight,
-            (cell_x_pt + cell_w_pt, cell_y_pt),
-            (cell_x_pt, cell_y_pt + cell_h_pt),
-            pages,
-        );
+        let diagonal_in_front = diag.diagonal_in_front == Some(true);
+        if !diagonal_in_front {
+            emit_diagonals(em, pages);
+        }
 
         // Lay out the cell paragraphs into a working buffer first
         // so we know their total height; then apply vertical
@@ -852,6 +952,11 @@ pub(super) fn emit_table_into_chain(
                     *t = rot.compose(t);
                 }
             }
+        }
+        // `DiagonalLineInFront` → paint the diagonal(s) over the
+        // (now vertically-justified / rotated) cell content.
+        if diagonal_in_front {
+            emit_diagonals(em, pages);
         }
         } // close inner `for c in 0..col_widths.len()`
     } // close outer `for prow_i in 0..physical_rows.len()`

@@ -300,6 +300,14 @@ pub struct TableStyleDef {
     pub left_border_stroke_weight: Option<f32>,
     pub right_border_stroke_color: Option<String>,
     pub right_border_stroke_weight: Option<f32>,
+    /// `AlternatingFills` discriminator: `"None"` (default),
+    /// `"AlternatingRows"`, or `"AlternatingColumns"`. Selects which
+    /// axis the Start/End fill pattern paints along — InDesign reuses
+    /// the same Start/End fill attributes for both axes and this
+    /// attribute disambiguates. The renderer treats an absent /
+    /// `"None"` value as "no alternating fill" even if a Start fill
+    /// colour is present.
+    pub alternating_fills: Option<String>,
     /// Alternating-row fill: every Nth body row from the top gets
     /// `start_row_fill_color`. `start_row_fill_count` is the
     /// number of consecutive rows that participate in the
@@ -310,6 +318,22 @@ pub struct TableStyleDef {
     pub end_row_fill_color: Option<String>,
     pub end_row_fill_count: Option<u32>,
     pub end_row_fill_tint: Option<f32>,
+    /// `SkipFirstAlternatingFillRows` / `SkipLastAlternatingFillRows`:
+    /// body rows at the start / end of the table that the alternating
+    /// pattern leaves unfilled. `None` ⇒ 0.
+    pub skip_first_alternating_fill_rows: Option<u32>,
+    pub skip_last_alternating_fill_rows: Option<u32>,
+    /// Alternating-column fill: the column analogue of the row fields
+    /// above. Paints column-by-column from the first body column when
+    /// `alternating_fills == "AlternatingColumns"`.
+    pub start_column_fill_color: Option<String>,
+    pub start_column_fill_count: Option<u32>,
+    pub start_column_fill_tint: Option<f32>,
+    pub end_column_fill_color: Option<String>,
+    pub end_column_fill_count: Option<u32>,
+    pub end_column_fill_tint: Option<f32>,
+    pub skip_first_alternating_fill_columns: Option<u32>,
+    pub skip_last_alternating_fill_columns: Option<u32>,
 }
 
 /// Effective table-level attributes after walking BasedOn.
@@ -328,12 +352,23 @@ pub struct ResolvedTable {
     pub left_border_stroke_weight: Option<f32>,
     pub right_border_stroke_color: Option<String>,
     pub right_border_stroke_weight: Option<f32>,
+    pub alternating_fills: Option<String>,
     pub start_row_fill_color: Option<String>,
     pub start_row_fill_count: Option<u32>,
     pub start_row_fill_tint: Option<f32>,
     pub end_row_fill_color: Option<String>,
     pub end_row_fill_count: Option<u32>,
     pub end_row_fill_tint: Option<f32>,
+    pub skip_first_alternating_fill_rows: Option<u32>,
+    pub skip_last_alternating_fill_rows: Option<u32>,
+    pub start_column_fill_color: Option<String>,
+    pub start_column_fill_count: Option<u32>,
+    pub start_column_fill_tint: Option<f32>,
+    pub end_column_fill_color: Option<String>,
+    pub end_column_fill_count: Option<u32>,
+    pub end_column_fill_tint: Option<f32>,
+    pub skip_first_alternating_fill_columns: Option<u32>,
+    pub skip_last_alternating_fill_columns: Option<u32>,
 }
 
 /// Effective cell-level attributes after walking BasedOn.
@@ -1437,8 +1472,11 @@ impl ResolvedTable {
         merge_str!(bottom_border_stroke_color);
         merge_str!(left_border_stroke_color);
         merge_str!(right_border_stroke_color);
+        merge_str!(alternating_fills);
         merge_str!(start_row_fill_color);
         merge_str!(end_row_fill_color);
+        merge_str!(start_column_fill_color);
+        merge_str!(end_column_fill_color);
         self.top_border_stroke_weight = self
             .top_border_stroke_weight
             .or(def.top_border_stroke_weight);
@@ -1455,6 +1493,24 @@ impl ResolvedTable {
         self.start_row_fill_tint = self.start_row_fill_tint.or(def.start_row_fill_tint);
         self.end_row_fill_count = self.end_row_fill_count.or(def.end_row_fill_count);
         self.end_row_fill_tint = self.end_row_fill_tint.or(def.end_row_fill_tint);
+        self.skip_first_alternating_fill_rows = self
+            .skip_first_alternating_fill_rows
+            .or(def.skip_first_alternating_fill_rows);
+        self.skip_last_alternating_fill_rows = self
+            .skip_last_alternating_fill_rows
+            .or(def.skip_last_alternating_fill_rows);
+        self.start_column_fill_count = self
+            .start_column_fill_count
+            .or(def.start_column_fill_count);
+        self.start_column_fill_tint = self.start_column_fill_tint.or(def.start_column_fill_tint);
+        self.end_column_fill_count = self.end_column_fill_count.or(def.end_column_fill_count);
+        self.end_column_fill_tint = self.end_column_fill_tint.or(def.end_column_fill_tint);
+        self.skip_first_alternating_fill_columns = self
+            .skip_first_alternating_fill_columns
+            .or(def.skip_first_alternating_fill_columns);
+        self.skip_last_alternating_fill_columns = self
+            .skip_last_alternating_fill_columns
+            .or(def.skip_last_alternating_fill_columns);
     }
 }
 
@@ -1865,12 +1921,27 @@ fn parse_table_style(e: &quick_xml::events::BytesStart) -> Option<TableStyleDef>
         right_border_stroke_color: normalize(attr(e, b"RightBorderStrokeColor")),
         right_border_stroke_weight: attr(e, b"RightBorderStrokeWeight")
             .and_then(|s| s.parse().ok()),
+        alternating_fills: attr(e, b"AlternatingFills"),
         start_row_fill_color: normalize(attr(e, b"StartRowFillColor")),
         start_row_fill_count: attr(e, b"StartRowFillCount").and_then(|s| s.parse().ok()),
         start_row_fill_tint: parse_tint_attr(e, b"StartRowFillTint"),
         end_row_fill_color: normalize(attr(e, b"EndRowFillColor")),
         end_row_fill_count: attr(e, b"EndRowFillCount").and_then(|s| s.parse().ok()),
         end_row_fill_tint: parse_tint_attr(e, b"EndRowFillTint"),
+        skip_first_alternating_fill_rows: attr(e, b"SkipFirstAlternatingFillRows")
+            .and_then(|s| s.parse().ok()),
+        skip_last_alternating_fill_rows: attr(e, b"SkipLastAlternatingFillRows")
+            .and_then(|s| s.parse().ok()),
+        start_column_fill_color: normalize(attr(e, b"StartColumnFillColor")),
+        start_column_fill_count: attr(e, b"StartColumnFillCount").and_then(|s| s.parse().ok()),
+        start_column_fill_tint: parse_tint_attr(e, b"StartColumnFillTint"),
+        end_column_fill_color: normalize(attr(e, b"EndColumnFillColor")),
+        end_column_fill_count: attr(e, b"EndColumnFillCount").and_then(|s| s.parse().ok()),
+        end_column_fill_tint: parse_tint_attr(e, b"EndColumnFillTint"),
+        skip_first_alternating_fill_columns: attr(e, b"SkipFirstAlternatingFillColumns")
+            .and_then(|s| s.parse().ok()),
+        skip_last_alternating_fill_columns: attr(e, b"SkipLastAlternatingFillColumns")
+            .and_then(|s| s.parse().ok()),
     })
 }
 
@@ -2723,5 +2794,74 @@ mod tests {
         let dot = s.stroke_styles.get("StrokeStyle/u164").unwrap();
         assert_eq!(dot.kind, StrokeStyleKind::Dotted);
         assert!(dot.pattern.is_empty());
+    }
+
+    #[test]
+    fn table_style_parses_alternating_row_and_column_fills() {
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+            <RootTableStyleGroup>
+              <TableStyle Self="TableStyle/Alt" Name="Alt"
+                          AlternatingFills="AlternatingRows"
+                          StartRowFillColor="Color/Cyan" StartRowFillCount="2"
+                          StartRowFillTint="40"
+                          EndRowFillColor="Color/Gray" EndRowFillCount="1"
+                          EndRowFillTint="100"
+                          SkipFirstAlternatingFillRows="1"
+                          SkipLastAlternatingFillRows="2"
+                          StartColumnFillColor="Color/Blue" StartColumnFillCount="3"
+                          StartColumnFillTint="55"
+                          EndColumnFillColor="Color/None" EndColumnFillCount="1"
+                          SkipFirstAlternatingFillColumns="0"
+                          SkipLastAlternatingFillColumns="1"/>
+            </RootTableStyleGroup>
+          </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let t = s.table_styles.get("TableStyle/Alt").unwrap();
+        assert_eq!(t.alternating_fills.as_deref(), Some("AlternatingRows"));
+        // Row fields.
+        assert_eq!(t.start_row_fill_color.as_deref(), Some("Color/Cyan"));
+        assert_eq!(t.start_row_fill_count, Some(2));
+        assert_eq!(t.start_row_fill_tint, Some(40.0));
+        assert_eq!(t.end_row_fill_color.as_deref(), Some("Color/Gray"));
+        assert_eq!(t.end_row_fill_count, Some(1));
+        assert_eq!(t.end_row_fill_tint, Some(100.0));
+        assert_eq!(t.skip_first_alternating_fill_rows, Some(1));
+        assert_eq!(t.skip_last_alternating_fill_rows, Some(2));
+        // Column fields.
+        assert_eq!(t.start_column_fill_color.as_deref(), Some("Color/Blue"));
+        assert_eq!(t.start_column_fill_count, Some(3));
+        assert_eq!(t.start_column_fill_tint, Some(55.0));
+        assert_eq!(t.end_column_fill_count, Some(1));
+        assert_eq!(t.skip_last_alternating_fill_columns, Some(1));
+    }
+
+    #[test]
+    fn resolve_table_walks_based_on_for_alternating_fills() {
+        // Child overrides AlternatingFills + start fill; parent
+        // supplies the end fill + skip counts. resolve_table walks the
+        // BasedOn chain merging "self wins, parent fills the gaps".
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+            <RootTableStyleGroup>
+              <TableStyle Self="TableStyle/Base" Name="Base"
+                          AlternatingFills="AlternatingRows"
+                          StartRowFillColor="Color/Cyan" StartRowFillCount="1"
+                          EndRowFillColor="Color/Gray" EndRowFillCount="1"
+                          SkipFirstAlternatingFillRows="2"/>
+              <TableStyle Self="TableStyle/Child" Name="Child"
+                          BasedOn="TableStyle/Base"
+                          StartRowFillColor="Color/Magenta"/>
+            </RootTableStyleGroup>
+          </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let r = s.resolve_table("TableStyle/Child");
+        // Override from child.
+        assert_eq!(r.start_row_fill_color.as_deref(), Some("Color/Magenta"));
+        // Inherited from base.
+        assert_eq!(r.alternating_fills.as_deref(), Some("AlternatingRows"));
+        assert_eq!(r.start_row_fill_count, Some(1));
+        assert_eq!(r.end_row_fill_color.as_deref(), Some("Color/Gray"));
+        assert_eq!(r.skip_first_alternating_fill_rows, Some(2));
     }
 }
