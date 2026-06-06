@@ -14,6 +14,7 @@ members = [
     "crates/paged-introspect",
     "crates/paged-introspect-wasm",
     "crates/paged-gen",
+    "crates/paged-write",
     "crates/paged-canvas",
     "crates/paged-canvas-wasm",
     "crates/paged-export-pdf",

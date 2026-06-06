@@ -1,0 +1,858 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * This file is part of paged (https://paged.media) and is additionally
+ * available under the Paged Media Enterprise License (PMEL). Full
+ * copyright and license information is available in LICENSE.md which is
+ * distributed with this source code.
+ *
+ *  @copyright  Copyright (c) And The Next GmbH
+ *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
+ */
+
+//! Attribute-preserving streaming rewrite of Spread / Story XML.
+//!
+//! Both rewriters share one shape: a `quick_xml::Reader` feeds events,
+//! a `quick_xml::Writer` re-emits them. The vast majority of events
+//! (processing instructions, comments, `<Properties>`, `<PathGeometry>`,
+//! unknown elements, all attributes we don't own) pass through
+//! **verbatim** — we hand the original [`Event`] straight to the writer
+//! so its bytes are reproduced. Only the start tags of page items
+//! (spreads) / style ranges (stories) and `<Content>` text are
+//! reconstructed, and even then only the model-owned attributes change;
+//! every other attribute keeps its original key, value, and position.
+//!
+//! # The model→XML mapping is positional within an element family
+//!
+//! IDML carries no model index on its elements, so we walk the model in
+//! the same document order the parser walked it:
+//!
+//! * Spread page items are matched by their `Self` id (stable, present
+//!   on every page item) — robust against reordering.
+//! * Story `<ParagraphStyleRange>` / `<CharacterStyleRange>` carry no
+//!   `Self` id, so they're matched **positionally** against
+//!   `Story::paragraphs[i].runs[j]` in document order. This is the same
+//!   order the parser produced them, so an unmutated story round-trips,
+//!   and a mutated story (which edits values in place, never inserts /
+//!   deletes ranges) stays aligned.
+//!
+//! # Patch inventory (what is save-able)
+//!
+//! Spread page items (`TextFrame` / `Rectangle` / `Oval` / `Polygon` /
+//! `GraphicLine`), patched on the element start tag:
+//!   - `ItemTransform`     (FrameTransform / rotate / scale / flip / move)
+//!   - `FillColor`         (FrameFillColor)
+//!   - `FillTint`          (FrameFillTint)
+//!   - `StrokeColor`       (FrameStrokeColor)
+//!   - `StrokeWeight`      (FrameStrokeWeight)
+//!   - `NextTextFrame`     (LinkFrames / UnlinkFrames; TextFrame only)
+//!   - `Nonprinting`       (FrameNonprinting)
+//!   - `GeometricBounds`   (FrameBounds) — only patched when the source
+//!     element already carries the attribute; bounds that live solely in
+//!     `<PathGeometry>` are not reconstructed here (see Known losses).
+//!
+//! Story ranges:
+//!   - `<ParagraphStyleRange AppliedParagraphStyle>` (AppliedParagraphStyle)
+//!   - `<CharacterStyleRange AppliedCharacterStyle>` (AppliedCharacterStyle)
+//!   - `<CharacterStyleRange PointSize>`   (CharacterFontSize)
+//!   - `<CharacterStyleRange FillColor>`   (CharacterFillColor)
+//!   - `<CharacterStyleRange Leading / Tracking / BaselineShift /
+//!     HorizontalScale / VerticalScale / Skew / FillTint / StrokeWeight>`
+//!     (the matching Character* paths)
+//!   - `<CharacterStyleRange AppliedFont / FontStyle / Capitalization /
+//!     Position / KerningMethod / AppliedLanguage / StrokeColor /
+//!     Underline / StrikeThru / Ligatures>` (the matching Character* paths)
+//!   - `<Content>` text — replaced when the run maps to a single Content
+//!     child (the common case + every generated fixture).
+//!
+//! # Known losses (documented, not silent)
+//!
+//! * **Bounds in `<PathGeometry>`.** Real InDesign exports store frame
+//!   geometry as a `<PathPointArray>`, not a `GeometricBounds` attribute.
+//!   A `FrameBounds` mutation updates the model's `bounds` but this
+//!   rewrite only rewrites the `GeometricBounds` *attribute* when it is
+//!   present; the path points are passed through untouched. Patching the
+//!   path array (and the `FramePathPoint` / `FramePath` mutations that
+//!   ride it) is a follow-up. Until then, bounds/path edits on
+//!   path-geometry frames do not save.
+//! * **Multi-`<Content>` / `<Br>` runs.** A run whose text spans several
+//!   `<Content>` children or contains a paragraph break is left
+//!   untouched (its attributes still patch). Text edits only save for
+//!   single-Content runs.
+//! * **Structural edits** (InsertNode / RemoveNode / MoveNode, new
+//!   swatches / styles / sections) are not reflected: this milestone is
+//!   the property-patch foundation. Adding / removing elements is W3.B2.
+//! * Anything the parser never modeled (preferences, fonts, tags, the
+//!   XML backing store, master-spread item internals beyond the patched
+//!   attributes) is carried through verbatim and so is always faithful.
+
+use std::io::Cursor;
+
+use quick_xml::events::attributes::Attribute;
+use quick_xml::events::{BytesStart, BytesText, Event};
+use quick_xml::{Reader, Writer};
+
+use paged_parse::{CharacterRun, Spread, Story, TextFrame};
+
+/// Mirror of `paged_gen::xml::format_f32`: round to 4 decimals, drop
+/// trailing zeros + a dangling `.`, normalise `-0` to `0`. Kept as a
+/// small local copy rather than depending on `paged-gen` (a dev/CLI
+/// crate that pulls clap/anyhow) so this runtime crate stays minimal +
+/// wasm-clean. InDesign serialises floats this way, so patched values
+/// match the surrounding hand-written / exported numbers.
+fn format_f32(v: f32) -> String {
+    let rounded = (v * 10_000.0).round() / 10_000.0;
+    if rounded == 0.0 {
+        return "0".to_string();
+    }
+    let mut s = format!("{rounded:.4}");
+    if s.contains('.') {
+        while s.ends_with('0') {
+            s.pop();
+        }
+        if s.ends_with('.') {
+            s.pop();
+        }
+    }
+    s
+}
+
+/// Format a `[a b c d tx ty]` matrix the IDML way (space-separated,
+/// fixed precision).
+fn format_matrix(m: &[f32; 6]) -> String {
+    let parts: Vec<String> = m.iter().map(|v| format_f32(*v)).collect();
+    parts.join(" ")
+}
+
+/// One attribute patch: the value to write for `key`, or `Remove` to
+/// drop the attribute entirely (model value went to `None` on an
+/// attribute that was present).
+enum Patch {
+    Set(String),
+    Remove,
+}
+
+/// Rewrite one page-item / range start tag: emit it with the same name,
+/// every original attribute in its original order (model-owned keys take
+/// their new value; `Remove` keys are dropped), then append any
+/// model-owned keys that were newly set (absent from the source).
+///
+/// `lookup(key) -> Option<Patch>`: `None` ⇒ not model-owned, pass the
+/// original attribute through. `Some(Set)` / `Some(Remove)` ⇒ patch it.
+/// `extras`: `(key, value)` pairs to append if the key wasn't already
+/// present (newly-set model attributes). Returns the rebuilt
+/// `BytesStart` preserving the element name exactly.
+fn patch_start<F>(
+    src: &BytesStart,
+    lookup: F,
+    extras: &[(&str, String)],
+) -> Result<BytesStart<'static>, quick_xml::Error>
+where
+    F: Fn(&[u8]) -> Option<Patch>,
+{
+    // Rebuild the start tag's raw inner content (`name attr="v" ...`)
+    // by hand so unchanged attributes reproduce their ON-DISK bytes
+    // exactly — no decode→re-escape round-trip that could normalise an
+    // entity form and break byte-identity. `BytesStart::from_content`
+    // takes this raw content and the writer emits it verbatim. IDML +
+    // the generator both serialise attributes as ` key="value"` (single
+    // space, double quote, no spaces around `=`); we match that so an
+    // unmutated frame reproduces the source byte-for-byte.
+    let name = src.name().as_ref().to_vec();
+    let mut content: Vec<u8> = name.clone();
+    let mut seen: Vec<Vec<u8>> = Vec::new();
+    for attr in src.attributes() {
+        let attr = attr?;
+        let key = attr.key.as_ref().to_vec();
+        match lookup(&key) {
+            None => {
+                // Not model-owned — copy the raw escaped value bytes.
+                content.push(b' ');
+                content.extend_from_slice(&key);
+                content.extend_from_slice(b"=\"");
+                content.extend_from_slice(attr.value.as_ref());
+                content.push(b'"');
+            }
+            Some(Patch::Set(v)) => {
+                content.push(b' ');
+                content.extend_from_slice(&key);
+                content.extend_from_slice(b"=\"");
+                content.extend_from_slice(escape_attr(&v).as_bytes());
+                content.push(b'"');
+            }
+            Some(Patch::Remove) => { /* dropped */ }
+        }
+        seen.push(key);
+    }
+    for (k, v) in extras {
+        if !seen.iter().any(|s| s.as_slice() == k.as_bytes()) {
+            content.push(b' ');
+            content.extend_from_slice(k.as_bytes());
+            content.extend_from_slice(b"=\"");
+            content.extend_from_slice(escape_attr(v).as_bytes());
+            content.push(b'"');
+        }
+    }
+    let content = String::from_utf8(content).map_err(|e| {
+        quick_xml::Error::Io(std::sync::Arc::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            e,
+        )))
+    })?;
+    Ok(BytesStart::from_content(content, name.len()).into_owned())
+}
+
+/// Escape the five XML entities for an attribute value we synthesise.
+/// Patched values are IDML ids / numbers / colour refs that almost never
+/// contain these, but a style name could — so escape defensively to keep
+/// the output well-formed.
+fn escape_attr(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.bytes()
+        .any(|b| matches!(b, b'&' | b'<' | b'>' | b'"' | b'\''))
+    {
+        let mut out = String::with_capacity(s.len());
+        for c in s.chars() {
+            match c {
+                '&' => out.push_str("&amp;"),
+                '<' => out.push_str("&lt;"),
+                '>' => out.push_str("&gt;"),
+                '"' => out.push_str("&quot;"),
+                '\'' => out.push_str("&apos;"),
+                _ => out.push(c),
+            }
+        }
+        std::borrow::Cow::Owned(out)
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
+// ---------------------------------------------------------------------
+// Spread rewrite
+// ---------------------------------------------------------------------
+
+/// Rewrite a `Spread_*.xml` body so its page-item start tags reflect the
+/// current model. Untouched bytes pass through verbatim; the result is
+/// byte-identical to `original` when nothing in `spread` diverged from it.
+pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick_xml::Error> {
+    // Index every page item by its `Self` id so a start tag can find its
+    // model counterpart regardless of element ordering.
+    let mut frames: std::collections::HashMap<&str, &TextFrame> = std::collections::HashMap::new();
+    for f in &spread.text_frames {
+        if let Some(id) = f.self_id.as_deref() {
+            frames.insert(id, f);
+        }
+    }
+
+    let mut reader = Reader::from_reader(original);
+    let config = reader.config_mut();
+    config.expand_empty_elements = false;
+    config.trim_text(false);
+
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buf = Vec::new();
+
+    // Depth of open `<Group>` elements. Inside a group the parser
+    // COMPOSES the group transform into each member's `item_transform`
+    // (see `effective_item_transform`), so the model value is not the
+    // on-disk member transform — patching it would corrupt the geometry.
+    // We therefore suppress the ItemTransform patch for group members
+    // (a documented known loss); fills / strokes / colours are not
+    // composed and patch safely at any depth.
+    let mut group_depth: usize = 0;
+
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Eof => break,
+            Event::Start(e) => {
+                let in_group = group_depth > 0;
+                let patched = patch_spread_item(
+                    &e,
+                    &frames,
+                    &spread.rectangles,
+                    &spread.ovals,
+                    &spread.polygons,
+                    &spread.graphic_lines,
+                    in_group,
+                )?;
+                match patched {
+                    Some(start) => writer.write_event(Event::Start(start))?,
+                    None => writer.write_event(Event::Start(e.clone().into_owned()))?,
+                }
+                if e.name().as_ref() == b"Group" {
+                    group_depth += 1;
+                }
+            }
+            Event::Empty(e) => {
+                let in_group = group_depth > 0;
+                let patched = patch_spread_item(
+                    &e,
+                    &frames,
+                    &spread.rectangles,
+                    &spread.ovals,
+                    &spread.polygons,
+                    &spread.graphic_lines,
+                    in_group,
+                )?;
+                match patched {
+                    Some(start) => writer.write_event(Event::Empty(start))?,
+                    None => writer.write_event(Event::Empty(e.into_owned()))?,
+                }
+            }
+            Event::End(e) => {
+                if e.name().as_ref() == b"Group" {
+                    group_depth = group_depth.saturating_sub(1);
+                }
+                writer.write_event(Event::End(e))?;
+            }
+            other => writer.write_event(other)?,
+        }
+        buf.clear();
+    }
+
+    Ok(writer.into_inner().into_inner())
+}
+
+/// If `e` is a page-item start tag whose `Self` matches a model item,
+/// return the patched start tag. `None` ⇒ not a page item we patch
+/// (caller emits the original verbatim). `in_group` suppresses the
+/// composed-ItemTransform patch (see [`rewrite_spread`]).
+#[allow(clippy::too_many_arguments)]
+fn patch_spread_item(
+    e: &BytesStart,
+    frames: &std::collections::HashMap<&str, &TextFrame>,
+    rectangles: &[paged_parse::Rectangle],
+    ovals: &[paged_parse::Oval],
+    polygons: &[paged_parse::Polygon],
+    graphic_lines: &[paged_parse::GraphicLine],
+    in_group: bool,
+) -> Result<Option<BytesStart<'static>>, quick_xml::Error> {
+    let name = e.name();
+    let self_id = attr_value(e, b"Self");
+    let Some(self_id) = self_id else {
+        return Ok(None);
+    };
+
+    // Inside a group, the model's `item_transform` is the composed
+    // (group ∘ member) matrix — not the on-disk member transform — so
+    // we must NOT patch it (that would corrupt the geometry). `patch_tx`
+    // false ⇒ the ItemTransform attribute passes through verbatim.
+    let patch_tx = !in_group;
+
+    match name.as_ref() {
+        b"TextFrame" => {
+            let Some(frame) = frames.get(self_id.as_str()) else {
+                return Ok(None);
+            };
+            let item_transform = frame.item_transform;
+            let fill = frame.fill_color.clone();
+            let fill_tint = frame.fill_tint;
+            let stroke = frame.stroke_color.clone();
+            let stroke_weight = frame.stroke_weight;
+            let next = frame.next_text_frame.clone();
+            let nonprinting = frame.nonprinting;
+            let bounds = frame.bounds;
+            let start = patch_start(
+                e,
+                |k| {
+                    frame_attr_patch(
+                        k,
+                        patch_tx,
+                        item_transform,
+                        &fill,
+                        fill_tint,
+                        &stroke,
+                        stroke_weight,
+                        Some(&next),
+                        nonprinting,
+                        bounds,
+                    )
+                },
+                &frame_attr_extras(
+                    patch_tx,
+                    item_transform,
+                    &fill,
+                    &stroke,
+                    stroke_weight,
+                    next.as_deref(),
+                    nonprinting,
+                ),
+            )?;
+            Ok(Some(start.into_owned()))
+        }
+        b"Rectangle" => patch_vector_item(
+            e,
+            patch_tx,
+            rectangles
+                .iter()
+                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()))
+                .map(|r| VectorItem {
+                    item_transform: r.item_transform,
+                    fill_color: r.fill_color.clone(),
+                    fill_tint: r.fill_tint,
+                    stroke_color: r.stroke_color.clone(),
+                    stroke_weight: r.stroke_weight,
+                    nonprinting: r.nonprinting,
+                    bounds: r.bounds,
+                }),
+        ),
+        b"Oval" => patch_vector_item(
+            e,
+            patch_tx,
+            ovals
+                .iter()
+                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()))
+                .map(|r| VectorItem {
+                    item_transform: r.item_transform,
+                    fill_color: r.fill_color.clone(),
+                    fill_tint: r.fill_tint,
+                    stroke_color: r.stroke_color.clone(),
+                    stroke_weight: r.stroke_weight,
+                    nonprinting: r.nonprinting,
+                    bounds: r.bounds,
+                }),
+        ),
+        b"Polygon" => patch_vector_item(
+            e,
+            patch_tx,
+            polygons
+                .iter()
+                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()))
+                .map(|r| VectorItem {
+                    item_transform: r.item_transform,
+                    fill_color: r.fill_color.clone(),
+                    fill_tint: r.fill_tint,
+                    stroke_color: r.stroke_color.clone(),
+                    stroke_weight: r.stroke_weight,
+                    nonprinting: r.nonprinting,
+                    bounds: r.bounds,
+                }),
+        ),
+        b"GraphicLine" => patch_vector_item(
+            e,
+            patch_tx,
+            graphic_lines
+                .iter()
+                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()))
+                .map(|r| VectorItem {
+                    item_transform: r.item_transform,
+                    fill_color: None,
+                    fill_tint: None,
+                    stroke_color: r.stroke_color.clone(),
+                    stroke_weight: r.stroke_weight,
+                    nonprinting: r.nonprinting,
+                    bounds: r.bounds,
+                }),
+        ),
+        _ => Ok(None),
+    }
+}
+
+/// The frame attributes shared by every page-item kind, lifted into one
+/// shape so a single patch routine covers Rectangle / Oval / Polygon /
+/// GraphicLine.
+struct VectorItem {
+    item_transform: Option<[f32; 6]>,
+    fill_color: Option<String>,
+    fill_tint: Option<f32>,
+    stroke_color: Option<String>,
+    stroke_weight: Option<f32>,
+    nonprinting: bool,
+    bounds: paged_parse::Bounds,
+}
+
+fn patch_vector_item(
+    e: &BytesStart,
+    patch_tx: bool,
+    item: Option<VectorItem>,
+) -> Result<Option<BytesStart<'static>>, quick_xml::Error> {
+    let Some(item) = item else {
+        return Ok(None);
+    };
+    let start = patch_start(
+        e,
+        |k| {
+            frame_attr_patch(
+                k,
+                patch_tx,
+                item.item_transform,
+                &item.fill_color,
+                item.fill_tint,
+                &item.stroke_color,
+                item.stroke_weight,
+                None,
+                item.nonprinting,
+                item.bounds,
+            )
+        },
+        &frame_attr_extras(
+            patch_tx,
+            item.item_transform,
+            &item.fill_color,
+            &item.stroke_color,
+            item.stroke_weight,
+            None,
+            item.nonprinting,
+        ),
+    )?;
+    Ok(Some(start.into_owned()))
+}
+
+/// Patch decision for one frame attribute key. `next` is `Some` only for
+/// TextFrame (`NextTextFrame` lives there); `None` skips that key for
+/// other kinds. Bounds patch only fires for a `GeometricBounds`
+/// attribute that the source element already carries. `patch_tx` false
+/// passes `ItemTransform` through verbatim (group member — see
+/// [`rewrite_spread`]).
+#[allow(clippy::too_many_arguments)]
+fn frame_attr_patch(
+    key: &[u8],
+    patch_tx: bool,
+    item_transform: Option<[f32; 6]>,
+    fill: &Option<String>,
+    fill_tint: Option<f32>,
+    stroke: &Option<String>,
+    stroke_weight: Option<f32>,
+    next: Option<&Option<String>>,
+    nonprinting: bool,
+    bounds: paged_parse::Bounds,
+) -> Option<Patch> {
+    match key {
+        b"ItemTransform" if !patch_tx => None,
+        b"ItemTransform" => Some(match item_transform {
+            Some(m) => Patch::Set(format_matrix(&m)),
+            None => Patch::Remove,
+        }),
+        b"FillColor" => Some(opt_string_patch(fill)),
+        b"FillTint" => Some(opt_f32_patch(fill_tint)),
+        b"StrokeColor" => Some(opt_string_patch(stroke)),
+        b"StrokeWeight" => Some(opt_f32_patch(stroke_weight)),
+        b"Nonprinting" => Some(if nonprinting {
+            Patch::Set("true".to_string())
+        } else {
+            // The parser defaults absent → false; drop the attribute to
+            // restore the implicit default rather than write "false".
+            Patch::Remove
+        }),
+        b"NextTextFrame" => next.map(opt_string_patch),
+        b"GeometricBounds" => Some(Patch::Set(format!(
+            "{} {} {} {}",
+            format_f32(bounds.top),
+            format_f32(bounds.left),
+            format_f32(bounds.bottom),
+            format_f32(bounds.right),
+        ))),
+        _ => None,
+    }
+}
+
+/// Extras to append when a model attribute is set but the source element
+/// didn't carry the key. Only emitted for genuinely-set values (so an
+/// unmutated frame appends nothing and round-trips byte-identically).
+/// `GeometricBounds` is intentionally NOT an extra — see the bounds
+/// known-loss note; we never invent the attribute on a path-geometry
+/// frame.
+fn frame_attr_extras(
+    patch_tx: bool,
+    item_transform: Option<[f32; 6]>,
+    fill: &Option<String>,
+    stroke: &Option<String>,
+    stroke_weight: Option<f32>,
+    next: Option<&str>,
+    nonprinting: bool,
+) -> Vec<(&'static str, String)> {
+    let mut out = Vec::new();
+    if patch_tx {
+        if let Some(m) = item_transform {
+            out.push(("ItemTransform", format_matrix(&m)));
+        }
+    }
+    if let Some(c) = fill {
+        out.push(("FillColor", c.clone()));
+    }
+    if let Some(c) = stroke {
+        out.push(("StrokeColor", c.clone()));
+    }
+    if let Some(w) = stroke_weight {
+        out.push(("StrokeWeight", format_f32(w)));
+    }
+    if let Some(n) = next {
+        out.push(("NextTextFrame", n.to_string()));
+    }
+    if nonprinting {
+        out.push(("Nonprinting", "true".to_string()));
+    }
+    out
+}
+
+fn opt_string_patch(v: &Option<String>) -> Patch {
+    match v {
+        Some(s) => Patch::Set(s.clone()),
+        None => Patch::Remove,
+    }
+}
+
+fn opt_f32_patch(v: Option<f32>) -> Patch {
+    match v {
+        Some(n) => Patch::Set(format_f32(n)),
+        None => Patch::Remove,
+    }
+}
+
+// ---------------------------------------------------------------------
+// Story rewrite
+// ---------------------------------------------------------------------
+
+/// Rewrite a `Story_*.xml` body so its `<ParagraphStyleRange>` /
+/// `<CharacterStyleRange>` attributes + single-Content text reflect the
+/// current model. Ranges are matched positionally (IDML carries no id on
+/// them); the parser produced them in this same order.
+pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xml::Error> {
+    let mut reader = Reader::from_reader(original);
+    let config = reader.config_mut();
+    config.expand_empty_elements = false;
+    config.trim_text(false);
+
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buf = Vec::new();
+
+    // Positional cursors into the model.
+    let mut para_idx: isize = -1;
+    let mut run_idx: isize = -1;
+    // The run currently open (for Content text + attribute patching).
+    let mut current_run: Option<&CharacterRun> = None;
+    // Number of `<Content>` children seen inside the open CSR — text is
+    // only replaced for the FIRST when the run is single-Content.
+    let mut content_seen_in_run: usize = 0;
+    // True while inside a `<Content>` element.
+    let mut in_content = false;
+    // True when the open run has exactly one Content child in the source
+    // (decided lazily: we only patch the first Content's text and, if a
+    // second appears, we've already passed it through — so the guard is
+    // "first content only").
+    let mut patch_this_content = false;
+    // Depth of open `<Table>` elements. Inside a table the
+    // `<ParagraphStyleRange>` / `<CharacterStyleRange>` belong to CELL
+    // paragraphs, which the parser stores on `paragraph.table.cells[]`,
+    // NOT on the story's top-level `paragraphs`. Patching them
+    // positionally against `story.paragraphs` would misalign + corrupt,
+    // so table-cell content passes through verbatim (a documented loss —
+    // cell text/style edits don't save this milestone) and does not
+    // advance the story-level cursors.
+    let mut table_depth: usize = 0;
+
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Eof => break,
+            Event::Start(e) => {
+                match e.name().as_ref() {
+                    b"Table" => {
+                        table_depth += 1;
+                        writer.write_event(Event::Start(e.into_owned()))?;
+                    }
+                    b"ParagraphStyleRange" if table_depth == 0 => {
+                        para_idx += 1;
+                        run_idx = -1;
+                        let para = story.paragraphs.get(para_idx as usize);
+                        let start = patch_paragraph_range(&e, para)?;
+                        writer.write_event(Event::Start(start))?;
+                    }
+                    b"CharacterStyleRange" if table_depth == 0 => {
+                        run_idx += 1;
+                        content_seen_in_run = 0;
+                        current_run = story
+                            .paragraphs
+                            .get(para_idx as usize)
+                            .and_then(|p| p.runs.get(run_idx as usize));
+                        let start = patch_character_range(&e, current_run)?;
+                        writer.write_event(Event::Start(start))?;
+                    }
+                    b"Content" if table_depth == 0 => {
+                        in_content = true;
+                        content_seen_in_run += 1;
+                        // Patch the first Content's text only, and only
+                        // when the run is a SINGLE-Content run: its text
+                        // carries no `<Tab/>` (→ tab char), `<Br/>` /
+                        // paragraph break (→ newline), or carriage
+                        // return. A run with any of those has multiple
+                        // inline children the parser collapsed into one
+                        // string; reconstructing that split is out of
+                        // scope (documented loss), so we pass its text
+                        // through untouched.
+                        patch_this_content = content_seen_in_run == 1
+                            && current_run
+                                .map(|r| {
+                                    !r.text.contains('\t')
+                                        && !r.text.contains('\n')
+                                        && !r.text.contains('\r')
+                                })
+                                .unwrap_or(false);
+                        writer.write_event(Event::Start(e.into_owned()))?;
+                    }
+                    _ => writer.write_event(Event::Start(e.into_owned()))?,
+                }
+            }
+            Event::Empty(e) => {
+                // A self-closing CharacterStyleRange / ParagraphStyleRange
+                // still advances the positional cursor + patches attrs.
+                match e.name().as_ref() {
+                    b"ParagraphStyleRange" if table_depth == 0 => {
+                        para_idx += 1;
+                        run_idx = -1;
+                        let para = story.paragraphs.get(para_idx as usize);
+                        let start = patch_paragraph_range(&e, para)?;
+                        writer.write_event(Event::Empty(start))?;
+                    }
+                    b"CharacterStyleRange" if table_depth == 0 => {
+                        run_idx += 1;
+                        let run = story
+                            .paragraphs
+                            .get(para_idx as usize)
+                            .and_then(|p| p.runs.get(run_idx as usize));
+                        let start = patch_character_range(&e, run)?;
+                        writer.write_event(Event::Empty(start))?;
+                    }
+                    _ => writer.write_event(Event::Empty(e.into_owned()))?,
+                }
+            }
+            Event::Text(t) => {
+                if in_content && patch_this_content {
+                    if let Some(run) = current_run {
+                        // Only substitute when the model text actually
+                        // diverged from the source — otherwise emit the
+                        // original event verbatim so its exact escaping
+                        // bytes are preserved (byte-identity on
+                        // unmutated stories). `BytesText::new` re-escapes
+                        // the model string, which can differ from the
+                        // source's entity choices for unchanged text.
+                        let decoded = t.decode().unwrap_or_default();
+                        let orig = quick_xml::escape::unescape(&decoded)
+                            .map(|c| c.into_owned())
+                            .unwrap_or_else(|_| decoded.into_owned());
+                        patch_this_content = false;
+                        if orig != run.text {
+                            writer.write_event(Event::Text(BytesText::new(&run.text)))?;
+                            buf.clear();
+                            continue;
+                        }
+                    }
+                }
+                writer.write_event(Event::Text(t))?;
+            }
+            Event::End(e) => {
+                match e.name().as_ref() {
+                    b"Table" => table_depth = table_depth.saturating_sub(1),
+                    b"Content" => {
+                        in_content = false;
+                        patch_this_content = false;
+                    }
+                    b"CharacterStyleRange" => current_run = None,
+                    _ => {}
+                }
+                writer.write_event(Event::End(e))?;
+            }
+            other => writer.write_event(other)?,
+        }
+        buf.clear();
+    }
+
+    Ok(writer.into_inner().into_inner())
+}
+
+fn patch_paragraph_range(
+    e: &BytesStart,
+    para: Option<&paged_parse::Paragraph>,
+) -> Result<BytesStart<'static>, quick_xml::Error> {
+    let style = para.and_then(|p| p.paragraph_style.clone());
+    let extras: Vec<(&str, String)> = match &style {
+        Some(s) => vec![("AppliedParagraphStyle", s.clone())],
+        None => Vec::new(),
+    };
+    let start = patch_start(
+        e,
+        |k| match k {
+            b"AppliedParagraphStyle" => Some(opt_string_patch(&style)),
+            _ => None,
+        },
+        &extras,
+    )?;
+    Ok(start.into_owned())
+}
+
+fn patch_character_range(
+    e: &BytesStart,
+    run: Option<&CharacterRun>,
+) -> Result<BytesStart<'static>, quick_xml::Error> {
+    let Some(run) = run else {
+        // No model run aligns with this range — pass through verbatim.
+        return Ok(e.clone().into_owned());
+    };
+    let r = run.clone();
+    let extras = character_extras(&r);
+    let start = patch_start(e, |k| character_attr_patch(k, &r), &extras)?;
+    Ok(start.into_owned())
+}
+
+/// Patch decision for one `<CharacterStyleRange>` attribute. Covers the
+/// character paths the mutation surface writes.
+fn character_attr_patch(key: &[u8], r: &CharacterRun) -> Option<Patch> {
+    match key {
+        b"AppliedCharacterStyle" => Some(opt_string_patch(&r.character_style)),
+        b"AppliedFont" => Some(opt_string_patch(&r.font)),
+        b"FontStyle" => Some(opt_string_patch(&r.font_style)),
+        b"PointSize" => Some(opt_f32_patch(r.point_size)),
+        b"FillColor" => Some(opt_string_patch(&r.fill_color)),
+        b"FillTint" => Some(opt_f32_patch(r.fill_tint)),
+        b"StrokeColor" => Some(opt_string_patch(&r.stroke_color)),
+        b"StrokeWeight" => Some(opt_f32_patch(r.stroke_weight)),
+        b"Leading" => Some(opt_f32_patch(r.leading)),
+        b"Tracking" => Some(opt_f32_patch(r.tracking)),
+        b"BaselineShift" => Some(opt_f32_patch(r.baseline_shift)),
+        b"HorizontalScale" => Some(opt_f32_patch(r.horizontal_scale)),
+        b"VerticalScale" => Some(opt_f32_patch(r.vertical_scale)),
+        b"Skew" => Some(opt_f32_patch(r.skew)),
+        b"Capitalization" => Some(opt_string_patch(&r.capitalization)),
+        b"Position" => Some(opt_string_patch(&r.position)),
+        b"KerningMethod" => Some(opt_string_patch(&r.kerning_method)),
+        b"AppliedLanguage" => Some(opt_string_patch(&r.applied_language)),
+        b"Underline" => Some(opt_bool_patch(r.underline)),
+        b"StrikeThru" => Some(opt_bool_patch(r.strikethru)),
+        b"Ligatures" => Some(opt_bool_patch(r.ligatures_on)),
+        _ => None,
+    }
+}
+
+/// Newly-set character attributes to append when absent from the source.
+/// Only the high-frequency authoring fields are appended; the rest patch
+/// in place when present but aren't invented (keeps unmutated round-trips
+/// byte-identical and avoids spraying defaults).
+fn character_extras(r: &CharacterRun) -> Vec<(&'static str, String)> {
+    let mut out = Vec::new();
+    if let Some(s) = &r.fill_color {
+        out.push(("FillColor", s.clone()));
+    }
+    if let Some(sz) = r.point_size {
+        out.push(("PointSize", format_f32(sz)));
+    }
+    if let Some(s) = &r.character_style {
+        out.push(("AppliedCharacterStyle", s.clone()));
+    }
+    out
+}
+
+fn opt_bool_patch(v: Option<bool>) -> Patch {
+    match v {
+        Some(b) => Patch::Set(b.to_string()),
+        None => Patch::Remove,
+    }
+}
+
+/// Read an attribute's decoded value off a start tag.
+fn attr_value(e: &BytesStart, key: &[u8]) -> Option<String> {
+    e.attributes()
+        .flatten()
+        .find(|a| a.key.as_ref() == key)
+        .and_then(|Attribute { value, .. }| std::str::from_utf8(&value).ok().map(|s| s.to_string()))
+}
