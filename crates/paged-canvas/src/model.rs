@@ -437,6 +437,69 @@ fn story_id_of_text_op(op: &crate::mutate::TextOp) -> &str {
     }
 }
 
+// ---- W0.3 — read-side enum→IDML-string mirrors + transform
+// decompose. The mutate layer owns the write-side `*_as_idml`
+// (private there); the inspector needs the same canonical strings so
+// the snapshot round-trips through `apply`. ----------------------
+
+fn vertical_justification_idml(v: paged_parse::VerticalJustification) -> &'static str {
+    use paged_parse::VerticalJustification as V;
+    match v {
+        V::Top => "TopAlign",
+        V::Center => "CenterAlign",
+        V::Bottom => "BottomAlign",
+        V::Justify => "JustifyAlign",
+    }
+}
+
+fn auto_sizing_idml(v: paged_parse::AutoSizingType) -> &'static str {
+    use paged_parse::AutoSizingType as A;
+    match v {
+        A::Off => "Off",
+        A::HeightOnly => "HeightOnly",
+        A::WidthOnly => "WidthOnly",
+        A::HeightAndWidth => "HeightAndWidth",
+        A::HeightAndWidthProportionally => "HeightAndWidthProportionally",
+    }
+}
+
+fn first_baseline_idml(v: paged_parse::FirstBaselineOffset) -> &'static str {
+    use paged_parse::FirstBaselineOffset as F;
+    match v {
+        F::AscentOffset => "AscentOffset",
+        F::CapHeight => "CapHeight",
+        F::XHeight => "XHeight",
+        F::EmBoxHeight => "EmBoxHeight",
+        F::LeadingOffset => "LeadingOffset",
+        F::FixedHeight => "FixedHeight",
+    }
+}
+
+fn corner_option_idml(v: paged_parse::CornerOption) -> &'static str {
+    use paged_parse::CornerOption as C;
+    match v {
+        C::None => "None",
+        C::Rounded => "RoundedCorner",
+        C::Inverse => "InverseRoundedCorner",
+        C::Inset => "InsetCorner",
+        C::Bevel => "BeveledCorner",
+        C::Fancy => "FancyCorner",
+    }
+}
+
+fn decompose_angle(m: Option<[f32; 6]>) -> f32 {
+    paged_mutate::operation::decompose_transform(m).angle_deg
+}
+fn decompose_scale_x(m: Option<[f32; 6]>) -> f32 {
+    paged_mutate::operation::decompose_transform(m).scale_x
+}
+fn decompose_scale_y(m: Option<[f32; 6]>) -> f32 {
+    paged_mutate::operation::decompose_transform(m).scale_y
+}
+fn decompose_flip_h(m: Option<[f32; 6]>) -> bool {
+    paged_mutate::operation::decompose_transform(m).flip_h
+}
+
 impl From<&pipeline::PipelineStats> for DocumentStats {
     fn from(s: &pipeline::PipelineStats) -> Self {
         Self {
@@ -2190,6 +2253,106 @@ impl CanvasModel {
                                     f.inset_spacing.unwrap_or([0.0; 4]),
                                 )),
                             },
+                            // W0.3 — text-frame prefs.
+                            PropertyEntry {
+                                path: PropertyPath::TextFrameColumnCount,
+                                value: Some(Value::Length(
+                                    f.column_count.map(|c| c as f32),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::TextFrameColumnGutter,
+                                value: Some(Value::Length(f.column_gutter)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::TextFrameColumnBalance,
+                                value: Some(Value::Bool(
+                                    f.column_balance.unwrap_or(false),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::TextFrameVerticalJustification,
+                                value: Some(Value::Text(
+                                    f.vertical_justification
+                                        .map(vertical_justification_idml)
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::TextFrameAutoSizing,
+                                value: Some(Value::Text(
+                                    f.auto_sizing
+                                        .map(auto_sizing_idml)
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::TextFrameFirstBaseline,
+                                value: Some(Value::Text(
+                                    f.first_baseline_offset
+                                        .map(first_baseline_idml)
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                )),
+                            },
+                            // W0.3 — stroke type / gap, wrap invert,
+                            // overprint, transform-decompose (shared).
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeType,
+                                value: Some(Value::Text(
+                                    f.stroke_type.clone().unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeGapColor,
+                                value: Some(Value::ColorRef(
+                                    f.stroke_gap_color.clone(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeGapTint,
+                                value: Some(Value::Length(f.stroke_gap_tint)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::TextWrapInvert,
+                                value: Some(Value::Bool(
+                                    f.text_wrap.and_then(|t| t.invert).unwrap_or(false),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameOverprintFill,
+                                value: Some(Value::Bool(f.overprint_fill)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameOverprintStroke,
+                                value: Some(Value::Bool(f.overprint_stroke)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameRotationAngle,
+                                value: Some(Value::Length(Some(
+                                    decompose_angle(f.item_transform),
+                                ))),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameScaleX,
+                                value: Some(Value::Length(Some(
+                                    decompose_scale_x(f.item_transform),
+                                ))),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameScaleY,
+                                value: Some(Value::Length(Some(
+                                    decompose_scale_y(f.item_transform),
+                                ))),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameFlipH,
+                                value: Some(Value::Bool(
+                                    decompose_flip_h(f.item_transform),
+                                )),
+                            },
                         ]
                     }),
                 ElementId::Rectangle(_) => spread
@@ -2362,6 +2525,151 @@ impl CanvasModel {
                                             ff.fitting_on_empty_frame.clone()
                                         })
                                         .unwrap_or_default(),
+                                )),
+                            },
+                            // W0.3 — frame fitting alignment / auto-fit.
+                            PropertyEntry {
+                                path: PropertyPath::FrameFittingReferencePoint,
+                                value: Some(Value::Text(
+                                    f.frame_fitting
+                                        .as_ref()
+                                        .and_then(|ff| ff.reference_point.clone())
+                                        .unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameAutoFit,
+                                value: Some(Value::Bool(
+                                    f.frame_fitting
+                                        .as_ref()
+                                        .and_then(|ff| ff.auto_fit)
+                                        .unwrap_or(false),
+                                )),
+                            },
+                            // W0.3 — stroke type / join / miter /
+                            // alignment / gap.
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeType,
+                                value: Some(Value::Text(
+                                    f.stroke_type.clone().unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeJoin,
+                                value: Some(Value::Text(
+                                    f.end_join.clone().unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeMiterLimit,
+                                value: Some(Value::Length(f.miter_limit)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeAlignment,
+                                value: Some(Value::Text(
+                                    f.stroke_alignment.clone().unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeGapColor,
+                                value: Some(Value::ColorRef(
+                                    f.stroke_gap_color.clone(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeGapTint,
+                                value: Some(Value::Length(f.stroke_gap_tint)),
+                            },
+                            // W0.3 — per-corner option + radius. Order
+                            // matches IDML `corners[4]`:
+                            // [top_left, top_right, bottom_right, bottom_left].
+                            PropertyEntry {
+                                path: PropertyPath::FrameCornerOptionTopLeft,
+                                value: Some(Value::Text(
+                                    f.corners[0]
+                                        .option
+                                        .map(corner_option_idml)
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameCornerRadiusTopLeft,
+                                value: Some(Value::Length(f.corners[0].radius)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameCornerOptionTopRight,
+                                value: Some(Value::Text(
+                                    f.corners[1]
+                                        .option
+                                        .map(corner_option_idml)
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameCornerRadiusTopRight,
+                                value: Some(Value::Length(f.corners[1].radius)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameCornerOptionBottomRight,
+                                value: Some(Value::Text(
+                                    f.corners[2]
+                                        .option
+                                        .map(corner_option_idml)
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameCornerRadiusBottomRight,
+                                value: Some(Value::Length(f.corners[2].radius)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameCornerOptionBottomLeft,
+                                value: Some(Value::Text(
+                                    f.corners[3]
+                                        .option
+                                        .map(corner_option_idml)
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameCornerRadiusBottomLeft,
+                                value: Some(Value::Length(f.corners[3].radius)),
+                            },
+                            // W0.3 — overprint + transform-decompose.
+                            PropertyEntry {
+                                path: PropertyPath::FrameOverprintFill,
+                                value: Some(Value::Bool(f.overprint_fill)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameOverprintStroke,
+                                value: Some(Value::Bool(f.overprint_stroke)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameRotationAngle,
+                                value: Some(Value::Length(Some(
+                                    decompose_angle(f.item_transform),
+                                ))),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameScaleX,
+                                value: Some(Value::Length(Some(
+                                    decompose_scale_x(f.item_transform),
+                                ))),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameScaleY,
+                                value: Some(Value::Length(Some(
+                                    decompose_scale_y(f.item_transform),
+                                ))),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameFlipH,
+                                value: Some(Value::Bool(
+                                    decompose_flip_h(f.item_transform),
                                 )),
                             },
                         ]

@@ -89,6 +89,50 @@ fn paged_frame_proxy_sugar_works() {
     assert_eq!(current_opacity(&model), Some(30.0));
 }
 
+/// W0.3 — a numeric frame-scope path (transform decompose) routes
+/// through `paged.set` as a `Value::Length`, and an enum-string path
+/// routes as `Value::Text`. Confirms the script encoder's path-aware
+/// routing covers the new variants.
+#[test]
+fn w03_frame_paths_route_through_paged_set() {
+    let mut model = load();
+    let result = execute_script(
+        &mut model,
+        r#"
+            paged.set("textFrame:ua365e1", "frameRotationAngle", 15);
+            paged.set("textFrame:ua365e1", "textFrameVerticalJustification", "CenterAlign");
+        "#,
+    );
+    assert!(result.error.is_none(), "script error: {:?}", result.error);
+    let id = ElementId::TextFrame(TEXT_FRAME_ID.to_string());
+    let props = model.element_properties(&id).expect("props");
+    let angle = props
+        .entries
+        .iter()
+        .find(|e| matches!(e.path, paged_mutate::PropertyPath::FrameRotationAngle))
+        .and_then(|e| match &e.value {
+            Some(paged_mutate::Value::Length(opt)) => *opt,
+            _ => None,
+        })
+        .expect("rotation angle entry");
+    assert!((angle - 15.0).abs() < 1e-2, "angle was {angle}");
+    let vj = props
+        .entries
+        .iter()
+        .find(|e| {
+            matches!(
+                e.path,
+                paged_mutate::PropertyPath::TextFrameVerticalJustification
+            )
+        })
+        .and_then(|e| match &e.value {
+            Some(paged_mutate::Value::Text(s)) => Some(s.clone()),
+            _ => None,
+        })
+        .expect("vertical justification entry");
+    assert_eq!(vj, "CenterAlign");
+}
+
 #[test]
 fn console_log_captured_into_output() {
     let mut model = load();

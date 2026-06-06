@@ -120,6 +120,38 @@ pub enum PropertyPathJson {
     ParagraphListType,
     ParagraphBulletCharacter,
     ParagraphNumberingFormat,
+    // W0.3 — text-frame prefs / wrap / fitting / stroke / corners /
+    // transform-decompose / overprint.
+    TextFrameColumnCount,
+    TextFrameColumnGutter,
+    TextFrameColumnBalance,
+    TextFrameVerticalJustification,
+    TextFrameAutoSizing,
+    TextFrameFirstBaseline,
+    TextWrapInvert,
+    FrameFittingReferencePoint,
+    FrameAutoFit,
+    FrameStrokeType,
+    FrameStrokeJoin,
+    FrameStrokeMiterLimit,
+    FrameStrokeAlignment,
+    FrameStrokeGapColor,
+    FrameStrokeGapTint,
+    FrameCornerOptionTopLeft,
+    FrameCornerOptionTopRight,
+    FrameCornerOptionBottomLeft,
+    FrameCornerOptionBottomRight,
+    FrameCornerRadiusTopLeft,
+    FrameCornerRadiusTopRight,
+    FrameCornerRadiusBottomLeft,
+    FrameCornerRadiusBottomRight,
+    FrameRotationAngle,
+    FrameScaleX,
+    FrameScaleY,
+    FrameFlipH,
+    FrameFlipV,
+    FrameOverprintFill,
+    FrameOverprintStroke,
 }
 
 impl From<PropertyPath> for PropertyPathJson {
@@ -210,6 +242,57 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::ParagraphListType => PropertyPathJson::ParagraphListType,
             PropertyPath::ParagraphBulletCharacter => PropertyPathJson::ParagraphBulletCharacter,
             PropertyPath::ParagraphNumberingFormat => PropertyPathJson::ParagraphNumberingFormat,
+            // W0.3.
+            PropertyPath::TextFrameColumnCount => PropertyPathJson::TextFrameColumnCount,
+            PropertyPath::TextFrameColumnGutter => PropertyPathJson::TextFrameColumnGutter,
+            PropertyPath::TextFrameColumnBalance => PropertyPathJson::TextFrameColumnBalance,
+            PropertyPath::TextFrameVerticalJustification => {
+                PropertyPathJson::TextFrameVerticalJustification
+            }
+            PropertyPath::TextFrameAutoSizing => PropertyPathJson::TextFrameAutoSizing,
+            PropertyPath::TextFrameFirstBaseline => PropertyPathJson::TextFrameFirstBaseline,
+            PropertyPath::TextWrapInvert => PropertyPathJson::TextWrapInvert,
+            PropertyPath::FrameFittingReferencePoint => {
+                PropertyPathJson::FrameFittingReferencePoint
+            }
+            PropertyPath::FrameAutoFit => PropertyPathJson::FrameAutoFit,
+            PropertyPath::FrameStrokeType => PropertyPathJson::FrameStrokeType,
+            PropertyPath::FrameStrokeJoin => PropertyPathJson::FrameStrokeJoin,
+            PropertyPath::FrameStrokeMiterLimit => PropertyPathJson::FrameStrokeMiterLimit,
+            PropertyPath::FrameStrokeAlignment => PropertyPathJson::FrameStrokeAlignment,
+            PropertyPath::FrameStrokeGapColor => PropertyPathJson::FrameStrokeGapColor,
+            PropertyPath::FrameStrokeGapTint => PropertyPathJson::FrameStrokeGapTint,
+            PropertyPath::FrameCornerOptionTopLeft => {
+                PropertyPathJson::FrameCornerOptionTopLeft
+            }
+            PropertyPath::FrameCornerOptionTopRight => {
+                PropertyPathJson::FrameCornerOptionTopRight
+            }
+            PropertyPath::FrameCornerOptionBottomLeft => {
+                PropertyPathJson::FrameCornerOptionBottomLeft
+            }
+            PropertyPath::FrameCornerOptionBottomRight => {
+                PropertyPathJson::FrameCornerOptionBottomRight
+            }
+            PropertyPath::FrameCornerRadiusTopLeft => {
+                PropertyPathJson::FrameCornerRadiusTopLeft
+            }
+            PropertyPath::FrameCornerRadiusTopRight => {
+                PropertyPathJson::FrameCornerRadiusTopRight
+            }
+            PropertyPath::FrameCornerRadiusBottomLeft => {
+                PropertyPathJson::FrameCornerRadiusBottomLeft
+            }
+            PropertyPath::FrameCornerRadiusBottomRight => {
+                PropertyPathJson::FrameCornerRadiusBottomRight
+            }
+            PropertyPath::FrameRotationAngle => PropertyPathJson::FrameRotationAngle,
+            PropertyPath::FrameScaleX => PropertyPathJson::FrameScaleX,
+            PropertyPath::FrameScaleY => PropertyPathJson::FrameScaleY,
+            PropertyPath::FrameFlipH => PropertyPathJson::FrameFlipH,
+            PropertyPath::FrameFlipV => PropertyPathJson::FrameFlipV,
+            PropertyPath::FrameOverprintFill => PropertyPathJson::FrameOverprintFill,
+            PropertyPath::FrameOverprintStroke => PropertyPathJson::FrameOverprintStroke,
         }
     }
 }
@@ -302,6 +385,57 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::ParagraphListType => PropertyPath::ParagraphListType,
             PropertyPathJson::ParagraphBulletCharacter => PropertyPath::ParagraphBulletCharacter,
             PropertyPathJson::ParagraphNumberingFormat => PropertyPath::ParagraphNumberingFormat,
+            // W0.3.
+            PropertyPathJson::TextFrameColumnCount => PropertyPath::TextFrameColumnCount,
+            PropertyPathJson::TextFrameColumnGutter => PropertyPath::TextFrameColumnGutter,
+            PropertyPathJson::TextFrameColumnBalance => PropertyPath::TextFrameColumnBalance,
+            PropertyPathJson::TextFrameVerticalJustification => {
+                PropertyPath::TextFrameVerticalJustification
+            }
+            PropertyPathJson::TextFrameAutoSizing => PropertyPath::TextFrameAutoSizing,
+            PropertyPathJson::TextFrameFirstBaseline => PropertyPath::TextFrameFirstBaseline,
+            PropertyPathJson::TextWrapInvert => PropertyPath::TextWrapInvert,
+            PropertyPathJson::FrameFittingReferencePoint => {
+                PropertyPath::FrameFittingReferencePoint
+            }
+            PropertyPathJson::FrameAutoFit => PropertyPath::FrameAutoFit,
+            PropertyPathJson::FrameStrokeType => PropertyPath::FrameStrokeType,
+            PropertyPathJson::FrameStrokeJoin => PropertyPath::FrameStrokeJoin,
+            PropertyPathJson::FrameStrokeMiterLimit => PropertyPath::FrameStrokeMiterLimit,
+            PropertyPathJson::FrameStrokeAlignment => PropertyPath::FrameStrokeAlignment,
+            PropertyPathJson::FrameStrokeGapColor => PropertyPath::FrameStrokeGapColor,
+            PropertyPathJson::FrameStrokeGapTint => PropertyPath::FrameStrokeGapTint,
+            PropertyPathJson::FrameCornerOptionTopLeft => {
+                PropertyPath::FrameCornerOptionTopLeft
+            }
+            PropertyPathJson::FrameCornerOptionTopRight => {
+                PropertyPath::FrameCornerOptionTopRight
+            }
+            PropertyPathJson::FrameCornerOptionBottomLeft => {
+                PropertyPath::FrameCornerOptionBottomLeft
+            }
+            PropertyPathJson::FrameCornerOptionBottomRight => {
+                PropertyPath::FrameCornerOptionBottomRight
+            }
+            PropertyPathJson::FrameCornerRadiusTopLeft => {
+                PropertyPath::FrameCornerRadiusTopLeft
+            }
+            PropertyPathJson::FrameCornerRadiusTopRight => {
+                PropertyPath::FrameCornerRadiusTopRight
+            }
+            PropertyPathJson::FrameCornerRadiusBottomLeft => {
+                PropertyPath::FrameCornerRadiusBottomLeft
+            }
+            PropertyPathJson::FrameCornerRadiusBottomRight => {
+                PropertyPath::FrameCornerRadiusBottomRight
+            }
+            PropertyPathJson::FrameRotationAngle => PropertyPath::FrameRotationAngle,
+            PropertyPathJson::FrameScaleX => PropertyPath::FrameScaleX,
+            PropertyPathJson::FrameScaleY => PropertyPath::FrameScaleY,
+            PropertyPathJson::FrameFlipH => PropertyPath::FrameFlipH,
+            PropertyPathJson::FrameFlipV => PropertyPath::FrameFlipV,
+            PropertyPathJson::FrameOverprintFill => PropertyPath::FrameOverprintFill,
+            PropertyPathJson::FrameOverprintStroke => PropertyPath::FrameOverprintStroke,
         }
     }
 }

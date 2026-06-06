@@ -573,6 +573,152 @@ pub enum PropertyPath {
     /// Reflow-affecting (the marker text changes). Addressed against
     /// a `NodeId::StoryRange`.
     ParagraphNumberingFormat,
+
+    // ---- W0.3 — text-frame prefs --------------------------------
+    /// W0.3 — `<TextFramePreference TextColumnCount="...">`. The run
+    /// field is a `u32`; the wire carries it as
+    /// `Value::Length(Some(count))` (integer-as-Length, like the
+    /// drop-cap counts). `Length(None)` clears the per-frame override.
+    /// Only `NodeId::TextFrame` carries it. Reflow-affecting (column
+    /// split reshapes the text). The composer's per-column layout is a
+    /// later wave; the field is wired for authoring + round-trip.
+    TextFrameColumnCount,
+    /// W0.3 — `<TextFramePreference TextColumnGutter="...">` in pt.
+    /// `Value::Length`; `None` clears the override. TextFrame-only.
+    /// Reflow-affecting.
+    TextFrameColumnGutter,
+    /// W0.3 — `<TextFramePreference VerticalBalanceColumns="...">`.
+    /// `Value::Bool`. TextFrame-only. Reflow-affecting (balancing
+    /// redistributes the last lines). `None`→default undo note like
+    /// `CharacterUnderline` (the balance default is `false`).
+    TextFrameColumnBalance,
+    /// W0.3 — `<TextFramePreference VerticalJustification="...">` enum.
+    /// `Value::Text` carrying the IDML attribute string (`"TopAlign"`,
+    /// `"CenterAlign"`, `"BottomAlign"`, `"JustifyAlign"`); empty
+    /// clears the override. TextFrame-only. Reflow-affecting (vertical
+    /// distribution shifts every line). Unknown strings clear (parse
+    /// `from_idml` returns `None`).
+    TextFrameVerticalJustification,
+    /// W0.3 — `<TextFramePreference AutoSizingType="...">` enum.
+    /// `Value::Text` carrying the IDML attribute string (`"Off"`,
+    /// `"HeightOnly"`, `"WidthOnly"`, `"HeightAndWidth"`,
+    /// `"HeightAndWidthProportionally"`); empty clears the override.
+    /// TextFrame-only. Reflow-affecting (auto-grow changes bounds).
+    TextFrameAutoSizing,
+    /// W0.3 — `<TextFramePreference FirstBaselineOffset="...">` enum.
+    /// `Value::Text` carrying the IDML attribute string (`"AscentOffset"`,
+    /// `"CapHeight"`, `"XHeight"`, `"EmBoxHeight"`, `"LeadingOffset"`,
+    /// `"FixedHeight"`); empty clears the override. TextFrame-only.
+    /// Reflow-affecting (the first line's baseline moves).
+    TextFrameFirstBaseline,
+
+    // ---- W0.3 — text wrap ---------------------------------------
+    /// W0.3 — `<TextWrapPreference Inverse="...">`. `Value::Bool`.
+    /// Carried on every page-item kind with a `text_wrap` field
+    /// (TextFrame / Rectangle / Oval / Polygon / GraphicLine). Writing
+    /// materialises a default `TextWrap` (mode=None, offsets=[0;4]) if
+    /// the prior was `None`. Text-reflow-affecting on *other* frames
+    /// (the wrap exclusion changes), so the InvalidationHint is a
+    /// structural rebuild rather than a single-frame repaint.
+    /// `None`→default undo note like `CharacterUnderline`.
+    TextWrapInvert,
+
+    // ---- W0.3 — frame fitting -----------------------------------
+    /// W0.3 — `<FrameFittingOption FittingAlignment="...">` enum.
+    /// `Value::Text` carrying the IDML reference-point string
+    /// (`"TopLeftPoint"`, `"CenterPoint"`, …); empty clears the
+    /// override. `NodeId::Rectangle` only (the kind that hosts placed
+    /// images). Materialises a `FrameFittingOption` when the prior was
+    /// `None`. Paint-only re-fit on the next rebuild → `frame_style`.
+    FrameFittingReferencePoint,
+    /// W0.3 — `<FrameFittingOption AutoFit="...">`. `Value::Bool`.
+    /// Rectangle-only. Same materialise-on-None handling as
+    /// `FrameFittingReferencePoint`. Informational until the live-fit
+    /// pass lands; `frame_style` invalidation. `None`→default undo.
+    FrameAutoFit,
+
+    // ---- W0.3 — stroke ------------------------------------------
+    /// W0.3 — `StrokeType` reference (`"StrokeStyle/$ID/Solid"`,
+    /// `"…/Dashed"`, `"…/Dotted"`, `"…/Canned Dotted"`, custom names).
+    /// `Value::Text`; empty clears the override. Carried on every
+    /// stroked page-item kind. Paint-only (`frame_style`).
+    FrameStrokeType,
+    /// W0.3 — `EndJoin` (`"MiterEndJoin"`, `"RoundEndJoin"`,
+    /// `"BevelEndJoin"`). `Value::Text`; empty clears. Rectangle-only
+    /// (the kind that parses `end_join`). Paint-only.
+    FrameStrokeJoin,
+    /// W0.3 — `MiterLimit` (multiple of stroke width, default 4.0).
+    /// `Value::Length`; `None` clears. Rectangle-only. Paint-only.
+    FrameStrokeMiterLimit,
+    /// W0.3 — `StrokeAlignment` (`"CenterAlignment"`,
+    /// `"InsideAlignment"`, `"OutsideAlignment"`). `Value::Text`;
+    /// empty clears. Rectangle-only. Paint-only (the renderer
+    /// inset/outsets by half the weight on rebuild).
+    FrameStrokeAlignment,
+    /// W0.3 — `GapColor` reference for dashed-stroke gaps.
+    /// `Value::ColorRef`. Carried on every stroked page-item kind.
+    /// Paint-only.
+    FrameStrokeGapColor,
+    /// W0.3 — `GapTint` percent (0..=100) for the gap colour.
+    /// `Value::Length`; `None` clears. Stroked kinds. Paint-only.
+    FrameStrokeGapTint,
+
+    // ---- W0.3 — corners (Rectangle) -----------------------------
+    /// W0.3 — per-corner `CornerOption` enum (`"None"`,
+    /// `"RoundedCorner"`, `"InverseRoundedCorner"`, `"InsetCorner"`,
+    /// `"BeveledCorner"`, `"FancyCorner"`). `Value::Text`; empty
+    /// clears that corner's override. Rectangle-only; addresses one of
+    /// the four entries in `corners[4]` (IDML order
+    /// `[top_left, top_right, bottom_right, bottom_left]`). Paint-only
+    /// (the renderer re-derives the rounded-rect path on rebuild).
+    FrameCornerOptionTopLeft,
+    FrameCornerOptionTopRight,
+    FrameCornerOptionBottomLeft,
+    FrameCornerOptionBottomRight,
+    /// W0.3 — per-corner `CornerRadius` in pt. `Value::Length`;
+    /// `None` clears that corner's radius. Rectangle-only; pairs with
+    /// the matching `FrameCornerOption*`. Paint-only.
+    FrameCornerRadiusTopLeft,
+    FrameCornerRadiusTopRight,
+    FrameCornerRadiusBottomLeft,
+    FrameCornerRadiusBottomRight,
+
+    // ---- W0.3 — transform decompose (gap 6/16) ------------------
+    /// W0.3 — frame rotation angle in degrees, decomposed from the
+    /// frame's `ItemTransform`. `Value::Length(Some(deg))`; `None`
+    /// resets rotation to 0 while preserving scale + translation.
+    /// Read decomposes the matrix; write recomposes
+    /// `T · R(angle) · scale · flip` preserving the existing
+    /// translation, scale, and flip. Carried on every page-item kind
+    /// with an `item_transform`. Reflow-affecting (rotating a text
+    /// frame re-lays its content) → `frame_geometry`. Shear is NOT
+    /// represented — a sheared matrix decomposes lossily (see
+    /// `decompose_transform`).
+    FrameRotationAngle,
+    /// W0.3 — horizontal scale factor (1.0 = identity), decomposed
+    /// from `ItemTransform`. `Value::Length`; `None` resets to 1.0.
+    /// Sign is carried by the flip paths, so the magnitude here is
+    /// always non-negative. `frame_geometry`.
+    FrameScaleX,
+    /// W0.3 — vertical scale factor. See `FrameScaleX`.
+    FrameScaleY,
+    /// W0.3 — horizontal flip (mirror across the vertical axis).
+    /// `Value::Bool`. Detected from the sign of the decomposed
+    /// X-scale (equivalently the matrix determinant). Recompose
+    /// negates the X-scale when set. `frame_geometry`.
+    FrameFlipH,
+    /// W0.3 — vertical flip (mirror across the horizontal axis).
+    /// `Value::Bool`. See `FrameFlipH`.
+    FrameFlipV,
+
+    // ---- W0.3 — overprint ---------------------------------------
+    /// W0.3 — `OverprintFill="true"`. `Value::Bool`. Carried on every
+    /// page-item kind with a fill (`overprint_fill` field). Paint-only
+    /// (`frame_style`).
+    FrameOverprintFill,
+    /// W0.3 — `OverprintStroke="true"`. `Value::Bool`. Every stroked
+    /// page-item kind. Paint-only.
+    FrameOverprintStroke,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -682,6 +828,43 @@ impl PropertyPath {
             PropertyPath::ParagraphListType => "paragraph.listType",
             PropertyPath::ParagraphBulletCharacter => "paragraph.bulletCharacter",
             PropertyPath::ParagraphNumberingFormat => "paragraph.numberingFormat",
+            // W0.3 — text-frame prefs.
+            PropertyPath::TextFrameColumnCount => "textFrame.columnCount",
+            PropertyPath::TextFrameColumnGutter => "textFrame.columnGutter",
+            PropertyPath::TextFrameColumnBalance => "textFrame.columnBalance",
+            PropertyPath::TextFrameVerticalJustification => "textFrame.verticalJustification",
+            PropertyPath::TextFrameAutoSizing => "textFrame.autoSizing",
+            PropertyPath::TextFrameFirstBaseline => "textFrame.firstBaseline",
+            // W0.3 — text wrap.
+            PropertyPath::TextWrapInvert => "frame.textWrapInvert",
+            // W0.3 — frame fitting.
+            PropertyPath::FrameFittingReferencePoint => "frame.fittingReferencePoint",
+            PropertyPath::FrameAutoFit => "frame.autoFit",
+            // W0.3 — stroke.
+            PropertyPath::FrameStrokeType => "frame.strokeType",
+            PropertyPath::FrameStrokeJoin => "frame.strokeJoin",
+            PropertyPath::FrameStrokeMiterLimit => "frame.strokeMiterLimit",
+            PropertyPath::FrameStrokeAlignment => "frame.strokeAlignment",
+            PropertyPath::FrameStrokeGapColor => "frame.strokeGapColor",
+            PropertyPath::FrameStrokeGapTint => "frame.strokeGapTint",
+            // W0.3 — corners.
+            PropertyPath::FrameCornerOptionTopLeft => "frame.cornerOptionTopLeft",
+            PropertyPath::FrameCornerOptionTopRight => "frame.cornerOptionTopRight",
+            PropertyPath::FrameCornerOptionBottomLeft => "frame.cornerOptionBottomLeft",
+            PropertyPath::FrameCornerOptionBottomRight => "frame.cornerOptionBottomRight",
+            PropertyPath::FrameCornerRadiusTopLeft => "frame.cornerRadiusTopLeft",
+            PropertyPath::FrameCornerRadiusTopRight => "frame.cornerRadiusTopRight",
+            PropertyPath::FrameCornerRadiusBottomLeft => "frame.cornerRadiusBottomLeft",
+            PropertyPath::FrameCornerRadiusBottomRight => "frame.cornerRadiusBottomRight",
+            // W0.3 — transform decompose.
+            PropertyPath::FrameRotationAngle => "frame.rotationAngle",
+            PropertyPath::FrameScaleX => "frame.scaleX",
+            PropertyPath::FrameScaleY => "frame.scaleY",
+            PropertyPath::FrameFlipH => "frame.flipH",
+            PropertyPath::FrameFlipV => "frame.flipV",
+            // W0.3 — overprint.
+            PropertyPath::FrameOverprintFill => "frame.overprintFill",
+            PropertyPath::FrameOverprintStroke => "frame.overprintStroke",
         }
     }
 }
@@ -1566,4 +1749,199 @@ pub struct AppliedOperation {
     pub op: Operation,
     pub inverse: Operation,
     pub invalidation: InvalidationHint,
+}
+
+// ------------------------------------------------------------------
+// W0.3 — ItemTransform decomposition (gap 6/16)
+// ------------------------------------------------------------------
+
+/// W0.3 — the rotation / scale / flip / translation that compose an
+/// IDML `ItemTransform` `[a, b, c, d, tx, ty]`. The matrix maps a
+/// point `(x, y)` to `(a·x + c·y + tx, b·x + d·y + ty)`.
+///
+/// The decomposition is the standard QR-style polar form for the
+/// linear 2×2 block `[[a, c], [b, d]]`:
+///
+/// 1. `flip_h` is read from the sign of the determinant — a negative
+///    determinant means the matrix includes a reflection. We fold the
+///    whole reflection into the X axis (`flip_h`) and keep `flip_v`
+///    addressable independently so the two editor toggles round-trip.
+/// 2. `angle_deg` is `atan2(b, a)` of the first basis vector.
+/// 3. `scale_x` is `‖(a, b)‖` (always ≥ 0; the sign lives in the
+///    flip flags); `scale_y` is the height of the parallelogram
+///    (`det / scale_x`), also taken as a magnitude.
+/// 4. `shear` is the off-axis skew (`(a·c + b·d) / scale_x²`),
+///    captured for round-trip fidelity but NOT exposed as a wire
+///    path — a sheared frame's `scale_y`/`angle` are only meaningful
+///    once the shear is re-applied on recompose.
+///
+/// `recompose` is the exact left-inverse for the shear-free, single-
+/// flip case (`recompose(decompose(m)) == m`); when both flips are
+/// set it normalises to the equivalent 180°-rotation form, which is
+/// the same matrix.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransformDecomp {
+    pub translate: [f32; 2],
+    pub angle_deg: f32,
+    pub scale_x: f32,
+    pub scale_y: f32,
+    pub shear: f32,
+    pub flip_h: bool,
+    pub flip_v: bool,
+}
+
+/// Decompose an IDML `ItemTransform` into rotation / scale / flip /
+/// translation. `None` (no transform) decomposes to the identity.
+pub fn decompose_transform(m: Option<[f32; 6]>) -> TransformDecomp {
+    let [a, b, c, d, tx, ty] = m.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let det = a * d - b * c;
+    // A negative determinant = the matrix mirrors. Fold the whole
+    // reflection into the X axis so the polar decomposition below
+    // operates on a proper (det ≥ 0) rotation·scale.
+    let flip_h = det < 0.0;
+    let sign = if flip_h { -1.0 } else { 1.0 };
+    // Apply the X reflection up front: (a, b) → (sign·a, sign·b).
+    let (a2, b2) = (sign * a, sign * b);
+    let scale_x = (a2 * a2 + b2 * b2).sqrt();
+    let angle_deg = if scale_x == 0.0 {
+        0.0
+    } else {
+        b2.atan2(a2).to_degrees()
+    };
+    // The de-reflected determinant is non-negative; scale_y is the
+    // parallelogram height. scale_x == 0 is a degenerate matrix; guard
+    // the division.
+    let det2 = sign * det; // == a2·d - b2·c, always ≥ 0
+    let scale_y = if scale_x == 0.0 { 0.0 } else { det2 / scale_x };
+    let shear = if scale_x == 0.0 {
+        0.0
+    } else {
+        (a2 * c + b2 * d) / (scale_x * scale_x)
+    };
+    TransformDecomp {
+        translate: [tx, ty],
+        angle_deg,
+        scale_x,
+        scale_y,
+        shear,
+        flip_h,
+        // `flip_v` is not derivable from a proper decomposition (a
+        // single reflection is fully captured by `flip_h`); it starts
+        // `false` and is toggled by the `FrameFlipV` path, which
+        // recompose honours by negating the Y scale.
+        flip_v: false,
+    }
+}
+
+/// Recompose an `ItemTransform` from a [`TransformDecomp`], preserving
+/// the translation. Inverse of [`decompose_transform`] for the
+/// shear-free single-flip case. Order:
+/// `T · R(angle) · shear · diag(±scale_x, ±scale_y)`.
+pub fn recompose_transform(t: &TransformDecomp) -> [f32; 6] {
+    let rad = t.angle_deg.to_radians();
+    let (sin, cos) = rad.sin_cos();
+    let sx = if t.flip_h { -t.scale_x } else { t.scale_x };
+    let sy = if t.flip_v { -t.scale_y } else { t.scale_y };
+    // First column = R · (sx, 0): the scaled+rotated X basis.
+    let a = cos * sx;
+    let b = sin * sx;
+    // Second column = R · (shear·sx? , sy): fold shear into the Y
+    // basis. shear is expressed in pre-rotation X units, so the
+    // pre-rotation second column is (shear·? , sy) → we reconstruct
+    // it as the rotated (shear-along-X, sy) vector.
+    let pre_cx = t.shear * sy;
+    let c = cos * pre_cx - sin * sy;
+    let d = sin * pre_cx + cos * sy;
+    [a, b, c, d, t.translate[0], t.translate[1]]
+}
+
+#[cfg(test)]
+mod transform_decompose_tests {
+    use super::*;
+
+    fn approx(m1: [f32; 6], m2: [f32; 6]) {
+        for i in 0..6 {
+            assert!(
+                (m1[i] - m2[i]).abs() < 1e-3,
+                "component {i}: {} vs {}\n{m1:?}\n{m2:?}",
+                m1[i],
+                m2[i]
+            );
+        }
+    }
+
+    #[test]
+    fn identity_round_trips() {
+        let d = decompose_transform(None);
+        assert!((d.angle_deg).abs() < 1e-4);
+        assert!((d.scale_x - 1.0).abs() < 1e-4);
+        assert!((d.scale_y - 1.0).abs() < 1e-4);
+        assert!(!d.flip_h && !d.flip_v);
+        approx(recompose_transform(&d), [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn pure_rotation_round_trips() {
+        // 30° rotation, translation (10, 20).
+        let rad = 30f32.to_radians();
+        let (s, c) = rad.sin_cos();
+        let m = [c, s, -s, c, 10.0, 20.0];
+        let d = decompose_transform(Some(m));
+        assert!((d.angle_deg - 30.0).abs() < 1e-2, "angle {}", d.angle_deg);
+        assert!((d.scale_x - 1.0).abs() < 1e-3);
+        assert!((d.scale_y - 1.0).abs() < 1e-3);
+        assert!(!d.flip_h && !d.flip_v);
+        assert_eq!(d.translate, [10.0, 20.0]);
+        approx(recompose_transform(&d), m);
+    }
+
+    #[test]
+    fn scale_and_rotation_round_trip() {
+        // scale (2, 3) then rotate 45°, translate (5, -7).
+        let rad = 45f32.to_radians();
+        let (s, c) = rad.sin_cos();
+        let (sx, sy) = (2.0f32, 3.0f32);
+        let m = [c * sx, s * sx, -s * sy, c * sy, 5.0, -7.0];
+        let d = decompose_transform(Some(m));
+        assert!((d.angle_deg - 45.0).abs() < 1e-2);
+        assert!((d.scale_x - 2.0).abs() < 1e-3, "sx {}", d.scale_x);
+        assert!((d.scale_y - 3.0).abs() < 1e-3, "sy {}", d.scale_y);
+        assert!(d.shear.abs() < 1e-3, "shear {}", d.shear);
+        approx(recompose_transform(&d), m);
+    }
+
+    #[test]
+    fn horizontal_flip_detected_via_negative_determinant() {
+        // Mirror across the vertical axis: x → -x. det = -1.
+        let m = [-1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+        let d = decompose_transform(Some(m));
+        assert!(d.flip_h, "negative-det matrix must flag flip_h");
+        assert!((d.scale_x - 1.0).abs() < 1e-4);
+        assert!((d.scale_y - 1.0).abs() < 1e-4);
+        // Round-trip recomposes the same reflection.
+        approx(recompose_transform(&d), m);
+    }
+
+    #[test]
+    fn vertical_flip_recompose() {
+        // FrameFlipV toggles flip_v; recompose negates scale_y. Start
+        // from identity, set flip_v, recompose → y-mirror matrix.
+        let mut d = decompose_transform(None);
+        d.flip_v = true;
+        approx(recompose_transform(&d), [1.0, 0.0, 0.0, -1.0, 0.0, 0.0]);
+        // Decomposing that y-mirror reads as a 180° rotation + flip_h
+        // (a single reflection is folded into X) — the matrix is the
+        // same either way, which is what round-trip fidelity needs.
+        let re = decompose_transform(Some([1.0, 0.0, 0.0, -1.0, 0.0, 0.0]));
+        approx(recompose_transform(&re), [1.0, 0.0, 0.0, -1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn translation_preserved_on_recompose() {
+        let m = [2.0, 0.0, 0.0, 2.0, 33.0, 44.0];
+        let d = decompose_transform(Some(m));
+        assert_eq!(d.translate, [33.0, 44.0]);
+        let re = recompose_transform(&d);
+        assert!((re[4] - 33.0).abs() < 1e-4 && (re[5] - 44.0).abs() < 1e-4);
+    }
 }

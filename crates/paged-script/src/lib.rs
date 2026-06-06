@@ -617,6 +617,37 @@ fn parse_property_path(s: &str) -> Option<paged_mutate::PropertyPath> {
         "frameGradientFillLength" => FrameGradientFillLength,
         "frameGradientStrokeAngle" => FrameGradientStrokeAngle,
         "frameGradientStrokeLength" => FrameGradientStrokeLength,
+        // W0.3.
+        "textFrameColumnCount" => TextFrameColumnCount,
+        "textFrameColumnGutter" => TextFrameColumnGutter,
+        "textFrameColumnBalance" => TextFrameColumnBalance,
+        "textFrameVerticalJustification" => TextFrameVerticalJustification,
+        "textFrameAutoSizing" => TextFrameAutoSizing,
+        "textFrameFirstBaseline" => TextFrameFirstBaseline,
+        "frameTextWrapInvert" => TextWrapInvert,
+        "frameFittingReferencePoint" => FrameFittingReferencePoint,
+        "frameAutoFit" => FrameAutoFit,
+        "frameStrokeType" => FrameStrokeType,
+        "frameStrokeJoin" => FrameStrokeJoin,
+        "frameStrokeMiterLimit" => FrameStrokeMiterLimit,
+        "frameStrokeAlignment" => FrameStrokeAlignment,
+        "frameStrokeGapColor" => FrameStrokeGapColor,
+        "frameStrokeGapTint" => FrameStrokeGapTint,
+        "frameCornerOptionTopLeft" => FrameCornerOptionTopLeft,
+        "frameCornerOptionTopRight" => FrameCornerOptionTopRight,
+        "frameCornerOptionBottomLeft" => FrameCornerOptionBottomLeft,
+        "frameCornerOptionBottomRight" => FrameCornerOptionBottomRight,
+        "frameCornerRadiusTopLeft" => FrameCornerRadiusTopLeft,
+        "frameCornerRadiusTopRight" => FrameCornerRadiusTopRight,
+        "frameCornerRadiusBottomLeft" => FrameCornerRadiusBottomLeft,
+        "frameCornerRadiusBottomRight" => FrameCornerRadiusBottomRight,
+        "frameRotationAngle" => FrameRotationAngle,
+        "frameScaleX" => FrameScaleX,
+        "frameScaleY" => FrameScaleY,
+        "frameFlipH" => FrameFlipH,
+        "frameFlipV" => FrameFlipV,
+        "frameOverprintFill" => FrameOverprintFill,
+        "frameOverprintStroke" => FrameOverprintStroke,
         _ => return None,
     })
 }
@@ -703,6 +734,37 @@ fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
         ParagraphListType => "paragraphListType",
         ParagraphBulletCharacter => "paragraphBulletCharacter",
         ParagraphNumberingFormat => "paragraphNumberingFormat",
+        // W0.3.
+        TextFrameColumnCount => "textFrameColumnCount",
+        TextFrameColumnGutter => "textFrameColumnGutter",
+        TextFrameColumnBalance => "textFrameColumnBalance",
+        TextFrameVerticalJustification => "textFrameVerticalJustification",
+        TextFrameAutoSizing => "textFrameAutoSizing",
+        TextFrameFirstBaseline => "textFrameFirstBaseline",
+        TextWrapInvert => "frameTextWrapInvert",
+        FrameFittingReferencePoint => "frameFittingReferencePoint",
+        FrameAutoFit => "frameAutoFit",
+        FrameStrokeType => "frameStrokeType",
+        FrameStrokeJoin => "frameStrokeJoin",
+        FrameStrokeMiterLimit => "frameStrokeMiterLimit",
+        FrameStrokeAlignment => "frameStrokeAlignment",
+        FrameStrokeGapColor => "frameStrokeGapColor",
+        FrameStrokeGapTint => "frameStrokeGapTint",
+        FrameCornerOptionTopLeft => "frameCornerOptionTopLeft",
+        FrameCornerOptionTopRight => "frameCornerOptionTopRight",
+        FrameCornerOptionBottomLeft => "frameCornerOptionBottomLeft",
+        FrameCornerOptionBottomRight => "frameCornerOptionBottomRight",
+        FrameCornerRadiusTopLeft => "frameCornerRadiusTopLeft",
+        FrameCornerRadiusTopRight => "frameCornerRadiusTopRight",
+        FrameCornerRadiusBottomLeft => "frameCornerRadiusBottomLeft",
+        FrameCornerRadiusBottomRight => "frameCornerRadiusBottomRight",
+        FrameRotationAngle => "frameRotationAngle",
+        FrameScaleX => "frameScaleX",
+        FrameScaleY => "frameScaleY",
+        FrameFlipH => "frameFlipH",
+        FrameFlipV => "frameFlipV",
+        FrameOverprintFill => "frameOverprintFill",
+        FrameOverprintStroke => "frameOverprintStroke",
     }
 }
 
@@ -760,12 +822,26 @@ fn js_value_to_wire(
             // round-trip branch below — not here.
             | P::ParagraphListType
             | P::ParagraphBulletCharacter
-            | P::ParagraphNumberingFormat => W::Text(s),
+            | P::ParagraphNumberingFormat
+            // W0.3 — enum-string / text frame-scope paths.
+            | P::TextFrameVerticalJustification
+            | P::TextFrameAutoSizing
+            | P::TextFrameFirstBaseline
+            | P::FrameFittingReferencePoint
+            | P::FrameStrokeType
+            | P::FrameStrokeJoin
+            | P::FrameStrokeAlignment
+            | P::FrameCornerOptionTopLeft
+            | P::FrameCornerOptionTopRight
+            | P::FrameCornerOptionBottomLeft
+            | P::FrameCornerOptionBottomRight => W::Text(s),
             // Color-ref paths.
             P::FrameFillColor
             | P::FrameStrokeColor
             | P::CharacterFillColor
-            | P::FrameDropShadowColor => W::ColorRef(Some(s)),
+            | P::FrameDropShadowColor
+            // W0.3 — stroke gap colour.
+            | P::FrameStrokeGapColor => W::ColorRef(Some(s)),
             // Anything else gets ColorRef as the legacy default —
             // callers passing other typed strings should use the
             // explicit `{ type, value }` wrapper which the

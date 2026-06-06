@@ -820,12 +820,14 @@ fn apply_set_property(
                 .map(|t| t.mode.as_idml().to_string())
                 .unwrap_or_default();
             let prev_offsets = tw.map(|t| t.offsets).unwrap_or([0.0; 4]);
+            let prev_invert = tw.and_then(|t| t.invert);
             if new_val.is_empty() {
                 *tw = None;
             } else {
                 *tw = Some(paged_parse::TextWrap {
                     mode: paged_parse::TextWrapMode::from_idml(&new_val),
                     offsets: prev_offsets,
+                    invert: prev_invert,
                 });
             }
             let _ = prev_offsets;
@@ -852,9 +854,11 @@ fn apply_set_property(
                 .map(|t| t.mode)
                 .unwrap_or(paged_parse::TextWrapMode::None);
             let prev_offsets = tw.map(|t| t.offsets).unwrap_or([0.0; 4]);
+            let prev_invert = tw.and_then(|t| t.invert);
             *tw = Some(paged_parse::TextWrap {
                 mode: prev_mode,
                 offsets: new_offsets,
+                invert: prev_invert,
             });
             (
                 Value::Bounds(prev_offsets),
@@ -1211,12 +1215,21 @@ fn apply_set_property(
                 .frame_fitting
                 .as_ref()
                 .and_then(|f| f.fitting_on_empty_frame.clone());
+            // Preserve the W0.3 alignment / auto-fit knobs across a
+            // crop-only edit.
+            let (prev_ref, prev_auto) = rect
+                .frame_fitting
+                .as_ref()
+                .map(|f| (f.reference_point.clone(), f.auto_fit))
+                .unwrap_or((None, None));
             rect.frame_fitting = Some(paged_parse::FrameFittingOption {
                 top_crop: Some(new_bounds[0]),
                 left_crop: Some(new_bounds[1]),
                 bottom_crop: Some(new_bounds[2]),
                 right_crop: Some(new_bounds[3]),
                 fitting_on_empty_frame: prev_type,
+                reference_point: prev_ref,
+                auto_fit: prev_auto,
             });
             (
                 Value::Bounds(prev_bounds),
@@ -1240,8 +1253,13 @@ fn apply_set_property(
                 .as_ref()
                 .map(|f| (f.top_crop, f.left_crop, f.bottom_crop, f.right_crop))
                 .unwrap_or((None, None, None, None));
+            let (prev_ref, prev_auto) = rect
+                .frame_fitting
+                .as_ref()
+                .map(|f| (f.reference_point.clone(), f.auto_fit))
+                .unwrap_or((None, None));
             let new_type = if new_val.is_empty() { None } else { Some(new_val.clone()) };
-            // Clearing both halves leaves frame_fitting at `None`
+            // Clearing all knobs leaves frame_fitting at `None`
             // for honest defaults; otherwise materialise the
             // FrameFitting with the merged state.
             if new_type.is_none()
@@ -1249,6 +1267,8 @@ fn apply_set_property(
                 && prev_left.is_none()
                 && prev_bottom.is_none()
                 && prev_right.is_none()
+                && prev_ref.is_none()
+                && prev_auto.is_none()
             {
                 rect.frame_fitting = None;
             } else {
@@ -1258,6 +1278,8 @@ fn apply_set_property(
                     bottom_crop: prev_bottom,
                     right_crop: prev_right,
                     fitting_on_empty_frame: new_type,
+                    reference_point: prev_ref,
+                    auto_fit: prev_auto,
                 });
             }
             (
@@ -1396,6 +1418,371 @@ fn apply_set_property(
         ) => {
             return apply_paragraph_property(doc, story_id, *start, *end, node, path, value);
         }
+
+        // ============ W0.3 — text-frame prefs (TextFrame only) ========
+        (NodeId::TextFrame(id), PropertyPath::TextFrameColumnCount) => {
+            let new_val = expect_length(path, value)?;
+            let frame = find_text_frame_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = frame.column_count;
+            frame.column_count = new_val.map(|n| n.max(1.0).round() as u32);
+            (
+                Value::Length(prev.map(|c| c as f32)),
+                InvalidationHint { text_reflow: vec![node.clone()], ..Default::default() },
+            )
+        }
+        (NodeId::TextFrame(id), PropertyPath::TextFrameColumnGutter) => {
+            let new_val = expect_length(path, value)?;
+            let frame = find_text_frame_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = frame.column_gutter;
+            frame.column_gutter = new_val;
+            (
+                Value::Length(prev),
+                InvalidationHint { text_reflow: vec![node.clone()], ..Default::default() },
+            )
+        }
+        (NodeId::TextFrame(id), PropertyPath::TextFrameColumnBalance) => {
+            let new_val = expect_bool(path, value)?;
+            let frame = find_text_frame_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = frame.column_balance.unwrap_or(false);
+            frame.column_balance = Some(new_val);
+            (
+                Value::Bool(prev),
+                InvalidationHint { text_reflow: vec![node.clone()], ..Default::default() },
+            )
+        }
+        (NodeId::TextFrame(id), PropertyPath::TextFrameVerticalJustification) => {
+            let new_val = expect_text(path, value)?;
+            let frame = find_text_frame_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = frame
+                .vertical_justification
+                .map(vj_as_idml)
+                .unwrap_or_default();
+            frame.vertical_justification = if new_val.is_empty() {
+                None
+            } else {
+                paged_parse::VerticalJustification::from_idml(&new_val)
+            };
+            (
+                Value::Text(prev.to_string()),
+                InvalidationHint { text_reflow: vec![node.clone()], ..Default::default() },
+            )
+        }
+        (NodeId::TextFrame(id), PropertyPath::TextFrameAutoSizing) => {
+            let new_val = expect_text(path, value)?;
+            let frame = find_text_frame_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = frame.auto_sizing.map(auto_sizing_as_idml).unwrap_or_default();
+            frame.auto_sizing = if new_val.is_empty() {
+                None
+            } else {
+                paged_parse::AutoSizingType::from_idml(&new_val)
+            };
+            (
+                Value::Text(prev.to_string()),
+                InvalidationHint { text_reflow: vec![node.clone()], ..Default::default() },
+            )
+        }
+        (NodeId::TextFrame(id), PropertyPath::TextFrameFirstBaseline) => {
+            let new_val = expect_text(path, value)?;
+            let frame = find_text_frame_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = frame
+                .first_baseline_offset
+                .map(first_baseline_as_idml)
+                .unwrap_or_default();
+            frame.first_baseline_offset = if new_val.is_empty() {
+                None
+            } else {
+                paged_parse::FirstBaselineOffset::from_idml(&new_val)
+            };
+            (
+                Value::Text(prev.to_string()),
+                InvalidationHint { text_reflow: vec![node.clone()], ..Default::default() },
+            )
+        }
+
+        // ============ W0.3 — text-wrap invert (all wrap kinds) ========
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::TextWrapInvert,
+        ) => {
+            let new_val = expect_bool(path, value)?;
+            let tw = find_text_wrap_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = tw.and_then(|t| t.invert).unwrap_or(false);
+            let prev_mode = tw.map(|t| t.mode).unwrap_or(paged_parse::TextWrapMode::None);
+            let prev_offsets = tw.map(|t| t.offsets).unwrap_or([0.0; 4]);
+            *tw = Some(paged_parse::TextWrap {
+                mode: prev_mode,
+                offsets: prev_offsets,
+                invert: Some(new_val),
+            });
+            (
+                Value::Bool(prev),
+                // The wrap exclusion changes; other frames reflow.
+                InvalidationHint { structural: true, ..Default::default() },
+            )
+        }
+
+        // ============ W0.3 — frame fitting (Rectangle only) ===========
+        (NodeId::Rectangle(id), PropertyPath::FrameFittingReferencePoint) => {
+            let new_val = expect_text(path, value)?;
+            let rect = find_rectangle_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let ff = rect.frame_fitting.get_or_insert_with(Default::default);
+            let prev = ff.reference_point.clone().unwrap_or_default();
+            ff.reference_point = if new_val.is_empty() { None } else { Some(new_val.clone()) };
+            (
+                Value::Text(prev),
+                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+            )
+        }
+        (NodeId::Rectangle(id), PropertyPath::FrameAutoFit) => {
+            let new_val = expect_bool(path, value)?;
+            let rect = find_rectangle_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let ff = rect.frame_fitting.get_or_insert_with(Default::default);
+            let prev = ff.auto_fit.unwrap_or(false);
+            ff.auto_fit = Some(new_val);
+            (
+                Value::Bool(prev),
+                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+            )
+        }
+
+        // ============ W0.3 — stroke type / gap (all stroked kinds) ====
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameStrokeType,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let slot = find_stroke_type_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = slot.clone().unwrap_or_default();
+            *slot = if new_val.is_empty() { None } else { Some(new_val.clone()) };
+            (
+                Value::Text(prev),
+                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+            )
+        }
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameStrokeGapColor,
+        ) => {
+            let new_color = expect_color_ref(path, value)?;
+            let slot = find_stroke_gap_color_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = slot.clone();
+            *slot = new_color;
+            (
+                Value::ColorRef(prev),
+                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+            )
+        }
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameStrokeGapTint,
+        ) => {
+            let new_val = expect_length(path, value)?;
+            let slot = find_stroke_gap_tint_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = *slot;
+            *slot = new_val;
+            (
+                Value::Length(prev),
+                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+            )
+        }
+        // Stroke join / miter / alignment are Rectangle-only parse
+        // fields.
+        (NodeId::Rectangle(id), PropertyPath::FrameStrokeJoin) => {
+            let new_val = expect_text(path, value)?;
+            let rect = find_rectangle_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = rect.end_join.clone().unwrap_or_default();
+            rect.end_join = if new_val.is_empty() { None } else { Some(new_val.clone()) };
+            (
+                Value::Text(prev),
+                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+            )
+        }
+        (NodeId::Rectangle(id), PropertyPath::FrameStrokeAlignment) => {
+            let new_val = expect_text(path, value)?;
+            let rect = find_rectangle_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = rect.stroke_alignment.clone().unwrap_or_default();
+            rect.stroke_alignment = if new_val.is_empty() { None } else { Some(new_val.clone()) };
+            (
+                Value::Text(prev),
+                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+            )
+        }
+        (NodeId::Rectangle(id), PropertyPath::FrameStrokeMiterLimit) => {
+            let new_val = expect_length(path, value)?;
+            let rect = find_rectangle_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = rect.miter_limit;
+            rect.miter_limit = new_val;
+            (
+                Value::Length(prev),
+                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+            )
+        }
+
+        // ============ W0.3 — per-corner option + radius (Rectangle) ===
+        (
+            NodeId::Rectangle(id),
+            PropertyPath::FrameCornerOptionTopLeft
+            | PropertyPath::FrameCornerOptionTopRight
+            | PropertyPath::FrameCornerOptionBottomLeft
+            | PropertyPath::FrameCornerOptionBottomRight,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let rect = find_rectangle_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let i = corner_index(path);
+            let prev = rect.corners[i]
+                .option
+                .map(corner_option_as_idml)
+                .unwrap_or_default();
+            rect.corners[i].option = if new_val.is_empty() {
+                None
+            } else {
+                paged_parse::CornerOption::from_idml(&new_val)
+            };
+            (
+                Value::Text(prev.to_string()),
+                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+            )
+        }
+        (
+            NodeId::Rectangle(id),
+            PropertyPath::FrameCornerRadiusTopLeft
+            | PropertyPath::FrameCornerRadiusTopRight
+            | PropertyPath::FrameCornerRadiusBottomLeft
+            | PropertyPath::FrameCornerRadiusBottomRight,
+        ) => {
+            let new_val = expect_length(path, value)?;
+            let rect = find_rectangle_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let i = corner_index(path);
+            let prev = rect.corners[i].radius;
+            rect.corners[i].radius = new_val;
+            (
+                Value::Length(prev),
+                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+            )
+        }
+
+        // ============ W0.3 — transform decompose (all path kinds) =====
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_)
+            | NodeId::Group(_),
+            PropertyPath::FrameRotationAngle
+            | PropertyPath::FrameScaleX
+            | PropertyPath::FrameScaleY
+            | PropertyPath::FrameFlipH
+            | PropertyPath::FrameFlipV,
+        ) => {
+            let slot = find_item_transform_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let mut d = crate::operation::decompose_transform(*slot);
+            let prev_value = match path {
+                PropertyPath::FrameRotationAngle => {
+                    let prev = Value::Length(Some(d.angle_deg));
+                    d.angle_deg = expect_length(path, value)?.unwrap_or(0.0);
+                    prev
+                }
+                PropertyPath::FrameScaleX => {
+                    let prev = Value::Length(Some(d.scale_x));
+                    d.scale_x = expect_length(path, value)?.unwrap_or(1.0);
+                    prev
+                }
+                PropertyPath::FrameScaleY => {
+                    let prev = Value::Length(Some(d.scale_y));
+                    d.scale_y = expect_length(path, value)?.unwrap_or(1.0);
+                    prev
+                }
+                PropertyPath::FrameFlipH => {
+                    let prev = Value::Bool(d.flip_h);
+                    d.flip_h = expect_bool(path, value)?;
+                    prev
+                }
+                PropertyPath::FrameFlipV => {
+                    let prev = Value::Bool(d.flip_v);
+                    d.flip_v = expect_bool(path, value)?;
+                    prev
+                }
+                _ => unreachable!("guarded by the match pattern"),
+            };
+            *slot = Some(crate::operation::recompose_transform(&d));
+            (
+                prev_value,
+                InvalidationHint { frame_geometry: vec![node.clone()], ..Default::default() },
+            )
+        }
+
+        // ============ W0.3 — overprint (fill: all fills; stroke: all) ==
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_),
+            PropertyPath::FrameOverprintFill,
+        ) => {
+            let new_val = expect_bool(path, value)?;
+            let slot = find_overprint_fill_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = *slot;
+            *slot = new_val;
+            (
+                Value::Bool(prev),
+                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+            )
+        }
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameOverprintStroke,
+        ) => {
+            let new_val = expect_bool(path, value)?;
+            let slot = find_overprint_stroke_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = *slot;
+            *slot = new_val;
+            (
+                Value::Bool(prev),
+                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+            )
+        }
+
         _ => {
             return Err(OperationError::UnsupportedProperty {
                 node: node.clone(),
@@ -4413,6 +4800,157 @@ fn find_rectangle_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mu
     None
 }
 
+// ---- W0.3 — enum string round-trippers (parse `from_idml`s are
+// non-injective for some variants, so we name the canonical string
+// explicitly rather than reusing a parse helper). -----------------
+
+fn vj_as_idml(v: paged_parse::VerticalJustification) -> &'static str {
+    use paged_parse::VerticalJustification as V;
+    match v {
+        V::Top => "TopAlign",
+        V::Center => "CenterAlign",
+        V::Bottom => "BottomAlign",
+        V::Justify => "JustifyAlign",
+    }
+}
+
+fn auto_sizing_as_idml(v: paged_parse::AutoSizingType) -> &'static str {
+    use paged_parse::AutoSizingType as A;
+    match v {
+        A::Off => "Off",
+        A::HeightOnly => "HeightOnly",
+        A::WidthOnly => "WidthOnly",
+        A::HeightAndWidth => "HeightAndWidth",
+        A::HeightAndWidthProportionally => "HeightAndWidthProportionally",
+    }
+}
+
+fn first_baseline_as_idml(v: paged_parse::FirstBaselineOffset) -> &'static str {
+    use paged_parse::FirstBaselineOffset as F;
+    match v {
+        F::AscentOffset => "AscentOffset",
+        F::CapHeight => "CapHeight",
+        F::XHeight => "XHeight",
+        F::EmBoxHeight => "EmBoxHeight",
+        F::LeadingOffset => "LeadingOffset",
+        F::FixedHeight => "FixedHeight",
+    }
+}
+
+fn corner_option_as_idml(v: paged_parse::CornerOption) -> &'static str {
+    use paged_parse::CornerOption as C;
+    match v {
+        C::None => "None",
+        C::Rounded => "RoundedCorner",
+        C::Inverse => "InverseRoundedCorner",
+        C::Inset => "InsetCorner",
+        C::Bevel => "BeveledCorner",
+        C::Fancy => "FancyCorner",
+    }
+}
+
+/// W0.3 — map a per-corner `PropertyPath` to its index in
+/// `Rectangle::corners` (IDML order `[top_left, top_right,
+/// bottom_right, bottom_left]`).
+fn corner_index(path: PropertyPath) -> usize {
+    match path {
+        PropertyPath::FrameCornerOptionTopLeft | PropertyPath::FrameCornerRadiusTopLeft => 0,
+        PropertyPath::FrameCornerOptionTopRight | PropertyPath::FrameCornerRadiusTopRight => 1,
+        PropertyPath::FrameCornerOptionBottomRight
+        | PropertyPath::FrameCornerRadiusBottomRight => 2,
+        PropertyPath::FrameCornerOptionBottomLeft | PropertyPath::FrameCornerRadiusBottomLeft => 3,
+        _ => unreachable!("corner_index called with a non-corner path"),
+    }
+}
+
+/// W0.3 — locate the `stroke_type: Option<String>` field on any
+/// stroked page-item kind.
+fn find_stroke_type_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut Option<String>> {
+    match node {
+        NodeId::TextFrame(id) => find_text_frame_mut(doc, id).map(|f| &mut f.stroke_type),
+        NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.stroke_type),
+        NodeId::Oval(id) => find_oval_mut(doc, id).map(|o| &mut o.stroke_type),
+        NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.stroke_type),
+        NodeId::GraphicLine(id) => find_graphic_line_mut(doc, id).map(|l| &mut l.stroke_type),
+        _ => None,
+    }
+}
+
+/// W0.3 — locate the `stroke_gap_color: Option<String>` field.
+fn find_stroke_gap_color_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut Option<String>> {
+    match node {
+        NodeId::TextFrame(id) => find_text_frame_mut(doc, id).map(|f| &mut f.stroke_gap_color),
+        NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.stroke_gap_color),
+        NodeId::Oval(id) => find_oval_mut(doc, id).map(|o| &mut o.stroke_gap_color),
+        NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.stroke_gap_color),
+        NodeId::GraphicLine(id) => find_graphic_line_mut(doc, id).map(|l| &mut l.stroke_gap_color),
+        _ => None,
+    }
+}
+
+/// W0.3 — locate the `stroke_gap_tint: Option<f32>` field.
+fn find_stroke_gap_tint_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut Option<f32>> {
+    match node {
+        NodeId::TextFrame(id) => find_text_frame_mut(doc, id).map(|f| &mut f.stroke_gap_tint),
+        NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.stroke_gap_tint),
+        NodeId::Oval(id) => find_oval_mut(doc, id).map(|o| &mut o.stroke_gap_tint),
+        NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.stroke_gap_tint),
+        NodeId::GraphicLine(id) => find_graphic_line_mut(doc, id).map(|l| &mut l.stroke_gap_tint),
+        _ => None,
+    }
+}
+
+/// W0.3 — locate the `item_transform: Option<[f32; 6]>` field on any
+/// page-item kind (including Group, whose own transform decomposes).
+fn find_item_transform_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut Option<[f32; 6]>> {
+    match node {
+        NodeId::TextFrame(id) => find_text_frame_mut(doc, id).map(|f| &mut f.item_transform),
+        NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.item_transform),
+        NodeId::Oval(id) => find_oval_mut(doc, id).map(|o| &mut o.item_transform),
+        NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.item_transform),
+        NodeId::GraphicLine(id) => find_graphic_line_mut(doc, id).map(|l| &mut l.item_transform),
+        NodeId::Group(id) => find_group_mut(doc, id).map(|g| &mut g.item_transform),
+        _ => None,
+    }
+}
+
+/// W0.3 — locate the `overprint_fill: bool` field (fill-bearing kinds;
+/// GraphicLine has no fill, so it's excluded).
+fn find_overprint_fill_mut<'a>(doc: &'a mut Document, node: &NodeId) -> Option<&'a mut bool> {
+    match node {
+        NodeId::TextFrame(id) => find_text_frame_mut(doc, id).map(|f| &mut f.overprint_fill),
+        NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.overprint_fill),
+        NodeId::Oval(id) => find_oval_mut(doc, id).map(|o| &mut o.overprint_fill),
+        NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.overprint_fill),
+        _ => None,
+    }
+}
+
+/// W0.3 — locate the `overprint_stroke: bool` field (every stroked
+/// kind, including GraphicLine).
+fn find_overprint_stroke_mut<'a>(doc: &'a mut Document, node: &NodeId) -> Option<&'a mut bool> {
+    match node {
+        NodeId::TextFrame(id) => find_text_frame_mut(doc, id).map(|f| &mut f.overprint_stroke),
+        NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.overprint_stroke),
+        NodeId::Oval(id) => find_oval_mut(doc, id).map(|o| &mut o.overprint_stroke),
+        NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.overprint_stroke),
+        NodeId::GraphicLine(id) => find_graphic_line_mut(doc, id).map(|l| &mut l.overprint_stroke),
+        _ => None,
+    }
+}
+
 fn find_group_mut<'a>(
     doc: &'a mut Document,
     self_id: &str,
@@ -5540,6 +6078,8 @@ pub(crate) fn new_text_frame(
         stroke_color: None,
         stroke_weight: None,
         stroke_type: None,
+        stroke_gap_color: None,
+        stroke_gap_tint: None,
         drop_shadow: None,
         stroke_drop_shadow: None,
         next_text_frame: None,
@@ -5552,6 +6092,9 @@ pub(crate) fn new_text_frame(
         minimum_width_for_auto_sizing: None,
         minimum_height_for_auto_sizing: None,
         use_minimum_height_for_auto_sizing: None,
+        column_count: None,
+        column_gutter: None,
+        column_balance: None,
         applied_object_style: None,
         text_wrap: None,
         item_layer: None,
@@ -5589,6 +6132,8 @@ fn new_graphic_line(
         stroke_color,
         stroke_weight,
         stroke_type: None,
+        stroke_gap_color: None,
+        stroke_gap_tint: None,
         applied_object_style: None,
         text_wrap: None,
         item_layer: None,
@@ -5626,6 +6171,8 @@ fn new_polygon(
         stroke_color,
         stroke_weight,
         stroke_type: None,
+        stroke_gap_color: None,
+        stroke_gap_tint: None,
         applied_object_style: None,
         anchors,
         subpath_starts,
@@ -5651,7 +6198,7 @@ fn new_polygon(
     }
 }
 
-fn new_rectangle(self_id: String, bounds: Bounds, fill_color: Option<String>) -> Rectangle {
+pub(crate) fn new_rectangle(self_id: String, bounds: Bounds, fill_color: Option<String>) -> Rectangle {
     Rectangle {
         self_id: Some(self_id),
         bounds,
@@ -5671,6 +6218,8 @@ fn new_rectangle(self_id: String, bounds: Bounds, fill_color: Option<String>) ->
         text_wrap: None,
         frame_fitting: None,
         stroke_type: None,
+        stroke_gap_color: None,
+        stroke_gap_tint: None,
         stroke_alignment: None,
         end_cap: None,
         end_join: None,

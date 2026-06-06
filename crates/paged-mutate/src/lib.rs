@@ -181,6 +181,8 @@ mod tests {
             stroke_color: None,
             stroke_weight: None,
             stroke_type: None,
+            stroke_gap_color: None,
+            stroke_gap_tint: None,
             drop_shadow: None,
             stroke_drop_shadow: None,
             next_text_frame: None,
@@ -193,6 +195,9 @@ mod tests {
             minimum_width_for_auto_sizing: None,
             minimum_height_for_auto_sizing: None,
             use_minimum_height_for_auto_sizing: None,
+            column_count: None,
+            column_gutter: None,
+            column_balance: None,
             applied_object_style: None,
             text_wrap: None,
             item_layer: None,
@@ -1643,6 +1648,8 @@ mod tests {
             stroke_color: None,
             stroke_weight: None,
             stroke_type: None,
+            stroke_gap_color: None,
+            stroke_gap_tint: None,
             applied_object_style: None,
             anchors,
             subpath_starts,
@@ -4433,5 +4440,356 @@ mod tests {
         assert_eq!(before, after);
         project.redo().expect("redo");
         assert_eq!(project.document().spreads[0].spread.polygons.len(), 1);
+    }
+
+    // ====================================================================
+    // W0.3 — frame-scope property paths. Each family: apply → assert →
+    // invert restores. Apply-invert-reapply identity, the W0.1/W0.2
+    // recipe.
+    // ====================================================================
+
+    fn document_with_one_rectangle(self_id: &str) -> Document {
+        let mut doc = document_with_one_textframe("TextFrame/unused");
+        doc.spreads[0].spread.text_frames.clear();
+        doc.spreads[0]
+            .spread
+            .rectangles
+            .push(crate::apply::new_rectangle(
+                self_id.to_string(),
+                Bounds { top: 0.0, left: 0.0, bottom: 100.0, right: 200.0 },
+                None,
+            ));
+        doc
+    }
+
+    fn set_op(node: NodeId, path: PropertyPath, value: Value) -> Operation {
+        Operation::SetProperty { node, path, value }
+    }
+
+    /// Apply, assert the value landed via `check`, then apply the
+    /// inverse and assert the document matches its pre-apply snapshot.
+    fn assert_round_trips(
+        project: &mut Project,
+        op: Operation,
+        check: impl Fn(&Document),
+    ) {
+        let before = format!("{:?}", project.document().spreads);
+        let applied = project.apply(op).expect("apply");
+        check(project.document());
+        crate::apply(project.document_mut(), &applied.inverse).expect("invert");
+        let after = format!("{:?}", project.document().spreads);
+        assert_eq!(before, after, "inverse did not restore the document");
+    }
+
+    #[test]
+    fn w03_text_frame_column_prefs_round_trip() {
+        let mut p = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let node = NodeId::TextFrame("TextFrame/u1".to_string());
+        assert_round_trips(
+            &mut p,
+            set_op(node.clone(), PropertyPath::TextFrameColumnCount, Value::Length(Some(3.0))),
+            |d| assert_eq!(d.spreads[0].spread.text_frames[0].column_count, Some(3)),
+        );
+        assert_round_trips(
+            &mut p,
+            set_op(node.clone(), PropertyPath::TextFrameColumnGutter, Value::Length(Some(14.0))),
+            |d| assert_eq!(d.spreads[0].spread.text_frames[0].column_gutter, Some(14.0)),
+        );
+        // column_balance is `Option<bool>`; `Value::Bool` carries no
+        // `None`, so undo of a write whose prior was `None` restores
+        // `Some(false)` (the default), not `None` — the documented
+        // `CharacterUnderline` lossy-default precedent. Assert value +
+        // semantic restore rather than bytewise identity.
+        let applied = p
+            .apply(set_op(node, PropertyPath::TextFrameColumnBalance, Value::Bool(true)))
+            .unwrap();
+        assert_eq!(p.document().spreads[0].spread.text_frames[0].column_balance, Some(true));
+        assert_eq!(applied.inverse, set_op(
+            NodeId::TextFrame("TextFrame/u1".to_string()),
+            PropertyPath::TextFrameColumnBalance,
+            Value::Bool(false),
+        ));
+        crate::apply(p.document_mut(), &applied.inverse).unwrap();
+        assert_eq!(p.document().spreads[0].spread.text_frames[0].column_balance, Some(false));
+    }
+
+    #[test]
+    fn w03_text_frame_enum_prefs_round_trip() {
+        let mut p = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let node = NodeId::TextFrame("TextFrame/u1".to_string());
+        let applied = p
+            .apply(set_op(
+                node.clone(),
+                PropertyPath::TextFrameVerticalJustification,
+                Value::Text("CenterAlign".to_string()),
+            ))
+            .unwrap();
+        assert_eq!(
+            p.document().spreads[0].spread.text_frames[0].vertical_justification,
+            Some(paged_parse::VerticalJustification::Center)
+        );
+        // Reflow classification — vertical justify shifts every line.
+        assert_eq!(applied.invalidation.text_reflow.len(), 1);
+        crate::apply(p.document_mut(), &applied.inverse).unwrap();
+        assert_eq!(
+            p.document().spreads[0].spread.text_frames[0].vertical_justification,
+            None
+        );
+        assert_round_trips(
+            &mut p,
+            set_op(node.clone(), PropertyPath::TextFrameAutoSizing, Value::Text("HeightOnly".into())),
+            |d| {
+                assert_eq!(
+                    d.spreads[0].spread.text_frames[0].auto_sizing,
+                    Some(paged_parse::AutoSizingType::HeightOnly)
+                )
+            },
+        );
+        assert_round_trips(
+            &mut p,
+            set_op(node, PropertyPath::TextFrameFirstBaseline, Value::Text("CapHeight".into())),
+            |d| {
+                assert_eq!(
+                    d.spreads[0].spread.text_frames[0].first_baseline_offset,
+                    Some(paged_parse::FirstBaselineOffset::CapHeight)
+                )
+            },
+        );
+    }
+
+    #[test]
+    fn w03_text_wrap_invert_round_trips_and_is_structural() {
+        let mut p = Project::new(document_with_one_rectangle("Rectangle/r1"));
+        let node = NodeId::Rectangle("Rectangle/r1".to_string());
+        let applied = p
+            .apply(set_op(node.clone(), PropertyPath::TextWrapInvert, Value::Bool(true)))
+            .unwrap();
+        assert_eq!(
+            p.document().spreads[0].spread.rectangles[0]
+                .text_wrap
+                .and_then(|t| t.invert),
+            Some(true)
+        );
+        // The wrap exclusion changes → structural rebuild.
+        assert!(applied.invalidation.structural);
+        crate::apply(p.document_mut(), &applied.inverse).unwrap();
+        // Materialised TextWrap stays (mode None, invert restored to
+        // false); the inverse carries Bool(false).
+        assert_eq!(
+            p.document().spreads[0].spread.rectangles[0]
+                .text_wrap
+                .and_then(|t| t.invert),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn w03_frame_fitting_alignment_and_auto_fit_round_trip() {
+        // Writing either knob materialises a `FrameFittingOption` if the
+        // prior was `None`; undo restores the *field* (reference_point /
+        // auto_fit) but leaves the now-present (all-None) struct — the
+        // same materialise-on-None lossiness as `FrameDropShadow`. The
+        // field value, not the struct presence, is what round-trips.
+        let mut p = Project::new(document_with_one_rectangle("Rectangle/r1"));
+        let node = NodeId::Rectangle("Rectangle/r1".to_string());
+        let applied = p
+            .apply(set_op(
+                node.clone(),
+                PropertyPath::FrameFittingReferencePoint,
+                Value::Text("CenterPoint".into()),
+            ))
+            .unwrap();
+        assert_eq!(
+            p.document().spreads[0].spread.rectangles[0]
+                .frame_fitting
+                .as_ref()
+                .and_then(|ff| ff.reference_point.clone())
+                .as_deref(),
+            Some("CenterPoint")
+        );
+        assert_eq!(applied.invalidation.frame_style.len(), 1);
+        crate::apply(p.document_mut(), &applied.inverse).unwrap();
+        assert_eq!(
+            p.document().spreads[0].spread.rectangles[0]
+                .frame_fitting
+                .as_ref()
+                .and_then(|ff| ff.reference_point.clone()),
+            None
+        );
+        let applied = p
+            .apply(set_op(node, PropertyPath::FrameAutoFit, Value::Bool(true)))
+            .unwrap();
+        assert_eq!(
+            p.document().spreads[0].spread.rectangles[0]
+                .frame_fitting
+                .as_ref()
+                .and_then(|ff| ff.auto_fit),
+            Some(true)
+        );
+        crate::apply(p.document_mut(), &applied.inverse).unwrap();
+        assert_eq!(
+            p.document().spreads[0].spread.rectangles[0]
+                .frame_fitting
+                .as_ref()
+                .and_then(|ff| ff.auto_fit),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn w03_stroke_family_round_trips_paint_only() {
+        let mut p = Project::new(document_with_one_rectangle("Rectangle/r1"));
+        let node = NodeId::Rectangle("Rectangle/r1".to_string());
+        // Stroke type on a Rectangle → frame_style (paint), not reflow.
+        let applied = p
+            .apply(set_op(
+                node.clone(),
+                PropertyPath::FrameStrokeType,
+                Value::Text("StrokeStyle/$ID/Dashed".into()),
+            ))
+            .unwrap();
+        assert_eq!(applied.invalidation.frame_style.len(), 1);
+        assert!(applied.invalidation.text_reflow.is_empty());
+        crate::apply(p.document_mut(), &applied.inverse).unwrap();
+        assert_eq!(p.document().spreads[0].spread.rectangles[0].stroke_type, None);
+        for (path, value, check) in [
+            (
+                PropertyPath::FrameStrokeJoin,
+                Value::Text("RoundEndJoin".into()),
+                "join",
+            ),
+            (
+                PropertyPath::FrameStrokeAlignment,
+                Value::Text("InsideAlignment".into()),
+                "align",
+            ),
+        ] {
+            let _ = check;
+            assert_round_trips(&mut p, set_op(node.clone(), path, value.clone()), |_| {});
+        }
+        assert_round_trips(
+            &mut p,
+            set_op(node.clone(), PropertyPath::FrameStrokeMiterLimit, Value::Length(Some(8.0))),
+            |d| assert_eq!(d.spreads[0].spread.rectangles[0].miter_limit, Some(8.0)),
+        );
+        assert_round_trips(
+            &mut p,
+            set_op(node.clone(), PropertyPath::FrameStrokeGapColor, Value::ColorRef(Some("Color/Cyan".into()))),
+            |d| {
+                assert_eq!(
+                    d.spreads[0].spread.rectangles[0].stroke_gap_color.as_deref(),
+                    Some("Color/Cyan")
+                )
+            },
+        );
+        assert_round_trips(
+            &mut p,
+            set_op(node, PropertyPath::FrameStrokeGapTint, Value::Length(Some(60.0))),
+            |d| assert_eq!(d.spreads[0].spread.rectangles[0].stroke_gap_tint, Some(60.0)),
+        );
+    }
+
+    #[test]
+    fn w03_per_corner_option_and_radius_round_trip() {
+        let mut p = Project::new(document_with_one_rectangle("Rectangle/r1"));
+        let node = NodeId::Rectangle("Rectangle/r1".to_string());
+        assert_round_trips(
+            &mut p,
+            set_op(
+                node.clone(),
+                PropertyPath::FrameCornerOptionBottomLeft,
+                Value::Text("RoundedCorner".into()),
+            ),
+            |d| {
+                // bottom_left is index 3 in IDML corners[4] order.
+                assert_eq!(
+                    d.spreads[0].spread.rectangles[0].corners[3].option,
+                    Some(paged_parse::CornerOption::Rounded)
+                )
+            },
+        );
+        assert_round_trips(
+            &mut p,
+            set_op(node, PropertyPath::FrameCornerRadiusTopRight, Value::Length(Some(12.0))),
+            |d| {
+                // top_right is index 1.
+                assert_eq!(d.spreads[0].spread.rectangles[0].corners[1].radius, Some(12.0))
+            },
+        );
+    }
+
+    #[test]
+    fn w03_transform_decompose_paths_round_trip() {
+        let mut p = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let node = NodeId::TextFrame("TextFrame/u1".to_string());
+        // Rotate 30°.
+        let applied = p
+            .apply(set_op(node.clone(), PropertyPath::FrameRotationAngle, Value::Length(Some(30.0))))
+            .unwrap();
+        // Geometry invalidation — rotating a text frame re-lays content.
+        assert_eq!(applied.invalidation.frame_geometry.len(), 1);
+        let m = p.document().spreads[0].spread.text_frames[0]
+            .item_transform
+            .expect("transform materialised");
+        let d = crate::operation::decompose_transform(Some(m));
+        assert!((d.angle_deg - 30.0).abs() < 1e-2, "angle {}", d.angle_deg);
+        crate::apply(p.document_mut(), &applied.inverse).unwrap();
+        // Inverse restores the pre-rotation angle (0 on identity input).
+        let d0 = crate::operation::decompose_transform(
+            p.document().spreads[0].spread.text_frames[0].item_transform,
+        );
+        assert!(d0.angle_deg.abs() < 1e-3);
+
+        // Scale X to 2.0, then flip H, then back — each round-trips.
+        assert_round_trips(
+            &mut p,
+            set_op(node.clone(), PropertyPath::FrameScaleX, Value::Length(Some(2.0))),
+            |doc| {
+                let dd = crate::operation::decompose_transform(
+                    doc.spreads[0].spread.text_frames[0].item_transform,
+                );
+                assert!((dd.scale_x - 2.0).abs() < 1e-3, "sx {}", dd.scale_x);
+            },
+        );
+        assert_round_trips(
+            &mut p,
+            set_op(node, PropertyPath::FrameFlipH, Value::Bool(true)),
+            |doc| {
+                let dd = crate::operation::decompose_transform(
+                    doc.spreads[0].spread.text_frames[0].item_transform,
+                );
+                assert!(dd.flip_h, "flip_h must be set");
+            },
+        );
+    }
+
+    #[test]
+    fn w03_overprint_round_trips() {
+        let mut p = Project::new(document_with_one_rectangle("Rectangle/r1"));
+        let node = NodeId::Rectangle("Rectangle/r1".to_string());
+        assert_round_trips(
+            &mut p,
+            set_op(node.clone(), PropertyPath::FrameOverprintFill, Value::Bool(true)),
+            |d| assert!(d.spreads[0].spread.rectangles[0].overprint_fill),
+        );
+        assert_round_trips(
+            &mut p,
+            set_op(node, PropertyPath::FrameOverprintStroke, Value::Bool(true)),
+            |d| assert!(d.spreads[0].spread.rectangles[0].overprint_stroke),
+        );
+    }
+
+    #[test]
+    fn w03_unsupported_kind_for_corner_path_errors() {
+        // Corners are Rectangle-only; a TextFrame must reject them.
+        let mut p = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let err = p
+            .apply(set_op(
+                NodeId::TextFrame("TextFrame/u1".to_string()),
+                PropertyPath::FrameCornerRadiusTopLeft,
+                Value::Length(Some(5.0)),
+            ))
+            .unwrap_err();
+        assert!(matches!(err, OperationError::UnsupportedProperty { .. }));
     }
 }

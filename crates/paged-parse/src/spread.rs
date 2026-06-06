@@ -359,6 +359,10 @@ pub struct TextFrame {
     pub stroke_weight: Option<f32>,
     /// `StrokeType` reference; see [`Rectangle::stroke_type`].
     pub stroke_type: Option<String>,
+    /// `GapColor` / `GapTint` for dashed-stroke gaps; see
+    /// [`Rectangle::stroke_gap_color`].
+    pub stroke_gap_color: Option<String>,
+    pub stroke_gap_tint: Option<f32>,
     /// `<DropShadowSetting>` parsed from `<Properties><TransparencySetting>`.
     /// `None` when absent or `Mode="None"`.
     pub drop_shadow: Option<DropShadowSetting>,
@@ -407,6 +411,20 @@ pub struct TextFrame {
     /// `<TextFramePreference UseMinimumHeightForAutoSizing="...">`.
     /// `Some(true)` ⇒ apply `minimum_height_for_auto_sizing`.
     pub use_minimum_height_for_auto_sizing: Option<bool>,
+    /// `<TextFramePreference TextColumnCount="...">` — number of text
+    /// columns the frame splits its inset box into. `None` ⇒ inherit
+    /// the IDML default (1). W0.3 wires this as a mutable text-frame
+    /// pref; the composer's per-column layout follows in a later wave.
+    pub column_count: Option<u32>,
+    /// `<TextFramePreference TextColumnGutter="...">` in pt — the gap
+    /// between adjacent text columns. `None` ⇒ inherit (12pt default).
+    pub column_gutter: Option<f32>,
+    /// `<TextFramePreference TextColumnFixedWidth="...">` is the sibling
+    /// "fixed-width" knob; `TextColumnCount` + balance cover the common
+    /// authoring case. `<TextFramePreference VerticalBalanceColumns="...">`
+    /// — `Some(true)` balances the last line across columns. `None` ⇒
+    /// inherit (false).
+    pub column_balance: Option<bool>,
     /// `AppliedObjectStyle` reference — `ObjectStyle/<id>`. Real-
     /// world IDMLs almost always rely on this for fill/stroke; the
     /// per-element FillColor attribute is rare. Resolved by
@@ -758,6 +776,13 @@ pub struct Rectangle {
     /// length expressed as a multiple of the stroke width before
     /// the join falls back to bevel. InDesign defaults to 4.0.
     pub miter_limit: Option<f32>,
+    /// `GapColor` reference — the colour painted between dashes of a
+    /// dashed / striped stroke. `Swatch/None` (the default) leaves the
+    /// gaps transparent. The renderer doesn't paint gap colour yet;
+    /// the field is wired for authoring + round-trip.
+    pub stroke_gap_color: Option<String>,
+    /// `GapTint` percentage (0..=100) for `stroke_gap_color`.
+    pub stroke_gap_tint: Option<f32>,
     /// `ItemLayer` reference (`<self_id>` of a `<Layer>` in
     /// designmap.xml). The renderer skips this rectangle when its
     /// layer is hidden or non-printable.
@@ -1023,6 +1048,15 @@ pub struct FrameFittingOption {
     /// crops alone reproduce InDesign's resolved placement for the
     /// common cases. The string is kept for future fidelity work.
     pub fitting_on_empty_frame: Option<String>,
+    /// `FittingAlignment` — the reference point the content is pinned
+    /// to when the fit is reapplied (`TopLeftPoint`, `CenterPoint`,
+    /// …). `None` ⇒ inherit (`CenterPoint`). W0.3 surfaces it as
+    /// `FrameFittingReferencePoint`; the crops drive placement today.
+    pub reference_point: Option<String>,
+    /// `AutoFit="true"` — when set, InDesign re-runs the fit whenever
+    /// the frame is resized. `None` ⇒ false. Surfaced as
+    /// `FrameAutoFit`; informational until the live-fit pass lands.
+    pub auto_fit: Option<bool>,
 }
 
 /// Axis-aligned ellipse — `<Oval>` in IDML. Same fill/stroke story as
@@ -1039,6 +1073,9 @@ pub struct Oval {
     pub stroke_weight: Option<f32>,
     /// `StrokeType` reference; see [`Rectangle::stroke_type`].
     pub stroke_type: Option<String>,
+    /// `GapColor` / `GapTint`; see [`Rectangle::stroke_gap_color`].
+    pub stroke_gap_color: Option<String>,
+    pub stroke_gap_tint: Option<f32>,
     pub drop_shadow: Option<DropShadowSetting>,
     /// See [`TextFrame::stroke_drop_shadow`].
     pub stroke_drop_shadow: Option<DropShadowSetting>,
@@ -1097,6 +1134,9 @@ pub struct GraphicLine {
     pub stroke_weight: Option<f32>,
     /// `StrokeType` reference; see [`Rectangle::stroke_type`].
     pub stroke_type: Option<String>,
+    /// `GapColor` / `GapTint`; see [`Rectangle::stroke_gap_color`].
+    pub stroke_gap_color: Option<String>,
+    pub stroke_gap_tint: Option<f32>,
     /// `AppliedObjectStyle` reference; see `TextFrame`.
     pub applied_object_style: Option<String>,
     /// `<TextWrapPreference>` parsed off the line.
@@ -1161,12 +1201,20 @@ pub struct TextWrap {
     /// IDML order: `[top, left, bottom, right]`, in pt. Inflates the
     /// wrap rectangle outwards so text keeps its distance.
     pub offsets: [f32; 4],
+    /// `Inverse`/`Inverted` flag — `true` flows text *inside* the wrap
+    /// shape rather than around it. `None` ⇒ false (the IDML default).
+    /// Kept `Copy`-compatible (a plain `Option<bool>`) so `TextWrap`
+    /// stays the small value type the renderer copies by value;
+    /// string-valued contour/side knobs are deferred for that reason
+    /// (see W0.3 notes).
+    pub invert: Option<bool>,
 }
 
 impl TextWrap {
     pub const NONE: TextWrap = TextWrap {
         mode: TextWrapMode::None,
         offsets: [0.0; 4],
+        invert: None,
     };
 }
 
@@ -1265,6 +1313,9 @@ pub struct Polygon {
     pub stroke_weight: Option<f32>,
     /// `StrokeType` reference; see [`Rectangle::stroke_type`].
     pub stroke_type: Option<String>,
+    /// `GapColor` / `GapTint`; see [`Rectangle::stroke_gap_color`].
+    pub stroke_gap_color: Option<String>,
+    pub stroke_gap_tint: Option<f32>,
     pub applied_object_style: Option<String>,
     /// Path-point anchors with their Bezier control points, in the
     /// polygon's inner coords. Empty for synthetic IDMLs that
@@ -1456,6 +1507,7 @@ fn set_text_wrap_offsets(out: &mut Spread, kind: CurrentFrameKind, offsets: [f32
             *w = Some(TextWrap {
                 mode: TextWrapMode::None,
                 offsets,
+                invert: None,
             });
         }
     };
@@ -1493,6 +1545,14 @@ struct CommonAttrs {
     /// rather than `StrokeStyleAttrs` so Oval / Polygon / GraphicLine /
     /// TextFrame all get it without each shape duplicating the read.
     stroke_type: Option<String>,
+    /// `GapColor` reference for a dashed / striped stroke — the colour
+    /// painted in the gaps between dashes. `Swatch/None` ⇒ transparent
+    /// gaps (the IDML default). Lives on `CommonAttrs` like
+    /// `stroke_type` so every stroked page-item kind picks it up.
+    stroke_gap_color: Option<String>,
+    /// `GapTint` percentage (0..=100) for the gap colour. `None` ⇒ use
+    /// the swatch at full strength.
+    stroke_gap_tint: Option<f32>,
     applied_object_style: Option<String>,
     item_layer: Option<String>,
     /// `OverprintFill="true"` on the IDML element. Absent attribute
@@ -1519,6 +1579,8 @@ fn read_common_attrs(e: &quick_xml::events::BytesStart) -> CommonAttrs {
         stroke_color: attr(e, b"StrokeColor"),
         stroke_weight: attr(e, b"StrokeWeight").and_then(|s| s.parse().ok()),
         stroke_type: attr(e, b"StrokeType"),
+        stroke_gap_color: attr(e, b"GapColor"),
+        stroke_gap_tint: parse_tint_attr(e, b"GapTint"),
         applied_object_style: attr(e, b"AppliedObjectStyle"),
         item_layer: attr(e, b"ItemLayer"),
         overprint_fill: attr(e, b"OverprintFill")
@@ -1848,6 +1910,8 @@ impl Spread {
                             stroke_color: common.stroke_color,
                             stroke_weight: common.stroke_weight,
                             stroke_type: common.stroke_type,
+                            stroke_gap_color: common.stroke_gap_color,
+                            stroke_gap_tint: common.stroke_gap_tint,
                             drop_shadow: None,
                             stroke_drop_shadow: None,
                             next_text_frame: attr(&e, b"NextTextFrame"),
@@ -1860,6 +1924,9 @@ impl Spread {
                             minimum_width_for_auto_sizing: None,
                             minimum_height_for_auto_sizing: None,
                             use_minimum_height_for_auto_sizing: None,
+                            column_count: None,
+                            column_gutter: None,
+                            column_balance: None,
                             applied_object_style: common.applied_object_style,
                             text_wrap: None,
                             item_layer: common.item_layer,
@@ -1933,6 +2000,8 @@ impl Spread {
                             end_cap: stroke.end_cap,
                             end_join: stroke.end_join,
                             miter_limit: stroke.miter_limit,
+                            stroke_gap_color: common.stroke_gap_color,
+                            stroke_gap_tint: common.stroke_gap_tint,
                             item_layer: common.item_layer,
                             corner_radius: corner.corner_radius,
                             corner_option: corner.corner_option,
@@ -1991,6 +2060,8 @@ impl Spread {
                             stroke_color: common.stroke_color,
                             stroke_weight: common.stroke_weight,
                             stroke_type: common.stroke_type,
+                            stroke_gap_color: common.stroke_gap_color,
+                            stroke_gap_tint: common.stroke_gap_tint,
                             drop_shadow: None,
                             stroke_drop_shadow: None,
                             applied_object_style: common.applied_object_style,
@@ -2482,6 +2553,9 @@ impl Spread {
                                 .as_deref()
                                 .map(TextWrapMode::from_idml)
                                 .unwrap_or(TextWrapMode::None);
+                            let invert = attr(&e, b"Inverse")
+                                .or_else(|| attr(&e, b"Inverted"))
+                                .and_then(|s| s.parse::<bool>().ok());
                             let kind = cf.kind;
                             let prior_offsets = current_text_wrap_offsets(&out, kind);
                             apply_text_wrap(
@@ -2490,6 +2564,7 @@ impl Spread {
                                 Some(TextWrap {
                                     mode,
                                     offsets: prior_offsets,
+                                    invert,
                                 }),
                             );
                             cf.in_text_wrap = true;
@@ -2567,6 +2642,21 @@ impl Spread {
                                 .and_then(|s| s.parse::<bool>().ok())
                             {
                                 f.use_minimum_height_for_auto_sizing = Some(use_min_h);
+                            }
+                            if let Some(cc) =
+                                attr(&e, b"TextColumnCount").and_then(|s| s.parse::<u32>().ok())
+                            {
+                                f.column_count = Some(cc);
+                            }
+                            if let Some(cg) =
+                                attr(&e, b"TextColumnGutter").and_then(|s| s.parse::<f32>().ok())
+                            {
+                                f.column_gutter = Some(cg);
+                            }
+                            if let Some(cb) = attr(&e, b"VerticalBalanceColumns")
+                                .and_then(|s| s.parse::<bool>().ok())
+                            {
+                                f.column_balance = Some(cb);
                             }
                         }
                     }
@@ -2700,6 +2790,8 @@ impl Spread {
                                 right_crop: attr(&e, b"RightCrop").and_then(|s| s.parse().ok()),
                                 bottom_crop: attr(&e, b"BottomCrop").and_then(|s| s.parse().ok()),
                                 fitting_on_empty_frame: attr(&e, b"FittingOnEmptyFrame"),
+                                reference_point: attr(&e, b"FittingAlignment"),
+                                auto_fit: attr(&e, b"AutoFit").and_then(|s| s.parse::<bool>().ok()),
                             });
                         }
                     }
@@ -2753,6 +2845,8 @@ impl Spread {
                             stroke_color: common.stroke_color,
                             stroke_weight: common.stroke_weight,
                             stroke_type: common.stroke_type,
+                            stroke_gap_color: common.stroke_gap_color,
+                            stroke_gap_tint: common.stroke_gap_tint,
                             applied_object_style: common.applied_object_style,
                             text_wrap: None,
                             item_layer: common.item_layer,
@@ -2812,6 +2906,8 @@ impl Spread {
                             stroke_color: common.stroke_color,
                             stroke_weight: common.stroke_weight,
                             stroke_type: common.stroke_type,
+                            stroke_gap_color: common.stroke_gap_color,
+                            stroke_gap_tint: common.stroke_gap_tint,
                             applied_object_style: common.applied_object_style,
                             text_wrap: None,
                             anchors: Vec::new(),
@@ -3449,6 +3545,58 @@ mod tests {
         );
         assert_eq!(f.minimum_first_baseline_offset, Some(14.0));
         assert_eq!(f.inset_spacing, Some([6.0, 8.0, 10.0, 12.0]));
+    }
+
+    // W0.3 — text-frame column prefs + balance.
+    #[test]
+    fn w03_parses_text_frame_columns() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <TextFrame Self="frameA" ParentStory="u1" GeometricBounds="0 0 200 300">
+              <TextFramePreference TextColumnCount="3" TextColumnGutter="14"
+                                   VerticalBalanceColumns="true"/>
+            </TextFrame>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        let f = &s.text_frames[0];
+        assert_eq!(f.column_count, Some(3));
+        assert_eq!(f.column_gutter, Some(14.0));
+        assert_eq!(f.column_balance, Some(true));
+    }
+
+    // W0.3 — stroke gap colour/tint + text-wrap invert + frame-fitting
+    // alignment/auto-fit + overprint, on a Rectangle.
+    #[test]
+    fn w03_parses_stroke_gap_wrap_invert_and_fitting() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Rectangle Self="r" GeometricBounds="0 0 100 200"
+                       StrokeType="StrokeStyle/$ID/Dashed"
+                       GapColor="Color/Cyan" GapTint="60"
+                       OverprintFill="true" OverprintStroke="true">
+              <TextWrapPreference TextWrapMode="ContourTextWrap" Inverse="true">
+                <TextWrapOffset Top="1" Left="2" Bottom="3" Right="4"/>
+              </TextWrapPreference>
+              <FrameFittingOption LeftCrop="-5" FittingOnEmptyFrame="FillProportionally"
+                                  FittingAlignment="CenterPoint" AutoFit="true"/>
+            </Rectangle>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        let r = &s.rectangles[0];
+        assert_eq!(r.stroke_gap_color.as_deref(), Some("Color/Cyan"));
+        assert_eq!(r.stroke_gap_tint, Some(60.0));
+        assert!(r.overprint_fill);
+        assert!(r.overprint_stroke);
+        let tw = r.text_wrap.expect("text wrap parsed");
+        assert_eq!(tw.invert, Some(true));
+        assert_eq!(tw.offsets, [1.0, 2.0, 3.0, 4.0]);
+        let ff = r.frame_fitting.as_ref().expect("frame fitting parsed");
+        assert_eq!(ff.reference_point.as_deref(), Some("CenterPoint"));
+        assert_eq!(ff.auto_fit, Some(true));
     }
 
     #[test]
