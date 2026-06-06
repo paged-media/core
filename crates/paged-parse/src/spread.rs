@@ -183,6 +183,20 @@ pub struct Spread {
     /// as an extra target; the overlay renders them as cyan lines.
     #[serde(default)]
     pub guides: Vec<RulerGuide>,
+    /// Placed-image colour space + resolution InDesign baked onto each
+    /// `<Image>` element, keyed by the HOST frame's `Self` id
+    /// (Rectangle / Oval / Polygon). Kept as a side map rather than a
+    /// field on the frame structs so the metadata rides along without
+    /// expanding every frame literal (panels.md gaps 2-3). Empty when
+    /// no placed image carried `Space` / `ActualPpi` / `EffectivePpi`.
+    #[serde(default)]
+    pub image_metadata: std::collections::HashMap<String, ImageMetadata>,
+    /// `<MarginPreference>` per `<Page>`, keyed by the page's `Self`
+    /// id (panels.md gap 10). Side map for the same reason as
+    /// [`Spread::image_metadata`] — keeps `Page` literals untouched.
+    /// Empty when no page declared margins.
+    #[serde(default)]
+    pub page_margins: std::collections::HashMap<String, MarginPreference>,
 }
 
 /// Ruler guide on a spread. See [`Spread::guides`].
@@ -305,6 +319,23 @@ pub struct Page {
     /// renderer skips stamping master frames/lines/text onto it.
     /// `None`/`Some(true)` ⇒ stamp as usual.
     pub show_master_items: Option<bool>,
+}
+
+/// `<MarginPreference>` — per-page margin box + column grid. All
+/// distances are in points (IDML's native unit on the spread). The
+/// margins inset the page rectangle; the column grid divides the
+/// resulting content area. See [`Page::margins`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MarginPreference {
+    pub top: f32,
+    pub bottom: f32,
+    pub left: f32,
+    pub right: f32,
+    /// `ColumnCount` — number of text columns the margin box is
+    /// divided into. Defaults to 1.
+    pub column_count: u32,
+    /// `ColumnGutter` — gutter width (pt) between adjacent columns.
+    pub column_gutter: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -609,6 +640,34 @@ pub struct DropShadowSetting {
     pub size: f32,
     pub opacity_pct: f32,
     pub effect_color: Option<String>,
+}
+
+/// Authoritative placed-image metadata InDesign bakes onto the
+/// `<Image>` element at export. Unlike a fresh decode, these reflect
+/// the *placed* state (the link's resolution, the colour space the
+/// asset was in, and the effective ppi after the frame's scale), so
+/// the Links panel can surface colour-space + resolution warnings
+/// (panels.md gaps 2-3) without resolving and decoding the asset
+/// bytes — which the canvas worker may not even have.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ImageMetadata {
+    /// `Space` attribute — the image's colour space as InDesign sees
+    /// it: `"$ID/CMYK"`, `"$ID/RGB"`, `"$ID/Gray"`, `"$ID/LAB"`, etc.
+    /// Stored stripped of the `$ID/` namespace prefix (`"CMYK"`).
+    /// `None` when the element omits it (synthetic IDMLs, vector
+    /// placements).
+    pub space: Option<String>,
+    /// `ActualPpi` x-resolution — the source asset's native ppi
+    /// before the placement scale. IDML writes `"(x y)"`; we keep the
+    /// x component (square pixels are near-universal). `None` when
+    /// absent.
+    pub actual_ppi: Option<f32>,
+    /// `EffectivePpi` x-resolution — the native ppi divided by the
+    /// placement scale, i.e. the resolution at print size. This is
+    /// the number a preflight check compares against a 300-ppi
+    /// threshold. `None` when absent (then the canvas may derive it
+    /// from pixel-dims ÷ placed-size if it has the decode).
+    pub effective_ppi: Option<f32>,
 }
 
 /// Vector-only frame (no story). Mirrors `TextFrame` minus the
@@ -1746,6 +1805,33 @@ impl Spread {
                             });
                         }
                     }
+                    b"MarginPreference" => {
+                        // `<MarginPreference>` is a child of the enclosing
+                        // `<Page>`; the most-recently-pushed page is its
+                        // host. Recorded in the spread's side map keyed by
+                        // the page `Self` id (panels.md gap 10). Pages with
+                        // no `Self` id (synthetic) can't be keyed, so skip.
+                        if let Some(host) =
+                            out.pages.last().and_then(|p| p.self_id.clone())
+                        {
+                            let f = |k: &[u8]| {
+                                attr(&e, k).and_then(|s| s.parse::<f32>().ok())
+                            };
+                            out.page_margins.insert(
+                                host,
+                                MarginPreference {
+                                    top: f(b"Top").unwrap_or(0.0),
+                                    bottom: f(b"Bottom").unwrap_or(0.0),
+                                    left: f(b"Left").unwrap_or(0.0),
+                                    right: f(b"Right").unwrap_or(0.0),
+                                    column_count: attr(&e, b"ColumnCount")
+                                        .and_then(|s| s.parse::<u32>().ok())
+                                        .unwrap_or(1),
+                                    column_gutter: f(b"ColumnGutter").unwrap_or(0.0),
+                                },
+                            );
+                        }
+                    }
                     b"TextFrame" => {
                         let bounds_attr =
                             attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
@@ -2534,6 +2620,8 @@ impl Spread {
                                             out.rectangles[i].image_item_transform = Some(m);
                                         }
                                     }
+                                    let host = out.rectangles[i].self_id.clone();
+                                    record_image_metadata(&mut out, host, &e);
                                 }
                             }
                             Some(CurrentFrameKind::Polygon(i)) => {
@@ -2556,6 +2644,8 @@ impl Spread {
                                             out.polygons[i].image_item_transform = Some(m);
                                         }
                                     }
+                                    let host = out.polygons[i].self_id.clone();
+                                    record_image_metadata(&mut out, host, &e);
                                 }
                             }
                             Some(CurrentFrameKind::Oval(i)) => {
@@ -2578,6 +2668,8 @@ impl Spread {
                                             out.ovals[i].image_item_transform = Some(m);
                                         }
                                     }
+                                    let host = out.ovals[i].self_id.clone();
+                                    record_image_metadata(&mut out, host, &e);
                                 }
                             }
                             _ => {}
@@ -3115,6 +3207,58 @@ fn parse_matrix(s: &str) -> Option<[f32; 6]> {
         return None;
     }
     Some([parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]])
+}
+
+/// Parse the x-component of an IDML ppi tuple. InDesign writes
+/// `ActualPpi`/`EffectivePpi` as `"(x y)"` (parenthesised, two
+/// space-separated numbers); square pixels are near-universal so the
+/// x-resolution is representative. Also tolerates a bare `"x"` for
+/// synthetic inputs. `None` when nothing parses.
+fn parse_ppi_x(s: &str) -> Option<f32> {
+    s.trim_matches(|c| c == '(' || c == ')' || c == ' ')
+        .split_whitespace()
+        .next()
+        .and_then(|p| p.parse::<f32>().ok())
+        .filter(|v| v.is_finite() && *v > 0.0)
+}
+
+/// Build [`ImageMetadata`] from a nested `<Image>` element's
+/// `Space` / `ActualPpi` / `EffectivePpi` attributes. Returns `None`
+/// when the element carries none of them (so a plain placement
+/// doesn't allocate an empty record). `Space` is stripped of its
+/// `$ID/` namespace prefix.
+fn read_image_metadata(e: &quick_xml::events::BytesStart) -> Option<ImageMetadata> {
+    let space = attr(e, b"Space").map(|s| {
+        s.strip_prefix("$ID/").unwrap_or(&s).to_string()
+    });
+    let actual_ppi = attr(e, b"ActualPpi").as_deref().and_then(parse_ppi_x);
+    let effective_ppi = attr(e, b"EffectivePpi").as_deref().and_then(parse_ppi_x);
+    if space.is_none() && actual_ppi.is_none() && effective_ppi.is_none() {
+        return None;
+    }
+    Some(ImageMetadata {
+        space,
+        actual_ppi,
+        effective_ppi,
+    })
+}
+
+/// Record placed-image metadata for the host frame `self_id` into the
+/// spread's side map. First-write-wins (matching `image_link`) and a
+/// no-op when the frame has no `Self` id or the `<Image>` carries no
+/// colour-space / ppi attributes.
+fn record_image_metadata(
+    out: &mut Spread,
+    host_self_id: Option<String>,
+    e: &quick_xml::events::BytesStart,
+) {
+    let Some(host) = host_self_id else { return };
+    if out.image_metadata.contains_key(&host) {
+        return;
+    }
+    if let Some(meta) = read_image_metadata(e) {
+        out.image_metadata.insert(host, meta);
+    }
 }
 
 /// Compose two affine matrices `a ∘ b`: applying the result to a
@@ -4331,5 +4475,51 @@ mod tests {
         assert!(!s.polygons[0].overprint_stroke);
         // GraphicLine: only stroke is meaningful.
         assert!(s.graphic_lines[0].overprint_stroke);
+    }
+
+    #[test]
+    fn parses_placed_image_colorspace_and_ppi() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Rectangle Self="r1" GeometricBounds="0 0 100 100">
+              <Image Self="img1" Space="$ID/CMYK"
+                     ActualPpi="(300 300)" EffectivePpi="(225 225)"
+                     LinkResourceURI="file:///photo.tif"/>
+            </Rectangle>
+            <Rectangle Self="r2" GeometricBounds="0 0 50 50" FillColor="Color/Red"/>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        let meta = s.image_metadata.get("r1").expect("metadata for r1");
+        assert_eq!(meta.space.as_deref(), Some("CMYK"), "$ID/ prefix stripped");
+        assert!((meta.actual_ppi.unwrap() - 300.0).abs() < 1e-3);
+        assert!((meta.effective_ppi.unwrap() - 225.0).abs() < 1e-3);
+        // Plain colour-swatch rectangle has no image metadata.
+        assert!(!s.image_metadata.contains_key("r2"));
+    }
+
+    #[test]
+    fn parses_page_margins_and_columns() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Page Self="p1" GeometricBounds="0 0 792 612">
+              <MarginPreference Top="36" Bottom="48" Left="54" Right="54"
+                                ColumnCount="3" ColumnGutter="12"/>
+            </Page>
+            <Page Self="p2" GeometricBounds="0 0 792 612"/>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        let m = s.page_margins.get("p1").expect("margins for p1");
+        assert!((m.top - 36.0).abs() < 1e-3);
+        assert!((m.bottom - 48.0).abs() < 1e-3);
+        assert!((m.left - 54.0).abs() < 1e-3);
+        assert!((m.right - 54.0).abs() < 1e-3);
+        assert_eq!(m.column_count, 3);
+        assert!((m.column_gutter - 12.0).abs() < 1e-3);
+        // p2 declared no MarginPreference.
+        assert!(!s.page_margins.contains_key("p2"));
     }
 }

@@ -35,6 +35,19 @@ use paged_export_pdf::{
 use crate::channel::ExportPdfWireOptions;
 use crate::model::CanvasModel;
 
+/// Result of [`CanvasExportSession::finish`]: the serialised PDF plus
+/// both the human-readable summary lines and the structured preflight
+/// findings (panels.md gap 20). A named struct keeps the `finish`
+/// signature legible (and below clippy's tuple-complexity bar).
+pub struct FinishedExport {
+    pub pdf_bytes: Vec<u8>,
+    /// Human-readable summary lines for the dialog's status row.
+    pub diagnostics: Vec<String>,
+    /// Structured findings (code + severity + page) for the grouped
+    /// findings list.
+    pub findings: Vec<crate::channel::PreflightFinding>,
+}
+
 /// Face bytes copied out of the model's font table at begin time —
 /// owned, so the session never borrows the (mutable) model.
 struct OwnedFontBytes(HashMap<u32, Vec<u8>>);
@@ -222,8 +235,10 @@ impl CanvasExportSession {
         self.session.pages_remaining()
     }
 
-    /// Serialise the finished document. Consumes the session.
-    pub fn finish(self) -> Result<(Vec<u8>, Vec<String>), String> {
+    /// Serialise the finished document. Consumes the session. Returns
+    /// the PDF bytes, the human-readable summary lines, and the
+    /// structured preflight findings (panels.md gap 20).
+    pub fn finish(self) -> Result<FinishedExport, String> {
         let input = ExportInput {
             doc: &self.built,
             palette: &self.palette,
@@ -240,12 +255,28 @@ impl CanvasExportSession {
             doc_slug: self.doc_slug,
         };
         let result = self.session.finish(&input).map_err(|e| e.to_string())?;
+        // Human-readable summary lines (the dialog's status line).
         let diagnostics = result
-            .diagnostics
+            .findings
             .iter()
-            .map(|d| format!("{d:?}"))
+            .map(|f| f.message.clone())
             .collect();
-        Ok((result.bytes, diagnostics))
+        // panels.md gap 20 — structured findings for the grouped list.
+        let findings = result
+            .findings
+            .iter()
+            .map(|f| crate::channel::PreflightFinding {
+                code: f.code.to_string(),
+                severity: f.severity.as_str().to_string(),
+                message: f.message.clone(),
+                page_index: f.page_index.map(|p| p as u32),
+            })
+            .collect();
+        Ok(FinishedExport {
+            pdf_bytes: result.bytes,
+            diagnostics,
+            findings,
+        })
     }
 }
 

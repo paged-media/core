@@ -125,6 +125,23 @@ pub struct ExportPdfWireOptions {
     pub title: Option<String>,
 }
 
+/// panels.md gap 20 — one structured PDF-export preflight finding for
+/// the export dialog's findings list. The wire mirror of
+/// `paged_export_pdf::PreflightFinding`. `severity` is `"warning"` /
+/// `"error"`; `code` is a stable machine tag (`"font_not_embeddable"`
+/// / `"image_missing_bytes"`); `page_index` is the 0-based body-page
+/// the finding was raised on (`None` for document-level findings).
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct PreflightFinding {
+    pub code: String,
+    pub severity: String,
+    pub message: String,
+    #[serde(default)]
+    pub page_index: Option<u32>,
+}
+
 /// One message from main → worker. (Tsify derive intentionally
 /// omitted; see `TS_ENVELOPES` above for the TS-side declaration.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -242,6 +259,22 @@ pub enum MainToWorkerKind {
     RequestCaretGeometry {
         selection: crate::selection::ContentSelection,
     },
+    /// panels.md (W0.6 caret queries) — vertical caret navigation:
+    /// move the caret one visible line up/down from `offset`,
+    /// targeting the column nearest the source caret's x. Reply:
+    /// `CaretNavResult` whose `offset` is `None` when there's no line
+    /// in that direction (caret already on the first/last line).
+    // PROTOCOL: needs bump (W0.6 caret queries)
+    RequestCaretNav {
+        story_id: String,
+        offset: u32,
+        direction: crate::geometry::CaretDirection,
+    },
+    /// panels.md (W0.6 caret queries) — the `[line_start, line_end]`
+    /// story offsets of the visible line containing `offset` (Home /
+    /// End targets). Reply: `LineBoundsResult`.
+    // PROTOCOL: needs bump (W0.6 caret queries)
+    RequestLineBounds { story_id: String, offset: u32 },
     /// Undo the most recent applied mutation. Reply: `UndoApplied`
     /// or `MutationFailed` (when the log is empty).
     Undo,
@@ -599,6 +632,22 @@ pub enum WorkerToMainKind {
     CaretGeometry {
         caret: Option<crate::geometry::CaretGeometry>,
     },
+    /// panels.md (W0.6 caret queries) — `RequestCaretNav` reply.
+    /// `offset` is the destination story offset, or `None` when there
+    /// was no line in the requested direction.
+    // PROTOCOL: needs bump (W0.6 caret queries)
+    CaretNavResult {
+        #[serde(default)]
+        offset: Option<u32>,
+    },
+    /// panels.md (W0.6 caret queries) — `RequestLineBounds` reply.
+    /// `None` when the offset doesn't fall on a visible line (story
+    /// has no captured layout).
+    // PROTOCOL: needs bump (W0.6 caret queries)
+    LineBoundsResult {
+        #[serde(default)]
+        bounds: Option<crate::geometry::LineBounds>,
+    },
     /// Phase 3 Item 7 — undo applied. `undone_seq` is the
     /// `applied_seq` of the mutation that was reversed.
     UndoApplied {
@@ -713,13 +762,17 @@ pub enum WorkerToMainKind {
     ExportPdfBegun { session: u32, page_count: u32 },
     /// Concept 3 — `ExportPdfPage` reply (one page exported).
     ExportPdfProgress { session: u32, done: u32, total: u32 },
-    /// Concept 3 — `ExportPdfFinish` reply. `diagnostics` carries
-    /// non-fatal findings (restricted fonts outlined, images with
-    /// missing bytes) for the dialog's summary line.
+    /// Concept 3 — `ExportPdfFinish` reply. `diagnostics` carries the
+    /// human-readable summary lines; panels.md gap 20 — `findings`
+    /// carries the SAME findings structured (code + severity + page)
+    /// so the dialog can render a grouped, severity-coloured list and
+    /// deep-link to the offending page.
     PdfExported {
         #[tsify(type = "number[]")]
         pdf_bytes: ByteBuf,
         diagnostics: Vec<String>,
+        #[serde(default)]
+        findings: Vec<PreflightFinding>,
     },
     /// Concept 3 — `ExportPdfCancel` reply.
     ExportPdfCancelled { session: u32 },
@@ -974,6 +1027,9 @@ pub enum CollectionName {
     /// Concept 2 — the Ink Manager's ink list (one row per spot
     /// swatch, carrying its output-time settings).
     Inks,
+    /// panels.md gaps 9/10/19 — `<Section>` numbering definitions
+    /// (one row per section). Backs the Pages panel's section bands.
+    Sections,
 }
 
 impl CollectionName {
@@ -1004,6 +1060,7 @@ impl CollectionName {
             Self::Fonts => "fonts",
             Self::IndexTopics => "indexTopics",
             Self::Inks => "inks",
+            Self::Sections => "sections",
         }
     }
 
@@ -1031,6 +1088,7 @@ impl CollectionName {
             "fonts" => Self::Fonts,
             "indexTopics" => Self::IndexTopics,
             "inks" => Self::Inks,
+            "sections" => Self::Sections,
             _ => return None,
         })
     }
@@ -1183,6 +1241,67 @@ pub struct PageSummary {
     pub index: u32,
     /// `[width, height]` in points.
     pub size_pt: [f32; 2],
+    /// panels.md gap 10 — page margins in pt (from the page's
+    /// `<MarginPreference>`). All four default to 0 when the page
+    /// declared no margins. The editor's margin-box overlay insets
+    /// the page rect by these.
+    #[serde(default)]
+    pub margin_top_pt: f32,
+    #[serde(default)]
+    pub margin_left_pt: f32,
+    #[serde(default)]
+    pub margin_bottom_pt: f32,
+    #[serde(default)]
+    pub margin_right_pt: f32,
+    /// panels.md gap 10 — column grid inside the margin box.
+    /// `column_count` defaults to 1, `column_gutter_pt` to 0.
+    #[serde(default)]
+    pub column_count: u32,
+    #[serde(default)]
+    pub column_gutter_pt: f32,
+    /// panels.md gap 10 — document bleed in pt (top, left, bottom,
+    /// right), from `<DocumentPreference>`. Document-level (the same
+    /// values on every page); carried per-page so the overlay can
+    /// draw the bleed box without a second round-trip. All 0 when the
+    /// document declares no bleed.
+    #[serde(default)]
+    pub bleed_top_pt: f32,
+    #[serde(default)]
+    pub bleed_left_pt: f32,
+    #[serde(default)]
+    pub bleed_bottom_pt: f32,
+    #[serde(default)]
+    pub bleed_right_pt: f32,
+}
+
+/// panels.md gaps 9/10/19 — one `<Section>` definition. Backs
+/// `documentCollection:sections`. The Pages panel groups page
+/// thumbnails by section and labels each group with its prefix +
+/// numbering style; `start_page_index` + `page_count` let it draw
+/// the section bands. `page_count` is computed by walking the body
+/// pages between this section's start and the next section's start
+/// (or the document end).
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct SectionSummary {
+    /// IDML `Self` id of the `<Section>`.
+    pub self_id: String,
+    /// `SectionPrefix` (e.g. `"A-"`); empty when the section has no
+    /// prefix or doesn't include it in labels.
+    pub prefix: String,
+    /// Page-number style — `"arabic"` / `"upperRoman"` /
+    /// `"lowerRoman"` / `"upperAlpha"` / `"lowerAlpha"`. The label a
+    /// panel renders next to the section band.
+    pub label_style: String,
+    /// 0-based flat body-page index where this section begins (the
+    /// page whose `Self` matches `PageStart`). `None` when the
+    /// section's start page can't be located in the built document.
+    #[serde(default)]
+    pub start_page_index: Option<u32>,
+    /// Number of body pages this section spans (up to the next
+    /// section's start, or the document end).
+    pub page_count: u32,
 }
 
 /// SDK Phase 5 (v1 sweep) — one master-spread summary. Backs
@@ -1239,6 +1358,19 @@ pub struct FontSummary {
     /// Number of runs/styles that reference this family. Surfaces
     /// "this font is used N times" without a full audit pass.
     pub reference_count: u32,
+    /// panels.md gap 4 — `true` when the family can't be resolved to
+    /// face bytes by the worker's font registry (`BytesResolver`),
+    /// so the renderer substituted a fallback. The Fonts/Preflight
+    /// panel flags these in red. `false` means at least one style of
+    /// the family resolved.
+    ///
+    /// `embedded` is intentionally omitted: IDML packages reference
+    /// fonts by name (the `Fonts/Font_*.xml` resource carries no face
+    /// bytes), so the engine can't honestly say whether a font is
+    /// "embedded" — only whether it's installed/registered. Surfacing
+    /// a fabricated `embedded` flag would mislead the panel.
+    #[serde(default)]
+    pub is_missing: bool,
 }
 
 /// SDK Phase 5 (v1 sweep) — resolved colour readout for a single
@@ -1447,6 +1579,26 @@ pub struct LinkSummary {
     pub host_self_id: String,
     pub host_kind: String,
     pub uri: String,
+    /// panels.md gap 2 — `"ok"` when the build resolved + decoded the
+    /// link, `"missing"` when the renderer fell back to the grey
+    /// missing-image placeholder (`ImageLinkMissing` /
+    /// `ImageDecodeFailed` diagnostic for this frame). Derived from
+    /// the build's render diagnostics, so it reflects the SAME
+    /// resolution outcome the rendered page shows.
+    #[serde(default)]
+    pub status: String,
+    /// panels.md gap 3 — placed-image colour space (`"CMYK"` /
+    /// `"RGB"` / `"Gray"` / `"LAB"`), from the `<Image Space>`
+    /// attribute InDesign baked at export. `None` when the IDML
+    /// omits it (synthetic fixtures, vector placements).
+    #[serde(default)]
+    pub colorspace: Option<String>,
+    /// panels.md gap 3 — effective ppi at print size (native ppi ÷
+    /// placement scale), from the `<Image EffectivePpi>` attribute.
+    /// The number a preflight resolution check compares against a
+    /// 300-ppi floor. `None` when the IDML omits it.
+    #[serde(default)]
+    pub effective_ppi: Option<f32>,
 }
 
 /// SDK Phase 5 (v1 sweep) — one object style's summary. Backs
@@ -1492,6 +1644,12 @@ pub struct StorySummary {
     /// that want to address "the whole story" without computing
     /// the character count.
     pub paragraph_count: u32,
+    /// panels.md gap 1 — `true` when this story's text overflowed the
+    /// last frame in its chain at build time (overset). Derived from
+    /// the build's `OversetTextDropped` diagnostics; drives the
+    /// Preflight panel + the red "+" overset badge on the frame.
+    #[serde(default)]
+    pub overset: bool,
 }
 
 /// Inspector P1 — one node in the scene tree. Children are nested
@@ -2181,6 +2339,7 @@ mod tests {
                 runs: 3,
                 glyphs: 50,
                 lines: 5,
+                overset_stories: 0,
             },
             ruler_guides: Vec::new(),
         };
@@ -2252,5 +2411,81 @@ mod tests {
         let json = serde_json::to_string(&e).unwrap();
         assert!(json.contains("\"kind\":\"parse\""), "{json}");
         assert!(json.contains("malformed zip"), "{json}");
+    }
+
+    #[test]
+    fn sections_collection_name_round_trips() {
+        // panels.md gaps 9/10/19 — the new collection name maps both
+        // ways and serialises as the camelCase tag the TS union uses.
+        assert_eq!(CollectionName::Sections.as_str(), "sections");
+        assert_eq!(CollectionName::from_str("sections"), Some(CollectionName::Sections));
+        let json = serde_json::to_string(&CollectionName::Sections).unwrap();
+        assert_eq!(json, "\"sections\"");
+    }
+
+    #[test]
+    fn caret_nav_request_round_trips_through_json() {
+        // panels.md (W0.6 caret queries) — the new request variant
+        // survives the JSON envelope round-trip the worker uses.
+        let msg = MainToWorker {
+            seq: 9,
+            protocol: PROTOCOL_VERSION,
+            kind: MainToWorkerKind::RequestCaretNav {
+                story_id: "u10".into(),
+                offset: 5,
+                direction: crate::geometry::CaretDirection::Down,
+            },
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"kind\":\"requestCaretNav\""), "{json}");
+        assert!(json.contains("\"direction\":\"down\""), "{json}");
+        let back: MainToWorker = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            MainToWorkerKind::RequestCaretNav {
+                story_id,
+                offset,
+                direction,
+            } => {
+                assert_eq!(story_id, "u10");
+                assert_eq!(offset, 5);
+                assert_eq!(direction, crate::geometry::CaretDirection::Down);
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn caret_nav_and_line_bounds_replies_round_trip() {
+        let r = WorkerToMain {
+            seq: Some(1),
+            protocol: PROTOCOL_VERSION,
+            kind: WorkerToMainKind::CaretNavResult { offset: Some(12) },
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let back: WorkerToMain = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            WorkerToMainKind::CaretNavResult { offset } => assert_eq!(offset, Some(12)),
+            other => panic!("wrong variant: {other:?}"),
+        }
+
+        let r = WorkerToMain {
+            seq: Some(1),
+            protocol: PROTOCOL_VERSION,
+            kind: WorkerToMainKind::LineBoundsResult {
+                bounds: Some(crate::geometry::LineBounds {
+                    line_start: 3,
+                    line_end: 9,
+                }),
+            },
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let back: WorkerToMain = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            WorkerToMainKind::LineBoundsResult { bounds } => {
+                let b = bounds.expect("bounds present");
+                assert_eq!((b.line_start, b.line_end), (3, 9));
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
     }
 }

@@ -858,6 +858,37 @@ mod wasm {
                     let caret = paged_canvas::caret_geometry(model.built(), &selection);
                     WorkerToMainKind::CaretGeometry { caret }
                 }
+                MainToWorkerKind::RequestCaretNav {
+                    story_id,
+                    offset,
+                    direction,
+                } => {
+                    let Some(model) = self.model.as_ref() else {
+                        return WorkerToMain {
+                            seq,
+                            protocol: PROTOCOL_VERSION,
+                            kind: WorkerToMainKind::MutationFailed {
+                                error: WorkerError::NoDocument,
+                            },
+                        };
+                    };
+                    let offset =
+                        paged_canvas::caret_nav(model.built(), &story_id, offset, direction);
+                    WorkerToMainKind::CaretNavResult { offset }
+                }
+                MainToWorkerKind::RequestLineBounds { story_id, offset } => {
+                    let Some(model) = self.model.as_ref() else {
+                        return WorkerToMain {
+                            seq,
+                            protocol: PROTOCOL_VERSION,
+                            kind: WorkerToMainKind::MutationFailed {
+                                error: WorkerError::NoDocument,
+                            },
+                        };
+                    };
+                    let bounds = paged_canvas::line_bounds(model.built(), &story_id, offset);
+                    WorkerToMainKind::LineBoundsResult { bounds }
+                }
                 MainToWorkerKind::Undo => {
                     let Some(model) = self.model.as_mut() else {
                         return WorkerToMain {
@@ -1080,9 +1111,10 @@ mod wasm {
                 MainToWorkerKind::ExportPdfFinish { session } => {
                     match self.export_sessions.remove(&session) {
                         Some(s) => match s.finish() {
-                            Ok((bytes, diagnostics)) => WorkerToMainKind::PdfExported {
-                                pdf_bytes: bytes.into(),
-                                diagnostics,
+                            Ok(done) => WorkerToMainKind::PdfExported {
+                                pdf_bytes: done.pdf_bytes.into(),
+                                diagnostics: done.diagnostics,
+                                findings: done.findings,
                             },
                             Err(error) => WorkerToMainKind::ExportPdfFailed { error },
                         },

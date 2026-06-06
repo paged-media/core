@@ -195,6 +195,15 @@ pub struct DocumentStats {
     pub runs: usize,
     pub glyphs: usize,
     pub lines: usize,
+    /// panels.md gap 1 — number of distinct stories whose text
+    /// overflows the last frame in its chain (overset). Derived from
+    /// the build's `OversetTextDropped` diagnostics, not from
+    /// `PipelineStats`, so `DocumentStats::from(&PipelineStats)`
+    /// leaves this 0 and the `handle()` builder backfills it from the
+    /// document's render diagnostics. Drives the Preflight panel's
+    /// "N overset stories" badge.
+    #[serde(default)]
+    pub overset_stories: usize,
 }
 
 /// What `CanvasModel::apply_mutation` returns on success. The
@@ -439,6 +448,10 @@ impl From<&pipeline::PipelineStats> for DocumentStats {
             runs: s.runs,
             glyphs: s.glyphs,
             lines: s.lines,
+            // Backfilled by `CanvasModel::handle()` from the build's
+            // overset diagnostics (PipelineStats doesn't track which
+            // *stories* overflowed, only the dropped-line count).
+            overset_stories: 0,
         }
     }
 }
@@ -836,12 +849,17 @@ impl CanvasModel {
                 });
             }
         }
+        let mut stats = DocumentStats::from(&self.built.stats);
+        // panels.md gap 1 — count distinct overset stories from the
+        // build's render diagnostics (the `From<&PipelineStats>` path
+        // can't see them).
+        stats.overset_stories = self.built.diagnostics.overset_story_ids().len();
         DocumentHandle {
             doc_id: self.doc_id.clone(),
             page_count: self.built.pages.len(),
             page_ids,
             page_sizes_pt,
-            stats: DocumentStats::from(&self.built.stats),
+            stats,
             ruler_guides,
         }
     }
@@ -2909,14 +2927,98 @@ impl CanvasModel {
     /// (matches the "Go to page #" convention).
     pub fn pages(&self) -> Vec<crate::channel::PageSummary> {
         use crate::channel::PageSummary;
+        // panels.md gap 10 — document bleed is document-level
+        // (`<DocumentPreference>`); carry it on every page so the
+        // overlay has it without a second request.
+        let bleed = self.scene.container.designmap.document_preference;
+        // Build page-self-id → MarginPreference once across all
+        // spreads (each spread carries its own pages' margins).
+        let mut margins: std::collections::HashMap<&str, &paged_parse::MarginPreference> =
+            std::collections::HashMap::new();
+        for parsed in &self.scene.spreads {
+            for (pid, m) in &parsed.spread.page_margins {
+                margins.insert(pid.as_str(), m);
+            }
+        }
         self.built
             .pages
             .iter()
             .enumerate()
-            .map(|(i, p)| PageSummary {
-                self_id: p.id.as_str().to_string(),
-                index: (i + 1) as u32,
-                size_pt: [p.width_pt, p.height_pt],
+            .map(|(i, p)| {
+                let m = margins.get(p.id.as_str()).copied();
+                PageSummary {
+                    self_id: p.id.as_str().to_string(),
+                    index: (i + 1) as u32,
+                    size_pt: [p.width_pt, p.height_pt],
+                    margin_top_pt: m.map(|m| m.top).unwrap_or(0.0),
+                    margin_left_pt: m.map(|m| m.left).unwrap_or(0.0),
+                    margin_bottom_pt: m.map(|m| m.bottom).unwrap_or(0.0),
+                    margin_right_pt: m.map(|m| m.right).unwrap_or(0.0),
+                    column_count: m.map(|m| m.column_count).unwrap_or(1),
+                    column_gutter_pt: m.map(|m| m.column_gutter).unwrap_or(0.0),
+                    bleed_top_pt: bleed.bleed_top,
+                    bleed_left_pt: bleed.bleed_inside_or_left,
+                    bleed_bottom_pt: bleed.bleed_bottom,
+                    bleed_right_pt: bleed.bleed_outside_or_right,
+                }
+            })
+            .collect()
+    }
+
+    /// panels.md gaps 9/10/19 — list every `<Section>` with its
+    /// prefix, numbering style, and the flat body-page range it
+    /// spans. `start_page_index` is resolved by matching the
+    /// section's `PageStart` against the built pages; `page_count`
+    /// runs from this section's start up to the next section's start
+    /// (sections are in document order) or the document end.
+    pub fn sections(&self) -> Vec<crate::channel::SectionSummary> {
+        use crate::channel::SectionSummary;
+        let sections = &self.scene.container.designmap.sections;
+        // page Self id → flat body-page index.
+        let page_index: HashMap<&str, u32> = self
+            .built
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (p.id.as_str(), i as u32))
+            .collect();
+        let total_pages = self.built.pages.len() as u32;
+        // Resolve each section's start index up-front so page_count
+        // can look at the following section's start.
+        let starts: Vec<Option<u32>> = sections
+            .iter()
+            .map(|s| {
+                s.page_start
+                    .as_deref()
+                    .and_then(|pid| page_index.get(pid).copied())
+            })
+            .collect();
+        sections
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let start = starts[i];
+                // The next section with a resolved start bounds this
+                // section's span; fall back to the document end.
+                let next_start = starts[i + 1..]
+                    .iter()
+                    .find_map(|s| *s)
+                    .unwrap_or(total_pages);
+                let page_count = match start {
+                    Some(st) => next_start.saturating_sub(st),
+                    None => 0,
+                };
+                SectionSummary {
+                    self_id: s.self_id.clone(),
+                    prefix: if s.include_prefix {
+                        s.section_prefix.clone().unwrap_or_default()
+                    } else {
+                        String::new()
+                    },
+                    label_style: s.numbering_style.as_str().to_string(),
+                    start_page_index: start,
+                    page_count,
+                }
             })
             .collect()
     }
@@ -3000,11 +3102,28 @@ impl CanvasModel {
                 *counts.entry(family.clone()).or_default() += 1;
             }
         }
+        // panels.md gap 4 — a family is "missing" when the worker's
+        // font registry has no face for it (the renderer then either
+        // substitutes the document-wide default font or drops glyphs).
+        // We check the registry directly rather than the resolver,
+        // because the resolver's default-font fall-through would mask
+        // every missing family as "resolved". Family match is
+        // case-insensitive to tolerate `"Open Sans"` vs `"open sans"`
+        // registration drift.
+        let registered: std::collections::BTreeSet<String> = self
+            .font_registry
+            .iter()
+            .map(|e| e.family.to_lowercase())
+            .collect();
         counts
             .into_iter()
-            .map(|(family, reference_count)| FontSummary {
-                family,
-                reference_count,
+            .map(|(family, reference_count)| {
+                let is_missing = !registered.contains(&family.to_lowercase());
+                FontSummary {
+                    family,
+                    reference_count,
+                    is_missing,
+                }
             })
             .collect()
     }
@@ -3154,42 +3273,42 @@ impl CanvasModel {
     /// consumes this through `useCollection<LinkSummary>("links")`.
     pub fn links(&self) -> Vec<crate::channel::LinkSummary> {
         use crate::channel::LinkSummary;
+        // panels.md gap 2 — frames whose image the build couldn't
+        // resolve/decode (drew the placeholder) are "missing".
+        let missing = self.built.diagnostics.missing_image_frame_ids();
+        // panels.md gap 3 — placed-image colour space + ppi lives in
+        // the per-spread side map keyed by host-frame self_id.
+        let summary = |self_id: String, host_kind: &str, uri: String,
+                       meta: Option<&paged_parse::ImageMetadata>| {
+            LinkSummary {
+                status: if missing.contains(&self_id) { "missing" } else { "ok" }
+                    .to_string(),
+                colorspace: meta.and_then(|m| m.space.clone()),
+                effective_ppi: meta.and_then(|m| m.effective_ppi),
+                host_self_id: self_id,
+                host_kind: host_kind.to_string(),
+                uri,
+            }
+        };
         let mut out = Vec::new();
         for parsed in &self.scene.spreads {
+            let meta_map = &parsed.spread.image_metadata;
             for r in &parsed.spread.rectangles {
-                if let (Some(self_id), Some(uri)) = (
-                    r.self_id.clone(),
-                    r.image_link.clone(),
-                ) {
-                    out.push(LinkSummary {
-                        host_self_id: self_id,
-                        host_kind: "Rectangle".to_string(),
-                        uri,
-                    });
+                if let (Some(self_id), Some(uri)) = (r.self_id.clone(), r.image_link.clone()) {
+                    let meta = meta_map.get(&self_id);
+                    out.push(summary(self_id, "Rectangle", uri, meta));
                 }
             }
             for o in &parsed.spread.ovals {
-                if let (Some(self_id), Some(uri)) = (
-                    o.self_id.clone(),
-                    o.image_link.clone(),
-                ) {
-                    out.push(LinkSummary {
-                        host_self_id: self_id,
-                        host_kind: "Oval".to_string(),
-                        uri,
-                    });
+                if let (Some(self_id), Some(uri)) = (o.self_id.clone(), o.image_link.clone()) {
+                    let meta = meta_map.get(&self_id);
+                    out.push(summary(self_id, "Oval", uri, meta));
                 }
             }
             for p in &parsed.spread.polygons {
-                if let (Some(self_id), Some(uri)) = (
-                    p.self_id.clone(),
-                    p.image_link.clone(),
-                ) {
-                    out.push(LinkSummary {
-                        host_self_id: self_id,
-                        host_kind: "Polygon".to_string(),
-                        uri,
-                    });
+                if let (Some(self_id), Some(uri)) = (p.self_id.clone(), p.image_link.clone()) {
+                    let meta = meta_map.get(&self_id);
+                    out.push(summary(self_id, "Polygon", uri, meta));
                 }
             }
         }
@@ -3382,6 +3501,9 @@ impl CanvasModel {
     /// Used by `paged.stories()` (the script host fn) and by tests
     /// that need a valid story id to address a StoryRange edit.
     pub fn stories(&self) -> Vec<crate::channel::StorySummary> {
+        // panels.md gap 1 — stories the build flagged overset (text
+        // dropped past the last frame in their chain).
+        let overset = self.built.diagnostics.overset_story_ids();
         self.scene
             .stories
             .iter()
@@ -3396,6 +3518,7 @@ impl CanvasModel {
                     self_id: s.self_id.clone(),
                     character_count: chars,
                     paragraph_count: s.story.paragraphs.len() as u32,
+                    overset: overset.contains(&s.self_id),
                 }
             })
             .collect()
@@ -3465,6 +3588,7 @@ impl CanvasModel {
                 serde_json::to_value(self.index_topics()).unwrap_or_default()
             }
             Inks => serde_json::to_value(self.inks()).unwrap_or_default(),
+            Sections => serde_json::to_value(self.sections()).unwrap_or_default(),
         }
     }
 
@@ -4359,6 +4483,210 @@ mod tests {
             "same bytes → same canonical hash (doc_id is not part of content)"
         );
         assert_eq!(a.initial_state_hash(), a.current_state_hash());
+    }
+
+    /// panels.md gaps 9/10/19 — a fixture with two `<Section>`s,
+    /// per-page `<MarginPreference>`, document bleed, and a placed
+    /// image link carrying colour space + ppi. Drives the W0.6 panel
+    /// summary accessors.
+    fn panels_idml_bytes() -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts: zip::write::SimpleFileOptions =
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file("mimetype", opts).unwrap();
+            zip.write_all(b"application/vnd.adobe.indesign-idml-package").unwrap();
+            zip.start_file("META-INF/container.xml", opts).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+<rootfiles><rootfile full-path="designmap.xml" media-type="text/xml"/></rootfiles></container>"#,
+            )
+            .unwrap();
+            // Two sections: A- prefix (lowerRoman) at p1, plain arabic at p2.
+            zip.start_file("designmap.xml", opts).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document DOMVersion="13.1" Self="d1">
+<DocumentPreference DocumentBleedTopOffset="9" DocumentBleedBottomOffset="9" DocumentBleedInsideOrLeftOffset="9" DocumentBleedOutsideOrRightOffset="9"/>
+<Section Self="sec1" PageStart="p1" PageNumberStyle="LowerRoman" SectionPrefix="A-" IncludeSectionPrefix="true"/>
+<Section Self="sec2" PageStart="p2" PageNumberStyle="Arabic"/>
+<idPkg:Spread src="Spreads/Spread_s1.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/>
+</Document>"#,
+            )
+            .unwrap();
+            zip.start_file("Spreads/Spread_s1.xml", opts).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="13.1">
+<Spread Self="s1" PageCount="2">
+<Page Self="p1" Name="i" GeometricBounds="0 0 792 612" ItemTransform="1 0 0 1 0 0">
+<MarginPreference Top="36" Bottom="48" Left="54" Right="54" ColumnCount="2" ColumnGutter="12"/>
+</Page>
+<Page Self="p2" Name="1" GeometricBounds="0 0 792 612" ItemTransform="1 0 0 1 700 0"/>
+<Rectangle Self="r1" GeometricBounds="0 0 100 100" ItemTransform="1 0 0 1 50 50">
+<Image Self="img1" Space="$ID/CMYK" ActualPpi="(300 300)" EffectivePpi="(150 150)" LinkResourceURI="file:///missing.tif"/>
+</Rectangle>
+</Spread></idPkg:Spread>"#,
+            )
+            .unwrap();
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn sections_summary_reports_prefix_style_and_page_ranges() {
+        use crate::channel::CollectionName;
+        let bytes = panels_idml_bytes();
+        let model = CanvasModel::load("doc-1", &bytes, CanvasOptions::default()).unwrap();
+        let sections = model.sections();
+        assert_eq!(sections.len(), 2);
+        // First section: A- prefix, lowerRoman, starts at page index 0,
+        // spans 1 page (up to the next section's start).
+        assert_eq!(sections[0].self_id, "sec1");
+        assert_eq!(sections[0].prefix, "A-");
+        assert_eq!(sections[0].label_style, "lowerRoman");
+        assert_eq!(sections[0].start_page_index, Some(0));
+        assert_eq!(sections[0].page_count, 1);
+        // Second section: no prefix, arabic, page index 1 to doc end.
+        assert_eq!(sections[1].prefix, "");
+        assert_eq!(sections[1].label_style, "arabic");
+        assert_eq!(sections[1].start_page_index, Some(1));
+        assert_eq!(sections[1].page_count, 1);
+        // The generic dispatcher routes "sections" to the same shape.
+        let via_named = serde_json::to_value(model.sections()).unwrap();
+        let via_dispatch = model.collection(CollectionName::Sections);
+        assert_eq!(via_named, via_dispatch);
+    }
+
+    #[test]
+    fn page_summary_carries_margins_columns_and_bleed() {
+        let bytes = panels_idml_bytes();
+        let model = CanvasModel::load("doc-1", &bytes, CanvasOptions::default()).unwrap();
+        let pages = model.pages();
+        assert_eq!(pages.len(), 2);
+        let p1 = &pages[0];
+        assert!((p1.margin_top_pt - 36.0).abs() < 1e-3);
+        assert!((p1.margin_bottom_pt - 48.0).abs() < 1e-3);
+        assert!((p1.margin_left_pt - 54.0).abs() < 1e-3);
+        assert!((p1.margin_right_pt - 54.0).abs() < 1e-3);
+        assert_eq!(p1.column_count, 2);
+        assert!((p1.column_gutter_pt - 12.0).abs() < 1e-3);
+        // Bleed is document-level: present on every page.
+        assert!((p1.bleed_top_pt - 9.0).abs() < 1e-3);
+        assert!((p1.bleed_right_pt - 9.0).abs() < 1e-3);
+        // p2 declared no margins → all 0, column_count defaults to 1.
+        let p2 = &pages[1];
+        assert_eq!(p2.margin_top_pt, 0.0);
+        assert_eq!(p2.column_count, 1);
+        assert!((p2.bleed_bottom_pt - 9.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn overset_story_is_flagged_on_summary_and_stats() {
+        use std::io::Write;
+        let font_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/fonts/Inter.ttf");
+        let Ok(font) = std::fs::read(&font_path) else {
+            // Font fixture absent in this checkout — skip rather than
+            // fail (mirrors the corpus-optional convention).
+            eprintln!("skip: Inter.ttf not present");
+            return;
+        };
+        let mut buf = Vec::new();
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+        let opts: zip::write::SimpleFileOptions =
+            zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("mimetype", opts).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package").unwrap();
+        zip.start_file("META-INF/container.xml", opts).unwrap();
+        zip.write_all(br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="designmap.xml" media-type="text/xml"/></rootfiles></container>"#).unwrap();
+        zip.start_file("designmap.xml", opts).unwrap();
+        zip.write_all(br#"<?xml version="1.0"?><Document Self="d1"><idPkg:Spread src="Spreads/Spread_s1.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/><idPkg:Story src="Stories/Story_u10.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/></Document>"#).unwrap();
+        // A 40pt-tall frame can't hold 12 lines → overset.
+        zip.start_file("Spreads/Spread_s1.xml", opts).unwrap();
+        zip.write_all(br#"<?xml version="1.0"?><idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Spread Self="s1"><Page Self="p1" GeometricBounds="0 0 800 400"/><TextFrame Self="f1" ParentStory="u10" GeometricBounds="20 20 60 200"/></Spread></idPkg:Spread>"#).unwrap();
+        let mut story = String::from(r#"<?xml version="1.0"?><idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Story Self="u10">"#);
+        for i in 0..12 {
+            story.push_str(&format!(r#"<ParagraphStyleRange><CharacterStyleRange AppliedFont="Inter" PointSize="10"><Content>Line {i}</Content></CharacterStyleRange></ParagraphStyleRange>"#));
+        }
+        story.push_str("</Story></idPkg:Story>");
+        zip.start_file("Stories/Story_u10.xml", opts).unwrap();
+        zip.write_all(story.as_bytes()).unwrap();
+        zip.finish().unwrap();
+        let bytes = buf;
+
+        let opts = CanvasOptions {
+            fonts: vec![font],
+            ..Default::default()
+        };
+        let model = CanvasModel::load("doc-overset", &bytes, opts).unwrap();
+        // The story overflowed its single short frame → overset.
+        let story = model
+            .stories()
+            .into_iter()
+            .find(|s| s.self_id == "u10")
+            .expect("story u10");
+        assert!(story.overset, "u10 should be flagged overset");
+        // Document stats count it.
+        assert_eq!(model.handle().stats.overset_stories, 1);
+    }
+
+    #[test]
+    fn font_summary_flags_unregistered_families_missing() {
+        let bytes = panels_idml_bytes();
+        let model = CanvasModel::load("doc-1", &bytes, CanvasOptions::default()).unwrap();
+        // The panels fixture has no text, so no font references — but
+        // the simple text fixture does. Re-load one with a run that
+        // names "Inter", registered with no matching face.
+        let _ = model; // panels fixture has no fonts; covered below.
+        let text_bytes = {
+            use std::io::Write;
+            let mut buf = Vec::new();
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts: zip::write::SimpleFileOptions =
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file("mimetype", opts).unwrap();
+            zip.write_all(b"application/vnd.adobe.indesign-idml-package").unwrap();
+            zip.start_file("META-INF/container.xml", opts).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="designmap.xml" media-type="text/xml"/></rootfiles></container>"#).unwrap();
+            zip.start_file("designmap.xml", opts).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Document Self="d1"><idPkg:Spread src="Spreads/Spread_s1.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/><idPkg:Story src="Stories/Story_u10.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/></Document>"#).unwrap();
+            zip.start_file("Spreads/Spread_s1.xml", opts).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Spread Self="s1"><Page Self="p1" GeometricBounds="0 0 792 612"/><TextFrame Self="f1" ParentStory="u10" GeometricBounds="40 40 700 500"/></Spread></idPkg:Spread>"#).unwrap();
+            zip.start_file("Stories/Story_u10.xml", opts).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Story Self="u10"><ParagraphStyleRange><CharacterStyleRange AppliedFont="Nonexistent Face" PointSize="12"><Content>Hi</Content></CharacterStyleRange></ParagraphStyleRange></Story></idPkg:Story>"#).unwrap();
+            zip.finish().unwrap();
+            buf
+        };
+        let model = CanvasModel::load("doc-2", &text_bytes, CanvasOptions::default()).unwrap();
+        let fonts = model.fonts();
+        let f = fonts
+            .iter()
+            .find(|f| f.family == "Nonexistent Face")
+            .expect("font row");
+        assert!(f.is_missing, "unregistered family must be flagged missing");
+    }
+
+    #[test]
+    fn link_summary_carries_status_colorspace_and_ppi() {
+        let bytes = panels_idml_bytes();
+        let model = CanvasModel::load("doc-1", &bytes, CanvasOptions::default()).unwrap();
+        let links = model.links();
+        assert_eq!(links.len(), 1);
+        let l = &links[0];
+        assert_eq!(l.host_self_id, "r1");
+        assert_eq!(l.colorspace.as_deref(), Some("CMYK"));
+        assert!((l.effective_ppi.unwrap() - 150.0).abs() < 1e-3);
+        // The link points at a non-existent asset and no resolver was
+        // configured, so the build drew the placeholder → "missing".
+        assert_eq!(l.status, "missing");
     }
 
     /// SDK Phase 5 (D1) — the generic `collection(name)` dispatcher
