@@ -108,12 +108,21 @@ pub(super) fn emit_anchored_frames_for_paragraph(
         let anchor_point = setting
             .and_then(|s| s.anchor_point.as_deref())
             .unwrap_or("BottomLeftAnchor");
+        // Corner-of-frame corrections: how far the frame's top-left
+        // must move so the *named* anchor corner lands on the resolved
+        // anchor point. Both are pure functions of the frame size and
+        // the anchor-point name (see the unit tests in `mod tests`).
         let vertical_corner_dy = anchor_vertical_corner_offset(anchor_point, frame_h);
-        // TODO(anchored-position): once paragraph_breaker exposes
-        // the anchor character's advance-from-line-start, replace
+        // TODO(anchored-position): once paragraph_breaker exposes the
+        // anchor character's advance-from-line-start, replace
         // `para_origin_x` with that advance so `InlinePosition` lands
         // at the actual inline position. The horizontal anchor-corner
-        // offset (Left / Center / Right) then becomes meaningful too.
+        // component is deliberately NOT applied to InlinePosition /
+        // AbovePosition: their anchor x is still approximated at the
+        // column origin (not the true advance), so shifting by the
+        // frame's own width would push a Right anchor off the left of
+        // the column. It IS applied to Custom / Anchored, where the
+        // reference rect gives a real span to align against.
         let (place_x, place_y) = match position {
             "InlinePosition" => {
                 if frame_w > 0.0 && frame_h > 0.0 {
@@ -126,10 +135,10 @@ pub(super) fn emit_anchored_frames_for_paragraph(
                 // Frame top-left placed so the named anchor corner
                 // sits at (paragraph origin x, baseline y) plus the
                 // anchor offsets. The horizontal anchor-corner
-                // component currently collapses to 0 until
-                // paragraph_breaker exposes the per-anchor advance
-                // position; the vertical component drives Top vs
-                // Bottom anchoring.
+                // component stays collapsed until paragraph_breaker
+                // exposes the per-anchor advance position; the vertical
+                // component drives Top vs Bottom anchoring. `offset_x`
+                // is honoured verbatim.
                 (
                     para_origin_x + offset_x,
                     baseline_y_pt + offset_y - vertical_corner_dy,
@@ -163,9 +172,14 @@ pub(super) fn emit_anchored_frames_for_paragraph(
                     &pages[target_page],
                     para_origin_y,
                 );
-                (
-                    ref_x + offset_x,
-                    ref_y + offset_y - vertical_corner_dy,
+                // Custom positioning resolves a real reference span, so
+                // both corner components are meaningful: a `RightAlign`
+                // reference x with a `*RightAnchor` corner snaps the
+                // frame's right edge to the reference's right edge.
+                // `resolve_custom_anchor_pos` is the pure composition
+                // exercised directly by the reference-point unit tests.
+                resolve_custom_anchor_pos(
+                    ref_x, ref_y, anchor_point, frame_w, frame_h, offset_x, offset_y,
                 )
             }
             _ => {
@@ -243,11 +257,26 @@ fn horizontal_reference_x(
         "PageMargins" | "PageEdge" => (0.0, page.width_pt),
         _ => (para_origin_x, para_origin_x),
     };
+    align_in_span(ref_left, ref_right, alignment)
+}
+
+/// Pure alignment selection within a `[near, far]` reference span,
+/// shared by the horizontal and vertical reference resolvers. Maps an
+/// IDML `HorizontalAlignment` / `VerticalAlignment` token to the point
+/// in the span the frame's anchor corner attaches to:
+/// - `CenterAlign` ⇒ the span's midpoint,
+/// - `RightAlign` / `BottomAlign` / `AwayFromBindingSide` ⇒ the far edge,
+/// - everything else (`LeftAlign`, `TopAlign`, `TextAlign`,
+///   `ToBindingSide`, unknown) ⇒ the near edge.
+///
+/// `BottomAlign` and `RightAlign` are spelled differently in the two
+/// axes but both mean "far edge"; accepting both keeps this one
+/// function usable for either axis.
+fn align_in_span(near: f32, far: f32, alignment: &str) -> f32 {
     match alignment {
-        "CenterAlign" => (ref_left + ref_right) * 0.5,
-        "RightAlign" | "AwayFromBindingSide" => ref_right,
-        // LeftAlign / TextAlign / ToBindingSide / unknown ⇒ left.
-        _ => ref_left,
+        "CenterAlign" => (near + far) * 0.5,
+        "RightAlign" | "BottomAlign" | "AwayFromBindingSide" => far,
+        _ => near,
     }
 }
 
@@ -289,12 +318,7 @@ fn vertical_reference_y(
         "PageMargins" | "PageEdge" => (0.0, page.height_pt),
         _ => (baseline_y_pt, baseline_y_pt),
     };
-    match alignment {
-        "CenterAlign" => (ref_top + ref_bottom) * 0.5,
-        "BottomAlign" => ref_bottom,
-        // TopAlign / unknown ⇒ top.
-        _ => ref_top,
-    }
+    align_in_span(ref_top, ref_bottom, alignment)
 }
 
 /// Vertical offset from an anchored frame's top to the reference
@@ -311,6 +335,52 @@ fn anchor_vertical_corner_offset(anchor_point: &str, h: f32) -> f32 {
         // bottom-anchored placement (frame's bottom at the anchor y).
         _ => h,
     }
+}
+
+/// Horizontal analogue of [`anchor_vertical_corner_offset`]: the
+/// offset from an anchored frame's left edge to the column of the
+/// named `anchor_point`. `0` for any `*LeftAnchor` (frame's left at
+/// the anchor x), `w/2` for any `*CenterAnchor` / `CenterAnchor`, and
+/// `w` for any `*RightAnchor` (frame's right at the anchor x). Unknown
+/// values default to `0` (left-anchored) — the conservative choice
+/// that leaves the frame at the reference x rather than off to the
+/// left of it.
+fn anchor_horizontal_corner_offset(anchor_point: &str, w: f32) -> f32 {
+    match anchor_point {
+        "TopRightAnchor" | "RightCenterAnchor" | "BottomRightAnchor" => w,
+        "TopCenterAnchor" | "CenterAnchor" | "BottomCenterAnchor" => w * 0.5,
+        // Left* and unknown values keep the frame's left edge on the
+        // anchor x.
+        _ => 0.0,
+    }
+}
+
+/// Pure placement math for a `Custom` / `Anchored` frame: given a
+/// resolved reference rectangle (in page-local pt), the named anchor
+/// corner, the frame's size, and the X/Y offsets, return the frame's
+/// top-left. This is exactly the composition the Custom branch of
+/// [`emit_anchored_frames_for_paragraph`] performs once the reference
+/// rect has been projected and the alignment applied — factored out so
+/// the reference-point math is unit-testable without a `BuiltPage` /
+/// `TextFrame`.
+///
+/// `ref_x` / `ref_y` are the post-alignment reference point (the
+/// output of [`align_in_span`] on each axis); `anchor_point` selects
+/// which corner of the frame attaches there; `(w, h)` is the frame's
+/// size; `(offset_x, offset_y)` are the `AnchorXoffset` /
+/// `AnchorYoffset` nudges.
+fn resolve_custom_anchor_pos(
+    ref_x: f32,
+    ref_y: f32,
+    anchor_point: &str,
+    w: f32,
+    h: f32,
+    offset_x: f32,
+    offset_y: f32,
+) -> (f32, f32) {
+    let dx = anchor_horizontal_corner_offset(anchor_point, w);
+    let dy = anchor_vertical_corner_offset(anchor_point, h);
+    (ref_x + offset_x - dx, ref_y + offset_y - dy)
 }
 
 /// Emit a single anchored frame (or recurse through a Group). Splits
@@ -747,4 +817,185 @@ pub(super) fn emit_anchored_textframe_story<'a>(
     }
     sub.apply_vertical_justification(pages);
     sub.apply_blend_groups(pages);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPS: f32 = 1e-4;
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < EPS
+    }
+
+    // --- align_in_span: the shared L/C/R (and T/C/B) selector ----------
+
+    #[test]
+    fn align_in_span_picks_near_center_far() {
+        // Span [100, 180] (width 80).
+        assert!(close(align_in_span(100.0, 180.0, "LeftAlign"), 100.0));
+        assert!(close(align_in_span(100.0, 180.0, "TopAlign"), 100.0));
+        assert!(close(align_in_span(100.0, 180.0, "CenterAlign"), 140.0));
+        assert!(close(align_in_span(100.0, 180.0, "RightAlign"), 180.0));
+        assert!(close(align_in_span(100.0, 180.0, "BottomAlign"), 180.0));
+        assert!(close(
+            align_in_span(100.0, 180.0, "AwayFromBindingSide"),
+            180.0
+        ));
+        // Unknown / binding-side-toward ⇒ near edge.
+        assert!(close(align_in_span(100.0, 180.0, "ToBindingSide"), 100.0));
+        assert!(close(align_in_span(100.0, 180.0, "Whatever"), 100.0));
+    }
+
+    // --- corner offsets: frame-local correction for the anchor point ---
+
+    #[test]
+    fn horizontal_corner_offset_left_center_right() {
+        let w = 60.0;
+        assert!(close(anchor_horizontal_corner_offset("TopLeftAnchor", w), 0.0));
+        assert!(close(
+            anchor_horizontal_corner_offset("BottomLeftAnchor", w),
+            0.0
+        ));
+        assert!(close(
+            anchor_horizontal_corner_offset("TopCenterAnchor", w),
+            30.0
+        ));
+        assert!(close(anchor_horizontal_corner_offset("CenterAnchor", w), 30.0));
+        assert!(close(
+            anchor_horizontal_corner_offset("TopRightAnchor", w),
+            60.0
+        ));
+        assert!(close(
+            anchor_horizontal_corner_offset("BottomRightAnchor", w),
+            60.0
+        ));
+        // Unknown ⇒ left (0), the conservative default.
+        assert!(close(anchor_horizontal_corner_offset("Mystery", w), 0.0));
+    }
+
+    #[test]
+    fn vertical_corner_offset_top_center_bottom() {
+        let h = 36.0;
+        assert!(close(anchor_vertical_corner_offset("TopLeftAnchor", h), 0.0));
+        assert!(close(
+            anchor_vertical_corner_offset("TopRightAnchor", h),
+            0.0
+        ));
+        assert!(close(anchor_vertical_corner_offset("CenterAnchor", h), 18.0));
+        assert!(close(
+            anchor_vertical_corner_offset("RightCenterAnchor", h),
+            18.0
+        ));
+        // Bottom* and unknown ⇒ full height (legacy bottom-anchored).
+        assert!(close(
+            anchor_vertical_corner_offset("BottomLeftAnchor", h),
+            36.0
+        ));
+        assert!(close(anchor_vertical_corner_offset("Mystery", h), 36.0));
+    }
+
+    // --- resolve_custom_anchor_pos: reference rect → frame top-left ----
+    //
+    // The reference span used below models a 80×120 pt reference rect
+    // whose top-left is (100, 200); each case picks the post-alignment
+    // reference point with `align_in_span` and asserts the resulting
+    // frame top-left for a 60×36 pt frame. ≥6 reference / anchor combos.
+
+    /// Reference rect helper: left/right and top/bottom of the span.
+    const REF_L: f32 = 100.0;
+    const REF_R: f32 = 180.0; // 80 wide
+    const REF_T: f32 = 200.0;
+    const REF_B: f32 = 320.0; // 120 tall
+    const FRAME_W: f32 = 60.0;
+    const FRAME_H: f32 = 36.0;
+
+    #[test]
+    fn custom_top_left_anchor_left_top_align_no_offset() {
+        // 1) TopLeft anchor, Left/Top alignment ⇒ frame top-left sits
+        //    exactly on the reference's top-left.
+        let rx = align_in_span(REF_L, REF_R, "LeftAlign");
+        let ry = align_in_span(REF_T, REF_B, "TopAlign");
+        let (x, y) =
+            resolve_custom_anchor_pos(rx, ry, "TopLeftAnchor", FRAME_W, FRAME_H, 0.0, 0.0);
+        assert!(close(x, 100.0) && close(y, 200.0), "got ({x}, {y})");
+    }
+
+    #[test]
+    fn custom_top_left_anchor_with_offsets() {
+        // 2) Same anchor, with +24/+12 offsets (the gen custom_offset
+        //    case) ⇒ shifted by the offsets.
+        let rx = align_in_span(REF_L, REF_R, "LeftAlign");
+        let ry = align_in_span(REF_T, REF_B, "TopAlign");
+        let (x, y) =
+            resolve_custom_anchor_pos(rx, ry, "TopLeftAnchor", FRAME_W, FRAME_H, 24.0, 12.0);
+        assert!(close(x, 124.0) && close(y, 212.0), "got ({x}, {y})");
+    }
+
+    #[test]
+    fn custom_top_right_anchor_right_align() {
+        // 3) TopRight anchor + RightAlign ⇒ frame's right edge on the
+        //    reference's right edge: x = 180 - 60 = 120; top at ref top.
+        let rx = align_in_span(REF_L, REF_R, "RightAlign");
+        let ry = align_in_span(REF_T, REF_B, "TopAlign");
+        let (x, y) =
+            resolve_custom_anchor_pos(rx, ry, "TopRightAnchor", FRAME_W, FRAME_H, 0.0, 0.0);
+        assert!(close(x, 120.0) && close(y, 200.0), "got ({x}, {y})");
+    }
+
+    #[test]
+    fn custom_center_anchor_center_align() {
+        // 4) Center anchor + CenterAlign on both axes ⇒ frame centred
+        //    on the reference centre. ref centre = (140, 260); frame
+        //    top-left = centre - (w/2, h/2) = (140-30, 260-18).
+        let rx = align_in_span(REF_L, REF_R, "CenterAlign");
+        let ry = align_in_span(REF_T, REF_B, "CenterAlign");
+        let (x, y) =
+            resolve_custom_anchor_pos(rx, ry, "CenterAnchor", FRAME_W, FRAME_H, 0.0, 0.0);
+        assert!(close(x, 110.0) && close(y, 242.0), "got ({x}, {y})");
+    }
+
+    #[test]
+    fn custom_bottom_right_anchor_right_bottom_align() {
+        // 5) BottomRight anchor + Right/Bottom alignment ⇒ frame's
+        //    bottom-right corner on the reference's bottom-right corner:
+        //    x = 180 - 60 = 120; y = 320 - 36 = 284.
+        let rx = align_in_span(REF_L, REF_R, "RightAlign");
+        let ry = align_in_span(REF_T, REF_B, "BottomAlign");
+        let (x, y) = resolve_custom_anchor_pos(
+            rx,
+            ry,
+            "BottomRightAnchor",
+            FRAME_W,
+            FRAME_H,
+            0.0,
+            0.0,
+        );
+        assert!(close(x, 120.0) && close(y, 284.0), "got ({x}, {y})");
+    }
+
+    #[test]
+    fn custom_bottom_left_anchor_bottom_align_default_corner() {
+        // 6) BottomLeft anchor (default) + Bottom alignment ⇒ frame's
+        //    bottom-left corner on the reference's bottom-left: x stays
+        //    at ref left (100), y = 320 - 36 = 284.
+        let rx = align_in_span(REF_L, REF_R, "LeftAlign");
+        let ry = align_in_span(REF_T, REF_B, "BottomAlign");
+        let (x, y) =
+            resolve_custom_anchor_pos(rx, ry, "BottomLeftAnchor", FRAME_W, FRAME_H, 0.0, 0.0);
+        assert!(close(x, 100.0) && close(y, 284.0), "got ({x}, {y})");
+    }
+
+    #[test]
+    fn custom_top_center_anchor_center_align_horizontal_only() {
+        // 7) TopCenter anchor + CenterAlign horizontal, TopAlign
+        //    vertical ⇒ frame horizontally centred on ref centre x,
+        //    top on ref top. centre x = 140; frame left = 140 - 30 = 110.
+        let rx = align_in_span(REF_L, REF_R, "CenterAlign");
+        let ry = align_in_span(REF_T, REF_B, "TopAlign");
+        let (x, y) =
+            resolve_custom_anchor_pos(rx, ry, "TopCenterAnchor", FRAME_W, FRAME_H, 0.0, 0.0);
+        assert!(close(x, 110.0) && close(y, 200.0), "got ({x}, {y})");
+    }
 }

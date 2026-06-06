@@ -47,6 +47,10 @@
 //!     the host line.
 //!   * `anchored · custom-x-y · 24-12pt-offset` — explicit AnchorXoffset
 //!     and AnchorYoffset values.
+//!   * `anchored · custom · textframe-top-right` — Custom positioning
+//!     against the host text frame, top-right corner snapped to the
+//!     frame's top-right edge (deterministic placement for the renderer
+//!     emission test).
 //!   * `anchored · prevent-manual-positioning` — `LockPosition="true"`.
 //!   * `anchored · spine-relative` — `SpineRelative="true"`.
 //!   * `anchored · with-text-wrap` — anchored frame carrying its own
@@ -121,6 +125,31 @@ fn custom_offset() -> AnchoredObjectSetting {
     }
 }
 
+/// Custom positioning against the host **text frame** with the frame's
+/// top-right corner snapped to the text frame's top-right edge. Chosen
+/// because the resulting placement is fully determined by the body
+/// frame's geometry (no dependence on the still-approximated per-anchor
+/// advance), so the renderer emission test can assert an exact page-
+/// local position:
+///   ref_x = body frame right edge, RightAlign ⇒ frame right on it;
+///   ref_y = body frame top edge,   TopAlign   ⇒ frame top on it;
+///   TopRightAnchor ⇒ frame_left = ref_right - frame_w, frame_top = ref_top.
+fn custom_textframe_topright() -> AnchoredObjectSetting {
+    AnchoredObjectSetting {
+        anchored_position: "Anchored",
+        spine_relative: false,
+        lock_position: false,
+        pin_position: true,
+        anchor_point: Some("TopRightAnchor"),
+        horizontal_reference_point: Some("TextFrame"),
+        vertical_reference_point: Some("TextFrame"),
+        horizontal_alignment: Some("RightAlign"),
+        vertical_alignment: Some("TopAlign"),
+        anchor_x_offset: None,
+        anchor_y_offset: None,
+    }
+}
+
 fn lock_position() -> AnchoredObjectSetting {
     AnchoredObjectSetting {
         lock_position: true,
@@ -150,6 +179,11 @@ fn variants() -> Vec<Variant> {
         Variant {
             name: "anchored · custom-x-y · 24-12pt-offset",
             setting_factory: custom_offset,
+            with_wrap: false,
+        },
+        Variant {
+            name: "anchored · custom · textframe-top-right",
+            setting_factory: custom_textframe_topright,
             with_wrap: false,
         },
         Variant {

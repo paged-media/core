@@ -56,6 +56,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 paged-fidelity = { path = "../paged-fidelity" }
+paged-gen = { path = "../paged-gen" }
 image = { workspace = true }
 zip = { workspace = true }
 tempfile = "3"
