@@ -51,6 +51,7 @@ pub mod history;
 pub mod invert;
 pub mod notify;
 pub mod operation;
+pub mod kurbo_kernel;
 pub mod path_math;
 pub mod pathfinder;
 

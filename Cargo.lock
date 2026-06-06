@@ -2238,6 +2238,7 @@ dependencies = [
  "paged-renderer",
  "paged-scene",
  "paged-text",
+ "paged-write",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2395,6 +2396,7 @@ version = "0.0.0"
 dependencies = [
  "bytes",
  "flo_curves",
+ "kurbo 0.11.3",
  "paged-compose",
  "paged-parse",
  "paged-renderer",
@@ -2437,6 +2439,7 @@ dependencies = [
  "paged-parse",
  "paged-scene",
  "paged-text",
+ "paged-write",
  "resvg",
  "rustybuzz 0.18.0",
  "serde",
