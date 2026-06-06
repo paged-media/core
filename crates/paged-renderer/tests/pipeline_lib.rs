@@ -917,3 +917,199 @@ fn cross_shape_item_layer_z_order_back_emits_before_front() {
         fills[1]
     );
 }
+
+/// Build an IDML with a single red-filled `<TextFrame>` whose
+/// `<PathGeometry>` carries the given anchor points (each anchor's
+/// Bezier handles collapse onto the anchor → straight sides). With 3
+/// anchors this is a triangle; with the 4 axis-aligned corners it is a
+/// plain rectangle.
+fn idml_with_text_frame_path(anchors: &[(f32, f32)]) -> Vec<u8> {
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+
+    zip.start_file("designmap.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_u10.xml"/>
+</Document>"#,
+    )
+    .unwrap();
+
+    zip.start_file("Resources/Graphic.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic>
+    <Color Self="Color/Red" Name="Red" Space="CMYK" ColorValue="0 100 100 0"/>
+  </Graphic>
+</idPkg:Graphic>"#,
+    )
+    .unwrap();
+
+    let mut points = String::new();
+    for (x, y) in anchors {
+        points.push_str(&format!(
+            "<PathPointType Anchor=\"{x} {y}\" LeftDirection=\"{x} {y}\" RightDirection=\"{x} {y}\"/>\n"
+        ));
+    }
+    let spread = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 400 300"/>
+    <TextFrame Self="frameA" ParentStory="u10" ItemTransform="1 0 0 1 0 0"
+               FillColor="Color/Red" StrokeWeight="0">
+      <Properties>
+        <PathGeometry>
+          <GeometryPathType PathOpen="false">
+            <PathPointArray>
+              {points}
+            </PathPointArray>
+          </GeometryPathType>
+        </PathGeometry>
+      </Properties>
+    </TextFrame>
+  </Spread>
+</idPkg:Spread>"#
+    );
+    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+    zip.write_all(spread.as_bytes()).unwrap();
+
+    zip.start_file("Stories/Story_u10.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">
+    <ParagraphStyleRange>
+      <CharacterStyleRange>
+        <Content>Body text.</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+    )
+    .unwrap();
+
+    zip.finish().unwrap().into_inner()
+}
+
+/// W1.1 render smoke: a `<TextFrame>` carrying a genuinely non-
+/// rectangular `<PathGeometry>` (a triangle) paints its fill through
+/// the *real* outline, not the AABB. We assert the FillPath's interned
+/// path is a single-contour curve with one CubicTo per triangle side
+/// plus a closing CubicTo (4 cubics) — distinctly more than the AABB
+/// rectangle a pre-W1.1 build would have stamped. The companion plain-
+/// rectangle frame stays on the rect emitter (an axis-aligned box, no
+/// curve), proving ordinary text panels don't regress onto the polygon
+/// path.
+#[test]
+fn text_frame_triangle_path_fills_real_outline_not_aabb() {
+    use paged_compose::PathSegment;
+
+    // A single-contour triangle outline (MoveTo + 3 CubicTo + Close)
+    // sitting in the page's path buffer: the triangle's two visible
+    // sides plus the closing side, each a degenerate cubic. Glyph
+    // outlines from the body text also live in the buffer, but a
+    // genuine triangle frame outline is the *only* single-MoveTo path
+    // built from exactly three anchors whose three cubics span the
+    // triangle's coordinate extent (x in [20,180], y in [20,120]).
+    fn has_triangle_outline(page: &paged_renderer::BuiltPage) -> bool {
+        (0..page.list.paths.len()).any(|i| {
+            let p = page
+                .list
+                .paths
+                .get(paged_compose::PathId(i as u32))
+                .unwrap();
+            let moves = p
+                .segments
+                .iter()
+                .filter(|s| matches!(s, PathSegment::MoveTo { .. }))
+                .count();
+            let cubics: Vec<_> = p
+                .segments
+                .iter()
+                .filter_map(|s| match s {
+                    PathSegment::CubicTo { x, y, .. } => Some((*x, *y)),
+                    _ => None,
+                })
+                .collect();
+            if moves != 1 || cubics.len() != 3 {
+                return false;
+            }
+            // The three cubic endpoints are the triangle's three
+            // anchors (the closing cubic lands back on anchor 0).
+            let mut endpoints: Vec<(f32, f32)> = cubics;
+            // anchor 0 appears twice (start + closing endpoint); dedup
+            // by rounding so we compare the three unique vertices.
+            endpoints.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let near = |a: (f32, f32), b: (f32, f32)| {
+                (a.0 - b.0).abs() < 0.5 && (a.1 - b.1).abs() < 0.5
+            };
+            let verts = [(20.0, 20.0), (100.0, 120.0), (180.0, 20.0)];
+            verts.iter().all(|v| endpoints.iter().any(|e| near(*e, *v)))
+        })
+    }
+
+    // Triangle: three non-rectangular anchors → a real curved outline
+    // lands in the page's path buffer. `build_document` is the real
+    // pipeline (the legacy `build` short-circuits every frame to its
+    // AABB rect and never reaches `emit_text_frame_into`).
+    let tri_bytes = idml_with_text_frame_path(&[(20.0, 20.0), (180.0, 20.0), (100.0, 120.0)]);
+    let tri_doc = Document::open(&tri_bytes).unwrap();
+    let tri_built = pipeline::build_document(&tri_doc, &PipelineOptions::default()).unwrap();
+    let tri_page = &tri_built.pages[0];
+    assert!(
+        has_triangle_outline(tri_page),
+        "triangular text frame must paint its real outline (a 3-cubic path) into the buffer",
+    );
+
+    // Plain axis-aligned rectangle: four corners, must NOT lift to a
+    // curved polygon path. No triangle-shaped outline appears.
+    let rect_bytes = idml_with_text_frame_path(&[
+        (20.0, 20.0),
+        (180.0, 20.0),
+        (180.0, 120.0),
+        (20.0, 120.0),
+    ]);
+    let rect_doc = Document::open(&rect_bytes).unwrap();
+    let rect_built = pipeline::build_document(&rect_doc, &PipelineOptions::default()).unwrap();
+    let rect_page = &rect_built.pages[0];
+    assert!(
+        !has_triangle_outline(rect_page),
+        "plain rectangular text frame must stay on the rect emitter (no curved outline)",
+    );
+    // The rectangular frame fill still routes through the interned
+    // unit-rect (straight edges only) — so the page carries no
+    // frame-fill cubics beyond glyph outlines.
+    let rect_frame_fill_is_straight = (0..rect_page.list.paths.len()).any(|i| {
+        let p = rect_page
+            .list
+            .paths
+            .get(paged_compose::PathId(i as u32))
+            .unwrap();
+        let lines = p
+            .segments
+            .iter()
+            .filter(|s| matches!(s, PathSegment::LineTo { .. }))
+            .count();
+        let cubics = p
+            .segments
+            .iter()
+            .filter(|s| matches!(s, PathSegment::CubicTo { .. }))
+            .count();
+        // unit rect: 3 LineTo, 0 CubicTo.
+        lines == 3 && cubics == 0
+    });
+    assert!(
+        rect_frame_fill_is_straight,
+        "rectangular text frame fill must use the straight-edged unit rect",
+    );
+}

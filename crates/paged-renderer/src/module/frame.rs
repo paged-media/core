@@ -151,6 +151,57 @@ fn rect_from_bounds(b: paged_parse::Bounds) -> Rect {
     }
 }
 
+/// True when a TextFrame's parsed `<PathGeometry>` is the ordinary
+/// axis-aligned rectangle that `TextFrameRect` already paints — so the
+/// frame stays on the cheap rect emitter. The frame is treated as a
+/// plain rect when:
+///
+///   * it carries no anchors (synthetic `GeometricBounds`-only IDML), or
+///   * it is a single contour of exactly four anchors whose `anchor`
+///     points collapse to two unique x values and two unique y values
+///     (an axis-aligned box) and whose Bezier handles coincide with
+///     their anchors (no rounded / curved sides).
+///
+/// Anything else — a triangle, a pentagon, curved sides, an explicitly
+/// open path, or a compound multi-contour path — is a real shape and
+/// must paint through `Geometry::Polygon`. Mirrors the inner-coord
+/// rectangularity test in `pipeline::frame_polygon_spread` (which gates
+/// the parallel text-layout clip) so the paint and the clip agree on
+/// what counts as "rectangular".
+fn text_frame_is_rect_path(
+    anchors: &[PathAnchor],
+    subpath_starts: &[usize],
+    subpath_open: &[bool],
+) -> bool {
+    if anchors.is_empty() {
+        return true;
+    }
+    // A compound or explicitly-open path is never a plain rect.
+    if subpath_starts.len() > 1 || subpath_open.iter().any(|&o| o) {
+        return false;
+    }
+    if anchors.len() != 4 {
+        return false;
+    }
+    let eq = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    // Curved sides: any handle that doesn't sit on its own anchor means
+    // the outline bows away from the bounding box.
+    for a in anchors {
+        if !eq(a.left.0, a.anchor.0)
+            || !eq(a.left.1, a.anchor.1)
+            || !eq(a.right.0, a.anchor.0)
+            || !eq(a.right.1, a.anchor.1)
+        {
+            return false;
+        }
+    }
+    let mut xs: Vec<f32> = anchors.iter().map(|a| a.anchor.0).collect();
+    let mut ys: Vec<f32> = anchors.iter().map(|a| a.anchor.1).collect();
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    ys.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    eq(xs[0], xs[1]) && eq(xs[2], xs[3]) && eq(ys[0], ys[1]) && eq(ys[2], ys[3])
+}
+
 impl<'a> ResolvedFrame<'a> {
     /// Stroke weight with InDesign's per-frame default applied
     /// (`1.0` pt). Modules use this when emitting; the `Option`
@@ -162,6 +213,32 @@ impl<'a> ResolvedFrame<'a> {
     }
 
     pub(crate) fn from_text_frame(frame: &'a TextFrame) -> Self {
+        // W1.1: a TextFrame whose `<PathGeometry>` is genuinely non-
+        // rectangular (triangle, pentagon, Bezier outline, or a
+        // compound multi-contour path) paints its *fill / stroke* via
+        // the real path rather than the AABB. InDesign serialises a
+        // path even for plain rectangles (4 axis-aligned corners), so
+        // we only lift when the anchors describe something the
+        // `TextFrameRect` primitive can't reproduce — `text_frame_is_
+        // rect_path` keeps every ordinary text panel on the cheap rect
+        // emitter. Text *layout* still clips to `frame.anchors`
+        // independently (see `frame_polygon_spread`); this only affects
+        // the frame's own paint.
+        let bbox = rect_from_bounds(frame.bounds);
+        let geometry = if text_frame_is_rect_path(
+            &frame.anchors,
+            &frame.subpath_starts,
+            &frame.subpath_open,
+        ) {
+            Geometry::TextFrameRect { rect: bbox }
+        } else {
+            Geometry::Polygon {
+                anchors: &frame.anchors,
+                subpath_starts: &frame.subpath_starts,
+                subpath_open: &frame.subpath_open,
+                bbox,
+            }
+        };
         Self {
             self_id: frame.self_id.as_deref(),
             item_transform: frame.item_transform,
@@ -187,9 +264,7 @@ impl<'a> ResolvedFrame<'a> {
             applied_object_style: frame.applied_object_style.as_deref(),
             overprint_fill: frame.overprint_fill,
             overprint_stroke: frame.overprint_stroke,
-            geometry: Geometry::TextFrameRect {
-                rect: rect_from_bounds(frame.bounds),
-            },
+            geometry,
         }
     }
 
@@ -422,6 +497,50 @@ mod tests {
         }
     }
 
+    fn text_frame_with(anchors: Vec<PathAnchor>) -> TextFrame {
+        TextFrame {
+            self_id: None,
+            parent_story: None,
+            bounds: Bounds { top: 0.0, left: 0.0, bottom: 20.0, right: 20.0 },
+            item_transform: None,
+            fill_color: None,
+            fill_tint: None,
+            stroke_color: None,
+            stroke_weight: None,
+            stroke_type: None,
+            drop_shadow: None,
+            stroke_drop_shadow: None,
+            next_text_frame: None,
+            vertical_justification: None,
+            first_baseline_offset: None,
+            minimum_first_baseline_offset: None,
+            inset_spacing: None,
+            auto_sizing: None,
+            auto_sizing_reference_point: None,
+            minimum_width_for_auto_sizing: None,
+            minimum_height_for_auto_sizing: None,
+            use_minimum_height_for_auto_sizing: None,
+            applied_object_style: None,
+            text_wrap: None,
+            item_layer: None,
+            is_anchored: false,
+            opacity: None,
+            blend_mode: None,
+            anchors,
+            subpath_starts: Vec::new(),
+            subpath_open: Vec::new(),
+            effects: None,
+            gradient_fill_angle: None,
+            gradient_fill_length: None,
+            gradient_stroke_angle: None,
+            gradient_stroke_length: None,
+            applied_toc_style: None,
+            overprint_fill: false,
+            overprint_stroke: false,
+            nonprinting: false,
+        }
+    }
+
     #[test]
     fn q11_rectangle_with_four_or_fewer_anchors_stays_rect_geometry() {
         // 4 anchors (AABB) → keep Rect path. Empty anchors → same.
@@ -460,6 +579,81 @@ mod tests {
             }
             _ => panic!("multi-anchor Rectangle must lift to Polygon geometry"),
         }
+    }
+
+    /// W1.1: a plain axis-aligned 4-anchor text-frame path (the
+    /// serialisation every ordinary text panel carries) and an empty
+    /// path both stay on the cheap `TextFrameRect` emitter — they're
+    /// "rectangular".
+    #[test]
+    fn text_frame_rect_path_recognises_plain_rectangle() {
+        let rect4 = vec![pa(0.0, 0.0), pa(20.0, 0.0), pa(20.0, 10.0), pa(0.0, 10.0)];
+        assert!(text_frame_is_rect_path(&rect4, &[], &[]));
+        assert!(text_frame_is_rect_path(&[], &[], &[]), "empty path = rect");
+    }
+
+    /// W1.1: a non-rectangular outline (triangle), a compound path, a
+    /// curved-sided box, and an explicitly-open path all fail the
+    /// rectangularity test, so `from_text_frame` lifts them to a real
+    /// `Geometry::Polygon` and the frame paints its actual fill/stroke.
+    #[test]
+    fn text_frame_rect_path_rejects_non_rectangular_shapes() {
+        // Triangle: 3 anchors → not a rect.
+        let tri = vec![pa(0.0, 0.0), pa(20.0, 0.0), pa(10.0, 20.0)];
+        assert!(!text_frame_is_rect_path(&tri, &[], &[]));
+
+        // Four axis-aligned corners but a compound path (two contours).
+        let two_contours = vec![
+            pa(0.0, 0.0),
+            pa(20.0, 0.0),
+            pa(20.0, 10.0),
+            pa(0.0, 10.0),
+        ];
+        assert!(!text_frame_is_rect_path(&two_contours, &[0, 2], &[]));
+
+        // Four axis-aligned corners but the path is flagged open.
+        let open = vec![pa(0.0, 0.0), pa(20.0, 0.0), pa(20.0, 10.0), pa(0.0, 10.0)];
+        assert!(!text_frame_is_rect_path(&open, &[], &[true]));
+
+        // Four corners whose top-left anchor carries a non-coincident
+        // handle: a curved side, so not a plain rect.
+        let curved = vec![
+            PathAnchor {
+                anchor: (0.0, 0.0),
+                left: (0.0, 0.0),
+                right: (5.0, -3.0), // handle bows the top edge outward
+            },
+            pa(20.0, 0.0),
+            pa(20.0, 10.0),
+            pa(0.0, 10.0),
+        ];
+        assert!(!text_frame_is_rect_path(&curved, &[], &[]));
+    }
+
+    /// W1.1: the lift is wired end-to-end through `from_text_frame` —
+    /// a triangular text frame produces `Geometry::Polygon` (so the
+    /// fill/stroke modules paint the real outline) while a plain
+    /// rectangular one stays `TextFrameRect`.
+    #[test]
+    fn from_text_frame_lifts_non_rect_path_to_polygon() {
+        let tri = text_frame_with(vec![pa(0.0, 0.0), pa(20.0, 0.0), pa(10.0, 20.0)]);
+        assert!(
+            matches!(ResolvedFrame::from_text_frame(&tri).geometry, Geometry::Polygon { .. }),
+            "triangular text frame must lift to Polygon"
+        );
+        let rect = text_frame_with(vec![
+            pa(0.0, 0.0),
+            pa(20.0, 0.0),
+            pa(20.0, 10.0),
+            pa(0.0, 10.0),
+        ]);
+        assert!(
+            matches!(
+                ResolvedFrame::from_text_frame(&rect).geometry,
+                Geometry::TextFrameRect { .. }
+            ),
+            "plain rectangular text frame must stay TextFrameRect"
+        );
     }
 
     #[test]

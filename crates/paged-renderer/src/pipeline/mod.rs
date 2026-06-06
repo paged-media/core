@@ -91,7 +91,8 @@ use numbering::{bullet_marker_character_style, list_prefix};
 use numbering::{format_number, substitute_numbering_expression};
 #[cfg(test)]
 use text_path::polygon_path_from_anchors;
-use text_path::{emit_polygon_into, emit_text_path_into, polygon_path_from_anchors_with_open};
+use text_path::{emit_polygon_into, emit_text_path_into};
+pub(crate) use text_path::polygon_path_from_anchors_with_open;
 
 /// Per-family override of the metrics the renderer uses for
 /// baseline-placement math. Glyph outlines still come from whichever
@@ -4809,7 +4810,7 @@ fn list_get_or_intern_glyph_outline<O: GlyphOutliner>(
 /// Cheap content-derived cache key for polygons that don't carry a
 /// `Self` id (synthetic / minified IDMLs). FNV-1a of the
 /// concatenated anchor coordinates.
-fn path_signature(anchors: &[PathAnchor]) -> u64 {
+pub(crate) fn path_signature(anchors: &[PathAnchor]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
     for a in anchors {
         for v in [
@@ -6265,31 +6266,60 @@ fn emit_text_frame_into(
         outer,
         frame.stroke_drop_shadow.as_ref(),
     );
+    // W1.1: a TextFrame carrying a genuinely non-rectangular path
+    // (triangle / pentagon / Bezier / compound outline) had its
+    // geometry lifted to `Geometry::Polygon` by `from_text_frame`.
+    // Intern that path up-front so the frame's own fill / stroke /
+    // effects paint the real outline rather than the AABB — mirroring
+    // `emit_polygon_into`. Plain rectangular text panels keep the
+    // unit-rect path (`fill_path = None`) and the rect emitter. Text
+    // *layout* clipping is handled separately off `frame.anchors`.
+    let fill_path = if let Geometry::Polygon {
+        anchors,
+        subpath_starts,
+        subpath_open,
+        ..
+    } = &resolved.geometry
+    {
+        let path = polygon_path_from_anchors_with_open(anchors, subpath_starts, subpath_open);
+        let cache_key = match resolved.self_id {
+            Some(id) => fnv_1a_u64(id.as_bytes()),
+            None => path_signature(anchors),
+        };
+        let (id, _) = page.list.paths.intern(cache_key, path);
+        Some(id)
+    } else {
+        None
+    };
     // Q-04: extended GradientFeather (and the rest of FrameEffects) to
-    // TextFrame. The host geometry is a rectangular text panel, so we
-    // route through the unit-rect path the same way `emit_rectangle_into`
-    // does for non-rounded rectangles: intern the unit rect, scale via
-    // `Transform::for_rect_in`, flag `effects_unit_normalize` so the
-    // effects module knows to convert path-local coordinates from unit
-    // space into the frame's actual bounds.
+    // TextFrame. For the rectangular panel we route through the unit-
+    // rect path the same way `emit_rectangle_into` does (intern the
+    // unit rect, scale via `Transform::for_rect_in`, flag
+    // `effects_unit_normalize` so the effects module converts path-
+    // local coords from unit space). For a pathed text frame the
+    // interned polygon path is already in inner-anchor coords under
+    // `outer`, so effects ride it directly with no unit normalisation
+    // (mirrors `emit_polygon_into`).
     let (effects_path, effects_xform, effects_unit_normalize) =
         if frame.effects.is_some() {
-            if let Geometry::TextFrameRect { rect: r } = &resolved.geometry {
-                let (id, _) = page
-                    .list
-                    .paths
-                    .intern(paged_compose::UNIT_RECT_KEY, paged_compose::PathData {
-                        segments: vec![
-                            paged_compose::PathSegment::MoveTo { x: 0.0, y: 0.0 },
-                            paged_compose::PathSegment::LineTo { x: 1.0, y: 0.0 },
-                            paged_compose::PathSegment::LineTo { x: 1.0, y: 1.0 },
-                            paged_compose::PathSegment::LineTo { x: 0.0, y: 1.0 },
-                            paged_compose::PathSegment::Close,
-                        ],
-                    });
-                (Some(id), Transform::for_rect_in(*r, outer), Some(*r))
-            } else {
-                (None, outer, None)
+            match (&resolved.geometry, fill_path) {
+                (Geometry::TextFrameRect { rect: r }, _) => {
+                    let (id, _) = page.list.paths.intern(
+                        paged_compose::UNIT_RECT_KEY,
+                        paged_compose::PathData {
+                            segments: vec![
+                                paged_compose::PathSegment::MoveTo { x: 0.0, y: 0.0 },
+                                paged_compose::PathSegment::LineTo { x: 1.0, y: 0.0 },
+                                paged_compose::PathSegment::LineTo { x: 1.0, y: 1.0 },
+                                paged_compose::PathSegment::LineTo { x: 0.0, y: 1.0 },
+                                paged_compose::PathSegment::Close,
+                            ],
+                        },
+                    );
+                    (Some(id), Transform::for_rect_in(*r, outer), Some(*r))
+                }
+                (Geometry::Polygon { .. }, Some(pid)) => (Some(pid), outer, None),
+                _ => (None, outer, None),
             }
         } else {
             (None, outer, None)
@@ -6300,7 +6330,7 @@ fn emit_text_frame_into(
         );
     }
     crate::module::fill_paint_module(
-        &resolved, page, palette, cmyk_xform, fallback, outer, None,
+        &resolved, page, palette, cmyk_xform, fallback, outer, fill_path,
     );
     if let (Some(path_id), Some(effects)) = (effects_path, frame.effects.as_ref()) {
         crate::module::emit_effects_post_fill(
@@ -6319,7 +6349,7 @@ fn emit_text_frame_into(
         palette,
         cmyk_xform,
         outer,
-        None,
+        fill_path,
         stroke_for(
             resolved.stroke_type,
             resolved.effective_stroke_weight(),
@@ -8740,6 +8770,35 @@ mod tests {
         // 3 anchors → 2 inter-anchor CubicTos; the closing back-to-first
         // cubic must NOT fire (so 2, not 3).
         assert_eq!(cubics, 2, "open contour skips the closing CubicTo");
+    }
+
+    /// W1.1: when an anchor's Bezier handles coincide with its anchor
+    /// point — the IDML serialisation for a straight corner — the
+    /// emitted CubicTo's control points land exactly on the segment's
+    /// endpoints, so the cubic reduces to a straight line in both
+    /// rasterizers (tiny-skia / Vello flatten a degenerate cubic to a
+    /// LineTo). Locks the "handle == anchor ⇒ line" contract.
+    #[test]
+    fn polygon_path_from_anchors_straight_segment_cubic_collapses_to_line() {
+        let anchors = vec![anchor_at(0.0, 0.0), anchor_at(10.0, 0.0)];
+        let path = polygon_path_from_anchors(&anchors, &[]);
+        // First CubicTo is the forward segment 0→1; its controls must be
+        // the two anchors (no bow).
+        let cubic = path
+            .segments
+            .iter()
+            .find_map(|s| match s {
+                PathSegment::CubicTo { cx1, cy1, cx2, cy2, x, y } => {
+                    Some((*cx1, *cy1, *cx2, *cy2, *x, *y))
+                }
+                _ => None,
+            })
+            .expect("a forward CubicTo is emitted between the two anchors");
+        let (cx1, cy1, cx2, cy2, x, y) = cubic;
+        // cx1/cy1 == from.right == anchor 0; cx2/cy2 == to.left == anchor 1.
+        assert!((cx1 - 0.0).abs() < 1e-6 && (cy1 - 0.0).abs() < 1e-6);
+        assert!((cx2 - 10.0).abs() < 1e-6 && (cy2 - 0.0).abs() < 1e-6);
+        assert!((x - 10.0).abs() < 1e-6 && (y - 0.0).abs() < 1e-6);
     }
 
     fn font_table_with(

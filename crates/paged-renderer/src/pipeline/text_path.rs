@@ -41,7 +41,7 @@ pub(super) fn polygon_path_from_anchors(anchors: &[PathAnchor], subpath_starts: 
 /// against the indexed order of contours (the `i`th true ⇒ `i`th
 /// contour open); a shorter slice / empty slice means every contour
 /// is closed (legacy behaviour).
-pub(super) fn polygon_path_from_anchors_with_open(
+pub(crate) fn polygon_path_from_anchors_with_open(
     anchors: &[PathAnchor],
     subpath_starts: &[usize],
     subpath_open: &[bool],
