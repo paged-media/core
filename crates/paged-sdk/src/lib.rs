@@ -37,15 +37,23 @@
 //! Native builds expose a plain library target so the crate can still
 //! participate in `cargo check --workspace`.
 
+mod build;
+pub use build::viewer_build;
+
 #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
 mod wasm {
     use paged_compose::Color;
     use paged_gpu::vello_kurbo::Affine;
     use paged_gpu::{SurfacePresenter, VelloScene};
-    use paged_renderer::{pipeline, BuiltDocument, BytesResolver, Document, PipelineOptions};
+    use paged_renderer::{BuiltDocument, BytesResolver, Document};
     use serde::Serialize;
     use tsify_next::Tsify;
     use wasm_bindgen::prelude::*;
+
+    /// Vertical gap between pages in continuous layout, in pt — the
+    /// same constant the editor canvas uses, so `page_layout()`
+    /// offsets and `present()` placement always agree.
+    const PAGE_GAP_PT: f32 = 24.0;
 
     #[wasm_bindgen(start)]
     pub fn on_start() {
@@ -109,6 +117,28 @@ mod wasm {
         pub rgba: Vec<u8>,
     }
 
+    /// Continuous-layout geometry for every page, so the TS wrapper
+    /// computes fit / goToPage / currentPage / scroll extents without
+    /// wasm round-trips. `y_pt` is the page top in doc space (vertical
+    /// stack with `gap_pt` between pages — the same offsets
+    /// `present()` uses).
+    #[derive(Serialize, Tsify)]
+    #[tsify(into_wasm_abi)]
+    #[serde(rename_all = "camelCase")]
+    pub struct PagesLayout {
+        pub gap_pt: f32,
+        pub pages: Vec<PageRect>,
+    }
+
+    #[derive(Serialize, Tsify)]
+    #[serde(rename_all = "camelCase")]
+    pub struct PageRect {
+        pub index: u32,
+        pub y_pt: f32,
+        pub width_pt: f32,
+        pub height_pt: f32,
+    }
+
     /// Renderer-core session. Holds the parsed+laid-out document and a
     /// lazily-created WebGPU presenter (device + surface). One per viewer
     /// instance / preview component.
@@ -124,6 +154,12 @@ mod wasm {
         fonts: BytesResolver,
         /// Current page index into `built.pages`.
         page: usize,
+        /// Per-page Vello scenes, built on first visibility in
+        /// `present()` and immutable thereafter (the viewer never
+        /// mutates the document) — cleared on `load`. Unbounded by
+        /// design for V1; revisit with an LRU if 100+-page documents
+        /// show memory pressure.
+        scenes: std::collections::HashMap<usize, VelloScene>,
     }
 
     #[wasm_bindgen]
@@ -145,6 +181,7 @@ mod wasm {
                 presenter: None,
                 fonts: BytesResolver::new(),
                 page: 0,
+                scenes: std::collections::HashMap::new(),
             })
         }
 
@@ -167,22 +204,18 @@ mod wasm {
                 Ok(d) => d,
                 Err(e) => return Diagnostics::error("open", &format!("open IDML: {e}")),
             };
-            // Scope the resolver borrow so it ends before we touch
-            // `self.built` — `font` is the last-resort fallback, the
+            // `crate::viewer_build` is the single load path — shared
+            // with the native digest-equivalence test ("same code,
+            // same scene"). `font` is the last-resort fallback; the
             // registered `fonts` resolver handles per-family lookup.
-            let built = {
-                let opts = PipelineOptions {
-                    font: font.as_deref(),
-                    assets: Some(&self.fonts),
-                    ..PipelineOptions::default()
-                };
-                match pipeline::build_document(&document, &opts) {
+            let built =
+                match crate::viewer_build(&document, font.as_deref(), &self.fonts) {
                     Ok(built) => built,
-                    Err(e) => return Diagnostics::error("build", &format!("build: {e}")),
-                }
-            };
+                    Err(e) => return Diagnostics::error("build", &e),
+                };
             self.built = Some(built);
             self.page = 0;
+            self.scenes.clear();
             Diagnostics::ok()
         }
 
@@ -285,6 +318,163 @@ mod wasm {
                 let h = ((height as f32 * device_pixel_ratio).round() as u32).max(1);
                 p.resize(w, h);
             }
+        }
+
+        /// Continuous-layout page geometry (doc-space pt, vertical
+        /// stack with `PAGE_GAP_PT` between pages). Empty until `load`
+        /// succeeds. The TS wrapper derives fit zoom, scroll extents,
+        /// `goToPage` targets and the current page from this — no
+        /// per-frame wasm round-trips.
+        pub fn page_layout(&self) -> PagesLayout {
+            let mut pages = Vec::new();
+            let mut y_pt = 0.0_f32;
+            if let Some(built) = self.built.as_ref() {
+                for (index, page) in built.pages.iter().enumerate() {
+                    pages.push(PageRect {
+                        index: index as u32,
+                        y_pt,
+                        width_pt: page.width_pt,
+                        height_pt: page.height_pt,
+                    });
+                    y_pt += page.height_pt + PAGE_GAP_PT;
+                }
+            }
+            PagesLayout {
+                gap_pt: PAGE_GAP_PT,
+                pages,
+            }
+        }
+
+        /// Camera-transformed present of the continuous page stack —
+        /// the viewer's per-frame paint (ports the editor canvas's
+        /// `presentFrame`). `zoom` is CSS px per pt; `scroll_x` /
+        /// `scroll_y` place the doc origin in CSS px (positive moves
+        /// content right/down); `dpr` brings CSS px to device px.
+        /// Off-viewport pages are culled; per-page scenes build once
+        /// and cache. `only_page` restricts the pass to one page laid
+        /// out at y = 0 (the wrapper's `"single"` layout mode).
+        ///
+        /// Requires a bound presenter (any `render_to_canvas*` call
+        /// binds one).
+        pub fn present(
+            &mut self,
+            zoom: f32,
+            scroll_x: f32,
+            scroll_y: f32,
+            dpr: f32,
+            only_page: Option<u32>,
+        ) -> Diagnostics {
+            let Some(built) = self.built.as_ref() else {
+                return Diagnostics::error("no_document", "no document loaded");
+            };
+            let Some(presenter) = self.presenter.as_ref() else {
+                return Diagnostics::error("no_gpu", "GPU not initialised");
+            };
+
+            let k = zoom * dpr;
+            let viewport_w = presenter.width() as f32;
+            let viewport_h = presenter.height() as f32;
+
+            // Pass 1: visibility-cull and make sure every visible page
+            // has a cached scene (mut-borrows `self.scenes`).
+            let mut visible: Vec<(usize, f32)> = Vec::new();
+            let mut y_pt = 0.0_f32;
+            for (idx, page) in built.pages.iter().enumerate() {
+                let (skip, y_here) = match only_page {
+                    Some(p) => (idx != p as usize, 0.0),
+                    None => (false, y_pt),
+                };
+                y_pt += page.height_pt + PAGE_GAP_PT;
+                if skip {
+                    continue;
+                }
+                let top = scroll_y * dpr + y_here * k;
+                let left = scroll_x * dpr;
+                let on_screen = left + page.width_pt * k > 0.0
+                    && left < viewport_w
+                    && top + page.height_pt * k > 0.0
+                    && top < viewport_h;
+                if !on_screen {
+                    continue;
+                }
+                self.scenes.entry(idx).or_insert_with(|| {
+                    SurfacePresenter::build_page_scene(
+                        &page.list,
+                        page.width_pt,
+                        page.height_pt,
+                    )
+                });
+                visible.push((idx, y_here));
+            }
+
+            // Pass 2: assemble (scene, transform) pairs from the cache
+            // (shared borrows only) and present in one pass.
+            let scene_list: Vec<(&VelloScene, [f32; 6])> = visible
+                .iter()
+                .filter_map(|(idx, y_here)| {
+                    self.scenes.get(idx).map(|scene| {
+                        (
+                            scene,
+                            [k, 0.0, 0.0, k, scroll_x * dpr, scroll_y * dpr + y_here * k],
+                        )
+                    })
+                })
+                .collect();
+
+            let Some(presenter) = self.presenter.as_mut() else {
+                return Diagnostics::error("no_gpu", "GPU not initialised");
+            };
+            let bg = Color::rgba(0.898, 0.905, 0.922, 1.0);
+            match presenter.present_scenes(&scene_list, bg) {
+                Ok(()) => Diagnostics::ok(),
+                Err(e) => Diagnostics::error("present", &format!("present: {e}")),
+            }
+        }
+
+        /// Headless render of ONE page scaled to `target_width_px`
+        /// (thumbnails / page strips). Aspect ratio preserved.
+        pub async fn render_page_to_bytes(
+            &mut self,
+            index: u32,
+            target_width_px: u32,
+        ) -> Result<RenderedRaster, JsError> {
+            self.ensure_presenter()
+                .await
+                .map_err(|e| JsError::new(&e))?;
+
+            let (scene, width_px, height_px) = {
+                let built = self
+                    .built
+                    .as_ref()
+                    .ok_or_else(|| JsError::new("no document loaded"))?;
+                let page = built
+                    .pages
+                    .get(index as usize)
+                    .ok_or_else(|| JsError::new("page index out of range"))?;
+                let page_scene =
+                    SurfacePresenter::build_page_scene(&page.list, page.width_pt, page.height_pt);
+                let width_px = target_width_px.max(1);
+                let scale = f64::from(width_px) / f64::from(page.width_pt.max(1.0));
+                let height_px =
+                    ((f64::from(page.height_pt) * scale).ceil() as u32).max(1);
+                let mut scene = VelloScene::new();
+                scene.append(&page_scene, Some(Affine::scale(scale)));
+                (scene, width_px, height_px)
+            };
+
+            let presenter = self
+                .presenter
+                .as_mut()
+                .ok_or_else(|| JsError::new("GPU not initialised"))?;
+            let rgba = presenter
+                .render_scene_to_rgba(&scene, width_px, height_px)
+                .await
+                .map_err(|e| JsError::new(&format!("readback: {e}")))?;
+            Ok(RenderedRaster {
+                width: width_px,
+                height: height_px,
+                rgba,
+            })
         }
     }
 

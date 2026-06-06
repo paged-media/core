@@ -32,10 +32,21 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Install wasm-bindgen-cli + binaryen (wasm-opt)
+      - name: Install wasm-bindgen-cli (lockfile pin) + binaryen (pinned)
         run: |
-          cargo install wasm-bindgen-cli --locked
-          sudo apt-get update && sudo apt-get install -y binaryen
+          set -euo pipefail
+          WB=$(awk '/^name = "wasm-bindgen"$/{getline; gsub(/version = "|"/,""); print; exit}' Cargo.lock)
+          echo "wasm-bindgen pin: $WB"
+          cargo install wasm-bindgen-cli --version "$WB" --locked
+          # Do NOT use apt's binaryen: ubuntu-latest ships v116, which
+          # miscompiles wasm-bindgen's reference-types tables ("Table.grow
+          # failed" at runtime). Same pin as docs' pages.yml.
+          BINARYEN=126
+          curl -fsSL -o /tmp/binaryen.tgz \
+            "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN}/binaryen-version_${BINARYEN}-x86_64-linux.tar.gz"
+          tar -xzf /tmp/binaryen.tgz -C /tmp
+          echo "/tmp/binaryen-version_${BINARYEN}/bin" >> "$GITHUB_PATH"
+          "/tmp/binaryen-version_${BINARYEN}/bin/wasm-opt" --version
 
       - uses: actions/setup-node@v4
         with:
@@ -86,6 +97,54 @@ jobs:
             license: 'MPL-2.0 OR LicenseRef-PMEL'
           }, null, 2))"
 
+      - name: Subset audit — paged-sdk must not link editor crates
+        run: |
+          set -euo pipefail
+          # "Sibling, not a shrunk app": the viewer/SDK wasm is
+          # renderer-core only. Any of these in its dependency tree is
+          # a boundary breach — fail loudly.
+          TREE=$(cargo tree -p paged-sdk --target wasm32-unknown-unknown --features gpu -e normal)
+          if echo "$TREE" | grep -E "paged-(mutate|canvas|script)"; then
+            echo "::error::paged-sdk wasm links an editor crate"; exit 1
+          fi
+          echo "subset audit OK — no paged-mutate/-canvas/-script in the tree"
+
+      - name: Build @paged-media/sdk (paged-sdk WebGPU ViewerSession)
+        run: |
+          set -euo pipefail
+          cargo build --release --target wasm32-unknown-unknown -p paged-sdk --features gpu
+          OUT=dist/sdk
+          mkdir -p "$OUT"
+          wasm-bindgen target/wasm32-unknown-unknown/release/paged_sdk.wasm \
+            --target web --out-dir "$OUT"
+          wasm-opt -Oz "$OUT/paged_sdk_bg.wasm" -o "$OUT/paged_sdk_bg.wasm.opt" \
+            && mv "$OUT/paged_sdk_bg.wasm.opt" "$OUT/paged_sdk_bg.wasm"
+          # Size ratchet (§4.2): print opt + brotli sizes next to the
+          # recorded baseline (2026-06-06: opt 7.20 MB, brotli 2.21 MB).
+          brotli -k -q 11 "$OUT/paged_sdk_bg.wasm"
+          ls -la "$OUT"/paged_sdk_bg.wasm*
+          node -e "require('fs').writeFileSync('$OUT/package.json', JSON.stringify({
+            name: '@paged-media/sdk',
+            version: '${{ steps.ver.outputs.version }}',
+            type: 'module',
+            main: 'paged_sdk.js',
+            types: 'paged_sdk.d.ts',
+            files: ['paged_sdk.js','paged_sdk_bg.wasm','paged_sdk.d.ts'],
+            license: 'MPL-2.0 OR LicenseRef-PMEL'
+          }, null, 2))"
+          rm -f "$OUT/paged_sdk_bg.wasm.br"
+
+      - name: Build @paged-media/idml-viewer (TS wrapper + bundled wasm)
+        run: |
+          set -euo pipefail
+          cd web/idml-viewer
+          npm install --no-fund --no-audit
+          npm test
+          npm run build
+          mkdir -p wasm
+          cp ../../dist/sdk/paged_sdk.js ../../dist/sdk/paged_sdk_bg.wasm ../../dist/sdk/paged_sdk.d.ts wasm/
+          npm pkg set version="${{ steps.ver.outputs.version }}"
+
       - name: Publish
         if: ${{ env.NPM_TOKEN != '' }}
         env:
@@ -94,3 +153,5 @@ jobs:
         run: |
           npm publish --access public dist/canvas-wasm
           npm publish --access public dist/introspect-wasm
+          npm publish --access public dist/sdk
+          npm publish --access public web/idml-viewer

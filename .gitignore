@@ -33,3 +33,9 @@ test-results/
 
 # NOTE: Cargo.lock IS tracked in this repo (it publishes binaries +
 # a reproducible workspace) — do not add it here.
+
+# web/idml-viewer — package build + CI-placed wasm artifacts
+web/idml-viewer/node_modules/
+web/idml-viewer/dist/
+web/idml-viewer/wasm/
+web/idml-viewer/package-lock.json
