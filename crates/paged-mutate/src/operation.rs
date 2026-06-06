@@ -31,6 +31,26 @@
 use serde::{Deserialize, Serialize};
 use tsify_next::Tsify;
 
+/// Serde helper for `Option<Option<T>>` "tri-state" fields: a present
+/// field (including `null`) deserialises to `Some(inner)`; an absent
+/// field deserialises to `None`. Plain `#[serde(default)]` collapses a
+/// `null` into the outer `None`, which would lose the "set to None"
+/// signal `EditSection` relies on. Used with `default` so an omitted
+/// key still yields the outer `None`.
+mod double_option {
+    use serde::{Deserialize, Deserializer};
+
+    pub fn deserialize<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+    where
+        T: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        // The field is present (serde only calls this when the key
+        // exists), so wrap the inner `Option<T>` in `Some`.
+        Deserialize::deserialize(deserializer).map(Some)
+    }
+}
+
 /// Stable identifier for a scene-graph node. The string payload is the
 /// IDML `Self` attribute (e.g. `"TextFrame/u14"`) — stable for the
 /// lifetime of the document. Operations reference nodes by ID, never
@@ -1463,6 +1483,24 @@ pub enum NodeSpec {
         #[serde(default)]
         item_transform: Option<[f32; 6]>,
     },
+    /// W0.5 — an ellipse (`<Oval>`). Mirrors `Rectangle`'s spec arm:
+    /// bounds + the same fill/stroke triple + an optional
+    /// `item_transform` so RemoveNode → undo re-inserts byte-identically.
+    /// The Ellipse tool's only structural difference from Rectangle is
+    /// the kind vec it lands in (`Spread::ovals`) and how the renderer
+    /// fills the bounds (an ellipse rather than a rect).
+    Oval {
+        self_id: String,
+        bounds: [f32; 4],
+        #[serde(default)]
+        fill_color: Option<String>,
+        #[serde(default)]
+        stroke_color: Option<String>,
+        #[serde(default)]
+        stroke_weight: Option<f32>,
+        #[serde(default)]
+        item_transform: Option<[f32; 6]>,
+    },
     /// Editor-ops — a graphic line. `anchors` carries the explicit
     /// path (two corner anchors for the Line tool; possibly more for
     /// captured lines) in spread coordinates with an identity
@@ -1541,6 +1579,7 @@ impl NodeSpec {
         match self {
             NodeSpec::TextFrame { self_id, .. } => NodeId::TextFrame(self_id.clone()),
             NodeSpec::Rectangle { self_id, .. } => NodeId::Rectangle(self_id.clone()),
+            NodeSpec::Oval { self_id, .. } => NodeId::Oval(self_id.clone()),
             NodeSpec::GraphicLine { self_id, .. } => NodeId::GraphicLine(self_id.clone()),
             NodeSpec::Polygon { self_id, .. } => NodeId::Polygon(self_id.clone()),
             NodeSpec::CloneTranslate { self_id, source, .. } => match source {
@@ -1925,6 +1964,224 @@ pub enum Operation {
         #[serde(rename = "opKind")]
         op_kind: PathfinderKind,
     },
+    /// W0.5 — thread two text frames: rewrite `from`'s
+    /// `NextTextFrame` to point at `to` so the story reflows into
+    /// `to` on overflow. Validation (apply): both frames exist; `to`
+    /// owns no story content of its own (InDesign only threads into
+    /// empty frames); the link must not create a cycle (walk the
+    /// existing chain). Invalidation: the story reflows. Inverse:
+    /// `UnlinkFrames { frame: from }` (with the prior `next_text_frame`
+    /// captured so undo restores any pre-existing link target).
+    LinkFrames {
+        from: String,
+        to: String,
+    },
+    /// W0.5 — break the thread leaving `frame`: clear its
+    /// `NextTextFrame`. Inverse re-links to the captured prior target
+    /// via `LinkFrames`. The `prev_next` field is **inverse-only** —
+    /// when set, `apply` restores `frame.next_text_frame` to it
+    /// instead of clearing (so `UnlinkFrames` can serve as
+    /// `LinkFrames`'s undo without a separate variant).
+    UnlinkFrames {
+        frame: String,
+        #[serde(default)]
+        prev_next: Option<String>,
+    },
+    /// W0.5 — apply a named paragraph or character style to a story
+    /// range. Delegates to the same run/paragraph splitter as
+    /// `SetProperty(AppliedCharacterStyle / AppliedParagraphStyle)`;
+    /// the inverse is a `Batch` of per-segment style restorations the
+    /// splitter captures. `scope` picks character- vs paragraph-level.
+    ApplyStyle {
+        story_id: String,
+        start: u32,
+        end: u32,
+        /// `ParagraphStyle/<id>` or `CharacterStyle/<id>` ref.
+        style: String,
+        scope: StyleScope,
+    },
+    /// W0.5 — insert a field marker (e.g. the auto current-page-number
+    /// marker, U+E018) into a story at a character offset. v1 supports
+    /// `PageNumber` only; `field` is extensible. Implemented as a
+    /// single-character text insertion, so the inverse is a
+    /// `DeleteRange` of that one character.
+    InsertField {
+        story_id: String,
+        offset: u32,
+        field: FieldKind,
+    },
+    /// W0.5 — inverse-only companion to `InsertField`: remove the
+    /// single field-marker character at `offset`. Inverse re-inserts
+    /// it via `InsertField`.
+    DeleteField {
+        story_id: String,
+        offset: u32,
+        field: FieldKind,
+    },
+    /// W0.5 — insert a ruler guide on the spread `spread_id`.
+    /// `position` is the page-local coordinate on the perpendicular
+    /// axis (x for Vertical, y for Horizontal); `page_index` is the
+    /// zero-based page within the spread. `guide_id` is normally
+    /// `None` (apply mints a deterministic `Guide/u<n>` recorded on
+    /// the op echo); set verbatim by the inverse so redo re-creates
+    /// the same id. Inverse: `DeleteGuide`.
+    InsertGuide {
+        spread_id: String,
+        orientation: GuideOrientationSpec,
+        position: f32,
+        #[serde(default)]
+        page_index: u32,
+        #[serde(default)]
+        guide_id: Option<String>,
+    },
+    /// W0.5 — move an existing guide to a new perpendicular-axis
+    /// position. Inverse carries the prior position.
+    MoveGuide {
+        guide_id: String,
+        position: f32,
+    },
+    /// W0.5 — delete a guide. Apply captures the full guide for the
+    /// inverse (`InsertGuide` restores it at its original id/spread).
+    DeleteGuide {
+        guide_id: String,
+    },
+    /// W0.5 — flip a `<Condition>`'s `Visible` flag in the document
+    /// condition table. Conditional text changes layout, so the whole
+    /// document reflows. Inverse carries the prior visibility.
+    SetConditionVisible {
+        condition: String,
+        visible: bool,
+    },
+    /// W0.5 — make every condition referenced by the named
+    /// `<ConditionSet>` visible and every other condition hidden (the
+    /// "show only this set" affordance). Apply captures the full prior
+    /// visibility map so the inverse (`RestoreConditionVisibility`)
+    /// can undo it in one step.
+    ActivateConditionSet {
+        set: String,
+    },
+    /// W0.5 — inverse-only companion to `ActivateConditionSet`:
+    /// restore each listed condition's prior `Visible` flag.
+    RestoreConditionVisibility {
+        /// `(condition_id, prior_visible)` pairs.
+        states: Vec<(String, bool)>,
+    },
+    /// W0.5 — set a page's `AppliedMaster` ref. `None` detaches the
+    /// master ([None]). Inverse carries the prior master ref.
+    ApplyMasterToPage {
+        page: String,
+        #[serde(default)]
+        master: Option<String>,
+    },
+    /// W0.5 — duplicate a single-page spread (the page plus every page
+    /// item) immediately after the source, minting fresh self ids for
+    /// the clone. Inverse: `RemovePage` of the cloned page.
+    /// `clone_spread_json` is **echo/redo-only** — the apply layer
+    /// fills it with the materialised clone so redo re-creates the
+    /// exact ids and geometry.
+    DuplicatePage {
+        page: String,
+        #[serde(default)]
+        clone_spread_json: Option<String>,
+    },
+    /// W0.5 — insert a `<Section>` anchored at `at_page`. Inverse:
+    /// `DeleteSection`. `self_id` is minted when `None` and echoed.
+    InsertSection {
+        at_page: String,
+        #[serde(default)]
+        prefix: Option<String>,
+        #[serde(default)]
+        numbering_style: Option<String>,
+        #[serde(default)]
+        start_at: Option<u32>,
+        #[serde(default)]
+        self_id: Option<String>,
+    },
+    /// W0.5 — edit fields of an existing `<Section>`. Each `Some`
+    /// field overwrites; `None` leaves the field unchanged. Inverse
+    /// carries the prior values as a full `EditSection`.
+    EditSection {
+        section_id: String,
+        /// `Some(_)` overwrites `section_prefix` (inner `None` clears
+        /// it); outer `None` leaves the prefix unchanged. The
+        /// `double_option` deserialiser preserves the `Some(None)` vs
+        /// `None` distinction a plain `#[serde(default)]` would lose.
+        #[serde(default, deserialize_with = "double_option::deserialize")]
+        prefix: Option<Option<String>>,
+        #[serde(default)]
+        numbering_style: Option<String>,
+        /// Same double-option semantics as `prefix`.
+        #[serde(default, deserialize_with = "double_option::deserialize")]
+        start_at: Option<Option<u32>>,
+    },
+    /// W0.5 — inverse-only companion to `InsertSection`: remove the
+    /// section by id. Inverse re-inserts it via `InsertSection` with
+    /// the captured fields.
+    DeleteSection {
+        section_id: String,
+    },
+}
+
+/// W0.5 — character- vs paragraph-level style application for
+/// [`Operation::ApplyStyle`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "camelCase")]
+pub enum StyleScope {
+    Paragraph,
+    Character,
+}
+
+/// W0.5 — the kind of field marker inserted by
+/// [`Operation::InsertField`]. Extensible; v1 implements `PageNumber`
+/// (the IDML auto current-page-number marker, U+E018).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "camelCase")]
+pub enum FieldKind {
+    PageNumber,
+    NextPageNumber,
+}
+
+impl FieldKind {
+    /// The Unicode marker char the parser uses to represent this field
+    /// in a story's flattened text (mirrors
+    /// `paged_parse::story::AUTO_PAGE_NUMBER_MARKER` etc.).
+    pub fn marker_char(self) -> char {
+        match self {
+            // U+E018 — IDML `<?ACE 18?>` auto current-page-number.
+            FieldKind::PageNumber => '\u{E018}',
+            // U+E019 — IDML `<?ACE 19?>` next-page-number marker.
+            FieldKind::NextPageNumber => '\u{E019}',
+        }
+    }
+}
+
+/// W0.5 — wire mirror of `paged_parse::GuideOrientation`
+/// (which is `Deserialize` but lives in the parse crate; kept here so
+/// the operation wire type doesn't depend on the parser's
+/// serialization shape).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "camelCase")]
+pub enum GuideOrientationSpec {
+    Vertical,
+    Horizontal,
+}
+
+impl GuideOrientationSpec {
+    pub fn to_parse(self) -> paged_parse::GuideOrientation {
+        match self {
+            GuideOrientationSpec::Vertical => paged_parse::GuideOrientation::Vertical,
+            GuideOrientationSpec::Horizontal => paged_parse::GuideOrientation::Horizontal,
+        }
+    }
+    pub fn from_parse(o: paged_parse::GuideOrientation) -> Self {
+        match o {
+            paged_parse::GuideOrientation::Vertical => GuideOrientationSpec::Vertical,
+            paged_parse::GuideOrientation::Horizontal => GuideOrientationSpec::Horizontal,
+        }
+    }
 }
 
 /// SDK Phase 5 (v1 sweep) — wire enum for Pathfinder ops. Mirrors

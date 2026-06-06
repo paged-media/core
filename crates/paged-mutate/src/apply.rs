@@ -40,7 +40,7 @@
 //!     Page-level routing, and the other shape kinds (Oval, Polygon,
 //!     GraphicLine) come as later stages.
 
-use paged_parse::{Bounds, FrameRef, GraphicLine, Polygon, Rectangle, Spread, TextFrame};
+use paged_parse::{Bounds, FrameRef, GraphicLine, Oval, Polygon, Rectangle, Spread, TextFrame};
 use paged_scene::Document;
 
 use crate::error::OperationError;
@@ -49,9 +49,9 @@ use crate::invert::{
     invert_set_property,
 };
 use crate::operation::{
-    AppliedOperation, ColorGroupSpec, GradientFeatherSpec, GradientSpec, GradientStopSpec,
-    InvalidationHint, NodeId, NodeSpec, Operation, PathAnchorSpec, PathfinderKind, PropertyPath,
-    StyleCollection, SwatchSpec, Value,
+    AppliedOperation, ColorGroupSpec, FieldKind, GradientFeatherSpec, GradientSpec,
+    GradientStopSpec, GuideOrientationSpec, InvalidationHint, NodeId, NodeSpec, Operation,
+    PathAnchorSpec, PathfinderKind, PropertyPath, StyleCollection, StyleScope, SwatchSpec, Value,
 };
 use crate::pathfinder::{pathfinder_boolean, PathfinderKind as InternalPathfinderKind};
 
@@ -201,6 +201,84 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             others,
             op_kind,
         } => apply_pathfinder(doc, kept, others, *op_kind),
+        Operation::LinkFrames { from, to } => apply_link_frames(doc, from, to),
+        Operation::UnlinkFrames { frame, prev_next } => {
+            apply_unlink_frames(doc, frame, prev_next.as_deref())
+        }
+        Operation::ApplyStyle {
+            story_id,
+            start,
+            end,
+            style,
+            scope,
+        } => apply_apply_style(doc, story_id, *start, *end, style, *scope),
+        Operation::InsertField {
+            story_id,
+            offset,
+            field,
+        } => apply_insert_field(doc, story_id, *offset, *field),
+        Operation::DeleteField {
+            story_id,
+            offset,
+            field,
+        } => apply_delete_field(doc, story_id, *offset, *field),
+        Operation::InsertGuide {
+            spread_id,
+            orientation,
+            position,
+            page_index,
+            guide_id,
+        } => apply_insert_guide(
+            doc,
+            spread_id,
+            *orientation,
+            *position,
+            *page_index,
+            guide_id.clone(),
+        ),
+        Operation::MoveGuide { guide_id, position } => apply_move_guide(doc, guide_id, *position),
+        Operation::DeleteGuide { guide_id } => apply_delete_guide(doc, guide_id),
+        Operation::SetConditionVisible { condition, visible } => {
+            apply_set_condition_visible(doc, condition, *visible)
+        }
+        Operation::ActivateConditionSet { set } => apply_activate_condition_set(doc, set),
+        Operation::RestoreConditionVisibility { states } => {
+            apply_restore_condition_visibility(doc, states)
+        }
+        Operation::ApplyMasterToPage { page, master } => {
+            apply_master_to_page(doc, page, master.as_deref())
+        }
+        Operation::DuplicatePage {
+            page,
+            clone_spread_json,
+        } => apply_duplicate_page(doc, page, clone_spread_json.as_deref()),
+        Operation::InsertSection {
+            at_page,
+            prefix,
+            numbering_style,
+            start_at,
+            self_id,
+        } => apply_insert_section(
+            doc,
+            at_page,
+            prefix.clone(),
+            numbering_style.clone(),
+            *start_at,
+            self_id.clone(),
+        ),
+        Operation::EditSection {
+            section_id,
+            prefix,
+            numbering_style,
+            start_at,
+        } => apply_edit_section(
+            doc,
+            section_id,
+            prefix.clone(),
+            numbering_style.clone(),
+            *start_at,
+        ),
+        Operation::DeleteSection { section_id } => apply_delete_section(doc, section_id),
     }
 }
 
@@ -3435,6 +3513,30 @@ fn apply_insert_node(
             spread.spread.rectangles.insert(position, rect);
             register_frame_ref(&mut spread.spread, FrameRef::Rectangle(0), position, z_slot);
         }
+        NodeSpec::Oval {
+            self_id,
+            bounds,
+            fill_color,
+            stroke_color,
+            stroke_weight,
+            item_transform,
+        } => {
+            let len = spread.spread.ovals.len();
+            if position > len {
+                return Err(OperationError::InvalidPosition {
+                    parent: parent.clone(),
+                    position,
+                    len,
+                });
+            }
+            let mut oval =
+                new_oval(self_id.clone(), bounds_from_array(*bounds), fill_color.clone());
+            oval.stroke_color = stroke_color.clone();
+            oval.stroke_weight = *stroke_weight;
+            oval.item_transform = *item_transform;
+            spread.spread.ovals.insert(position, oval);
+            register_frame_ref(&mut spread.spread, FrameRef::Oval(0), position, z_slot);
+        }
         NodeSpec::GraphicLine {
             self_id,
             bounds,
@@ -3597,6 +3699,31 @@ fn remove_and_capture(
             }
             Err(OperationError::NodeNotFound(node.clone()))
         }
+        NodeId::Oval(id) => {
+            for parsed in &mut doc.spreads {
+                if let Some(pos) = parsed
+                    .spread
+                    .ovals
+                    .iter()
+                    .position(|o| o.self_id.as_deref() == Some(id.as_str()))
+                {
+                    let oval = parsed.spread.ovals.remove(pos);
+                    let z_slot =
+                        unregister_frame_ref(&mut parsed.spread, FrameRef::Oval(0), pos);
+                    let parent = spread_parent_id(parsed);
+                    let spec = NodeSpec::Oval {
+                        self_id: id.clone(),
+                        bounds: bounds_to_array(oval.bounds),
+                        fill_color: oval.fill_color,
+                        stroke_color: oval.stroke_color,
+                        stroke_weight: oval.stroke_weight,
+                        item_transform: oval.item_transform,
+                    };
+                    return Ok((parent, pos, spec, z_slot));
+                }
+            }
+            Err(OperationError::NodeNotFound(node.clone()))
+        }
         NodeId::GraphicLine(id) => {
             for parsed in &mut doc.spreads {
                 if let Some(pos) = parsed
@@ -3690,6 +3817,7 @@ fn apply_move_node(
         Some(dest) => match &captured {
             NodeSpec::TextFrame { .. } => dest.spread.text_frames.len(),
             NodeSpec::Rectangle { .. } => dest.spread.rectangles.len(),
+            NodeSpec::Oval { .. } => dest.spread.ovals.len(),
             NodeSpec::GraphicLine { .. } => dest.spread.graphic_lines.len(),
             NodeSpec::Polygon { .. } => dest.spread.polygons.len(),
             // CloneTranslate is never captured from the doc — it's
@@ -3786,6 +3914,21 @@ fn insert_captured(
             rect.item_transform = item_transform;
             spread.spread.rectangles.insert(position, rect);
             register_frame_ref(&mut spread.spread, FrameRef::Rectangle(0), position, z_slot);
+        }
+        NodeSpec::Oval {
+            self_id,
+            bounds,
+            fill_color,
+            stroke_color,
+            stroke_weight,
+            item_transform,
+        } => {
+            let mut oval = new_oval(self_id, bounds_from_array(bounds), fill_color);
+            oval.stroke_color = stroke_color;
+            oval.stroke_weight = stroke_weight;
+            oval.item_transform = item_transform;
+            spread.spread.ovals.insert(position, oval);
+            register_frame_ref(&mut spread.spread, FrameRef::Oval(0), position, z_slot);
         }
         NodeSpec::GraphicLine {
             self_id,
@@ -6840,6 +6983,41 @@ fn new_polygon(
     }
 }
 
+pub(crate) fn new_oval(self_id: String, bounds: Bounds, fill_color: Option<String>) -> Oval {
+    Oval {
+        self_id: Some(self_id),
+        bounds,
+        item_transform: None,
+        fill_color,
+        fill_tint: None,
+        stroke_color: None,
+        stroke_weight: None,
+        stroke_type: None,
+        stroke_gap_color: None,
+        stroke_gap_tint: None,
+        drop_shadow: None,
+        stroke_drop_shadow: None,
+        applied_object_style: None,
+        text_wrap: None,
+        item_layer: None,
+        effects: None,
+        gradient_fill_angle: None,
+        gradient_fill_length: None,
+        gradient_stroke_angle: None,
+        gradient_stroke_length: None,
+        opacity: None,
+        blend_mode: None,
+        image_link: None,
+        has_image_element: false,
+        has_inline_pdf: false,
+        image_item_transform: None,
+        image_bytes: None,
+        overprint_fill: false,
+        overprint_stroke: false,
+        nonprinting: false,
+    }
+}
+
 pub(crate) fn new_rectangle(self_id: String, bounds: Bounds, fill_color: Option<String>) -> Rectangle {
     Rectangle {
         self_id: Some(self_id),
@@ -6886,4 +7064,1055 @@ pub(crate) fn new_rectangle(self_id: String, bounds: Bounds, fill_color: Option<
         subpath_starts: Vec::new(),
         subpath_open: Vec::new(),
     }
+}
+
+// ===========================================================================
+// W0.5 — wire-expansion operations
+// ===========================================================================
+
+/// Locate a `TextFrame` by `Self` id across every spread (mut). Returns
+/// the spread index + frame index for an O(1)-ish revisit.
+fn find_text_frame_pos(doc: &Document, frame_id: &str) -> Option<(usize, usize)> {
+    for (si, parsed) in doc.spreads.iter().enumerate() {
+        if let Some(fi) = parsed
+            .spread
+            .text_frames
+            .iter()
+            .position(|f| f.self_id.as_deref() == Some(frame_id))
+        {
+            return Some((si, fi));
+        }
+    }
+    None
+}
+
+/// Build a `text_reflow` invalidation hint targeting the frame hosting
+/// `story_id` (best-effort; default hint when the story has no frame).
+fn reflow_hint_for_story(doc: &Document, story_id: &str) -> InvalidationHint {
+    match doc.frame_for_story.get(story_id) {
+        Some(frame) => match &frame.self_id {
+            Some(self_id) => InvalidationHint {
+                text_reflow: vec![NodeId::TextFrame(self_id.clone())],
+                ..Default::default()
+            },
+            None => InvalidationHint::default(),
+        },
+        None => InvalidationHint::default(),
+    }
+}
+
+/// True when `frame_id` carries no story content of its own — either it
+/// has no `ParentStory`, or its parent story has no non-empty runs. Used
+/// by `LinkFrames` to honour InDesign's "thread into empty frames only"
+/// rule.
+fn frame_has_no_own_content(doc: &Document, frame_id: &str) -> bool {
+    let Some((si, fi)) = find_text_frame_pos(doc, frame_id) else {
+        return false;
+    };
+    let frame = &doc.spreads[si].spread.text_frames[fi];
+    let Some(story_id) = frame.parent_story.as_deref() else {
+        return true;
+    };
+    // A frame is "empty" if its story has no characters. A shared story
+    // (the frame is a continuation of an existing chain) still counts as
+    // content for the purpose of refusing the link.
+    match doc.stories.iter().find(|s| s.self_id == story_id) {
+        Some(parsed) => parsed
+            .story
+            .paragraphs
+            .iter()
+            .all(|p| p.runs.iter().all(|r| r.text.is_empty())),
+        // ParentStory points at a story we can't see → treat as content
+        // present (conservative: refuse the link).
+        None => false,
+    }
+}
+
+/// Walk the existing `NextTextFrame` chain forward from `start` and
+/// report whether `target` is reachable (i.e. linking `start → target`
+/// would close a cycle). Bounded so a pre-existing malformed cycle in
+/// the document can't loop forever.
+fn chain_reaches(doc: &Document, start: &str, target: &str) -> bool {
+    let mut cursor = Some(start.to_string());
+    let mut guard = 0usize;
+    while let Some(cur) = cursor {
+        if guard > 4096 {
+            return true; // pathological; treat as a cycle to be safe
+        }
+        guard += 1;
+        if cur == target {
+            return true;
+        }
+        let Some((si, fi)) = find_text_frame_pos(doc, &cur) else {
+            return false;
+        };
+        cursor = doc.spreads[si].spread.text_frames[fi]
+            .next_text_frame
+            .clone();
+    }
+    false
+}
+
+fn apply_link_frames(
+    doc: &mut Document,
+    from: &str,
+    to: &str,
+) -> Result<AppliedOperation, OperationError> {
+    if from == to {
+        return Err(OperationError::InvalidValue {
+            node: NodeId::TextFrame(from.to_string()),
+            path: PropertyPath::FrameBounds,
+            reason: "cannot thread a frame to itself".to_string(),
+        });
+    }
+    let (from_si, from_fi) =
+        find_text_frame_pos(doc, from).ok_or_else(|| {
+            OperationError::NodeNotFound(NodeId::TextFrame(from.to_string()))
+        })?;
+    if find_text_frame_pos(doc, to).is_none() {
+        return Err(OperationError::NodeNotFound(NodeId::TextFrame(to.to_string())));
+    }
+    // InDesign threads into empty frames only.
+    if !frame_has_no_own_content(doc, to) {
+        return Err(OperationError::InvalidValue {
+            node: NodeId::TextFrame(to.to_string()),
+            path: PropertyPath::FrameBounds,
+            reason: "target frame already owns story content; threading into \
+                     a non-empty frame is not allowed"
+                .to_string(),
+        });
+    }
+    // Reject cycles: if `to` can already reach `from` along the chain,
+    // linking `from → to` closes a loop.
+    if chain_reaches(doc, to, from) {
+        return Err(OperationError::InvalidValue {
+            node: NodeId::TextFrame(from.to_string()),
+            path: PropertyPath::FrameBounds,
+            reason: "linking these frames would create a cycle".to_string(),
+        });
+    }
+
+    let prev_next = doc.spreads[from_si].spread.text_frames[from_fi]
+        .next_text_frame
+        .clone();
+    doc.spreads[from_si].spread.text_frames[from_fi].next_text_frame = Some(to.to_string());
+
+    // The story flowing through `from` reflows across the new link.
+    let story_id = doc.spreads[from_si].spread.text_frames[from_fi]
+        .parent_story
+        .clone();
+    let invalidation = match story_id {
+        Some(sid) => reflow_hint_for_story(doc, &sid),
+        None => InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    };
+
+    Ok(AppliedOperation {
+        op: Operation::LinkFrames {
+            from: from.to_string(),
+            to: to.to_string(),
+        },
+        // Undo restores `from`'s prior next-target (None clears it; a
+        // prior link re-points it).
+        inverse: Operation::UnlinkFrames {
+            frame: from.to_string(),
+            prev_next,
+        },
+        invalidation,
+    })
+}
+
+fn apply_unlink_frames(
+    doc: &mut Document,
+    frame: &str,
+    prev_next: Option<&str>,
+) -> Result<AppliedOperation, OperationError> {
+    let (si, fi) = find_text_frame_pos(doc, frame).ok_or_else(|| {
+        OperationError::NodeNotFound(NodeId::TextFrame(frame.to_string()))
+    })?;
+    let captured = doc.spreads[si].spread.text_frames[fi]
+        .next_text_frame
+        .clone();
+    // Forward unlink clears; the inverse-only `prev_next` restores.
+    doc.spreads[si].spread.text_frames[fi].next_text_frame =
+        prev_next.map(str::to_string);
+
+    let story_id = doc.spreads[si].spread.text_frames[fi]
+        .parent_story
+        .clone();
+    let invalidation = match story_id {
+        Some(sid) => reflow_hint_for_story(doc, &sid),
+        None => InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    };
+
+    // Inverse re-links to the captured prior target (if any). When the
+    // frame was already end-of-chain (captured None), the inverse is a
+    // no-op UnlinkFrames so undo stays balanced.
+    let inverse = match captured {
+        Some(to) => Operation::LinkFrames {
+            from: frame.to_string(),
+            to,
+        },
+        None => Operation::UnlinkFrames {
+            frame: frame.to_string(),
+            prev_next: None,
+        },
+    };
+
+    Ok(AppliedOperation {
+        op: Operation::UnlinkFrames {
+            frame: frame.to_string(),
+            prev_next: prev_next.map(str::to_string),
+        },
+        inverse,
+        invalidation,
+    })
+}
+
+fn apply_apply_style(
+    doc: &mut Document,
+    story_id: &str,
+    start: u32,
+    end: u32,
+    style: &str,
+    scope: StyleScope,
+) -> Result<AppliedOperation, OperationError> {
+    // Delegate to the existing run/paragraph splitter via the
+    // AppliedCharacterStyle / AppliedParagraphStyle property paths. The
+    // splitter captures a per-segment inverse Batch. We then rewrap the
+    // returned AppliedOperation so the *forward* op records as
+    // `ApplyStyle` (the inverse stays the splitter's SetProperty Batch,
+    // which `apply` can replay directly).
+    let node = NodeId::StoryRange {
+        story_id: story_id.to_string(),
+        start,
+        end,
+    };
+    let value = Value::Text(style.to_string());
+    let applied = match scope {
+        StyleScope::Character => apply_character_property(
+            doc,
+            story_id,
+            start,
+            end,
+            &node,
+            PropertyPath::AppliedCharacterStyle,
+            &value,
+        )?,
+        StyleScope::Paragraph => apply_paragraph_property(
+            doc,
+            story_id,
+            start,
+            end,
+            &node,
+            PropertyPath::AppliedParagraphStyle,
+            &value,
+        )?,
+    };
+    Ok(AppliedOperation {
+        op: Operation::ApplyStyle {
+            story_id: story_id.to_string(),
+            start,
+            end,
+            style: style.to_string(),
+            scope,
+        },
+        inverse: applied.inverse,
+        invalidation: applied.invalidation,
+    })
+}
+
+fn apply_insert_field(
+    doc: &mut Document,
+    story_id: &str,
+    offset: u32,
+    field: FieldKind,
+) -> Result<AppliedOperation, OperationError> {
+    let story_idx = doc
+        .stories
+        .iter()
+        .position(|s| s.self_id == story_id)
+        .ok_or_else(|| {
+            OperationError::NodeNotFound(NodeId::StoryRange {
+                story_id: story_id.to_string(),
+                start: offset,
+                end: offset,
+            })
+        })?;
+    let marker = field.marker_char();
+    let story = &mut doc.stories[story_idx].story;
+
+    // Walk to the offset and insert the marker char into the run that
+    // contains it (splitting nothing — a one-char insert just grows the
+    // run's text). The page-number marker inherits the surrounding
+    // run's formatting, which matches InDesign (the field takes the
+    // character style at the insertion point).
+    let total: u32 = story
+        .paragraphs
+        .iter()
+        .flat_map(|p| p.runs.iter())
+        .map(|r| r.text.chars().count() as u32)
+        .sum();
+    if offset > total {
+        return Err(OperationError::InvalidValue {
+            node: NodeId::StoryRange {
+                story_id: story_id.to_string(),
+                start: offset,
+                end: offset,
+            },
+            path: PropertyPath::AppliedCharacterStyle,
+            reason: format!("offset {offset} past end of story (len {total})"),
+        });
+    }
+
+    let mut char_cursor: u32 = 0;
+    let mut inserted = false;
+    'outer: for para in story.paragraphs.iter_mut() {
+        for run in para.runs.iter_mut() {
+            let run_len = run.text.chars().count() as u32;
+            // Insert when the offset falls within this run (inclusive of
+            // its trailing boundary, so an offset at end-of-run lands
+            // before the next run / at the run's tail).
+            if offset <= char_cursor + run_len {
+                let local = (offset - char_cursor) as usize;
+                let byte = run
+                    .text
+                    .char_indices()
+                    .nth(local)
+                    .map(|(b, _)| b)
+                    .unwrap_or(run.text.len());
+                run.text.insert(byte, marker);
+                inserted = true;
+                break 'outer;
+            }
+            char_cursor += run_len;
+        }
+    }
+    // Empty story (no runs at all): append a fresh run holding the
+    // marker to the first (or a new) paragraph.
+    if !inserted {
+        if story.paragraphs.is_empty() {
+            story.paragraphs.push(paged_parse::Paragraph::default());
+        }
+        let para = story.paragraphs.last_mut().expect("ensured above");
+        if let Some(run) = para.runs.last_mut() {
+            run.text.push(marker);
+        } else {
+            let mut run = paged_parse::CharacterRun::default();
+            run.text.push(marker);
+            para.runs.push(run);
+        }
+    }
+
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::InsertField {
+            story_id: story_id.to_string(),
+            offset,
+            field,
+        },
+        // Undo removes the one marker char we inserted at `offset`.
+        inverse: Operation::DeleteField {
+            story_id: story_id.to_string(),
+            offset,
+            field,
+        },
+        invalidation,
+    })
+}
+
+fn apply_delete_field(
+    doc: &mut Document,
+    story_id: &str,
+    offset: u32,
+    field: FieldKind,
+) -> Result<AppliedOperation, OperationError> {
+    let story_idx = doc
+        .stories
+        .iter()
+        .position(|s| s.self_id == story_id)
+        .ok_or_else(|| {
+            OperationError::NodeNotFound(NodeId::StoryRange {
+                story_id: story_id.to_string(),
+                start: offset,
+                end: offset,
+            })
+        })?;
+    let marker = field.marker_char();
+    let story = &mut doc.stories[story_idx].story;
+
+    let mut char_cursor: u32 = 0;
+    let mut removed = false;
+    'outer: for para in story.paragraphs.iter_mut() {
+        for run in para.runs.iter_mut() {
+            let run_len = run.text.chars().count() as u32;
+            // The char to delete sits at `offset`; it must land within
+            // this run (offset in [char_cursor, char_cursor+run_len)).
+            if offset < char_cursor + run_len {
+                let local = (offset - char_cursor) as usize;
+                if let Some((byte, ch)) = run.text.char_indices().nth(local) {
+                    if ch != marker {
+                        return Err(OperationError::InvalidValue {
+                            node: NodeId::StoryRange {
+                                story_id: story_id.to_string(),
+                                start: offset,
+                                end: offset + 1,
+                            },
+                            path: PropertyPath::AppliedCharacterStyle,
+                            reason: format!(
+                                "expected field marker at offset {offset}, found {ch:?}"
+                            ),
+                        });
+                    }
+                    run.text.remove(byte);
+                    removed = true;
+                }
+                break 'outer;
+            }
+            char_cursor += run_len;
+        }
+    }
+    if !removed {
+        return Err(OperationError::InvalidValue {
+            node: NodeId::StoryRange {
+                story_id: story_id.to_string(),
+                start: offset,
+                end: offset + 1,
+            },
+            path: PropertyPath::AppliedCharacterStyle,
+            reason: format!("no field marker at offset {offset}"),
+        });
+    }
+
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::DeleteField {
+            story_id: story_id.to_string(),
+            offset,
+            field,
+        },
+        inverse: Operation::InsertField {
+            story_id: story_id.to_string(),
+            offset,
+            field,
+        },
+        invalidation,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// W0.5 — guide CRUD
+// ---------------------------------------------------------------------------
+
+/// Guides carry no id in the parse struct, so we address them
+/// positionally as `Guide/<spread_self_id>/<index>`. Resolve such an id
+/// to its `(spread_index, guide_index)`.
+fn resolve_guide(doc: &Document, guide_id: &str) -> Option<(usize, usize)> {
+    let rest = guide_id.strip_prefix("Guide/")?;
+    let (spread_self, idx_str) = rest.rsplit_once('/')?;
+    let gi: usize = idx_str.parse().ok()?;
+    let si = doc
+        .spreads
+        .iter()
+        .position(|p| p.spread.self_id.as_deref() == Some(spread_self))?;
+    if gi < doc.spreads[si].spread.guides.len() {
+        Some((si, gi))
+    } else {
+        None
+    }
+}
+
+/// The positional id for the guide at `(spread_index, guide_index)`.
+fn guide_id_for(doc: &Document, si: usize, gi: usize) -> String {
+    let spread_self = doc.spreads[si]
+        .spread
+        .self_id
+        .as_deref()
+        .unwrap_or_default();
+    format!("Guide/{spread_self}/{gi}")
+}
+
+fn apply_insert_guide(
+    doc: &mut Document,
+    spread_id: &str,
+    orientation: GuideOrientationSpec,
+    position: f32,
+    page_index: u32,
+    _guide_id: Option<String>,
+) -> Result<AppliedOperation, OperationError> {
+    let si = doc
+        .spreads
+        .iter()
+        .position(|p| p.spread.self_id.as_deref() == Some(spread_id))
+        .ok_or_else(|| OperationError::NodeNotFound(NodeId::Spread(spread_id.to_string())))?;
+    let guide = paged_parse::RulerGuide {
+        orientation: orientation.to_parse(),
+        location: position,
+        page_index,
+    };
+    doc.spreads[si].spread.guides.push(guide);
+    let gi = doc.spreads[si].spread.guides.len() - 1;
+    let id = guide_id_for(doc, si, gi);
+    Ok(AppliedOperation {
+        op: Operation::InsertGuide {
+            spread_id: spread_id.to_string(),
+            orientation,
+            position,
+            page_index,
+            guide_id: Some(id.clone()),
+        },
+        inverse: Operation::DeleteGuide { guide_id: id },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+fn apply_move_guide(
+    doc: &mut Document,
+    guide_id: &str,
+    position: f32,
+) -> Result<AppliedOperation, OperationError> {
+    let (si, gi) = resolve_guide(doc, guide_id).ok_or_else(|| {
+        OperationError::CollectionEntryNotFound {
+            collection: "guides".to_string(),
+            id: guide_id.to_string(),
+        }
+    })?;
+    let prev = doc.spreads[si].spread.guides[gi].location;
+    doc.spreads[si].spread.guides[gi].location = position;
+    Ok(AppliedOperation {
+        op: Operation::MoveGuide {
+            guide_id: guide_id.to_string(),
+            position,
+        },
+        inverse: Operation::MoveGuide {
+            guide_id: guide_id.to_string(),
+            position: prev,
+        },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+fn apply_delete_guide(
+    doc: &mut Document,
+    guide_id: &str,
+) -> Result<AppliedOperation, OperationError> {
+    let (si, gi) = resolve_guide(doc, guide_id).ok_or_else(|| {
+        OperationError::CollectionEntryNotFound {
+            collection: "guides".to_string(),
+            id: guide_id.to_string(),
+        }
+    })?;
+    let removed = doc.spreads[si].spread.guides.remove(gi);
+    let spread_id = doc.spreads[si]
+        .spread
+        .self_id
+        .clone()
+        .unwrap_or_default();
+    Ok(AppliedOperation {
+        op: Operation::DeleteGuide {
+            guide_id: guide_id.to_string(),
+        },
+        // Undo re-inserts at the tail; positional ids past this index
+        // are stable because deletion shifts only higher indices and we
+        // re-append. (v1: a delete-then-undo restores geometry, not the
+        // exact mid-vec slot — acceptable since guides are unordered.)
+        inverse: Operation::InsertGuide {
+            spread_id,
+            orientation: GuideOrientationSpec::from_parse(removed.orientation),
+            position: removed.location,
+            page_index: removed.page_index,
+            guide_id: None,
+        },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+// ---------------------------------------------------------------------------
+// W0.5 — conditions
+// ---------------------------------------------------------------------------
+
+fn apply_set_condition_visible(
+    doc: &mut Document,
+    condition: &str,
+    visible: bool,
+) -> Result<AppliedOperation, OperationError> {
+    let cond = doc.styles.conditions.get_mut(condition).ok_or_else(|| {
+        OperationError::CollectionEntryNotFound {
+            collection: "conditions".to_string(),
+            id: condition.to_string(),
+        }
+    })?;
+    // `None` ⇒ visible (IDML default), so capture the resolved prior.
+    let prev = cond.visible.unwrap_or(true);
+    cond.visible = Some(visible);
+    Ok(AppliedOperation {
+        op: Operation::SetConditionVisible {
+            condition: condition.to_string(),
+            visible,
+        },
+        inverse: Operation::SetConditionVisible {
+            condition: condition.to_string(),
+            visible: prev,
+        },
+        // Conditional text changes which runs render → reflow the
+        // whole document (advisory: structural).
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+fn apply_activate_condition_set(
+    doc: &mut Document,
+    set: &str,
+) -> Result<AppliedOperation, OperationError> {
+    let members: Vec<String> = doc
+        .styles
+        .condition_sets
+        .get(set)
+        .ok_or_else(|| OperationError::CollectionEntryNotFound {
+            collection: "conditionSets".to_string(),
+            id: set.to_string(),
+        })?
+        .conditions
+        .clone();
+    // Capture every condition's prior visibility so the inverse is a
+    // single RestoreConditionVisibility.
+    let mut states: Vec<(String, bool)> = Vec::with_capacity(doc.styles.conditions.len());
+    for (id, def) in doc.styles.conditions.iter() {
+        states.push((id.clone(), def.visible.unwrap_or(true)));
+    }
+    // Activate: members visible, everyone else hidden.
+    let member_set: std::collections::HashSet<&str> =
+        members.iter().map(String::as_str).collect();
+    for (id, def) in doc.styles.conditions.iter_mut() {
+        def.visible = Some(member_set.contains(id.as_str()));
+    }
+    Ok(AppliedOperation {
+        op: Operation::ActivateConditionSet {
+            set: set.to_string(),
+        },
+        inverse: Operation::RestoreConditionVisibility { states },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+fn apply_restore_condition_visibility(
+    doc: &mut Document,
+    states: &[(String, bool)],
+) -> Result<AppliedOperation, OperationError> {
+    // Capture the current state for THIS op's own inverse so a
+    // restore is itself undoable (redo of ActivateConditionSet).
+    let mut prior: Vec<(String, bool)> = Vec::with_capacity(states.len());
+    for (id, vis) in states {
+        if let Some(def) = doc.styles.conditions.get_mut(id) {
+            prior.push((id.clone(), def.visible.unwrap_or(true)));
+            def.visible = Some(*vis);
+        }
+    }
+    Ok(AppliedOperation {
+        op: Operation::RestoreConditionVisibility {
+            states: states.to_vec(),
+        },
+        inverse: Operation::RestoreConditionVisibility { states: prior },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+// ---------------------------------------------------------------------------
+// W0.5 — master application
+// ---------------------------------------------------------------------------
+
+fn apply_master_to_page(
+    doc: &mut Document,
+    page: &str,
+    master: Option<&str>,
+) -> Result<AppliedOperation, OperationError> {
+    let page_ref = find_page_mut(doc, page)
+        .ok_or_else(|| OperationError::NodeNotFound(NodeId::Page(page.to_string())))?;
+    let prev = page_ref.applied_master.clone();
+    page_ref.applied_master = master.map(str::to_string);
+    Ok(AppliedOperation {
+        op: Operation::ApplyMasterToPage {
+            page: page.to_string(),
+            master: master.map(str::to_string),
+        },
+        inverse: Operation::ApplyMasterToPage {
+            page: page.to_string(),
+            master: prev,
+        },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+// ---------------------------------------------------------------------------
+// W0.5 — duplicate page
+// ---------------------------------------------------------------------------
+
+fn apply_duplicate_page(
+    doc: &mut Document,
+    page: &str,
+    clone_spread_json: Option<&str>,
+) -> Result<AppliedOperation, OperationError> {
+    // Redo path — re-materialise the captured clone verbatim.
+    if let Some(json) = clone_spread_json {
+        let restore: SpreadRestore =
+            serde_json::from_str(json).map_err(|e| OperationError::InvalidValue {
+                node: NodeId::Page(page.to_string()),
+                path: PropertyPath::PageBounds,
+                reason: format!("malformed duplicate-page payload: {e}"),
+            })?;
+        let cloned_page_id = restore
+            .spread
+            .pages
+            .first()
+            .and_then(|p| p.self_id.clone())
+            .unwrap_or_default();
+        let index = restore.index.min(doc.spreads.len());
+        doc.spreads.insert(
+            index,
+            paged_scene::ParsedSpread {
+                src: restore.src,
+                spread: restore.spread,
+            },
+        );
+        return Ok(AppliedOperation {
+            op: Operation::DuplicatePage {
+                page: page.to_string(),
+                clone_spread_json: Some(json.to_string()),
+            },
+            inverse: Operation::RemovePage {
+                page_id: cloned_page_id,
+            },
+            invalidation: InvalidationHint {
+                structural: true,
+                ..Default::default()
+            },
+        });
+    }
+
+    let src_idx = doc
+        .spreads
+        .iter()
+        .position(|p| p.spread.pages.iter().any(|pg| pg.self_id.as_deref() == Some(page)))
+        .ok_or_else(|| OperationError::NodeNotFound(NodeId::Page(page.to_string())))?;
+    if doc.spreads[src_idx].spread.pages.len() != 1 {
+        return Err(OperationError::InvalidValue {
+            node: NodeId::Page(page.to_string()),
+            path: PropertyPath::PageBounds,
+            reason: "duplicating a page out of a multi-page spread is not supported in v1"
+                .to_string(),
+        });
+    }
+
+    // Deep-clone the source spread, then remap every Self id to a fresh
+    // one (spread, page, and all page items) so the clone is a distinct
+    // document object. Reuse the id-minting convention used by
+    // InsertPage / id scans (`u<hex>`).
+    let mut clone = doc.spreads[src_idx].clone();
+    let mut next = next_id_seed(doc);
+    let remap = |slot: &mut Option<String>, next: &mut u64| {
+        *slot = Some(format!("u{:x}", *next));
+        *next += 1;
+    };
+    remap(&mut clone.spread.self_id, &mut next);
+    for pg in &mut clone.spread.pages {
+        remap(&mut pg.self_id, &mut next);
+    }
+    for f in &mut clone.spread.text_frames {
+        remap(&mut f.self_id, &mut next);
+    }
+    for r in &mut clone.spread.rectangles {
+        remap(&mut r.self_id, &mut next);
+    }
+    for o in &mut clone.spread.ovals {
+        remap(&mut o.self_id, &mut next);
+    }
+    for l in &mut clone.spread.graphic_lines {
+        remap(&mut l.self_id, &mut next);
+    }
+    for p in &mut clone.spread.polygons {
+        remap(&mut p.self_id, &mut next);
+    }
+    for g in &mut clone.spread.groups {
+        remap(&mut g.self_id, &mut next);
+    }
+
+    // Stack the clone below everything on the pasteboard (same rule as
+    // InsertPage) so spread AABBs never overlap.
+    let mut max_bottom: f32 = 0.0;
+    for parsed in &doc.spreads {
+        let sty = parsed.spread.item_transform.map(|m| m[5]).unwrap_or(0.0);
+        for p in &parsed.spread.pages {
+            let pty = p.item_transform.map(|m| m[5]).unwrap_or(0.0);
+            max_bottom = max_bottom.max(sty + pty + p.bounds.bottom);
+        }
+    }
+    clone.spread.item_transform =
+        Some([1.0, 0.0, 0.0, 1.0, 0.0, max_bottom + SPREAD_STACK_GAP_PT]);
+    let cloned_spread_self = clone.spread.self_id.clone().unwrap_or_default();
+    clone.src = format!("Spreads/Spread_{cloned_spread_self}.xml");
+    let cloned_page_id = clone
+        .spread
+        .pages
+        .first()
+        .and_then(|p| p.self_id.clone())
+        .unwrap_or_default();
+
+    let insert_index = src_idx + 1;
+    // Capture the materialised clone so redo re-creates the exact ids.
+    let restore = SpreadRestore {
+        index: insert_index,
+        src: clone.src.clone(),
+        spread: clone.spread.clone(),
+    };
+    let json = serde_json::to_string(&restore).map_err(|e| OperationError::InvalidValue {
+        node: NodeId::Page(page.to_string()),
+        path: PropertyPath::PageBounds,
+        reason: format!("duplicate-page capture failed: {e}"),
+    })?;
+
+    doc.spreads.insert(insert_index, clone);
+
+    Ok(AppliedOperation {
+        op: Operation::DuplicatePage {
+            page: page.to_string(),
+            clone_spread_json: Some(json),
+        },
+        inverse: Operation::RemovePage {
+            page_id: cloned_page_id,
+        },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+/// Highest `u<hex>` id seen across the document + 1, as a raw counter
+/// for minting a run of fresh ids (DuplicatePage needs many at once).
+fn next_id_seed(doc: &Document) -> u64 {
+    let mut max: u64 = 0;
+    let mut scan = |id: Option<&str>| {
+        let Some(id) = id else { return };
+        let Some(hex) = id.strip_prefix('u') else { return };
+        if hex.is_empty() || hex.len() > 12 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return;
+        }
+        if let Ok(v) = u64::from_str_radix(hex, 16) {
+            max = max.max(v);
+        }
+    };
+    for parsed in &doc.spreads {
+        let s = &parsed.spread;
+        scan(s.self_id.as_deref());
+        for p in &s.pages {
+            scan(p.self_id.as_deref());
+        }
+        for f in &s.text_frames {
+            scan(f.self_id.as_deref());
+        }
+        for r in &s.rectangles {
+            scan(r.self_id.as_deref());
+        }
+        for o in &s.ovals {
+            scan(o.self_id.as_deref());
+        }
+        for l in &s.graphic_lines {
+            scan(l.self_id.as_deref());
+        }
+        for p in &s.polygons {
+            scan(p.self_id.as_deref());
+        }
+        for g in &s.groups {
+            scan(g.self_id.as_deref());
+        }
+    }
+    max + 1
+}
+
+// ---------------------------------------------------------------------------
+// W0.5 — sections
+// ---------------------------------------------------------------------------
+
+/// Map a parsed `NumberingStyle` back to its IDML `PageNumberStyle`
+/// attribute spelling so an inverse op round-trips through
+/// `NumberingStyle::from_idml`. (`NumberingStyle::as_str` yields the
+/// editor's lower-camel wire name, which `from_idml` does NOT accept.)
+fn numbering_style_to_idml(s: paged_parse::NumberingStyle) -> &'static str {
+    use paged_parse::NumberingStyle::*;
+    match s {
+        Arabic => "Arabic",
+        UpperRoman => "UpperRoman",
+        LowerRoman => "LowerRoman",
+        UpperAlpha => "UpperLetters",
+        LowerAlpha => "LowerLetters",
+    }
+}
+
+fn apply_insert_section(
+    doc: &mut Document,
+    at_page: &str,
+    prefix: Option<String>,
+    numbering_style: Option<String>,
+    start_at: Option<u32>,
+    self_id: Option<String>,
+) -> Result<AppliedOperation, OperationError> {
+    // The anchor page must exist.
+    if find_page_mut(doc, at_page).is_none() {
+        return Err(OperationError::NodeNotFound(NodeId::Page(at_page.to_string())));
+    }
+    let sections = &mut doc.container.designmap.sections;
+    let id = match self_id {
+        Some(id) => id,
+        None => {
+            // Deterministic non-colliding `Section/u<n>`.
+            let mut n = sections.len();
+            let mut id = format!("Section/u{n}");
+            while sections.iter().any(|s| s.self_id == id) {
+                n += 1;
+                id = format!("Section/u{n}");
+            }
+            id
+        }
+    };
+    if sections.iter().any(|s| s.self_id == id) {
+        return Err(OperationError::DuplicateNodeId { id });
+    }
+    let section = paged_parse::Section {
+        self_id: id.clone(),
+        page_start: Some(at_page.to_string()),
+        continue_numbering: false,
+        start_at,
+        numbering_style: numbering_style
+            .as_deref()
+            .map(paged_parse::NumberingStyle::from_idml)
+            .unwrap_or(paged_parse::NumberingStyle::Arabic),
+        section_prefix: prefix.clone(),
+        marker: None,
+        include_prefix: prefix.is_some(),
+    };
+    sections.push(section);
+    Ok(AppliedOperation {
+        op: Operation::InsertSection {
+            at_page: at_page.to_string(),
+            prefix,
+            numbering_style,
+            start_at,
+            self_id: Some(id.clone()),
+        },
+        inverse: Operation::DeleteSection { section_id: id },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+fn apply_edit_section(
+    doc: &mut Document,
+    section_id: &str,
+    prefix: Option<Option<String>>,
+    numbering_style: Option<String>,
+    start_at: Option<Option<u32>>,
+) -> Result<AppliedOperation, OperationError> {
+    let sections = &mut doc.container.designmap.sections;
+    let section = sections
+        .iter_mut()
+        .find(|s| s.self_id == section_id)
+        .ok_or_else(|| OperationError::CollectionEntryNotFound {
+            collection: "sections".to_string(),
+            id: section_id.to_string(),
+        })?;
+    // Capture prior values for the inverse.
+    let prev_prefix = section.section_prefix.clone();
+    let prev_style = numbering_style_to_idml(section.numbering_style).to_string();
+    let prev_start = section.start_at;
+
+    if let Some(p) = &prefix {
+        section.section_prefix = p.clone();
+        section.include_prefix = p.is_some();
+    }
+    if let Some(style) = &numbering_style {
+        section.numbering_style = paged_parse::NumberingStyle::from_idml(style);
+    }
+    if let Some(s) = &start_at {
+        section.start_at = *s;
+    }
+
+    Ok(AppliedOperation {
+        op: Operation::EditSection {
+            section_id: section_id.to_string(),
+            prefix,
+            numbering_style,
+            start_at,
+        },
+        inverse: Operation::EditSection {
+            section_id: section_id.to_string(),
+            prefix: Some(prev_prefix),
+            numbering_style: Some(prev_style),
+            start_at: Some(prev_start),
+        },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+fn apply_delete_section(
+    doc: &mut Document,
+    section_id: &str,
+) -> Result<AppliedOperation, OperationError> {
+    let sections = &mut doc.container.designmap.sections;
+    let pos = sections
+        .iter()
+        .position(|s| s.self_id == section_id)
+        .ok_or_else(|| OperationError::CollectionEntryNotFound {
+            collection: "sections".to_string(),
+            id: section_id.to_string(),
+        })?;
+    let removed = sections.remove(pos);
+    let style_str = numbering_style_to_idml(removed.numbering_style).to_string();
+    let at_page = removed.page_start.clone().unwrap_or_default();
+    Ok(AppliedOperation {
+        op: Operation::DeleteSection {
+            section_id: section_id.to_string(),
+        },
+        inverse: Operation::InsertSection {
+            at_page,
+            prefix: removed.section_prefix.clone(),
+            numbering_style: Some(style_str),
+            start_at: removed.start_at,
+            self_id: Some(removed.self_id.clone()),
+        },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
 }

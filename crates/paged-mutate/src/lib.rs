@@ -60,9 +60,9 @@ pub use history::{History, DEFAULT_HISTORY_CAPACITY};
 pub use notify::Notifier;
 pub use path_math::fit_polyline_to_anchors;
 pub use operation::{
-    AppliedOperation, ColorGroupSpec, GradientSpec, GradientStopSpec, InvalidationHint, NodeId,
-    NodeSpec, Operation, PathPointAddress, PathPointRole, PathfinderKind, PropertyPath,
-    StyleCollection, SwatchSpec, Value,
+    AppliedOperation, ColorGroupSpec, FieldKind, GradientSpec, GradientStopSpec,
+    GuideOrientationSpec, InvalidationHint, NodeId, NodeSpec, Operation, PathPointAddress,
+    PathPointRole, PathfinderKind, PropertyPath, StyleCollection, StyleScope, SwatchSpec, Value,
 };
 
 /// Holds a [`Document`] plus the Operation surface, undo/redo
@@ -1302,6 +1302,93 @@ mod tests {
                 node: NodeId::Rectangle("Rectangle/u1".to_string()),
                 path: PropertyPath::FrameTransform,
                 value: Value::Transform(None),
+            },
+            // W0.5 — Oval NodeSpec + every new operation variant.
+            Operation::InsertNode {
+                z_slot: None,
+                parent: NodeId::Spread("Spread/u_main".to_string()),
+                position: 0,
+                node: NodeSpec::Oval {
+                    self_id: "Oval/u_new".to_string(),
+                    bounds: [1.0, 2.0, 3.0, 4.0],
+                    fill_color: Some("Color/Green".to_string()),
+                    stroke_color: None,
+                    stroke_weight: Some(2.0),
+                    item_transform: None,
+                },
+            },
+            Operation::LinkFrames {
+                from: "TextFrame/u1".to_string(),
+                to: "TextFrame/u2".to_string(),
+            },
+            Operation::UnlinkFrames {
+                frame: "TextFrame/u1".to_string(),
+                prev_next: Some("TextFrame/u9".to_string()),
+            },
+            Operation::ApplyStyle {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 5,
+                style: "ParagraphStyle/Body".to_string(),
+                scope: crate::operation::StyleScope::Paragraph,
+            },
+            Operation::InsertField {
+                story_id: "Story/u1".to_string(),
+                offset: 3,
+                field: crate::operation::FieldKind::PageNumber,
+            },
+            Operation::DeleteField {
+                story_id: "Story/u1".to_string(),
+                offset: 3,
+                field: crate::operation::FieldKind::PageNumber,
+            },
+            Operation::InsertGuide {
+                spread_id: "Spread/u_main".to_string(),
+                orientation: crate::operation::GuideOrientationSpec::Vertical,
+                position: 100.0,
+                page_index: 0,
+                guide_id: None,
+            },
+            Operation::MoveGuide {
+                guide_id: "Guide/Spread/u_main/0".to_string(),
+                position: 120.0,
+            },
+            Operation::DeleteGuide {
+                guide_id: "Guide/Spread/u_main/0".to_string(),
+            },
+            Operation::SetConditionVisible {
+                condition: "Condition/A".to_string(),
+                visible: false,
+            },
+            Operation::ActivateConditionSet {
+                set: "ConditionSet/Print".to_string(),
+            },
+            Operation::RestoreConditionVisibility {
+                states: vec![("Condition/A".to_string(), true)],
+            },
+            Operation::ApplyMasterToPage {
+                page: "Page/u1".to_string(),
+                master: Some("MasterSpread/uA".to_string()),
+            },
+            Operation::DuplicatePage {
+                page: "Page/u1".to_string(),
+                clone_spread_json: None,
+            },
+            Operation::InsertSection {
+                at_page: "Page/u1".to_string(),
+                prefix: Some("A-".to_string()),
+                numbering_style: Some("UpperRoman".to_string()),
+                start_at: Some(1),
+                self_id: None,
+            },
+            Operation::EditSection {
+                section_id: "Section/u0".to_string(),
+                prefix: Some(None),
+                numbering_style: Some("Arabic".to_string()),
+                start_at: Some(Some(5)),
+            },
+            Operation::DeleteSection {
+                section_id: "Section/u0".to_string(),
             },
         ];
 
@@ -5123,5 +5210,574 @@ mod tests {
             ))
             .unwrap_err();
         assert!(matches!(err, OperationError::UnsupportedProperty { .. }));
+    }
+
+    // =======================================================================
+    // W0.5 — wire-expansion operations
+    // =======================================================================
+    mod w05 {
+        use super::*;
+        use crate::operation::{FieldKind, GuideOrientationSpec, StyleScope};
+        use paged_parse::styles::ConditionSetDef;
+        use paged_parse::{Bounds, CharacterRun, ConditionDef, Paragraph, Spread, Story};
+        use paged_scene::ParsedStory;
+        use std::collections::BTreeMap;
+
+        fn base_doc() -> Document {
+            Document {
+                container: Container {
+                    mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
+                    designmap_raw: Bytes::new(),
+                    designmap: DesignMap::default(),
+                    entries: BTreeMap::new(),
+                },
+                palette: Graphic::default(),
+                spreads: Vec::new(),
+                stories: Vec::new(),
+                master_spreads: HashMap::new(),
+                frame_for_story: HashMap::new(),
+                text_frame_index: HashMap::new(),
+                styles: StyleSheet::default(),
+                anchors: Vec::new(),
+            }
+        }
+
+        fn text_frame(self_id: &str, story: Option<&str>) -> ParsedTextFrame {
+            let mut f = empty_text_frame(
+                self_id,
+                Bounds {
+                    top: 0.0,
+                    left: 0.0,
+                    bottom: 100.0,
+                    right: 200.0,
+                },
+            );
+            f.parent_story = story.map(str::to_string);
+            f
+        }
+
+        fn page(self_id: &str) -> paged_parse::Page {
+            paged_parse::Page {
+                self_id: Some(self_id.to_string()),
+                bounds: Bounds {
+                    top: 0.0,
+                    left: 0.0,
+                    bottom: 792.0,
+                    right: 612.0,
+                },
+                applied_master: None,
+                item_transform: None,
+                master_page_transform: None,
+                override_list: Vec::new(),
+                name: None,
+                show_master_items: None,
+            }
+        }
+
+        /// Doc with two text frames (one carrying a story, one empty)
+        /// on a single spread.
+        fn doc_two_frames() -> Document {
+            let mut spread = Spread::default();
+            spread.self_id = Some("Spread/u_main".to_string());
+            spread.text_frames.push(text_frame("TextFrame/from", Some("Story/u1")));
+            spread.text_frames.push(text_frame("TextFrame/to", None));
+            let story = Story {
+                paragraphs: vec![{
+                    let mut p = Paragraph::default();
+                    p.runs.push(CharacterRun {
+                        text: "Hello world".to_string(),
+                        point_size: Some(10.0),
+                        ..CharacterRun::default()
+                    });
+                    p
+                }],
+                ..Story::default()
+            };
+            let mut doc = base_doc();
+            doc.spreads.push(paged_scene::ParsedSpread {
+                src: "Spreads/Spread_u_main.xml".to_string(),
+                spread,
+            });
+            doc.stories.push(ParsedStory {
+                src: "Stories/Story_u1.xml".to_string(),
+                self_id: "Story/u1".to_string(),
+                story,
+            });
+            doc
+        }
+
+        // ---- LinkFrames / UnlinkFrames ----------------------------------
+
+        #[test]
+        fn link_then_unlink_round_trips() {
+            let mut p = Project::new(doc_two_frames());
+            let applied = p
+                .apply(Operation::LinkFrames {
+                    from: "TextFrame/from".to_string(),
+                    to: "TextFrame/to".to_string(),
+                })
+                .expect("link must succeed");
+            assert_eq!(
+                p.document().spreads[0].spread.text_frames[0].next_text_frame.as_deref(),
+                Some("TextFrame/to")
+            );
+            // Inverse clears the link.
+            assert_eq!(
+                applied.inverse,
+                Operation::UnlinkFrames {
+                    frame: "TextFrame/from".to_string(),
+                    prev_next: None,
+                }
+            );
+            p.undo().expect("undo");
+            assert!(p.document().spreads[0].spread.text_frames[0]
+                .next_text_frame
+                .is_none());
+            p.redo().expect("redo");
+            assert_eq!(
+                p.document().spreads[0].spread.text_frames[0].next_text_frame.as_deref(),
+                Some("TextFrame/to")
+            );
+        }
+
+        #[test]
+        fn link_to_nonempty_frame_is_rejected() {
+            let mut doc = doc_two_frames();
+            // Give the `to` frame its own non-empty story.
+            doc.spreads[0].spread.text_frames[1].parent_story = Some("Story/u2".to_string());
+            doc.stories.push(ParsedStory {
+                src: "Stories/Story_u2.xml".to_string(),
+                self_id: "Story/u2".to_string(),
+                story: Story {
+                    paragraphs: vec![{
+                        let mut p = Paragraph::default();
+                        p.runs.push(CharacterRun {
+                            text: "occupied".to_string(),
+                            ..CharacterRun::default()
+                        });
+                        p
+                    }],
+                    ..Story::default()
+                },
+            });
+            let mut p = Project::new(doc);
+            let err = p
+                .apply(Operation::LinkFrames {
+                    from: "TextFrame/from".to_string(),
+                    to: "TextFrame/to".to_string(),
+                })
+                .unwrap_err();
+            assert!(matches!(err, OperationError::InvalidValue { .. }));
+        }
+
+        #[test]
+        fn link_creating_a_cycle_is_rejected() {
+            let mut doc = doc_two_frames();
+            // Pre-thread: from → to already. Linking to → from closes a
+            // cycle.
+            doc.spreads[0].spread.text_frames[0].next_text_frame =
+                Some("TextFrame/to".to_string());
+            let mut p = Project::new(doc);
+            let err = p
+                .apply(Operation::LinkFrames {
+                    from: "TextFrame/to".to_string(),
+                    to: "TextFrame/from".to_string(),
+                })
+                .unwrap_err();
+            assert!(matches!(err, OperationError::InvalidValue { .. }));
+        }
+
+        // ---- ApplyStyle --------------------------------------------------
+
+        #[test]
+        fn apply_paragraph_style_round_trips() {
+            let mut p = Project::new(document_with_one_story("Story/u1"));
+            let applied = p
+                .apply(Operation::ApplyStyle {
+                    story_id: "Story/u1".to_string(),
+                    start: 0,
+                    end: 6,
+                    style: "ParagraphStyle/Heading".to_string(),
+                    scope: StyleScope::Paragraph,
+                })
+                .expect("apply style");
+            assert_eq!(
+                p.document().stories[0].story.paragraphs[0].paragraph_style.as_deref(),
+                Some("ParagraphStyle/Heading")
+            );
+            crate::apply(p.document_mut(), &applied.inverse).expect("undo");
+            assert!(p.document().stories[0].story.paragraphs[0]
+                .paragraph_style
+                .is_none());
+        }
+
+        #[test]
+        fn apply_character_style_splits_runs_and_round_trips() {
+            let mut p = Project::new(document_with_one_story("Story/u1"));
+            // [0,6) covers "Hello " exactly (run boundary).
+            let applied = p
+                .apply(Operation::ApplyStyle {
+                    story_id: "Story/u1".to_string(),
+                    start: 0,
+                    end: 6,
+                    style: "CharacterStyle/Emph".to_string(),
+                    scope: StyleScope::Character,
+                })
+                .expect("apply char style");
+            assert_eq!(
+                p.document().stories[0].story.paragraphs[0].runs[0].character_style.as_deref(),
+                Some("CharacterStyle/Emph")
+            );
+            crate::apply(p.document_mut(), &applied.inverse).expect("undo");
+            assert!(p.document().stories[0].story.paragraphs[0].runs[0]
+                .character_style
+                .is_none());
+        }
+
+        // ---- InsertField -------------------------------------------------
+
+        #[test]
+        fn insert_page_number_field_round_trips() {
+            let mut p = Project::new(document_with_one_story("Story/u1"));
+            let applied = p
+                .apply(Operation::InsertField {
+                    story_id: "Story/u1".to_string(),
+                    offset: 0,
+                    field: FieldKind::PageNumber,
+                })
+                .expect("insert field");
+            // The U+E018 marker now leads the first run.
+            assert!(p.document().stories[0].story.paragraphs[0].runs[0]
+                .text
+                .starts_with('\u{E018}'));
+            assert_eq!(
+                applied.inverse,
+                Operation::DeleteField {
+                    story_id: "Story/u1".to_string(),
+                    offset: 0,
+                    field: FieldKind::PageNumber,
+                }
+            );
+            crate::apply(p.document_mut(), &applied.inverse).expect("undo");
+            assert!(!p.document().stories[0].story.paragraphs[0].runs[0]
+                .text
+                .contains('\u{E018}'));
+        }
+
+        // ---- Guide CRUD --------------------------------------------------
+
+        fn doc_with_spread() -> Document {
+            let mut spread = Spread::default();
+            spread.self_id = Some("Spread/u_main".to_string());
+            spread.pages.push(page("Page/u1"));
+            let mut doc = base_doc();
+            doc.spreads.push(paged_scene::ParsedSpread {
+                src: "Spreads/Spread_u_main.xml".to_string(),
+                spread,
+            });
+            doc
+        }
+
+        #[test]
+        fn guide_insert_move_delete_round_trip() {
+            let mut p = Project::new(doc_with_spread());
+            let applied = p
+                .apply(Operation::InsertGuide {
+                    spread_id: "Spread/u_main".to_string(),
+                    orientation: GuideOrientationSpec::Vertical,
+                    position: 100.0,
+                    page_index: 0,
+                    guide_id: None,
+                })
+                .expect("insert guide");
+            assert_eq!(p.document().spreads[0].spread.guides.len(), 1);
+            let gid = match &applied.op {
+                Operation::InsertGuide { guide_id, .. } => guide_id.clone().unwrap(),
+                _ => unreachable!(),
+            };
+            // Move it.
+            let moved = p
+                .apply(Operation::MoveGuide {
+                    guide_id: gid.clone(),
+                    position: 150.0,
+                })
+                .expect("move guide");
+            assert_eq!(p.document().spreads[0].spread.guides[0].location, 150.0);
+            assert_eq!(
+                moved.inverse,
+                Operation::MoveGuide {
+                    guide_id: gid.clone(),
+                    position: 100.0,
+                }
+            );
+            // Delete it; undo restores geometry.
+            p.apply(Operation::DeleteGuide { guide_id: gid.clone() })
+                .expect("delete guide");
+            assert_eq!(p.document().spreads[0].spread.guides.len(), 0);
+            p.undo().expect("undo delete");
+            assert_eq!(p.document().spreads[0].spread.guides.len(), 1);
+            assert_eq!(p.document().spreads[0].spread.guides[0].location, 150.0);
+        }
+
+        #[test]
+        fn delete_missing_guide_is_rejected() {
+            let mut p = Project::new(doc_with_spread());
+            let err = p
+                .apply(Operation::DeleteGuide {
+                    guide_id: "Guide/Spread/u_main/0".to_string(),
+                })
+                .unwrap_err();
+            assert!(matches!(err, OperationError::CollectionEntryNotFound { .. }));
+        }
+
+        // ---- Conditions --------------------------------------------------
+
+        fn doc_with_conditions() -> Document {
+            let mut doc = base_doc();
+            let mut conditions: BTreeMap<String, ConditionDef> = BTreeMap::new();
+            conditions.insert(
+                "Condition/A".to_string(),
+                ConditionDef {
+                    self_id: "Condition/A".to_string(),
+                    name: Some("A".to_string()),
+                    visible: Some(true),
+                    indicator_method: None,
+                },
+            );
+            conditions.insert(
+                "Condition/B".to_string(),
+                ConditionDef {
+                    self_id: "Condition/B".to_string(),
+                    name: Some("B".to_string()),
+                    visible: Some(true),
+                    indicator_method: None,
+                },
+            );
+            let mut sets: BTreeMap<String, ConditionSetDef> = BTreeMap::new();
+            sets.insert(
+                "ConditionSet/Print".to_string(),
+                ConditionSetDef {
+                    self_id: "ConditionSet/Print".to_string(),
+                    name: Some("Print".to_string()),
+                    conditions: vec!["Condition/A".to_string()],
+                },
+            );
+            doc.styles.conditions = conditions;
+            doc.styles.condition_sets = sets;
+            doc
+        }
+
+        #[test]
+        fn set_condition_visible_round_trips() {
+            let mut p = Project::new(doc_with_conditions());
+            let applied = p
+                .apply(Operation::SetConditionVisible {
+                    condition: "Condition/A".to_string(),
+                    visible: false,
+                })
+                .expect("set visible");
+            assert_eq!(
+                p.document().styles.conditions["Condition/A"].visible,
+                Some(false)
+            );
+            assert_eq!(
+                applied.inverse,
+                Operation::SetConditionVisible {
+                    condition: "Condition/A".to_string(),
+                    visible: true,
+                }
+            );
+            p.undo().expect("undo");
+            assert_eq!(
+                p.document().styles.conditions["Condition/A"].visible,
+                Some(true)
+            );
+        }
+
+        #[test]
+        fn activate_condition_set_round_trips() {
+            let mut p = Project::new(doc_with_conditions());
+            p.apply(Operation::ActivateConditionSet {
+                set: "ConditionSet/Print".to_string(),
+            })
+            .expect("activate set");
+            // Member A visible, non-member B hidden.
+            assert_eq!(
+                p.document().styles.conditions["Condition/A"].visible,
+                Some(true)
+            );
+            assert_eq!(
+                p.document().styles.conditions["Condition/B"].visible,
+                Some(false)
+            );
+            p.undo().expect("undo");
+            // Restored to the prior (both visible).
+            assert_eq!(
+                p.document().styles.conditions["Condition/A"].visible,
+                Some(true)
+            );
+            assert_eq!(
+                p.document().styles.conditions["Condition/B"].visible,
+                Some(true)
+            );
+        }
+
+        // ---- ApplyMasterToPage ------------------------------------------
+
+        #[test]
+        fn apply_master_to_page_round_trips() {
+            let mut p = Project::new(doc_with_spread());
+            let applied = p
+                .apply(Operation::ApplyMasterToPage {
+                    page: "Page/u1".to_string(),
+                    master: Some("MasterSpread/uA".to_string()),
+                })
+                .expect("apply master");
+            assert_eq!(
+                p.document().spreads[0].spread.pages[0].applied_master.as_deref(),
+                Some("MasterSpread/uA")
+            );
+            assert_eq!(
+                applied.inverse,
+                Operation::ApplyMasterToPage {
+                    page: "Page/u1".to_string(),
+                    master: None,
+                }
+            );
+            p.undo().expect("undo");
+            assert!(p.document().spreads[0].spread.pages[0]
+                .applied_master
+                .is_none());
+        }
+
+        // ---- DuplicatePage ----------------------------------------------
+
+        #[test]
+        fn duplicate_page_clones_with_fresh_ids_and_round_trips() {
+            let mut doc = doc_with_spread();
+            // Put a rectangle on the source spread so the clone copies it.
+            doc.spreads[0].spread.rectangles.push(crate::apply::new_rectangle(
+                "Rectangle/r1".to_string(),
+                Bounds { top: 1.0, left: 1.0, bottom: 50.0, right: 50.0 },
+                Some("Color/Red".to_string()),
+            ));
+            let mut p = Project::new(doc);
+            let applied = p
+                .apply(Operation::DuplicatePage {
+                    page: "Page/u1".to_string(),
+                    clone_spread_json: None,
+                })
+                .expect("duplicate page");
+            assert_eq!(p.document().spreads.len(), 2);
+            // The clone's page id differs from the source.
+            let clone_page = p.document().spreads[1].spread.pages[0].self_id.clone();
+            assert_ne!(clone_page.as_deref(), Some("Page/u1"));
+            // The clone carries a copied rectangle with a fresh id.
+            assert_eq!(p.document().spreads[1].spread.rectangles.len(), 1);
+            assert_ne!(
+                p.document().spreads[1].spread.rectangles[0].self_id.as_deref(),
+                Some("Rectangle/r1")
+            );
+            // Inverse removes the cloned page.
+            assert!(matches!(applied.inverse, Operation::RemovePage { .. }));
+            p.undo().expect("undo");
+            assert_eq!(p.document().spreads.len(), 1);
+            p.redo().expect("redo");
+            assert_eq!(p.document().spreads.len(), 2);
+        }
+
+        // ---- Sections ----------------------------------------------------
+
+        #[test]
+        fn insert_edit_delete_section_round_trip() {
+            let mut p = Project::new(doc_with_spread());
+            let applied = p
+                .apply(Operation::InsertSection {
+                    at_page: "Page/u1".to_string(),
+                    prefix: Some("A-".to_string()),
+                    numbering_style: Some("UpperRoman".to_string()),
+                    start_at: Some(1),
+                    self_id: None,
+                })
+                .expect("insert section");
+            assert_eq!(p.document().container.designmap.sections.len(), 1);
+            let sid = match &applied.op {
+                Operation::InsertSection { self_id, .. } => self_id.clone().unwrap(),
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                p.document().container.designmap.sections[0].numbering_style,
+                paged_parse::NumberingStyle::UpperRoman
+            );
+            // Edit it.
+            p.apply(Operation::EditSection {
+                section_id: sid.clone(),
+                prefix: Some(None),
+                numbering_style: Some("Arabic".to_string()),
+                start_at: Some(Some(5)),
+            })
+            .expect("edit section");
+            assert_eq!(
+                p.document().container.designmap.sections[0].numbering_style,
+                paged_parse::NumberingStyle::Arabic
+            );
+            assert_eq!(
+                p.document().container.designmap.sections[0].start_at,
+                Some(5)
+            );
+            // Undo the edit restores UpperRoman + prefix.
+            p.undo().expect("undo edit");
+            assert_eq!(
+                p.document().container.designmap.sections[0].numbering_style,
+                paged_parse::NumberingStyle::UpperRoman
+            );
+            assert_eq!(
+                p.document().container.designmap.sections[0].section_prefix.as_deref(),
+                Some("A-")
+            );
+            // Delete + undo restores it.
+            p.apply(Operation::DeleteSection { section_id: sid.clone() })
+                .expect("delete section");
+            assert_eq!(p.document().container.designmap.sections.len(), 0);
+            p.undo().expect("undo delete");
+            assert_eq!(p.document().container.designmap.sections.len(), 1);
+        }
+
+        // ---- Oval NodeSpec ----------------------------------------------
+
+        #[test]
+        fn insert_oval_round_trips() {
+            let mut p = Project::new(doc_with_spread());
+            let before = format!("{:?}", p.document().spreads[0].spread.ovals);
+            let applied = p
+                .apply(Operation::InsertNode {
+                    parent: NodeId::Spread("Spread/u_main".to_string()),
+                    position: 0,
+                    node: NodeSpec::Oval {
+                        self_id: "Oval/o1".to_string(),
+                        bounds: [10.0, 20.0, 60.0, 120.0],
+                        fill_color: Some("Color/Blue".to_string()),
+                        stroke_color: Some("Color/Black".to_string()),
+                        stroke_weight: Some(2.0),
+                        item_transform: None,
+                    },
+                    z_slot: None,
+                })
+                .expect("insert oval");
+            assert_eq!(p.document().spreads[0].spread.ovals.len(), 1);
+            assert_eq!(
+                p.document().spreads[0].spread.ovals[0].self_id.as_deref(),
+                Some("Oval/o1")
+            );
+            assert!(matches!(applied.inverse, Operation::RemoveNode { .. }));
+            // Undo removes it byte-identically; redo brings it back.
+            p.undo().expect("undo");
+            assert_eq!(
+                format!("{:?}", p.document().spreads[0].spread.ovals),
+                before
+            );
+            p.redo().expect("redo");
+            assert_eq!(p.document().spreads[0].spread.ovals.len(), 1);
+        }
     }
 }

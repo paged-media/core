@@ -2286,4 +2286,119 @@ mod tests {
         let cy = (out.top + out.bottom) * 0.5;
         assert!((cy - 50.0).abs() < 1e-3, "cy={cy}");
     }
+
+    // ---- Phase G — content-transform gestures (RotateContent /
+    //      ScaleContent) -----------------------------------------------------
+
+    #[test]
+    fn rotate_content_pivot_is_fixed_under_rotation() {
+        // Rotating about a pivot must leave the pivot point itself
+        // unmoved: applying the resulting transform to `pivot` returns
+        // `pivot`.
+        let m = IDENTITY;
+        let pivot = (40.0, 60.0);
+        let out = rotate_matrix_about_pivot_local(m, std::f32::consts::FRAC_PI_2, pivot);
+        // Map pivot through `out`: (a*x + c*y + tx, b*x + d*y + ty).
+        let [a, bb, c, d, tx, ty] = out;
+        let px = a * pivot.0 + c * pivot.1 + tx;
+        let py = bb * pivot.0 + d * pivot.1 + ty;
+        assert!((px - pivot.0).abs() < 1e-3, "px={px}");
+        assert!((py - pivot.1).abs() < 1e-3, "py={py}");
+    }
+
+    #[test]
+    fn rotate_content_90_maps_basis_correctly() {
+        // 90° CCW about the origin: x-basis (1,0) → (0,1).
+        let out = rotate_matrix_about_pivot_local(IDENTITY, std::f32::consts::FRAC_PI_2, (0.0, 0.0));
+        let [a, b, _c, _d, _tx, _ty] = out;
+        assert!(a.abs() < 1e-3, "a={a}");
+        assert!((b - 1.0).abs() < 1e-3, "b={b}");
+    }
+
+    #[test]
+    fn scale_content_pivot_is_fixed_under_scale() {
+        // Scaling about a pivot leaves the pivot point itself put.
+        let m = IDENTITY;
+        let pivot = (30.0, 30.0);
+        let out = scale_matrix_about_pivot_local(m, 2.0, 3.0, pivot);
+        let [a, bb, c, d, tx, ty] = out;
+        let px = a * pivot.0 + c * pivot.1 + tx;
+        let py = bb * pivot.0 + d * pivot.1 + ty;
+        assert!((px - pivot.0).abs() < 1e-3, "px={px}");
+        assert!((py - pivot.1).abs() < 1e-3, "py={py}");
+    }
+
+    #[test]
+    fn scale_factors_ratio_from_anchor_and_delta() {
+        // Anchor 100 right of pivot; drag +50 → sx = 1.5. Anchor 50
+        // below pivot; no y delta → sy = 1.0.
+        let (sx, sy) = compute_scale_factors((100.0, 50.0), (50.0, 0.0), (0.0, 0.0), NONE);
+        assert!((sx - 1.5).abs() < 1e-3, "sx={sx}");
+        assert!((sy - 1.0).abs() < 1e-3, "sy={sy}");
+    }
+
+    #[test]
+    fn scale_factors_shift_locks_to_dominant_axis() {
+        // sx = 1.5 (|Δ|=0.5), sy = 1.2 (|Δ|=0.2): Shift picks the
+        // dominant (sx) for both axes — uniform scale.
+        let (sx, sy) = compute_scale_factors((100.0, 100.0), (50.0, 20.0), (0.0, 0.0), SHIFT);
+        assert!((sx - 1.5).abs() < 1e-3, "sx={sx}");
+        assert!((sy - 1.5).abs() < 1e-3, "sy={sy}");
+    }
+
+    /// Build an image-frame snapshot + a content-gesture session, run
+    /// `compute_node_mutation`, and return the resulting NodeMutation.
+    fn content_gesture_mutation(gesture: GestureType) -> NodeMutation {
+        let snap = NodeSnapshot {
+            id: ElementId::Rectangle("Rectangle/u1".to_string()),
+            node_id: NodeId::Rectangle("Rectangle/u1".to_string()),
+            bounds: b(0.0, 0.0, 100.0, 100.0),
+            item_transform: None,
+            image_item_transform: Some(IDENTITY),
+            path_anchors: Vec::new(),
+        };
+        let session = GestureSession {
+            handle: GestureHandle(0),
+            gesture,
+            snapshots: vec![snap.clone()],
+            current_delta: Some((0.0, 50.0)),
+            modifiers: NONE,
+            anchor_spread: Some((100.0, 50.0)),
+            pivot_spread: Some((50.0, 50.0)),
+            camera_scale: None,
+        };
+        compute_node_mutation(&snap, &session, (0.0, 50.0))
+    }
+
+    #[test]
+    fn rotate_content_gesture_emits_image_transform_op() {
+        // Phase G — RotateContent produces an ImageTransform mutation
+        // (not a frame transform); build_op_from_mutation maps it to a
+        // SetProperty on ImageContentTransform.
+        let mutation = content_gesture_mutation(GestureType::RotateContent);
+        assert!(matches!(mutation, NodeMutation::ImageTransform(Some(_))));
+        let snap = NodeSnapshot {
+            id: ElementId::Rectangle("Rectangle/u1".to_string()),
+            node_id: NodeId::Rectangle("Rectangle/u1".to_string()),
+            bounds: b(0.0, 0.0, 100.0, 100.0),
+            item_transform: None,
+            image_item_transform: Some(IDENTITY),
+            path_anchors: Vec::new(),
+        };
+        let op = build_op_from_mutation(&snap, mutation);
+        assert!(matches!(
+            op,
+            paged_mutate::Operation::SetProperty {
+                path: paged_mutate::PropertyPath::ImageContentTransform,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn scale_content_gesture_emits_image_transform_op() {
+        // Phase G — ScaleContent likewise targets ImageContentTransform.
+        let mutation = content_gesture_mutation(GestureType::ScaleContent);
+        assert!(matches!(mutation, NodeMutation::ImageTransform(Some(_))));
+    }
 }

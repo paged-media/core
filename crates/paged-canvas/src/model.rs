@@ -1269,6 +1269,10 @@ impl CanvasModel {
                 Mutation::InsertPage { .. }
                     | Mutation::DeletePage { .. }
                     | Mutation::ResizePage { .. }
+                    // W0.5 — DuplicatePage adds a spread; the others
+                    // change page labels/masters but keep the page
+                    // count, so they don't force a grid rebuild.
+                    | Mutation::DuplicatePage { .. }
             );
             return Ok(MutationOutcome {
                 applied_seq: outcome.applied_seq,
@@ -1882,6 +1886,124 @@ impl CanvasModel {
                 style_id: style_id.clone(),
                 path: *path,
                 value: value.clone(),
+            }),
+            // ── W0.5 wire-expansion ─────────────────────────────────
+            Mutation::InsertOval { page_id, bounds } => {
+                let (spread_id, (ox, oy), idx) = self.page_insert_context(page_id)?;
+                let position = self.scene.spreads[idx].spread.ovals.len();
+                let d = &self.document_defaults;
+                Some(Operation::InsertNode {
+                    parent: NodeId::Spread(spread_id),
+                    position,
+                    node: paged_mutate::NodeSpec::Oval {
+                        self_id: self.mint_page_item_id(),
+                        // Page-local (top, left, bottom, right) → spread
+                        // coords (same rule as InsertFrame).
+                        bounds: [
+                            bounds.0 + oy,
+                            bounds.1 + ox,
+                            bounds.2 + oy,
+                            bounds.3 + ox,
+                        ],
+                        fill_color: d.fill_color.clone(),
+                        stroke_color: d.stroke_color.clone(),
+                        stroke_weight: d.stroke_weight,
+                        item_transform: None,
+                    },
+                    z_slot: None,
+                })
+            }
+            Mutation::LinkFrames { from, to } => Some(Operation::LinkFrames {
+                from: from.clone(),
+                to: to.clone(),
+            }),
+            Mutation::UnlinkFrames { frame } => Some(Operation::UnlinkFrames {
+                frame: frame.clone(),
+                prev_next: None,
+            }),
+            Mutation::ApplyStyle {
+                story_id,
+                start,
+                end,
+                style,
+                scope,
+            } => Some(Operation::ApplyStyle {
+                story_id: story_id.clone(),
+                start: *start,
+                end: *end,
+                style: style.clone(),
+                scope: *scope,
+            }),
+            Mutation::InsertField {
+                story_id,
+                offset,
+                field,
+            } => Some(Operation::InsertField {
+                story_id: story_id.clone(),
+                offset: *offset,
+                field: *field,
+            }),
+            Mutation::InsertGuide {
+                spread_id,
+                orientation,
+                position,
+                page_index,
+            } => Some(Operation::InsertGuide {
+                spread_id: spread_id.clone(),
+                orientation: *orientation,
+                position: *position,
+                page_index: *page_index,
+                guide_id: None,
+            }),
+            Mutation::MoveGuide { guide_id, position } => Some(Operation::MoveGuide {
+                guide_id: guide_id.clone(),
+                position: *position,
+            }),
+            Mutation::DeleteGuide { guide_id } => Some(Operation::DeleteGuide {
+                guide_id: guide_id.clone(),
+            }),
+            Mutation::SetConditionVisible { condition, visible } => {
+                Some(Operation::SetConditionVisible {
+                    condition: condition.clone(),
+                    visible: *visible,
+                })
+            }
+            Mutation::ActivateConditionSet { set } => {
+                Some(Operation::ActivateConditionSet { set: set.clone() })
+            }
+            Mutation::ApplyMasterToPage { page, master } => Some(Operation::ApplyMasterToPage {
+                page: page.0.clone(),
+                master: master.clone(),
+            }),
+            Mutation::DuplicatePage { page } => Some(Operation::DuplicatePage {
+                page: page.0.clone(),
+                clone_spread_json: None,
+            }),
+            Mutation::InsertSection {
+                at_page,
+                prefix,
+                numbering_style,
+                start_at,
+            } => Some(Operation::InsertSection {
+                at_page: at_page.0.clone(),
+                prefix: prefix.clone(),
+                numbering_style: numbering_style.clone(),
+                start_at: *start_at,
+                self_id: None,
+            }),
+            Mutation::EditSection {
+                section_id,
+                prefix,
+                numbering_style,
+                start_at,
+            } => Some(Operation::EditSection {
+                section_id: section_id.clone(),
+                prefix: prefix.clone(),
+                numbering_style: numbering_style.clone(),
+                start_at: *start_at,
+            }),
+            Mutation::DeleteSection { section_id } => Some(Operation::DeleteSection {
+                section_id: section_id.clone(),
             }),
             _ => None,
         }

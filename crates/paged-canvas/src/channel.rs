@@ -65,7 +65,20 @@ export type WorkerToMain = WorkerToMainKind & {
 /// loud than to silently desync.
 /// v27: NodeSpec carries item_transform (RemoveNode → undo keeps the
 /// frame in place instead of snapping to the page origin).
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(27);
+/// v28 (W0.5/W0.6): the final wire-expansion bump. Covers
+///   - W0.6 caret queries: `RequestCaretNav` / `RequestLineBounds`
+///     requests + `CaretNavResult` / `LineBoundsResult` replies.
+///   - W0.5 operations reachable via `Mutation` translation:
+///     `LinkFrames` / `UnlinkFrames` (frame threading), `ApplyStyle`
+///     (named para/char style over a story range), `InsertField`
+///     (page-number marker), guide CRUD (`InsertGuide` / `MoveGuide` /
+///     `DeleteGuide`), `SetConditionVisible` / `ActivateConditionSet`,
+///     `ApplyMasterToPage`, `DuplicatePage`, section ops
+///     (`InsertSection` / `EditSection` / `DeleteSection`), and the
+///     `NodeSpec::Oval` insert kind. (The new `paged_mutate::Operation`
+///     variants ride the existing `Mutate(Mutation)` envelope, so the
+///     Mutation enum gains the variants below.)
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(28);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -264,7 +277,6 @@ pub enum MainToWorkerKind {
     /// targeting the column nearest the source caret's x. Reply:
     /// `CaretNavResult` whose `offset` is `None` when there's no line
     /// in that direction (caret already on the first/last line).
-    // PROTOCOL: needs bump (W0.6 caret queries)
     RequestCaretNav {
         story_id: String,
         offset: u32,
@@ -273,7 +285,6 @@ pub enum MainToWorkerKind {
     /// panels.md (W0.6 caret queries) — the `[line_start, line_end]`
     /// story offsets of the visible line containing `offset` (Home /
     /// End targets). Reply: `LineBoundsResult`.
-    // PROTOCOL: needs bump (W0.6 caret queries)
     RequestLineBounds { story_id: String, offset: u32 },
     /// Undo the most recent applied mutation. Reply: `UndoApplied`
     /// or `MutationFailed` (when the log is empty).
@@ -635,7 +646,6 @@ pub enum WorkerToMainKind {
     /// panels.md (W0.6 caret queries) — `RequestCaretNav` reply.
     /// `offset` is the destination story offset, or `None` when there
     /// was no line in the requested direction.
-    // PROTOCOL: needs bump (W0.6 caret queries)
     CaretNavResult {
         #[serde(default)]
         offset: Option<u32>,
@@ -643,7 +653,6 @@ pub enum WorkerToMainKind {
     /// panels.md (W0.6 caret queries) — `RequestLineBounds` reply.
     /// `None` when the offset doesn't fall on a visible line (story
     /// has no captured layout).
-    // PROTOCOL: needs bump (W0.6 caret queries)
     LineBoundsResult {
         #[serde(default)]
         bounds: Option<crate::geometry::LineBounds>,
@@ -1745,16 +1754,23 @@ pub enum Mutation {
         start: u32,
         end: u32,
     },
+    /// W0.5 — apply a named paragraph/character style to a story
+    /// range. `scope` picks the level; `style` is the style ref
+    /// (`ParagraphStyle/<id>` or `CharacterStyle/<id>`). Routes to
+    /// `Operation::ApplyStyle`.
     ApplyStyle {
         story_id: String,
         start: u32,
         end: u32,
-        attributes: serde_json::Value,
+        style: String,
+        scope: paged_mutate::operation::StyleScope,
     },
+    /// W0.5 — insert a field marker (page-number etc.) at a story
+    /// offset. Routes to `Operation::InsertField`.
     InsertField {
         story_id: String,
         offset: u32,
-        field_kind: String,
+        field: paged_mutate::operation::FieldKind,
     },
     MoveFrame {
         frame_id: String,
@@ -1764,13 +1780,16 @@ pub enum Mutation {
         frame_id: String,
         bounds: (f32, f32, f32, f32),
     },
+    /// W0.5 — thread `from`'s overflow into the empty frame `to`.
+    /// Routes to `Operation::LinkFrames`.
     LinkFrames {
-        frame_a: String,
-        frame_b: String,
+        from: String,
+        to: String,
     },
+    /// W0.5 — break the thread leaving `frame`. Routes to
+    /// `Operation::UnlinkFrames`.
     UnlinkFrames {
-        chain_id: String,
-        after_frame: String,
+        frame: String,
     },
     InsertPage {
         after_page_id: Option<PageId>,
@@ -2141,6 +2160,76 @@ pub enum Mutation {
         path: paged_mutate::PropertyPath,
         value: paged_mutate::Value,
     },
+    // ── W0.5 wire-expansion ─────────────────────────────────────────
+    /// W0.5 — insert an Oval (Ellipse tool). `page_id` + page-local
+    /// `bounds` `(top, left, bottom, right)`; the model resolves the
+    /// host spread and mints the self id (mirrors `InsertFrame`).
+    InsertOval {
+        page_id: PageId,
+        bounds: (f32, f32, f32, f32),
+    },
+    /// W0.5 — insert a ruler guide. `position` is page-local on the
+    /// perpendicular axis. Routes to `Operation::InsertGuide`.
+    InsertGuide {
+        spread_id: String,
+        orientation: paged_mutate::operation::GuideOrientationSpec,
+        position: f32,
+        #[serde(default)]
+        page_index: u32,
+    },
+    /// W0.5 — move a guide by its `Operation::InsertGuide`-minted id.
+    MoveGuide {
+        guide_id: String,
+        position: f32,
+    },
+    /// W0.5 — delete a guide.
+    DeleteGuide {
+        guide_id: String,
+    },
+    /// W0.5 — flip a condition's visibility.
+    SetConditionVisible {
+        condition: String,
+        visible: bool,
+    },
+    /// W0.5 — "show only this set": activate one `<ConditionSet>`.
+    ActivateConditionSet {
+        set: String,
+    },
+    /// W0.5 — set a page's applied master (`None` detaches).
+    ApplyMasterToPage {
+        page: PageId,
+        #[serde(default)]
+        master: Option<String>,
+    },
+    /// W0.5 — duplicate a single-page spread after the source.
+    DuplicatePage {
+        page: PageId,
+    },
+    /// W0.5 — insert a `<Section>` anchored at `at_page`.
+    InsertSection {
+        at_page: PageId,
+        #[serde(default)]
+        prefix: Option<String>,
+        #[serde(default)]
+        numbering_style: Option<String>,
+        #[serde(default)]
+        start_at: Option<u32>,
+    },
+    /// W0.5 — edit a `<Section>`. `prefix`/`start_at` are tri-state
+    /// (`Some(None)` clears; outer `None` leaves unchanged).
+    EditSection {
+        section_id: String,
+        #[serde(default)]
+        prefix: Option<Option<String>>,
+        #[serde(default)]
+        numbering_style: Option<String>,
+        #[serde(default)]
+        start_at: Option<Option<u32>>,
+    },
+    /// W0.5 — delete a `<Section>`.
+    DeleteSection {
+        section_id: String,
+    },
 }
 
 impl Mutation {
@@ -2208,6 +2297,17 @@ impl Mutation {
             Self::RenameTableStyle { .. } => "RenameTableStyle",
             Self::DeleteTableStyle { .. } => "DeleteTableStyle",
             Self::SetStyleProperty { .. } => "SetStyleProperty",
+            Self::InsertOval { .. } => "InsertOval",
+            Self::InsertGuide { .. } => "InsertGuide",
+            Self::MoveGuide { .. } => "MoveGuide",
+            Self::DeleteGuide { .. } => "DeleteGuide",
+            Self::SetConditionVisible { .. } => "SetConditionVisible",
+            Self::ActivateConditionSet { .. } => "ActivateConditionSet",
+            Self::ApplyMasterToPage { .. } => "ApplyMasterToPage",
+            Self::DuplicatePage { .. } => "DuplicatePage",
+            Self::InsertSection { .. } => "InsertSection",
+            Self::EditSection { .. } => "EditSection",
+            Self::DeleteSection { .. } => "DeleteSection",
         }
     }
 }
@@ -2382,6 +2482,98 @@ mod tests {
         // Wire tag is camelCase but `discriminant()` is PascalCase
         // for human-readable error messages. Both contracts.
         assert!(json.contains("\"op\":\"insertText\""), "tag drift: {json}");
+    }
+
+    #[test]
+    fn w05_mutations_round_trip_through_the_mutate_envelope() {
+        // Every W0.5 Mutation variant survives the JSON envelope the
+        // worker decodes `Mutate(Mutation)` from.
+        let muts = vec![
+            Mutation::LinkFrames {
+                from: "TextFrame/a".into(),
+                to: "TextFrame/b".into(),
+            },
+            Mutation::UnlinkFrames {
+                frame: "TextFrame/a".into(),
+            },
+            Mutation::ApplyStyle {
+                story_id: "Story/u1".into(),
+                start: 0,
+                end: 5,
+                style: "ParagraphStyle/Body".into(),
+                scope: paged_mutate::operation::StyleScope::Paragraph,
+            },
+            Mutation::InsertField {
+                story_id: "Story/u1".into(),
+                offset: 2,
+                field: paged_mutate::operation::FieldKind::PageNumber,
+            },
+            Mutation::InsertOval {
+                page_id: PageId("Page/u1".into()),
+                bounds: (1.0, 2.0, 3.0, 4.0),
+            },
+            Mutation::InsertGuide {
+                spread_id: "Spread/u1".into(),
+                orientation: paged_mutate::operation::GuideOrientationSpec::Horizontal,
+                position: 50.0,
+                page_index: 0,
+            },
+            Mutation::MoveGuide {
+                guide_id: "Guide/Spread/u1/0".into(),
+                position: 75.0,
+            },
+            Mutation::DeleteGuide {
+                guide_id: "Guide/Spread/u1/0".into(),
+            },
+            Mutation::SetConditionVisible {
+                condition: "Condition/A".into(),
+                visible: false,
+            },
+            Mutation::ActivateConditionSet {
+                set: "ConditionSet/Print".into(),
+            },
+            Mutation::ApplyMasterToPage {
+                page: PageId("Page/u1".into()),
+                master: Some("MasterSpread/uA".into()),
+            },
+            Mutation::DuplicatePage {
+                page: PageId("Page/u1".into()),
+            },
+            Mutation::InsertSection {
+                at_page: PageId("Page/u1".into()),
+                prefix: Some("A-".into()),
+                numbering_style: Some("UpperRoman".into()),
+                start_at: Some(1),
+            },
+            Mutation::EditSection {
+                section_id: "Section/u0".into(),
+                prefix: Some(None),
+                numbering_style: None,
+                start_at: Some(Some(3)),
+            },
+            Mutation::DeleteSection {
+                section_id: "Section/u0".into(),
+            },
+        ];
+        for m in muts {
+            let disc = m.discriminant();
+            let env = MainToWorker {
+                seq: 1,
+                protocol: PROTOCOL_VERSION,
+                kind: MainToWorkerKind::Mutate(m),
+            };
+            let json = serde_json::to_string(&env).unwrap();
+            let back: MainToWorker = serde_json::from_str(&json).unwrap();
+            match back.kind {
+                MainToWorkerKind::Mutate(m2) => assert_eq!(m2.discriminant(), disc, "{json}"),
+                other => panic!("unexpected: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn protocol_version_is_v28() {
+        assert_eq!(PROTOCOL_VERSION.0, 28);
     }
 
     #[test]
