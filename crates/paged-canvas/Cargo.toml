@@ -41,6 +41,10 @@ bytes = { workspace = true }
 # Snapshot tier encodes its output as PNG; the upstream renderer
 # already produces `image::RgbaImage` so we use the same crate.
 image = { workspace = true }
+# Aftercare-A — UAX-29 word segmentation for `RequestWordBounds`
+# (double-click word selection). Already in the lockfile via
+# paged-text; wasm-clean (pure-Rust tables, no native deps).
+unicode-segmentation = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"

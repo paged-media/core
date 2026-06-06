@@ -285,7 +285,8 @@ pub fn layout_runs_cached(runs: &[StyledRun], options: &LayoutOptions) -> LaidOu
 /// Hashed inputs (in order):
 /// - Per run: text, `font_id`, point size, tracking, underline,
 ///   strikethru, baseline_shift_pt, horizontal_scale_pct,
-///   fallback-face count (not contents — see module docs).
+///   vertical_scale_pct, skew_deg, fallback-face count (not contents —
+///   see module docs), and every OTF shaping-feature toggle.
 /// - LayoutOptions: alignment, line_height, first_baseline,
 ///   leading_override.
 /// - ComposeOptions: column_width, column_widths, tolerance, looseness,
@@ -311,6 +312,15 @@ pub fn layout_runs_key(runs: &[StyledRun], options: &LayoutOptions) -> [u8; 32] 
         h.add_f32(r.baseline_shift_pt);
         h.add_f32(r.horizontal_scale_pct);
         h.add_f32(r.vertical_scale_pct);
+        // IDML `Skew` (false-italic shear). Carried straight through to
+        // each glyph's emit affine (`PositionedGlyph::skew_deg`), so two
+        // runs identical except for skew lay out to different glyph
+        // affines and MUST hash to distinct keys. Threaded into
+        // `StyledRun` after the key was first written (render-honor
+        // batch); omitting it aliased skewed/unskewed runs and made the
+        // persistent layout cache return a stale (un)skewed paragraph on
+        // a SetProperty(CharacterSkew) and its undo.
+        h.add_f32(r.skew_deg);
         h.add_u32(r.fallback_faces.len() as u32);
         h.add_bool(r.shaping_features.ligatures_on);
         h.add_u32(match r.shaping_features.kerning {
@@ -506,5 +516,80 @@ mod tests {
         let opts = LayoutOptions::new(400.0, 12.0);
         let p = layout_runs_cached(&empty, &opts);
         assert!(p.lines.is_empty());
+    }
+
+    /// AC-E2E-CHAR-skew-undo (cache-key unit) — every `StyledRun` field
+    /// that reaches the laid-out glyphs must change `layout_runs_key`, or
+    /// the persistent layout cache aliases runs that differ only in that
+    /// field. Audits the render-honor batch's per-glyph affine inputs
+    /// (skew + the scales) plus baseline shift. `skew_deg` regressed here
+    /// (threaded into `StyledRun` after the key was written).
+    #[test]
+    fn layout_runs_key_distinguishes_per_glyph_affine_fields() {
+        let bytes = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../corpus/fonts/Inter.ttf"),
+        )
+        .expect("Inter.ttf fixture");
+        let face = rustybuzz::Face::from_slice(&bytes, 0).expect("parse Inter");
+        let opts = LayoutOptions::new(400.0, 12.0);
+
+        let base = StyledRun {
+            text: "lean",
+            face: &face,
+            point_size: 12.0,
+            tracking: None,
+            font_id: 1,
+            underline: false,
+            strikethru: false,
+            baseline_shift_pt: 0.0,
+            horizontal_scale_pct: 100.0,
+            vertical_scale_pct: 100.0,
+            skew_deg: 0.0,
+            fallback_faces: &[],
+            shaping_features: crate::shape::ShapingFeatures::default(),
+        };
+        let base_key = layout_runs_key(std::slice::from_ref(&base), &opts);
+
+        // Each variant flips exactly one render-relevant field; every
+        // resulting key must differ from the baseline.
+        let variants = [
+            (
+                "skew_deg",
+                StyledRun {
+                    skew_deg: 15.0,
+                    ..base
+                },
+            ),
+            (
+                "vertical_scale_pct",
+                StyledRun {
+                    vertical_scale_pct: 160.0,
+                    ..base
+                },
+            ),
+            (
+                "horizontal_scale_pct",
+                StyledRun {
+                    horizontal_scale_pct: 160.0,
+                    ..base
+                },
+            ),
+            (
+                "baseline_shift_pt",
+                StyledRun {
+                    baseline_shift_pt: 4.0,
+                    ..base
+                },
+            ),
+        ];
+        for (field, run) in variants {
+            let key = layout_runs_key(std::slice::from_ref(&run), &opts);
+            assert_ne!(
+                base_key, key,
+                "two runs differing only in {field} must hash to distinct \
+                 layout-cache keys (else the cache aliases them)",
+            );
+        }
     }
 }

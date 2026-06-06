@@ -239,6 +239,105 @@ fn cell_fill_mutation_round_trips_through_the_wire() {
 }
 
 #[test]
+fn table_dimension_read_entries() {
+    // Aftercare-A — `element_properties` on a `Table` address now also
+    // reports the read-only `tableRowCount` / `tableColumnCount`
+    // (integer-as-Length). The fixture is a 2-row × 2-column table.
+    let model = load_model();
+    let id = ElementId::Table {
+        story_id: "u10".into(),
+        table_id: "t1".into(),
+    };
+    let props = model.element_properties(&id).expect("table props");
+    let row_count = props
+        .entries
+        .iter()
+        .find(|e| e.path == paged_mutate::PropertyPath::TableRowCount)
+        .and_then(|e| e.value.clone());
+    assert_eq!(row_count, Some(paged_mutate::Value::Length(Some(2.0))));
+    let col_count = props
+        .entries
+        .iter()
+        .find(|e| e.path == paged_mutate::PropertyPath::TableColumnCount)
+        .and_then(|e| e.value.clone());
+    assert_eq!(col_count, Some(paged_mutate::Value::Length(Some(2.0))));
+}
+
+#[test]
+fn table_dimension_write_is_rejected() {
+    // Aftercare-A — the dimension paths are read-only: a write routes
+    // to `apply_table_property` and is rejected (the standard
+    // read-only contract). The catch-all guard means the model errors.
+    let mut model = load_model();
+    let id = ElementId::Table {
+        story_id: "u10".into(),
+        table_id: "t1".into(),
+    };
+    let err = model.apply_mutation(&Mutation::SetElementProperty {
+        element_id: id,
+        path: paged_mutate::PropertyPath::TableRowCount,
+        value: paged_mutate::Value::Length(Some(5.0)),
+    });
+    assert!(err.is_err(), "writing tableRowCount must be rejected");
+}
+
+#[test]
+fn cell_geometry_returns_the_hit_test_rect() {
+    // Aftercare-A — `element_geometry` on a `TableCell` resolves the
+    // BuiltPage `cell_rects` entry the hit-test path uses. Cell (0,0)
+    // sits at page-local (40, 40), 100pt wide × 30pt tall, so the
+    // ElementGeometryItem bounds `[top, left, bottom, right]` are
+    // `[40, 40, 70, 140]` and carry no item_transform (already
+    // page-local).
+    let model = load_model();
+    let id = ElementId::TableCell {
+        story_id: "u10".into(),
+        table_id: "t1".into(),
+        row: 0,
+        col: 0,
+    };
+    let items = model.element_geometry(std::slice::from_ref(&id));
+    assert_eq!(items.len(), 1, "cell geometry resolves to one item");
+    let item = &items[0];
+    assert_eq!(item.page_id.as_str(), "p1");
+    assert!(item.item_transform.is_none(), "cell rect is page-local");
+    let [top, left, bottom, right] = item.bounds;
+    assert!((top - 40.0).abs() < 0.5, "top {top}");
+    assert!((left - 40.0).abs() < 0.5, "left {left}");
+    assert!((bottom - 70.0).abs() < 0.5, "bottom {bottom}");
+    assert!((right - 140.0).abs() < 0.5, "right {right}");
+
+    // Cell (1, 1): x in [140, 200), y in [70, 110).
+    let id11 = ElementId::TableCell {
+        story_id: "u10".into(),
+        table_id: "t1".into(),
+        row: 1,
+        col: 1,
+    };
+    let items = model.element_geometry(std::slice::from_ref(&id11));
+    assert_eq!(items.len(), 1);
+    let [top, left, bottom, right] = items[0].bounds;
+    assert!((top - 70.0).abs() < 0.5, "top {top}");
+    assert!((left - 140.0).abs() < 0.5, "left {left}");
+    assert!((bottom - 110.0).abs() < 0.5, "bottom {bottom}");
+    assert!((right - 200.0).abs() < 0.5, "right {right}");
+}
+
+#[test]
+fn cell_geometry_unknown_cell_is_dropped() {
+    // An out-of-range cell resolves nothing (dropped silently, like
+    // every other unresolved geometry id).
+    let model = load_model();
+    let id = ElementId::TableCell {
+        story_id: "u10".into(),
+        table_id: "t1".into(),
+        row: 9,
+        col: 9,
+    };
+    assert!(model.element_geometry(std::slice::from_ref(&id)).is_empty());
+}
+
+#[test]
 fn insert_table_row_mutation_applies() {
     let mut model = load_model();
     model

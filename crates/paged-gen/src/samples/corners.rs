@@ -100,6 +100,8 @@ pub fn build() -> Sample {
             stroke_color: Some("Color/Black".into()),
             stroke_weight_pt: Some(3.0),
             parent_story: None,
+            next_text_frame: None,
+            previous_text_frame: None,
             extra_attrs: vec![
                 ("CornerOption".to_string(), (*corner_option).to_string()),
                 ("CornerRadius".to_string(), CORNER_RADIUS_PT.to_string()),

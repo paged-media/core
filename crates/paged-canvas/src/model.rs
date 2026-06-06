@@ -239,10 +239,30 @@ pub struct DocumentDefaults {
 /// Editor-ops — the element a structural-insert Operation created,
 /// mapped to the channel's `ElementId` so the `MutationApplied` reply
 /// can carry it (the editor selects the fresh element).
+/// B-04 — leaf ElementId -> NodeId for group membership (groups and
+/// non-page-item ids map to None and reject wire-side).
+fn element_to_leaf_node_id(
+    id: &crate::element_selection::ElementId,
+) -> Option<paged_mutate::NodeId> {
+    use crate::element_selection::ElementId;
+    Some(match id {
+        ElementId::TextFrame(s) => paged_mutate::NodeId::TextFrame(s.clone()),
+        ElementId::Rectangle(s) => paged_mutate::NodeId::Rectangle(s.clone()),
+        ElementId::Oval(s) => paged_mutate::NodeId::Oval(s.clone()),
+        ElementId::GraphicLine(s) => paged_mutate::NodeId::GraphicLine(s.clone()),
+        ElementId::Polygon(s) => paged_mutate::NodeId::Polygon(s.clone()),
+        _ => return None,
+    })
+}
+
 fn created_element_id(
     op: &paged_mutate::Operation,
 ) -> Option<crate::element_selection::ElementId> {
     use crate::element_selection::ElementId;
+    // B-04 — group creation reports the minted group id.
+    if let paged_mutate::Operation::CreateGroup { spec } = op {
+        return spec.self_id.clone().map(ElementId::Group);
+    }
     if let paged_mutate::Operation::InsertNode { node, .. } = op {
         return match node.node_id() {
             paged_mutate::NodeId::TextFrame(id) => Some(ElementId::TextFrame(id)),
@@ -1700,6 +1720,19 @@ impl CanvasModel {
                     prev_subpath_starts: None,
                     prev_subpath_open: None,
                 },
+            }),
+            Mutation::CreateGroup { member_ids } => Some(Operation::CreateGroup {
+                spec: paged_mutate::GroupSpec {
+                    self_id: None,
+                    members: member_ids
+                        .iter()
+                        .map(element_to_leaf_node_id)
+                        .collect::<Option<Vec<_>>>()?,
+                },
+            }),
+            Mutation::DissolveGroup { group_id } => Some(Operation::DissolveGroup {
+                group_id: group_id.clone(),
+                restore_slots: None,
             }),
             Mutation::PathPointCurveType {
                 element_id,
@@ -3603,12 +3636,27 @@ impl CanvasModel {
         use paged_mutate::{PropertyPath, Value};
 
         let table = self.find_table_read(story_id, table_id)?;
-        let entries = vec![PropertyEntry {
-            path: PropertyPath::AppliedTableStyle,
-            value: Some(Value::Text(
-                table.applied_table_style.clone().unwrap_or_default(),
-            )),
-        }];
+        // Aftercare-A — total physical rows = header + body + footer
+        // (the three IDML `*RowCount` attributes). Read-only, carried
+        // as the integer-as-`Length` convention drop-cap counts use.
+        let row_count =
+            table.header_row_count + table.body_row_count + table.footer_row_count;
+        let entries = vec![
+            PropertyEntry {
+                path: PropertyPath::AppliedTableStyle,
+                value: Some(Value::Text(
+                    table.applied_table_style.clone().unwrap_or_default(),
+                )),
+            },
+            PropertyEntry {
+                path: PropertyPath::TableRowCount,
+                value: Some(Value::Length(Some(row_count as f32))),
+            },
+            PropertyEntry {
+                path: PropertyPath::TableColumnCount,
+                value: Some(Value::Length(Some(table.column_count as f32))),
+            },
+        ];
         Some(ElementProperties {
             id: id.clone(),
             kind: "Table".to_string(),
@@ -4713,6 +4761,41 @@ impl CanvasModel {
         out
     }
 
+    /// Aftercare-A — `RequestWordBounds` accessor. Reconstructs the
+    /// story's byte-text (paragraphs joined by the synthetic
+    /// inter-paragraph `\n`, matching the offset convention the caret /
+    /// line-bounds / hit-test paths share) and returns the
+    /// `[start, end)` byte span of the word (per UAX-29 word
+    /// segmentation) containing `offset`. The editor's double-click
+    /// word-selection drives this. `None` when the story id doesn't
+    /// resolve or the story has no text. See [`geometry::word_bounds`]
+    /// for the whitespace / boundary / clamp behaviour.
+    pub fn word_bounds(
+        &self,
+        story_id: &str,
+        offset: u32,
+    ) -> Option<crate::geometry::WordBounds> {
+        let story = self
+            .scene
+            .stories
+            .iter()
+            .find(|s| s.self_id == story_id)?;
+        // Join paragraphs with the single synthetic `\n` that
+        // `paragraph_byte_offset` accounts for (`end + 1` per prior
+        // paragraph), so the reconstructed byte string is index-
+        // compatible with every other story offset on the wire.
+        let mut text = String::new();
+        for (i, para) in story.story.paragraphs.iter().enumerate() {
+            if i > 0 {
+                text.push('\n');
+            }
+            for run in &para.runs {
+                text.push_str(&run.text);
+            }
+        }
+        crate::geometry::word_bounds(&text, offset)
+    }
+
     pub fn element_geometry(
         &self,
         ids: &[crate::element_selection::ElementId],
@@ -4720,6 +4803,43 @@ impl CanvasModel {
         use crate::element_selection::ElementId;
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
+            // Aftercare-A — per-cell geometry. A `TableCell` resolves
+            // against the BuiltPage's retained `cell_rects` (the W3.A1
+            // hit-test map), not a spread page-item vec. The rect is
+            // already page-local pt (`(0,0)` = page top-left, the
+            // `LineLayout` frame), so it needs no `item_transform`:
+            // the overlay consumes `bounds` directly. `bounds` follows
+            // the `[top, left, bottom, right]` convention by mapping
+            // the cell rect `[x, y, w, h]` → `[y, x, y+h, x+w]`. The
+            // editor's cell overlay upgrades from the table AABB to
+            // this precise cell rect.
+            if let ElementId::TableCell {
+                story_id,
+                table_id,
+                row,
+                col,
+            } = id
+            {
+                for bp in &self.built().pages {
+                    if let Some(cr) = bp.cell_rects.iter().find(|cr| {
+                        cr.story_id == *story_id
+                            && cr.table_id == *table_id
+                            && cr.row == *row
+                            && cr.col == *col
+                    }) {
+                        let [x, y, w, h] = cr.rect;
+                        out.push(crate::channel::ElementGeometryItem {
+                            id: id.clone(),
+                            page_id: bp.id.clone(),
+                            bounds: [y, x, y + h, x + w],
+                            item_transform: None,
+                            has_image: false,
+                        });
+                        break;
+                    }
+                }
+                continue;
+            }
             let raw = id.raw_id();
             for parsed in &self.scene().spreads {
                 let spread = &parsed.spread;

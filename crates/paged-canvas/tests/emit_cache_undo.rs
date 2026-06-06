@@ -26,6 +26,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use paged_canvas::channel::Mutation;
+use paged_canvas::element_selection::ElementId;
 use paged_canvas::{CanvasModel, CanvasOptions, PageId};
 
 fn font_dir() -> PathBuf {
@@ -33,8 +34,7 @@ fn font_dir() -> PathBuf {
 }
 
 fn read_font(name: &str) -> Vec<u8> {
-    std::fs::read(font_dir().join(name))
-        .unwrap_or_else(|e| panic!("read font fixture {name}: {e}"))
+    std::fs::read(font_dir().join(name)).unwrap_or_else(|e| panic!("read font fixture {name}: {e}"))
 }
 
 /// Minimal IDML: `spreads` are (self_id, spread_xml_body) pairs written
@@ -57,7 +57,9 @@ fn idml(spreads: &[(&str, String)], story_xml: &str) -> Vec<u8> {
 "#,
     );
     for (id, _) in spreads {
-        designmap.push_str(&format!("  <idPkg:Spread src=\"Spreads/Spread_{id}.xml\"/>\n"));
+        designmap.push_str(&format!(
+            "  <idPkg:Spread src=\"Spreads/Spread_{id}.xml\"/>\n"
+        ));
     }
     designmap.push_str("  <idPkg:Story src=\"Stories/Story_u10.xml\"/>\n</Document>");
     zip.start_file("designmap.xml", deflated).unwrap();
@@ -111,7 +113,11 @@ fn page_dl(model: &CanvasModel, page: &str) -> String {
         .display_list_for_page(&PageId(page.into()))
         .unwrap_or_else(|| panic!("page {page} has a display list"));
     let paths: Vec<_> = (0..dl.paths.len() as u32)
-        .map(|i| dl.paths.get(paged_compose::PathId(i)).expect("dense path ids"))
+        .map(|i| {
+            dl.paths
+                .get(paged_compose::PathId(i))
+                .expect("dense path ids")
+        })
         .collect();
     format!(
         "{paths:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
@@ -184,7 +190,10 @@ fn text_undo_restores_the_display_list() {
         })
         .expect("insert text");
     let edited = page_dl(&model, "p1");
-    assert_ne!(baseline, edited, "the text edit must change the page's display list");
+    assert_ne!(
+        baseline, edited,
+        "the text edit must change the page's display list"
+    );
 
     model.undo().expect("undo");
     assert_eq!(
@@ -221,10 +230,20 @@ fn insert_page_middle_undo_redo_round_trips_built_pages() {
         .expect("insert page mid-set");
     assert_eq!(model.page_count(), 3, "page inserted between p1 and p2");
 
-    model.undo().expect("undo of the mid-set insert must not panic");
+    model
+        .undo()
+        .expect("undo of the mid-set insert must not panic");
     assert_eq!(model.page_count(), 2);
-    assert_eq!(page_dl(&model, "p1"), baseline_p1, "page 1 repaints to baseline");
-    assert_eq!(page_dl(&model, "p2"), baseline_p2, "page 2 repaints to baseline");
+    assert_eq!(
+        page_dl(&model, "p1"),
+        baseline_p1,
+        "page 1 repaints to baseline"
+    );
+    assert_eq!(
+        page_dl(&model, "p2"),
+        baseline_p2,
+        "page 2 repaints to baseline"
+    );
 
     model.redo().expect("redo");
     assert_eq!(model.page_count(), 3);
@@ -312,6 +331,96 @@ fn set_style_property_repaints_styled_text() {
     );
 
     model.undo().expect("undo style edit");
-    assert_eq!(page_dl(&model, "p1"), baseline, "undo repaints the original size");
+    assert_eq!(
+        page_dl(&model, "p1"),
+        baseline,
+        "undo repaints the original size"
+    );
 }
 
+/// AC-E2E-CHAR-skew-undo — the per-paragraph layout cache key
+/// (`paged-text/src/cache.rs::layout_runs_key`) must include every
+/// `StyledRun` field that reaches the laid-out glyphs. `skew_deg` was
+/// threaded through `StyledRun` (render-honor batch) AFTER the key was
+/// written, so two runs that differ ONLY in skew hashed to the same key.
+/// On a SetProperty(CharacterSkew) → undo, the model restores correctly
+/// but the cache returns the SKEWED `LaidOutParagraph` for the unchanged
+/// text, splicing a stale skew into the repainted page (a ~58px residual
+/// the editor op-sandwich byte-identity check caught).
+///
+/// Each property below is a recently-threaded `StyledRun` field that
+/// affects per-glyph output; the loop applies it as a text-range
+/// SetProperty, asserts the forward paint changed, then asserts undo
+/// repaints byte-identically to the baseline. Because the layout cache
+/// is persistent across rebuilds, an unkeyed field also poisons the
+/// FORWARD render (the cache returns the stale pre-edit layout), so the
+/// `assert_ne!` below is itself a guard against the collision.
+#[test]
+fn character_property_undo_restores_display_list_no_stale_cache() {
+    use paged_mutate::{PropertyPath, Value};
+
+    // (label, path, forward value) — Length-valued character properties
+    // whose StyledRun field must be folded into the layout cache key.
+    let cases: &[(&str, PropertyPath, Value)] = &[
+        // The prime suspect: skew was unkeyed.
+        (
+            "skew",
+            PropertyPath::CharacterSkew,
+            Value::Length(Some(15.0)),
+        ),
+        // Siblings threaded in the same render-honor batch — audit that
+        // they are keyed too (vertical scale + horizontal scale).
+        (
+            "vertical_scale",
+            PropertyPath::CharacterVerticalScale,
+            Value::Length(Some(160.0)),
+        ),
+        (
+            "horizontal_scale",
+            PropertyPath::CharacterHorizontalScale,
+            Value::Length(Some(160.0)),
+        ),
+        (
+            "baseline_shift",
+            PropertyPath::CharacterBaselineShift,
+            Value::Length(Some(4.0)),
+        ),
+    ];
+
+    for (label, path, value) in cases {
+        let mut model = single_page_with_story();
+        let baseline = page_dl(&model, "p1");
+
+        // Cover the whole single-paragraph story (end past the content
+        // is clamped per-run) — the editor's "apply to text selection"
+        // path.
+        let range = ElementId::StoryRange {
+            story_id: "u10".into(),
+            start: 0,
+            end: 1000,
+        };
+        model
+            .apply_mutation(&Mutation::SetElementProperty {
+                element_id: range,
+                path: *path,
+                value: value.clone(),
+            })
+            .unwrap_or_else(|e| panic!("apply {label}: {e:?}"));
+        let edited = page_dl(&model, "p1");
+        assert_ne!(
+            baseline, edited,
+            "{label}: forward paint must change the page's display list",
+        );
+
+        model
+            .undo()
+            .unwrap_or_else(|| panic!("undo {label}: nothing to undo"));
+        assert_eq!(
+            page_dl(&model, "p1"),
+            baseline,
+            "{label}: undo must repaint the pre-edit layout — a stale cache \
+             hit (field missing from the layout-cache key) leaves the {label} \
+             baked into the unchanged text",
+        );
+    }
+}

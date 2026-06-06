@@ -94,7 +94,30 @@ export type WorkerToMain = WorkerToMainKind & {
 ///     `DeleteTableColumn` (translate to the matching new
 ///     `paged_mutate::Operation` variants, with delete capturing the
 ///     removed line for undo).
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(30);
+/// v31 (Aftercare-A — editor read-surface fill-in): three read-only
+///   additions found during the gap campaign.
+///   - `RequestWordBounds` / `WordBoundsResult`: the word containing a
+///     story byte offset, per Unicode word segmentation (UAX-29). The
+///     editor flips double-click word-selection on this. Mirrors the
+///     `RequestLineBounds` / `LineBoundsResult` wiring exactly.
+///   - table dimension reads: `element_properties` on a
+///     `NodeId::Table` now also returns `tableRowCount` /
+///     `tableColumnCount` (the integer-as-`Length` convention used for
+///     drop-cap counts). Read-only like `NextTextFrame` — no apply arm
+///     (writes reject via `apply_table_property`'s non-`AppliedTableStyle`
+///     guard).
+///   - per-cell geometry: `RequestElementGeometry` on a
+///     `ElementId::TableCell` now resolves against the BuiltPage's
+///     `cell_rects` (page-local pt, `item_transform: None`) instead of
+///     returning nothing.
+/// v32 (B-04 — groups): `CreateGroup { member_ids }` /
+///   `DissolveGroup { group_id }` mutations. Create is z-order-neutral
+///   for members contiguous in paint order (scattered members collect
+///   at the earliest member's slot, InDesign-style); the reply carries
+///   the minted group id as `createdId`. Undo restores the exact
+///   pre-group z-order via inverse-side `restore_slots` (internal —
+///   not a wire field).
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -302,6 +325,17 @@ pub enum MainToWorkerKind {
     /// story offsets of the visible line containing `offset` (Home /
     /// End targets). Reply: `LineBoundsResult`.
     RequestLineBounds { story_id: String, offset: u32 },
+    /// Aftercare-A (protocol v31) — the `[start, end]` story byte
+    /// offsets of the word containing the character at `offset`, per
+    /// Unicode word segmentation (UAX-29). The editor flips
+    /// double-click word-selection on this. Reply: `WordBoundsResult`.
+    /// Offsets are story-local *bytes* — the same address space
+    /// `HitResult.offset_within_story` / `RequestLineBounds` /
+    /// `RequestCaretNav` use. An offset that lands on a run of
+    /// whitespace selects that whitespace span (documented in
+    /// `word_bounds`); an offset past the story end clamps to the
+    /// final word.
+    RequestWordBounds { story_id: String, offset: u32 },
     /// Undo the most recent applied mutation. Reply: `UndoApplied`
     /// or `MutationFailed` (when the log is empty).
     Undo,
@@ -706,6 +740,14 @@ pub enum WorkerToMainKind {
     LineBoundsResult {
         #[serde(default)]
         bounds: Option<crate::geometry::LineBounds>,
+    },
+    /// Aftercare-A (protocol v31) — `RequestWordBounds` reply. `None`
+    /// when the story doesn't resolve or carries no text; otherwise
+    /// the `[start, end)` byte span of the word (or whitespace run)
+    /// containing the requested offset.
+    WordBoundsResult {
+        #[serde(default)]
+        bounds: Option<crate::geometry::WordBounds>,
     },
     /// Phase 3 Item 7 — undo applied. `undone_seq` is the
     /// `applied_seq` of the mutation that was reversed.
@@ -2110,6 +2152,18 @@ pub enum Mutation {
         element_id: crate::element_selection::ElementId,
         tolerance: f32,
     },
+    /// B-04 (protocol v32) — group leaf page items on one spread.
+    /// Reference-based and z-order-neutral (the group takes the
+    /// earliest member's paint slot). Reply carries the minted group
+    /// id as `createdId` so the editor can select it.
+    CreateGroup {
+        member_ids: Vec<crate::element_selection::ElementId>,
+    },
+    /// B-04 (protocol v32) — dissolve a group; members return to the
+    /// group's paint slot in stored order.
+    DissolveGroup {
+        group_id: String,
+    },
     /// Track J — toggle the curve type of an anchor between corner
     /// (handles equal to anchor) and smooth (handles derived from
     /// neighbour tangents). UI dispatches from a double-click on
@@ -2464,6 +2518,8 @@ impl Mutation {
             Self::OutlineStroke { .. } => "OutlineStroke",
             Self::OffsetPath { .. } => "OffsetPath",
             Self::SimplifyPath { .. } => "SimplifyPath",
+            Self::CreateGroup { .. } => "CreateGroup",
+            Self::DissolveGroup { .. } => "DissolveGroup",
             Self::PathPointCurveType { .. } => "PathPointCurveType",
             Self::PathPointSet { .. } => "PathPointSet",
             Self::Batch { .. } => "Batch",
@@ -2786,8 +2842,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v30() {
-        assert_eq!(PROTOCOL_VERSION.0, 30);
+    fn protocol_version_is_v32() {
+        assert_eq!(PROTOCOL_VERSION.0, 32);
     }
 
     #[test]
@@ -2973,6 +3029,66 @@ mod tests {
                 let b = bounds.expect("bounds present");
                 assert_eq!((b.line_start, b.line_end), (3, 9));
             }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn word_bounds_request_round_trips_through_json() {
+        // Aftercare-A — the new request variant survives the JSON
+        // envelope with the camelCase tag the worker switches on.
+        let msg = MainToWorker {
+            seq: 13,
+            protocol: PROTOCOL_VERSION,
+            kind: MainToWorkerKind::RequestWordBounds {
+                story_id: "u10".into(),
+                offset: 7,
+            },
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"kind\":\"requestWordBounds\""), "{json}");
+        let back: MainToWorker = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            MainToWorkerKind::RequestWordBounds { story_id, offset } => {
+                assert_eq!(story_id, "u10");
+                assert_eq!(offset, 7);
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn word_bounds_reply_round_trips_through_json() {
+        // Aftercare-A — `WordBoundsResult` carries a camelCase
+        // `[start, end)` span; `None` is the unresolved-story case.
+        let r = WorkerToMain {
+            seq: Some(13),
+            protocol: PROTOCOL_VERSION,
+            kind: WorkerToMainKind::WordBoundsResult {
+                bounds: Some(crate::geometry::WordBounds { start: 4, end: 9 }),
+            },
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.contains("\"kind\":\"wordBoundsResult\""), "{json}");
+        assert!(json.contains("\"start\":4"), "{json}");
+        let back: WorkerToMain = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            WorkerToMainKind::WordBoundsResult { bounds } => {
+                let b = bounds.expect("bounds present");
+                assert_eq!((b.start, b.end), (4, 9));
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+
+        let none = WorkerToMain {
+            seq: Some(13),
+            protocol: PROTOCOL_VERSION,
+            kind: WorkerToMainKind::WordBoundsResult { bounds: None },
+        };
+        let back: WorkerToMain =
+            serde_json::from_str(&serde_json::to_string(&none).unwrap()).unwrap();
+        match back.kind {
+            WorkerToMainKind::WordBoundsResult { bounds } => assert!(bounds.is_none()),
             other => panic!("wrong variant: {other:?}"),
         }
     }

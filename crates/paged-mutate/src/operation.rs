@@ -1001,6 +1001,25 @@ pub enum PropertyPath {
     /// new optional cell field for round-trip; the renderer honours it
     /// when the cell-vertical-justify pass lands. Reflow-affecting.
     CellVerticalJustification,
+
+    // ---- Aftercare-A — table dimensions (READ-ONLY) -------------
+    // Like `NextTextFrame` / `PreviousTextFrame`, these exist only so
+    // the inspector can *read* a table's shape as `PropertyEntry`s:
+    // they have no arm in `apply_table_property` (which rejects every
+    // path but `AppliedTableStyle` with `UnsupportedProperty`), so a
+    // `SetProperty` carrying either is rejected — the standard
+    // read-only contract. Structure edits go through the dedicated
+    // `Insert/DeleteTableRow` / `Insert/DeleteTableColumn` Operations.
+    /// Aftercare-A (read-only) — the table's total row count
+    /// (header + body + footer rows). The wire carries it as
+    /// `Value::Length(Some(count))` (the integer-as-`Length`
+    /// convention the inspector uses for drop-cap counts). Addressed
+    /// against a `NodeId::Table`. Read-only (see the section comment).
+    TableRowCount,
+    /// Aftercare-A (read-only) — the table's column count.
+    /// `Value::Length(Some(count))`. Addressed against a
+    /// `NodeId::Table`. Read-only (see the section comment).
+    TableColumnCount,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -1224,6 +1243,9 @@ impl PropertyPath {
             PropertyPath::CellInsetBottom => "cell.insetBottom",
             PropertyPath::CellInsetRight => "cell.insetRight",
             PropertyPath::CellVerticalJustification => "cell.verticalJustification",
+            // Aftercare-A — table dimensions (read-only).
+            PropertyPath::TableRowCount => "table.rowCount",
+            PropertyPath::TableColumnCount => "table.columnCount",
         }
     }
 }
@@ -1938,6 +1960,22 @@ pub struct GradientStopSpec {
     pub midpoint_pct: Option<f32>,
 }
 
+/// B-04 — creation spec for a page-item group. Members are NodeIds
+/// of LEAF page items (flat groups in v1; nesting is a follow-up);
+/// the apply layer resolves them to `FrameRef`s, orders them by
+/// current document order, and performs the `frames_in_order`
+/// surgery so z-order is provably unchanged. `self_id` follows the
+/// page-item `u<hex>` convention (minted when absent; echoed
+/// resolved in the applied op so the wire reports `createdId`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupSpec {
+    #[serde(default)]
+    pub self_id: Option<String>,
+    pub members: Vec<NodeId>,
+}
+
 /// Wire description of a gradient swatch, mirroring `GradientEntry`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -2186,6 +2224,31 @@ pub enum Operation {
     },
     /// Collection mutation — create a gradient swatch. `spec.self_id`
     /// `None` ⇒ assigned `Gradient/u<n>`. Inverse: `DeleteGradient`.
+    /// B-04 — group LEAF page items on one spread. Reference-based:
+    /// members stay in their per-kind vecs; a `Group` entry joins
+    /// `spread.groups` and `frames_in_order` swaps the member entries
+    /// for one `FrameRef::Group` at the earliest member's slot.
+    /// Members CONTIGUOUS in z-order group paint-neutrally; scattered
+    /// members deterministically collect at the earliest slot (the
+    /// InDesign semantic). Inverse: `DissolveGroup` carrying the
+    /// members' original slots so undo restores z-order exactly.
+    CreateGroup {
+        spec: GroupSpec,
+    },
+    /// B-04 — dissolve a group: members return to `frames_in_order`
+    /// at the group's slot in stored order (or, when `restore_slots`
+    /// is carried by an undo inverse, at their exact pre-group
+    /// indices); the `Group` entry is removed (with a
+    /// `FrameRef::Group` index fix-up across the spread). Inverse:
+    /// `CreateGroup` with the captured spec.
+    DissolveGroup {
+        group_id: String,
+        /// Snapshot-inverse data (cf. `prev_anchors`): the members'
+        /// `frames_in_order` indices before grouping. Wire callers
+        /// omit it.
+        #[serde(default)]
+        restore_slots: Option<Vec<u32>>,
+    },
     CreateGradient {
         spec: GradientSpec,
     },

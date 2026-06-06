@@ -26,7 +26,7 @@
 //!    Trailing zeros are trimmed so `1.0` stays `1` — also matching
 //!    real exports — and `-0` is normalised to `0`.
 
-use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::events::{BytesCData, BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 use std::io::Cursor;
 
@@ -125,6 +125,16 @@ impl XmlBuilder {
         self.writer
             .write_event(Event::Text(BytesText::new(s)))
             .expect("text");
+    }
+
+    /// Emit a `<![CDATA[...]]>` section verbatim (no escaping). Used for
+    /// the base64 `<Contents>` payload of an inline-embedded image,
+    /// mirroring InDesign's serialisation; `paged-parse` base64-decodes
+    /// it back into the host frame's `image_bytes`.
+    pub fn cdata(&mut self, s: &str) {
+        self.writer
+            .write_event(Event::CData(BytesCData::new(s)))
+            .expect("cdata");
     }
 
     /// Consume the writer and return the assembled bytes.

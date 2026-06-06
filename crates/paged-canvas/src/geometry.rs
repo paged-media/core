@@ -287,6 +287,69 @@ pub struct LineBounds {
     pub line_end: u32,
 }
 
+/// Aftercare-A — `RequestWordBounds` reply payload. Story-local byte
+/// offsets of the `[start, end)` span the word (or whitespace run)
+/// containing the requested offset covers. Same address space as
+/// [`LineBounds`] and `HitResult.offset_within_story`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct WordBounds {
+    /// Story byte offset of the word's first character.
+    pub start: u32,
+    /// Story byte offset just past the word's last character.
+    pub end: u32,
+}
+
+/// Aftercare-A — the `[start, end)` byte span of the word containing
+/// `offset`, per Unicode word segmentation (UAX-29, via
+/// `unicode-segmentation`). `text` is the story's reconstructed byte
+/// string (paragraphs joined by the synthetic inter-paragraph `\n`,
+/// matching the offset convention `caret_nav` / `line_bounds` /
+/// hit-testing all use), and `offset` is a story-local byte offset
+/// into it. The editor's double-click word-selection drives this.
+///
+/// Segmentation behaviour at the requested offset:
+/// - Offset inside or at the leading edge of a word → that whole word.
+/// - Offset on a run of whitespace (a space, the synthetic paragraph
+///   `\n`, a tab) → that whitespace run's span. UAX-29 treats each
+///   whitespace run as its own segment, so selecting it (rather than
+///   an adjacent word) is the faithful, double-click-on-space result.
+/// - Offset at or past the story end → the final segment (clamped).
+/// - Empty story → `None`.
+///
+/// Returns `None` only when `text` is empty; any in-range offset
+/// resolves to the segment whose half-open `[start, end)` byte span
+/// contains it (an offset exactly on a segment boundary belongs to the
+/// segment that *starts* there, matching how a click between two words
+/// lands on the following word).
+pub fn word_bounds(text: &str, offset: u32) -> Option<WordBounds> {
+    use unicode_segmentation::UnicodeSegmentation;
+    if text.is_empty() {
+        return None;
+    }
+    let offset = offset as usize;
+    let mut last: Option<(usize, usize)> = None;
+    for (seg_start, seg) in text.split_word_bound_indices() {
+        let seg_end = seg_start + seg.len();
+        // The segment that *starts* at the offset wins (half-open
+        // `[start, end)`); this makes a boundary offset resolve to the
+        // following word, matching the caret-between-words convention.
+        if offset >= seg_start && offset < seg_end {
+            return Some(WordBounds {
+                start: seg_start as u32,
+                end: seg_end as u32,
+            });
+        }
+        last = Some((seg_start, seg_end));
+    }
+    // Offset is at or past the story end: clamp to the final segment.
+    last.map(|(start, end)| WordBounds {
+        start: start as u32,
+        end: end as u32,
+    })
+}
+
 /// Direction for [`caret_nav`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
@@ -617,5 +680,77 @@ mod tests {
     fn line_bounds_for_unknown_story_is_none() {
         let model = load_model("Hello");
         assert!(line_bounds(model.built(), "nope", 0).is_none());
+    }
+
+    // ---- Aftercare-A — word segmentation ------------------------
+
+    #[test]
+    fn word_bounds_middle_of_word_selects_the_whole_word() {
+        // "Hello world." — offset 8 is inside "world". The word span is
+        // [6, 11) (the bytes covering "world", excluding the period).
+        let wb = word_bounds("Hello world.", 8).expect("a word at offset 8");
+        assert_eq!((wb.start, wb.end), (6, 11), "expected the 'world' span");
+        assert_eq!(&"Hello world."[wb.start as usize..wb.end as usize], "world");
+    }
+
+    #[test]
+    fn word_bounds_at_word_leading_edge_selects_that_word() {
+        // Offset exactly at a word's start byte resolves to that word
+        // (half-open [start, end) → boundary belongs to the following
+        // segment), matching the caret-between-words convention.
+        let wb = word_bounds("Hello world.", 6).expect("a word at offset 6");
+        assert_eq!((wb.start, wb.end), (6, 11));
+    }
+
+    #[test]
+    fn word_bounds_on_space_selects_the_whitespace_run() {
+        // Offset 5 is the space between "Hello" and "world". UAX-29
+        // makes the space its own segment, so a double-click on it
+        // selects the whitespace run [5, 6) (documented behaviour).
+        let wb = word_bounds("Hello world.", 5).expect("a whitespace segment");
+        assert_eq!((wb.start, wb.end), (5, 6));
+        assert_eq!(&"Hello world."[wb.start as usize..wb.end as usize], " ");
+    }
+
+    #[test]
+    fn word_bounds_past_end_clamps_to_final_segment() {
+        // Offset at/after the story end clamps to the last segment (the
+        // trailing "." here).
+        let text = "Hello world.";
+        let wb = word_bounds(text, text.len() as u32).expect("clamped to last segment");
+        assert_eq!(wb.end as usize, text.len());
+        assert_eq!(&text[wb.start as usize..wb.end as usize], ".");
+    }
+
+    #[test]
+    fn word_bounds_empty_story_is_none() {
+        assert!(word_bounds("", 0).is_none());
+    }
+
+    #[test]
+    fn word_bounds_multibyte_word_uses_byte_offsets() {
+        // "café road" — "café" is 5 bytes (the é is 2), the space is
+        // byte 5, so "road" starts at byte 6. An offset inside the
+        // second word must report byte (not char) offsets so it stays
+        // index-compatible with the rest of the wire.
+        let text = "café road";
+        let wb = word_bounds(text, 7).expect("a word at offset 7");
+        assert_eq!(&text[wb.start as usize..wb.end as usize], "road");
+        assert_eq!(wb.start, 6); // "café" (5 bytes) + space (1) = 6
+    }
+
+    #[test]
+    fn model_word_bounds_resolves_a_word_on_a_text_fixture() {
+        // End-to-end through the model's story-text reconstruction: a
+        // mid-word offset on the loaded story returns the word span.
+        let model = load_model("Hello world.");
+        let wb = model.word_bounds("u10", 8).expect("word bounds for offset 8");
+        assert_eq!((wb.start, wb.end), (6, 11));
+    }
+
+    #[test]
+    fn model_word_bounds_unknown_story_is_none() {
+        let model = load_model("Hello");
+        assert!(model.word_bounds("nope", 0).is_none());
     }
 }

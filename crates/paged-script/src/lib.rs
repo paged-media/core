@@ -743,6 +743,10 @@ fn parse_property_path(s: &str) -> Option<paged_mutate::PropertyPath> {
         "cellInsetBottom" => CellInsetBottom,
         "cellInsetRight" => CellInsetRight,
         "cellVerticalJustification" => CellVerticalJustification,
+        // Aftercare-A — table dimensions (read-only; resolvable by name
+        // so scripts can read them, rejected on write by the apply layer).
+        "tableRowCount" => TableRowCount,
+        "tableColumnCount" => TableColumnCount,
         _ => return None,
     })
 }
@@ -934,6 +938,9 @@ fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
         CellInsetBottom => "cellInsetBottom",
         CellInsetRight => "cellInsetRight",
         CellVerticalJustification => "cellVerticalJustification",
+        // Aftercare-A — table dimensions (read-only).
+        TableRowCount => "tableRowCount",
+        TableColumnCount => "tableColumnCount",
     }
 }
 

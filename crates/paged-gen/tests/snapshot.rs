@@ -438,3 +438,161 @@ fn images_round_trips_through_parser() {
         "every spread must round-trip its FrameFittingOption",
     );
 }
+
+// ── Aftercare-D: text-overset.idml ───────────────────────────────
+
+/// Load the harness Inter face. Returns `None` (and the caller skips)
+/// when the corpus font isn't present in this checkout, mirroring the
+/// corpus-optional convention the canvas tests use.
+fn inter_font() -> Option<Vec<u8>> {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts/Inter.ttf");
+    std::fs::read(path).ok()
+}
+
+#[test]
+fn text_overset_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::text_overset::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::text_overset::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+#[test]
+fn text_overset_round_trips_through_parser() {
+    let sample = paged_gen::samples::text_overset::build();
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let container = paged_parse::Container::open(&bytes).expect("Container::open");
+    assert_eq!(container.designmap.spreads.len(), 2, "two pages");
+    // The threaded chain on page 2 must surface a `NextTextFrame` link
+    // on its head frame (parse-level proof the threading round-trips).
+    let mut chains = 0;
+    for entry_path in container.entries.keys() {
+        if !entry_path.starts_with("Spreads/") {
+            continue;
+        }
+        let spread = paged_parse::Spread::parse(&container.entries[entry_path]).expect("Spread");
+        for f in &spread.text_frames {
+            if let Some(next) = f.next_text_frame.as_deref() {
+                if next != "n" {
+                    // The target must be another text frame on the same
+                    // story — a real thread, not a dangling ref.
+                    let target_exists = spread
+                        .text_frames
+                        .iter()
+                        .any(|g| g.self_id.as_deref() == Some(next));
+                    assert!(target_exists, "NextTextFrame target {next} must exist");
+                    chains += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(chains, 1, "exactly one threaded chain head");
+}
+
+/// The overset diagnostic is layout-time, so build the document and
+/// assert `OversetTextDropped` fires for both the single-frame story
+/// (page 1) and the threaded chain (page 2).
+#[test]
+fn text_overset_fires_overset_diagnostic() {
+    let Some(font) = inter_font() else {
+        eprintln!("skip: Inter.ttf not present");
+        return;
+    };
+    let bytes = paged_gen::write_idml(&paged_gen::samples::text_overset::build()).unwrap();
+    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    let opts = paged_renderer::pipeline::PipelineOptions {
+        font: Some(&font),
+        ..Default::default()
+    };
+    let built = paged_renderer::pipeline::build_document(&doc, &opts).expect("build_document");
+    let overset = built.diagnostics.overset_story_ids();
+    // Both body stories (short-frame + threaded-chain) must be overset.
+    // The two label stories fit their frames and must NOT be flagged.
+    assert_eq!(
+        overset.len(),
+        2,
+        "expected 2 overset stories (single + chain), got {overset:?}",
+    );
+}
+
+// ── Aftercare-D: links-broken.idml ───────────────────────────────
+
+#[test]
+fn links_broken_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::links_broken::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::links_broken::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+/// Parse-level: every placed-image rectangle surfaces its link, the two
+/// embedded frames decode their inline bytes, and the low-res frame's
+/// `EffectivePpi` reads back below the 150-ppi preflight threshold.
+#[test]
+fn links_broken_round_trips_through_parser() {
+    let sample = paged_gen::samples::links_broken::build();
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let container = paged_parse::Container::open(&bytes).expect("Container::open");
+    assert_eq!(container.designmap.spreads.len(), 1, "single page");
+
+    let spread_path = container
+        .entries
+        .keys()
+        .find(|k| k.starts_with("Spreads/"))
+        .expect("a spread entry")
+        .clone();
+    let spread = paged_parse::Spread::parse(&container.entries[&spread_path]).expect("Spread");
+
+    // Four image-bearing rectangles, all with a link URI.
+    let with_link = spread
+        .rectangles
+        .iter()
+        .filter(|r| r.image_link.is_some())
+        .count();
+    assert_eq!(with_link, 4, "four placed-image rectangles");
+
+    // Two carry inline bytes (the healthy + low-res controls); two are
+    // link-only (the broken links).
+    let with_inline = spread
+        .rectangles
+        .iter()
+        .filter(|r| r.image_bytes.is_some())
+        .count();
+    assert_eq!(with_inline, 2, "two inline-embedded images");
+
+    // The low-res frame's effective PPI must parse below 150. At least
+    // one image_metadata entry carries a sub-150 effective_ppi, and the
+    // healthy control's effective_ppi stays >= 150.
+    let ppis: Vec<f32> = spread
+        .image_metadata
+        .values()
+        .filter_map(|m| m.effective_ppi)
+        .collect();
+    assert!(
+        ppis.iter().any(|p| *p < 150.0),
+        "a low effective_ppi (<150) must round-trip; got {ppis:?}",
+    );
+    assert!(
+        ppis.iter().any(|p| *p >= 150.0),
+        "a healthy effective_ppi (>=150) must round-trip; got {ppis:?}",
+    );
+}
+
+/// Build-level: with no asset resolver wired, the two broken links fire
+/// `ImageLinkMissing` (→ canvas `status = "missing"`), while the two
+/// inline-embedded frames resolve cleanly (no missing diagnostic, →
+/// `status = "ok"`).
+#[test]
+fn links_broken_missing_and_ok_classification() {
+    let bytes = paged_gen::write_idml(&paged_gen::samples::links_broken::build()).unwrap();
+    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    // No `assets` resolver and no `font`: the inline images still
+    // resolve from their embedded bytes; the link-only frames cannot.
+    let opts = paged_renderer::pipeline::PipelineOptions::default();
+    let built = paged_renderer::pipeline::build_document(&doc, &opts).expect("build_document");
+    let missing = built.diagnostics.missing_image_frame_ids();
+    assert_eq!(
+        missing.len(),
+        2,
+        "exactly the two broken links must be missing, got {missing:?}",
+    );
+}

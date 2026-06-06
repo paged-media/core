@@ -14,11 +14,14 @@ workspace = true
 zip = { workspace = true }
 quick-xml = { workspace = true }
 anyhow = { workspace = true }
+base64 = { workspace = true }
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 paged-parse = { path = "../paged-parse" }
+paged-scene = { path = "../paged-scene" }
+paged-renderer = { path = "../paged-renderer" }
 sha2 = "0.10"
 
 [[bin]]

@@ -910,6 +910,19 @@ mod wasm {
                     let bounds = paged_canvas::line_bounds(model.built(), &story_id, offset);
                     WorkerToMainKind::LineBoundsResult { bounds }
                 }
+                MainToWorkerKind::RequestWordBounds { story_id, offset } => {
+                    let Some(model) = self.model.as_ref() else {
+                        return WorkerToMain {
+                            seq,
+                            protocol: PROTOCOL_VERSION,
+                            kind: WorkerToMainKind::MutationFailed {
+                                error: WorkerError::NoDocument,
+                            },
+                        };
+                    };
+                    let bounds = model.word_bounds(&story_id, offset);
+                    WorkerToMainKind::WordBoundsResult { bounds }
+                }
                 MainToWorkerKind::Undo => {
                     let Some(model) = self.model.as_mut() else {
                         return WorkerToMain {

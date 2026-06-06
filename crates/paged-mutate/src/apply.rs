@@ -49,7 +49,7 @@ use crate::invert::{
     invert_set_property,
 };
 use crate::operation::{
-    AppliedOperation, ColorGroupSpec, FieldKind, GradientFeatherSpec, GradientSpec,
+    AppliedOperation, ColorGroupSpec, FieldKind, GradientFeatherSpec, GradientSpec, GroupSpec,
     GradientStopSpec, GuideOrientationSpec, InvalidationHint, NodeId, NodeSpec, Operation,
     PathAnchorSpec, PathfinderKind, PropertyPath, StyleCollection, StyleScope, SwatchSpec, Value,
 };
@@ -180,6 +180,11 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             apply_rename_table_style(doc, style_id, name)
         }
         Operation::DeleteTableStyle { style_id } => apply_delete_table_style(doc, style_id),
+        Operation::CreateGroup { spec } => apply_create_group(doc, spec),
+        Operation::DissolveGroup {
+            group_id,
+            restore_slots,
+        } => apply_dissolve_group(doc, group_id, restore_slots.as_deref()),
         Operation::CreateGradient { spec } => apply_create_gradient(doc, spec),
         Operation::EditGradient { gradient_id, spec } => {
             apply_edit_gradient(doc, gradient_id, spec)
@@ -4698,6 +4703,389 @@ fn gradient_spec_from_entry(entry: &paged_parse::GradientEntry) -> GradientSpec 
             })
             .collect(),
     }
+}
+
+/// B-04 — mint a page-item id (`u<hex>`) unique across every page
+/// item in the document, groups included. Mutate-side twin of the
+/// canvas `mint_page_item_id_with_offset` scanner.
+fn mint_group_id(doc: &paged_scene::Document) -> String {
+    fn scan(max: &mut u64, id: Option<&str>) {
+        if let Some(rest) = id.and_then(|s| s.strip_prefix('u')) {
+            if let Ok(n) = u64::from_str_radix(rest, 16) {
+                *max = (*max).max(n);
+            }
+        }
+    }
+    let mut max: u64 = 0;
+    for parsed in &doc.spreads {
+        let s = &parsed.spread;
+        for f in &s.text_frames {
+            scan(&mut max, f.self_id.as_deref());
+        }
+        for r in &s.rectangles {
+            scan(&mut max, r.self_id.as_deref());
+        }
+        for o in &s.ovals {
+            scan(&mut max, o.self_id.as_deref());
+        }
+        for l in &s.graphic_lines {
+            scan(&mut max, l.self_id.as_deref());
+        }
+        for p in &s.polygons {
+            scan(&mut max, p.self_id.as_deref());
+        }
+        for g in &s.groups {
+            scan(&mut max, g.self_id.as_deref());
+        }
+    }
+    format!("u{:x}", max + 1)
+}
+
+/// Resolve a leaf-member NodeId to its `FrameRef` within `spread`.
+fn leaf_frame_ref(
+    spread: &paged_parse::Spread,
+    node: &NodeId,
+) -> Option<paged_parse::FrameRef> {
+    use paged_parse::FrameRef;
+    let find = |id: &str, ids: Vec<Option<&str>>| -> Option<usize> {
+        ids.iter().position(|s| *s == Some(id))
+    };
+    match node {
+        NodeId::TextFrame(id) => find(
+            id,
+            spread.text_frames.iter().map(|f| f.self_id.as_deref()).collect(),
+        )
+        .map(FrameRef::TextFrame),
+        NodeId::Rectangle(id) => find(
+            id,
+            spread.rectangles.iter().map(|f| f.self_id.as_deref()).collect(),
+        )
+        .map(FrameRef::Rectangle),
+        NodeId::Oval(id) => find(
+            id,
+            spread.ovals.iter().map(|f| f.self_id.as_deref()).collect(),
+        )
+        .map(FrameRef::Oval),
+        NodeId::GraphicLine(id) => find(
+            id,
+            spread
+                .graphic_lines
+                .iter()
+                .map(|f| f.self_id.as_deref())
+                .collect(),
+        )
+        .map(FrameRef::GraphicLine),
+        NodeId::Polygon(id) => find(
+            id,
+            spread.polygons.iter().map(|f| f.self_id.as_deref()).collect(),
+        )
+        .map(FrameRef::Polygon),
+        _ => None,
+    }
+}
+
+/// B-04 — group leaf page items. Fully validated BEFORE any mutation
+/// (atomicity invariant). Members contiguous in z-order group
+/// paint-neutrally (the group ref takes the earliest member's
+/// `frames_in_order` slot, paint recursion emits members there in
+/// stored order); scattered members deterministically collect at the
+/// earliest slot. The inverse carries the original slots so undo
+/// restores z-order EXACTLY either way.
+fn apply_create_group(
+    doc: &mut paged_scene::Document,
+    spec: &GroupSpec,
+) -> Result<AppliedOperation, OperationError> {
+    use paged_parse::FrameRef;
+
+    let invalid = |reason: String| OperationError::InvalidValue {
+        node: NodeId::Group(spec.self_id.clone().unwrap_or_default()),
+        path: PropertyPath::FrameTransform,
+        reason,
+    };
+
+    if spec.members.is_empty() {
+        return Err(invalid("a group needs at least one member".into()));
+    }
+    // v1: flat groups — leaf kinds only.
+    if spec.members.iter().any(|m| matches!(m, NodeId::Group(_))) {
+        return Err(invalid(
+            "nested groups are not supported yet (flat groups in v1)".into(),
+        ));
+    }
+    // Duplicate member ids.
+    {
+        let mut seen = std::collections::HashSet::new();
+        for m in &spec.members {
+            if !seen.insert(m.self_id().to_string()) {
+                return Err(invalid(format!(
+                    "duplicate member \"{}\"",
+                    m.self_id()
+                )));
+            }
+        }
+    }
+    // Locate the ONE spread holding every member; resolve FrameRefs.
+    let mut located: Option<(usize, Vec<FrameRef>)> = None;
+    for (si, parsed) in doc.spreads.iter().enumerate() {
+        let spread = &parsed.spread;
+        let refs: Vec<Option<FrameRef>> = spec
+            .members
+            .iter()
+            .map(|m| leaf_frame_ref(spread, m))
+            .collect();
+        if refs.iter().all(|r| r.is_some()) {
+            located = Some((si, refs.into_iter().flatten().collect()));
+            break;
+        }
+        if refs.iter().any(|r| r.is_some()) {
+            return Err(invalid(
+                "all members must live on the same spread".into(),
+            ));
+        }
+    }
+    let Some((spread_idx, member_refs)) = located else {
+        return Err(invalid("member not found in any spread".into()));
+    };
+    let spread = &doc.spreads[spread_idx].spread;
+    // Already grouped? (Direct membership scan — nesting is v1-flat.)
+    for g in &spread.groups {
+        for r in &member_refs {
+            if g.members.contains(r) {
+                return Err(invalid(
+                    "a member already belongs to another group".into(),
+                ));
+            }
+        }
+    }
+    // Every member must sit in frames_in_order (top-level item).
+    for r in &member_refs {
+        if !spread.frames_in_order.contains(r) {
+            return Err(invalid(
+                "member is not a top-level spread item".into(),
+            ));
+        }
+    }
+    // Mint or validate the id.
+    let self_id = match &spec.self_id {
+        Some(s) => {
+            if spread.groups.iter().any(|g| g.self_id.as_deref() == Some(s)) {
+                return Err(OperationError::DuplicateNodeId { id: s.clone() });
+            }
+            s.clone()
+        }
+        None => mint_group_id(doc),
+    };
+
+    // ---- mutation (validated; cannot fail past this point) ----
+    let spread = &mut doc.spreads[spread_idx].spread;
+    // Members in DOCUMENT order (their frames_in_order positions).
+    let mut ordered: Vec<(usize, FrameRef)> = member_refs
+        .iter()
+        .map(|r| {
+            let pos = spread
+                .frames_in_order
+                .iter()
+                .position(|x| x == r)
+                .expect("validated above");
+            (pos, *r)
+        })
+        .collect();
+    ordered.sort_by_key(|(pos, _)| *pos);
+    let earliest = ordered[0].0;
+    let members_doc_order: Vec<FrameRef> =
+        ordered.iter().map(|(_, r)| *r).collect();
+    // Snapshot for the inverse: exact pre-group slots (doc order).
+    let restore_slots: Vec<u32> =
+        ordered.iter().map(|(pos, _)| *pos as u32).collect();
+
+    let new_group_idx = spread.groups.len();
+    spread.groups.push(paged_parse::Group {
+        self_id: Some(self_id.clone()),
+        members: members_doc_order.clone(),
+        transparency: Default::default(),
+        item_transform: None,
+    });
+    // frames_in_order surgery: group ref at the earliest slot, member
+    // entries removed.
+    spread
+        .frames_in_order
+        .insert(earliest, FrameRef::Group(new_group_idx));
+    spread
+        .frames_in_order
+        .retain(|r| !(members_doc_order.contains(r) && !matches!(r, FrameRef::Group(_))));
+
+    let mut resolved = spec.clone();
+    resolved.self_id = Some(self_id.clone());
+    Ok(AppliedOperation {
+        op: Operation::CreateGroup { spec: resolved },
+        inverse: Operation::DissolveGroup {
+            group_id: self_id,
+            restore_slots: Some(restore_slots),
+        },
+        invalidation: InvalidationHint {
+            structural: true,
+            frame_geometry: spec.members.clone(),
+            ..Default::default()
+        },
+    })
+}
+
+/// B-04 — dissolve a group: members return to the group's
+/// `frames_in_order` slot in stored order — or, when an undo inverse
+/// carries `restore_slots`, at their exact pre-group indices;
+/// `FrameRef::Group` indices above the removed entry are fixed up
+/// across the spread.
+fn apply_dissolve_group(
+    doc: &mut paged_scene::Document,
+    group_id: &str,
+    restore_slots: Option<&[u32]>,
+) -> Result<AppliedOperation, OperationError> {
+    use paged_parse::FrameRef;
+
+    let node = NodeId::Group(group_id.to_string());
+    let invalid = |reason: String| OperationError::InvalidValue {
+        node: node.clone(),
+        path: PropertyPath::FrameTransform,
+        reason,
+    };
+
+    // Locate the group.
+    let mut found: Option<(usize, usize)> = None;
+    for (si, parsed) in doc.spreads.iter().enumerate() {
+        if let Some(gi) = parsed
+            .spread
+            .groups
+            .iter()
+            .position(|g| g.self_id.as_deref() == Some(group_id))
+        {
+            found = Some((si, gi));
+            break;
+        }
+    }
+    let Some((spread_idx, group_idx)) = found else {
+        return Err(OperationError::NodeNotFound(node));
+    };
+    let spread = &doc.spreads[spread_idx].spread;
+    // v1: refuse to dissolve a group that is itself a member of
+    // another group (parsed nested structures stay intact).
+    if spread
+        .groups
+        .iter()
+        .any(|g| g.members.contains(&FrameRef::Group(group_idx)))
+    {
+        return Err(invalid(
+            "group is nested inside another group; dissolve the outer group first"
+                .into(),
+        ));
+    }
+    // The group must be a top-level frames_in_order entry.
+    let Some(slot) = spread
+        .frames_in_order
+        .iter()
+        .position(|r| *r == FrameRef::Group(group_idx))
+    else {
+        return Err(invalid(
+            "group is not a top-level spread item".into(),
+        ));
+    };
+    // Members must be resolvable to NodeIds for the inverse spec
+    // (leaf members only in v1 — nested parsed groups refuse above
+    // only covers THIS group being nested; a group CONTAINING groups
+    // also stays untouched in v1).
+    let member_nodes: Option<Vec<NodeId>> = spread.groups[group_idx]
+        .members
+        .iter()
+        .map(|r| match *r {
+            FrameRef::TextFrame(i) => spread
+                .text_frames
+                .get(i)
+                .and_then(|f| f.self_id.clone())
+                .map(NodeId::TextFrame),
+            FrameRef::Rectangle(i) => spread
+                .rectangles
+                .get(i)
+                .and_then(|f| f.self_id.clone())
+                .map(NodeId::Rectangle),
+            FrameRef::Oval(i) => spread
+                .ovals
+                .get(i)
+                .and_then(|f| f.self_id.clone())
+                .map(NodeId::Oval),
+            FrameRef::GraphicLine(i) => spread
+                .graphic_lines
+                .get(i)
+                .and_then(|f| f.self_id.clone())
+                .map(NodeId::GraphicLine),
+            FrameRef::Polygon(i) => spread
+                .polygons
+                .get(i)
+                .and_then(|f| f.self_id.clone())
+                .map(NodeId::Polygon),
+            FrameRef::Group(_) => None,
+        })
+        .collect();
+    let Some(member_nodes) = member_nodes else {
+        return Err(invalid(
+            "group contains nested groups or id-less members; v1 dissolves flat groups only"
+                .into(),
+        ));
+    };
+
+    // ---- mutation ----
+    let spread = &mut doc.spreads[spread_idx].spread;
+    let group = spread.groups.remove(group_idx);
+    spread.frames_in_order.remove(slot);
+    match restore_slots {
+        // Undo path: members back at their exact pre-group indices
+        // (captured ascending, paired with stored member order).
+        Some(slots) if slots.len() == group.members.len() => {
+            for (r, s) in group.members.iter().zip(slots) {
+                let at = (*s as usize).min(spread.frames_in_order.len());
+                spread.frames_in_order.insert(at, *r);
+            }
+        }
+        // User-initiated ungroup: members stay together at the
+        // group's slot (the InDesign semantic).
+        _ => {
+            for (k, r) in group.members.iter().enumerate() {
+                spread.frames_in_order.insert(slot + k, *r);
+            }
+        }
+    }
+    // Index fix-up: every FrameRef::Group(j) with j > group_idx
+    // decrements, in frames_in_order AND in remaining groups' members.
+    let fix = |r: &mut FrameRef| {
+        if let FrameRef::Group(j) = r {
+            if *j > group_idx {
+                *j -= 1;
+            }
+        }
+    };
+    for r in spread.frames_in_order.iter_mut() {
+        fix(r);
+    }
+    for g in spread.groups.iter_mut() {
+        for r in g.members.iter_mut() {
+            fix(r);
+        }
+    }
+
+    Ok(AppliedOperation {
+        op: Operation::DissolveGroup {
+            group_id: group_id.to_string(),
+            restore_slots: restore_slots.map(<[u32]>::to_vec),
+        },
+        inverse: Operation::CreateGroup {
+            spec: GroupSpec {
+                self_id: group.self_id.clone(),
+                members: member_nodes,
+            },
+        },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
 }
 
 fn apply_create_gradient(

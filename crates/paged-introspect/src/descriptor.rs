@@ -226,6 +226,9 @@ pub enum PropertyPathJson {
     CellInsetBottom,
     CellInsetRight,
     CellVerticalJustification,
+    // Aftercare-A — table dimensions (read-only).
+    TableRowCount,
+    TableColumnCount,
 }
 
 impl From<PropertyPath> for PropertyPathJson {
@@ -460,6 +463,9 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::CellVerticalJustification => {
                 PropertyPathJson::CellVerticalJustification
             }
+            // Aftercare-A — table dimensions (read-only).
+            PropertyPath::TableRowCount => PropertyPathJson::TableRowCount,
+            PropertyPath::TableColumnCount => PropertyPathJson::TableColumnCount,
         }
     }
 }
@@ -696,6 +702,9 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::CellVerticalJustification => {
                 PropertyPath::CellVerticalJustification
             }
+            // Aftercare-A — table dimensions (read-only).
+            PropertyPathJson::TableRowCount => PropertyPath::TableRowCount,
+            PropertyPathJson::TableColumnCount => PropertyPath::TableColumnCount,
         }
     }
 }

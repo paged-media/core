@@ -444,22 +444,16 @@ pub fn offset_closed_path(
     };
 
     let d = f64::from(delta.abs());
-    let picked = match (candidate(d), candidate(-d)) {
-        (a, b) => {
-            let mut options: Vec<(Vec<PathAnchor>, f64)> =
-                [a, b].into_iter().flatten().collect();
-            if delta > 0.0 {
-                options.retain(|(_, area)| *area > original_area + 1e-3);
-                options.sort_by(|x, y| x.1.total_cmp(&y.1));
-                options.pop()
-            } else {
-                options.retain(|(_, area)| {
-                    *area > 1e-3 && *area < original_area - 1e-3
-                });
-                options.sort_by(|x, y| x.1.total_cmp(&y.1));
-                options.into_iter().next()
-            }
-        }
+    let mut options: Vec<(Vec<PathAnchor>, f64)> =
+        [candidate(d), candidate(-d)].into_iter().flatten().collect();
+    let picked = if delta > 0.0 {
+        options.retain(|(_, area)| *area > original_area + 1e-3);
+        options.sort_by(|x, y| x.1.total_cmp(&y.1));
+        options.pop()
+    } else {
+        options.retain(|(_, area)| *area > 1e-3 && *area < original_area - 1e-3);
+        options.sort_by(|x, y| x.1.total_cmp(&y.1));
+        options.into_iter().next()
     }?;
     if picked.0.len() < 3 {
         return None;

@@ -2244,6 +2244,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "tsify-next",
+ "unicode-segmentation",
  "wasm-bindgen",
  "web-sys",
  "zip",
@@ -2332,9 +2333,12 @@ name = "paged-gen"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64",
  "blake3",
  "clap",
  "paged-parse",
+ "paged-renderer",
+ "paged-scene",
  "quick-xml",
  "sha2",
  "zip",

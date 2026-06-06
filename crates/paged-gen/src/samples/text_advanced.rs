@@ -603,6 +603,8 @@ pub fn build() -> Sample {
             stroke_color: None,
             stroke_weight_pt: None,
             parent_story: Some(story_id.clone()),
+            next_text_frame: None,
+            previous_text_frame: None,
             extra_attrs: Vec::new(),
             blending: None,
             drop_shadow: None,

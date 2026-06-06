@@ -179,6 +179,19 @@ pub struct Rect {
     /// becomes a text frame (kind = `TextFrame` in the XML). Phase-0
     /// labels live in stories on the page they describe.
     pub parent_story: Option<String>,
+    /// `NextTextFrame` self-id — the frame that continues this story
+    /// when its content overflows the current frame. `None` ⇒ the
+    /// builder emits `"n"` (end-of-chain / unthreaded), matching the
+    /// historical default. Only meaningful on a text frame (one with a
+    /// `parent_story`); the chain is what makes a story overset across
+    /// multiple frames instead of a single one.
+    pub next_text_frame: Option<String>,
+    /// `PreviousTextFrame` self-id — the frame this one continues from.
+    /// `None` ⇒ the builder emits `"n"`. The renderer's chain walk
+    /// keys off `NextTextFrame` only (it derives the head as the frame
+    /// no `NextTextFrame` targets), but real InDesign exports always
+    /// write the back-link too, so we mirror it for fidelity.
+    pub previous_text_frame: Option<String>,
     /// Sample-specific attribute overrides emitted after the standard
     /// fill/stroke attrs (so they win on duplicate keys per IDML's
     /// "last attribute wins" reader behaviour). Values come straight
@@ -320,9 +333,28 @@ pub struct PlacedImage {
     /// transform" need this knob.
     pub image_item_transform: Option<Matrix>,
     /// `EffectivePpi` attribute on `<Image>` — emitted as a
-    /// space-separated `"x y"` pair (e.g. `"144 144"`). When `None`,
-    /// the attribute is omitted (parser then defaults to 72 / 72).
+    /// parenthesised `"(x y)"` pair (e.g. `"(144 144)"`) to match real
+    /// InDesign serialisation. When `None`, the attribute is omitted
+    /// (parser then leaves `effective_ppi = None`, and the canvas may
+    /// derive it from pixel dims ÷ placed size if it has the decode).
     pub effective_ppi: Option<(f32, f32)>,
+    /// `ActualPpi` attribute on `<Image>` — the source asset's native
+    /// resolution, parenthesised `"(x y)"`. Emitted alongside
+    /// `EffectivePpi` so a low-effective-PPI placement reads honestly
+    /// (a high `ActualPpi` scaled down to a low `EffectivePpi`). `None`
+    /// ⇒ omitted.
+    pub actual_ppi: Option<(f32, f32)>,
+    /// `Space` attribute on `<Image>` — the colour space InDesign
+    /// records (`"$ID/RGB"`, `"$ID/CMYK"`, …). Drives the Links
+    /// panel's colour-space column. `None` ⇒ omitted.
+    pub color_space: Option<&'static str>,
+    /// Raw image bytes to inline as a base64 `<Contents>` CDATA payload
+    /// under the `<Image><Properties>`. When `Some`, the placed image
+    /// resolves to these bytes at build time (no external file / asset
+    /// resolver needed), so its host frame renders "ok" rather than the
+    /// missing-image placeholder. `None` ⇒ link-only (resolved via the
+    /// URI; "missing" when nothing on disk answers it).
+    pub inline_bytes: Option<Vec<u8>>,
 }
 
 /// IDML `<BlendingSetting>` — `Opacity` is 0..=100, `BlendMode` is
@@ -385,6 +417,8 @@ impl Rect {
             stroke_color: None,
             stroke_weight_pt: None,
             parent_story: None,
+            next_text_frame: None,
+            previous_text_frame: None,
             extra_attrs: Vec::new(),
             blending: None,
             drop_shadow: None,
@@ -429,8 +463,18 @@ impl Rect {
         attrs.push(("Self", self.self_id.clone()));
         if let Some(story) = &self.parent_story {
             attrs.push(("ParentStory", story.clone()));
-            attrs.push(("PreviousTextFrame", "n".to_string()));
-            attrs.push(("NextTextFrame", "n".to_string()));
+            attrs.push((
+                "PreviousTextFrame",
+                self.previous_text_frame
+                    .clone()
+                    .unwrap_or_else(|| "n".to_string()),
+            ));
+            attrs.push((
+                "NextTextFrame",
+                self.next_text_frame
+                    .clone()
+                    .unwrap_or_else(|| "n".to_string()),
+            ));
             attrs.push(("ContentType", "TextType".to_string()));
         }
         // Pin AppliedObjectStyle to the built-in `[None]` style so
@@ -559,16 +603,38 @@ impl Rect {
                 ("ItemTransform", img_xform.as_str()),
                 ("LinkResourceURI", img.link_resource_uri.as_str()),
             ];
-            // EffectivePpi serialises as a space-separated pair,
-            // matching what real InDesign emits.
+            if let Some(space) = img.color_space {
+                img_attrs.push(("Space", space));
+            }
+            // ActualPpi / EffectivePpi serialise as a parenthesised
+            // `"(x y)"` pair — what real InDesign writes and what
+            // paged-parse's `parse_ppi_x` expects (it tolerates a bare
+            // `"x"` too, but the canonical form round-trips cleanly).
+            let actual_ppi_str: String;
+            if let Some((px, py)) = img.actual_ppi {
+                actual_ppi_str = format!("({} {})", format_f32(px), format_f32(py));
+                img_attrs.push(("ActualPpi", actual_ppi_str.as_str()));
+            }
             let ppi_str: String;
             if let Some((px, py)) = img.effective_ppi {
-                ppi_str = format!("{} {}", format_f32(px), format_f32(py));
+                ppi_str = format!("({} {})", format_f32(px), format_f32(py));
                 img_attrs.push(("EffectivePpi", ppi_str.as_str()));
             }
             b.start("Image", &img_attrs);
             b.start("Properties", &[]);
             write_path_geometry(b, img.image_w_pt, img.image_h_pt);
+            // Inline-embedded image bytes: a base64 `<Contents>` CDATA
+            // payload sibling of the PathGeometry. The parser captures
+            // this into `image_bytes`, so the renderer resolves it
+            // without an external file — the frame renders "ok" rather
+            // than the missing-image placeholder.
+            if let Some(bytes) = &img.inline_bytes {
+                use base64::Engine;
+                let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+                b.start("Contents", &[]);
+                b.cdata(&encoded);
+                b.end("Contents");
+            }
             b.end("Properties");
             b.empty(
                 "Link",

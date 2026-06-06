@@ -54,6 +54,7 @@ fn emit_sample(name: &str, out_dir: &std::path::Path) -> Result<()> {
         "text" => paged_gen::samples::text::build(),
         "text-advanced" => paged_gen::samples::text_advanced::build(),
         "text-letterspacing" => paged_gen::samples::text_letterspacing::build(),
+        "text-overset" => paged_gen::samples::text_overset::build(),
         "text-wrap" => paged_gen::samples::text_wrap::build(),
         "effects" => paged_gen::samples::effects::build(),
         "gradients" => paged_gen::samples::gradients::build(),
@@ -64,9 +65,10 @@ fn emit_sample(name: &str, out_dir: &std::path::Path) -> Result<()> {
         "markers" => paged_gen::samples::markers::build(),
         "masters" => paged_gen::samples::masters::build(),
         "corners" => paged_gen::samples::corners::build(),
+        "links-broken" => paged_gen::samples::links_broken::build(),
         other => {
             anyhow::bail!(
-                "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, text-letterspacing, text-wrap, effects, gradients, tables, images, anchored, transparency, markers, masters, corners"
+                "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, text-letterspacing, text-overset, text-wrap, effects, gradients, tables, images, anchored, transparency, markers, masters, corners, links-broken"
             )
         }
     };

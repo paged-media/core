@@ -351,6 +351,8 @@ pub fn build() -> Sample {
             stroke_color: None,
             stroke_weight_pt: None,
             parent_story: Some(story_id.clone()),
+            next_text_frame: None,
+            previous_text_frame: None,
             extra_attrs: Vec::new(),
             blending: None,
             drop_shadow: None,
@@ -374,6 +376,8 @@ pub fn build() -> Sample {
             stroke_color: Some("Color/Black".to_string()),
             stroke_weight_pt: Some(variant.stroke_weight_pt.unwrap_or(6.0)),
             parent_story: None,
+            next_text_frame: None,
+            previous_text_frame: None,
             extra_attrs: variant
                 .overrides
                 .iter()
