@@ -252,6 +252,7 @@ pub fn build() -> Sample {
         page_self_id: master_page_id,
         page_width_pt: PAGE_W_PT,
         page_height_pt: PAGE_H_PT,
+        page_items: Vec::new(),
     });
     let story_bytes = write_markers_story(&story_id, &segs);
 
@@ -284,6 +285,7 @@ pub fn build() -> Sample {
         page_width_pt: PAGE_W_PT,
         page_height_pt: PAGE_H_PT,
         page_items: vec![body_frame.into()],
+        override_list: Vec::new(),
     });
     // Page 2 — the page-hyperlink jump target. No body items.
     let spread1 = crate::builders::spread::write_spread(&crate::builders::spread::Spread {
@@ -294,6 +296,7 @@ pub fn build() -> Sample {
         page_width_pt: PAGE_W_PT,
         page_height_pt: PAGE_H_PT,
         page_items: Vec::new(),
+        override_list: Vec::new(),
     });
 
     let designmap = write_designmap_with_markers(

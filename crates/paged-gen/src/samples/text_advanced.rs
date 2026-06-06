@@ -524,6 +524,7 @@ pub fn build() -> Sample {
                 page_self_id: master_page_id.clone(),
                 page_width_pt: PAGE_W_PT,
                 page_height_pt: PAGE_H_PT,
+                page_items: Vec::new(),
             }),
         ));
         master_refs.push(master_id.clone());
@@ -620,6 +621,7 @@ pub fn build() -> Sample {
                 page_width_pt: PAGE_W_PT,
                 page_height_pt: PAGE_H_PT,
                 page_items: vec![body_frame.into()],
+                override_list: Vec::new(),
             }),
         ));
         spread_refs.push(spread_id);

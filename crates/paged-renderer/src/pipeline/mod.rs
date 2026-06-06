@@ -10526,27 +10526,195 @@ mod tests {
                 .filter(|s| matches!(s, CubicTo { .. }))
                 .count()
         };
-        // Rounded / Inverse: one quarter-arc cubic per corner.
-        assert_eq!(cubics(CornerOption::Rounded), 4);
-        assert_eq!(cubics(CornerOption::Inverse), 4);
-        // Bevel: straight chamfers, no cubics.
-        assert_eq!(cubics(CornerOption::Bevel), 0);
-        // Inset: square notches — no cubics, but extra LineTos vs Bevel.
-        assert_eq!(cubics(CornerOption::Inset), 0);
-        let line_count = |kind| {
+        let lines = |kind| {
             segs(kind)
                 .iter()
                 .filter(|s| matches!(s, LineTo { .. }))
                 .count()
         };
+        // Rounded / Inverse: one quarter-arc cubic per corner. Inverse
+        // is the smooth concave indentation (distinct from Inset's
+        // sharp fold-in below).
+        assert_eq!(cubics(CornerOption::Rounded), 4);
+        assert_eq!(cubics(CornerOption::Inverse), 4);
+        // Bevel: straight chamfers — no cubics. Four corners + four
+        // edges ⇒ 8 LineTos.
+        assert_eq!(cubics(CornerOption::Bevel), 0);
+        assert_eq!(lines(CornerOption::Bevel), 8);
+        // Inset: InDesign's sharp "fold-in" notch — no cubics, two
+        // LineTos per corner (in to `m`, back out) ⇒ strictly more line
+        // segments than Bevel's single chamfer per corner. Distinct
+        // from Inverse (calibrated + verified distinct in W1.8).
+        assert_eq!(cubics(CornerOption::Inset), 0);
         assert!(
-            line_count(CornerOption::Inset) > line_count(CornerOption::Bevel),
-            "inset notch should add extra line segments"
+            lines(CornerOption::Inset) > lines(CornerOption::Bevel),
+            "inset fold-in adds an extra line segment per corner vs bevel"
         );
-        // Fancy: an ogee — two cubics per corner.
-        assert_eq!(cubics(CornerOption::Fancy), 8);
+        // Fancy: the ornamental three-arc scallop — three cubics per
+        // corner (calibrated; was a two-cubic ogee before W1.8).
+        assert_eq!(cubics(CornerOption::Fancy), 12);
         // None / zero radius: sharp corners, no cubics.
         assert_eq!(cubics(CornerOption::None), 0);
+    }
+
+    #[test]
+    fn inset_and_inverse_corners_are_distinct_geometry() {
+        // W1.8 regression guard: InDesign's Inset (sharp fold-in) and
+        // Inverse Rounded (smooth concave arc) must NOT collapse onto
+        // the same path. A naive "Inset = quarter-circle cut inward"
+        // implementation made them byte-identical.
+        use paged_parse::CornerOption;
+        let rect = paged_compose::Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 80.0,
+            h: 60.0,
+        };
+        let inverse = corner_rect_path(rect, [Some(15.0); 4], [CornerOption::Inverse; 4]);
+        let inset = corner_rect_path(rect, [Some(15.0); 4], [CornerOption::Inset; 4]);
+        assert_ne!(
+            inverse.segments, inset.segments,
+            "Inset and Inverse Rounded must render as distinct shapes"
+        );
+    }
+
+    #[test]
+    fn corner_rect_path_every_option_emits_closed_continuous_geometry() {
+        // W1.8: all five IDML corner options must emit geometry (a
+        // non-degenerate, closed, continuous contour). Verifies segment
+        // counts AND that the path's drawn vertices stay inside the
+        // rect's bounds with no NaNs — the regression guard for the
+        // Inset / Fancy calibration.
+        use paged_compose::PathSegment;
+        use paged_parse::CornerOption;
+        let rect = paged_compose::Rect {
+            x: 10.0,
+            y: 20.0,
+            w: 120.0,
+            h: 80.0,
+        };
+        let r = 18.0_f32;
+        for kind in [
+            CornerOption::Rounded,
+            CornerOption::Inverse,
+            CornerOption::Bevel,
+            CornerOption::Inset,
+            CornerOption::Fancy,
+        ] {
+            let path = corner_rect_path(rect, [Some(r); 4], [kind; 4]);
+            let segs = &path.segments;
+            // Starts with a MoveTo, ends with a Close.
+            assert!(
+                matches!(segs.first(), Some(PathSegment::MoveTo { .. })),
+                "{kind:?}: must open with MoveTo"
+            );
+            assert!(
+                matches!(segs.last(), Some(PathSegment::Close)),
+                "{kind:?}: must end Close"
+            );
+            // Walk the contour tracking the current point; every drawn
+            // endpoint and control point must be finite and inside the
+            // rect's AABB (corner effects only ever cut *inward*, never
+            // outside the bounding box). A square notch / scallop / arc
+            // that escaped the box would signal a miscomputed corner.
+            let inside = |x: f32, y: f32| -> bool {
+                x.is_finite()
+                    && y.is_finite()
+                    && x >= rect.x - 0.01
+                    && x <= rect.x + rect.w + 0.01
+                    && y >= rect.y - 0.01
+                    && y <= rect.y + rect.h + 0.01
+            };
+            let mut start: Option<(f32, f32)> = None;
+            let mut cur = (0.0_f32, 0.0_f32);
+            for s in segs {
+                match s {
+                    PathSegment::MoveTo { x, y } => {
+                        assert!(inside(*x, *y), "{kind:?}: MoveTo escapes box");
+                        start = Some((*x, *y));
+                        cur = (*x, *y);
+                    }
+                    PathSegment::LineTo { x, y } => {
+                        assert!(inside(*x, *y), "{kind:?}: LineTo escapes box");
+                        cur = (*x, *y);
+                    }
+                    PathSegment::CubicTo {
+                        cx1,
+                        cy1,
+                        cx2,
+                        cy2,
+                        x,
+                        y,
+                    } => {
+                        for (px, py) in [(*cx1, *cy1), (*cx2, *cy2), (*x, *y)] {
+                            assert!(inside(px, py), "{kind:?}: cubic point escapes box");
+                        }
+                        cur = (*x, *y);
+                    }
+                    PathSegment::QuadTo { cx, cy, x, y } => {
+                        for (px, py) in [(*cx, *cy), (*x, *y)] {
+                            assert!(inside(px, py), "{kind:?}: quad point escapes box");
+                        }
+                        cur = (*x, *y);
+                    }
+                    PathSegment::Close => {
+                        // Closing back to the contour start; the current
+                        // point should already be (approximately) the
+                        // start of the top edge's outgoing point.
+                        if let Some(s0) = start {
+                            let d = (cur.0 - s0.0).hypot(cur.1 - s0.1);
+                            // The walk ends at TL's p_out, which is the
+                            // very point MoveTo emitted — continuity.
+                            assert!(d < 1e-3, "{kind:?}: contour not continuous (gap {d})");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn inset_corner_folds_in_to_the_rounding_centre() {
+        // W1.8 Inset shape: each corner steps in to the inner rounding
+        // centre `m` (the "fold-in" apex) then back out to the outgoing
+        // edge. We check the top-left corner of a square: its apex must
+        // land at `m = (r, r)` and the segment endpoints on the edges at
+        // `(0, r)` (incoming) and `(r, 0)` (outgoing).
+        use paged_compose::PathSegment::LineTo;
+        use paged_parse::CornerOption;
+        let rect = paged_compose::Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 100.0,
+        };
+        let r = 25.0_f32;
+        let path = corner_rect_path(rect, [Some(r); 4], [CornerOption::Inset; 4]);
+        // The contour walks TR, BR, BL, then TL last. The final two
+        // LineTos belong to TL: the fold-in apex `m = (r, r)` then the
+        // outgoing point `p_out = (r, 0)` on the top edge.
+        let line_pts: Vec<(f32, f32)> = path
+            .segments
+            .iter()
+            .filter_map(|s| match s {
+                LineTo { x, y } => Some((*x, *y)),
+                _ => None,
+            })
+            .collect();
+        let n = line_pts.len();
+        assert!(n >= 2, "inset emits fold-in LineTos");
+        // Last LineTo = TL p_out on the top edge at (r, 0).
+        let p_out = line_pts[n - 1];
+        assert!(
+            (p_out.0 - r).abs() < 1e-3 && p_out.1.abs() < 1e-3,
+            "TL p_out at {p_out:?}"
+        );
+        // Second-to-last = the fold-in apex at m = (r, r).
+        let apex = line_pts[n - 2];
+        assert!(
+            (apex.0 - r).abs() < 1e-3 && (apex.1 - r).abs() < 1e-3,
+            "TL fold-in apex at {apex:?}, expected ({r}, {r})"
+        );
     }
 
     #[test]
