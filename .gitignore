@@ -39,3 +39,6 @@ web/idml-viewer/node_modules/
 web/idml-viewer/dist/
 web/idml-viewer/wasm/
 web/idml-viewer/package-lock.json
+
+# blitz-wasm spike is workspace-excluded — its target dir is its own
+spikes/blitz-wasm/target/

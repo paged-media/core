@@ -1,0 +1,43 @@
+# W0 (paged.web concept §4.1/§10) — Blitz/WASM feasibility spike.
+#
+# Go/no-go gate for the embedded HTML/CSS engine bet: does the
+# Stylo/Taffy/Parley stack (via blitz-dom/-html/-paint) compile to
+# wasm32-unknown-unknown, and at what binary size? Paint runs into a
+# command-counting `anyrender::PaintScene`, NOT a Vello scene — the
+# Vello backend is shared with paged-sdk in a real integration, so the
+# marginal size of the Blitz stack alone is the number that matters.
+#
+# Deliberately a STANDALONE crate (excluded from the workspace): the
+# Blitz tree is huge and pins its own kurbo/peniko/stylo versions —
+# keep them out of the engine's Cargo.lock. Its own Cargo.lock is
+# committed so the measured numbers are reproducible.
+
+[package]
+name = "spike-blitz-wasm"
+version = "0.0.0"
+edition = "2021"
+license = "MPL-2.0"
+publish = false
+description = "W0 spike: Blitz (Stylo/Taffy/Parley) on wasm32 — compile feasibility + size + paint-path sanity."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# default features minus accessibility/file_input/custom-widget — but
+# WITH system_fonts (native test path) so text actually shapes. The
+# wasm build swaps system_fonts for bundled faces in a real
+# integration (registered like ViewerSession::register_font).
+blitz-dom = { version = "=0.3.0-alpha.4", default-features = false, features = ["system_fonts", "woff"] }
+blitz-html = { version = "=0.3.0-alpha.4" }
+blitz-paint = { version = "=0.3.0-alpha.4" }
+blitz-traits = { version = "=0.3.0-alpha.4" }
+anyrender = "0.10"
+parley = "0.9"
+kurbo = "0.13"
+peniko = "0.6"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+
+[workspace]

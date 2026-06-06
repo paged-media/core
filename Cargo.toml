@@ -23,6 +23,9 @@ members = [
     "spikes/composer-calibration",
     "spikes/wasm-size",
 ]
+# W0 (paged.web) — standalone on purpose: the Blitz/Stylo tree is huge
+# and version-skewed from the workspace; keep it out of our Cargo.lock.
+exclude = ["spikes/blitz-wasm"]
 
 [workspace.package]
 version = "0.0.0"
