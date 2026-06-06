@@ -901,6 +901,27 @@ pub enum PropertyPath {
     /// Paint-only (`frame_style`). The companion `FrameOpacity` path
     /// (the `<BlendingSetting Opacity="…">` half) already exists.
     FrameBlendMode,
+
+    // ---- W3.A0 — text-frame threading (READ-ONLY) ---------------
+    // The thread chain is *authored* via the `LinkFrames` /
+    // `UnlinkFrames` operations (which capture the prior link for
+    // undo), NOT via `SetProperty`. These two paths exist only so the
+    // inspector can *read* the chain as `PropertyEntry`s: they have no
+    // arm in `apply_set_property`, so a `SetProperty` carrying either
+    // falls through to the catch-all and is rejected with
+    // `UnsupportedProperty` — the standard read-only contract.
+    /// W3.A0 (read-only) — the `NextTextFrame` link target: the
+    /// self id of the frame this one's overflow threads into, or an
+    /// empty string when the frame ends its chain. `Value::Text`.
+    /// Write via `Operation::LinkFrames` / `UnlinkFrames`, not
+    /// `SetProperty` (which rejects this path).
+    NextTextFrame,
+    /// W3.A0 (read-only) — the previous frame in the thread: the
+    /// self id of the frame whose `NextTextFrame` points at this one,
+    /// or empty when this frame starts its chain. Derived by scanning
+    /// the spread's frames. `Value::Text`. Read-only (see
+    /// `NextTextFrame`).
+    PreviousTextFrame,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -1111,6 +1132,8 @@ impl PropertyPath {
             PropertyPath::FrameDirectionalFeatherNoise => "frame.directionalFeather.noise",
             PropertyPath::FrameDirectionalFeatherChoke => "frame.directionalFeather.choke",
             PropertyPath::FrameBlendMode => "frame.blendMode",
+            PropertyPath::NextTextFrame => "textFrame.nextTextFrame",
+            PropertyPath::PreviousTextFrame => "textFrame.previousTextFrame",
         }
     }
 }

@@ -1039,6 +1039,12 @@ pub enum CollectionName {
     /// panels.md gaps 9/10/19 — `<Section>` numbering definitions
     /// (one row per section). Backs the Pages panel's section bands.
     Sections,
+    /// W3.A0 — the document's stories (one row per `<Story>`, carrying
+    /// character/paragraph counts + the overset flag). The same
+    /// `StorySummary` list `paged.stories()` already builds. Backs
+    /// link-panel / preflight surfaces that bind against the collection
+    /// rather than the bespoke `stories()` accessor.
+    Stories,
 }
 
 impl CollectionName {
@@ -1070,6 +1076,7 @@ impl CollectionName {
             Self::IndexTopics => "indexTopics",
             Self::Inks => "inks",
             Self::Sections => "sections",
+            Self::Stories => "stories",
         }
     }
 
@@ -1098,6 +1105,7 @@ impl CollectionName {
             "indexTopics" => Self::IndexTopics,
             "inks" => Self::Inks,
             "sections" => Self::Sections,
+            "stories" => Self::Stories,
             _ => return None,
         })
     }
@@ -1233,6 +1241,35 @@ pub struct SpreadSummary {
     pub self_id: String,
     pub label: String,
     pub page_count: u32,
+    /// W3.A0 — the spread's live `<Guide>` set, refreshed on every
+    /// `collection("spreads")` request. `DocumentHandle.ruler_guides`
+    /// is load-time-only (it doesn't pick up `InsertGuide` /
+    /// `MoveGuide` / `DeleteGuide` mutations), so the editor re-queries
+    /// this collection after an undo/redo to re-sync its overlay
+    /// mirror. Empty for spreads with no guides.
+    #[serde(default)]
+    pub guides: Vec<GuideSummary>,
+}
+
+/// W3.A0 — one live ruler guide on a spread, carried inline on
+/// [`SpreadSummary`]. `id` is the positional id the guide-CRUD
+/// mutations mint (`"Guide/<spreadSelf>/<index>"`), so the editor can
+/// address a `MoveGuide` / `DeleteGuide` at it without a second
+/// round-trip. `position` is the page-local coordinate on the
+/// perpendicular axis (x for `Vertical`, y for `Horizontal`).
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct GuideSummary {
+    /// Positional id — `"Guide/<spreadSelf>/<index>"`. Matches the id
+    /// `Operation::InsertGuide` mints (see `apply::guide_id_for`).
+    pub id: String,
+    /// `"vertical"` (snaps on x) or `"horizontal"` (snaps on y).
+    pub orientation: crate::model::GuideOrientationWire,
+    /// Page-local coordinate on the perpendicular axis (pt).
+    pub position: f32,
+    /// Zero-based index into the spread's pages (IDML's `PageIndex`).
+    pub page_index: u32,
 }
 
 /// SDK Phase 5 (v1 sweep) — one page summary. Backs

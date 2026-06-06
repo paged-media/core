@@ -499,6 +499,9 @@ fn decompose_scale_y(m: Option<[f32; 6]>) -> f32 {
 fn decompose_flip_h(m: Option<[f32; 6]>) -> bool {
     paged_mutate::operation::decompose_transform(m).flip_h
 }
+fn decompose_flip_v(m: Option<[f32; 6]>) -> bool {
+    paged_mutate::operation::decompose_transform(m).flip_v
+}
 
 /// W0.4 — read-side mirror of the transparency-effect per-field paths
 /// (gap 18). Emits one `PropertyEntry` per effect field, sourcing each
@@ -2596,6 +2599,44 @@ impl CanvasModel {
                                     decompose_flip_h(f.item_transform),
                                 )),
                             },
+                            // W3.A0 — read-side mirror of the W0.3
+                            // `FrameFlipV` apply arm (decompose already
+                            // computes the V flip).
+                            PropertyEntry {
+                                path: PropertyPath::FrameFlipV,
+                                value: Some(Value::Bool(
+                                    decompose_flip_v(f.item_transform),
+                                )),
+                            },
+                            // W3.A0 — thread-chain read (READ-ONLY).
+                            // `nextTextFrame` is this frame's own
+                            // `NextTextFrame` link (empty ⇒ end of
+                            // chain). Authored via `LinkFrames` /
+                            // `UnlinkFrames`, never `SetProperty`.
+                            PropertyEntry {
+                                path: PropertyPath::NextTextFrame,
+                                value: Some(Value::Text(
+                                    f.next_text_frame.clone().unwrap_or_default(),
+                                )),
+                            },
+                            // `previousTextFrame` is derived: the frame
+                            // whose `NextTextFrame` points at this one
+                            // (empty ⇒ start of chain). Scans the
+                            // spread's text frames — threads don't cross
+                            // spreads in the parse model.
+                            PropertyEntry {
+                                path: PropertyPath::PreviousTextFrame,
+                                value: Some(Value::Text(
+                                    spread
+                                        .text_frames
+                                        .iter()
+                                        .find(|other| {
+                                            other.next_text_frame.as_deref() == Some(raw)
+                                        })
+                                        .and_then(|other| other.self_id.clone())
+                                        .unwrap_or_default(),
+                                )),
+                            },
                         ];
                         // W0.4 — transparency effects (gap 18).
                         entries.extend(effect_property_entries(
@@ -2921,7 +2962,31 @@ impl CanvasModel {
                                     decompose_flip_h(f.item_transform),
                                 )),
                             },
+                            // W3.A0 — read-side mirror of the W0.3
+                            // `FrameFlipV` apply arm.
+                            PropertyEntry {
+                                path: PropertyPath::FrameFlipV,
+                                value: Some(Value::Bool(
+                                    decompose_flip_v(f.item_transform),
+                                )),
+                            },
                         ];
+                        // W3.A0 — image-bearing rectangles surface the
+                        // inner `<Image>` transform so the content
+                        // grabber's `ImageContentTransform` apply arm
+                        // has a read counterpart. Gated on
+                        // `has_image_element` (a plain colour swatch has
+                        // no inner image to grab); `None` ⇒ the legacy
+                        // "stretch to bounds" frame with no parsed inner
+                        // matrix.
+                        if f.has_image_element {
+                            entries.push(PropertyEntry {
+                                path: PropertyPath::ImageContentTransform,
+                                value: Some(Value::Transform(
+                                    f.image_item_transform,
+                                )),
+                            });
+                        }
                         // W0.4 — transparency effects (gap 18).
                         entries.extend(effect_property_entries(
                             f.effects.as_ref(),
@@ -3464,8 +3529,16 @@ impl CanvasModel {
     }
 
     /// SDK Phase 5 (v1 sweep) — list every spread in the document.
+    ///
+    /// W3.A0 — each summary carries the spread's *live* guide set
+    /// (`SpreadSummary.guides`), rebuilt from `spread.guides` on every
+    /// call. This is the read-side counterpart to the guide-CRUD
+    /// mutations: `DocumentHandle.ruler_guides` is load-time-only, so
+    /// the editor re-queries `collection("spreads")` after an undo to
+    /// re-sync its overlay mirror.
     pub fn spreads(&self) -> Vec<crate::channel::SpreadSummary> {
-        use crate::channel::SpreadSummary;
+        use crate::channel::{GuideSummary, SpreadSummary};
+        use crate::model::GuideOrientationWire;
         self.scene
             .spreads
             .iter()
@@ -3476,10 +3549,35 @@ impl CanvasModel {
                     .clone()
                     .unwrap_or_else(|| parsed.src.clone());
                 let page_count = parsed.spread.pages.len() as u32;
+                // Positional ids mirror `apply::guide_id_for` —
+                // `Guide/<spreadSelf>/<index>`. The spread-self half is
+                // empty when the parse carried no `Self`, exactly as the
+                // mutation layer mints it, so the ids stay addressable.
+                let spread_self = parsed.spread.self_id.as_deref().unwrap_or_default();
+                let guides = parsed
+                    .spread
+                    .guides
+                    .iter()
+                    .enumerate()
+                    .map(|(gi, g)| GuideSummary {
+                        id: format!("Guide/{spread_self}/{gi}"),
+                        orientation: match g.orientation {
+                            paged_parse::GuideOrientation::Vertical => {
+                                GuideOrientationWire::Vertical
+                            }
+                            paged_parse::GuideOrientation::Horizontal => {
+                                GuideOrientationWire::Horizontal
+                            }
+                        },
+                        position: g.location,
+                        page_index: g.page_index,
+                    })
+                    .collect();
                 SpreadSummary {
                     label: self_id.clone(),
                     self_id,
                     page_count,
+                    guides,
                 }
             })
             .collect()
@@ -4152,6 +4250,7 @@ impl CanvasModel {
             }
             Inks => serde_json::to_value(self.inks()).unwrap_or_default(),
             Sections => serde_json::to_value(self.sections()).unwrap_or_default(),
+            Stories => serde_json::to_value(self.stories()).unwrap_or_default(),
         }
     }
 

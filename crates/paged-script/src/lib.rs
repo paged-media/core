@@ -885,6 +885,9 @@ fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
         FrameDirectionalFeatherNoise => "frameDirectionalFeatherNoise",
         FrameDirectionalFeatherChoke => "frameDirectionalFeatherChoke",
         FrameBlendMode => "frameBlendMode",
+        // W3.A0 — text-frame thread chain (read-only paths).
+        NextTextFrame => "nextTextFrame",
+        PreviousTextFrame => "previousTextFrame",
     }
 }
 

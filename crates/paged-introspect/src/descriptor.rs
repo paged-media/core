@@ -212,6 +212,9 @@ pub enum PropertyPathJson {
     FrameDirectionalFeatherNoise,
     FrameDirectionalFeatherChoke,
     FrameBlendMode,
+    // W3.A0 — text-frame thread chain (read-only).
+    NextTextFrame,
+    PreviousTextFrame,
 }
 
 impl From<PropertyPath> for PropertyPathJson {
@@ -431,6 +434,8 @@ impl From<PropertyPath> for PropertyPathJson {
                 PropertyPathJson::FrameDirectionalFeatherChoke
             }
             PropertyPath::FrameBlendMode => PropertyPathJson::FrameBlendMode,
+            PropertyPath::NextTextFrame => PropertyPathJson::NextTextFrame,
+            PropertyPath::PreviousTextFrame => PropertyPathJson::PreviousTextFrame,
         }
     }
 }
@@ -652,6 +657,8 @@ impl From<PropertyPathJson> for PropertyPath {
                 PropertyPath::FrameDirectionalFeatherChoke
             }
             PropertyPathJson::FrameBlendMode => PropertyPath::FrameBlendMode,
+            PropertyPathJson::NextTextFrame => PropertyPath::NextTextFrame,
+            PropertyPathJson::PreviousTextFrame => PropertyPath::PreviousTextFrame,
         }
     }
 }
