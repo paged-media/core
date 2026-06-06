@@ -44,6 +44,7 @@ mod color_paint;
 mod image_convert;
 mod image_decode;
 mod images;
+mod links;
 mod numbering;
 mod shapes;
 mod stroke_geom;
@@ -154,6 +155,11 @@ pub struct PipelineOptions<'a> {
     /// text. Default `false`: the live canvas build never pays for
     /// it and the command stream stays byte-identical.
     pub collect_glyph_runs: bool,
+    /// W1.4 (PDF export) — record the link-region side-channel on
+    /// every page's display list so the exporter can emit `/Annots`
+    /// Link annotations for hyperlinks / cross-references. Default
+    /// `false`: the live canvas build never pays for it.
+    pub collect_link_regions: bool,
     /// Synthetic drop shadow applied to every TextFrame and
     /// Rectangle. Useful for tooling demos and as a stopgap until
     /// `<TransparencySetting>` parsing lands and per-frame effects
@@ -316,6 +322,7 @@ impl Default for PipelineOptions<'_> {
             cmyk_intent: paged_color::Intent::RelativeColorimetric,
             cmyk_bpc: true,
             collect_glyph_runs: false,
+            collect_link_regions: false,
             frame_drop_shadow: None,
             font_metrics_overrides: &[],
             missing_image_placeholder: true,
@@ -782,6 +789,9 @@ pub fn build_document(
             if options.collect_glyph_runs {
                 page_list.glyph_runs = Some(paged_compose::GlyphRunTable::default());
             }
+            if options.collect_link_regions {
+                page_list.link_regions = Some(paged_compose::LinkRegionTable::default());
+            }
             pages.push(BuiltPage {
                 id: page_id,
                 width_pt: bounds_in_spread.width(),
@@ -842,6 +852,24 @@ pub fn build_document(
         });
         page_labels.push("1".to_string());
     }
+
+    // W1.4 — total body-page count, frozen here (pages are all created
+    // above). Feeds `PageCountType` text-variable resolution.
+    let total_page_count = pages.len();
+    // W1.4 — `<Page Self=...>` id → flat body-page index, for resolving
+    // hyperlink page destinations. Built only when link-region
+    // collection is on (the live render never pays for it). A page's
+    // `PageId(self_id)` is its `<Page Self>`; synthetic ids (no baked
+    // Self) won't be hyperlink targets, so they harmlessly miss.
+    let page_index_map: HashMap<String, u32> = if options.collect_link_regions {
+        pages
+            .iter()
+            .enumerate()
+            .map(|(idx, p)| (p.id.0.clone(), idx as u32))
+            .collect()
+    } else {
+        HashMap::new()
+    };
 
     // Master-spread pass — runs first so master items end up at the
     // bottom of each page's display list (page-level frames overlay on
@@ -1673,7 +1701,9 @@ pub fn build_document(
             parsed.story.optical_margin_alignment,
             parsed.story.optical_margin_size,
         )
-        .with_story_id(&parsed.self_id);
+        .with_story_id(&parsed.self_id)
+        .with_page_count(total_page_count)
+        .with_page_index_map(&page_index_map);
         for paragraph in &parsed.story.paragraphs {
             emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
         }
@@ -2035,6 +2065,8 @@ pub fn build_document(
                 parsed.story.optical_margin_size,
             )
             .with_story_id(&parsed.self_id)
+            .with_page_count(total_page_count)
+            .with_page_index_map(&page_index_map)
             .with_footnote_reservation(&reserved_64);
             // Phase 7 — capture each page's command count BEFORE this
             // story's emit so a post-pass can rotate the story's commands
@@ -2386,6 +2418,20 @@ struct StoryEmitter<'a> {
     /// Set once a story-overflow drop has been reported so the overset
     /// diagnostic fires once per story, not once per dropped line.
     overset_reported: bool,
+    /// W1.4 — total body-page count, for `PageCountType` text-variable
+    /// resolution. Set once per build (the same value for every
+    /// emitter); 0 only before pages exist.
+    page_count: usize,
+    /// W1.4 — when true, the LineLayout capture also pushes
+    /// [`paged_compose::LinkRegion`]s for runs tagged with
+    /// `hyperlink_source`. Mirrors `options.collect_link_regions`;
+    /// cached so the per-line path doesn't re-read options.
+    collect_link_regions: bool,
+    /// W1.4 — `<Page Self=...>` id → flat 0-based body-page index, for
+    /// resolving hyperlink page destinations. `None` when link-region
+    /// collection is off (the map isn't built). Owned by the build, not
+    /// the emitter.
+    page_index_map: Option<&'a HashMap<String, u32>>,
 }
 
 impl<'a> StoryEmitter<'a> {
@@ -2540,11 +2586,39 @@ impl<'a> StoryEmitter<'a> {
             paragraph_idx: 0,
             diagnostics: Vec::new(),
             overset_reported: false,
+            page_count: 0,
+            collect_link_regions: options.collect_link_regions,
+            page_index_map: None,
         }
+    }
+
+    /// W1.4 — wire the `<Page Self=...>` → flat-index map used to
+    /// resolve hyperlink page destinations. Called only when
+    /// link-region collection is on.
+    fn with_page_index_map(mut self, map: &'a HashMap<String, u32>) -> Self {
+        self.page_index_map = Some(map);
+        self
+    }
+
+    /// W1.4 — resolve a hyperlink destination target id (a `<Page>`
+    /// self id, or a story / text-anchor id) to a flat body-page index.
+    /// Only page ids resolve in v1; story / text-anchor ids fall through
+    /// to `None` (the caller records them as `Unresolved`).
+    fn page_index_for_target(&self, target_id: &str) -> Option<u32> {
+        self.page_index_map
+            .and_then(|m| m.get(target_id).copied())
     }
 
     fn with_story_id(mut self, story_id: &str) -> Self {
         self.current_story_id = story_id.to_string();
+        self
+    }
+
+    /// W1.4 — record the document's total body-page count for
+    /// `PageCountType` text-variable resolution. Called by the body /
+    /// master pass once `pages` is sized.
+    fn with_page_count(mut self, count: usize) -> Self {
+        self.page_count = count;
         self
     }
 
@@ -3454,6 +3528,44 @@ fn emit_paragraph_into_chain(
         Vec::new()
     };
 
+    // W1.4 — text-variable substitution. Each run tagged with
+    // `text_variable` (produced by the parser splitting a
+    // `<TextVariableInstance>` into its own run) is re-resolved per the
+    // variable's type: real page count, document name, custom literal,
+    // etc. `None` ⇒ keep the run's baked `ResultText` (already its
+    // `text`). Mirrors the auto-page-number marker substitution above;
+    // the resolved string flows through the same per-run text override
+    // as `capitalized` / `page_substituted`.
+    let total_pages = em.page_count;
+    let needs_var_subst = paragraph.runs.iter().any(|r| r.text_variable.is_some());
+    let variable_resolved: Vec<Option<String>> = if needs_var_subst {
+        paragraph
+            .runs
+            .iter()
+            .map(|r| {
+                r.text_variable.as_deref().and_then(|var_id| {
+                    links::resolve_variable(
+                        &em.document.container.designmap,
+                        var_id,
+                        &r.text,
+                        total_pages,
+                    )
+                })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let var_text = |i: usize| -> Option<&str> {
+        if needs_var_subst {
+            variable_resolved
+                .get(i)
+                .and_then(|o| o.as_deref())
+        } else {
+            None
+        }
+    };
+
     // Per-run uppercase override for `Capitalization=AllCaps`. The
     // previous implementation also uppercased SmallCaps / CapToSmallCap,
     // but our shaper doesn't drive the `smcp` OT feature yet — the
@@ -3469,7 +3581,9 @@ fn emit_paragraph_into_chain(
         .map(
             |(i, run)| match resolved_runs[i].capitalization.as_deref() {
                 Some("AllCaps") => {
-                    let src: &str = if needs_page_subst {
+                    let src: &str = if let Some(v) = var_text(i) {
+                        v
+                    } else if needs_page_subst {
                         page_substituted[i].as_str()
                     } else {
                         &run.text
@@ -3527,6 +3641,8 @@ fn emit_paragraph_into_chain(
                     list_first_text.as_deref().unwrap_or_else(|| {
                         if let Some(c) = capitalized[i].as_deref() {
                             c
+                        } else if let Some(v) = var_text(i) {
+                            v
                         } else if needs_page_subst {
                             page_substituted[i].as_str()
                         } else {
@@ -3535,6 +3651,8 @@ fn emit_paragraph_into_chain(
                     })
                 } else if let Some(c) = capitalized[i].as_deref() {
                     c
+                } else if let Some(v) = var_text(i) {
+                    v
                 } else if needs_page_subst {
                     page_substituted[i].as_str()
                 } else {
@@ -3558,6 +3676,44 @@ fn emit_paragraph_into_chain(
             }
         })
         .collect();
+
+    // W1.4 — hyperlink/cross-reference source spans for this paragraph,
+    // as paragraph-local byte ranges into the concatenated styled-run
+    // text (the same string the line clusters index into). Each entry
+    // pre-resolves the source id to a `LinkTarget` so the per-line
+    // capture below only intersects byte ranges. Empty (and skipped)
+    // unless `collect_link_regions` is on AND a run carries a source.
+    let link_spans: Vec<(std::ops::Range<usize>, paged_compose::LinkTarget)> =
+        if em.collect_link_regions
+            && paragraph.runs.iter().any(|r| r.hyperlink_source.is_some())
+        {
+            let mut spans = Vec::new();
+            let mut byte_cursor = 0usize;
+            for (i, sr) in styled_runs.iter().enumerate() {
+                let run_len = sr.text.len();
+                let start = byte_cursor;
+                byte_cursor += run_len;
+                let Some(source_id) = paragraph
+                    .runs
+                    .get(i)
+                    .and_then(|r| r.hyperlink_source.as_deref())
+                else {
+                    continue;
+                };
+                if run_len == 0 {
+                    continue;
+                }
+                let target = links::resolve_link_target(
+                    &em.document.container.designmap,
+                    source_id,
+                    |page_id| em.page_index_for_target(page_id),
+                );
+                spans.push((start..byte_cursor, target));
+            }
+            spans
+        } else {
+            Vec::new()
+        };
 
     let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
     let Some(col_pt) = em.column_width_pt else {
@@ -4403,6 +4559,57 @@ fn emit_paragraph_into_chain(
                     advance_pt: adv,
                 });
             }
+            // W1.4 — clickable link regions. For each hyperlink source
+            // span that overlaps this visible line, bound the clusters
+            // in the overlap into one page-local pt rect and push a
+            // `LinkRegion` carrying the pre-resolved target. The rect's
+            // vertical extent follows the line's ascent / descent (same
+            // heuristic the LineLayout uses); a span covering multiple
+            // lines yields one region per line, which the PDF backend
+            // emits as separate annotations — the correct behaviour for
+            // a wrapped link.
+            if em.collect_link_regions && !link_spans.is_empty() {
+                let baseline_y_page = text_origin_pt.1 + baseline_pt_local;
+                let asc = 0.8 * line_h_pt;
+                let desc = 0.2 * line_h_pt;
+                let line_start = line.byte_range.start;
+                let line_end = line.byte_range.end;
+                for (span, target) in &link_spans {
+                    // Byte intersection of the span with this line.
+                    let lo = span.start.max(line_start);
+                    let hi = span.end.min(line_end);
+                    if lo >= hi {
+                        continue;
+                    }
+                    // Bound the clusters whose byte falls in [lo, hi).
+                    let mut min_x = f32::MAX;
+                    let mut max_x = f32::MIN;
+                    for c in &clusters {
+                        let b = c.byte as usize;
+                        if b >= lo && b < hi {
+                            min_x = min_x.min(c.x_pt);
+                            max_x = max_x.max(c.x_pt + c.advance_pt);
+                        }
+                    }
+                    if min_x > max_x {
+                        // No cluster landed in the overlap (e.g. the
+                        // span covers only trailing whitespace) — skip.
+                        continue;
+                    }
+                    if let Some(table) = pages[target_page].list.link_regions.as_mut() {
+                        table.push(paged_compose::LinkRegion {
+                            rect: paged_compose::Rect {
+                                x: min_x,
+                                y: baseline_y_page - asc,
+                                w: (max_x - min_x).max(0.0),
+                                h: asc + desc,
+                            },
+                            target: target.clone(),
+                        });
+                    }
+                }
+            }
+
             let host_page_id = pages[target_page].id.clone();
             pages[target_page].story_layout.push(LineLayout {
                 story_id: em.current_story_id.clone(),

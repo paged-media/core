@@ -30,7 +30,52 @@ pub struct DesignMap {
     pub stories: Vec<String>,
 }
 
+/// W1.4 — document-level marker resources (text variables, hyperlinks,
+/// destinations) bolted onto a `DesignMap`. Kept separate so the
+/// existing samples' 4-field `DesignMap` literals (and their emitted
+/// designmaps) stay byte-identical; only the markers sample passes a
+/// non-empty set via [`write_designmap_with_markers`].
+#[derive(Default)]
+pub struct MarkerResources {
+    pub text_variables: Vec<TextVariableDef>,
+    pub hyperlinks: Vec<HyperlinkDef>,
+    pub hyperlink_destinations: Vec<HyperlinkDestinationDef>,
+}
+
+/// W1.4 — a `<TextVariable>` to emit. `contents` populates the
+/// `<TextVariablePreference Contents="...">` child for custom-text
+/// variables; the renderer resolves all other types itself.
+pub struct TextVariableDef {
+    pub self_id: String,
+    pub name: String,
+    pub variable_type: String,
+    pub contents: Option<String>,
+}
+
+/// W1.4 — a `<Hyperlink>` (source span → destination resource).
+pub struct HyperlinkDef {
+    pub self_id: String,
+    pub name: String,
+    pub source: String,
+    pub destination: String,
+}
+
+/// W1.4 — a hyperlink destination resource.
+pub enum HyperlinkDestinationDef {
+    /// `<HyperlinkURLDestination Self=... DestinationURL=...>`.
+    Url { self_id: String, url: String },
+    /// `<HyperlinkPageDestination Self=... DestinationPage=...>`.
+    Page { self_id: String, page: String },
+}
+
 pub fn write_designmap(dm: &DesignMap) -> Vec<u8> {
+    write_designmap_with_markers(dm, &MarkerResources::default())
+}
+
+/// As [`write_designmap`] but also emits document-level marker
+/// resources (W1.4). When `markers` is empty the output is identical
+/// to `write_designmap`.
+pub fn write_designmap_with_markers(dm: &DesignMap, markers: &MarkerResources) -> Vec<u8> {
     let mut b = XmlBuilder::new();
     b.write_decl();
     // <?aid?> processing instruction. InDesign's IDML reader rejects
@@ -69,6 +114,66 @@ pub fn write_designmap(dm: &DesignMap) -> Vec<u8> {
             ("DefaultImageIntent", "UseColorSettings"),
         ],
     );
+    // W1.4 — marker resources (text variables, hyperlinks,
+    // destinations). Emitted before the idPkg refs, matching where
+    // InDesign serialises document-level resources. Skipped entirely
+    // when empty so existing samples' designmaps stay byte-identical.
+    for v in &markers.text_variables {
+        b.start(
+            "TextVariable",
+            &[
+                ("Self", v.self_id.as_str()),
+                ("Name", v.name.as_str()),
+                ("VariableType", v.variable_type.as_str()),
+            ],
+        );
+        // Real exports nest a <TextVariablePreference>; for custom
+        // text it carries the literal `Contents`. Emit it for every
+        // variable (empty for non-custom) so the parser folds it in.
+        let contents = v.contents.as_deref().unwrap_or("");
+        b.empty("TextVariablePreference", &[("Contents", contents)]);
+        b.end("TextVariable");
+    }
+    for d in &markers.hyperlink_destinations {
+        match d {
+            HyperlinkDestinationDef::Url { self_id, url } => {
+                b.empty(
+                    "HyperlinkURLDestination",
+                    &[
+                        ("Self", self_id.as_str()),
+                        ("Name", url.as_str()),
+                        ("DestinationURL", url.as_str()),
+                        ("Hidden", "false"),
+                    ],
+                );
+            }
+            HyperlinkDestinationDef::Page { self_id, page } => {
+                b.empty(
+                    "HyperlinkPageDestination",
+                    &[
+                        ("Self", self_id.as_str()),
+                        ("Name", self_id.as_str()),
+                        ("DestinationPage", page.as_str()),
+                        ("DestinationPageSetting", "FitVisible"),
+                        ("Hidden", "false"),
+                    ],
+                );
+            }
+        }
+    }
+    for h in &markers.hyperlinks {
+        b.empty(
+            "Hyperlink",
+            &[
+                ("Self", h.self_id.as_str()),
+                ("Name", h.name.as_str()),
+                ("Source", h.source.as_str()),
+                ("Destination", h.destination.as_str()),
+                ("Visible", "true"),
+                ("Hidden", "false"),
+            ],
+        );
+    }
     b.empty("idPkg:Graphic", &[("src", "Resources/Graphic.xml")]);
     b.empty("idPkg:Fonts", &[("src", "Resources/Fonts.xml")]);
     b.empty("idPkg:Styles", &[("src", "Resources/Styles.xml")]);

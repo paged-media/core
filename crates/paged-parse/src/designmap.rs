@@ -34,6 +34,10 @@ pub struct DesignMap {
     /// report the authoring DOM; the parser is version-agnostic and
     /// does **not** branch on it yet (no version negotiation).
     pub dom_version: Option<String>,
+    /// `Name` attribute on the root `<Document>` element — the source
+    /// `.indd` file name (e.g. `"generated.indd"`). W1.4: feeds the
+    /// `FileNameVariable` text variable. `None` when absent.
+    pub document_name: Option<String>,
     /// Document-level color management settings, extracted from the
     /// root `<Document>` element. Drives ICC transform construction —
     /// the renderer matches `color_settings.cmyk_profile` against its
@@ -68,6 +72,11 @@ pub struct DesignMap {
     /// has a name + a source (HyperlinkTextSource ref) + a
     /// destination (URL, page, or anchor).
     pub hyperlinks: Vec<Hyperlink>,
+    /// W1.4 — `<HyperlinkURLDestination>` / `<HyperlinkPageDestination>`
+    /// / `<HyperlinkTextDestination>` resources, keyed by `Self`. A
+    /// `<Hyperlink Destination="...">` resolves through this table to a
+    /// concrete URL or page target.
+    pub hyperlink_destinations: Vec<HyperlinkDestination>,
     /// SDK Phase 5 (v1 sweep) — `<Bookmark>` definitions. Each
     /// is a named anchor pointing at a destination (typically a
     /// hyperlink-page-destination or text-anchor).
@@ -249,6 +258,35 @@ pub struct Bookmark {
     pub destination: Option<String>,
 }
 
+/// W1.4 — a hyperlink destination resource. IDML declares three
+/// flavours at the document level, each referenced from a
+/// `<Hyperlink Destination="...">`:
+///
+/// - `HyperlinkURLDestination` carries an external `DestinationURL`.
+/// - `HyperlinkPageDestination` points at a `<Page>` by `Self`
+///   (`DestinationPage`), optionally with a zoom setting.
+/// - `HyperlinkTextDestination` is an in-story text anchor whose
+///   `DestinationText` references the hosting story; the renderer
+///   resolves it to the page the anchor lands on (best-effort: the
+///   first page hosting that story).
+#[derive(Debug, Clone, Serialize)]
+pub struct HyperlinkDestination {
+    pub self_id: String,
+    pub kind: HyperlinkDestinationKind,
+}
+
+/// The destination flavour + its payload.
+#[derive(Debug, Clone, Serialize)]
+pub enum HyperlinkDestinationKind {
+    /// External URL (e.g. `https://paged.media`).
+    Url(String),
+    /// `DestinationPage` — the `Self` id of the target `<Page>`.
+    Page(String),
+    /// `DestinationText` — the `Self` id of the target text anchor /
+    /// story. Resolved to a page index downstream.
+    TextAnchor(String),
+}
+
 /// IDML `<CrossReferenceSource>` marker.
 #[derive(Debug, Clone, Serialize)]
 pub struct CrossReference {
@@ -270,15 +308,34 @@ pub struct IndexTopic {
     pub sort_order: Option<String>,
 }
 
-/// IDML `<TextVariable>` declaration. Parsed for completeness; the
-/// rendered value comes from each `<TextVariableInstance>`'s
-/// `ResultText` attribute, which the parser inlines into the host
-/// run's text.
+/// IDML `<TextVariable>` declaration. W1.4: the renderer resolves the
+/// value per `variable_type` at emit time (falling back to each
+/// instance's baked `ResultText` when the type's inputs aren't
+/// modelled). The `<TextVariablePreference>` child carries the
+/// type-specific payload — the literal contents of a custom variable,
+/// the date `Format` string, and the surrounding `TextBefore` /
+/// `TextAfter` decoration.
 #[derive(Debug, Clone, Serialize)]
 pub struct TextVariable {
     pub self_id: String,
     pub name: Option<String>,
+    /// `VariableType` — e.g. `CustomTextType`, `FileNameType`,
+    /// `PageCountType`, `CreationDateType`, `ModificationDateType`,
+    /// `OutputDateType`, `ChapterNumberType`, `RunningHeaderType`.
     pub variable_type: Option<String>,
+    /// `<TextVariablePreference Contents="...">` — the literal value of
+    /// a `CustomTextType` variable (verbatim). `None` for other types.
+    pub contents: Option<String>,
+    /// `<TextVariablePreference Format="...">` — the date/time format
+    /// pattern for the date variable types (InDesign/ICU-style tokens).
+    /// `None` when absent.
+    pub date_format: Option<String>,
+    /// `<TextVariablePreference TextBefore="...">` decoration prepended
+    /// to the resolved value.
+    pub text_before: Option<String>,
+    /// `<TextVariablePreference TextAfter="...">` decoration appended to
+    /// the resolved value.
+    pub text_after: Option<String>,
 }
 
 /// IDML `<Layer>` definition. Only the fields the renderer needs
@@ -369,6 +426,10 @@ impl DesignMap {
         // flat common case) records `parent_id` from the stack top but
         // doesn't push, keeping flat documents byte-identical.
         let mut layer_stack: Vec<String> = Vec::new();
+        // W1.4 — the `<TextVariable>` currently being parsed (the
+        // wrapping form parks here so its `<TextVariablePreference>`
+        // child can fold in before `</TextVariable>` pushes it).
+        let mut current_text_variable: Option<TextVariable> = None;
 
         loop {
             let ev = reader.read_event_into(&mut buf)?;
@@ -376,12 +437,18 @@ impl DesignMap {
                 if e.name().as_ref() == b"Layer" {
                     layer_stack.pop();
                 }
+                if e.name().as_ref() == b"TextVariable" {
+                    if let Some(var) = current_text_variable.take() {
+                        out.text_variables.push(var);
+                    }
+                }
             }
             let is_start = matches!(ev, Event::Start(_));
             match ev {
                 Event::Start(e) | Event::Empty(e) => {
                     if e.name().as_ref() == b"Document" {
                         out.dom_version = attr(&e, b"DOMVersion");
+                        out.document_name = attr(&e, b"Name");
                         out.color_settings = ColorSettings {
                             cmyk_profile: attr(&e, b"CMYKProfile"),
                             rgb_profile: attr(&e, b"RGBProfile"),
@@ -430,11 +497,67 @@ impl DesignMap {
                     }
                     if e.name().as_ref() == b"TextVariable" {
                         if let Some(self_id) = attr(&e, b"Self") {
-                            out.text_variables.push(TextVariable {
+                            let var = TextVariable {
                                 self_id,
                                 name: attr(&e, b"Name"),
                                 variable_type: attr(&e, b"VariableType"),
+                                contents: None,
+                                date_format: None,
+                                text_before: None,
+                                text_after: None,
+                            };
+                            // A self-closing `<TextVariable/>` carries no
+                            // preference child; push it straight away.
+                            // The wrapping form parks it until `</TextVariable>`
+                            // so the `<TextVariablePreference>` child folds in.
+                            if is_start {
+                                current_text_variable = Some(var);
+                            } else {
+                                out.text_variables.push(var);
+                            }
+                        }
+                    }
+                    // `<TextVariablePreference>` carries the type-specific
+                    // payload of the enclosing `<TextVariable>`. Real
+                    // exports vary which attribute they use per type:
+                    // CustomText → `Contents`; the date types → `Format`;
+                    // both decorated by `TextBefore` / `TextAfter`.
+                    if e.name().as_ref() == b"TextVariablePreference" {
+                        if let Some(var) = current_text_variable.as_mut() {
+                            var.contents = attr(&e, b"Contents").or(var.contents.take());
+                            var.date_format = attr(&e, b"Format").or(var.date_format.take());
+                            var.text_before = attr(&e, b"TextBefore").or(var.text_before.take());
+                            var.text_after = attr(&e, b"TextAfter").or(var.text_after.take());
+                        }
+                    }
+                    // W1.4 — hyperlink destination resources.
+                    if e.name().as_ref() == b"HyperlinkURLDestination" {
+                        if let Some(self_id) = attr(&e, b"Self") {
+                            let url = attr(&e, b"DestinationURL").unwrap_or_default();
+                            out.hyperlink_destinations.push(HyperlinkDestination {
+                                self_id,
+                                kind: HyperlinkDestinationKind::Url(url),
                             });
+                        }
+                    }
+                    if e.name().as_ref() == b"HyperlinkPageDestination" {
+                        if let Some(self_id) = attr(&e, b"Self") {
+                            if let Some(page) = attr(&e, b"DestinationPage") {
+                                out.hyperlink_destinations.push(HyperlinkDestination {
+                                    self_id,
+                                    kind: HyperlinkDestinationKind::Page(page),
+                                });
+                            }
+                        }
+                    }
+                    if e.name().as_ref() == b"HyperlinkTextDestination" {
+                        if let Some(self_id) = attr(&e, b"Self") {
+                            if let Some(text) = attr(&e, b"DestinationText") {
+                                out.hyperlink_destinations.push(HyperlinkDestination {
+                                    self_id,
+                                    kind: HyperlinkDestinationKind::TextAnchor(text),
+                                });
+                            }
                         }
                     }
                     if e.name().as_ref() == b"Section" {
@@ -661,6 +784,58 @@ mod tests {
         // SAMPLE's <Document> carries no DOMVersion attribute.
         let dm = DesignMap::parse(SAMPLE).unwrap();
         assert_eq!(dm.dom_version, None);
+    }
+
+    #[test]
+    fn parses_hyperlink_resources_and_destinations() {
+        // W1.4 — hyperlink definitions + their destination resources.
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" Name="brochure.indd">
+  <HyperlinkURLDestination Self="d1" DestinationURL="https://paged.media"/>
+  <HyperlinkPageDestination Self="d2" DestinationPage="Page/p3"/>
+  <HyperlinkTextDestination Self="d3" DestinationText="Story/s9"/>
+  <Hyperlink Self="h1" Name="web" Source="HyperlinkTextSource/src1" Destination="d1"/>
+  <Hyperlink Self="h2" Name="jump" Source="HyperlinkTextSource/src2" Destination="d2"/>
+</Document>"#;
+        let dm = DesignMap::parse(xml).unwrap();
+        assert_eq!(dm.document_name.as_deref(), Some("brochure.indd"));
+        assert_eq!(dm.hyperlinks.len(), 2);
+        assert_eq!(dm.hyperlinks[0].source.as_deref(), Some("HyperlinkTextSource/src1"));
+        assert_eq!(dm.hyperlinks[0].destination.as_deref(), Some("d1"));
+        assert_eq!(dm.hyperlink_destinations.len(), 3);
+        assert!(matches!(
+            &dm.hyperlink_destinations[0].kind,
+            HyperlinkDestinationKind::Url(u) if u == "https://paged.media"
+        ));
+        assert!(matches!(
+            &dm.hyperlink_destinations[1].kind,
+            HyperlinkDestinationKind::Page(p) if p == "Page/p3"
+        ));
+        assert!(matches!(
+            &dm.hyperlink_destinations[2].kind,
+            HyperlinkDestinationKind::TextAnchor(t) if t == "Story/s9"
+        ));
+    }
+
+    #[test]
+    fn parses_text_variable_with_preference_contents() {
+        // W1.4 — a custom text variable folds in its
+        // <TextVariablePreference Contents="..."> child.
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <TextVariable Self="TextVariable/v1" Name="Season" VariableType="CustomTextType">
+    <TextVariablePreference Contents="Spring 2026"/>
+  </TextVariable>
+  <TextVariable Self="TextVariable/v2" Name="Pages" VariableType="PageCountType"/>
+</Document>"#;
+        let dm = DesignMap::parse(xml).unwrap();
+        assert_eq!(dm.text_variables.len(), 2);
+        let custom = &dm.text_variables[0];
+        assert_eq!(custom.variable_type.as_deref(), Some("CustomTextType"));
+        assert_eq!(custom.contents.as_deref(), Some("Spring 2026"));
+        let pc = &dm.text_variables[1];
+        assert_eq!(pc.variable_type.as_deref(), Some("PageCountType"));
+        assert_eq!(pc.contents, None);
     }
 }
 

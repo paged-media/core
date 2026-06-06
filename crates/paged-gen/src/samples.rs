@@ -21,6 +21,7 @@ pub mod geometry;
 pub mod geometry_groups;
 pub mod gradients;
 pub mod images;
+pub mod markers;
 pub mod strokes_fills;
 pub mod tables;
 pub mod text;

@@ -36,7 +36,8 @@ pub mod styles;
 mod util;
 
 pub use designmap::{
-    ColorSettings, DesignMap, DocumentPreference, Layer, SpreadRef, StoryRef, TextVariable,
+    ColorSettings, DesignMap, DocumentPreference, HyperlinkDestination, HyperlinkDestinationKind,
+    Hyperlink, Layer, SpreadRef, StoryRef, TextVariable,
 };
 pub use graphic::{
     ColorEntry, ColorModel, ColorSpace, GradientEntry, GradientKind, GradientStopRef, Graphic,

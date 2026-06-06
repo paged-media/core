@@ -61,6 +61,28 @@ pub struct FinishedPage {
     /// captured from it (allocated before the walk, written at
     /// finish when the resource set is complete).
     pub resources_ref: Ref,
+    /// W1.4 — Link annotations harvested from the display list's
+    /// `LinkRegionTable`. Each is already in y-up media coords; the
+    /// finish pass allocates one annotation object per entry and lists
+    /// them in the page's `/Annots`. Empty when the build didn't
+    /// collect link regions (the common case).
+    pub link_annots: Vec<LinkAnnot>,
+}
+
+/// W1.4 — one resolved Link annotation, in PDF y-up media coords.
+pub struct LinkAnnot {
+    /// `[x0 y0 x1 y1]` annotation rect (media coords, y-up).
+    pub rect: Rect,
+    pub target: LinkAnnotTarget,
+}
+
+/// Where a [`LinkAnnot`] points.
+pub enum LinkAnnotTarget {
+    /// External URI — written as an `/Action /URI`.
+    Uri(String),
+    /// In-document page (flat 0-based body-page index) — written as a
+    /// `/Action /GoTo` with a `/Fit` destination on that page.
+    Page(u32),
 }
 
 /// A transparency-group / soft-mask Form XObject captured during the
@@ -159,7 +181,50 @@ impl DocState {
             tree.kids(kids.iter().copied());
             tree.count(self.pages.len() as i32);
         }
+
+        // W1.4 — Link annotations. Allocate one annotation object per
+        // harvested region first (so we can list their refs in each
+        // page's `/Annots`), then write the annotation dicts. GoTo
+        // targets resolve to the target page object's `page_ref`, which
+        // every page already owns. `page_ref` lookup is by flat index
+        // (kids[i]); an out-of-range index drops the annotation rather
+        // than emit a dangling /GoTo.
+        let mut annots_per_page: Vec<Vec<Ref>> = Vec::with_capacity(self.pages.len());
         for page in &self.pages {
+            let mut refs = Vec::with_capacity(page.link_annots.len());
+            for _ in &page.link_annots {
+                refs.push(self.refs.alloc());
+            }
+            annots_per_page.push(refs);
+        }
+        for (page_idx, page) in self.pages.iter().enumerate() {
+            for (annot_idx, annot) in page.link_annots.iter().enumerate() {
+                let annot_ref = annots_per_page[page_idx][annot_idx];
+                let mut a = self.pdf.annotation(annot_ref);
+                a.subtype(pdf_writer::types::AnnotationType::Link);
+                a.rect(annot.rect);
+                // No visible border (InDesign exports invisible link
+                // hotspots) — a zero-width border array.
+                a.insert(Name(b"Border")).array().items([0i32, 0, 0]);
+                match &annot.target {
+                    LinkAnnotTarget::Uri(url) => {
+                        let mut action = a.action();
+                        action.action_type(pdf_writer::types::ActionType::Uri);
+                        action.uri(pdf_writer::Str(url.as_bytes()));
+                    }
+                    LinkAnnotTarget::Page(target_idx) => {
+                        if let Some(target_page) = self.pages.get(*target_idx as usize) {
+                            let target_ref = target_page.page_ref;
+                            let mut action = a.action();
+                            action.action_type(pdf_writer::types::ActionType::GoTo);
+                            action.destination().page(target_ref).fit();
+                        }
+                    }
+                }
+            }
+        }
+
+        for (page_idx, page) in self.pages.iter().enumerate() {
             // The shared indirect /Resources dict (page + its forms).
             {
                 let mut res = self
@@ -205,6 +270,11 @@ impl DocState {
             p.crop_box(page.media_box);
             p.contents(page.content_ref);
             p.pair(Name(b"Resources"), page.resources_ref);
+            // W1.4 — list this page's Link annotation objects.
+            let annot_refs = &annots_per_page[page_idx];
+            if !annot_refs.is_empty() {
+                p.annotations(annot_refs.iter().copied());
+            }
         }
 
         // OutputIntent (required for X-4; emitted whenever a

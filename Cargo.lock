@@ -2302,6 +2302,7 @@ dependencies = [
  "lopdf",
  "paged-color",
  "paged-compose",
+ "paged-gen",
  "paged-parse",
  "paged-renderer",
  "paged-scene",

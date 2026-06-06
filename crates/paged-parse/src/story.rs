@@ -896,6 +896,23 @@ pub struct CharacterRun {
     /// condition resolves to `Visible="true"` in the document's
     /// `<Condition>` table.
     pub applied_conditions: Vec<String>,
+    /// W1.4 — the `Self` of the enclosing `<HyperlinkTextSource>` (or
+    /// `<CrossReferenceSource>`) when this run sits inside one. IDML
+    /// serialises a hyperlink/cross-reference *source* span as a
+    /// wrapper element around the character ranges it covers; the
+    /// `<Hyperlink>` / `<CrossReference>` in the designmap references
+    /// it by `Source`. The renderer resolves the source id back to a
+    /// destination (URL / page) and emits a clickable region over the
+    /// run's glyph rect. `None` for the overwhelming majority of runs.
+    pub hyperlink_source: Option<String>,
+    /// W1.4 — the `AssociatedTextVariable` id (`TextVariable/<id>`)
+    /// when this run was produced by a `<TextVariableInstance>`. The
+    /// run's `text` carries InDesign's baked `ResultText`; the
+    /// renderer re-resolves the value per type at emit time (real page
+    /// count, document name, custom content, formatted dates) when it
+    /// can do better than the baked string, and falls back to
+    /// `ResultText` otherwise. `None` for ordinary text runs.
+    pub text_variable: Option<String>,
     pub text: String,
 }
 
@@ -961,6 +978,16 @@ impl Story {
         // body to the host paragraph, and restores the parker state.
         // Nesting is rare but handled.
         let mut footnote_stack: Vec<FootnoteContext> = Vec::new();
+        // W1.4 — hyperlink / cross-reference *source* span stack. IDML
+        // wraps the character ranges a hyperlink covers in a
+        // `<HyperlinkTextSource Self="...">` (or `<CrossReferenceSource
+        // Self="...">`) element; every CharacterStyleRange opened while
+        // such a wrapper is on the stack inherits its `Self` as
+        // `hyperlink_source`. The designmap's `<Hyperlink Source=...>`
+        // then resolves the run back to a destination. A vec (not a
+        // single slot) because IDML technically permits nesting, though
+        // it's exotic — the innermost source wins.
+        let mut source_stack: Vec<String> = Vec::new();
         let mut in_content = false;
         let mut buf = Vec::new();
         // `<Properties>` child elements appear *inside* a CharacterStyleRange
@@ -1159,6 +1186,21 @@ impl Story {
                     b"Story" => {
                         if let Some(v) = attr(&e, b"StoryDirection") {
                             out.story_direction = StoryDirection::from_idml(&v);
+                        }
+                    }
+                    // W1.4 — a hyperlink / cross-reference source span
+                    // wraps the character ranges it covers. Push its
+                    // `Self` so every run opened inside inherits the id;
+                    // the matching End pops it. (Self-closing sources
+                    // arrive via `Event::Empty` and never reach here, so
+                    // they don't unbalance the stack.)
+                    b"HyperlinkTextSource" | b"CrossReferenceSource" => {
+                        if let Some(self_id) = attr(&e, b"Self") {
+                            source_stack.push(self_id);
+                        } else {
+                            // Keep the stack depth-balanced with the
+                            // End even when the id is missing.
+                            source_stack.push(String::new());
                         }
                     }
                     // <StoryPreference> may also appear with
@@ -1498,6 +1540,11 @@ impl Story {
                                         .collect()
                                 })
                                 .unwrap_or_default(),
+                            // Inherit the enclosing hyperlink/xref source
+                            // span (if any) so the run carries the source
+                            // id the designmap's <Hyperlink> references.
+                            hyperlink_source: source_stack.last().cloned(),
+                            text_variable: None,
                             text: String::new(),
                         });
                     }
@@ -1607,6 +1654,11 @@ impl Story {
                                 para.runs.push(run);
                             }
                         }
+                    }
+                    // W1.4 — close the hyperlink / cross-reference
+                    // source span so following runs stop inheriting it.
+                    b"HyperlinkTextSource" | b"CrossReferenceSource" => {
+                        source_stack.pop();
                     }
                     b"ParagraphStyleRange" => {
                         if let Some(para) = current_paragraph.take() {
@@ -1810,18 +1862,45 @@ impl Story {
                     // AssociatedTextVariable="TextVariable/<id>" />
                     // appears inside <Content> as a placeholder for a
                     // computed value (running header, file name,
-                    // chapter number, …). InDesign bakes the value
-                    // into ResultText at export time, so inlining the
-                    // attribute reproduces what InDesign saw the last
-                    // time it composed the document. Live per-page
-                    // recomputation (e.g. RunningHeader picking up the
-                    // nearest preceding paragraph at render time) is a
-                    // future task.
+                    // chapter number, …). InDesign bakes the last
+                    // composed value into ResultText.
+                    //
+                    // W1.4: split the instance into its OWN run so the
+                    // renderer can re-resolve the value per variable
+                    // type at emit time (real page count, document name,
+                    // custom content, formatted dates) instead of always
+                    // trusting the stale baked string. The dedicated run
+                    // clones the open run's style, carries ResultText as
+                    // its `text`, and tags `text_variable` with the
+                    // associated id. Any text accumulated in the open run
+                    // before the instance is flushed first so byte order
+                    // is preserved; a fresh continuation run (same style,
+                    // empty text) stays open for content after it.
                     b"TextVariableInstance" => {
-                        if let (Some(run), Some(text)) =
-                            (current_run.as_mut(), attr(&e, b"ResultText"))
-                        {
-                            run.text.push_str(&text);
+                        if let Some(run) = current_run.as_mut() {
+                            let result_text = attr(&e, b"ResultText").unwrap_or_default();
+                            // Flush text that preceded the instance as a
+                            // plain run.
+                            if !run.text.is_empty() {
+                                let mut flushed = run.clone();
+                                flushed.text_variable = None;
+                                if let Some(para) = current_paragraph.as_mut() {
+                                    para.runs.push(flushed);
+                                }
+                                run.text.clear();
+                            }
+                            // Emit the variable run (style cloned from the
+                            // open run; text = baked ResultText).
+                            let mut var_run = run.clone();
+                            var_run.text = result_text;
+                            var_run.text_variable = attr(&e, b"AssociatedTextVariable");
+                            if !var_run.text.is_empty() {
+                                if let Some(para) = current_paragraph.as_mut() {
+                                    para.runs.push(var_run);
+                                }
+                            }
+                            // `run` continues open with empty text for
+                            // any content following the instance.
                         }
                     }
                     // Tab characters surface as <Tab/>; the layout
@@ -2150,6 +2229,61 @@ mod tests {
         let p2 = &s.paragraphs[1];
         assert_eq!(p2.runs.len(), 1);
         assert_eq!(p2.runs[0].text, "Second paragraph.");
+    }
+
+    #[test]
+    fn hyperlink_text_source_tags_enclosed_runs() {
+        // W1.4 — a <HyperlinkTextSource> wrapping a CharacterStyleRange
+        // tags the enclosed run with its Self id; runs outside stay
+        // untagged.
+        let xml = br#"<Story>
+          <ParagraphStyleRange>
+            <CharacterStyleRange><Content>Visit </Content></CharacterStyleRange>
+            <HyperlinkTextSource Self="HyperlinkTextSource/src1" Name="web">
+              <CharacterStyleRange><Content>paged.media</Content></CharacterStyleRange>
+            </HyperlinkTextSource>
+            <CharacterStyleRange><Content> now.</Content></CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let runs = &s.paragraphs[0].runs;
+        assert_eq!(runs.len(), 3);
+        assert_eq!(runs[0].hyperlink_source, None);
+        assert_eq!(
+            runs[1].hyperlink_source.as_deref(),
+            Some("HyperlinkTextSource/src1")
+        );
+        assert_eq!(runs[1].text, "paged.media");
+        assert_eq!(runs[2].hyperlink_source, None);
+    }
+
+    #[test]
+    fn text_variable_instance_becomes_tagged_run() {
+        // W1.4 — a <TextVariableInstance> splits into its own run
+        // carrying the AssociatedTextVariable id and the baked
+        // ResultText, flushing preceding text into a plain run.
+        let xml = br#"<Story>
+          <ParagraphStyleRange>
+            <CharacterStyleRange>
+              <Content>Season: </Content>
+              <TextVariableInstance ResultText="Spring 2026" AssociatedTextVariable="TextVariable/v1"/>
+              <Content>.</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let runs = &s.paragraphs[0].runs;
+        // "Season: " | variable run "Spring 2026" | "."
+        assert_eq!(runs.len(), 3);
+        assert_eq!(runs[0].text, "Season: ");
+        assert_eq!(runs[0].text_variable, None);
+        assert_eq!(runs[1].text, "Spring 2026");
+        assert_eq!(
+            runs[1].text_variable.as_deref(),
+            Some("TextVariable/v1")
+        );
+        assert_eq!(runs[2].text, ".");
+        assert_eq!(runs[2].text_variable, None);
     }
 
     #[test]
