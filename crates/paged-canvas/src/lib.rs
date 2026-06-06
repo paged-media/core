@@ -73,7 +73,10 @@ pub use gesture::{
 };
 pub use snap::{SnapAxis, SnapLine};
 pub use hit::HitTestResult;
-pub use geometry::{caret_geometry, selection_geometry, CaretGeometry};
+pub use geometry::{
+    caret_geometry, caret_nav, line_bounds, selection_geometry, CaretDirection, CaretGeometry,
+    LineBounds,
+};
 pub use mutate::{AppliedText, TextOp, TextOpError};
 pub use selection::{ContentSelection, Side};
 

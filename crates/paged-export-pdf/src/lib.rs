@@ -174,6 +174,87 @@ pub enum ExportDiagnostic {
     ImageMissingBytes { image_index: u32 },
 }
 
+/// Severity of a preflight finding (panels.md gap 20). Errors block a
+/// faithful export; warnings note a degraded-but-shipped outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FindingSeverity {
+    Warning,
+    Error,
+}
+
+impl FindingSeverity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FindingSeverity::Warning => "warning",
+            FindingSeverity::Error => "error",
+        }
+    }
+}
+
+impl ExportDiagnostic {
+    /// Stable lower-snake code for the finding (panels.md gap 20) so a
+    /// panel can group/icon without parsing `message`.
+    pub fn code(&self) -> &'static str {
+        match self {
+            ExportDiagnostic::FontNotEmbeddable { .. } => "font_not_embeddable",
+            ExportDiagnostic::ImageMissingBytes { .. } => "image_missing_bytes",
+        }
+    }
+
+    /// Severity. Both current findings are warnings: the font path
+    /// keeps the run as vector outlines (visually faithful, just not
+    /// selectable/searchable) and the image path falls back to a
+    /// placeholder — neither aborts the export. A future
+    /// embed-or-fail policy would raise the font case to `Error`.
+    pub fn severity(&self) -> FindingSeverity {
+        match self {
+            ExportDiagnostic::FontNotEmbeddable { .. } => FindingSeverity::Warning,
+            ExportDiagnostic::ImageMissingBytes { .. } => FindingSeverity::Warning,
+        }
+    }
+
+    /// Human-readable summary for the dialog.
+    pub fn message(&self) -> String {
+        match self {
+            ExportDiagnostic::FontNotEmbeddable {
+                font_id,
+                runs_outlined,
+            } => format!(
+                "font {font_id} forbids embedding; {runs_outlined} run(s) kept as outlines"
+            ),
+            ExportDiagnostic::ImageMissingBytes { image_index } => {
+                format!("placed image {image_index} had no usable bytes; placeholder drawn")
+            }
+        }
+    }
+}
+
+/// Structured preflight finding (panels.md gap 20): the raw export
+/// diagnostic enriched with severity + the body-page index it was
+/// raised on (when known). The export reply carries these so the
+/// dialog can render a grouped, severity-coloured findings list and
+/// jump to the offending page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreflightFinding {
+    pub code: &'static str,
+    pub severity: FindingSeverity,
+    pub message: String,
+    /// Flat body-page index the finding was raised on; `None` for
+    /// findings raised at document `finish()` (no single page).
+    pub page_index: Option<usize>,
+}
+
+impl PreflightFinding {
+    fn from_diag(d: &ExportDiagnostic, page_index: Option<usize>) -> Self {
+        Self {
+            code: d.code(),
+            severity: d.severity(),
+            message: d.message(),
+            page_index,
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ExportError {
     #[error("PDF/X-4 requires an output intent profile")]
@@ -222,6 +303,10 @@ pub struct ExportInput<'a> {
 pub struct ExportResult {
     pub bytes: Vec<u8>,
     pub diagnostics: Vec<ExportDiagnostic>,
+    /// panels.md gap 20 — `diagnostics` enriched with severity + the
+    /// body-page index each was raised on. Parallel to `diagnostics`
+    /// (same length, same order).
+    pub findings: Vec<PreflightFinding>,
     pub pages_exported: usize,
 }
 
@@ -250,6 +335,11 @@ pub struct ExportSession {
     page_indices: Vec<usize>,
     next: usize,
     diagnostics: Vec<ExportDiagnostic>,
+    /// panels.md gap 20 — body-page index each diagnostic was raised
+    /// on, parallel to `diagnostics`. `None` for findings raised at
+    /// document `finish()`. Stamped by diffing the diagnostics length
+    /// before/after each `export_next_page`.
+    finding_pages: Vec<Option<usize>>,
 }
 
 impl ExportSession {
@@ -275,6 +365,7 @@ impl ExportSession {
             page_indices,
             next: 0,
             diagnostics: Vec::new(),
+            finding_pages: Vec::new(),
         })
     }
 
@@ -296,6 +387,12 @@ impl ExportSession {
         };
         let page = &input.doc.pages[page_index];
         page::export_page(&mut self.state, input, page, &mut self.diagnostics)?;
+        // Stamp every diagnostic this page raised with the body-page
+        // index, so the preflight finding can deep-link to it. Newly
+        // pushed slots (if any) fill with this page index; existing
+        // slots from prior pages keep theirs.
+        self.finding_pages
+            .resize(self.diagnostics.len(), Some(page_index));
         self.next += 1;
         Ok(())
     }
@@ -305,9 +402,18 @@ impl ExportSession {
             return Err(ExportError::SessionState("pages remaining; export them first"));
         }
         let bytes = self.state.finish(input, &mut self.diagnostics)?;
+        // Document-`finish` diagnostics have no single page.
+        self.finding_pages.resize(self.diagnostics.len(), None);
+        let findings = self
+            .diagnostics
+            .iter()
+            .zip(self.finding_pages.iter())
+            .map(|(d, page)| PreflightFinding::from_diag(d, *page))
+            .collect();
         Ok(ExportResult {
             bytes,
             diagnostics: self.diagnostics,
+            findings,
             pages_exported: self.next,
         })
     }
@@ -368,4 +474,32 @@ pub(crate) fn paint_is_cmyk(paint: &Paint) -> bool {
 #[allow(unused)]
 pub(crate) fn glyph_table_of(list: &paged_compose::DisplayList) -> Option<&GlyphRunTable> {
     list.glyph_runs.as_ref()
+}
+
+#[cfg(test)]
+mod preflight_tests {
+    use super::*;
+
+    #[test]
+    fn preflight_finding_maps_code_severity_and_page() {
+        // panels.md gap 20 — structured findings carry a stable code,
+        // a severity, and the page they were raised on.
+        let font = ExportDiagnostic::FontNotEmbeddable {
+            font_id: 7,
+            runs_outlined: 3,
+        };
+        let f = PreflightFinding::from_diag(&font, Some(2));
+        assert_eq!(f.code, "font_not_embeddable");
+        assert_eq!(f.severity, FindingSeverity::Warning);
+        assert_eq!(f.page_index, Some(2));
+        assert!(f.message.contains('7') && f.message.contains('3'));
+
+        let img = ExportDiagnostic::ImageMissingBytes { image_index: 4 };
+        let f = PreflightFinding::from_diag(&img, None);
+        assert_eq!(f.code, "image_missing_bytes");
+        assert_eq!(f.severity, FindingSeverity::Warning);
+        assert_eq!(f.page_index, None);
+        assert_eq!(FindingSeverity::Warning.as_str(), "warning");
+        assert_eq!(FindingSeverity::Error.as_str(), "error");
+    }
 }

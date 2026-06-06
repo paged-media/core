@@ -124,10 +124,16 @@ fn session_exports_page_by_page() {
     // Driving past the end is a session-state error, not a panic.
     assert!(session.export_next_page().is_err());
 
-    let (bytes, diagnostics) = session.finish().expect("finish");
+    let done = session.finish().expect("finish");
+    let bytes = done.pdf_bytes;
     assert!(bytes.starts_with(b"%PDF-1.7"), "plain export is PDF 1.7");
     assert!(bytes.windows(5).rev().take(64).any(|w| w == b"%%EOF"));
-    assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+    assert!(
+        done.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        done.diagnostics
+    );
+    assert!(done.findings.is_empty(), "unexpected findings: {:?}", done.findings);
 
     // Without a CMYK working profile the pipeline collapses swatches
     // to RGB solids (Stage A/B display behaviour) — no Separation to
@@ -182,7 +188,7 @@ fn x4_requires_a_profile_and_honours_a_registered_one() {
     for _ in 0..pages {
         session.export_next_page().expect("page");
     }
-    let (bytes, _) = session.finish().expect("finish");
+    let bytes = session.finish().expect("finish").pdf_bytes;
     assert!(bytes.starts_with(b"%PDF-1.6"), "X-4 is PDF 1.6");
     let text = String::from_utf8_lossy(&bytes);
     assert!(text.contains("GTS_PDFX"), "missing OutputIntent");
@@ -218,7 +224,7 @@ fn document_bleed_grows_the_media_box() {
     for _ in 0..pages {
         session.export_next_page().expect("page");
     }
-    let (bytes, _) = session.finish().expect("finish");
+    let bytes = session.finish().expect("finish").pdf_bytes;
     let text = String::from_utf8_lossy(&bytes);
     // Page is 612x792 (GeometricBounds are TLBR: 0 0 792 612).
     assert!(

@@ -112,6 +112,19 @@ impl NumberingStyle {
         }
     }
 
+    /// Stable lower-camel wire name for the editor's section panel
+    /// (panels.md gaps 9/10/19). Distinct from `format`, which
+    /// renders a number; this names the *style* itself.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NumberingStyle::Arabic => "arabic",
+            NumberingStyle::UpperRoman => "upperRoman",
+            NumberingStyle::LowerRoman => "lowerRoman",
+            NumberingStyle::UpperAlpha => "upperAlpha",
+            NumberingStyle::LowerAlpha => "lowerAlpha",
+        }
+    }
+
     /// Format a 1-based page number in this style. `0` (or anything
     /// the roman/alpha encoders can't represent) renders as the bare
     /// Arabic digits so the label is never empty.

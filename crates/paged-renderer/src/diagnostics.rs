@@ -166,6 +166,39 @@ impl RenderDiagnostics {
         }
         m
     }
+
+    /// Distinct `<Story Self="...">` ids reported overset (text
+    /// dropped past the last frame in their chain). The overset
+    /// diagnostic is fired once per story at emit time (see
+    /// `StoryEmitter::overset_reported`), so this is already
+    /// deduplicated, but we collect into a `BTreeSet` for stable
+    /// order regardless of build/page-visit order. Backs the editor
+    /// Preflight + per-story overset flag (panels.md gap 1).
+    pub fn overset_story_ids(&self) -> std::collections::BTreeSet<String> {
+        self.items
+            .iter()
+            .filter(|d| d.code == DiagnosticCode::OversetTextDropped)
+            .filter_map(|d| d.story_id.clone())
+            .collect()
+    }
+
+    /// Distinct host-frame `Self` ids whose placed image could not be
+    /// resolved or decoded at build time (`ImageLinkMissing` /
+    /// `ImageDecodeFailed`). The build draws the grey missing-image
+    /// placeholder for these, so they're exactly the links the Links
+    /// panel should mark `"missing"` (panels.md gap 2).
+    pub fn missing_image_frame_ids(&self) -> std::collections::BTreeSet<String> {
+        self.items
+            .iter()
+            .filter(|d| {
+                matches!(
+                    d.code,
+                    DiagnosticCode::ImageLinkMissing | DiagnosticCode::ImageDecodeFailed
+                )
+            })
+            .filter_map(|d| d.frame_id.clone())
+            .collect()
+    }
 }
 
 #[cfg(test)]
