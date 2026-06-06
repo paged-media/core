@@ -633,6 +633,17 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
     // second appears, we've already passed it through — so the guard is
     // "first content only").
     let mut patch_this_content = false;
+    // Buffered children of a patch-armed `<Content>`. Entities split
+    // the text into multiple events (`Text("It") GeneralRef(apos)
+    // Text("s")`), so the replace-or-passthrough decision can only be
+    // made at `</Content>` once the WHOLE span is known — deciding on
+    // the first chunk dropped apostrophes and duplicated the tail
+    // (found by the conformance round-trips level, text-letterspacing).
+    let mut content_events: Vec<Event<'static>> = Vec::new();
+    let mut content_text = String::new();
+    // A PI/element inside the span (e.g. InDesign's `<?ACE 18?>`
+    // page-number marker) — never rewrite over those; pass through.
+    let mut content_has_foreign = false;
     // Depth of open `<Table>` elements. Inside a table the
     // `<ParagraphStyleRange>` / `<CharacterStyleRange>` belong to CELL
     // paragraphs, which the parser stores on `paragraph.table.cells[]`,
@@ -689,6 +700,11 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                                         && !r.text.contains('\r')
                                 })
                                 .unwrap_or(false);
+                        if patch_this_content {
+                            content_events.clear();
+                            content_text.clear();
+                            content_has_foreign = false;
+                        }
                         writer.write_event(Event::Start(e.into_owned()))?;
                     }
                     _ => writer.write_event(Event::Start(e.into_owned()))?,
@@ -714,37 +730,78 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                         let start = patch_character_range(&e, run)?;
                         writer.write_event(Event::Empty(start))?;
                     }
-                    _ => writer.write_event(Event::Empty(e.into_owned()))?,
+                    _ => {
+                        if in_content && patch_this_content {
+                            // e.g. an empty element inside the span —
+                            // never rewrite over it.
+                            content_has_foreign = true;
+                            content_events.push(Event::Empty(e.into_owned()));
+                        } else {
+                            writer.write_event(Event::Empty(e.into_owned()))?;
+                        }
+                    }
                 }
             }
             Event::Text(t) => {
                 if in_content && patch_this_content {
-                    if let Some(run) = current_run {
-                        // Only substitute when the model text actually
-                        // diverged from the source — otherwise emit the
-                        // original event verbatim so its exact escaping
-                        // bytes are preserved (byte-identity on
-                        // unmutated stories). `BytesText::new` re-escapes
-                        // the model string, which can differ from the
-                        // source's entity choices for unchanged text.
-                        let decoded = t.decode().unwrap_or_default();
-                        let orig = quick_xml::escape::unescape(&decoded)
-                            .map(|c| c.into_owned())
-                            .unwrap_or_else(|_| decoded.into_owned());
-                        patch_this_content = false;
-                        if orig != run.text {
-                            writer.write_event(Event::Text(BytesText::new(&run.text)))?;
-                            buf.clear();
-                            continue;
-                        }
-                    }
+                    // Buffer — the patch decision happens at </Content>
+                    // once the whole (possibly entity-split) span is
+                    // known.
+                    let decoded = t.decode().unwrap_or_default();
+                    let orig = quick_xml::escape::unescape(&decoded)
+                        .map(|c| c.into_owned())
+                        .unwrap_or_else(|_| decoded.into_owned());
+                    content_text.push_str(&orig);
+                    content_events.push(Event::Text(t.into_owned()));
+                } else {
+                    writer.write_event(Event::Text(t))?;
                 }
-                writer.write_event(Event::Text(t))?;
+            }
+            Event::GeneralRef(r) => {
+                if in_content && patch_this_content {
+                    // Resolve the reference (predefined five + numeric)
+                    // so the comparison sees the parsed run's chars.
+                    let name = String::from_utf8_lossy(r.as_ref()).into_owned();
+                    let resolved = quick_xml::escape::unescape(&format!("&{name};"))
+                        .map(|c| c.into_owned())
+                        .unwrap_or_default();
+                    if resolved.is_empty() {
+                        // Unknown entity — never rewrite over it.
+                        content_has_foreign = true;
+                    }
+                    content_text.push_str(&resolved);
+                    content_events.push(Event::GeneralRef(r.into_owned()));
+                } else {
+                    writer.write_event(Event::GeneralRef(r))?;
+                }
             }
             Event::End(e) => {
                 match e.name().as_ref() {
                     b"Table" => table_depth = table_depth.saturating_sub(1),
                     b"Content" => {
+                        if in_content && patch_this_content {
+                            let replace = match current_run {
+                                // Rewrite only when the model text
+                                // diverged AND the span is pure text
+                                // (no PI/element to clobber); otherwise
+                                // replay the source bytes verbatim so
+                                // entity choices survive byte-identical.
+                                Some(run) => {
+                                    content_text != run.text && !content_has_foreign
+                                }
+                                None => false,
+                            };
+                            if replace {
+                                let run = current_run.expect("checked above");
+                                writer
+                                    .write_event(Event::Text(BytesText::new(&run.text)))?;
+                            } else {
+                                for ev in content_events.drain(..) {
+                                    writer.write_event(ev)?;
+                                }
+                            }
+                            content_events.clear();
+                        }
                         in_content = false;
                         patch_this_content = false;
                     }
@@ -753,7 +810,17 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                 }
                 writer.write_event(Event::End(e))?;
             }
-            other => writer.write_event(other)?,
+            other => {
+                if in_content && patch_this_content {
+                    // PI (e.g. InDesign's <?ACE 18?> marker) or other
+                    // markup inside the span — buffer in order and
+                    // never rewrite over it.
+                    content_has_foreign = true;
+                    content_events.push(other.into_owned());
+                } else {
+                    writer.write_event(other)?;
+                }
+            }
         }
         buf.clear();
     }

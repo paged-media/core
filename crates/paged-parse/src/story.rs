@@ -1990,6 +1990,35 @@ impl Story {
                         );
                     }
                 }
+                Event::GeneralRef(r) => {
+                    // quick-xml ≥0.40 emits entity references as their
+                    // own events, SPLITTING the surrounding text — so
+                    // `wizard&apos;s` arrives as Text("wizard"),
+                    // GeneralRef(apos), Text("s"). Dropping them here
+                    // silently lost the entity characters from run
+                    // text (apostrophes never parsed → never rendered,
+                    // never round-tripped). Resolve the predefined
+                    // five + numeric references and append.
+                    if in_content || properties_field.is_some() {
+                        let name = String::from_utf8_lossy(r.as_ref());
+                        let resolved = quick_xml::escape::unescape(&format!("&{name};"))
+                            .map(|c| c.into_owned())
+                            .unwrap_or_default();
+                        if in_content {
+                            if let Some(run) = current_run.as_mut() {
+                                for ch in resolved.chars() {
+                                    if matches!(ch, '\u{2028}' | '\u{2029}') {
+                                        run.text.push('\n');
+                                    } else {
+                                        run.text.push(ch);
+                                    }
+                                }
+                            }
+                        } else {
+                            properties_text.push_str(&resolved);
+                        }
+                    }
+                }
                 Event::PI(pi) => {
                     // InDesign serialises auto-page-number markers
                     // inside <Content> as `<?ACE 18?>` processing
