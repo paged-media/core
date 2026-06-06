@@ -215,6 +215,14 @@ pub enum PropertyPathJson {
     // W3.A0 — text-frame thread chain (read-only).
     NextTextFrame,
     PreviousTextFrame,
+    // W3.A1 — table cell properties.
+    CellFillColor,
+    CellFillTint,
+    CellInsetTop,
+    CellInsetLeft,
+    CellInsetBottom,
+    CellInsetRight,
+    CellVerticalJustification,
 }
 
 impl From<PropertyPath> for PropertyPathJson {
@@ -436,6 +444,16 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::FrameBlendMode => PropertyPathJson::FrameBlendMode,
             PropertyPath::NextTextFrame => PropertyPathJson::NextTextFrame,
             PropertyPath::PreviousTextFrame => PropertyPathJson::PreviousTextFrame,
+            // W3.A1 — table cell properties.
+            PropertyPath::CellFillColor => PropertyPathJson::CellFillColor,
+            PropertyPath::CellFillTint => PropertyPathJson::CellFillTint,
+            PropertyPath::CellInsetTop => PropertyPathJson::CellInsetTop,
+            PropertyPath::CellInsetLeft => PropertyPathJson::CellInsetLeft,
+            PropertyPath::CellInsetBottom => PropertyPathJson::CellInsetBottom,
+            PropertyPath::CellInsetRight => PropertyPathJson::CellInsetRight,
+            PropertyPath::CellVerticalJustification => {
+                PropertyPathJson::CellVerticalJustification
+            }
         }
     }
 }
@@ -659,6 +677,16 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::FrameBlendMode => PropertyPath::FrameBlendMode,
             PropertyPathJson::NextTextFrame => PropertyPath::NextTextFrame,
             PropertyPathJson::PreviousTextFrame => PropertyPath::PreviousTextFrame,
+            // W3.A1 — table cell properties.
+            PropertyPathJson::CellFillColor => PropertyPath::CellFillColor,
+            PropertyPathJson::CellFillTint => PropertyPath::CellFillTint,
+            PropertyPathJson::CellInsetTop => PropertyPath::CellInsetTop,
+            PropertyPathJson::CellInsetLeft => PropertyPath::CellInsetLeft,
+            PropertyPathJson::CellInsetBottom => PropertyPath::CellInsetBottom,
+            PropertyPathJson::CellInsetRight => PropertyPath::CellInsetRight,
+            PropertyPathJson::CellVerticalJustification => {
+                PropertyPath::CellVerticalJustification
+            }
         }
     }
 }

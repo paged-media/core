@@ -56,6 +56,23 @@ pub enum ElementId {
         start: u32,
         end: u32,
     },
+    /// W3.A1 — a `<Table>` addressed by `(story_id, table_id)`. Maps to
+    /// `paged_mutate::NodeId::Table`. Backs `AppliedTableStyle` writes
+    /// and the table-structure Mutations.
+    Table {
+        story_id: String,
+        table_id: String,
+    },
+    /// W3.A1 — a table cell addressed by `(story_id, table_id, row,
+    /// col)`. Maps to `paged_mutate::NodeId::TableCell`. Backs the
+    /// cell-scoped `SetElementProperty` writes (fill / insets / vertical
+    /// justify / applied cell style).
+    TableCell {
+        story_id: String,
+        table_id: String,
+        row: u32,
+        col: u32,
+    },
 }
 
 impl ElementId {
@@ -72,6 +89,13 @@ impl ElementId {
             | ElementId::GraphicLine(id)
             | ElementId::Group(id) => id,
             ElementId::StoryRange { story_id, .. } => story_id,
+            // The story is the container; table / cell ids ride the
+            // variant. `raw_id` returns the story for table addresses
+            // (callers needing the table / cell coords match on the
+            // variant) — consistent with `StoryRange`.
+            ElementId::Table { story_id, .. } | ElementId::TableCell { story_id, .. } => {
+                story_id
+            }
         }
     }
 
@@ -87,6 +111,8 @@ impl ElementId {
             ElementId::GraphicLine(_) => "GraphicLine",
             ElementId::Group(_) => "Group",
             ElementId::StoryRange { .. } => "StoryRange",
+            ElementId::Table { .. } => "Table",
+            ElementId::TableCell { .. } => "TableCell",
         }
     }
 }

@@ -429,6 +429,37 @@ pub struct BuiltPage {
     /// for a clean page. Story-level signals (overset) ride the emit
     /// channel instead, so this stays untouched by the body-story cache.
     pub diagnostics: Vec<Diagnostic>,
+    /// W3.A1 — per-cell page-local rects for every table cell that
+    /// landed on this page. Captured at table-emit time (the only place
+    /// cell geometry exists; the display list flattens it into fills /
+    /// strokes / glyphs). The canvas's hit-tester reads this to resolve
+    /// a doc-point inside a table frame to its `(tableId, row, col)`
+    /// context. Empty for pages with no tables — mirrors how
+    /// `story_layout` retains text-line hit data. Header / footer
+    /// *replays* on continuation frames push their own rects (each
+    /// carries the template row index), so a click on a replayed header
+    /// resolves to the source row.
+    pub cell_rects: Vec<CellRect>,
+}
+
+/// W3.A1 — one table cell's page-local rect plus its addressing keys.
+/// Page-local pt, `(0, 0)` = page top-left (same frame as
+/// [`LineLayout`]). Captured once per emitted physical row × column.
+#[derive(Debug, Clone)]
+pub struct CellRect {
+    /// `<Story Self="…">` owning the table.
+    pub story_id: String,
+    /// `<Table Self="…">` id. Empty string when the table carried no
+    /// `Self` (synthetic / malformed) — such tables aren't addressable.
+    pub table_id: String,
+    /// Zero-based row index in the table's `rows` (the *template* row;
+    /// header / footer replays report their source row).
+    pub row: u32,
+    /// Zero-based column index.
+    pub col: u32,
+    /// Page-local rect `[x, y, w, h]` in pt (cell's outer box,
+    /// inset-inclusive).
+    pub rect: [f32; 4],
 }
 
 /// Phase 5 — a footnote captured at emit time on the page where its
@@ -804,6 +835,7 @@ pub fn build_document(
                 story_layout: Vec::new(),
                 footnotes: Vec::new(),
                 diagnostics: Vec::new(),
+                cell_rects: Vec::new(),
             });
         }
         spread_page_ranges.push(start..pages.len());
@@ -838,6 +870,7 @@ pub fn build_document(
             story_layout: Vec::new(),
             footnotes: Vec::new(),
             diagnostics: Vec::new(),
+            cell_rects: Vec::new(),
         });
         page_geometries.push(PageGeom {
             bounds_in_spread: paged_parse::Bounds {
@@ -7395,6 +7428,7 @@ pub fn build(document: &Document, options: &PipelineOptions) -> anyhow::Result<B
         story_layout: Vec::new(),
         footnotes: Vec::new(),
         diagnostics: Vec::new(),
+        cell_rects: Vec::new(),
     })
 }
 

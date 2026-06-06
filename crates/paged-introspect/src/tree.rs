@@ -78,6 +78,19 @@ pub enum NodeIdJson {
         start: u32,
         end: u32,
     },
+    /// W3.A1 — a `<Table>` addressed by `(story_id, table_id)`.
+    Table {
+        story_id: String,
+        table_id: String,
+    },
+    /// W3.A1 — a table cell addressed by `(story_id, table_id, row,
+    /// col)`.
+    TableCell {
+        story_id: String,
+        table_id: String,
+        row: u32,
+        col: u32,
+    },
 }
 
 impl From<NodeId> for NodeIdJson {
@@ -100,6 +113,18 @@ impl From<NodeId> for NodeIdJson {
                 story_id,
                 start,
                 end,
+            },
+            NodeId::Table { story_id, table_id } => NodeIdJson::Table { story_id, table_id },
+            NodeId::TableCell {
+                story_id,
+                table_id,
+                row,
+                col,
+            } => NodeIdJson::TableCell {
+                story_id,
+                table_id,
+                row,
+                col,
             },
         }
     }
@@ -125,6 +150,21 @@ impl From<&NodeIdJson> for NodeId {
                 story_id: story_id.clone(),
                 start: *start,
                 end: *end,
+            },
+            NodeIdJson::Table { story_id, table_id } => NodeId::Table {
+                story_id: story_id.clone(),
+                table_id: table_id.clone(),
+            },
+            NodeIdJson::TableCell {
+                story_id,
+                table_id,
+                row,
+                col,
+            } => NodeId::TableCell {
+                story_id: story_id.clone(),
+                table_id: table_id.clone(),
+                row: *row,
+                col: *col,
             },
         }
     }

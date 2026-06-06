@@ -809,6 +809,13 @@ mod wasm {
                         bounds: result.bounds,
                         item_transform: result.item_transform,
                         group_chain: result.group_chain,
+                        table_context: result.table_context.map(|t| {
+                            paged_canvas::channel::TableHitContext {
+                                table_id: t.table_id,
+                                row: t.row,
+                                col: t.col,
+                            }
+                        }),
                     })
                 }
                 MainToWorkerKind::RequestSnapshot {

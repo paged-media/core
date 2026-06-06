@@ -640,6 +640,21 @@ pub(super) fn emit_table_into_chain(
         }
         let cell_w_pt = col_x[last_c] - col_x[c];
 
+        // W3.A1 — retain this cell's page-local rect for hit-testing.
+        // `r` is the template row (header / footer replays report their
+        // source row, so a click on a replayed header resolves to the
+        // original cell). Only addressable tables (those with a `Self`)
+        // are recorded; others fall back to the frame-level hit.
+        if let Some(table_id) = table.self_id.as_deref() {
+            pages[target_page].cell_rects.push(CellRect {
+                story_id: em.current_story_id.clone(),
+                table_id: table_id.to_string(),
+                row: r as u32,
+                col: c as u32,
+                rect: [cell_x_pt, cell_y_pt, cell_w_pt, cell_h_pt],
+            });
+        }
+
         let inner_left = cell_x_pt + cell.text_left_inset;
         let inner_top = cell_y_pt + cell.text_top_inset;
         let inner_w = (cell_w_pt - cell.text_left_inset - cell.text_right_inset).max(0.0);

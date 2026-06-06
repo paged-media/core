@@ -2395,7 +2395,9 @@ version = "0.0.0"
 dependencies = [
  "bytes",
  "flo_curves",
+ "paged-compose",
  "paged-parse",
+ "paged-renderer",
  "paged-scene",
  "serde",
  "serde_json",

@@ -78,7 +78,23 @@ export type WorkerToMain = WorkerToMainKind & {
 ///     `NodeSpec::Oval` insert kind. (The new `paged_mutate::Operation`
 ///     variants ride the existing `Mutate(Mutation)` envelope, so the
 ///     Mutation enum gains the variants below.)
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(28);
+/// v29 (W3.A1 — table NodeId surface): tables become addressable +
+///   mutable through the wire. Covers:
+///   - `HitResult.table_context` — `HitTest` into a table cell now
+///     returns the `(tableId, row, col)` it landed in (new
+///     `TableHitContext` payload).
+///   - cell-scoped `PropertyPath`s on a `NodeId::TableCell`
+///     (`cellFillColor` / `cellFillTint` / `cellInset{Top,Left,Bottom,
+///     Right}` / `cellVerticalJustification`; plus the now-live
+///     `appliedCellStyle`) and `appliedTableStyle` on a `NodeId::Table`
+///     — reachable via `SetElementProperty` against the new
+///     `ElementId::Table` / `ElementId::TableCell` addresses.
+///   - table-structure `Mutation`s: `SetRowHeight` / `SetColumnWidth` /
+///     `InsertTableRow` / `DeleteTableRow` / `InsertTableColumn` /
+///     `DeleteTableColumn` (translate to the matching new
+///     `paged_mutate::Operation` variants, with delete capturing the
+///     removed line for undo).
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(29);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -528,6 +544,23 @@ pub struct HitResult {
     /// when the hit element is not nested in any group.
     #[serde(default)]
     pub group_chain: Vec<String>,
+    /// W3.A1 — table cell context when the point landed inside a cell
+    /// of the hit frame's story. `None` for non-table hits. Carries
+    /// `(tableId, row, col)` so the canvas can select / mutate the cell
+    /// without a second query.
+    #[serde(default)]
+    pub table_context: Option<TableHitContext>,
+}
+
+/// W3.A1 — wire shape of [`crate::hit::TableHitContext`]: the table
+/// cell a `HitTest` landed in.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct TableHitContext {
+    pub table_id: String,
+    pub row: u32,
+    pub col: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
@@ -2274,6 +2307,51 @@ pub enum Mutation {
     DeleteSection {
         section_id: String,
     },
+    // ── W3.A1 table structure ───────────────────────────────────────
+    /// W3.A1 — set a table row's height in pt (`None` clears the
+    /// per-row override). Routes to `Operation::SetRowHeight`.
+    SetRowHeight {
+        story_id: String,
+        table_id: String,
+        row: u32,
+        #[serde(default)]
+        height: Option<f32>,
+    },
+    /// W3.A1 — set a table column's width in pt. Routes to
+    /// `Operation::SetColumnWidth`.
+    SetColumnWidth {
+        story_id: String,
+        table_id: String,
+        col: u32,
+        #[serde(default)]
+        width: Option<f32>,
+    },
+    /// W3.A1 — insert an empty body row at `at`. Routes to
+    /// `Operation::InsertTableRow`.
+    InsertTableRow {
+        story_id: String,
+        table_id: String,
+        at: u32,
+    },
+    /// W3.A1 — delete the row at `at`. Routes to
+    /// `Operation::DeleteTableRow` (captures content for undo).
+    DeleteTableRow {
+        story_id: String,
+        table_id: String,
+        at: u32,
+    },
+    /// W3.A1 — insert an empty column at `at`.
+    InsertTableColumn {
+        story_id: String,
+        table_id: String,
+        at: u32,
+    },
+    /// W3.A1 — delete the column at `at`.
+    DeleteTableColumn {
+        story_id: String,
+        table_id: String,
+        at: u32,
+    },
 }
 
 impl Mutation {
@@ -2353,6 +2431,12 @@ impl Mutation {
             Self::InsertSection { .. } => "InsertSection",
             Self::EditSection { .. } => "EditSection",
             Self::DeleteSection { .. } => "DeleteSection",
+            Self::SetRowHeight { .. } => "SetRowHeight",
+            Self::SetColumnWidth { .. } => "SetColumnWidth",
+            Self::InsertTableRow { .. } => "InsertTableRow",
+            Self::DeleteTableRow { .. } => "DeleteTableRow",
+            Self::InsertTableColumn { .. } => "InsertTableColumn",
+            Self::DeleteTableColumn { .. } => "DeleteTableColumn",
         }
     }
 }
@@ -2621,8 +2705,90 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v28() {
-        assert_eq!(PROTOCOL_VERSION.0, 28);
+    fn protocol_version_is_v29() {
+        assert_eq!(PROTOCOL_VERSION.0, 29);
+    }
+
+    #[test]
+    fn w3a1_table_mutations_round_trip_through_the_mutate_envelope() {
+        let muts = vec![
+            Mutation::SetRowHeight {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+                row: 1,
+                height: Some(42.0),
+            },
+            Mutation::SetColumnWidth {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+                col: 0,
+                width: None,
+            },
+            Mutation::InsertTableRow {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+                at: 1,
+            },
+            Mutation::DeleteTableRow {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+                at: 0,
+            },
+            Mutation::InsertTableColumn {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+                at: 2,
+            },
+            Mutation::DeleteTableColumn {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+                at: 1,
+            },
+        ];
+        for m in muts {
+            let disc = m.discriminant();
+            let env = MainToWorker {
+                seq: 1,
+                protocol: PROTOCOL_VERSION,
+                kind: MainToWorkerKind::Mutate(m),
+            };
+            let json = serde_json::to_string(&env).unwrap();
+            let back: MainToWorker = serde_json::from_str(&json).unwrap();
+            match back.kind {
+                MainToWorkerKind::Mutate(m2) => assert_eq!(m2.discriminant(), disc, "{json}"),
+                other => panic!("unexpected: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn w3a1_hit_result_table_context_round_trips() {
+        let hr = HitResult {
+            frame_id: Some("frameA".into()),
+            story_id: Some("u10".into()),
+            table_context: Some(TableHitContext {
+                table_id: "t1".into(),
+                row: 1,
+                col: 0,
+            }),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&hr).unwrap();
+        // camelCase wire keys.
+        assert!(json.contains("\"tableContext\":"), "{json}");
+        assert!(json.contains("\"tableId\":\"t1\""), "{json}");
+        let back: HitResult = serde_json::from_str(&json).unwrap();
+        let tc = back.table_context.expect("table_context round-trips");
+        assert_eq!((tc.row, tc.col), (1, 0));
+        assert_eq!(tc.table_id, "t1");
+        // A non-table hit serialises `table_context: null`.
+        let plain = HitResult {
+            frame_id: Some("rectA".into()),
+            ..Default::default()
+        };
+        let back2: HitResult =
+            serde_json::from_str(&serde_json::to_string(&plain).unwrap()).unwrap();
+        assert!(back2.table_context.is_none());
     }
 
     #[test]

@@ -636,6 +636,13 @@ pub struct TableCell {
     /// `None` ⇒ inherit from the cell-style cascade, then default 0.
     /// Borders/fills are not rotated — only the cell content.
     pub rotation_angle: Option<f32>,
+    /// `<Cell VerticalJustification="…">` enum string (`"TopAlign"`,
+    /// `"CenterAlign"`, `"BottomAlign"`, `"JustifyAlign"`). `None` ⇒
+    /// inherit from the cell-style cascade, then default Top. The
+    /// renderer currently lays cell content top-aligned; this field is
+    /// parsed + writable (W3.A1) so the value round-trips and the
+    /// cell-vertical-justify pass can honour it later.
+    pub vertical_justification: Option<String>,
     /// Cell content — paragraphs, parsed identically to top-level
     /// story paragraphs.
     pub paragraphs: Vec<Paragraph>,
@@ -1466,6 +1473,7 @@ impl Story {
                             },
                             rotation_angle: attr(&e, b"RotationAngle")
                                 .and_then(|s| s.parse().ok()),
+                            vertical_justification: attr(&e, b"VerticalJustification"),
                             paragraphs: Vec::new(),
                         });
                     }
@@ -2478,6 +2486,37 @@ mod tests {
         // Cell insets carried through.
         assert_eq!(table.cells[0].text_top_inset, 2.0);
         assert_eq!(table.cells[0].text_left_inset, 3.0);
+    }
+
+    #[test]
+    fn parses_cell_vertical_justification() {
+        // W3.A1 — `<Cell VerticalJustification="…">` is parsed onto the
+        // new `vertical_justification` field so the cell-vjust write
+        // path round-trips. Absent attribute ⇒ `None`.
+        let xml =
+            br#"<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Story Self="s1">
+            <ParagraphStyleRange><CharacterStyleRange>
+              <Table Self="t1" BodyRowCount="1" ColumnCount="2">
+                <Row Self="r0" Name="0"/>
+                <Column Self="c0" Name="0"/>
+                <Column Self="c1" Name="1"/>
+                <Cell Self="cell00" Name="0:0" VerticalJustification="CenterAlign">
+                  <ParagraphStyleRange><CharacterStyleRange><Content>X</Content></CharacterStyleRange></ParagraphStyleRange>
+                </Cell>
+                <Cell Self="cell10" Name="1:0">
+                  <ParagraphStyleRange><CharacterStyleRange><Content>Y</Content></CharacterStyleRange></ParagraphStyleRange>
+                </Cell>
+              </Table>
+            </CharacterStyleRange></ParagraphStyleRange>
+          </Story>
+        </idPkg:Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let table = s.paragraphs[0].table.as_ref().unwrap();
+        let cell00 = table.cells.iter().find(|c| c.coords() == Some((0, 0))).unwrap();
+        assert_eq!(cell00.vertical_justification.as_deref(), Some("CenterAlign"));
+        let cell10 = table.cells.iter().find(|c| c.coords() == Some((1, 0))).unwrap();
+        assert_eq!(cell10.vertical_justification, None);
     }
 
     #[test]

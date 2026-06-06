@@ -152,6 +152,7 @@ mod tests {
             story_layout: Vec::new(),
             footnotes: Vec::new(),
             diagnostics: Vec::new(),
+            cell_rects: Vec::new(),
         }
     }
 

@@ -27,7 +27,7 @@ pub use asset::{AssetResolver, BytesResolver};
 pub use diagnostics::{Diagnostic, DiagnosticCode, RenderDiagnostics, Severity};
 pub use pipeline::{
     build, build_document, build_run_paint_picker, resolve_fill, resolve_stroke,
-    BodyStoryEmissionDelta, BodyStoryPageDelta, BuiltDocument, BuiltPage, ClusterPos,
+    BodyStoryEmissionDelta, BodyStoryPageDelta, BuiltDocument, BuiltPage, CellRect, ClusterPos,
     FontMetricsOverride, FontTable, LineLayout, MasterTextEmitDelta, PageId, PipelineOptions,
     PipelineStats, RunPaintPicker,
 };

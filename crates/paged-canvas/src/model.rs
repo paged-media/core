@@ -311,10 +311,14 @@ fn path_node_id_for(
         ElementId::TextFrame(s) => Some(NodeId::TextFrame(s.clone())),
         ElementId::Rectangle(s) => Some(NodeId::Rectangle(s.clone())),
         ElementId::GraphicLine(s) => Some(NodeId::GraphicLine(s.clone())),
-        // Path-bearing only — Oval / Group / StoryRange have no
-        // `<PathPointArray>`, so the path-edit gestures never
-        // target them.
-        ElementId::Oval(_) | ElementId::Group(_) | ElementId::StoryRange { .. } => None,
+        // Path-bearing only — Oval / Group / StoryRange / Table /
+        // TableCell have no `<PathPointArray>`, so the path-edit
+        // gestures never target them.
+        ElementId::Oval(_)
+        | ElementId::Group(_)
+        | ElementId::StoryRange { .. }
+        | ElementId::Table { .. }
+        | ElementId::TableCell { .. } => None,
     }
 }
 
@@ -337,6 +341,21 @@ fn element_to_node_id(id: &crate::element_selection::ElementId) -> paged_mutate:
             story_id: story_id.clone(),
             start: *start,
             end: *end,
+        },
+        ElementId::Table { story_id, table_id } => NodeId::Table {
+            story_id: story_id.clone(),
+            table_id: table_id.clone(),
+        },
+        ElementId::TableCell {
+            story_id,
+            table_id,
+            row,
+            col,
+        } => NodeId::TableCell {
+            story_id: story_id.clone(),
+            table_id: table_id.clone(),
+            row: *row,
+            col: *col,
         },
     }
 }
@@ -2032,6 +2051,67 @@ impl CanvasModel {
             Mutation::DeleteSection { section_id } => Some(Operation::DeleteSection {
                 section_id: section_id.clone(),
             }),
+            // ── W3.A1 table structure — 1:1 with the Operation. ──────
+            Mutation::SetRowHeight {
+                story_id,
+                table_id,
+                row,
+                height,
+            } => Some(Operation::SetRowHeight {
+                story_id: story_id.clone(),
+                table_id: table_id.clone(),
+                row: *row,
+                height: *height,
+            }),
+            Mutation::SetColumnWidth {
+                story_id,
+                table_id,
+                col,
+                width,
+            } => Some(Operation::SetColumnWidth {
+                story_id: story_id.clone(),
+                table_id: table_id.clone(),
+                col: *col,
+                width: *width,
+            }),
+            Mutation::InsertTableRow {
+                story_id,
+                table_id,
+                at,
+            } => Some(Operation::InsertTableRow {
+                story_id: story_id.clone(),
+                table_id: table_id.clone(),
+                at: *at,
+                restore: None,
+            }),
+            Mutation::DeleteTableRow {
+                story_id,
+                table_id,
+                at,
+            } => Some(Operation::DeleteTableRow {
+                story_id: story_id.clone(),
+                table_id: table_id.clone(),
+                at: *at,
+            }),
+            Mutation::InsertTableColumn {
+                story_id,
+                table_id,
+                at,
+            } => Some(Operation::InsertTableColumn {
+                story_id: story_id.clone(),
+                table_id: table_id.clone(),
+                at: *at,
+                restore: None,
+            }),
+            Mutation::DeleteTableColumn {
+                story_id,
+                table_id,
+                at,
+            } => Some(Operation::DeleteTableColumn {
+                story_id: story_id.clone(),
+                table_id: table_id.clone(),
+                at: *at,
+            }),
             _ => None,
         }
     }
@@ -2348,6 +2428,19 @@ impl CanvasModel {
         // returns early before the spread loop below.
         if let ElementId::StoryRange { story_id, start, end } = id {
             return self.story_range_properties(story_id, *start, *end, id);
+        }
+        // W3.A1 — tables / cells likewise live in stories, not spreads.
+        if let ElementId::Table { story_id, table_id } = id {
+            return self.table_properties(story_id, table_id, id);
+        }
+        if let ElementId::TableCell {
+            story_id,
+            table_id,
+            row,
+            col,
+        } = id
+        {
+            return self.cell_properties(story_id, table_id, *row, *col, id);
         }
 
         let raw = id.raw_id();
@@ -3382,6 +3475,109 @@ impl CanvasModel {
         Some(ElementProperties {
             id: id.clone(),
             kind: "StoryRange".to_string(),
+            name: None,
+            entries,
+        })
+    }
+
+    /// W3.A1 — locate a `<Table>` by `(story_id, table_id)` for the
+    /// inspector read-side. Returns the host paragraph's table ref.
+    fn find_table_read(
+        &self,
+        story_id: &str,
+        table_id: &str,
+    ) -> Option<&paged_parse::Table> {
+        let story = self
+            .scene
+            .stories
+            .iter()
+            .find(|s| s.self_id == story_id)?;
+        story.story.paragraphs.iter().find_map(|p| {
+            p.table
+                .as_ref()
+                .filter(|t| t.self_id.as_deref() == Some(table_id))
+        })
+    }
+
+    /// W3.A1 — table-scoped property snapshot (the `AppliedTableStyle`
+    /// entry). Mirrors `story_range_properties`'s return shape.
+    fn table_properties(
+        &self,
+        story_id: &str,
+        table_id: &str,
+        id: &crate::element_selection::ElementId,
+    ) -> Option<crate::channel::ElementProperties> {
+        use crate::channel::{ElementProperties, PropertyEntry};
+        use paged_mutate::{PropertyPath, Value};
+
+        let table = self.find_table_read(story_id, table_id)?;
+        let entries = vec![PropertyEntry {
+            path: PropertyPath::AppliedTableStyle,
+            value: Some(Value::Text(
+                table.applied_table_style.clone().unwrap_or_default(),
+            )),
+        }];
+        Some(ElementProperties {
+            id: id.clone(),
+            kind: "Table".to_string(),
+            name: None,
+            entries,
+        })
+    }
+
+    /// W3.A1 — cell-scoped property snapshot (fill / insets / vertical
+    /// justify / applied cell style). Backs the Cell panel's read so it
+    /// can populate before a `SetElementProperty` write.
+    fn cell_properties(
+        &self,
+        story_id: &str,
+        table_id: &str,
+        row: u32,
+        col: u32,
+        id: &crate::element_selection::ElementId,
+    ) -> Option<crate::channel::ElementProperties> {
+        use crate::channel::{ElementProperties, PropertyEntry};
+        use paged_mutate::{PropertyPath, Value};
+
+        let table = self.find_table_read(story_id, table_id)?;
+        let cell = table.cells.iter().find(|c| c.coords() == Some((col, row)))?;
+        let entries = vec![
+            PropertyEntry {
+                path: PropertyPath::CellFillColor,
+                value: Some(Value::ColorRef(cell.fill_color.clone())),
+            },
+            PropertyEntry {
+                path: PropertyPath::CellInsetTop,
+                value: Some(Value::Length(Some(cell.text_top_inset))),
+            },
+            PropertyEntry {
+                path: PropertyPath::CellInsetLeft,
+                value: Some(Value::Length(Some(cell.text_left_inset))),
+            },
+            PropertyEntry {
+                path: PropertyPath::CellInsetBottom,
+                value: Some(Value::Length(Some(cell.text_bottom_inset))),
+            },
+            PropertyEntry {
+                path: PropertyPath::CellInsetRight,
+                value: Some(Value::Length(Some(cell.text_right_inset))),
+            },
+            PropertyEntry {
+                path: PropertyPath::CellVerticalJustification,
+                value: Some(Value::Text(
+                    cell.vertical_justification.clone().unwrap_or_default(),
+                )),
+            },
+            PropertyEntry {
+                path: PropertyPath::AppliedCellStyle,
+                value: Some(Value::Text(
+                    cell.applied_cell_style.clone().unwrap_or_default(),
+                )),
+            },
+        ];
+        Some(ElementProperties {
+            id: id.clone(),
+            kind: "TableCell".to_string(),
             name: None,
             entries,
         })
@@ -4476,6 +4672,11 @@ impl CanvasModel {
                     // (RequestCaretGeometry / RequestSelectionGeometry)
                     // is the right read path for text-range visuals.
                     ElementId::StoryRange { .. } => None,
+                    // W3.A1 — Table / TableCell geometry comes from the
+                    // retained `cell_rects` on the BuiltPage (the hit
+                    // path), not the spread's page-item vecs. No
+                    // spread-frame geometry to resolve here.
+                    ElementId::Table { .. } | ElementId::TableCell { .. } => None,
                 };
                 let Some((bounds, item_transform, has_image)) = resolved else {
                     continue;
@@ -4601,6 +4802,8 @@ impl CanvasModel {
                 ElementId::Group(_) => None,
                 // StoryRange doesn't carry path anchors.
                 ElementId::StoryRange { .. } => None,
+                // W3.A1 — tables / cells have no path-anchor array.
+                ElementId::Table { .. } | ElementId::TableCell { .. } => None,
             };
             let Some((bounds, item_transform, anchors, subpath_starts, subpath_open)) = resolved
             else {

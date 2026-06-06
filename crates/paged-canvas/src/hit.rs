@@ -40,7 +40,7 @@
 use std::collections::HashMap;
 
 use paged_parse::{Bounds, FrameRef, Group, Spread};
-use paged_renderer::{BuiltDocument, LineLayout, PageId};
+use paged_renderer::{BuiltDocument, BuiltPage, LineLayout, PageId};
 
 use crate::channel::HitFilter;
 use crate::element_selection::ElementId;
@@ -69,6 +69,26 @@ pub struct HitTestResult {
     pub item_transform: Option<[f32; 6]>,
     pub group_chain: Vec<String>,
     pub offset_within_story: Option<u32>,
+    /// W3.A1 — set when the doc-point landed inside a table cell of the
+    /// hit frame's story. Carries `(tableId, row, col)` so the canvas
+    /// can select / mutate the cell. `None` when the hit frame has no
+    /// table, or the point fell in the frame but outside the table grid.
+    pub table_context: Option<TableHitContext>,
+}
+
+/// W3.A1 — the table cell a hit landed in. Page-local cell geometry is
+/// retained on the `BuiltPage` at table-emit time (`cell_rects`); the
+/// hit-tester resolves the topmost cell whose rect contains the
+/// page-local point.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableHitContext {
+    /// `<Table Self="…">` id.
+    pub table_id: String,
+    /// Zero-based row (template row; header / footer replays resolve to
+    /// their source row).
+    pub row: u32,
+    /// Zero-based column.
+    pub col: u32,
 }
 
 impl CanvasModel {
@@ -199,6 +219,13 @@ impl CanvasModel {
                         doc_point,
                     )
                 });
+                // W3.A1 — resolve the table cell under the pointer, if
+                // the hit frame's story owns a table whose cells landed
+                // on this page. `doc_point` and `cell_rects` are both
+                // page-local pt.
+                let table_context = c.parent_story.as_deref().and_then(|sid| {
+                    table_cell_at_point(built_page, sid, doc_point)
+                });
                 let bbox = transform_bbox(c.bounds, c.item_transform);
                 return HitTestResult {
                     element: Some(c.element_id.clone()),
@@ -218,6 +245,7 @@ impl CanvasModel {
                     item_transform: c.item_transform,
                     group_chain: c.group_chain.clone(),
                     offset_within_story: offset,
+                    table_context,
                 };
             }
         }
@@ -230,6 +258,37 @@ fn filter_allows(filter: HitFilter, c: &Candidate) -> bool {
         HitFilter::Any | HitFilter::Frame => true,
         HitFilter::Text => c.is_text,
     }
+}
+
+/// W3.A1 — find the table cell whose retained page-local rect contains
+/// `doc_point` (page-local pt), restricting to cells of `story_id`.
+/// Returns the LAST matching cell in emit order — header / footer
+/// replays are pushed after body rows, but a body row and a replayed
+/// header never overlap geometrically, so the order doesn't change the
+/// result; the explicit last-match is just a deterministic tiebreak for
+/// the (degenerate) zero-area-rect case. `None` when the point isn't in
+/// any of this story's cells.
+fn table_cell_at_point(
+    page: &BuiltPage,
+    story_id: &str,
+    doc_point: (f32, f32),
+) -> Option<TableHitContext> {
+    let (px, py) = doc_point;
+    let mut found: Option<TableHitContext> = None;
+    for cr in &page.cell_rects {
+        if cr.story_id != story_id {
+            continue;
+        }
+        let [x, y, w, h] = cr.rect;
+        if px >= x && px < x + w && py >= y && py < y + h {
+            found = Some(TableHitContext {
+                table_id: cr.table_id.clone(),
+                row: cr.row,
+                col: cr.col,
+            });
+        }
+    }
+    found
 }
 
 /// One selectable item, in spread-coord geometry.
