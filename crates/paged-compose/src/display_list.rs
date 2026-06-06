@@ -338,6 +338,24 @@ impl PathBuffer {
     pub fn is_empty(&self) -> bool {
         self.paths.is_empty()
     }
+
+    /// Roll the buffer back to `len` paths, dropping every later path
+    /// AND evicting any intern-cache entry that pointed at a now-gone
+    /// id. Used by the footnote space-reservation pass, which re-emits
+    /// a story's body text after truncating the page's display list
+    /// back to a pre-story snapshot: without the cache eviction a
+    /// glyph interned during the discarded pass would resolve to a
+    /// `PathId` past the end of `paths` on the re-emit, silently
+    /// painting the wrong (or no) outline. No-op when `len` already
+    /// covers the whole buffer.
+    pub fn truncate_to(&mut self, len: usize) {
+        if len >= self.paths.len() {
+            return;
+        }
+        self.paths.truncate(len);
+        let cutoff = len as u32;
+        self.cache.retain(|_, id| id.0 < cutoff);
+    }
 }
 
 /// Cache key for a glyph outline. Hashed to give `PathBuffer::intern`
