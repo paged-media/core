@@ -34,6 +34,12 @@ pub struct Spread {
     pub page_width_pt: f32,
     pub page_height_pt: f32,
     pub page_items: Vec<PageItem>,
+    /// Master-spread item `Self` ids this body page has overridden.
+    /// Emitted as the `<Page OverrideList="…">` attribute (space-
+    /// separated). The renderer skips stamping any master item whose
+    /// id appears here, so the body's replacement frame isn't double-
+    /// painted under the master placeholder. Empty ⇒ no attribute.
+    pub override_list: Vec<String>,
 }
 
 pub fn write_spread(s: &Spread) -> Vec<u8> {
@@ -71,17 +77,19 @@ pub fn write_spread(s: &Spread) -> Vec<u8> {
     // tend to compose. Real InDesign exports use bare ids (e.g.
     // `AppliedMaster="ub4"`) — match that.
     let applied_master = strip_type_prefix(&s.applied_master);
-    b.empty(
-        "Page",
-        &[
-            ("Self", s.page_self_id.as_str()),
-            ("Name", s.page_name.as_str()),
-            ("AppliedMaster", applied_master),
-            ("ItemTransform", &identity),
-            ("GeometricBounds", &bounds),
-            ("MasterPageTransform", &identity),
-        ],
-    );
+    let override_list = s.override_list.join(" ");
+    let mut page_attrs: Vec<(&str, &str)> = vec![
+        ("Self", s.page_self_id.as_str()),
+        ("Name", s.page_name.as_str()),
+        ("AppliedMaster", applied_master),
+        ("ItemTransform", &identity),
+        ("GeometricBounds", &bounds),
+        ("MasterPageTransform", &identity),
+    ];
+    if !override_list.is_empty() {
+        page_attrs.push(("OverrideList", override_list.as_str()));
+    }
+    b.empty("Page", &page_attrs);
     for item in &s.page_items {
         item.write(&mut b);
     }

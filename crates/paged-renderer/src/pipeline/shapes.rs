@@ -727,15 +727,16 @@ pub(crate) fn corner_radius_from(radius: Option<f32>, option: Option<&str>) -> O
     if r <= 0.0 {
         return None;
     }
-    match option {
-        // The decorative variants (Inverse-Rounded, Inset, Bevel, Fancy)
-        // currently fall back to plain Rounded. Replace per-corner-option
-        // path emission lands later.
-        Some("Rounded")
-        | Some("InverseRounded")
-        | Some("Inset")
-        | Some("Bevel")
-        | Some("Fancy") => Some(r),
+    // Normalise through `CornerOption::from_idml` so the full IDML
+    // vocabulary is accepted — InDesign serialises these as
+    // `RoundedCorner`, `BeveledCorner`, `InverseRoundedCorner`,
+    // `InsetCorner`, `FancyCorner` (and the bare aliases). A hand-rolled
+    // match on the short enum names silently dropped the radius for any
+    // `…Corner`-suffixed value (W1.8: this was why a `Beveled` rect fell
+    // back to the plain axis-aligned rect with no corner geometry).
+    // Every non-`None` option consumes the radius.
+    match option.and_then(paged_parse::CornerOption::from_idml) {
+        Some(opt) if opt.rounds() => Some(r),
         _ => None,
     }
 }
@@ -922,8 +923,17 @@ pub(crate) fn corner_rect_path(
                     });
                 }
                 CornerOption::Inset => {
-                    // Step inward to the rounding centre, then out to
-                    // the outgoing edge — a square notch.
+                    // InDesign's Inset is the SHARP "fold-in" corner: the
+                    // edge steps inward to the inner rounding centre `m`
+                    // and back out to the outgoing edge — two straight
+                    // segments forming a right-angle notch. Applied to a
+                    // square this yields the cross / plus-sign silhouette
+                    // Adobe documents ("corners folding in on
+                    // themselves"). It is deliberately NOT a quarter-
+                    // circle: that is Inverse Rounded (a smooth concave
+                    // arc), and a circular Inset would collapse the two
+                    // options onto byte-identical geometry. W1.8
+                    // calibration verified the two stay visually distinct.
                     segs.push(LineTo { x: m.0, y: m.1 });
                     segs.push(LineTo {
                         x: p_out.0,
@@ -931,27 +941,57 @@ pub(crate) fn corner_rect_path(
                     });
                 }
                 CornerOption::Fancy => {
-                    // Ogee: convex half toward the vertex to the chord
-                    // midpoint, then concave half toward the inner
-                    // centre. Approximation pending calibration.
-                    let mid = ((p_in.0 + p_out.0) * 0.5, (p_in.1 + p_out.1) * 0.5);
-                    let c1 = ctl(p_in, c, 0.5);
-                    let c2 = ctl(mid, c, 0.5);
+                    // InDesign's Fancy corner is an ornamental scallop:
+                    // three small arcs running p_in → q1 → q2 → p_out.
+                    // The two outer arcs are convex quarter-bumps (pulled
+                    // toward the sharp vertex `c`); the middle arc is a
+                    // concave notch (pulled toward the inner centre `m`).
+                    // That concave-between-two-convex rhythm is the
+                    // decorative three-arc pattern InDesign draws (an
+                    // honest approximation of the precise ornament, whose
+                    // exact radii Adobe never published — the segment
+                    // count, endpoints, and convex/concave rhythm match).
+                    //
+                    // q1 / q2 split the corner span into thirds along the
+                    // straight chord from p_in to p_out; each arc's
+                    // control points pull a third of the way toward `c`
+                    // (convex) or `m` (concave).
+                    let lerp = |a: (f32, f32), b: (f32, f32), f: f32| {
+                        (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f)
+                    };
+                    let q1 = lerp(p_in, p_out, 1.0 / 3.0);
+                    let q2 = lerp(p_in, p_out, 2.0 / 3.0);
+                    // Arc 1: p_in → q1, convex bump toward the vertex.
+                    let a1 = ctl(p_in, c, 0.5);
+                    let a2 = ctl(q1, c, 0.5);
                     segs.push(CubicTo {
-                        cx1: c1.0,
-                        cy1: c1.1,
-                        cx2: c2.0,
-                        cy2: c2.1,
-                        x: mid.0,
-                        y: mid.1,
+                        cx1: a1.0,
+                        cy1: a1.1,
+                        cx2: a2.0,
+                        cy2: a2.1,
+                        x: q1.0,
+                        y: q1.1,
                     });
-                    let c3 = ctl(mid, m, 0.5);
-                    let c4 = ctl(p_out, m, 0.5);
+                    // Arc 2: q1 → q2, concave notch toward the inner
+                    // centre (the ornament's central dip).
+                    let b1 = ctl(q1, m, 0.5);
+                    let b2 = ctl(q2, m, 0.5);
                     segs.push(CubicTo {
-                        cx1: c3.0,
-                        cy1: c3.1,
-                        cx2: c4.0,
-                        cy2: c4.1,
+                        cx1: b1.0,
+                        cy1: b1.1,
+                        cx2: b2.0,
+                        cy2: b2.1,
+                        x: q2.0,
+                        y: q2.1,
+                    });
+                    // Arc 3: q2 → p_out, convex bump toward the vertex.
+                    let d1 = ctl(q2, c, 0.5);
+                    let d2 = ctl(p_out, c, 0.5);
+                    segs.push(CubicTo {
+                        cx1: d1.0,
+                        cy1: d1.1,
+                        cx2: d2.0,
+                        cy2: d2.1,
                         x: p_out.0,
                         y: p_out.1,
                     });

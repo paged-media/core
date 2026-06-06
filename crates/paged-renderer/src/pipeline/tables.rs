@@ -1836,8 +1836,13 @@ fn measure_cell_paragraph(
 /// Returns the vertical extent the paragraph consumed so the
 /// caller can stack subsequent cell paragraphs underneath.
 /// Self-contained shape → layout → emit; no inter-paragraph state.
+///
+/// `pub(crate)` so the `#[cfg(doc)]` intra-doc link in `pipeline/mod.rs`
+/// (`use tables::emit_cell_paragraph;`) resolves under rustdoc — a bare
+/// private fn made the `--doc` test pass fail with E0603 even though the
+/// normal build / lib-tests were unaffected.
 #[allow(clippy::too_many_arguments)]
-fn emit_cell_paragraph(
+pub(crate) fn emit_cell_paragraph(
     em: &mut StoryEmitter,
     paragraph: &paged_parse::Paragraph,
     target_page: usize,

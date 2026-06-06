@@ -12,10 +12,13 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! Empty master-spread builder. One master per body page so a single
+//! Master-spread builder. One master per body page so a single
 //! variant page can't pollute its neighbours via inherited master
-//! items.
+//! items. Masters may carry their own page items (master frames /
+//! rectangles) so body pages can inherit — and, via `OverrideList`,
+//! suppress — them.
 
+use crate::builders::page_item::PageItem;
 use crate::geometry::IDENTITY;
 use crate::xml::{format_f32, XmlBuilder};
 
@@ -30,6 +33,11 @@ pub struct Master {
     pub page_self_id: String,
     pub page_width_pt: f32,
     pub page_height_pt: f32,
+    /// Master-spread page items (rectangles, frames, …). Stamped onto
+    /// every body page that applies this master, unless suppressed by
+    /// `ShowMasterItems="false"` or the body page's `OverrideList`.
+    /// Empty ⇒ the classic empty master.
+    pub page_items: Vec<PageItem>,
 }
 
 pub fn write_master(m: &Master) -> Vec<u8> {
@@ -63,7 +71,12 @@ pub fn write_master(m: &Master) -> Vec<u8> {
             ("Self", bare_self),
             ("Name", "$ID/None"),
             ("PageCount", "1"),
-            ("ShowMasterItems", "false"),
+            // `ShowMasterItems` on the *master* spread is InDesign's
+            // "let body pages display these master items" toggle. The
+            // empty master left it `false`; with real master items we
+            // want them inherited, so `true`. With no items this is a
+            // harmless no-op for the existing empty-master call sites.
+            ("ShowMasterItems", "true"),
             ("ItemTransform", &identity),
         ],
     );
@@ -77,6 +90,13 @@ pub fn write_master(m: &Master) -> Vec<u8> {
             ("GeometricBounds", &bounds),
         ],
     );
+    // Master page items live as direct children of the MasterSpread
+    // element (same convention as body Spread items), not nested under
+    // the Page. They carry their own `Self` ids so a body page's
+    // `OverrideList` can name them for suppression.
+    for item in &m.page_items {
+        item.write(&mut b);
+    }
     b.end("MasterSpread");
     b.end("idPkg:MasterSpread");
     b.into_bytes()
