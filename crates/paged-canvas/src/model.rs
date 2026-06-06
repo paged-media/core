@@ -1852,6 +1852,16 @@ impl CanvasModel {
                 None
             }
         };
+        // Perf-MasterText + Perf-BodyStory — undo replays an inverse
+        // through the same scene paths as the forward commit, so the
+        // same invariant applies: a content-only text inverse keeps the
+        // body-story signature matching (the stale pre-undo emit would
+        // splice back in), and a structural inverse (page remove, frame
+        // re-insert) shifts page indices under the cached per-page
+        // deltas. Mirror apply_mutation / apply_operation and blow both
+        // caches before the rebuild.
+        self.master_text_emit_cache.borrow_mut().clear();
+        self.body_story_emit_cache.borrow_mut().clear();
         self.rebuild_after_mutation().ok()?;
         let undone_seq = rec.applied_seq;
         let applied_seq = self.bump_applied_seq();
@@ -1886,6 +1896,10 @@ impl CanvasModel {
                 (LoggedMutation::Frame(applied), None)
             }
         };
+        // Perf-MasterText + Perf-BodyStory — same invariant as undo():
+        // the replayed op mutates content/structure under the caches.
+        self.master_text_emit_cache.borrow_mut().clear();
+        self.body_story_emit_cache.borrow_mut().clear();
         self.rebuild_after_mutation().ok()?;
         let redone_seq = rec.applied_seq;
         let applied_seq = self.bump_applied_seq();

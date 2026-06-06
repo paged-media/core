@@ -1886,12 +1886,21 @@ pub fn build_document(
         };
         if let (Some(ref key), Some(rc)) = (&cache_key, options.body_story_emit_cache) {
             if let Some(delta) = rc.borrow().get(key) {
-                for (page_idx, page_delta) in &delta.per_page {
-                    splice_body_story_page_delta(&mut pages[*page_idx], page_delta);
+                // Defense in depth — the signature includes the chain's
+                // page indices, so a stale-index hit should be
+                // impossible; but the cache is long-lived interactive
+                // state, and splicing past pages.len() is a hard panic
+                // inside the worker (mutate() never resolves). If any
+                // captured index is out of range, treat the entry as a
+                // miss and re-emit fresh.
+                if delta.per_page.iter().all(|(idx, _)| *idx < pages.len()) {
+                    for (page_idx, page_delta) in &delta.per_page {
+                        splice_body_story_page_delta(&mut pages[*page_idx], page_delta);
+                    }
+                    anchored_image_queue.extend(delta.anchored.iter().cloned());
+                    breaks.extend(delta.breaks.iter().cloned());
+                    continue;
                 }
-                anchored_image_queue.extend(delta.anchored.iter().cloned());
-                breaks.extend(delta.breaks.iter().cloned());
-                continue;
             }
         }
         // Snapshot per-page pool sizes BEFORE this story emits so
@@ -5477,7 +5486,15 @@ fn body_story_signature(
     // movements on pages this story touches. Other pages' wrap
     // changes don't affect this story's line breaking.
     for &page in chain_pages {
+        // The page INDEX is part of the key: insert/delete-page shifts
+        // the chain's absolute page indices while the frame geometry
+        // stays identical, and the cached delta's per_page entries are
+        // keyed by absolute index — a stale hit would splice commands
+        // into the wrong page, or out of bounds entirely (the
+        // editor-suite insertPage-mid-set panic).
+        page.hash(&mut h);
         if let Some(rects) = wrap_rects_per_page.get(page) {
+            1u8.hash(&mut h);
             rects.len().hash(&mut h);
             for r in rects {
                 r.bounds.top.to_bits().hash(&mut h);
@@ -5489,6 +5506,8 @@ fn body_story_signature(
                     cy.to_bits().hash(&mut h);
                 }
             }
+        } else {
+            0u8.hash(&mut h);
         }
     }
     h.finish()
