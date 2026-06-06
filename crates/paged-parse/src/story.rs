@@ -688,6 +688,90 @@ pub struct TabStop {
     pub leader: Option<String>,
 }
 
+/// Phase 4 typography — the discrete OpenType feature toggles IDML
+/// records as individual attributes on a `<CharacterStyleRange>` /
+/// `<CharacterStyle>` (each `OTF*` attribute is its own flag, not a
+/// packed tag list).
+///
+/// Every field is `Option` so the style cascade can distinguish
+/// "unset at this level — inherit" from "explicitly off". A bottom-of-
+/// cascade `None` means the feature is off (its OpenType default).
+/// `merge_below` fills each unset field from the level below.
+///
+/// The renderer maps these to rustybuzz feature tags in
+/// `paged_text::ShapingFeatures` — see that type for the tag table.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OtfFeatures {
+    /// `OTFFraction="true"` — `frac` (diagonal fractions like ½).
+    pub fraction: Option<bool>,
+    /// `OTFOrdinal="true"` — `ordn` (superscripted ordinals: 1st, 2nd).
+    pub ordinal: Option<bool>,
+    /// `OTFSwash="true"` — `swsh` (swash alternates).
+    pub swash: Option<bool>,
+    /// `OTFDiscretionaryLigature="true"` — `dlig` (discretionary
+    /// ligatures, distinct from the standard `liga`/`clig` driven by
+    /// [`CharacterRun::ligatures_on`]).
+    pub discretionary_ligatures: Option<bool>,
+    /// `OTFSlashedZero="true"` — `zero` (slashed zero).
+    pub slashed_zero: Option<bool>,
+    /// `OTFTitling="true"` — `titl` (titling alternates).
+    pub titling: Option<bool>,
+    /// `OTFContextualAlternate` — `calt` (contextual alternates). IDML
+    /// defaults this on; we treat `None` as "inherit", and only the
+    /// explicit `false` disables `calt`.
+    pub contextual_alternates: Option<bool>,
+    /// `OTFFigureStyle` raw string — one of `Default`, `Lining`,
+    /// `OldStyle`, `TabularLining`, `ProportionalLining`,
+    /// `TabularOldstyle`, `ProportionalOldstyle`. Drives the figure
+    /// (digit) features `lnum`/`onum` (lining vs oldstyle) and
+    /// `pnum`/`tnum` (proportional vs tabular). `None`/`Default` ⇒ the
+    /// font's own default digits (no figure feature forced).
+    pub figure_style: Option<String>,
+    /// `OTFStylisticSets` integer bitfield. InDesign packs the enabled
+    /// stylistic sets into one integer where bit `i` (0-based) enables
+    /// `ss{i+1}` (`ss01`..`ss20`). `0`/`None` ⇒ no stylistic set.
+    pub stylistic_sets: Option<i32>,
+}
+
+impl OtfFeatures {
+    /// Parse the discrete `OTF*` attributes off a CharacterStyleRange /
+    /// CharacterStyle start tag. Returns an all-`None` bag when none of
+    /// the attributes are present (the common case) so the cascade can
+    /// distinguish "nothing declared here" from "declared off".
+    pub fn from_attrs(e: &quick_xml::events::BytesStart) -> Self {
+        let b = |k: &[u8]| attr(e, k).and_then(|s| s.parse::<bool>().ok());
+        Self {
+            fraction: b(b"OTFFraction"),
+            ordinal: b(b"OTFOrdinal"),
+            swash: b(b"OTFSwash"),
+            discretionary_ligatures: b(b"OTFDiscretionaryLigature"),
+            slashed_zero: b(b"OTFSlashedZero"),
+            titling: b(b"OTFTitling"),
+            contextual_alternates: b(b"OTFContextualAlternate"),
+            figure_style: attr(e, b"OTFFigureStyle"),
+            stylistic_sets: attr(e, b"OTFStylisticSets").and_then(|s| s.parse::<i32>().ok()),
+        }
+    }
+
+    /// Fill any unset field from `below` (a lower cascade level: this
+    /// run's character style, then paragraph style). Nothing is
+    /// overwritten once set.
+    pub fn merge_below(&mut self, below: &OtfFeatures) {
+        self.fraction = self.fraction.or(below.fraction);
+        self.ordinal = self.ordinal.or(below.ordinal);
+        self.swash = self.swash.or(below.swash);
+        self.discretionary_ligatures =
+            self.discretionary_ligatures.or(below.discretionary_ligatures);
+        self.slashed_zero = self.slashed_zero.or(below.slashed_zero);
+        self.titling = self.titling.or(below.titling);
+        self.contextual_alternates = self.contextual_alternates.or(below.contextual_alternates);
+        if self.figure_style.is_none() {
+            self.figure_style = below.figure_style.clone();
+        }
+        self.stylistic_sets = self.stylistic_sets.or(below.stylistic_sets);
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct CharacterRun {
     pub character_style: Option<String>,
@@ -796,13 +880,15 @@ pub struct CharacterRun {
     /// editor can author the value.
     pub applied_language: Option<String>,
     /// OpenType feature toggles as an opaque, space-separated tag
-    /// list (e.g. `"frac ordn ss01"`). IDML records OpenType
-    /// features as a spread of discrete attributes
-    /// (`OTFFractions`, `OTFStylisticSets`, …) rather than one tag
-    /// list, so the parser leaves this `None` and the mutate API
-    /// owns it as a free-form authoring string. None ⇒ no override;
-    /// no renderer behaviour is keyed off it yet.
+    /// list (e.g. `"frac ordn ss01"`). The mutate API owns this as a
+    /// free-form authoring override string (parser leaves it `None`);
+    /// the *parsed* discrete IDML attributes live in [`Self::otf`].
     pub otf_features: Option<String>,
+    /// Discrete OpenType feature toggles (`OTFFraction`, `OTFOrdinal`,
+    /// `OTFSwash`, `OTFDiscretionaryLigature`, `OTFFigureStyle`,
+    /// `OTFStylisticSets`, …) parsed off the `<CharacterStyleRange>`.
+    /// Each field `None` ⇒ inherit from the cascade. See [`OtfFeatures`].
+    pub otf: OtfFeatures,
     /// Phase 5 — `AppliedConditions="Condition/A Condition/B"`.
     /// Space-separated list of `<Condition>` references. Empty
     /// means "no condition gating" (always visible). A run with
@@ -1401,8 +1487,10 @@ impl Story {
                             // OpenType feature tags have no single IDML
                             // attribute; left None at parse time and
                             // owned by the mutate API as a free-form
-                            // authoring string.
+                            // authoring string. The discrete parsed
+                            // attributes land in `otf` below.
                             otf_features: None,
+                            otf: OtfFeatures::from_attrs(&e),
                             applied_conditions: attr(&e, b"AppliedConditions")
                                 .map(|s| {
                                     s.split_whitespace()
@@ -3232,5 +3320,53 @@ mod tests {
         assert_eq!(c10.right_line_tint, Some(100.0));
         assert_eq!(c10.diagonal_in_front, Some(true));
         assert_eq!(c10.left_line_drawn, None);
+    }
+
+    #[test]
+    fn parses_discrete_otf_feature_attributes_on_runs() {
+        let xml = br#"<Story Self="u1">
+          <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Body">
+            <CharacterStyleRange AppliedFont="F" PointSize="10"
+                                 OTFFraction="true" OTFOrdinal="true"
+                                 OTFSwash="true" OTFDiscretionaryLigature="true"
+                                 OTFFigureStyle="ProportionalOldstyle"
+                                 OTFStylisticSets="5">
+              <Content>1/2 1st</Content>
+            </CharacterStyleRange>
+            <CharacterStyleRange AppliedFont="F" PointSize="10">
+              <Content>plain</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Story>"#;
+        let s = Story::parse(xml).unwrap();
+        let otf = &s.paragraphs[0].runs[0].otf;
+        assert_eq!(otf.fraction, Some(true));
+        assert_eq!(otf.ordinal, Some(true));
+        assert_eq!(otf.swash, Some(true));
+        assert_eq!(otf.discretionary_ligatures, Some(true));
+        assert_eq!(otf.figure_style.as_deref(), Some("ProportionalOldstyle"));
+        assert_eq!(otf.stylistic_sets, Some(5));
+        // A run with no OTF attributes leaves every field unset.
+        assert_eq!(s.paragraphs[0].runs[1].otf, OtfFeatures::default());
+    }
+
+    #[test]
+    fn otf_features_merge_below_fills_only_unset_fields() {
+        let mut top = OtfFeatures {
+            fraction: Some(true),
+            ..OtfFeatures::default()
+        };
+        let below = OtfFeatures {
+            fraction: Some(false), // already set on top — must NOT override
+            ordinal: Some(true),
+            figure_style: Some("Lining".to_string()),
+            stylistic_sets: Some(2),
+            ..OtfFeatures::default()
+        };
+        top.merge_below(&below);
+        assert_eq!(top.fraction, Some(true), "set field wins");
+        assert_eq!(top.ordinal, Some(true), "unset field inherits");
+        assert_eq!(top.figure_style.as_deref(), Some("Lining"));
+        assert_eq!(top.stylistic_sets, Some(2));
     }
 }

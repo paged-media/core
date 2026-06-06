@@ -1913,6 +1913,7 @@ fn measure_cell_paragraph(
             shaping_features: shaping_features_from(
                 resolved_runs[i].ligatures_on,
                 resolved_runs[i].kerning_method.as_deref(),
+                &resolved_runs[i].otf,
             ),
         })
         .collect();
@@ -2106,6 +2107,7 @@ pub(super) fn emit_cell_paragraph(
             shaping_features: shaping_features_from(
                 resolved_runs[i].ligatures_on,
                 resolved_runs[i].kerning_method.as_deref(),
+                &resolved_runs[i].otf,
             ),
         })
         .collect();

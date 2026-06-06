@@ -52,8 +52,8 @@ pub use spread::{
 };
 pub use story::{
     AnchoredFrame, AnchoredFrameKind, AnchoredObjectSetting, CellDiagonal, CharacterRun,
-    Justification, Paragraph, Story, TabStop, Table, TableBorder, TableCell, TableColumn,
-    TableLineStrokes, TableRow, AUTO_PAGE_NUMBER_MARKER, NEXT_PAGE_NUMBER_MARKER,
+    Justification, OtfFeatures, Paragraph, Story, TabStop, Table, TableBorder, TableCell,
+    TableColumn, TableLineStrokes, TableRow, AUTO_PAGE_NUMBER_MARKER, NEXT_PAGE_NUMBER_MARKER,
 };
 pub use styles::{
     CellStyleDef, CharacterStyleDef, ConditionDef, NestedDelimiter, NestedStyle, ObjectStyleDef,

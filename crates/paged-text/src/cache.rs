@@ -44,7 +44,7 @@ use std::collections::HashMap;
 
 use crate::compose::ComposeOptions;
 use crate::layout::{layout_runs, Alignment, LaidOutParagraph, LayoutOptions, StyledRun};
-use crate::shape::{KerningMethod, ShapingFeatures};
+use crate::shape::{FigureStyle, KerningMethod};
 
 /// Bounded per-paragraph layout cache.
 #[derive(Debug)]
@@ -318,6 +318,19 @@ pub fn layout_runs_key(runs: &[StyledRun], options: &LayoutOptions) -> [u8; 32] 
             KerningMethod::Optical => 1,
             KerningMethod::Off => 2,
         });
+        // OTF feature toggles: two runs that differ only in their
+        // OpenType features (fractions, swash, stylistic sets, …) shape
+        // differently, so they must hash to distinct cache keys.
+        let f = &r.shaping_features;
+        h.add_bool(f.discretionary_ligatures);
+        h.add_bool(f.fractions);
+        h.add_bool(f.ordinals);
+        h.add_bool(f.swash);
+        h.add_bool(f.slashed_zero);
+        h.add_bool(f.titling);
+        h.add_bool(f.contextual_alternates);
+        h.add_u32(figure_style_tag(f.figure_style));
+        h.add_u32(f.stylistic_sets);
         h.sep();
     }
     fold_layout_options(&mut h, options);
@@ -359,6 +372,7 @@ fn fold_compose_options(h: &mut LayoutKeyHasher, options: &ComposeOptions) {
         None => h.add_bool(false),
     }
     h.add_i32(options.hyphen_penalty);
+    h.add_i32(options.hyphenation_zone);
     h.add_bool(options.kinsoku_enforce);
 }
 
@@ -368,6 +382,18 @@ fn alignment_tag(a: Alignment) -> u32 {
         Alignment::Right => 1,
         Alignment::Center => 2,
         Alignment::Justify => 3,
+    }
+}
+
+fn figure_style_tag(f: FigureStyle) -> u32 {
+    match f {
+        FigureStyle::Default => 0,
+        FigureStyle::Lining => 1,
+        FigureStyle::OldStyle => 2,
+        FigureStyle::TabularLining => 3,
+        FigureStyle::ProportionalLining => 4,
+        FigureStyle::TabularOldstyle => 5,
+        FigureStyle::ProportionalOldstyle => 6,
     }
 }
 

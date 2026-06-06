@@ -59,11 +59,26 @@ pub fn shape_run(face: &Face, text: &str, point_size: f32) -> ShapedRun {
     shape_run_with_features(face, text, point_size, ShapingFeatures::default())
 }
 
-/// Phase 4 typography — OpenType feature toggles. Currently exposes
-/// the two that ship in InDesign's character-style UI today: standard
-/// ligatures (`liga` / `clig`) and kerning (`kern`). Other features
-/// (discretionary ligatures, contextual alternates, swashes,
-/// stylistic sets) can be added as needed.
+/// Phase 4 typography — OpenType feature toggles fed to rustybuzz.
+///
+/// Beyond standard ligatures (`liga`/`clig`) and kerning (`kern`), this
+/// carries the discrete OpenType features InDesign exposes per character
+/// style and serialises as individual `OTF*` IDML attributes. Each maps
+/// to one (or, for the figure styles, two) rustybuzz feature tag(s):
+///
+/// | field                     | IDML attribute             | tag(s)              |
+/// |---------------------------|----------------------------|---------------------|
+/// | `ligatures_on=false`      | `Ligatures="false"`        | `liga=0` `clig=0`   |
+/// | `discretionary_ligatures` | `OTFDiscretionaryLigature` | `dlig`              |
+/// | `kerning=Off`             | `KerningMethod="None"`     | `kern=0`            |
+/// | `fractions`               | `OTFFraction`              | `frac`              |
+/// | `ordinals`                | `OTFOrdinal`               | `ordn`              |
+/// | `swash`                   | `OTFSwash`                 | `swsh`              |
+/// | `slashed_zero`            | `OTFSlashedZero`           | `zero`              |
+/// | `titling`                 | `OTFTitling`               | `titl`              |
+/// | `contextual_alternates=false` | `OTFContextualAlternate="false"` | `calt=0`  |
+/// | `figure_style`            | `OTFFigureStyle`           | `lnum`/`onum` + `pnum`/`tnum` |
+/// | `stylistic_sets` bit i    | `OTFStylisticSets`         | `ss{i+1}`           |
 ///
 /// The default is "shape exactly like the bare `shape_run` did before
 /// Phase 4 landed" so existing call sites change behaviour only when
@@ -71,9 +86,12 @@ pub fn shape_run(face: &Face, text: &str, point_size: f32) -> ShapedRun {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShapingFeatures {
     /// `LigaturesOn`. When false, standard + contextual ligatures
-    /// (`liga`, `clig`) are disabled. Discretionary ligatures stay
-    /// off either way (separate IDML attribute, not yet wired).
+    /// (`liga`, `clig`) are disabled. Discretionary ligatures are a
+    /// separate toggle (`discretionary_ligatures`).
     pub ligatures_on: bool,
+    /// `OTFDiscretionaryLigature` — enables `dlig` (off by default in
+    /// every font, so we only ever emit it as `dlig=1`).
+    pub discretionary_ligatures: bool,
     /// `KerningMethod`. When `Off`, the `kern` OpenType feature is
     /// disabled and shape advances reflect the font's bare metrics.
     /// `Metrics` (default) lets rustybuzz apply OpenType kerning;
@@ -81,6 +99,80 @@ pub struct ShapingFeatures {
     /// optical kerning would need a separate pass over glyph
     /// outlines and is queued.
     pub kerning: KerningMethod,
+    /// `OTFFraction` — enables `frac` (diagonal fractions).
+    pub fractions: bool,
+    /// `OTFOrdinal` — enables `ordn` (superscripted ordinals).
+    pub ordinals: bool,
+    /// `OTFSwash` — enables `swsh` (swash alternates).
+    pub swash: bool,
+    /// `OTFSlashedZero` — enables `zero` (slashed zero).
+    pub slashed_zero: bool,
+    /// `OTFTitling` — enables `titl` (titling alternates).
+    pub titling: bool,
+    /// `OTFContextualAlternate`. Fonts opt into `calt` by default, so
+    /// `true` (the default) emits nothing and `false` emits `calt=0`.
+    pub contextual_alternates: bool,
+    /// `OTFFigureStyle` — selects lining vs oldstyle and proportional
+    /// vs tabular digit forms. `Default` forces no figure feature.
+    pub figure_style: FigureStyle,
+    /// `OTFStylisticSets` bitfield. Bit `i` (0-based) enables `ss{i+1}`
+    /// (`ss01`..`ss20`). `0` ⇒ no stylistic set.
+    pub stylistic_sets: u32,
+}
+
+/// OpenType digit (figure) style. Maps to a lining/oldstyle pair
+/// (`lnum`/`onum`) and a proportional/tabular pair (`pnum`/`tnum`).
+/// `Default` forces neither so the font's own default digits win.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FigureStyle {
+    /// No figure feature forced — use the font's default digits.
+    #[default]
+    Default,
+    /// Lining figures (`lnum`), width unspecified.
+    Lining,
+    /// Oldstyle figures (`onum`), width unspecified.
+    OldStyle,
+    /// Tabular (fixed-width) lining figures (`lnum` + `tnum`).
+    TabularLining,
+    /// Proportional lining figures (`lnum` + `pnum`).
+    ProportionalLining,
+    /// Tabular oldstyle figures (`onum` + `tnum`).
+    TabularOldstyle,
+    /// Proportional oldstyle figures (`onum` + `pnum`).
+    ProportionalOldstyle,
+}
+
+impl FigureStyle {
+    /// Map an IDML `OTFFigureStyle` string to the enum. Unknown /
+    /// absent values fall back to `Default` (font's own digits).
+    pub fn from_idml(s: Option<&str>) -> Self {
+        match s {
+            Some("Lining") => FigureStyle::Lining,
+            Some("OldStyle") | Some("Oldstyle") => FigureStyle::OldStyle,
+            Some("TabularLining") => FigureStyle::TabularLining,
+            Some("ProportionalLining") => FigureStyle::ProportionalLining,
+            Some("TabularOldstyle") | Some("TabularOldStyle") => FigureStyle::TabularOldstyle,
+            Some("ProportionalOldstyle") | Some("ProportionalOldStyle") => {
+                FigureStyle::ProportionalOldstyle
+            }
+            // "Default" / None / unknown ⇒ no figure feature forced.
+            _ => FigureStyle::Default,
+        }
+    }
+
+    /// The `(figure, width)` feature tags this style turns on. Either
+    /// element is `None` when the style leaves that axis to the font.
+    fn tags(self) -> (Option<&'static [u8; 4]>, Option<&'static [u8; 4]>) {
+        match self {
+            FigureStyle::Default => (None, None),
+            FigureStyle::Lining => (Some(b"lnum"), None),
+            FigureStyle::OldStyle => (Some(b"onum"), None),
+            FigureStyle::TabularLining => (Some(b"lnum"), Some(b"tnum")),
+            FigureStyle::ProportionalLining => (Some(b"lnum"), Some(b"pnum")),
+            FigureStyle::TabularOldstyle => (Some(b"onum"), Some(b"tnum")),
+            FigureStyle::ProportionalOldstyle => (Some(b"onum"), Some(b"pnum")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -99,7 +191,16 @@ impl Default for ShapingFeatures {
     fn default() -> Self {
         Self {
             ligatures_on: true,
+            discretionary_ligatures: false,
             kerning: KerningMethod::Metrics,
+            fractions: false,
+            ordinals: false,
+            swash: false,
+            slashed_zero: false,
+            titling: false,
+            contextual_alternates: true,
+            figure_style: FigureStyle::Default,
+            stylistic_sets: 0,
         }
     }
 }
@@ -107,25 +208,58 @@ impl Default for ShapingFeatures {
 impl ShapingFeatures {
     fn to_rustybuzz(self) -> Vec<rustybuzz::Feature> {
         let mut out: Vec<rustybuzz::Feature> = Vec::new();
+        let on = |out: &mut Vec<rustybuzz::Feature>, tag: &[u8; 4]| {
+            out.push(rustybuzz::Feature::new(ttf_parser::Tag::from_bytes(tag), 1, ..));
+        };
+        let off = |out: &mut Vec<rustybuzz::Feature>, tag: &[u8; 4]| {
+            out.push(rustybuzz::Feature::new(ttf_parser::Tag::from_bytes(tag), 0, ..));
+        };
         if !self.ligatures_on {
-            // Tag = `liga`, value 0 = off. Same for `clig`.
-            out.push(rustybuzz::Feature::new(
-                ttf_parser::Tag::from_bytes(b"liga"),
-                0,
-                ..,
-            ));
-            out.push(rustybuzz::Feature::new(
-                ttf_parser::Tag::from_bytes(b"clig"),
-                0,
-                ..,
-            ));
+            // Standard + contextual ligatures off.
+            off(&mut out, b"liga");
+            off(&mut out, b"clig");
+        }
+        if self.discretionary_ligatures {
+            on(&mut out, b"dlig");
         }
         if matches!(self.kerning, KerningMethod::Off) {
-            out.push(rustybuzz::Feature::new(
-                ttf_parser::Tag::from_bytes(b"kern"),
-                0,
-                ..,
-            ));
+            off(&mut out, b"kern");
+        }
+        if self.fractions {
+            on(&mut out, b"frac");
+        }
+        if self.ordinals {
+            on(&mut out, b"ordn");
+        }
+        if self.swash {
+            on(&mut out, b"swsh");
+        }
+        if self.slashed_zero {
+            on(&mut out, b"zero");
+        }
+        if self.titling {
+            on(&mut out, b"titl");
+        }
+        // `calt` is on by default in fonts; only emit it to force off.
+        if !self.contextual_alternates {
+            off(&mut out, b"calt");
+        }
+        let (figure_tag, width_tag) = self.figure_style.tags();
+        if let Some(t) = figure_tag {
+            on(&mut out, t);
+        }
+        if let Some(t) = width_tag {
+            on(&mut out, t);
+        }
+        // Stylistic sets: bit i (0-based) ⇒ ss{i+1}. rustybuzz needs a
+        // 4-byte tag per set, so format `ss01`..`ss20` (the OpenType
+        // spec defines exactly 20 stylistic-set features).
+        for i in 0..20u32 {
+            if self.stylistic_sets & (1 << i) != 0 {
+                let n = i + 1;
+                let tag = [b's', b's', b'0' + (n / 10) as u8, b'0' + (n % 10) as u8];
+                on(&mut out, &tag);
+            }
         }
         out
     }
@@ -537,6 +671,157 @@ mod tests {
         assert!(f.to_rustybuzz().is_empty());
     }
 
+    /// Collect `(tag-string, value)` pairs from a feature list so tests
+    /// can assert on the human-readable OpenType tags.
+    fn tag_pairs(features: &[rustybuzz::Feature]) -> Vec<(String, u32)> {
+        features
+            .iter()
+            .map(|f| (f.tag.to_string(), f.value))
+            .collect()
+    }
+
+    fn has_tag_on(features: &[rustybuzz::Feature], tag: &str) -> bool {
+        features
+            .iter()
+            .any(|f| f.tag.to_string() == tag && f.value == 1)
+    }
+
+    #[test]
+    fn shaping_features_each_discrete_toggle_emits_its_tag() {
+        // Each discrete OTF toggle, in isolation, must emit exactly its
+        // own enabling tag (value 1) and nothing else.
+        let cases: &[(fn(&mut ShapingFeatures), &str)] = &[
+            (|f| f.discretionary_ligatures = true, "dlig"),
+            (|f| f.fractions = true, "frac"),
+            (|f| f.ordinals = true, "ordn"),
+            (|f| f.swash = true, "swsh"),
+            (|f| f.slashed_zero = true, "zero"),
+            (|f| f.titling = true, "titl"),
+        ];
+        for (set, tag) in cases {
+            let mut f = ShapingFeatures::default();
+            set(&mut f);
+            let rb = f.to_rustybuzz();
+            assert_eq!(
+                rb.len(),
+                1,
+                "{tag}: expected exactly one feature, got {:?}",
+                tag_pairs(&rb)
+            );
+            assert_eq!(rb[0].tag.to_string(), *tag, "{tag}: wrong tag");
+            assert_eq!(rb[0].value, 1, "{tag}: expected enabling value");
+        }
+    }
+
+    #[test]
+    fn shaping_features_contextual_alternates_off_emits_calt_off() {
+        // `calt` is font-default-on, so it only appears as an explicit
+        // disable (value 0); the default (true) emits nothing.
+        assert!(ShapingFeatures::default().to_rustybuzz().is_empty());
+        let off = ShapingFeatures {
+            contextual_alternates: false,
+            ..Default::default()
+        };
+        let rb = off.to_rustybuzz();
+        assert_eq!(tag_pairs(&rb), vec![("calt".to_string(), 0)]);
+    }
+
+    #[test]
+    fn shaping_features_figure_styles_map_to_lnum_onum_and_pnum_tnum() {
+        // Bare lining / oldstyle force only the figure axis.
+        let lining = ShapingFeatures {
+            figure_style: FigureStyle::Lining,
+            ..Default::default()
+        };
+        assert_eq!(tag_pairs(&lining.to_rustybuzz()), vec![("lnum".into(), 1)]);
+        let oldstyle = ShapingFeatures {
+            figure_style: FigureStyle::OldStyle,
+            ..Default::default()
+        };
+        assert_eq!(tag_pairs(&oldstyle.to_rustybuzz()), vec![("onum".into(), 1)]);
+        // Combined styles force both the figure and width axes.
+        let prop_old = ShapingFeatures {
+            figure_style: FigureStyle::ProportionalOldstyle,
+            ..Default::default()
+        };
+        let rb = prop_old.to_rustybuzz();
+        assert!(has_tag_on(&rb, "onum"), "expected onum: {:?}", tag_pairs(&rb));
+        assert!(has_tag_on(&rb, "pnum"), "expected pnum: {:?}", tag_pairs(&rb));
+        assert_eq!(rb.len(), 2);
+        let tab_lin = ShapingFeatures {
+            figure_style: FigureStyle::TabularLining,
+            ..Default::default()
+        };
+        let rb = tab_lin.to_rustybuzz();
+        assert!(has_tag_on(&rb, "lnum"));
+        assert!(has_tag_on(&rb, "tnum"));
+        // `Default` figure style forces neither axis.
+        assert!(ShapingFeatures::default().to_rustybuzz().is_empty());
+    }
+
+    #[test]
+    fn figure_style_from_idml_parses_known_strings() {
+        assert_eq!(FigureStyle::from_idml(Some("Lining")), FigureStyle::Lining);
+        assert_eq!(FigureStyle::from_idml(Some("OldStyle")), FigureStyle::OldStyle);
+        assert_eq!(
+            FigureStyle::from_idml(Some("ProportionalOldstyle")),
+            FigureStyle::ProportionalOldstyle
+        );
+        assert_eq!(
+            FigureStyle::from_idml(Some("TabularLining")),
+            FigureStyle::TabularLining
+        );
+        // Unknown / Default / absent ⇒ Default (font's own digits).
+        assert_eq!(FigureStyle::from_idml(Some("Default")), FigureStyle::Default);
+        assert_eq!(FigureStyle::from_idml(Some("Bogus")), FigureStyle::Default);
+        assert_eq!(FigureStyle::from_idml(None), FigureStyle::Default);
+    }
+
+    #[test]
+    fn shaping_features_stylistic_sets_bitfield_maps_to_ss_nn() {
+        // Bit 0 ⇒ ss01, bit 1 ⇒ ss02, bit 11 ⇒ ss12, bit 19 ⇒ ss20.
+        let f = ShapingFeatures {
+            stylistic_sets: (1 << 0) | (1 << 1) | (1 << 11) | (1 << 19),
+            ..Default::default()
+        };
+        let rb = f.to_rustybuzz();
+        let tags: Vec<String> = rb.iter().map(|x| x.tag.to_string()).collect();
+        assert!(tags.contains(&"ss01".to_string()), "{tags:?}");
+        assert!(tags.contains(&"ss02".to_string()), "{tags:?}");
+        assert!(tags.contains(&"ss12".to_string()), "{tags:?}");
+        assert!(tags.contains(&"ss20".to_string()), "{tags:?}");
+        assert_eq!(rb.len(), 4);
+        for feat in &rb {
+            assert_eq!(feat.value, 1, "stylistic sets are enabled (value 1)");
+        }
+        // Bits past ss20 (only 20 sets exist) are ignored.
+        let high = ShapingFeatures {
+            stylistic_sets: 1 << 25,
+            ..Default::default()
+        };
+        assert!(high.to_rustybuzz().is_empty());
+    }
+
+    #[test]
+    fn shaping_features_combine_disables_and_enables() {
+        // A realistic combo: ligatures off (2 off-tags), dlig on,
+        // fractions on, oldstyle figures. Each contributes its tags.
+        let f = ShapingFeatures {
+            ligatures_on: false,
+            discretionary_ligatures: true,
+            fractions: true,
+            figure_style: FigureStyle::OldStyle,
+            ..Default::default()
+        };
+        let rb = f.to_rustybuzz();
+        let pairs = tag_pairs(&rb);
+        assert!(pairs.contains(&("liga".into(), 0)), "{pairs:?}");
+        assert!(pairs.contains(&("clig".into(), 0)), "{pairs:?}");
+        assert!(pairs.contains(&("dlig".into(), 1)), "{pairs:?}");
+        assert!(pairs.contains(&("frac".into(), 1)), "{pairs:?}");
+        assert!(pairs.contains(&("onum".into(), 1)), "{pairs:?}");
+    }
+
     #[test]
     fn shape_run_with_features_handles_empty_text() {
         // Sanity smoke — the function should produce an empty result
@@ -554,6 +839,7 @@ mod tests {
             ShapingFeatures {
                 ligatures_on: false,
                 kerning: KerningMethod::Off,
+                ..ShapingFeatures::default()
             },
         );
         assert!(r.glyphs.is_empty());

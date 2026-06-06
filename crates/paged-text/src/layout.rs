@@ -1505,6 +1505,7 @@ mod tests {
                 looseness: 0,
                 hyphenator: None,
                 hyphen_penalty: 50,
+                hyphenation_zone: 0,
                 kinsoku_enforce: false,
                 mojikumi_half_width: false,
             },

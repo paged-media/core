@@ -749,6 +749,7 @@ impl ResolvedRunAttrs {
             overprint_stroke: run.overprint_stroke,
             ligatures_on: run.ligatures_on,
             kerning_method: run.kerning_method.clone(),
+            otf: run.otf.clone(),
         }
     }
 
@@ -802,6 +803,9 @@ impl ResolvedRunAttrs {
         if self.kerning_method.is_none() {
             self.kerning_method = c.kerning_method.clone();
         }
+        // Discrete OTF toggles cascade per-field: any flag still unset
+        // on the run inherits the character style's value.
+        self.otf.merge_below(&c.otf);
     }
 
     /// Fill any unset field from a resolved paragraph style.
@@ -863,6 +867,7 @@ impl ResolvedParagraphAttrs {
             numbering_start_at: None,
             numbering_continue: None,
             hyphenation: None,
+            hyphenation_zone: None,
             applied_language: None,
             minimum_word_spacing: None,
             desired_word_spacing: None,
@@ -928,6 +933,7 @@ impl ResolvedParagraphAttrs {
         self.numbering_start_at = self.numbering_start_at.or(p.numbering_start_at);
         self.numbering_continue = self.numbering_continue.or(p.numbering_continue);
         self.hyphenation = self.hyphenation.or(p.hyphenation);
+        self.hyphenation_zone = self.hyphenation_zone.or(p.hyphenation_zone);
         if self.applied_language.is_none() {
             self.applied_language = p.applied_language.clone();
         }
@@ -1154,6 +1160,14 @@ pub struct ResolvedRunAttrs {
     /// Cascaded `KerningMethod` string. `None` ⇒ default
     /// (`"Metrics"`) at the bottom of the cascade.
     pub kerning_method: Option<String>,
+    /// Cascaded discrete OpenType feature toggles (`OTFFraction`,
+    /// `OTFOrdinal`, `OTFSwash`, `OTFDiscretionaryLigature`,
+    /// `OTFFigureStyle`, `OTFStylisticSets`, …). Resolves through the
+    /// direct > character-style chain; IDML records these at the
+    /// character level only, so there is no paragraph-style fallback.
+    /// The renderer maps the resolved bag to rustybuzz feature tags via
+    /// `paged_text::ShapingFeatures`.
+    pub otf: paged_parse::OtfFeatures,
 }
 
 /// Effective paragraph-level attributes after walking the cascade
@@ -1206,6 +1220,11 @@ pub struct ResolvedParagraphAttrs {
     /// `Hyphenation` boolean from the cascaded paragraph style.
     /// Drives whether the composer wires up a hyphenator.
     pub hyphenation: Option<bool>,
+    /// `HyphenationZone` in pt from the cascaded paragraph style.
+    /// Suppresses hyphenation for words that would otherwise start
+    /// within this distance of the right margin. `None`/`0` ⇒ no zone
+    /// restriction. See [`paged_parse::ResolvedParagraph::hyphenation_zone`].
+    pub hyphenation_zone: Option<f32>,
     /// `AppliedLanguage` from the cascade — feeds dictionary picking
     /// for hyphenation. Strings like `"$ID/English: USA"`.
     pub applied_language: Option<String>,

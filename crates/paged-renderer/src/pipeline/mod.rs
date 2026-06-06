@@ -3508,53 +3508,53 @@ fn emit_paragraph_into_chain(
         .runs
         .iter()
         .enumerate()
-        .map(|(i, run)| paged_text::StyledRun {
-            text: if i == 0 {
-                list_first_text.as_deref().unwrap_or_else(|| {
-                    if let Some(c) = capitalized[i].as_deref() {
-                        c
-                    } else if needs_page_subst {
-                        page_substituted[i].as_str()
-                    } else {
-                        &run.text
-                    }
-                })
-            } else if let Some(c) = capitalized[i].as_deref() {
-                c
-            } else if needs_page_subst {
-                page_substituted[i].as_str()
-            } else {
-                &run.text
-            },
-            face: shaping_faces[unique_idx[i]].unwrap(),
-            point_size: {
-                // `Position` (super/subscript) shrinks the run to a
-                // fraction of its base size — see `position_metrics`.
-                let base = resolved_runs[i]
-                    .point_size
-                    .unwrap_or(em.options.default_point_size);
-                base * position_metrics(resolved_runs[i].position.as_deref()).0
-            },
-            tracking: resolved_runs[i].tracking,
-            font_id: font_ids[i],
-            underline: resolved_runs[i].underline.unwrap_or(false),
-            strikethru: resolved_runs[i].strikethru.unwrap_or(false),
-            baseline_shift_pt: {
-                // Add the `Position` (super/subscript) baseline offset
-                // on top of any explicit `BaselineShift`.
-                let base = resolved_runs[i]
-                    .point_size
-                    .unwrap_or(em.options.default_point_size);
-                resolved_runs[i].baseline_shift.unwrap_or(0.0)
-                    + base * position_metrics(resolved_runs[i].position.as_deref()).1
-            },
-            horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
-            vertical_scale_pct: resolved_runs[i].vertical_scale.unwrap_or(100.0),
-            fallback_faces: &fallback_faces_pool,
-            shaping_features: shaping_features_from(
-                resolved_runs[i].ligatures_on,
-                resolved_runs[i].kerning_method.as_deref(),
-            ),
+        .map(|(i, run)| {
+            // `Position` (super/subscript) shrinks the run to a
+            // fraction of its base size and adds a baseline offset on
+            // top of any explicit `BaselineShift` — see
+            // `position_adjusted_metrics`.
+            let base_size = resolved_runs[i]
+                .point_size
+                .unwrap_or(em.options.default_point_size);
+            let (point_size, baseline_shift_pt) = position_adjusted_metrics(
+                base_size,
+                resolved_runs[i].baseline_shift,
+                resolved_runs[i].position.as_deref(),
+            );
+            paged_text::StyledRun {
+                text: if i == 0 {
+                    list_first_text.as_deref().unwrap_or_else(|| {
+                        if let Some(c) = capitalized[i].as_deref() {
+                            c
+                        } else if needs_page_subst {
+                            page_substituted[i].as_str()
+                        } else {
+                            &run.text
+                        }
+                    })
+                } else if let Some(c) = capitalized[i].as_deref() {
+                    c
+                } else if needs_page_subst {
+                    page_substituted[i].as_str()
+                } else {
+                    &run.text
+                },
+                face: shaping_faces[unique_idx[i]].unwrap(),
+                point_size,
+                tracking: resolved_runs[i].tracking,
+                font_id: font_ids[i],
+                underline: resolved_runs[i].underline.unwrap_or(false),
+                strikethru: resolved_runs[i].strikethru.unwrap_or(false),
+                baseline_shift_pt,
+                horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
+                vertical_scale_pct: resolved_runs[i].vertical_scale.unwrap_or(100.0),
+                fallback_faces: &fallback_faces_pool,
+                shaping_features: shaping_features_from(
+                    resolved_runs[i].ligatures_on,
+                    resolved_runs[i].kerning_method.as_deref(),
+                    &resolved_runs[i].otf,
+                ),
+            }
         })
         .collect();
 
@@ -7257,6 +7257,15 @@ fn apply_paragraph_compose_options<'a>(
     } else {
         lopts.compose.hyphenator = None;
     }
+    // Hyphenation zone (pt → 1/64 pt). Only meaningful when a
+    // hyphenator is wired; the composer ignores it otherwise. A word
+    // that would start within `zone` of the right margin is kept whole
+    // rather than broken (InDesign's "hyphenation zone"). `None`/0 ⇒
+    // no zone restriction (hyphenate anywhere an opportunity exists).
+    lopts.compose.hyphenation_zone = resolved
+        .hyphenation_zone
+        .map(|z| (z.max(0.0) * paged_text::shape::ADVANCE_PRECISION).round() as i32)
+        .unwrap_or(0);
     // Word spacing: IDML carries percentages on the [Min..=Desired..=Max]
     // axis relative to the natural space-glyph advance. The composer's
     // `desired_space_ratio` scales the glue's natural width;
@@ -7955,9 +7964,32 @@ pub fn position_metrics(position: Option<&str>) -> (f32, f32) {
     }
 }
 
+/// Combine a run's base point size, its explicit `BaselineShift`, and
+/// its `Position` (super/subscript) into the `(point_size,
+/// baseline_shift_pt)` pair the layout emit consumes.
+///
+/// - `point_size` shrinks by the `Position` size factor (super/subscript
+///   render at a fraction of the base; `Normal` keeps the base).
+/// - `baseline_shift_pt` adds the `Position` baseline offset (a fraction
+///   of the *base* size) on top of any explicit `BaselineShift`, so a
+///   superscript both lifts and shrinks while an explicit shift still
+///   composes additively. The offset is computed against the base size
+///   (not the shrunk size) to match InDesign's geometry.
+pub fn position_adjusted_metrics(
+    base_size: f32,
+    explicit_baseline_shift: Option<f32>,
+    position: Option<&str>,
+) -> (f32, f32) {
+    let (size_factor, offset_fraction) = position_metrics(position);
+    let point_size = base_size * size_factor;
+    let baseline_shift_pt = explicit_baseline_shift.unwrap_or(0.0) + base_size * offset_fraction;
+    (point_size, baseline_shift_pt)
+}
+
 pub fn shaping_features_from(
     ligatures_on: Option<bool>,
     kerning_method: Option<&str>,
+    otf: &paged_parse::OtfFeatures,
 ) -> paged_text::ShapingFeatures {
     use paged_text::KerningMethod as K;
     paged_text::ShapingFeatures {
@@ -7968,6 +8000,20 @@ pub fn shaping_features_from(
             // "Metrics" or anything else (incl. None) → default.
             _ => K::Metrics,
         },
+        // Discrete OTF toggles: a `None` flag at the bottom of the
+        // cascade means the feature is off (its OpenType default).
+        // `OTFContextualAlternate` is the exception — fonts opt into
+        // `calt` by default, so only an explicit `false` disables it.
+        discretionary_ligatures: otf.discretionary_ligatures.unwrap_or(false),
+        fractions: otf.fraction.unwrap_or(false),
+        ordinals: otf.ordinal.unwrap_or(false),
+        swash: otf.swash.unwrap_or(false),
+        slashed_zero: otf.slashed_zero.unwrap_or(false),
+        titling: otf.titling.unwrap_or(false),
+        contextual_alternates: otf.contextual_alternates.unwrap_or(true),
+        figure_style: paged_text::FigureStyle::from_idml(otf.figure_style.as_deref()),
+        // Negative / absent bitfields ⇒ no stylistic set.
+        stylistic_sets: otf.stylistic_sets.unwrap_or(0).max(0) as u32,
     }
 }
 
@@ -8469,6 +8515,36 @@ mod tests {
         // Normal / absent / unknown ⇒ identity (no scale, no shift).
         assert_eq!(position_metrics(Some("Normal")), (1.0, 0.0));
         assert_eq!(position_metrics(None), (1.0, 0.0));
+    }
+
+    #[test]
+    fn position_adjusted_metrics_super_sub_and_normal() {
+        // Base 12pt, no explicit baseline shift.
+        // Superscript: 12 * 0.583 = 6.996 pt, +12 * 0.333 = +3.996 pt.
+        let (sz, sh) = position_adjusted_metrics(12.0, None, Some("Superscript"));
+        assert!((sz - 6.996).abs() < 1e-3, "super size {sz}");
+        assert!((sh - 3.996).abs() < 1e-3, "super shift {sh}");
+        // Subscript drops (negative shift), same shrink.
+        let (sz, sh) = position_adjusted_metrics(12.0, None, Some("Subscript"));
+        assert!((sz - 6.996).abs() < 1e-3, "sub size {sz}");
+        assert!((sh + 3.996).abs() < 1e-3, "sub shift {sh}");
+        // Normal: untouched size, zero shift.
+        assert_eq!(position_adjusted_metrics(12.0, None, Some("Normal")), (12.0, 0.0));
+        assert_eq!(position_adjusted_metrics(12.0, None, None), (12.0, 0.0));
+    }
+
+    #[test]
+    fn position_adjusted_metrics_composes_explicit_baseline_shift() {
+        // An explicit BaselineShift adds on top of the Position offset.
+        // Base 10pt, explicit +2pt, superscript ⇒ shift = 2 + 10*0.333.
+        let (sz, sh) = position_adjusted_metrics(10.0, Some(2.0), Some("Superscript"));
+        assert!((sz - 5.83).abs() < 1e-3, "size {sz}");
+        assert!((sh - (2.0 + 3.33)).abs() < 1e-3, "shift {sh}");
+        // Explicit shift with Normal position is passed through verbatim
+        // (no size change, no Position offset).
+        let (sz, sh) = position_adjusted_metrics(10.0, Some(-1.5), None);
+        assert_eq!(sz, 10.0);
+        assert!((sh + 1.5).abs() < 1e-6, "shift {sh}");
     }
 
     #[test]

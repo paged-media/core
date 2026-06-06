@@ -312,6 +312,7 @@ mod tests {
                 looseness: 0,
                 hyphenator: None,
                 hyphen_penalty: 50,
+                hyphenation_zone: 0,
                 kinsoku_enforce: false,
                 mojikumi_half_width: false,
             },
@@ -477,6 +478,90 @@ mod tests {
         assert!(m1[3] < 0.0 && m2[3] < 0.0);
         assert!((m2[3] - 2.0 * m1[3]).abs() < 1e-4, "d1={} d2={}", m1[3], m2[3]);
         assert!((m1[0] - m2[0]).abs() < 1e-4, "x-scale must not change");
+    }
+
+    #[test]
+    fn horizontal_scale_scales_glyph_affine_x_axis_only() {
+        // HorizontalScale → the affine's `a` term (x-scale). Doubling
+        // x_scale doubles `a` and leaves `d` (y-scale) untouched —
+        // mirror of the VerticalScale test.
+        let glyph = |x_scale: f32, y_scale: f32| PositionedGlyph {
+            glyph_id: 65,
+            cluster: 0,
+            x: 0,
+            y: 0,
+            x_advance: 0,
+            font_id: 0,
+            point_size: 0.0,
+            underline: false,
+            strikethru: false,
+            x_scale,
+            y_scale,
+            ch: None,
+        };
+        let mut list = DisplayList::new();
+        for g in [glyph(1.0, 1.0), glyph(2.0, 1.0)] {
+            emit_glyph_slice(
+                &[g],
+                1,
+                12.0,
+                |_| Paint::Solid(Color::BLACK),
+                (0.0, 0.0),
+                &UnitSquareOutliner::default(),
+                &mut list,
+            );
+        }
+        let aff = |i: usize| match &list.commands[i] {
+            DisplayCommand::FillPath { transform, .. } => transform.0,
+            other => panic!("expected FillPath, got {other:?}"),
+        };
+        let (m1, m2) = (aff(0), aff(1));
+        assert!((m2[0] - 2.0 * m1[0]).abs() < 1e-4, "a1={} a2={}", m1[0], m2[0]);
+        assert!((m1[3] - m2[3]).abs() < 1e-4, "y-scale must not change");
+    }
+
+    #[test]
+    fn baseline_shift_offsets_glyph_y_via_positioned_y() {
+        // Super/subscript baseline shift reaches the affine as the
+        // glyph's `y` (1/64 pt, frame-relative): a lifted glyph has a
+        // smaller `ty` than an unshifted one (page y grows downward, so
+        // "up" = a more negative y offset added to the origin). This
+        // pins that the `y` field flows straight into the affine's `ty`.
+        let glyph = |y: i32| PositionedGlyph {
+            glyph_id: 65,
+            cluster: 0,
+            x: 0,
+            y,
+            x_advance: 0,
+            font_id: 0,
+            point_size: 0.0,
+            underline: false,
+            strikethru: false,
+            x_scale: 1.0,
+            y_scale: 1.0,
+            ch: None,
+        };
+        let mut list = DisplayList::new();
+        // y = 0 (baseline) vs y = -64 (lifted one pt above baseline).
+        for g in [glyph(0), glyph(-64)] {
+            emit_glyph_slice(
+                &[g],
+                1,
+                12.0,
+                |_| Paint::Solid(Color::BLACK),
+                (0.0, 100.0),
+                &UnitSquareOutliner::default(),
+                &mut list,
+            );
+        }
+        let ty = |i: usize| match &list.commands[i] {
+            DisplayCommand::FillPath { transform, .. } => transform.0[5],
+            other => panic!("expected FillPath, got {other:?}"),
+        };
+        // Origin oy = 100; baseline glyph lands at 100, lifted glyph at
+        // 100 + (-64/64) = 99 (one pt higher up the page).
+        assert!((ty(0) - 100.0).abs() < 1e-4, "baseline ty={}", ty(0));
+        assert!((ty(1) - 99.0).abs() < 1e-4, "lifted ty={}", ty(1));
     }
 
     #[test]

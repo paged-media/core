@@ -450,6 +450,12 @@ pub struct CharacterStyleDef {
     /// falls back to `Metrics` at the renderer until the outline-
     /// driven pass lands.
     pub kerning_method: Option<String>,
+    /// Discrete OpenType feature toggles (`OTFFraction`, `OTFOrdinal`,
+    /// `OTFSwash`, `OTFDiscretionaryLigature`, `OTFFigureStyle`,
+    /// `OTFStylisticSets`, …) declared on the `<CharacterStyle>`.
+    /// Cascades through `BasedOn` per-field. See
+    /// [`crate::story::OtfFeatures`].
+    pub otf: crate::story::OtfFeatures,
 }
 
 /// Q-09: `ParagraphShading*` attributes parsed off a
@@ -708,6 +714,15 @@ pub struct ParagraphStyleDef {
     /// lands on the cascade. Drives whether the composer registers a
     /// language-specific hyphenator with the breaker.
     pub hyphenation: Option<bool>,
+    /// `HyphenationZone` in pt. InDesign's "hyphenation zone" is the
+    /// width of whitespace allowed at the end of a line before a word
+    /// is broken: a word becomes hyphenation-eligible only when it
+    /// would otherwise start within `zone` of the right margin (i.e.
+    /// the gap before it exceeds the zone). Larger zones ⇒ fewer
+    /// hyphens (more raggedness tolerated); `0` ⇒ no zone restriction
+    /// (the breaker may hyphenate anywhere). Only consulted for
+    /// left-aligned / ragged paragraphs in InDesign; `None` ⇒ inherit.
+    pub hyphenation_zone: Option<f32>,
     /// `AppliedLanguage` reference (e.g. `$ID/English: USA`). Used to
     /// pick the hyphenation dictionary; unrecognised values fall back
     /// to English-US so we always have *some* dictionary loaded.
@@ -882,6 +897,9 @@ pub struct ResolvedCharacter {
     /// Cascaded `KerningMethod` string. See
     /// [`CharacterStyleDef::kerning_method`].
     pub kerning_method: Option<String>,
+    /// Cascaded discrete OpenType feature toggles. See
+    /// [`CharacterStyleDef::otf`].
+    pub otf: crate::story::OtfFeatures,
 }
 
 /// Effective paragraph-level attributes after walking BasedOn.
@@ -932,6 +950,9 @@ pub struct ResolvedParagraph {
     /// `ParagraphStyleDef::numbering_continue`.
     pub numbering_continue: Option<bool>,
     pub hyphenation: Option<bool>,
+    /// Cascaded `HyphenationZone` in pt. See
+    /// [`ParagraphStyleDef::hyphenation_zone`].
+    pub hyphenation_zone: Option<f32>,
     pub applied_language: Option<String>,
     pub minimum_word_spacing: Option<f32>,
     pub desired_word_spacing: Option<f32>,
@@ -1598,6 +1619,7 @@ impl ResolvedCharacter {
         if self.kerning_method.is_none() {
             self.kerning_method = def.kerning_method.clone();
         }
+        self.otf.merge_below(&def.otf);
     }
 }
 
@@ -1664,6 +1686,7 @@ impl ResolvedParagraph {
         self.numbering_start_at = self.numbering_start_at.or(def.numbering_start_at);
         self.numbering_continue = self.numbering_continue.or(def.numbering_continue);
         self.hyphenation = self.hyphenation.or(def.hyphenation);
+        self.hyphenation_zone = self.hyphenation_zone.or(def.hyphenation_zone);
         if self.applied_language.is_none() {
             self.applied_language = def.applied_language.clone();
         }
@@ -1812,6 +1835,7 @@ fn parse_character_style(e: &quick_xml::events::BytesStart) -> Option<CharacterS
         kenten_font_size: attr(e, b"KentenFontSize").and_then(|s| s.parse().ok()),
         ligatures_on: attr(e, b"Ligatures").and_then(|s| s.parse().ok()),
         kerning_method: attr(e, b"KerningMethod"),
+        otf: crate::story::OtfFeatures::from_attrs(e),
     })
 }
 
@@ -2094,6 +2118,7 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         numbering_start_at: attr(e, b"NumberingStartAt").and_then(|s| s.parse().ok()),
         numbering_continue: attr(e, b"NumberingContinue").and_then(|s| s.parse().ok()),
         hyphenation: attr(e, b"Hyphenation").and_then(|s| s.parse().ok()),
+        hyphenation_zone: attr(e, b"HyphenationZone").and_then(|s| s.parse().ok()),
         applied_language: attr(e, b"AppliedLanguage"),
         minimum_word_spacing: attr(e, b"MinimumWordSpacing").and_then(|s| s.parse().ok()),
         desired_word_spacing: attr(e, b"DesiredWordSpacing").and_then(|s| s.parse().ok()),
@@ -2184,6 +2209,27 @@ mod tests {
         assert_eq!(r.font.as_deref(), Some("Body Font")); // inherited
         assert_eq!(r.justification, Some(Justification::LeftAlign));
         assert_eq!(r.space_after, Some(6.0));
+    }
+
+    #[test]
+    fn parses_and_cascades_hyphenation_zone() {
+        let xml =
+            br#"<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <RootParagraphStyleGroup>
+            <ParagraphStyle Self="ParagraphStyle/Body"
+                            Hyphenation="true"
+                            HyphenationZone="36"/>
+            <ParagraphStyle Self="ParagraphStyle/Sub"
+                            BasedOn="ParagraphStyle/Body"/>
+          </RootParagraphStyleGroup>
+        </idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        // Direct value parses.
+        let body = s.resolve_paragraph("ParagraphStyle/Body");
+        assert_eq!(body.hyphenation_zone, Some(36.0));
+        // BasedOn child with no own zone inherits it.
+        let sub = s.resolve_paragraph("ParagraphStyle/Sub");
+        assert_eq!(sub.hyphenation_zone, Some(36.0));
     }
 
     #[test]
