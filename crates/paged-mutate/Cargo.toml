@@ -27,4 +27,6 @@ wasm-bindgen = { workspace = true }
 flo_curves = "=0.8.0"
 
 [dev-dependencies]
+paged-renderer = { path = "../paged-renderer" }
+paged-compose = { path = "../paged-compose" }
 bytes = { workspace = true }

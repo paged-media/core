@@ -93,6 +93,30 @@ pub enum NodeId {
         start: u32,
         end: u32,
     },
+    /// W3.A1 — a `<Table>` nested inside a story paragraph. Tables are
+    /// NOT in the story's character/run space (they hang off
+    /// `Paragraph::table`), so they're addressed by `(story_id,
+    /// table_id)` rather than a story offset. `table_id` is the table's
+    /// IDML `Self`. The `Table*` `PropertyPath`s (e.g.
+    /// `AppliedTableStyle`) and the table-structure Operations
+    /// (`SetRowHeight`, `InsertTableRow`, …) target this variant.
+    Table {
+        story_id: String,
+        table_id: String,
+    },
+    /// W3.A1 — one cell of a table, addressed by its zero-indexed
+    /// `(row, col)` (IDML serialises cell `Name="col:row"`; we expose
+    /// the row-major `(row, col)` order designers think in). Cell-scoped
+    /// scalar `PropertyPath`s (`CellFillColor`, `CellInsets*`,
+    /// `CellVerticalJustification`, `AppliedCellStyle`) write here — the
+    /// index rides the NodeId so the fieldless `PropertyPath` enum stays
+    /// payload-free.
+    TableCell {
+        story_id: String,
+        table_id: String,
+        row: u32,
+        col: u32,
+    },
 }
 
 impl NodeId {
@@ -113,6 +137,9 @@ impl NodeId {
             | NodeId::Page(s)
             | NodeId::Layer(s) => s,
             NodeId::StoryRange { story_id, .. } => story_id,
+            // The story is the container that owns the table; table /
+            // cell ids are carried as metadata on the variant.
+            NodeId::Table { story_id, .. } | NodeId::TableCell { story_id, .. } => story_id,
         }
     }
 
@@ -128,6 +155,8 @@ impl NodeId {
             NodeId::Page(_) => "Page",
             NodeId::Layer(_) => "Layer",
             NodeId::StoryRange { .. } => "StoryRange",
+            NodeId::Table { .. } => "Table",
+            NodeId::TableCell { .. } => "TableCell",
         }
     }
 }
@@ -922,6 +951,45 @@ pub enum PropertyPath {
     /// the spread's frames. `Value::Text`. Read-only (see
     /// `NextTextFrame`).
     PreviousTextFrame,
+
+    // ---- W3.A1 — table cell properties --------------------------
+    // Cell-scoped scalar writes. Addressed against a
+    // `NodeId::TableCell { story_id, table_id, row, col }` — the
+    // (row, col) index rides the NodeId so these paths stay
+    // payload-free like every other `PropertyPath`. The host story
+    // reflows on any of these (cell geometry / fill can shift the
+    // table), so the InvalidationHint targets the host frame's
+    // text_reflow. `AppliedCellStyle` (defined above, the Tier-2d
+    // placeholder) is the fifth cell-scoped path and now has a live
+    // apply arm.
+    /// W3.A1 — inline `<Cell FillColor="Color/…">`. `Value::ColorRef`;
+    /// `None` clears the inline override (the cell-style cascade then
+    /// supplies the fill).
+    CellFillColor,
+    /// W3.A1 — `<Cell FillTint="…">` percent (0..=100). IDML stores the
+    /// tint inline only as part of the fill; we model it as the cell's
+    /// fill tint. The parse side has no dedicated cell fill-tint field
+    /// today, so v1 routes this through the same precedence as
+    /// `CellFillColor` (see the apply arm). `Value::Length`; `None`
+    /// clears.
+    CellFillTint,
+    /// W3.A1 — `<Cell TextTopInset="…">` in pt. `Value::Length(Some(_))`;
+    /// `None` resets to 0 (IDML's default cell inset). Four separate
+    /// paths because the parse models four independent inset fields
+    /// (`text_{top,left,bottom,right}_inset`) — matching the
+    /// per-corner `FrameCornerRadius*` precedent of one path per side.
+    CellInsetTop,
+    CellInsetLeft,
+    CellInsetBottom,
+    CellInsetRight,
+    /// W3.A1 — `<Cell VerticalJustification="…">` enum. `Value::Text`
+    /// carrying the IDML attribute string (`"TopAlign"`,
+    /// `"CenterAlign"`, `"BottomAlign"`, `"JustifyAlign"`); empty
+    /// clears the override. The parse side has no dedicated field yet
+    /// (cell content uses Ascent semantics) — v1 stores the value on a
+    /// new optional cell field for round-trip; the renderer honours it
+    /// when the cell-vertical-justify pass lands. Reflow-affecting.
+    CellVerticalJustification,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -1134,6 +1202,14 @@ impl PropertyPath {
             PropertyPath::FrameBlendMode => "frame.blendMode",
             PropertyPath::NextTextFrame => "textFrame.nextTextFrame",
             PropertyPath::PreviousTextFrame => "textFrame.previousTextFrame",
+            // W3.A1 — table cell properties.
+            PropertyPath::CellFillColor => "cell.fillColor",
+            PropertyPath::CellFillTint => "cell.fillTint",
+            PropertyPath::CellInsetTop => "cell.insetTop",
+            PropertyPath::CellInsetLeft => "cell.insetLeft",
+            PropertyPath::CellInsetBottom => "cell.insetBottom",
+            PropertyPath::CellInsetRight => "cell.insetRight",
+            PropertyPath::CellVerticalJustification => "cell.verticalJustification",
         }
     }
 }
@@ -1335,6 +1411,139 @@ impl TabStopSpec {
             leader: self.leader.clone(),
         }
     }
+}
+
+/// W3.A1 — opaque JSON blob capturing a removed table row/column's
+/// content for the `DeleteTable{Row,Column}` inverse. Carried on
+/// `InsertTable{Row,Column} { restore }` so undo re-inserts the line
+/// losslessly (within the v1 field set — see `TableCellSpec`).
+///
+/// A `String` rather than a typed wire struct because the parse-side
+/// `TableRow` / `TableColumn` / `TableCell` are `Serialize`-only (no
+/// `Deserialize` / `Tsify`); serialising the apply layer's own
+/// `Deserialize`-able mirror to a string keeps the Op wire-shaped — the
+/// `restore_spread_json` precedent on `InsertPage`. `None` on a forward
+/// delete; the apply layer fills it on the inverse.
+pub type TableLineRestoreJson = String;
+
+/// W3.A1 — `Deserialize`-able mirror of the round-trippable fields of a
+/// `paged_parse::TableCell`, used inside the `DeleteTable{Row,Column}`
+/// restore blob. Captures the cell's structure + style (spans, insets,
+/// fill, applied style, vertical justification). **Does NOT carry the
+/// cell's `paragraphs`** — cell text content is out-of-band of the
+/// story-offset space and not addressable in W3.A1 (see the task's
+/// cell-text finding); restoring cell *text* on a delete-undo is a v2
+/// item. The renderer re-emits an empty cell from the restored
+/// structure, matching `NodeSpec`'s "minimal supported field set"
+/// precedent (drop_shadow / effects residue on re-insert).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TableCellSpec {
+    pub name: Option<String>,
+    pub row_span: u32,
+    pub column_span: u32,
+    pub text_top_inset: f32,
+    pub text_left_inset: f32,
+    pub text_bottom_inset: f32,
+    pub text_right_inset: f32,
+    pub applied_cell_style: Option<String>,
+    pub fill_color: Option<String>,
+    pub vertical_justification: Option<String>,
+}
+
+impl TableCellSpec {
+    pub fn from_parse(c: &paged_parse::TableCell) -> Self {
+        Self {
+            name: c.name.clone(),
+            row_span: c.row_span,
+            column_span: c.column_span,
+            text_top_inset: c.text_top_inset,
+            text_left_inset: c.text_left_inset,
+            text_bottom_inset: c.text_bottom_inset,
+            text_right_inset: c.text_right_inset,
+            applied_cell_style: c.applied_cell_style.clone(),
+            fill_color: c.fill_color.clone(),
+            vertical_justification: c.vertical_justification.clone(),
+        }
+    }
+    pub fn to_parse(&self) -> paged_parse::TableCell {
+        paged_parse::TableCell {
+            name: self.name.clone(),
+            row_span: self.row_span.max(1),
+            column_span: self.column_span.max(1),
+            text_top_inset: self.text_top_inset,
+            text_left_inset: self.text_left_inset,
+            text_bottom_inset: self.text_bottom_inset,
+            text_right_inset: self.text_right_inset,
+            applied_cell_style: self.applied_cell_style.clone(),
+            fill_color: self.fill_color.clone(),
+            vertical_justification: self.vertical_justification.clone(),
+            ..Default::default()
+        }
+    }
+}
+
+/// W3.A1 — `Deserialize`-able mirror of a `paged_parse::TableRow`'s
+/// round-trippable fields, for the `DeleteTableRow` restore blob.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TableRowSpec {
+    pub name: Option<String>,
+    pub single_row_height: Option<f32>,
+    pub minimum_height: Option<f32>,
+    pub maximum_height: Option<f32>,
+}
+
+impl TableRowSpec {
+    pub fn from_parse(r: &paged_parse::TableRow) -> Self {
+        Self {
+            name: r.name.clone(),
+            single_row_height: r.single_row_height,
+            minimum_height: r.minimum_height,
+            maximum_height: r.maximum_height,
+        }
+    }
+    pub fn to_parse(&self) -> paged_parse::TableRow {
+        paged_parse::TableRow {
+            name: self.name.clone(),
+            single_row_height: self.single_row_height,
+            minimum_height: self.minimum_height,
+            maximum_height: self.maximum_height,
+            ..Default::default()
+        }
+    }
+}
+
+/// W3.A1 — `Deserialize`-able mirror of a `paged_parse::TableColumn`,
+/// for the `DeleteTableColumn` restore blob.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TableColumnSpec {
+    pub name: Option<String>,
+    pub single_column_width: Option<f32>,
+}
+
+impl TableColumnSpec {
+    pub fn from_parse(c: &paged_parse::TableColumn) -> Self {
+        Self {
+            name: c.name.clone(),
+            single_column_width: c.single_column_width,
+        }
+    }
+    pub fn to_parse(&self) -> paged_parse::TableColumn {
+        paged_parse::TableColumn {
+            name: self.name.clone(),
+            single_column_width: self.single_column_width,
+            ..Default::default()
+        }
+    }
+}
+
+/// W3.A1 — the captured content of a removed table row or column. JSON-
+/// encoded into the `restore` blob on `DeleteTable{Row,Column}`'s
+/// inverse.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RemovedTableLine {
+    pub row: Option<TableRowSpec>,
+    pub column: Option<TableColumnSpec>,
+    pub cells: Vec<TableCellSpec>,
 }
 
 /// Typed payload for a `SetProperty` Op. Each variant carries a value
@@ -2142,6 +2351,75 @@ pub enum Operation {
     /// the captured fields.
     DeleteSection {
         section_id: String,
+    },
+
+    // ---- W3.A1 — table structure --------------------------------
+    // Indexed, structural table edits. Kept as top-level Operations
+    // (not `SetProperty`) because `PropertyPath` is a fieldless enum
+    // that can't carry a row/col index, and because row/column
+    // insert/delete reshapes the cell grid (every higher row index
+    // shifts) — the LinkFrames / InsertGuide precedent for
+    // index-carrying structural ops. All address the table by
+    // `(story_id, table_id)`; all reflow the host story.
+    /// W3.A1 — set row `row`'s `SingleRowHeight` to `height` pt.
+    /// `None` clears the per-row override (the row grows to fit
+    /// content). Inverse carries the prior height.
+    SetRowHeight {
+        story_id: String,
+        table_id: String,
+        row: u32,
+        #[serde(default)]
+        height: Option<f32>,
+    },
+    /// W3.A1 — set column `col`'s `SingleColumnWidth` to `width` pt.
+    /// `None` clears the override. Inverse carries the prior width.
+    SetColumnWidth {
+        story_id: String,
+        table_id: String,
+        col: u32,
+        #[serde(default)]
+        width: Option<f32>,
+    },
+    /// W3.A1 — insert an empty body row at index `at` (0-based,
+    /// clamped to `[0, body_row_count]`). Cells in rows ≥ `at` shift
+    /// down by one; `body_row_count` increments; a fresh empty cell
+    /// is minted per column. `restore` is **inverse-only**: the
+    /// `DeleteTableRow` undo fills it with the captured removed row so
+    /// re-insertion is byte-identical. Inverse: `DeleteTableRow` at
+    /// the same index.
+    InsertTableRow {
+        story_id: String,
+        table_id: String,
+        at: u32,
+        #[serde(default)]
+        restore: Option<TableLineRestoreJson>,
+    },
+    /// W3.A1 — delete the row at index `at`. Apply captures the row's
+    /// declaration + every cell originating in it into the inverse's
+    /// `restore` blob so undo (`InsertTableRow { restore }`) is
+    /// lossless. Cells in rows > `at` shift up by one. Rejected when
+    /// `at` is out of range or the table has only one row.
+    DeleteTableRow {
+        story_id: String,
+        table_id: String,
+        at: u32,
+    },
+    /// W3.A1 — insert an empty column at index `at`. Cells in columns
+    /// ≥ `at` shift right; `column_count` increments. `restore` is
+    /// inverse-only (see `InsertTableRow`).
+    InsertTableColumn {
+        story_id: String,
+        table_id: String,
+        at: u32,
+        #[serde(default)]
+        restore: Option<TableLineRestoreJson>,
+    },
+    /// W3.A1 — delete the column at index `at`. Captures the column +
+    /// its cells for the inverse, like `DeleteTableRow`.
+    DeleteTableColumn {
+        story_id: String,
+        table_id: String,
+        at: u32,
     },
 }
 

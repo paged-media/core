@@ -5780,4 +5780,350 @@ mod tests {
             assert_eq!(p.document().spreads[0].spread.ovals.len(), 1);
         }
     }
+
+    // ---- W3.A1 — table NodeId surface -----------------------------
+
+    mod tables {
+        use super::*;
+        use paged_parse::{Story, Table, TableCell, TableColumn, TableRow};
+
+        /// A document whose story `Story/t1` holds a single 2×2 table
+        /// `Table/tbl1` (one host paragraph carrying the table). Cells
+        /// are named `"col:row"`; each carries a distinguishing fill so
+        /// round-trips are observable. A `TextFrame/u1` hosts the story
+        /// so `frame_for_story` resolves for reflow hints.
+        fn document_with_table() -> Document {
+            let mut spread = Spread::default();
+            spread.self_id = Some("Spread/u_main".to_string());
+            let mut frame = empty_text_frame(
+                "TextFrame/u1",
+                Bounds {
+                    top: 0.0,
+                    left: 0.0,
+                    bottom: 200.0,
+                    right: 200.0,
+                },
+            );
+            frame.parent_story = Some("Story/t1".to_string());
+            spread.text_frames.push(frame.clone());
+
+            let cell = |col: u32, row: u32, fill: &str| TableCell {
+                name: Some(format!("{col}:{row}")),
+                row_span: 1,
+                column_span: 1,
+                fill_color: Some(fill.to_string()),
+                ..Default::default()
+            };
+            let table = Table {
+                self_id: Some("Table/tbl1".to_string()),
+                body_row_count: 2,
+                column_count: 2,
+                rows: vec![
+                    TableRow {
+                        name: Some("0".into()),
+                        single_row_height: Some(20.0),
+                        ..Default::default()
+                    },
+                    TableRow {
+                        name: Some("1".into()),
+                        single_row_height: Some(30.0),
+                        ..Default::default()
+                    },
+                ],
+                columns: vec![
+                    TableColumn {
+                        name: Some("0".into()),
+                        single_column_width: Some(50.0),
+                        ..Default::default()
+                    },
+                    TableColumn {
+                        name: Some("1".into()),
+                        single_column_width: Some(60.0),
+                        ..Default::default()
+                    },
+                ],
+                cells: vec![
+                    cell(0, 0, "Color/A"),
+                    cell(1, 0, "Color/B"),
+                    cell(0, 1, "Color/C"),
+                    cell(1, 1, "Color/D"),
+                ],
+                ..Default::default()
+            };
+            let host = paged_parse::Paragraph {
+                table: Some(table),
+                ..Default::default()
+            };
+            let story = Story {
+                paragraphs: vec![host],
+                ..Default::default()
+            };
+
+            let mut frame_for_story = HashMap::new();
+            frame_for_story.insert("Story/t1".to_string(), frame);
+
+            Document {
+                container: Container {
+                    mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
+                    designmap_raw: Bytes::new(),
+                    designmap: DesignMap::default(),
+                    entries: BTreeMap::new(),
+                },
+                palette: Graphic::default(),
+                spreads: vec![ParsedSpread {
+                    src: "Spreads/syn.xml".to_string(),
+                    spread,
+                }],
+                stories: vec![ParsedStory {
+                    src: "Stories/Story_t1.xml".to_string(),
+                    self_id: "Story/t1".to_string(),
+                    story,
+                }],
+                master_spreads: HashMap::new(),
+                frame_for_story,
+                text_frame_index: HashMap::new(),
+                styles: StyleSheet::default(),
+                anchors: Vec::new(),
+            }
+        }
+
+        /// Borrow the live table from the document under test.
+        fn table_of(doc: &Document) -> &Table {
+            doc.stories[0].story.paragraphs[0]
+                .table
+                .as_ref()
+                .expect("table present")
+        }
+
+        fn cell_named<'a>(t: &'a Table, col: u32, row: u32) -> &'a TableCell {
+            t.cells
+                .iter()
+                .find(|c| c.coords() == Some((col, row)))
+                .expect("cell present")
+        }
+
+        #[test]
+        fn cell_fill_color_writes_and_round_trips() {
+            let mut p = Project::new(document_with_table());
+            let node = NodeId::TableCell {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+                row: 1,
+                col: 0,
+            };
+            let applied = p
+                .apply(Operation::SetProperty {
+                    node: node.clone(),
+                    path: PropertyPath::CellFillColor,
+                    value: Value::ColorRef(Some("Color/Z".into())),
+                })
+                .expect("set cell fill");
+            assert_eq!(
+                cell_named(table_of(p.document()), 0, 1).fill_color.as_deref(),
+                Some("Color/Z")
+            );
+            // Reflow targets the host frame.
+            assert_eq!(
+                applied.invalidation.text_reflow,
+                vec![NodeId::TextFrame("TextFrame/u1".into())]
+            );
+            // Inverse restores the prior fill ("Color/C").
+            p.undo().expect("undo");
+            assert_eq!(
+                cell_named(table_of(p.document()), 0, 1).fill_color.as_deref(),
+                Some("Color/C")
+            );
+            p.redo().expect("redo");
+            assert_eq!(
+                cell_named(table_of(p.document()), 0, 1).fill_color.as_deref(),
+                Some("Color/Z")
+            );
+        }
+
+        #[test]
+        fn cell_insets_and_vertical_justify_round_trip() {
+            let mut p = Project::new(document_with_table());
+            let node = NodeId::TableCell {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+                row: 0,
+                col: 1,
+            };
+            p.apply(Operation::SetProperty {
+                node: node.clone(),
+                path: PropertyPath::CellInsetTop,
+                value: Value::Length(Some(7.5)),
+            })
+            .expect("set inset");
+            p.apply(Operation::SetProperty {
+                node: node.clone(),
+                path: PropertyPath::CellVerticalJustification,
+                value: Value::Text("CenterAlign".into()),
+            })
+            .expect("set vjust");
+            let c = cell_named(table_of(p.document()), 1, 0);
+            assert_eq!(c.text_top_inset, 7.5);
+            assert_eq!(c.vertical_justification.as_deref(), Some("CenterAlign"));
+            // Undo vjust, then inset.
+            p.undo().expect("undo vjust");
+            p.undo().expect("undo inset");
+            let c = cell_named(table_of(p.document()), 1, 0);
+            assert_eq!(c.text_top_inset, 0.0);
+            assert_eq!(c.vertical_justification, None);
+        }
+
+        #[test]
+        fn applied_table_style_round_trips() {
+            let mut p = Project::new(document_with_table());
+            let node = NodeId::Table {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+            };
+            p.apply(Operation::SetProperty {
+                node: node.clone(),
+                path: PropertyPath::AppliedTableStyle,
+                value: Value::Text("TableStyle/Fancy".into()),
+            })
+            .expect("set table style");
+            assert_eq!(
+                table_of(p.document()).applied_table_style.as_deref(),
+                Some("TableStyle/Fancy")
+            );
+            p.undo().expect("undo");
+            assert_eq!(table_of(p.document()).applied_table_style, None);
+        }
+
+        #[test]
+        fn set_row_height_round_trips() {
+            let mut p = Project::new(document_with_table());
+            p.apply(Operation::SetRowHeight {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+                row: 1,
+                height: Some(99.0),
+            })
+            .expect("set row height");
+            assert_eq!(table_of(p.document()).rows[1].single_row_height, Some(99.0));
+            p.undo().expect("undo");
+            // Prior height was 30.0.
+            assert_eq!(table_of(p.document()).rows[1].single_row_height, Some(30.0));
+        }
+
+        #[test]
+        fn insert_row_shifts_cells_and_round_trips() {
+            let mut p = Project::new(document_with_table());
+            let before = format!("{:?}", table_of(p.document()).cells);
+            p.apply(Operation::InsertTableRow {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+                at: 1,
+                restore: None,
+            })
+            .expect("insert row");
+            let t = table_of(p.document());
+            assert_eq!(t.rows.len(), 3);
+            // The old row-1 cells (Color/C, Color/D) shifted to row 2.
+            assert_eq!(cell_named(t, 0, 2).fill_color.as_deref(), Some("Color/C"));
+            // Fresh empty cells minted at row 1.
+            assert_eq!(cell_named(t, 0, 1).fill_color, None);
+            // Undo removes the inserted row and restores cell layout.
+            p.undo().expect("undo");
+            assert_eq!(table_of(p.document()).rows.len(), 2);
+            assert_eq!(format!("{:?}", table_of(p.document()).cells), before);
+        }
+
+        #[test]
+        fn delete_row_restores_content_on_undo() {
+            let mut p = Project::new(document_with_table());
+            // Delete row 0 (cells Color/A, Color/B).
+            p.apply(Operation::DeleteTableRow {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+                at: 0,
+            })
+            .expect("delete row");
+            let t = table_of(p.document());
+            assert_eq!(t.rows.len(), 1);
+            // Surviving row (was row 1) shifted up to row 0.
+            assert_eq!(cell_named(t, 0, 0).fill_color.as_deref(), Some("Color/C"));
+            assert_eq!(cell_named(t, 1, 0).fill_color.as_deref(), Some("Color/D"));
+            // Undo restores the deleted row's cells (Color/A, Color/B)
+            // with the surviving row pushed back to row 1.
+            p.undo().expect("undo");
+            let t = table_of(p.document());
+            assert_eq!(t.rows.len(), 2);
+            assert_eq!(cell_named(t, 0, 0).fill_color.as_deref(), Some("Color/A"));
+            assert_eq!(cell_named(t, 1, 0).fill_color.as_deref(), Some("Color/B"));
+            assert_eq!(cell_named(t, 0, 1).fill_color.as_deref(), Some("Color/C"));
+        }
+
+        #[test]
+        fn insert_and_delete_column_round_trip() {
+            let mut p = Project::new(document_with_table());
+            p.apply(Operation::InsertTableColumn {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+                at: 1,
+                restore: None,
+            })
+            .expect("insert col");
+            let t = table_of(p.document());
+            assert_eq!(t.columns.len(), 3);
+            // Old col-1 cells (Color/B at row 0) shifted to col 2.
+            assert_eq!(cell_named(t, 2, 0).fill_color.as_deref(), Some("Color/B"));
+            assert_eq!(cell_named(t, 1, 0).fill_color, None);
+            p.undo().expect("undo insert col");
+            assert_eq!(table_of(p.document()).columns.len(), 2);
+
+            // Now delete column 0 and undo to confirm content restore.
+            p.apply(Operation::DeleteTableColumn {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+                at: 0,
+            })
+            .expect("delete col");
+            assert_eq!(table_of(p.document()).columns.len(), 1);
+            p.undo().expect("undo delete col");
+            let t = table_of(p.document());
+            assert_eq!(t.columns.len(), 2);
+            assert_eq!(cell_named(t, 0, 0).fill_color.as_deref(), Some("Color/A"));
+            assert_eq!(cell_named(t, 0, 1).fill_color.as_deref(), Some("Color/C"));
+        }
+
+        #[test]
+        fn delete_last_row_is_rejected() {
+            let mut doc = document_with_table();
+            // Collapse to a single-row table.
+            {
+                let t = doc.stories[0].story.paragraphs[0].table.as_mut().unwrap();
+                t.rows.truncate(1);
+                t.cells.retain(|c| matches!(c.coords(), Some((_, 0))));
+            }
+            let mut p = Project::new(doc);
+            let err = p
+                .apply(Operation::DeleteTableRow {
+                    story_id: "Story/t1".into(),
+                    table_id: "Table/tbl1".into(),
+                    at: 0,
+                })
+                .unwrap_err();
+            assert!(matches!(err, OperationError::InvalidValue { .. }));
+        }
+
+        #[test]
+        fn unknown_table_is_node_not_found() {
+            let mut p = Project::new(document_with_table());
+            let err = p
+                .apply(Operation::SetProperty {
+                    node: NodeId::Table {
+                        story_id: "Story/t1".into(),
+                        table_id: "Table/missing".into(),
+                    },
+                    path: PropertyPath::AppliedTableStyle,
+                    value: Value::Text("TableStyle/X".into()),
+                })
+                .unwrap_err();
+            assert!(matches!(err, OperationError::NodeNotFound(_)));
+        }
+    }
 }

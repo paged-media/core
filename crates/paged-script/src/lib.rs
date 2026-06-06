@@ -86,6 +86,33 @@ fn push_output(line: String) {
     OUTPUT.with(|o| o.borrow_mut().push(line));
 }
 
+/// B-09 (plugin platform, decision 2026-06-06) — runtime budgets.
+///
+/// Boa runs synchronously inside the worker, so a runaway script
+/// hangs the editor unless the engine itself bails. Boa 0.21's
+/// `RuntimeLimits` cover the dominant runaway classes:
+///   - `LOOP_ITERATION_LIMIT` kills `while(true) {}` and friends —
+///     generous enough that a script touching every element of a
+///     large document never trips it (10M iterations ≈ tens of ms),
+///     tight enough that an infinite loop dies promptly.
+///   - `RECURSION_LIMIT` keeps Boa's default (512) explicit.
+/// What stock Boa CANNOT give yet (recorded, not faked): instruction
+/// metering / wall-clock interruption (a long-running but FINITE
+/// loop still blocks until done) and per-context memory caps. The
+/// full per-plugin frame-budget story (§10) needs upstream fuel or
+/// worker-level isolation — tracked as the open half of B-09.
+const LOOP_ITERATION_LIMIT: u64 = 10_000_000;
+const RECURSION_LIMIT: usize = 512;
+
+fn budgeted_context() -> Context {
+    let mut ctx = Context::default();
+    let mut limits = boa_engine::vm::RuntimeLimits::default();
+    limits.set_loop_iteration_limit(LOOP_ITERATION_LIMIT);
+    limits.set_recursion_limit(RECURSION_LIMIT);
+    ctx.set_runtime_limits(limits);
+    ctx
+}
+
 /// Run `source` against the given `CanvasModel`. Every write the
 /// script issues lands as an `Operation` via `apply_mutation`, so
 /// undo/redo work identically to any UI-driven change.
@@ -94,7 +121,7 @@ pub fn execute_script(model: &mut CanvasModel, source: &str) -> ScriptResult {
     MODEL_PTR.with(|p| *p.borrow_mut() = Some(ptr));
     OUTPUT.with(|o| o.borrow_mut().clear());
 
-    let mut ctx = Context::default();
+    let mut ctx = budgeted_context();
 
     let error = run(&mut ctx, source);
 
@@ -708,6 +735,14 @@ fn parse_property_path(s: &str) -> Option<paged_mutate::PropertyPath> {
         "frameDirectionalFeatherNoise" => FrameDirectionalFeatherNoise,
         "frameDirectionalFeatherChoke" => FrameDirectionalFeatherChoke,
         "frameBlendMode" => FrameBlendMode,
+        // W3.A1 — table cell properties (writable).
+        "cellFillColor" => CellFillColor,
+        "cellFillTint" => CellFillTint,
+        "cellInsetTop" => CellInsetTop,
+        "cellInsetLeft" => CellInsetLeft,
+        "cellInsetBottom" => CellInsetBottom,
+        "cellInsetRight" => CellInsetRight,
+        "cellVerticalJustification" => CellVerticalJustification,
         _ => return None,
     })
 }
@@ -888,6 +923,14 @@ fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
         // W3.A0 — text-frame thread chain (read-only paths).
         NextTextFrame => "nextTextFrame",
         PreviousTextFrame => "previousTextFrame",
+        // W3.A1 — table cell properties.
+        CellFillColor => "cellFillColor",
+        CellFillTint => "cellFillTint",
+        CellInsetTop => "cellInsetTop",
+        CellInsetLeft => "cellInsetLeft",
+        CellInsetBottom => "cellInsetBottom",
+        CellInsetRight => "cellInsetRight",
+        CellVerticalJustification => "cellVerticalJustification",
     }
 }
 
@@ -968,12 +1011,16 @@ fn js_value_to_wire(
             | P::FrameBevelDirection
             | P::FrameSatinBlendMode
             | P::FrameFeatherCornerType
-            | P::FrameBlendMode => W::Text(s),
+            | P::FrameBlendMode
+            // W3.A1 — cell vertical-justify enum string.
+            | P::CellVerticalJustification => W::Text(s),
             // Color-ref paths.
             P::FrameFillColor
             | P::FrameStrokeColor
             | P::CharacterFillColor
             | P::FrameDropShadowColor
+            // W3.A1 — cell fill colour ref.
+            | P::CellFillColor
             // W0.3 — stroke gap colour.
             | P::FrameStrokeGapColor
             // W0.4 — transparency-effect colour refs.
@@ -1075,6 +1122,16 @@ fn format_value(value: &JsValue, ctx: &mut Context) -> String {
 }
 
 fn format_error(err: &boa_engine::JsError, ctx: &mut Context) -> String {
+    // B-09 — a tripped RuntimeLimit is a NATIVE error that Boa
+    // refuses to convert to an opaque JS value (`to_opaque` PANICS on
+    // it — which would abort the wasm worker, the exact hang-class
+    // the budget exists to prevent). Surface it as a plain string
+    // before touching the opaque path.
+    if let Some(native) = err.as_native() {
+        if native.is_runtime_limit() {
+            return format!("runtime budget exceeded: {native}");
+        }
+    }
     // Boa exposes the thrown value via `to_opaque(ctx)`; reuse the
     // value formatter so Error objects come out as "Name: message".
     let opaque = err.to_opaque(ctx);

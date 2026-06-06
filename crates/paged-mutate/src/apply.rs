@@ -279,6 +279,40 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             *start_at,
         ),
         Operation::DeleteSection { section_id } => apply_delete_section(doc, section_id),
+        Operation::SetRowHeight {
+            story_id,
+            table_id,
+            row,
+            height,
+        } => apply_set_row_height(doc, story_id, table_id, *row, *height),
+        Operation::SetColumnWidth {
+            story_id,
+            table_id,
+            col,
+            width,
+        } => apply_set_column_width(doc, story_id, table_id, *col, *width),
+        Operation::InsertTableRow {
+            story_id,
+            table_id,
+            at,
+            restore,
+        } => apply_insert_table_row(doc, story_id, table_id, *at, restore.as_deref()),
+        Operation::DeleteTableRow {
+            story_id,
+            table_id,
+            at,
+        } => apply_delete_table_row(doc, story_id, table_id, *at),
+        Operation::InsertTableColumn {
+            story_id,
+            table_id,
+            at,
+            restore,
+        } => apply_insert_table_column(doc, story_id, table_id, *at, restore.as_deref()),
+        Operation::DeleteTableColumn {
+            story_id,
+            table_id,
+            at,
+        } => apply_delete_table_column(doc, story_id, table_id, *at),
     }
 }
 
@@ -505,6 +539,18 @@ fn apply_set_property(
             PropertyPath::PathOpenAt,
         ) => {
             return apply_path_open_at(doc, node, value);
+        }
+        // W3.A1 — table-scoped writes: `AppliedTableStyle` on a
+        // `NodeId::Table`, and every cell-scoped path on a
+        // `NodeId::TableCell`. These resolve `(story_id, table_id[,
+        // row, col])` and build their own inverse (the standard
+        // `invert_set_property` tail keys off page-item kinds and
+        // doesn't reach tables), so they short-circuit here.
+        (NodeId::Table { .. }, _) => {
+            return apply_table_property(doc, node, path, value);
+        }
+        (NodeId::TableCell { .. }, _) => {
+            return apply_cell_property(doc, node, path, value);
         }
         _ => {}
     }
@@ -7098,6 +7144,652 @@ fn reflow_hint_for_story(doc: &Document, story_id: &str) -> InvalidationHint {
             None => InvalidationHint::default(),
         },
         None => InvalidationHint::default(),
+    }
+}
+
+// ===========================================================================
+// W3.A1 — table NodeId surface (addressing + mutation)
+// ===========================================================================
+
+use crate::operation::{RemovedTableLine, TableCellSpec, TableColumnSpec, TableRowSpec};
+
+/// W3.A1 — locate a `<Table>` inside a story by `(story_id, table_id)`.
+/// Returns the story index + the host paragraph index. Tables hang off
+/// `Paragraph::table`, so the table lives at
+/// `doc.stories[si].story.paragraphs[pi].table`.
+fn find_table_pos(doc: &Document, story_id: &str, table_id: &str) -> Option<(usize, usize)> {
+    let si = doc.stories.iter().position(|s| s.self_id == story_id)?;
+    let pi = doc.stories[si]
+        .story
+        .paragraphs
+        .iter()
+        .position(|p| p.table.as_ref().and_then(|t| t.self_id.as_deref()) == Some(table_id))?;
+    Some((si, pi))
+}
+
+/// Mutable access to a located `<Table>`. `find_table_pos` first, then
+/// reborrow mutably (the position scan is immutable).
+fn find_table_mut<'a>(
+    doc: &'a mut Document,
+    story_id: &str,
+    table_id: &str,
+) -> Option<&'a mut paged_parse::Table> {
+    let (si, pi) = find_table_pos(doc, story_id, table_id)?;
+    doc.stories[si].story.paragraphs[pi].table.as_mut()
+}
+
+/// W3.A1 — `AppliedTableStyle` write on a `NodeId::Table`. The only
+/// table-scoped `SetProperty` path today (row/column/structure edits
+/// are their own Operations). Empty string clears the override.
+fn apply_table_property(
+    doc: &mut Document,
+    node: &NodeId,
+    path: PropertyPath,
+    value: &Value,
+) -> Result<AppliedOperation, OperationError> {
+    let NodeId::Table { story_id, table_id } = node else {
+        unreachable!("apply_table_property dispatched on a non-Table node");
+    };
+    if path != PropertyPath::AppliedTableStyle {
+        return Err(OperationError::UnsupportedProperty {
+            node: node.clone(),
+            path,
+        });
+    }
+    let new = expect_text(path, value)?;
+    let table = find_table_mut(doc, story_id, table_id)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    let prev = table.applied_table_style.clone().unwrap_or_default();
+    table.applied_table_style = if new.is_empty() { None } else { Some(new) };
+
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::SetProperty {
+            node: node.clone(),
+            path,
+            value: value.clone(),
+        },
+        inverse: Operation::SetProperty {
+            node: node.clone(),
+            path,
+            value: Value::Text(prev),
+        },
+        invalidation,
+    })
+}
+
+/// W3.A1 — scalar cell-property write on a `NodeId::TableCell`. The
+/// `(row, col)` index lives on the NodeId; the path picks the field.
+/// Builds its own inverse (carrying the prior value) so undo
+/// round-trips. The host story reflows on any cell edit.
+fn apply_cell_property(
+    doc: &mut Document,
+    node: &NodeId,
+    path: PropertyPath,
+    value: &Value,
+) -> Result<AppliedOperation, OperationError> {
+    let NodeId::TableCell {
+        story_id,
+        table_id,
+        row,
+        col,
+    } = node
+    else {
+        unreachable!("apply_cell_property dispatched on a non-TableCell node");
+    };
+    // Resolve the cell. Cells are keyed by `Name="col:row"`; match on
+    // the parsed `(col, row)` coords.
+    let table = find_table_mut(doc, story_id, table_id)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    let cell = table
+        .cells
+        .iter_mut()
+        .find(|c| c.coords() == Some((*col, *row)))
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+
+    // Apply by path, capturing the prior value as the inverse payload.
+    let inverse_value = match path {
+        PropertyPath::CellFillColor => {
+            let new = expect_color_ref(path, value)?;
+            let prev = cell.fill_color.clone();
+            cell.fill_color = new;
+            Value::ColorRef(prev)
+        }
+        // v1: IDML has no standalone per-cell fill-tint attribute;
+        // the parse side doesn't model one. We accept the path for the
+        // wire surface but route it through the cell-style cascade —
+        // there's nothing to store, so the write is a typed no-op that
+        // still round-trips (inverse restores the same absent value).
+        // Honest scope: a real fill-tint needs a parse field; deferred.
+        PropertyPath::CellFillTint => {
+            let _ = expect_length(path, value)?;
+            Value::Length(None)
+        }
+        PropertyPath::CellInsetTop => {
+            let new = expect_length(path, value)?.unwrap_or(0.0);
+            let prev = cell.text_top_inset;
+            cell.text_top_inset = new;
+            Value::Length(Some(prev))
+        }
+        PropertyPath::CellInsetLeft => {
+            let new = expect_length(path, value)?.unwrap_or(0.0);
+            let prev = cell.text_left_inset;
+            cell.text_left_inset = new;
+            Value::Length(Some(prev))
+        }
+        PropertyPath::CellInsetBottom => {
+            let new = expect_length(path, value)?.unwrap_or(0.0);
+            let prev = cell.text_bottom_inset;
+            cell.text_bottom_inset = new;
+            Value::Length(Some(prev))
+        }
+        PropertyPath::CellInsetRight => {
+            let new = expect_length(path, value)?.unwrap_or(0.0);
+            let prev = cell.text_right_inset;
+            cell.text_right_inset = new;
+            Value::Length(Some(prev))
+        }
+        PropertyPath::CellVerticalJustification => {
+            let new = expect_text(path, value)?;
+            let prev = cell.vertical_justification.clone().unwrap_or_default();
+            cell.vertical_justification = if new.is_empty() { None } else { Some(new) };
+            Value::Text(prev)
+        }
+        PropertyPath::AppliedCellStyle => {
+            let new = expect_text(path, value)?;
+            let prev = cell.applied_cell_style.clone().unwrap_or_default();
+            cell.applied_cell_style = if new.is_empty() { None } else { Some(new) };
+            Value::Text(prev)
+        }
+        _ => {
+            return Err(OperationError::UnsupportedProperty {
+                node: node.clone(),
+                path,
+            });
+        }
+    };
+
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::SetProperty {
+            node: node.clone(),
+            path,
+            value: value.clone(),
+        },
+        inverse: Operation::SetProperty {
+            node: node.clone(),
+            path,
+            value: inverse_value,
+        },
+        invalidation,
+    })
+}
+
+/// W3.A1 — set a row's `SingleRowHeight`. Inverse carries the prior
+/// height. `row` out of range → `InvalidValue`.
+fn apply_set_row_height(
+    doc: &mut Document,
+    story_id: &str,
+    table_id: &str,
+    row: u32,
+    height: Option<f32>,
+) -> Result<AppliedOperation, OperationError> {
+    let node = NodeId::Table {
+        story_id: story_id.to_string(),
+        table_id: table_id.to_string(),
+    };
+    let table = find_table_mut(doc, story_id, table_id)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    let row_count = table.rows.len();
+    let tr = table
+        .rows
+        .get_mut(row as usize)
+        .ok_or_else(|| OperationError::InvalidValue {
+            node: node.clone(),
+            path: PropertyPath::FrameBounds,
+            reason: format!("row {row} out of range ({row_count} rows)"),
+        })?;
+    let prev = tr.single_row_height;
+    tr.single_row_height = height;
+
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::SetRowHeight {
+            story_id: story_id.to_string(),
+            table_id: table_id.to_string(),
+            row,
+            height,
+        },
+        inverse: Operation::SetRowHeight {
+            story_id: story_id.to_string(),
+            table_id: table_id.to_string(),
+            row,
+            height: prev,
+        },
+        invalidation,
+    })
+}
+
+/// W3.A1 — set a column's `SingleColumnWidth`. Inverse carries the
+/// prior width.
+fn apply_set_column_width(
+    doc: &mut Document,
+    story_id: &str,
+    table_id: &str,
+    col: u32,
+    width: Option<f32>,
+) -> Result<AppliedOperation, OperationError> {
+    let node = NodeId::Table {
+        story_id: story_id.to_string(),
+        table_id: table_id.to_string(),
+    };
+    let table = find_table_mut(doc, story_id, table_id)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    let col_count = table.columns.len();
+    let tc = table
+        .columns
+        .get_mut(col as usize)
+        .ok_or_else(|| OperationError::InvalidValue {
+            node: node.clone(),
+            path: PropertyPath::FrameBounds,
+            reason: format!("column {col} out of range ({col_count} cols)"),
+        })?;
+    let prev = tc.single_column_width;
+    tc.single_column_width = width;
+
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::SetColumnWidth {
+            story_id: story_id.to_string(),
+            table_id: table_id.to_string(),
+            col,
+            width,
+        },
+        inverse: Operation::SetColumnWidth {
+            story_id: story_id.to_string(),
+            table_id: table_id.to_string(),
+            col,
+            width: prev,
+        },
+        invalidation,
+    })
+}
+
+/// W3.A1 — recompute every cell's `Name` from its position after a row
+/// or column shift. Cells are keyed by `Name="col:row"`; an insert /
+/// delete renumbers the affected axis. We rewrite names in place so the
+/// renderer's `coords()` lookups and our own re-addressing stay
+/// consistent.
+fn set_cell_name(cell: &mut paged_parse::TableCell, col: u32, row: u32) {
+    cell.name = Some(format!("{col}:{row}"));
+}
+
+/// W3.A1 — insert a row at `at`. Cells in rows ≥ `at` shift down (+1);
+/// a fresh empty cell per column is minted at the new row;
+/// `body_row_count` / the `rows` vec grow. When `restore` is `Some`
+/// (the `DeleteTableRow` inverse), the captured row + cells are
+/// re-inserted verbatim instead of minting empties.
+fn apply_insert_table_row(
+    doc: &mut Document,
+    story_id: &str,
+    table_id: &str,
+    at: u32,
+    restore: Option<&str>,
+) -> Result<AppliedOperation, OperationError> {
+    let node = NodeId::Table {
+        story_id: story_id.to_string(),
+        table_id: table_id.to_string(),
+    };
+    let table = find_table_mut(doc, story_id, table_id)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    let total_rows = table.rows.len() as u32;
+    if at > total_rows {
+        return Err(OperationError::InvalidValue {
+            node,
+            path: PropertyPath::FrameBounds,
+            reason: format!("insert row at {at} out of range ({total_rows} rows)"),
+        });
+    }
+    let col_count = table.columns.len().max(table.column_count as usize);
+
+    // Shift existing cells in rows ≥ `at` down by one (rewrite names).
+    for cell in &mut table.cells {
+        if let Some((c, r)) = cell.coords() {
+            if r >= at {
+                set_cell_name(cell, c, r + 1);
+            }
+        }
+    }
+
+    // Build the new row + its cells.
+    let (new_row, new_cells): (paged_parse::TableRow, Vec<paged_parse::TableCell>) =
+        match restore {
+            Some(blob) => {
+                let removed = parse_restore_blob(blob, story_id, table_id)?;
+                let mut cells: Vec<paged_parse::TableCell> =
+                    removed.cells.iter().map(TableCellSpec::to_parse).collect();
+                // Re-key the restored cells to the insertion row.
+                for cell in &mut cells {
+                    if let Some((c, _)) = cell.coords() {
+                        set_cell_name(cell, c, at);
+                    }
+                }
+                let row = removed.row.as_ref().map(TableRowSpec::to_parse).unwrap_or_default();
+                (row, cells)
+            }
+            None => {
+                let row = paged_parse::TableRow {
+                    name: Some(at.to_string()),
+                    ..Default::default()
+                };
+                let cells: Vec<paged_parse::TableCell> = (0..col_count as u32)
+                    .map(|c| paged_parse::TableCell {
+                        name: Some(format!("{c}:{at}")),
+                        row_span: 1,
+                        column_span: 1,
+                        ..Default::default()
+                    })
+                    .collect();
+                (row, cells)
+            }
+        };
+
+    table.rows.insert(at as usize, new_row);
+    table.cells.extend(new_cells);
+    table.body_row_count = table.body_row_count.saturating_add(1);
+    renumber_table_rows(table);
+
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::InsertTableRow {
+            story_id: story_id.to_string(),
+            table_id: table_id.to_string(),
+            at,
+            restore: restore.map(str::to_string),
+        },
+        inverse: Operation::DeleteTableRow {
+            story_id: story_id.to_string(),
+            table_id: table_id.to_string(),
+            at,
+        },
+        invalidation,
+    })
+}
+
+/// W3.A1 — delete the row at `at`. Captures the row + originating cells
+/// for the inverse. Cells in rows > `at` shift up. Rejected when the
+/// table has only one row or `at` is out of range.
+fn apply_delete_table_row(
+    doc: &mut Document,
+    story_id: &str,
+    table_id: &str,
+    at: u32,
+) -> Result<AppliedOperation, OperationError> {
+    let node = NodeId::Table {
+        story_id: story_id.to_string(),
+        table_id: table_id.to_string(),
+    };
+    let table = find_table_mut(doc, story_id, table_id)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    let total_rows = table.rows.len() as u32;
+    if at >= total_rows {
+        return Err(OperationError::InvalidValue {
+            node,
+            path: PropertyPath::FrameBounds,
+            reason: format!("delete row at {at} out of range ({total_rows} rows)"),
+        });
+    }
+    if total_rows <= 1 {
+        return Err(OperationError::InvalidValue {
+            node,
+            path: PropertyPath::FrameBounds,
+            reason: "cannot delete the last row of a table".to_string(),
+        });
+    }
+
+    // Capture the row declaration + every cell originating on it.
+    let removed_row = table.rows.remove(at as usize);
+    let mut captured_cells: Vec<TableCellSpec> = Vec::new();
+    table.cells.retain(|cell| match cell.coords() {
+        Some((_, r)) if r == at => {
+            captured_cells.push(TableCellSpec::from_parse(cell));
+            false
+        }
+        _ => true,
+    });
+    // Shift cells in rows > `at` up by one.
+    for cell in &mut table.cells {
+        if let Some((c, r)) = cell.coords() {
+            if r > at {
+                set_cell_name(cell, c, r - 1);
+            }
+        }
+    }
+    table.body_row_count = table.body_row_count.saturating_sub(1);
+    renumber_table_rows(table);
+
+    let restore_blob = serde_json::to_string(&RemovedTableLine {
+        row: Some(TableRowSpec::from_parse(&removed_row)),
+        column: None,
+        cells: captured_cells,
+    })
+    .expect("RemovedTableLine serialises");
+
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::DeleteTableRow {
+            story_id: story_id.to_string(),
+            table_id: table_id.to_string(),
+            at,
+        },
+        inverse: Operation::InsertTableRow {
+            story_id: story_id.to_string(),
+            table_id: table_id.to_string(),
+            at,
+            restore: Some(restore_blob),
+        },
+        invalidation,
+    })
+}
+
+/// W3.A1 — insert a column at `at`. Cells in columns ≥ `at` shift
+/// right; a fresh empty cell per row is minted. `restore` re-inserts
+/// captured column content (the `DeleteTableColumn` inverse).
+fn apply_insert_table_column(
+    doc: &mut Document,
+    story_id: &str,
+    table_id: &str,
+    at: u32,
+    restore: Option<&str>,
+) -> Result<AppliedOperation, OperationError> {
+    let node = NodeId::Table {
+        story_id: story_id.to_string(),
+        table_id: table_id.to_string(),
+    };
+    let table = find_table_mut(doc, story_id, table_id)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    let total_cols = table.columns.len() as u32;
+    if at > total_cols {
+        return Err(OperationError::InvalidValue {
+            node,
+            path: PropertyPath::FrameBounds,
+            reason: format!("insert column at {at} out of range ({total_cols} cols)"),
+        });
+    }
+    let row_count = table.rows.len().max(
+        (table.header_row_count + table.body_row_count + table.footer_row_count) as usize,
+    );
+
+    // Shift cells in columns ≥ `at` right by one.
+    for cell in &mut table.cells {
+        if let Some((c, r)) = cell.coords() {
+            if c >= at {
+                set_cell_name(cell, c + 1, r);
+            }
+        }
+    }
+
+    let (new_col, new_cells): (paged_parse::TableColumn, Vec<paged_parse::TableCell>) =
+        match restore {
+            Some(blob) => {
+                let removed = parse_restore_blob(blob, story_id, table_id)?;
+                let mut cells: Vec<paged_parse::TableCell> =
+                    removed.cells.iter().map(TableCellSpec::to_parse).collect();
+                for cell in &mut cells {
+                    if let Some((_, r)) = cell.coords() {
+                        set_cell_name(cell, at, r);
+                    }
+                }
+                let col = removed
+                    .column
+                    .as_ref()
+                    .map(TableColumnSpec::to_parse)
+                    .unwrap_or_default();
+                (col, cells)
+            }
+            None => {
+                let col = paged_parse::TableColumn {
+                    name: Some(at.to_string()),
+                    ..Default::default()
+                };
+                let cells: Vec<paged_parse::TableCell> = (0..row_count as u32)
+                    .map(|r| paged_parse::TableCell {
+                        name: Some(format!("{at}:{r}")),
+                        row_span: 1,
+                        column_span: 1,
+                        ..Default::default()
+                    })
+                    .collect();
+                (col, cells)
+            }
+        };
+
+    table.columns.insert(at as usize, new_col);
+    table.cells.extend(new_cells);
+    table.column_count = table.column_count.saturating_add(1);
+    renumber_table_columns(table);
+
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::InsertTableColumn {
+            story_id: story_id.to_string(),
+            table_id: table_id.to_string(),
+            at,
+            restore: restore.map(str::to_string),
+        },
+        inverse: Operation::DeleteTableColumn {
+            story_id: story_id.to_string(),
+            table_id: table_id.to_string(),
+            at,
+        },
+        invalidation,
+    })
+}
+
+/// W3.A1 — delete the column at `at`. Captures the column + cells for
+/// the inverse. Cells in columns > `at` shift left.
+fn apply_delete_table_column(
+    doc: &mut Document,
+    story_id: &str,
+    table_id: &str,
+    at: u32,
+) -> Result<AppliedOperation, OperationError> {
+    let node = NodeId::Table {
+        story_id: story_id.to_string(),
+        table_id: table_id.to_string(),
+    };
+    let table = find_table_mut(doc, story_id, table_id)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    let total_cols = table.columns.len() as u32;
+    if at >= total_cols {
+        return Err(OperationError::InvalidValue {
+            node,
+            path: PropertyPath::FrameBounds,
+            reason: format!("delete column at {at} out of range ({total_cols} cols)"),
+        });
+    }
+    if total_cols <= 1 {
+        return Err(OperationError::InvalidValue {
+            node,
+            path: PropertyPath::FrameBounds,
+            reason: "cannot delete the last column of a table".to_string(),
+        });
+    }
+
+    let removed_col = table.columns.remove(at as usize);
+    let mut captured_cells: Vec<TableCellSpec> = Vec::new();
+    table.cells.retain(|cell| match cell.coords() {
+        Some((c, _)) if c == at => {
+            captured_cells.push(TableCellSpec::from_parse(cell));
+            false
+        }
+        _ => true,
+    });
+    for cell in &mut table.cells {
+        if let Some((c, r)) = cell.coords() {
+            if c > at {
+                set_cell_name(cell, c - 1, r);
+            }
+        }
+    }
+    table.column_count = table.column_count.saturating_sub(1);
+    renumber_table_columns(table);
+
+    let restore_blob = serde_json::to_string(&RemovedTableLine {
+        row: None,
+        column: Some(TableColumnSpec::from_parse(&removed_col)),
+        cells: captured_cells,
+    })
+    .expect("RemovedTableLine serialises");
+
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::DeleteTableColumn {
+            story_id: story_id.to_string(),
+            table_id: table_id.to_string(),
+            at,
+        },
+        inverse: Operation::InsertTableColumn {
+            story_id: story_id.to_string(),
+            table_id: table_id.to_string(),
+            at,
+            restore: Some(restore_blob),
+        },
+        invalidation,
+    })
+}
+
+/// W3.A1 — decode a `DeleteTable{Row,Column}` restore blob. On a bad
+/// blob, raises `InvalidValue` rather than panicking (the blob crosses
+/// the wasm boundary on redo of a deserialised op log).
+fn parse_restore_blob(
+    blob: &str,
+    story_id: &str,
+    table_id: &str,
+) -> Result<RemovedTableLine, OperationError> {
+    serde_json::from_str(blob).map_err(|e| OperationError::InvalidValue {
+        node: NodeId::Table {
+            story_id: story_id.to_string(),
+            table_id: table_id.to_string(),
+        },
+        path: PropertyPath::FrameBounds,
+        reason: format!("bad table restore blob: {e}"),
+    })
+}
+
+/// W3.A1 — renumber `<Row>` `Name` attributes to their positional
+/// index after an insert / delete (IDML expects `Name="0".."n-1"`).
+fn renumber_table_rows(table: &mut paged_parse::Table) {
+    for (i, row) in table.rows.iter_mut().enumerate() {
+        row.name = Some(i.to_string());
+    }
+}
+
+/// W3.A1 — renumber `<Column>` `Name` attributes after an insert /
+/// delete.
+fn renumber_table_columns(table: &mut paged_parse::Table) {
+    for (i, col) in table.columns.iter_mut().enumerate() {
+        col.name = Some(i.to_string());
     }
 }
 
