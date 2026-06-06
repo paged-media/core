@@ -1293,7 +1293,9 @@ impl CanvasModel {
         // (carries an inverse `TextOp`), so frame-shape mutations
         // synthesise an empty text op into the response. Future
         // convergence folds both into one shape.
-        if let Some(op) = self.try_translate_frame_mutation_to_operation(mutation) {
+        if let Some(op) =
+            self.try_translate_frame_mutation_to_operation(mutation, &mut 0)
+        {
             let outcome = self.apply_operation(op)?;
             let created_id = created_element_id(&outcome.applied.op);
             // Page-list mutations (M7 extends this set with ResizePage)
@@ -1407,9 +1409,15 @@ impl CanvasModel {
     /// `paged_mutate::Operation` when the mutation is a frame-shape
     /// edit. Returns `None` for text edits + any mutation kind not yet
     /// bridged (MoveFrame, InsertFrame, etc.).
+    /// `mint_offset` (FINDING #6) tracks how many page-item ids this
+    /// translation pass has already minted, so a `Batch` of N inserts
+    /// gets N distinct ids instead of N copies of `u<max+1>`. Top-level
+    /// callers pass `&mut 0`; the `Batch` arm threads the SAME counter
+    /// through every child so the ids stay unique across the batch.
     fn try_translate_frame_mutation_to_operation(
         &self,
         mutation: &Mutation,
+        mint_offset: &mut u64,
     ) -> Option<paged_mutate::Operation> {
         use paged_mutate::{NodeId, Operation, PropertyPath, Value};
         match mutation {
@@ -1432,7 +1440,7 @@ impl CanvasModel {
                     parent: NodeId::Spread(spread_id),
                     position,
                     node: paged_mutate::NodeSpec::Rectangle {
-                        self_id: self.mint_page_item_id(),
+                        self_id: self.mint_page_item_id_with_offset(mint_offset),
                         // Page-local (top, left, bottom, right) →
                         // spread coords (the marquee_hits rule: y axes
                         // shift by origin.y, x axes by origin.x).
@@ -1458,7 +1466,7 @@ impl CanvasModel {
                     parent: NodeId::Spread(spread_id),
                     position,
                     node: paged_mutate::NodeSpec::TextFrame {
-                        self_id: self.mint_page_item_id(),
+                        self_id: self.mint_page_item_id_with_offset(mint_offset),
                         bounds: [
                             bounds.0 + oy,
                             bounds.1 + ox,
@@ -1490,7 +1498,7 @@ impl CanvasModel {
                     parent: NodeId::Spread(spread_id),
                     position,
                     node: paged_mutate::NodeSpec::GraphicLine {
-                        self_id: self.mint_page_item_id(),
+                        self_id: self.mint_page_item_id_with_offset(mint_offset),
                         bounds: [
                             s[1].min(e[1]),
                             s[0].min(e[0]),
@@ -1554,7 +1562,7 @@ impl CanvasModel {
                     parent: NodeId::Spread(spread_id),
                     position,
                     node: paged_mutate::NodeSpec::Polygon {
-                        self_id: self.mint_page_item_id(),
+                        self_id: self.mint_page_item_id_with_offset(mint_offset),
                         bounds: [top, left, bottom, right],
                         anchors: conv,
                         subpath_starts: vec![0],
@@ -1730,7 +1738,10 @@ impl CanvasModel {
                 // the worker can return a coherent error.
                 let mut translated = Vec::with_capacity(ops.len());
                 for child in ops {
-                    let op = self.try_translate_frame_mutation_to_operation(child)?;
+                    // FINDING #6 — thread the SAME mint counter so each
+                    // child insert in the batch mints a distinct self_id.
+                    let op = self
+                        .try_translate_frame_mutation_to_operation(child, mint_offset)?;
                     translated.push(op);
                 }
                 Some(Operation::Batch { ops: translated })
@@ -2003,7 +2014,7 @@ impl CanvasModel {
                     parent: NodeId::Spread(spread_id),
                     position,
                     node: paged_mutate::NodeSpec::Oval {
-                        self_id: self.mint_page_item_id(),
+                        self_id: self.mint_page_item_id_with_offset(mint_offset),
                         // Page-local (top, left, bottom, right) → spread
                         // coords (same rule as InsertFrame).
                         bounds: [
@@ -2177,15 +2188,21 @@ impl CanvasModel {
         }
     }
 
-    /// Phase B — look up a frame's `NodeId` by its raw `Self` id.
-    /// Searches text frames first, then rectangles. Phase D extends
-    /// to ovals / polygons / graphic lines as `apply.rs` graduates.
     /// Editor-ops — mint a fresh, document-wide-unique page-item
     /// `Self` id (`u<hex>`, the bare style real IDML page items use).
     /// Scans every page-item id across all spreads for the highest
     /// `u<hex>` suffix and returns the successor — collision-safe by
     /// construction.
-    pub(crate) fn mint_page_item_id(&self) -> String {
+    ///
+    /// FINDING #6 — batch-safe id minting. The scene is only mutated at
+    /// `apply` time, so every translate-time `mint_page_item_id()` within
+    /// one `Operation::Batch` saw the SAME unmutated max and minted the
+    /// SAME `u<max+1>` for all N inserts — `paged_mutate::apply` then
+    /// rejected the 2nd insert with "duplicate self_id". `offset` is the
+    /// number of ids already minted earlier in the same translation pass;
+    /// the caller bumps it by one after each mint so N successive calls
+    /// yield `u<max+1>, u<max+2>, …`. Standalone inserts pass `&mut 0`.
+    pub(crate) fn mint_page_item_id_with_offset(&self, offset: &mut u64) -> String {
         let mut max: u64 = 0;
         for parsed in &self.scene.spreads {
             let s = &parsed.spread;
@@ -2208,7 +2225,9 @@ impl CanvasModel {
                 scan_page_item_id(&mut max, g.self_id.as_deref());
             }
         }
-        format!("u{:x}", max + 1)
+        let id = format!("u{:x}", max + 1 + *offset);
+        *offset += 1;
+        id
     }
 
     /// Editor-ops — resolve the spread hosting `page_id` plus the

@@ -188,13 +188,29 @@ fn resolve_effect_color(
     cmyk_xform: Option<&paged_color::IccTransform>,
     list: &mut paged_compose::DisplayList,
 ) -> Color {
+    resolve_effect_color_or(id, Color::BLACK, palette, cmyk_xform, list)
+}
+
+/// As [`resolve_effect_color`] but with a caller-supplied fallback for
+/// the `None` / unresolvable case. FINDING #7.4 — glows default to
+/// **white**, not black: InDesign's default glow `EffectColor` is a
+/// light tint and the default blend is `Screen`, under which a *black*
+/// glow is a no-op (`screen(base, 0) = base`) and paints zero pixels.
+/// Shadows keep the black default (multiply-ish look).
+fn resolve_effect_color_or(
+    id: Option<&str>,
+    fallback: Color,
+    palette: &Graphic,
+    cmyk_xform: Option<&paged_color::IccTransform>,
+    list: &mut paged_compose::DisplayList,
+) -> Color {
     let Some(id) = id else {
-        return Color::BLACK;
+        return fallback;
     };
     match color_id_to_paint_with_list(id, palette, cmyk_xform, list) {
         Some(Paint::Solid(c)) => c,
         Some(Paint::Cmyk { rgb, .. }) => rgb,
-        _ => Color::BLACK,
+        _ => fallback,
     }
 }
 
@@ -246,7 +262,14 @@ fn outer_glow_from_parser(
     cmyk_xform: Option<&paged_color::IccTransform>,
     list: &mut paged_compose::DisplayList,
 ) -> ComposeOuterGlow {
-    let color = resolve_effect_color(p.effect_color.as_deref(), palette, cmyk_xform, list);
+    // FINDING #7.4 — glow default color is white (visible under Screen).
+    let color = resolve_effect_color_or(
+        p.effect_color.as_deref(),
+        Color::WHITE,
+        palette,
+        cmyk_xform,
+        list,
+    );
     ComposeOuterGlow {
         blur_radius: p.size.unwrap_or(DEFAULT_BLUR_RADIUS),
         color,
@@ -262,7 +285,14 @@ fn inner_glow_from_parser(
     cmyk_xform: Option<&paged_color::IccTransform>,
     list: &mut paged_compose::DisplayList,
 ) -> ComposeInnerGlow {
-    let color = resolve_effect_color(p.effect_color.as_deref(), palette, cmyk_xform, list);
+    // FINDING #7.4 — glow default color is white (visible under Screen).
+    let color = resolve_effect_color_or(
+        p.effect_color.as_deref(),
+        Color::WHITE,
+        palette,
+        cmyk_xform,
+        list,
+    );
     ComposeInnerGlow {
         blur_radius: p.size.unwrap_or(DEFAULT_BLUR_RADIUS),
         color,

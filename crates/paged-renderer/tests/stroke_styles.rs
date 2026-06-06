@@ -248,6 +248,73 @@ fn gap_color_dash_emits_under_stroke_plus_dash() {
 }
 
 #[test]
+fn frame_gap_color_overrides_style_def_gap_color() {
+    // FINDING #7.5 — a per-FRAME `GapColor` (W0.3's mutation target)
+    // wins over the `StrokeStyleDef`'s gap colour (W1.2). The style def
+    // declares Cyan gap; the frame overrides with Black. The under-
+    // stroke (drawn first) must carry the frame's Black, not Cyan.
+    let style = r#"<DashedStrokeStyle Self="StrokeStyle/GapDash" Name="GapDash"
+        GapColor="Color/Cyan" GapTint="100" Pattern="8 6"/>"#;
+    let bytes = build_idml(
+        r#"StrokeColor="Color/Black" StrokeWeight="8" StrokeType="StrokeStyle/GapDash"
+           GapColor="Color/Black" GapTint="100""#,
+        style,
+    );
+    let document = Document::open(&bytes).unwrap();
+    let built = pipeline::build_document(&document, &PipelineOptions::default()).unwrap();
+    let page = &built.pages[0];
+    let strokes = stroke_paths(&page.list.commands);
+    assert_eq!(
+        strokes.len(),
+        2,
+        "gap under-stroke + dash; got {:?}",
+        page.list.commands
+    );
+    // The under-stroke (drawn first) carries the gap paint. The frame's
+    // Black (CMYK 0 0 0 100 → near-black RGB) must win over the style's
+    // Cyan (CMYK 100 0 0 0 → cyan RGB).
+    let under_paint = match strokes[0] {
+        DisplayCommand::StrokePath { paint, .. } => *paint,
+        _ => unreachable!(),
+    };
+    let c = match under_paint {
+        paged_compose::Paint::Solid(c) => c,
+        paged_compose::Paint::Cmyk { rgb, .. } => rgb,
+        other => panic!("unexpected gap paint {other:?}"),
+    };
+    // Black gap: all channels low. Cyan would have a high blue/green.
+    assert!(
+        c.r < 0.3 && c.g < 0.3 && c.b < 0.3,
+        "frame GapColor=Black must win over style Cyan, got {c:?}"
+    );
+}
+
+#[test]
+fn frame_gap_color_paints_when_style_def_has_none() {
+    // FINDING #7.5 — a dashed frame with NO style-def gap colour but a
+    // per-frame `GapColor` still paints the gap under-stroke (pre-fix the
+    // `Plain { gap_color: None }` class made the stroke non-styled and
+    // the frame override was dropped → zero pixel delta in the editor).
+    let style = r#"<DashedStrokeStyle Self="StrokeStyle/PlainDash" Name="PlainDash"
+        Pattern="8 6"/>"#;
+    let no_gap = build_idml(
+        r#"StrokeColor="Color/Black" StrokeWeight="8" StrokeType="StrokeStyle/PlainDash""#,
+        style,
+    );
+    let with_gap = build_idml(
+        r#"StrokeColor="Color/Black" StrokeWeight="8" StrokeType="StrokeStyle/PlainDash"
+           GapColor="Color/Cyan" GapTint="100""#,
+        style,
+    );
+    let n_no = stroke_paths(&built_commands(&no_gap)).len();
+    let n_with = stroke_paths(&built_commands(&with_gap)).len();
+    assert!(
+        n_with > n_no,
+        "per-frame GapColor must add the gap under-stroke: no-gap={n_no}, with-gap={n_with}"
+    );
+}
+
+#[test]
 fn solid_stroke_without_style_is_a_single_strokepath() {
     // Sanity floor: a plain solid stroke with no custom style still
     // emits exactly one StrokePath (no gap pass, no stripes).

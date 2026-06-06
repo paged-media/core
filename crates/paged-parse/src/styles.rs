@@ -680,6 +680,11 @@ pub struct ParagraphStyleDef {
     /// `Justification` enum at XML-read time.
     pub justification: Option<Justification>,
     pub first_line_indent: Option<f32>,
+    /// `LeftIndent` / `RightIndent` in pt — the paragraph's left/right
+    /// margin offsets. Narrow the composed column and shift the body
+    /// (FINDING #7.2). `None` ⇒ inherit through the cascade.
+    pub left_indent: Option<f32>,
+    pub right_indent: Option<f32>,
     pub space_before: Option<f32>,
     pub space_after: Option<f32>,
     pub underline: Option<bool>,
@@ -955,6 +960,11 @@ pub struct ResolvedParagraph {
     pub tracking: Option<f32>,
     pub justification: Option<Justification>,
     pub first_line_indent: Option<f32>,
+    /// `LeftIndent` / `RightIndent` in pt (FINDING #7.2) — the
+    /// paragraph's left/right margin offsets resolved through the
+    /// cascade. `None` ⇒ no indent.
+    pub left_indent: Option<f32>,
+    pub right_indent: Option<f32>,
     pub space_before: Option<f32>,
     pub space_after: Option<f32>,
     pub underline: Option<bool>,
@@ -1712,6 +1722,8 @@ impl ResolvedParagraph {
         self.tracking = self.tracking.or(def.tracking);
         self.justification = self.justification.or(def.justification);
         self.first_line_indent = self.first_line_indent.or(def.first_line_indent);
+        self.left_indent = self.left_indent.or(def.left_indent);
+        self.right_indent = self.right_indent.or(def.right_indent);
         self.space_before = self.space_before.or(def.space_before);
         self.space_after = self.space_after.or(def.space_after);
         self.underline = self.underline.or(def.underline);
@@ -2178,6 +2190,8 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
             .as_deref()
             .and_then(Justification::from_idml),
         first_line_indent: attr(e, b"FirstLineIndent").and_then(|s| s.parse().ok()),
+        left_indent: attr(e, b"LeftIndent").and_then(|s| s.parse().ok()),
+        right_indent: attr(e, b"RightIndent").and_then(|s| s.parse().ok()),
         space_before: attr(e, b"SpaceBefore").and_then(|s| s.parse().ok()),
         space_after: attr(e, b"SpaceAfter").and_then(|s| s.parse().ok()),
         underline: attr(e, b"Underline").and_then(|s| s.parse().ok()),

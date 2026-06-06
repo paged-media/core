@@ -68,6 +68,11 @@ pub struct PositionedGlyph {
     /// glyph-emit affine y-scale (twin of `x_scale`); scales glyph
     /// height without changing the line's advance or leading.
     pub y_scale: f32,
+    /// IDML `Skew` (false-italic shear) in degrees. Positive leans the
+    /// glyph tops to the right. Folded into the glyph-emit affine's `c`
+    /// (x-shear) term at paint time; 0.0 = upright. Like `y_scale` it
+    /// does not alter the advance or leading — pure paint-space shear.
+    pub skew_deg: f32,
     /// Concept 3 (PDF export) — the source character at `cluster`,
     /// captured at layout time (the only place the text is in
     /// scope). Feeds the exporter's `/ToUnicode` CMap; rasterizers
@@ -250,6 +255,7 @@ pub fn position_line(
             strikethru: false,
             x_scale: 1.0,
             y_scale: 1.0,
+            skew_deg: 0.0,
         });
         pen_x += g.x_advance;
     }
@@ -358,6 +364,11 @@ pub struct StyledRun<'a> {
     /// per-glyph emit affine as `y_scale` rather than folded into
     /// shaping.
     pub vertical_scale_pct: f32,
+    /// IDML `Skew` (false-italic shear) in degrees. Carried straight
+    /// through to each glyph's `skew_deg`; folded into the emit affine's
+    /// x-shear at paint time. Like vertical scale it does not affect
+    /// shaping/advance, so it never reaches the breaker.
+    pub skew_deg: f32,
     /// Per-cluster glyph-fallback faces. When `face` shapes a cluster
     /// to `.notdef` (glyph id 0), the composer retries that cluster
     /// against each face in this slice in order, taking the first
@@ -824,6 +835,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                 strikethru: run.strikethru,
                 x_scale: (run.horizontal_scale_pct / 100.0).max(0.0),
                 y_scale: (run.vertical_scale_pct / 100.0).max(0.0),
+                skew_deg: run.skew_deg,
                 // Concept 3 — the source character, for /ToUnicode.
                 ch: paragraph_text
                     .get(fg.cluster as usize..)
@@ -855,6 +867,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                         strikethru: r.strikethru,
                         x_scale: (r.horizontal_scale_pct / 100.0).max(0.0),
                         y_scale: (r.vertical_scale_pct / 100.0).max(0.0),
+                        skew_deg: r.skew_deg,
                     });
                     pen_x += g.x_advance;
                 }
@@ -1249,6 +1262,7 @@ impl<'a, 'b> LeaderContext<'a, 'b> {
                     strikethru: false,
                     x_scale: (run.horizontal_scale_pct / 100.0).max(0.0),
                     y_scale: (run.vertical_scale_pct / 100.0).max(0.0),
+                    skew_deg: run.skew_deg,
                 });
                 pen_x += g.x_advance;
             }
@@ -1688,6 +1702,7 @@ mod tests {
             strikethru: false,
             x_scale: 1.0,
             y_scale: 1.0,
+            skew_deg: 0.0,
             ch: None,
         }
     }
@@ -1724,6 +1739,7 @@ mod tests {
                 strikethru: false,
                 x_scale: 1.0,
                 y_scale: 1.0,
+                skew_deg: 0.0,
                 ch: None,
             });
             pen += adv;
@@ -1934,6 +1950,7 @@ mod tests {
                 strikethru: false,
                 x_scale: 1.0,
                 y_scale: 1.0,
+                skew_deg: 0.0,
                 ch: None,
             });
             x += advance;

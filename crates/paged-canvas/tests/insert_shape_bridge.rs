@@ -207,6 +207,69 @@ fn minted_ids_are_unique_across_inserts() {
 }
 
 #[test]
+fn batch_of_insert_frames_mints_distinct_ids_and_single_undo_removes_all() {
+    // FINDING #6 — the editor's gridify N×M sends ONE
+    // `Mutation::Batch { ops: [InsertFrame; N] }`. Pre-fix, every child
+    // translated against the same unmutated scene and minted the SAME
+    // `u<max+1>`, so `paged_mutate::apply` rejected the 2nd insert with
+    // "duplicate self_id … IDML node IDs must be unique".
+    let mut model = load();
+    let rects_before = model.scene().spreads[0].spread.rectangles.len();
+    let before = format!("{:?}", model.scene().spreads);
+
+    let batch = Mutation::Batch {
+        ops: vec![
+            Mutation::InsertFrame {
+                page_id: PageId("p1".into()),
+                bounds: (0.0, 0.0, 10.0, 10.0),
+            },
+            Mutation::InsertFrame {
+                page_id: PageId("p1".into()),
+                bounds: (20.0, 0.0, 30.0, 10.0),
+            },
+            Mutation::InsertFrame {
+                page_id: PageId("p1".into()),
+                bounds: (40.0, 0.0, 50.0, 10.0),
+            },
+        ],
+    };
+    let outcome = model.apply_mutation(&batch).expect("gridify batch applies");
+    assert!(outcome.applied_seq > 0);
+
+    // Three new rectangles, each with a DISTINCT self_id.
+    let spread = &model.scene().spreads[0].spread;
+    assert_eq!(
+        spread.rectangles.len(),
+        rects_before + 3,
+        "batch of 3 inserts must create 3 frames"
+    );
+    let new_ids: Vec<String> = spread.rectangles[rects_before..]
+        .iter()
+        .map(|r| r.self_id.clone().expect("minted id"))
+        .collect();
+    let unique: std::collections::HashSet<_> = new_ids.iter().collect();
+    assert_eq!(
+        unique.len(),
+        3,
+        "batch inserts must mint distinct ids, got {new_ids:?}"
+    );
+
+    // Single undo removes ALL three (one undoable Batch op) and restores
+    // the scene byte-identically.
+    model.undo().expect("undo");
+    assert_eq!(
+        model.scene().spreads[0].spread.rectangles.len(),
+        rects_before,
+        "single undo of the batch must remove all 3 frames"
+    );
+    assert_eq!(
+        format!("{:?}", model.scene().spreads),
+        before,
+        "undo of the batch must restore the scene byte-identically"
+    );
+}
+
+#[test]
 fn insert_line_creates_two_anchor_open_graphic_line() {
     let mut model = load();
     let outcome = model

@@ -3700,6 +3700,7 @@ fn emit_paragraph_into_chain(
                 baseline_shift_pt,
                 horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
                 vertical_scale_pct: resolved_runs[i].vertical_scale.unwrap_or(100.0),
+                skew_deg: resolved_runs[i].skew.unwrap_or(0.0),
                 fallback_faces: &fallback_faces_pool,
                 shaping_features: shaping_features_from(
                     resolved_runs[i].ligatures_on,
@@ -3749,9 +3750,16 @@ fn emit_paragraph_into_chain(
         };
 
     let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
-    let Some(col_pt) = em.column_width_pt else {
+    let Some(full_col_pt) = em.column_width_pt else {
         return;
     };
+    // FINDING #7.2 — LeftIndent / RightIndent narrow the composed
+    // column (so the breaker wraps inside the indented measure) and the
+    // body shifts right by LeftIndent post-layout. Clamp so a pathological
+    // indent can't drive the column non-positive.
+    let left_indent_pt = resolved_paragraph.left_indent.unwrap_or(0.0).max(0.0);
+    let right_indent_pt = resolved_paragraph.right_indent.unwrap_or(0.0).max(0.0);
+    let col_pt = (full_col_pt - left_indent_pt - right_indent_pt).max(1.0);
     let mut lopts = paged_text::LayoutOptions::new(col_pt, paragraph_size);
     lopts.alignment = map_justification(resolved_paragraph.justification);
     apply_paragraph_compose_options(&mut lopts, em.hyphenator, &resolved_paragraph);
@@ -4002,6 +4010,7 @@ fn emit_paragraph_into_chain(
                 baseline_shift_pt: r.baseline_shift_pt,
                 horizontal_scale_pct: r.horizontal_scale_pct,
                 vertical_scale_pct: r.vertical_scale_pct,
+                skew_deg: r.skew_deg,
                 fallback_faces: r.fallback_faces,
                 shaping_features: r.shaping_features,
             });
@@ -4176,6 +4185,21 @@ fn emit_paragraph_into_chain(
                     }
                 }
                 prev_unique_baseline = Some(new_baseline);
+            }
+        }
+    }
+
+    // FINDING #7.2 — LeftIndent shifts the whole paragraph body right.
+    // The column was already narrowed by left+right indent above (so the
+    // breaker wrapped inside the measure); this slides every line to the
+    // left margin. FirstLineIndent (below) stacks on top of this on line 0.
+    if left_indent_pt != 0.0 {
+        let left_64 = (left_indent_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+        if left_64 != 0 {
+            for line in laid_out.lines.iter_mut() {
+                for g in &mut line.glyphs {
+                    g.x += left_64;
+                }
             }
         }
     }
@@ -5066,6 +5090,9 @@ fn emit_paragraph_into_chain(
                 strikethru: false,
                 x_scale: 1.0,
                 y_scale: 1.0,
+                // Drop caps inherit run 0's skew (the cap is the head of
+                // the first run) so a skewed paragraph leans its cap too.
+                skew_deg: resolved_runs.first().and_then(|r| r.skew).unwrap_or(0.0),
                 ch: None,
             });
             pen_x += g.x_advance;
@@ -7803,6 +7830,7 @@ fn emit_ruby_for_line(
                 strikethru: false,
                 x_scale: 1.0,
                 y_scale: 1.0,
+                skew_deg: 0.0,
                 ch: None,
             });
             cursor = cursor.saturating_add(g.x_advance);

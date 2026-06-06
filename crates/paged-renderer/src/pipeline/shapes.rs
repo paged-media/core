@@ -499,7 +499,12 @@ fn emit_rectangle_polygon_path(
     // can't be safely inset/outset; documented in `stroke_geom`).
     let class =
         classify_stroke_style(resolved.stroke_type, stroke_width, &document.styles.stroke_styles);
-    let styled = !matches!(class, StrokeStyleClass::Plain { gap_color: None });
+    // FINDING #7.5 — a per-frame GapColor turns a dashed/dotted stroke
+    // (whose gaps would otherwise show the page) into a gap-filled
+    // styled stroke even when the style def declares no gap colour.
+    let gap_override = frame_gap_override(resolved, &stroke, &class);
+    let styled =
+        !matches!(class, StrokeStyleClass::Plain { gap_color: None }) || gap_override.is_some();
     let handled = if styled && stroke_width > 0.0 {
         if let (Some(base), Some(paint)) = (
             base_path.as_ref(),
@@ -516,8 +521,17 @@ fn emit_rectangle_polygon_path(
             }),
         ) {
             emit_styled_stroke(
-                page, base, cache_key, &class, &stroke, stroke_width, paint, palette, cmyk_xform,
+                page,
+                base,
+                cache_key,
+                &class,
+                &stroke,
+                stroke_width,
+                paint,
+                palette,
+                cmyk_xform,
                 outer,
+                gap_override,
             )
         } else {
             false
@@ -698,7 +712,11 @@ pub(super) fn emit_rectangle_into(
                 stroke_width,
                 &document.styles.stroke_styles,
             );
-            let styled = !matches!(class, StrokeStyleClass::Plain { gap_color: None });
+            // FINDING #7.5 — per-frame GapColor override (see the polygon
+            // path for the rationale).
+            let gap_override = frame_gap_override(&resolved, &stroke, &class);
+            let styled = !matches!(class, StrokeStyleClass::Plain { gap_color: None })
+                || gap_override.is_some();
             let handled = if styled {
                 let base = axis_rect_path(inset);
                 let seed = resolved
@@ -706,8 +724,17 @@ pub(super) fn emit_rectangle_into(
                     .map(|id| fnv_1a_u64(id.as_bytes()))
                     .unwrap_or(0xFEED);
                 emit_styled_stroke(
-                    page, &base, seed, &class, &stroke, stroke_width, paint, palette,
-                    cmyk_xform, outer,
+                    page,
+                    &base,
+                    seed,
+                    &class,
+                    &stroke,
+                    stroke_width,
+                    paint,
+                    palette,
+                    cmyk_xform,
+                    outer,
+                    gap_override,
                 )
             } else {
                 false
@@ -814,6 +841,29 @@ pub(crate) enum StrokeStyleClass<'a> {
         period: f32,
         sub_weight: f32,
     },
+}
+
+/// FINDING #7.5 — the frame's INSTANCE gap colour override, or `None`.
+/// Returns `Some((gap_color_id, gap_tint))` only when the frame carries a
+/// `GapColor` AND the stroke actually has gaps to fill: either a dash
+/// pattern (`stroke.dash`) or a striped/dashed/dotted `class`. A solid
+/// stroke has no gaps, so the override is irrelevant there. This value
+/// takes precedence over the `StrokeStyleDef`'s gap colour in
+/// `emit_styled_stroke`.
+fn frame_gap_override<'a>(
+    resolved: &super::ResolvedFrame<'a>,
+    stroke: &Stroke,
+    class: &StrokeStyleClass<'_>,
+) -> Option<(&'a str, Option<f32>)> {
+    let gc = resolved.stroke_gap_color?;
+    let class_has_gaps = matches!(
+        class,
+        StrokeStyleClass::Striped { .. } | StrokeStyleClass::Plain { gap_color: Some(_) }
+    );
+    if stroke.dash.len == 0 && !class_has_gaps {
+        return None;
+    }
+    Some((gc, resolved.stroke_gap_tint))
 }
 
 /// Classify a frame's `StrokeType` into a [`StrokeStyleClass`] given the
@@ -971,15 +1021,25 @@ pub(crate) fn emit_styled_stroke(
     palette: &Graphic,
     cmyk_xform: Option<&paged_color::IccTransform>,
     outer: Transform,
+    // FINDING #7.5 — the frame's INSTANCE `(GapColor, GapTint)`. When
+    // present it overrides the `StrokeStyleDef`'s gap colour (W0.3's
+    // per-frame mutation must win over the style def's W1.2 gap fill).
+    gap_override: Option<(&str, Option<f32>)>,
 ) -> bool {
     use crate::pipeline::stroke_geom;
     // Resolve a gap-colour paint (if any) so the under-stroke pass can
     // run beneath dashed/dotted/striped patterns.
-    let gap_color = match class {
+    let style_gap_color = match class {
         StrokeStyleClass::Plain { gap_color } | StrokeStyleClass::Striped { gap_color, .. } => {
             *gap_color
         }
         StrokeStyleClass::Wavy { .. } => None,
+    };
+    // Frame instance gap colour wins; fall back to the style def's. The
+    // instance tint (if any) rides through `apply_fill_tint`.
+    let (gap_color, gap_tint) = match gap_override {
+        Some((gc, tint)) => (Some(gc), tint),
+        None => (style_gap_color, None),
     };
     // Gap-colour second pass: a continuous solid under-stroke of the full
     // weight in the gap colour, beneath the patterned/striped stroke, so
@@ -987,6 +1047,7 @@ pub(crate) fn emit_styled_stroke(
     // first (drawn first ⇒ underneath).
     if let Some(gc) = gap_color {
         if let Some(gap_paint) = color_id_to_paint(gc, palette, cmyk_xform) {
+            let gap_paint = crate::pipeline::apply_fill_tint(gap_paint, gap_tint);
             let (gap_path_id, _) = page
                 .list
                 .paths

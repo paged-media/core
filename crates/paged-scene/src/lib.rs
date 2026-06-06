@@ -854,6 +854,10 @@ impl ResolvedParagraphAttrs {
         Self {
             justification: paragraph.justification,
             first_line_indent: paragraph.first_line_indent,
+            // FINDING #7.2 — instance margin indents win over the style
+            // cascade (filled by `merge_below` only when unset here).
+            left_indent: paragraph.left_indent,
+            right_indent: paragraph.right_indent,
             space_before: paragraph.space_before,
             space_after: paragraph.space_after,
             tab_list: paragraph.tab_list.clone(),
@@ -891,8 +895,14 @@ impl ResolvedParagraphAttrs {
             // override today; the cascade pulls everything from the
             // applied paragraph style.
             shading: Default::default(),
-            rule_above: Default::default(),
-            rule_below: Default::default(),
+            // FINDING #7.3 — capture the paragraph's INSTANCE rule
+            // structs (set directly on the ParagraphStyleRange, e.g. by
+            // the `ParagraphRuleAbove` / `Below` mutation). `merge_below`
+            // then fills any unset per-field value from the style
+            // cascade. Pre-fix these were `Default::default()`, so an
+            // instance-only rule (no style rule) painted nothing.
+            rule_above: paragraph.rule_above.clone(),
+            rule_below: paragraph.rule_below.clone(),
             border: Default::default(),
             // Nested styles are not declared inline on a
             // ParagraphStyleRange in normal IDML; `merge_below` pulls
@@ -905,6 +915,9 @@ impl ResolvedParagraphAttrs {
     pub fn merge_below(&mut self, p: &paged_parse::ResolvedParagraph) {
         self.justification = self.justification.or(p.justification);
         self.first_line_indent = self.first_line_indent.or(p.first_line_indent);
+        // FINDING #7.2 — fall back to the cascaded style indents.
+        self.left_indent = self.left_indent.or(p.left_indent);
+        self.right_indent = self.right_indent.or(p.right_indent);
         self.space_before = self.space_before.or(p.space_before);
         self.space_after = self.space_after.or(p.space_after);
         if self.tab_list.is_empty() && !p.tab_list.is_empty() {
@@ -1176,6 +1189,14 @@ pub struct ResolvedRunAttrs {
 pub struct ResolvedParagraphAttrs {
     pub justification: Option<paged_parse::Justification>,
     pub first_line_indent: Option<f32>,
+    /// FINDING #7.2 — `LeftIndent` / `RightIndent` in pt. The
+    /// paragraph's left/right margin offsets: the renderer narrows the
+    /// composed column by `left + right` and shifts the body right by
+    /// `left`. Instance values (set directly on the ParagraphStyleRange,
+    /// e.g. via the `ParagraphLeftIndent` mutation) win over the style
+    /// cascade. `None` ⇒ no indent.
+    pub left_indent: Option<f32>,
+    pub right_indent: Option<f32>,
     pub space_before: Option<f32>,
     pub space_after: Option<f32>,
     pub tab_list: Vec<paged_parse::TabStop>,

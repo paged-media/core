@@ -17,7 +17,7 @@
 
 use std::io::Write;
 
-use paged_compose::{Color, Paint};
+use paged_compose::{Color, DisplayCommand, Paint, Transform};
 use paged_renderer::{pipeline, Document, PipelineOptions};
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
@@ -640,6 +640,90 @@ fn rectangle_image_link_decodes_and_blits() {
     // Image command alongside the rectangle's FillPath.
     let page = &built.pages[0];
     assert_eq!(page.list.images.len(), 1);
+}
+
+/// Like `build_image_idml` but the placed `<Image>` carries an inner
+/// `ItemTransform` (`image_item_transform`) — the `ImageContentTransform`
+/// mutation target. `extra` is spliced into the `<Image>` element.
+fn build_image_idml_with(image_attrs: &str) -> Vec<u8> {
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    zip.start_file("designmap.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+</Document>"#,
+    )
+    .unwrap();
+    zip.start_file("Resources/Graphic.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic/>
+</idPkg:Graphic>"#,
+    )
+    .unwrap();
+    let spread = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 200"/>
+    <Rectangle Self="rectImage" GeometricBounds="40 40 160 160" StrokeWeight="0">
+      <Image Self="imageA" LinkResourceURI="logo.png" {image_attrs}/>
+    </Rectangle>
+  </Spread>
+</idPkg:Spread>"#
+    );
+    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+    zip.write_all(spread.as_bytes()).unwrap();
+    zip.finish().unwrap().into_inner()
+}
+
+#[test]
+fn image_content_transform_changes_emitted_image_command_with_real_image() {
+    // FINDING #7.6 — with a REAL decodable image, the placed `<Image>`'s
+    // inner `ItemTransform` (the `ImageContentTransform` mutation target)
+    // flows into the emitted `Image` command's transform. The editor saw
+    // a zero pixel delta only because its probe used a placeholder image
+    // that fails to decode → the image emit `return`s early on
+    // `ImageResolution::DecodeFailed`/`LinkMissing` (images.rs), so there
+    // is no `Image` command for the transform to act on. This is
+    // fixture-conditioned, not an engine gap.
+    let mut br = paged_renderer::BytesResolver::new();
+    br.add_image("logo.png", green_pixel_png());
+    let opts = PipelineOptions {
+        assets: Some(&br),
+        ..PipelineOptions::default()
+    };
+
+    let image_transform = |bytes: &[u8]| -> Transform {
+        let document = Document::open(bytes).unwrap();
+        let built = pipeline::build_document(&document, &opts).unwrap();
+        built.pages[0]
+            .list
+            .commands
+            .iter()
+            .find_map(|c| match c {
+                DisplayCommand::Image { transform, .. } => Some(*transform),
+                _ => None,
+            })
+            .expect("a real decodable image emits one Image command")
+    };
+
+    // Identity inner transform vs a translated+scaled one. The emitted
+    // Image command transform must differ.
+    let ident = image_transform(&build_image_idml_with(r#"ItemTransform="1 0 0 1 0 0""#));
+    let moved = image_transform(&build_image_idml_with(r#"ItemTransform="2 0 0 2 30 15""#));
+    assert_ne!(
+        ident.0, moved.0,
+        "ImageContentTransform must change the emitted Image command transform"
+    );
 }
 
 fn build_threaded_idml() -> Vec<u8> {

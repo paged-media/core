@@ -1924,6 +1924,7 @@ fn measure_cell_paragraph(
             },
             horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
             vertical_scale_pct: resolved_runs[i].vertical_scale.unwrap_or(100.0),
+            skew_deg: resolved_runs[i].skew.unwrap_or(0.0),
             fallback_faces: &[],
             shaping_features: shaping_features_from(
                 resolved_runs[i].ligatures_on,
@@ -2118,6 +2119,7 @@ pub(super) fn emit_cell_paragraph(
             },
             horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
             vertical_scale_pct: resolved_runs[i].vertical_scale.unwrap_or(100.0),
+            skew_deg: resolved_runs[i].skew.unwrap_or(0.0),
             fallback_faces: &[],
             shaping_features: shaping_features_from(
                 resolved_runs[i].ligatures_on,

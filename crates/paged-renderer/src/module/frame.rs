@@ -65,6 +65,12 @@ pub(crate) struct ResolvedFrame<'a> {
     pub end_cap: Option<&'a str>,
     pub end_join: Option<&'a str>,
     pub miter_limit: Option<f32>,
+    /// FINDING #7.5 — the frame's INSTANCE `GapColor` / `GapTint`
+    /// (W0.3 mutation target). Takes precedence over the
+    /// `StrokeStyleDef`'s gap colour when painting dashed/dotted/striped
+    /// gaps. `None` ⇒ fall back to the style def's gap colour.
+    pub stroke_gap_color: Option<&'a str>,
+    pub stroke_gap_tint: Option<f32>,
     pub corner_radius: Option<f32>,
     pub corner_option: Option<&'a str>,
     /// Q-16: per-corner `(option, radius)` overrides. When any corner
@@ -258,6 +264,8 @@ impl<'a> ResolvedFrame<'a> {
             end_cap: None,
             end_join: None,
             miter_limit: None,
+            stroke_gap_color: frame.stroke_gap_color.as_deref(),
+            stroke_gap_tint: frame.stroke_gap_tint,
             corner_radius: None,
             corner_option: None,
             corners: Default::default(),
@@ -304,6 +312,8 @@ impl<'a> ResolvedFrame<'a> {
             end_cap: rect.end_cap.as_deref(),
             end_join: rect.end_join.as_deref(),
             miter_limit: rect.miter_limit,
+            stroke_gap_color: rect.stroke_gap_color.as_deref(),
+            stroke_gap_tint: rect.stroke_gap_tint,
             corner_radius: rect.corner_radius,
             corner_option: rect.corner_option.as_deref(),
             corners: rect.corners,
@@ -334,6 +344,8 @@ impl<'a> ResolvedFrame<'a> {
             end_cap: None,
             end_join: None,
             miter_limit: None,
+            stroke_gap_color: oval.stroke_gap_color.as_deref(),
+            stroke_gap_tint: oval.stroke_gap_tint,
             corner_radius: None,
             corner_option: None,
             corners: Default::default(),
@@ -379,6 +391,8 @@ impl<'a> ResolvedFrame<'a> {
             end_cap: None,
             end_join: None,
             miter_limit: None,
+            stroke_gap_color: poly.stroke_gap_color.as_deref(),
+            stroke_gap_tint: poly.stroke_gap_tint,
             corner_radius: None,
             corner_option: None,
             corners: Default::default(),
@@ -419,6 +433,8 @@ impl<'a> ResolvedFrame<'a> {
             end_cap: None,
             end_join: None,
             miter_limit: None,
+            stroke_gap_color: line.stroke_gap_color.as_deref(),
+            stroke_gap_tint: line.stroke_gap_tint,
             corner_radius: None,
             corner_option: None,
             corners: Default::default(),

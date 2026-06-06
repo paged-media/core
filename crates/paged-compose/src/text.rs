@@ -172,7 +172,13 @@ pub fn emit_glyph_slice_blend<O, F>(
         // y-axis (the `-scale` y-flip term), scaling glyph height about
         // the baseline (`gy`) without touching the advance or leading.
         let sy = scale * g.y_scale;
-        let transform = Transform([sx, 0.0, 0.0, -sy, gx, gy]);
+        // IDML `Skew` (false italic) → the affine's `c` (x-shear) term.
+        // A glyph point at em-height `y` lands at page-x `sx·x + c·y`;
+        // positive `Skew` must push the glyph *top* (positive `y`) to
+        // the right, so `c = +tan(skew)·sy` (scaled by the y-axis so the
+        // lean tracks the glyph's painted height). 0° → 0 → upright.
+        let cterm = skew_shear(g.skew_deg, sy);
+        let transform = Transform([sx, 0.0, cterm, -sy, gx, gy]);
         // Concept 3 — glyph-run side-channel (collect_glyph_runs
         // builds only): record the parallel text-run entry BEFORE
         // pushing, so command_index points at the outline command.
@@ -248,7 +254,11 @@ pub fn emit_glyph_slice_stroke<O, S>(
         // y-axis (the `-scale` y-flip term), scaling glyph height about
         // the baseline (`gy`) without touching the advance or leading.
         let sy = scale * g.y_scale;
-        let transform = Transform([sx, 0.0, 0.0, -sy, gx, gy]);
+        // IDML `Skew` (false italic) → the affine's `c` (x-shear) term;
+        // mirrors the fill path so a skewed run keeps stroke + fill
+        // aligned. See `emit_glyph_slice_blend` for the sign rationale.
+        let cterm = skew_shear(g.skew_deg, sy);
+        let transform = Transform([sx, 0.0, cterm, -sy, gx, gy]);
         // Concept 3 — glyph-run side-channel (stroked text keeps
         // is_stroke so the exporter falls back to the outline: PDF
         // text render mode 1 strokes are a refinement).
@@ -271,6 +281,20 @@ pub fn emit_glyph_slice_stroke<O, S>(
             transform,
         });
     }
+}
+
+/// IDML `Skew` (false-italic shear) → the glyph affine's `c` term.
+/// `skew_deg` is the clockwise lean in degrees (InDesign's Skew /
+/// Shear field; positive leans the glyph top to the right). `sy` is the
+/// affine's painted y-scale, so the shear tracks the glyph's height.
+/// Returns 0.0 for an upright glyph — the common case — so the affine
+/// stays byte-identical to the pre-skew code path when `Skew` is unset.
+#[inline]
+fn skew_shear(skew_deg: f32, sy: f32) -> f32 {
+    if skew_deg == 0.0 {
+        return 0.0;
+    }
+    skew_deg.to_radians().tan() * sy
 }
 
 fn get_or_intern_glyph_outline(
@@ -454,6 +478,7 @@ mod tests {
             strikethru: false,
             x_scale,
             y_scale,
+            skew_deg: 0.0,
             ch: None,
         };
         let mut list = DisplayList::new();
@@ -497,6 +522,7 @@ mod tests {
             strikethru: false,
             x_scale,
             y_scale,
+            skew_deg: 0.0,
             ch: None,
         };
         let mut list = DisplayList::new();
@@ -521,6 +547,68 @@ mod tests {
     }
 
     #[test]
+    fn skew_folds_into_glyph_affine_c_term_and_leans_right() {
+        // FINDING #7.1 — IDML `Skew` (false italic) reaches the glyph
+        // affine's `c` (x-shear) term. Upright = 0; a positive skew
+        // makes `c > 0` so a point at positive em-`y` (the glyph top)
+        // lands further right (`x' = a·x + c·y + tx`). Twin axes (a/d)
+        // are untouched.
+        let glyph = |skew_deg: f32| PositionedGlyph {
+            glyph_id: 65,
+            cluster: 0,
+            x: 0,
+            y: 0,
+            x_advance: 0,
+            font_id: 0,
+            point_size: 0.0,
+            underline: false,
+            strikethru: false,
+            x_scale: 1.0,
+            y_scale: 1.0,
+            skew_deg,
+            ch: None,
+        };
+        let mut list = DisplayList::new();
+        for g in [glyph(0.0), glyph(15.0), glyph(-15.0)] {
+            emit_glyph_slice(
+                &[g],
+                1,
+                12.0,
+                |_| Paint::Solid(Color::BLACK),
+                (0.0, 0.0),
+                &UnitSquareOutliner::default(),
+                &mut list,
+            );
+        }
+        let aff = |i: usize| match &list.commands[i] {
+            DisplayCommand::FillPath { transform, .. } => transform.0,
+            other => panic!("expected FillPath, got {other:?}"),
+        };
+        let (upright, right, left) = (aff(0), aff(1), aff(2));
+        // Upright: c term is exactly 0 (byte-identical to pre-skew).
+        assert_eq!(upright[2], 0.0, "upright glyph must keep c=0");
+        // Positive skew → positive c (lean right); negative → negative c.
+        assert!(right[2] > 0.0, "positive skew must lean right: {right:?}");
+        assert!(left[2] < 0.0, "negative skew must lean left: {left:?}");
+        // Skew touches only `c`; the scale terms (a, d) are unchanged.
+        assert!(
+            (right[0] - upright[0]).abs() < 1e-6,
+            "skew must not touch a"
+        );
+        assert!(
+            (right[3] - upright[3]).abs() < 1e-6,
+            "skew must not touch d"
+        );
+        // Magnitude: c = tan(15°)·sy. sy = -d (the positive y-scale).
+        let sy = -upright[3];
+        assert!(
+            (right[2] - 15f32.to_radians().tan() * sy).abs() < 1e-5,
+            "c must be tan(skew)·sy, got {}",
+            right[2]
+        );
+    }
+
+    #[test]
     fn baseline_shift_offsets_glyph_y_via_positioned_y() {
         // Super/subscript baseline shift reaches the affine as the
         // glyph's `y` (1/64 pt, frame-relative): a lifted glyph has a
@@ -539,6 +627,7 @@ mod tests {
             strikethru: false,
             x_scale: 1.0,
             y_scale: 1.0,
+            skew_deg: 0.0,
             ch: None,
         };
         let mut list = DisplayList::new();
@@ -582,6 +671,7 @@ mod tests {
             strikethru: false,
             x_scale: 1.0,
             y_scale: 1.0,
+            skew_deg: 0.0,
             ch: None,
         }];
         let glyphs_b = vec![PositionedGlyph {
@@ -596,6 +686,7 @@ mod tests {
             strikethru: false,
             x_scale: 1.0,
             y_scale: 1.0,
+            skew_deg: 0.0,
             ch: None,
         }];
         emit_glyph_slice(
