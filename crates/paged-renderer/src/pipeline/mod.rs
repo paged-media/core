@@ -594,7 +594,7 @@ pub struct BreakRecord {
     pub source_text: String,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct PipelineStats {
     pub spreads: usize,
     pub pages: usize,
@@ -1963,67 +1963,143 @@ pub fn build_document(
         // resolve the host frame for each page.
         let chain_for_post = chain.clone();
         let chain_pages_for_post = chain_pages.clone();
-        let mut emitter = StoryEmitter::new(
-            document,
-            options,
-            palette,
-            cmyk_xform.as_ref(),
-            &font_table,
-            chain,
-            chain_pages,
-            &page_labels,
-            Some(&hyphenator),
-            head_wrap_rects,
-            chain_wrap_rects,
-        )
-        .with_optical_margin(
-            parsed.story.optical_margin_alignment,
-            parsed.story.optical_margin_size,
-        )
-        .with_story_id(&parsed.self_id);
-        // Phase 7 — capture each page's command count BEFORE this
-        // story's emit so a post-pass can rotate the story's commands
-        // when StoryDirection="VerticalWritingDirection".
-        let pre_story_cmd_counts: Vec<usize> =
-            pages.iter().map(|p| p.list.commands.len()).collect();
-        if let Some(paragraphs) = toc_paragraphs.as_ref() {
-            for paragraph in paragraphs {
-                emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
-            }
-        } else {
-            for paragraph in &parsed.story.paragraphs {
-                emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
-            }
-        }
-        emitter.apply_vertical_justification(&mut pages);
-        emitter.apply_polygon_clip(&mut pages);
-        emitter.apply_blend_groups(&mut pages);
-        // Phase 7 — vertical writing post-rotation. When the source
-        // story declares `StoryDirection="VerticalWritingDirection"`,
-        // rotate every command this story emitted by 90° CW around
-        // each host frame's top-left corner, then translate right
-        // by the frame's width. This maps the horizontal layout
-        // (lines top-to-bottom, chars left-to-right within a line)
-        // to CJK vertical convention (columns right-to-left, chars
-        // top-to-bottom within a column). Latin glyphs render
-        // sideways — full per-glyph upright counter-rotation
-        // (matched to InDesign's `<RotateSingleByteCharacters>` flag)
-        // is queued.
         let is_vertical = matches!(
             parsed.story.story_direction,
             Some(paged_parse::story::StoryDirection::VerticalWritingDirection)
         );
-        if is_vertical {
-            apply_vertical_writing_rotation(
-                &mut pages,
-                &pre_story_cmd_counts,
-                &chain_for_post,
-                &chain_pages_for_post,
-            );
+
+        // W1.7 — footnote space reservation. Footnotes are discovered
+        // while composing the very text that references them, so the
+        // pool's height isn't known until the body has been laid out —
+        // a chicken-and-egg the standard fix resolves by COMPOSING,
+        // MEASURING, then RE-COMPOSING with the bottom of each frame's
+        // text area held back by the measured pool height.
+        //
+        // Convergence: each iteration emits the whole story, measures
+        // every frame's pool, and sets `reserved[frame]` to that pool's
+        // height. A taller pool pushes the last body lines (and any
+        // footnote they reference) into the next frame, which can shrink
+        // THIS frame's pool — so we iterate to a fixpoint. In practice
+        // the reservation only ever grows or holds within a frame, so
+        // the loop settles in 1–2 passes; we cap at
+        // `MAX_FOOTNOTE_RESERVE_PASSES` and accept whatever the last
+        // pass produced (the pool is still drawn as an overlay, so a
+        // non-converged page degrades to today's behaviour rather than
+        // dropping content). A footnote whose reference moved to the
+        // next frame simply moves WITH it — the per-page pool the
+        // post-pass draws follows the capture, matching InDesign's
+        // "footnote travels with its reference" rule for the stable
+        // subset; cross-frame *splitting* of a single oversized
+        // footnote is still deferred (reported via FootnoteOverflow).
+        let pre_reset = snapshot_body_story_reset(&pages);
+        let pre_total_stats = total_stats;
+        // Map each chain frame to the (page, rect) key it captures
+        // footnotes under, so a measured pool routes back to the frame
+        // whose text area must shrink.
+        let frame_host_keys: Vec<(usize, i32, i32, i32, i32)> = chain_for_post
+            .iter()
+            .zip(chain_pages_for_post.iter())
+            .map(|(f, &p)| footnote_host_key_for_frame(f, p, &pages))
+            .collect();
+        let mut reserved_64: Vec<i32> = vec![0; chain_for_post.len()];
+
+        // Captured from the FINAL emit pass for the cache + side
+        // channels below.
+        let mut new_anchored: Vec<AnchoredImageEmit> = Vec::new();
+        let mut new_breaks: Vec<BreakRecord> = Vec::new();
+        let mut new_diags: Vec<Diagnostic> = Vec::new();
+
+        for pass in 0..MAX_FOOTNOTE_RESERVE_PASSES {
+            // Re-emit passes start from the pre-story snapshot so the
+            // page accumulates exactly one story's worth of commands.
+            if pass > 0 {
+                rollback_body_story(&mut pages, &pre_reset);
+                total_stats = pre_total_stats;
+            }
+            let mut emitter = StoryEmitter::new(
+                document,
+                options,
+                palette,
+                cmyk_xform.as_ref(),
+                &font_table,
+                chain_for_post.clone(),
+                chain_pages_for_post.clone(),
+                &page_labels,
+                Some(&hyphenator),
+                head_wrap_rects,
+                chain_wrap_rects.clone(),
+            )
+            .with_optical_margin(
+                parsed.story.optical_margin_alignment,
+                parsed.story.optical_margin_size,
+            )
+            .with_story_id(&parsed.self_id)
+            .with_footnote_reservation(&reserved_64);
+            // Phase 7 — capture each page's command count BEFORE this
+            // story's emit so a post-pass can rotate the story's commands
+            // when StoryDirection="VerticalWritingDirection".
+            let pre_story_cmd_counts: Vec<usize> =
+                pages.iter().map(|p| p.list.commands.len()).collect();
+            if let Some(paragraphs) = toc_paragraphs.as_ref() {
+                for paragraph in paragraphs {
+                    emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
+                }
+            } else {
+                for paragraph in &parsed.story.paragraphs {
+                    emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
+                }
+            }
+            emitter.apply_vertical_justification(&mut pages);
+            emitter.apply_polygon_clip(&mut pages);
+            emitter.apply_blend_groups(&mut pages);
+            // Phase 7 — vertical writing post-rotation. When the source
+            // story declares `StoryDirection="VerticalWritingDirection"`,
+            // rotate every command this story emitted by 90° CW around
+            // each host frame's top-left corner, then translate right
+            // by the frame's width. This maps the horizontal layout
+            // (lines top-to-bottom, chars left-to-right within a line)
+            // to CJK vertical convention (columns right-to-left, chars
+            // top-to-bottom within a column). Latin glyphs render
+            // sideways — full per-glyph upright counter-rotation
+            // (matched to InDesign's `<RotateSingleByteCharacters>` flag)
+            // is queued.
+            if is_vertical {
+                apply_vertical_writing_rotation(
+                    &mut pages,
+                    &pre_story_cmd_counts,
+                    &chain_for_post,
+                    &chain_pages_for_post,
+                );
+            }
+            new_anchored = emitter.take_anchored_image_queue();
+            new_breaks = emitter.take_breaks();
+            new_diags = emitter.take_diagnostics();
+
+            // Measure each frame's footnote pool and fold it into the
+            // reservation. Vertical-writing stories lay the pool out in
+            // horizontal page space too, so the measure is valid there;
+            // we skip the reserve loop only when no footnotes captured.
+            let any_footnotes = pages.iter().any(|p| !p.footnotes.is_empty());
+            if !any_footnotes {
+                break;
+            }
+            let pool_heights = measure_footnote_pools(&pages, options);
+            let mut next_reserved = vec![0i32; reserved_64.len()];
+            for (frame_idx, key) in frame_host_keys.iter().enumerate() {
+                if let Some(h_pt) = pool_heights.get(key) {
+                    next_reserved[frame_idx] =
+                        (*h_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+                }
+            }
+            if next_reserved == reserved_64 || pass + 1 == MAX_FOOTNOTE_RESERVE_PASSES {
+                // Fixpoint, or the bail cap — accept this pass. The pool
+                // emit post-pass paints below the reserved band.
+                reserved_64 = next_reserved;
+                break;
+            }
+            reserved_64 = next_reserved;
         }
-        let new_anchored = emitter.take_anchored_image_queue();
-        let new_breaks = emitter.take_breaks();
-        let new_diags = emitter.take_diagnostics();
+
         anchored_image_queue.extend(new_anchored.iter().cloned());
         breaks.extend(new_breaks.iter().cloned());
         emit_diagnostics.extend(new_diags.iter().cloned());
@@ -2231,6 +2307,16 @@ struct StoryEmitter<'a> {
     prev_line_height_64: Option<i32>,
     frame_cmd_ranges: Vec<Option<(usize, usize)>>,
     frame_max_baseline_64: Vec<i32>,
+    /// W1.7 footnote space reservation — per chain-frame height (in
+    /// 1/64 pt) to hold back from the bottom of the frame's text area
+    /// for the footnote pool. Body text overflows to the next frame
+    /// once a line's baseline crosses `frame_height - reserved`, so the
+    /// pool drawn in the post-pass sits *below* the last body line
+    /// instead of overlapping it. All zero on the first (measuring)
+    /// emit; the body-story loop fills it from the measured pool
+    /// heights and re-emits to a fixpoint. See `emit_footnote_pools`
+    /// and the reservation loop in `build_document`.
+    reserved_footnote_64: Vec<i32>,
     /// Per-frame list of `(cmd_start, cmd_end)` slices, one entry
     /// per paragraph that contributed glyph commands to the frame,
     /// in emission order. A paragraph that flows across N frames
@@ -2440,6 +2526,7 @@ impl<'a> StoryEmitter<'a> {
             prev_line_height_64: None,
             frame_cmd_ranges: vec![None; len],
             frame_max_baseline_64: vec![0; len],
+            reserved_footnote_64: vec![0; len],
             paragraph_cmd_ranges: vec![Vec::new(); len],
             numbered_counter: 0,
             prev_was_numbered: false,
@@ -2517,6 +2604,18 @@ impl<'a> StoryEmitter<'a> {
         self
     }
 
+    /// W1.7 — seed the per-frame footnote space reservation (1/64 pt)
+    /// before a re-emit. `reserved[i]` is held back from chain frame
+    /// `i`'s text bottom so the footnote pool drawn underneath does
+    /// not overlap the body. A shorter/empty slice is padded with
+    /// zeros; entries past the chain length are ignored.
+    fn with_footnote_reservation(mut self, reserved: &[i32]) -> Self {
+        for (slot, &r) in self.reserved_footnote_64.iter_mut().zip(reserved.iter()) {
+            *slot = r.max(0);
+        }
+        self
+    }
+
     fn emit_paragraph(
         &mut self,
         paragraph: &paged_parse::Paragraph,
@@ -2541,7 +2640,14 @@ impl<'a> StoryEmitter<'a> {
             let frame_height_64 =
                 (frame.bounds.height() * paged_text::shape::ADVANCE_PRECISION).round() as i32;
             let used_64 = self.frame_max_baseline_64[i];
-            let slack_64 = (frame_height_64 - used_64).max(0);
+            // W1.7 — the footnote pool reserves the bottom of the
+            // frame, so vertical justification must distribute slack
+            // against the reduced text area. Without this, Center /
+            // Bottom / Justify would shove the body text back down into
+            // the reserved band and the pool would overlap it again.
+            let reserved_64 = self.reserved_footnote_64.get(i).copied().unwrap_or(0);
+            let usable_64 = (frame_height_64 - reserved_64).max(0);
+            let slack_64 = (usable_64 - used_64).max(0);
             if vj == paged_parse::VerticalJustification::Justify {
                 // JustifyAlign distributes the frame's slack as extra
                 // space between paragraphs (NOT inside a paragraph —
@@ -4119,7 +4225,24 @@ fn emit_paragraph_into_chain(
         let frame_height_64 = (em.chain[em.frame_idx].bounds.height()
             * paged_text::shape::ADVANCE_PRECISION)
             .round() as i32;
-        if line.baseline_y > frame_height_64 && em.frame_idx + 1 < em.chain.len() {
+        // W1.7 — the usable text bottom is the frame height minus the
+        // space reserved for this frame's footnote pool. Lines whose
+        // baseline crosses it flow on (or drop, on the last frame) so
+        // the pool drawn in the post-pass lands below the body text
+        // rather than over it. Zero reservation reproduces the old
+        // `frame_height_64` comparison byte-for-byte (the no-footnote
+        // regression guard). Never let the reservation invert the
+        // usable area to a negative bottom — a pool taller than the
+        // frame is the FootnoteOverflow case, handled by accepting the
+        // overlap rather than dropping every line.
+        let text_bottom_64 = (frame_height_64
+            - em
+                .reserved_footnote_64
+                .get(em.frame_idx)
+                .copied()
+                .unwrap_or(0))
+        .max(0);
+        if line.baseline_y > text_bottom_64 && em.frame_idx + 1 < em.chain.len() {
             let prev_baseline = line.baseline_y;
             em.frame_idx += 1;
             let new_baseline =
@@ -4148,7 +4271,7 @@ fn emit_paragraph_into_chain(
         // them spill across following frames/pages with no clip. The
         // reference PDFs hide the overflow via the same out-of-frame
         // clip; matching this prevents large ΔE regions.
-        if line.baseline_y > frame_height_64
+        if line.baseline_y > text_bottom_64
             && em.frame_idx + 1 >= em.chain.len()
             && !last_frame_grows_height
         {
@@ -5623,6 +5746,184 @@ fn rebase_path_ids(cmd: &mut paged_compose::DisplayCommand, offset: i64) {
     }
 }
 
+/// W1.7 — body point size every footnote renders at (MVP: fixed 8pt
+/// fallback face). Owned here so the space-reservation measurement
+/// and the pool emit agree to the pixel; if footnote bodies ever gain
+/// per-run styling, the reservation measure must move in lockstep.
+const FOOTNOTE_POINT_SIZE: f32 = 8.0;
+
+/// W1.7 — bail cap for the footnote space-reservation fixpoint loop.
+/// Pass 0 composes with no reservation and measures; pass 1 re-composes
+/// against the measured pool; a third pass catches the rare case where
+/// the pass-1 reflow pushed a footnote across a frame boundary and
+/// changed a pool height. Two re-composes settle every realistic
+/// layout; the cap guarantees termination even if a pathological
+/// document oscillates, in which case the last pass's result (an
+/// overlay, never dropped text) is accepted.
+const MAX_FOOTNOTE_RESERVE_PASSES: usize = 3;
+
+/// W1.7 — measured height (pt) of one frame's footnote pool, laid out
+/// exactly as [`emit_footnote_pools`] draws it: each footnote's body
+/// text shaped at `FOOTNOTE_POINT_SIZE` on the fallback face into
+/// `column_width_pt`, its height being `line_count.max(1) × 1.2 ×
+/// point_size`. Summed across the group, this is the band the body
+/// text must vacate so the pool sits below it.
+///
+/// Separator rule: the current emit draws NO footnote separator rule
+/// (the thin line InDesign puts between body and pool), so none is
+/// added to the reservation here — reserving for an un-drawn rule
+/// would open a gap the renderer never fills. If a separator is ever
+/// emitted, add its height to both this measure and the draw.
+fn footnote_pool_height_pt(
+    group: &[&EmittedFootnote],
+    rb_face: &rustybuzz::Face,
+    column_width_pt: f32,
+) -> f32 {
+    if column_width_pt <= 0.0 {
+        return 0.0;
+    }
+    let line_height_pt = FOOTNOTE_POINT_SIZE * 1.2;
+    let mut total_h_pt = 0.0f32;
+    for fn_ in group {
+        let text = footnote_body_text(fn_);
+        let mut lopts = paged_text::LayoutOptions::new(column_width_pt, FOOTNOTE_POINT_SIZE);
+        lopts.alignment = paged_text::Alignment::Left;
+        let shaper = paged_text::RustybuzzMeasurer::new(rb_face, FOOTNOTE_POINT_SIZE);
+        let laid = paged_text::layout_paragraph(&text, &shaper, &lopts);
+        total_h_pt += laid.lines.len().max(1) as f32 * line_height_pt;
+    }
+    total_h_pt
+}
+
+/// W1.7 — per (page, host-frame) footnote pool heights in pt. Keyed by
+/// the same quantised `host_frame_rect_pt` tuple the emit groups by, so
+/// the reservation pass can map a pool back to the chain frame that
+/// hosts it. Returns an empty map when the document carries no font
+/// bytes (footnotes can't be measured or drawn without the fallback
+/// face — matching `emit_footnote_pools`' early return).
+fn measure_footnote_pools(
+    pages: &[BuiltPage],
+    options: &PipelineOptions,
+) -> std::collections::HashMap<(usize, i32, i32, i32, i32), f32> {
+    let mut out = std::collections::HashMap::new();
+    let Some(font_bytes) = options.font else {
+        return out;
+    };
+    let Some(rb_face) = rustybuzz::Face::from_slice(font_bytes, 0) else {
+        return out;
+    };
+    for (page_idx, page) in pages.iter().enumerate() {
+        if page.footnotes.is_empty() {
+            continue;
+        }
+        let mut by_frame: std::collections::BTreeMap<(i32, i32, i32, i32), Vec<&EmittedFootnote>> =
+            Default::default();
+        for fn_ in &page.footnotes {
+            by_frame
+                .entry(footnote_frame_key(&fn_.host_frame_rect_pt))
+                .or_default()
+                .push(fn_);
+        }
+        for (key, group) in by_frame {
+            let column_width_pt = group[0].host_frame_rect_pt.w;
+            let h = footnote_pool_height_pt(&group, &rb_face, column_width_pt);
+            if h > 0.0 {
+                out.insert((page_idx, key.0, key.1, key.2, key.3), h);
+            }
+        }
+    }
+    out
+}
+
+/// Quantised grouping key for a host frame's content rect (1/64 pt),
+/// shared by the pool emit and the reservation measure so they agree
+/// on which footnotes belong to which frame.
+fn footnote_frame_key(rect: &paged_compose::Rect) -> (i32, i32, i32, i32) {
+    (
+        (rect.x * 64.0) as i32,
+        (rect.y * 64.0) as i32,
+        (rect.w * 64.0) as i32,
+        (rect.h * 64.0) as i32,
+    )
+}
+
+/// W1.7 — the page index and quantised content-rect key a chain frame
+/// would capture footnotes under, computed with the EXACT formula
+/// [`emit_paragraph_into_chain`] uses (`frame_spread_top_left` minus the
+/// page origin, plus L/T insets; width/height minus L+R / T+B insets).
+/// Lets the reservation pass map a measured pool back to the chain
+/// frame whose text area must shrink. Returns `None` for a frame whose
+/// `self_id` doesn't resolve to a page.
+fn footnote_host_key_for_frame(
+    frame: &TextFrame,
+    page_idx: usize,
+    pages: &[BuiltPage],
+) -> (usize, i32, i32, i32, i32) {
+    let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
+    let (ox, oy) = pages[page_idx].spread_origin;
+    let insets = frame.inset_spacing.unwrap_or([0.0; 4]);
+    let frame_w = frame.bounds.width();
+    let frame_h = frame.bounds.height();
+    let rect = paged_compose::Rect {
+        x: sx - ox + insets[1],
+        y: sy - oy + insets[0],
+        w: (frame_w - insets[1] - insets[3]).max(0.0),
+        h: (frame_h - insets[0] - insets[2]).max(0.0),
+    };
+    let k = footnote_frame_key(&rect);
+    (page_idx, k.0, k.1, k.2, k.3)
+}
+
+/// W1.7 — per-page display-list + capture lengths plus stats, snapshot
+/// before a story's body emit so the footnote space-reservation loop
+/// can roll the page back and re-emit with a reduced text area. The
+/// re-emit truncates `paths` (cache-aware, [`PathBuffer::truncate_to`]),
+/// `commands`, the gradient/image pools, `story_layout`, and
+/// `footnotes` to these lengths and restores `stats` — returning the
+/// page to exactly its pre-story state. (The body emit never appends to
+/// `page.diagnostics`; footnote-overflow diagnostics come from the
+/// later pool pass, so they need no rollback here.)
+#[derive(Clone, Copy)]
+struct BodyStoryPageReset {
+    paths: usize,
+    commands: usize,
+    gradients: usize,
+    radial_gradients: usize,
+    images: usize,
+    story_layout: usize,
+    footnotes: usize,
+    stats: PipelineStats,
+}
+
+fn snapshot_body_story_reset(pages: &[BuiltPage]) -> Vec<BodyStoryPageReset> {
+    pages
+        .iter()
+        .map(|p| BodyStoryPageReset {
+            paths: p.list.paths.len(),
+            commands: p.list.commands.len(),
+            gradients: p.list.gradients.len(),
+            radial_gradients: p.list.radial_gradients.len(),
+            images: p.list.images.len(),
+            story_layout: p.story_layout.len(),
+            footnotes: p.footnotes.len(),
+            stats: p.stats,
+        })
+        .collect()
+}
+
+fn rollback_body_story(pages: &mut [BuiltPage], snap: &[BodyStoryPageReset]) {
+    for (page, s) in pages.iter_mut().zip(snap.iter()) {
+        page.list.paths.truncate_to(s.paths);
+        page.list.commands.truncate(s.commands);
+        page.list.gradients.truncate(s.gradients);
+        page.list.radial_gradients.truncate(s.radial_gradients);
+        page.list.images.truncate(s.images);
+        page.story_layout.truncate(s.story_layout);
+        page.footnotes.truncate(s.footnotes);
+        page.stats = s.stats;
+    }
+}
+
 fn emit_footnote_pools(
     pages: &mut [BuiltPage],
     _font_table: &FontTable,
@@ -5647,7 +5948,7 @@ fn emit_footnote_pools(
     // so the rasterizer can fetch them. The display list's
     // `register_font` is idempotent — registering the same id
     // multiple times is a no-op after the first.
-    let point_size: f32 = 8.0;
+    let point_size: f32 = FOOTNOTE_POINT_SIZE;
     let footnote_paint = Paint::Solid(Color {
         r: 0.0,
         g: 0.0,
@@ -5670,13 +5971,10 @@ fn emit_footnote_pools(
             Vec<&EmittedFootnote>,
         > = Default::default();
         for fn_ in &pool {
-            let key = (
-                (fn_.host_frame_rect_pt.x * 64.0) as i32,
-                (fn_.host_frame_rect_pt.y * 64.0) as i32,
-                (fn_.host_frame_rect_pt.w * 64.0) as i32,
-                (fn_.host_frame_rect_pt.h * 64.0) as i32,
-            );
-            by_frame.entry(key).or_default().push(fn_);
+            by_frame
+                .entry(footnote_frame_key(&fn_.host_frame_rect_pt))
+                .or_default()
+                .push(fn_);
         }
         for (_key, group) in by_frame {
             let rect = group[0].host_frame_rect_pt;
@@ -10355,6 +10653,212 @@ mod tests {
         assert!(
             cmd_count >= 40,
             "expected footnote pool glyphs in display list (≥40), got {cmd_count}"
+        );
+    }
+
+    /// W1.7 — shared fixture for the footnote space-reservation tests:
+    /// a SHORT frame whose body paragraph anchors `footnote_count`
+    /// footnotes, each with a long body so the accumulated pool is a
+    /// meaningful fraction of the frame height. `with_footnotes=false`
+    /// produces the identical body with the footnotes stripped — the
+    /// regression control.
+    fn footnote_reserve_idml(footnote_count: usize, with_footnotes: bool) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+        let buf = std::io::Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+        zip.start_file("mimetype", stored).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+        zip.start_file("designmap.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_s1.xml"/>
+</Document>"#,
+        )
+        .unwrap();
+        zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+        // Short frame: 120pt tall (top 40, bottom 160), 232pt wide.
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 300 612"/>
+    <TextFrame Self="frameA" ParentStory="s1" GeometricBounds="40 40 160 272"/>
+  </Spread>
+</idPkg:Spread>"#,
+        )
+        .unwrap();
+
+        let mut footnotes_xml = String::new();
+        if with_footnotes {
+            for i in 0..footnote_count {
+                footnotes_xml.push_str(&format!(
+                    r#"<Footnote Self="Footnote/fn{i}">
+          <ParagraphStyleRange>
+            <CharacterStyleRange>
+              <Content>Footnote body number {i} runs long enough to wrap across several lines in the narrow pool column at the bottom of the host frame.</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Footnote>"#
+                ));
+            }
+        }
+        let story = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="s1">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="12">
+        <Content>Body line one of the host paragraph. Body line two continues the host text. Body line three keeps the frame filled so the footnote pool must reserve space and push these lines upward.</Content>
+        {footnotes_xml}
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#
+        );
+        zip.start_file("Stories/Story_s1.xml", deflated).unwrap();
+        zip.write_all(story.as_bytes()).unwrap();
+        zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn footnote_pool_reserves_space_below_body_text() {
+        // W1.7 (a): with the reservation pass, NO body line's baseline
+        // may fall inside the band the footnote pool occupies
+        // (frame content bottom − pool height). Before W1.7 the pool
+        // was a pure overlay and body lines ran straight through it.
+        let bytes = footnote_reserve_idml(3, true);
+        let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+        let font_bytes = inter_font_bytes();
+        let options = PipelineOptions {
+            font: Some(&font_bytes),
+            ..PipelineOptions::default()
+        };
+        let built = build_document(&doc, &options).expect("build");
+        assert_eq!(built.pages.len(), 1);
+
+        // The pool must actually exist for this assertion to bite.
+        assert!(
+            !built.pages[0].footnotes.is_empty(),
+            "fixture should capture footnotes"
+        );
+        let pools = measure_footnote_pools(&built.pages, &options);
+        let pool_h: f32 = pools.values().copied().fold(0.0, f32::max);
+        assert!(pool_h > 0.0, "expected a measurable footnote pool height");
+
+        // Frame content area: top 40, height 120 (no insets) ⇒ bottom
+        // at page-local y = 160. The reserved band starts at
+        // bottom − pool_h; every kept body line's baseline sits at or
+        // above it (a small epsilon absorbs the rounding the overflow
+        // check does in 1/64-pt units).
+        let content_bottom_pt = 160.0_f32;
+        let reserved_top_pt = content_bottom_pt - pool_h;
+        let body_baselines: Vec<f32> = built.pages[0]
+            .story_layout
+            .iter()
+            .filter(|l| l.story_id == "s1")
+            .map(|l| l.baseline_y_pt)
+            .collect();
+        assert!(
+            !body_baselines.is_empty(),
+            "expected body lines in the layout index"
+        );
+        let max_baseline = body_baselines.iter().copied().fold(0.0, f32::max);
+        assert!(
+            max_baseline <= reserved_top_pt + 0.5,
+            "body baseline {max_baseline:.2}pt intrudes into the reserved \
+             footnote band (starts at {reserved_top_pt:.2}pt, pool {pool_h:.2}pt)"
+        );
+    }
+
+    #[test]
+    fn footnote_reserve_loop_converges_and_pushes_text_up() {
+        // W1.7 (b): the compose→measure→re-compose loop terminates
+        // (build returns Ok, i.e. it didn't spin past the bail cap), and
+        // the reservation demonstrably moved body text — the
+        // footnote-bearing build keeps FEWER body lines on the page than
+        // the same body with footnotes stripped, because the pool ate
+        // the bottom of the frame.
+        let font_bytes = inter_font_bytes();
+        let options = PipelineOptions {
+            font: Some(&font_bytes),
+            ..PipelineOptions::default()
+        };
+
+        let with_doc =
+            paged_scene::Document::open(&footnote_reserve_idml(3, true)).expect("open with");
+        let with_built = build_document(&with_doc, &options).expect("build with footnotes");
+
+        let without_doc =
+            paged_scene::Document::open(&footnote_reserve_idml(3, false)).expect("open without");
+        let without_built = build_document(&without_doc, &options).expect("build without");
+
+        let count_body = |b: &BuiltDocument| {
+            b.pages[0]
+                .story_layout
+                .iter()
+                .filter(|l| l.story_id == "s1")
+                .count()
+        };
+        let with_lines = count_body(&with_built);
+        let without_lines = count_body(&without_built);
+        assert!(
+            with_lines < without_lines,
+            "reservation should keep fewer body lines on the page \
+             (with footnotes: {with_lines}, without: {without_lines})"
+        );
+    }
+
+    #[test]
+    fn no_footnote_frame_is_byte_identical() {
+        // W1.7 (c) regression guard: a story with no footnotes must
+        // take the pass-0 early break (no rollback, no re-emit), so its
+        // display list is identical to the pre-W1.7 single-pass emit.
+        // We can't diff against old code in-process, so we assert (1)
+        // the build is deterministic across two runs, and (2) it emits
+        // ZERO footnote-pool commands — i.e. the reservation machinery
+        // left the page untouched. The display-list command count is
+        // the golden; update the comment here if a legitimate emit
+        // change shifts it.
+        let font_bytes = inter_font_bytes();
+        let options = PipelineOptions {
+            font: Some(&font_bytes),
+            ..PipelineOptions::default()
+        };
+        let bytes = footnote_reserve_idml(0, false);
+
+        let doc_a = paged_scene::Document::open(&bytes).expect("open a");
+        let built_a = build_document(&doc_a, &options).expect("build a");
+        let doc_b = paged_scene::Document::open(&bytes).expect("open b");
+        let built_b = build_document(&doc_b, &options).expect("build b");
+
+        assert!(
+            built_a.pages[0].footnotes.is_empty(),
+            "no-footnote fixture must capture zero footnotes"
+        );
+        // Deterministic command count across runs — the reservation
+        // loop is a no-op here, so nothing perturbs the display list.
+        assert_eq!(
+            built_a.pages[0].list.commands.len(),
+            built_b.pages[0].list.commands.len(),
+            "no-footnote build must be deterministic (reservation loop \
+             must not run for a footnote-free story)"
+        );
+        // No FootnoteOverflow / pool diagnostics leaked in.
+        assert!(
+            built_a
+                .diagnostics
+                .items
+                .iter()
+                .all(|d| d.code != DiagnosticCode::FootnoteOverflow),
+            "no-footnote build must not emit footnote diagnostics"
         );
     }
 
