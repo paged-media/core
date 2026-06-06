@@ -2508,6 +2508,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "paged-write"
+version = "0.0.0"
+dependencies = [
+ "paged-gen",
+ "paged-mutate",
+ "paged-parse",
+ "paged-scene",
+ "quick-xml",
+ "thiserror 2.0.18",
+ "zip",
+]
+
+[[package]]
 name = "paragraph-breaker"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,25 @@
+[package]
+name = "paged-write"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "IDML re-serialization (save-back). Carry-through writer: copies untouched package entries verbatim and streaming-patches only the attributes the parsed model owns, so a mutated Document round-trips to a valid IDML package without losing unparsed bytes."
+
+[lints]
+workspace = true
+
+[dependencies]
+paged-parse = { path = "../paged-parse" }
+paged-scene = { path = "../paged-scene" }
+thiserror = { workspace = true }
+# Same wasm-compatible config paged-parse reads zips with: default
+# features off + deflate only. No native-only deps so the crate
+# builds for wasm32 too (the save-back path runs in the editor/SDK).
+zip = { workspace = true }
+quick-xml = { workspace = true }
+
+[dev-dependencies]
+paged-gen = { path = "../paged-gen" }
+paged-mutate = { path = "../paged-mutate" }
