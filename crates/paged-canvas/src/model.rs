@@ -1734,6 +1734,19 @@ impl CanvasModel {
                 group_id: group_id.clone(),
                 restore_slots: None,
             }),
+            Mutation::SetPluginMetadata {
+                element_id,
+                key,
+                value,
+            } => Some(Operation::SetProperty {
+                node: element_to_leaf_node_id(element_id)?,
+                path: PropertyPath::PluginMetadata,
+                value: Value::PluginMetadata {
+                    key: key.clone(),
+                    value: value.clone(),
+                    prev: None,
+                },
+            }),
             Mutation::PathPointCurveType {
                 element_id,
                 index,
@@ -3218,7 +3231,24 @@ impl CanvasModel {
                 // stroke) follow once the apply arms cover them.
                 _ => None,
             };
-            if let Some(entries) = entries {
+            if let Some(mut entries) = entries {
+                // Plugin-metadata carrier (protocol v33) — surface the
+                // item's reserved-namespace Label entries. Vendor
+                // (non-`x-paged:`) labels stay engine-internal.
+                if let Some(labels) = spread.labels.get(raw) {
+                    for (key, value) in labels {
+                        if key.starts_with("x-paged:") {
+                            entries.push(PropertyEntry {
+                                path: PropertyPath::PluginMetadata,
+                                value: Some(Value::PluginMetadata {
+                                    key: key.clone(),
+                                    value: Some(value.clone()),
+                                    prev: None,
+                                }),
+                            });
+                        }
+                    }
+                }
                 let kind = id.kind_label().to_string();
                 let name = None; // TextFrame/Rectangle don't carry a Name attr today.
                 return Some(ElementProperties {

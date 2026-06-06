@@ -263,10 +263,78 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
     // composed and patch safely at any depth.
     let mut group_depth: usize = 0;
 
+    // ---- plugin-metadata Label patching state ----
+    // Element-name stack (depth tracking) + the innermost open page
+    // item that the model labels. The model's `spread.labels` map IS
+    // the truth: an item's `<Label>` contents are replaced wholesale
+    // with the model entries; a labelled item whose source has no
+    // `<Properties>`/`<Label>` gets the block synthesised; an item the
+    // model no longer labels has its `<Label>` dropped.
+    let mut depth: usize = 0;
+    struct LabelCtx {
+        /// Depth of the item element itself.
+        item_depth: usize,
+        /// Model entries; `None` ⇒ the model has no labels for it.
+        entries: Option<Vec<(String, String)>>,
+        /// A direct `<Properties>` child is currently open.
+        in_direct_properties: bool,
+        /// We are inside the item's `<Label>` (original KVPs drop).
+        in_label: bool,
+        /// The model entries have been written.
+        handled: bool,
+    }
+    let mut label_ctx: Vec<LabelCtx> = Vec::new();
+    const ITEM_KINDS: [&[u8]; 5] = [
+        b"TextFrame",
+        b"Rectangle",
+        b"Oval",
+        b"GraphicLine",
+        b"Polygon",
+    ];
+    fn write_label_entries(
+        writer: &mut Writer<Cursor<Vec<u8>>>,
+        entries: &[(String, String)],
+    ) -> Result<(), quick_xml::Error> {
+        writer.write_event(Event::Start(BytesStart::new("Label")))?;
+        for (k, v) in entries {
+            let mut kvp = BytesStart::new("KeyValuePair");
+            kvp.push_attribute(("Key", k.as_str()));
+            kvp.push_attribute(("Value", v.as_str()));
+            writer.write_event(Event::Empty(kvp))?;
+        }
+        writer.write_event(Event::End(quick_xml::events::BytesEnd::new("Label")))?;
+        Ok(())
+    }
+
     loop {
         match reader.read_event_into(&mut buf)? {
             Event::Eof => break,
             Event::Start(e) => {
+                depth += 1;
+                let name_owned = e.name().as_ref().to_vec();
+                // Label handling for the innermost labelled item.
+                if let Some(ctx) = label_ctx.last_mut() {
+                    if name_owned == b"Properties" && depth == ctx.item_depth + 1 {
+                        ctx.in_direct_properties = true;
+                    } else if name_owned == b"Label"
+                        && ctx.in_direct_properties
+                        && depth == ctx.item_depth + 2
+                    {
+                        // Replace (or drop) the Label wholesale.
+                        ctx.in_label = true;
+                        if let Some(entries) = ctx.entries.as_deref() {
+                            write_label_entries(&mut writer, entries)?;
+                        }
+                        ctx.handled = true;
+                        buf.clear();
+                        continue; // original <Label> start not written
+                    } else if ctx.in_label {
+                        // Unexpected child inside a replaced Label —
+                        // drop it with the rest of the Label body.
+                        buf.clear();
+                        continue;
+                    }
+                }
                 let in_group = group_depth > 0;
                 let patched = patch_spread_item(
                     &e,
@@ -281,11 +349,32 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                     Some(start) => writer.write_event(Event::Start(start))?,
                     None => writer.write_event(Event::Start(e.clone().into_owned()))?,
                 }
-                if e.name().as_ref() == b"Group" {
+                if name_owned == b"Group" {
                     group_depth += 1;
+                }
+                if ITEM_KINDS.contains(&name_owned.as_slice()) {
+                    let entries = attr_value(&e, b"Self")
+                        .and_then(|id| spread.labels.get(&id).cloned())
+                        .filter(|v| !v.is_empty());
+                    label_ctx.push(LabelCtx {
+                        item_depth: depth,
+                        entries,
+                        in_direct_properties: false,
+                        in_label: false,
+                        handled: false,
+                    });
                 }
             }
             Event::Empty(e) => {
+                // KeyValuePairs inside a replaced Label drop (the
+                // model entries were already written).
+                if let Some(ctx) = label_ctx.last() {
+                    if ctx.in_label {
+                        buf.clear();
+                        continue;
+                    }
+                }
+                let name_is_item = ITEM_KINDS.contains(&e.name().as_ref());
                 let in_group = group_depth > 0;
                 let patched = patch_spread_item(
                     &e,
@@ -296,16 +385,95 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                     &spread.graphic_lines,
                     in_group,
                 )?;
-                match patched {
-                    Some(start) => writer.write_event(Event::Empty(start))?,
-                    None => writer.write_event(Event::Empty(e.into_owned()))?,
+                // A labelled item serialised as an EMPTY tag must grow
+                // children — expand to Start + Properties/Label + End.
+                let pending_entries = if name_is_item {
+                    attr_value(&e, b"Self")
+                        .and_then(|id| spread.labels.get(&id).cloned())
+                        .filter(|v| !v.is_empty())
+                } else {
+                    None
+                };
+                if let Some(entries) = pending_entries {
+                    let name_owned = e.name().as_ref().to_vec();
+                    match patched {
+                        Some(start) => writer.write_event(Event::Start(start))?,
+                        None => writer.write_event(Event::Start(e.clone().into_owned()))?,
+                    }
+                    writer.write_event(Event::Start(BytesStart::new("Properties")))?;
+                    write_label_entries(&mut writer, &entries)?;
+                    writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
+                        "Properties",
+                    )))?;
+                    writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
+                        String::from_utf8_lossy(&name_owned).into_owned(),
+                    )))?;
+                } else {
+                    match patched {
+                        Some(start) => writer.write_event(Event::Empty(start))?,
+                        None => writer.write_event(Event::Empty(e.into_owned()))?,
+                    }
                 }
             }
             Event::End(e) => {
-                if e.name().as_ref() == b"Group" {
+                let name_owned = e.name().as_ref().to_vec();
+                if let Some(ctx) = label_ctx.last_mut() {
+                    if ctx.in_label && name_owned == b"Label" && depth == ctx.item_depth + 2 {
+                        // Closing the replaced Label — the new entries
+                        // (with their own End) were already written.
+                        ctx.in_label = false;
+                        depth = depth.saturating_sub(1);
+                        buf.clear();
+                        continue;
+                    }
+                    if ctx.in_label {
+                        // Closing a dropped child inside the Label.
+                        depth = depth.saturating_sub(1);
+                        buf.clear();
+                        continue;
+                    }
+                    if name_owned == b"Properties" && depth == ctx.item_depth + 1 {
+                        // Direct Properties closing without a Label —
+                        // synthesise one when the model has entries.
+                        if !ctx.handled {
+                            if let Some(entries) = ctx.entries.take() {
+                                write_label_entries(&mut writer, &entries)?;
+                                ctx.handled = true;
+                            }
+                        }
+                        ctx.in_direct_properties = false;
+                    }
+                    if depth == ctx.item_depth && ITEM_KINDS.contains(&name_owned.as_slice()) {
+                        // Item closing without any Properties at all —
+                        // synthesise the whole block.
+                        if !ctx.handled {
+                            if let Some(entries) = ctx.entries.take() {
+                                writer.write_event(Event::Start(BytesStart::new(
+                                    "Properties",
+                                )))?;
+                                write_label_entries(&mut writer, &entries)?;
+                                writer.write_event(Event::End(
+                                    quick_xml::events::BytesEnd::new("Properties"),
+                                ))?;
+                            }
+                        }
+                        label_ctx.pop();
+                    }
+                }
+                if name_owned == b"Group" {
                     group_depth = group_depth.saturating_sub(1);
                 }
+                depth = depth.saturating_sub(1);
                 writer.write_event(Event::End(e))?;
+            }
+            Event::Text(t) => {
+                // Indentation between KVPs of a replaced Label drops
+                // with the rest of the original Label body.
+                if label_ctx.last().is_some_and(|c| c.in_label) {
+                    buf.clear();
+                    continue;
+                }
+                writer.write_event(Event::Text(t))?;
             }
             other => writer.write_event(other)?,
         }

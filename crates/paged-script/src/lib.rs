@@ -747,6 +747,7 @@ fn parse_property_path(s: &str) -> Option<paged_mutate::PropertyPath> {
         // so scripts can read them, rejected on write by the apply layer).
         "tableRowCount" => TableRowCount,
         "tableColumnCount" => TableColumnCount,
+        "pluginMetadata" => PluginMetadata,
         _ => return None,
     })
 }
@@ -941,6 +942,7 @@ fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
         // Aftercare-A — table dimensions (read-only).
         TableRowCount => "tableRowCount",
         TableColumnCount => "tableColumnCount",
+        PluginMetadata => "pluginMetadata",
     }
 }
 

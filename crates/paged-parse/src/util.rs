@@ -24,6 +24,26 @@ pub(crate) fn attr(e: &quick_xml::events::BytesStart, key: &[u8]) -> Option<Stri
         .and_then(|a| std::str::from_utf8(&a.value).ok().map(str::to_string))
 }
 
+/// Like [`attr`], but XML-NORMALIZES the value (entity unescaping) (`&quot;` → `"`,
+/// `&amp;` → `&`, …). Required for free-text carriers — Label
+/// `KeyValuePair` values hold JSON, which InDesign serialises with
+/// escaped quotes. The plain [`attr`] stays raw because the numeric /
+/// enum attributes it reads never contain entities.
+pub(crate) fn attr_unescaped(
+    e: &quick_xml::events::BytesStart,
+    key: &[u8],
+) -> Option<String> {
+    e.attributes()
+        .flatten()
+        .find(|a| a.key.as_ref() == key)
+        .and_then(|a| {
+            // IDML is XML 1.0 (every part declares it).
+            a.normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                .ok()
+                .map(|v| v.into_owned())
+        })
+}
+
 /// Parse an `f32` attribute by key. Returns `None` when the
 /// attribute is absent, malformed, or non-finite. Convenience
 /// wrapper used by the IDML effect parsers (XOffset, Size, Opacity,

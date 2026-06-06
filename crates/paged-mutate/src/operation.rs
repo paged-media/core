@@ -1020,6 +1020,14 @@ pub enum PropertyPath {
     /// `Value::Length(Some(count))`. Addressed against a
     /// `NodeId::Table`. Read-only (see the section comment).
     TableColumnCount,
+
+    /// Plugin-metadata carrier (decision 9 facility) — one
+    /// `Properties/Label` `KeyValuePair` on a leaf page item, in the
+    /// reserved `x-paged:` key namespace. The payload (key + new
+    /// value + prev snapshot) rides in `Value::PluginMetadata`;
+    /// `value: None` deletes the entry. Write-gated at apply time:
+    /// key prefix, 64 KiB cap, JSON envelope `{v, data, …}`.
+    PluginMetadata,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -1246,6 +1254,7 @@ impl PropertyPath {
             // Aftercare-A — table dimensions (read-only).
             PropertyPath::TableRowCount => "table.rowCount",
             PropertyPath::TableColumnCount => "table.columnCount",
+            PropertyPath::PluginMetadata => "plugin.metadata",
         }
     }
 }
@@ -1653,6 +1662,16 @@ pub enum Value {
         smooth: bool,
         #[serde(default)]
         prev: Option<PathAnchorSpec>,
+    },
+    /// Plugin-metadata carrier — one Label `KeyValuePair`. `value:
+    /// None` deletes the entry; `prev` is the apply-layer snapshot
+    /// (`Some(None)` = "was absent") so the inverse restores exactly.
+    /// Wire callers leave `prev` at `None`.
+    PluginMetadata {
+        key: String,
+        value: Option<String>,
+        #[serde(default)]
+        prev: Option<Option<String>>,
     },
     /// Track M — boolean toggle (e.g. layer visibility / lock /
     /// printable). The inverse is just the same Value with the

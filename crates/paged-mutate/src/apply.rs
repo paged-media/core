@@ -556,6 +556,19 @@ fn apply_set_property(
         ) => {
             return apply_path_kernel_op(doc, node, &path, value);
         }
+        // Plugin-metadata carrier — its inverse carries the prev
+        // snapshot inside the same Value, so it short-circuits like
+        // the Track J ops. All five leaf page-item kinds.
+        (
+            NodeId::Polygon(_)
+            | NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::GraphicLine(_)
+            | NodeId::Oval(_),
+            PropertyPath::PluginMetadata,
+        ) => {
+            return apply_plugin_metadata(doc, node, value);
+        }
         // W3.A1 — table-scoped writes: `AppliedTableStyle` on a
         // `NodeId::Table`, and every cell-scoped path on a
         // `NodeId::TableCell`. These resolve `(story_id, table_id[,
@@ -4782,6 +4795,139 @@ fn leaf_frame_ref(
         .map(FrameRef::Polygon),
         _ => None,
     }
+}
+
+/// Plugin-metadata write cap: keeps documents loadable and the Label
+/// mechanism friendly to other IDML consumers (facility design §2).
+const PLUGIN_METADATA_MAX_BYTES: usize = 64 * 1024;
+
+/// Locate the spread holding a leaf page item by NodeId. Returns the
+/// spread index so the caller can borrow mutably afterwards.
+fn find_spread_for_leaf(doc: &Document, node: &NodeId) -> Option<usize> {
+    fn has<'a>(mut ids: impl Iterator<Item = Option<&'a str>>, id: &str) -> bool {
+        ids.any(|s| s == Some(id))
+    }
+    for (si, parsed) in doc.spreads.iter().enumerate() {
+        let s = &parsed.spread;
+        let found = match node {
+            NodeId::TextFrame(id) => {
+                has(s.text_frames.iter().map(|f| f.self_id.as_deref()), id)
+            }
+            NodeId::Rectangle(id) => {
+                has(s.rectangles.iter().map(|f| f.self_id.as_deref()), id)
+            }
+            NodeId::Oval(id) => has(s.ovals.iter().map(|f| f.self_id.as_deref()), id),
+            NodeId::GraphicLine(id) => {
+                has(s.graphic_lines.iter().map(|f| f.self_id.as_deref()), id)
+            }
+            NodeId::Polygon(id) => {
+                has(s.polygons.iter().map(|f| f.self_id.as_deref()), id)
+            }
+            _ => false,
+        };
+        if found {
+            return Some(si);
+        }
+    }
+    None
+}
+
+/// Plugin-metadata carrier (decision 9 facility) — set / replace /
+/// delete one Label `KeyValuePair` in the reserved `x-paged:`
+/// namespace. Gates BEFORE any mutation: key prefix, 64 KiB cap, and
+/// the JSON envelope `{ v: number >= 1, data: object, … }`. The
+/// inverse carries the prev snapshot so undo restores exactly
+/// (including "was absent").
+fn apply_plugin_metadata(
+    doc: &mut Document,
+    node: &NodeId,
+    value: &Value,
+) -> Result<AppliedOperation, OperationError> {
+    let invalid = |reason: String| OperationError::InvalidValue {
+        node: node.clone(),
+        path: PropertyPath::PluginMetadata,
+        reason,
+    };
+    let Value::PluginMetadata { key, value: new_value, .. } = value else {
+        return Err(invalid("expected Value::PluginMetadata".into()));
+    };
+    if !key.starts_with("x-paged:") || key.len() <= "x-paged:".len() {
+        return Err(invalid(format!(
+            "metadata keys live in the reserved namespace: expected \"x-paged:<plugin>\", got \"{key}\""
+        )));
+    }
+    if let Some(v) = new_value {
+        if v.len() > PLUGIN_METADATA_MAX_BYTES {
+            return Err(invalid(format!(
+                "metadata value is {} bytes; the cap is {PLUGIN_METADATA_MAX_BYTES} (assets belong in the asset store, not inline)",
+                v.len()
+            )));
+        }
+        let parsed: serde_json::Value = serde_json::from_str(v)
+            .map_err(|e| invalid(format!("metadata value must be the JSON envelope: {e}")))?;
+        let envelope_ok = parsed
+            .as_object()
+            .is_some_and(|o| {
+                o.get("v").and_then(serde_json::Value::as_u64).is_some_and(|n| n >= 1)
+                    && o.get("data").is_some_and(serde_json::Value::is_object)
+            });
+        if !envelope_ok {
+            return Err(invalid(
+                "metadata envelope must be { v: <int >= 1>, data: {…}, engine?: {…} }".into(),
+            ));
+        }
+    }
+    let Some(si) = find_spread_for_leaf(doc, node) else {
+        return Err(OperationError::NodeNotFound(node.clone()));
+    };
+
+    // ---- mutation ----
+    let self_id = node.self_id().to_string();
+    let labels = &mut doc.spreads[si].spread.labels;
+    let prev: Option<String> = labels
+        .get(&self_id)
+        .and_then(|entries| entries.iter().find(|(k, _)| k == key))
+        .map(|(_, v)| v.clone());
+    match new_value {
+        Some(v) => {
+            let entries = labels.entry(self_id).or_default();
+            match entries.iter_mut().find(|(k, _)| k == key) {
+                Some(slot) => slot.1 = v.clone(),
+                None => entries.push((key.clone(), v.clone())),
+            }
+        }
+        None => {
+            if let Some(entries) = labels.get_mut(&self_id) {
+                entries.retain(|(k, _)| k != key);
+                if entries.is_empty() {
+                    labels.remove(&self_id);
+                }
+            }
+        }
+    }
+
+    Ok(AppliedOperation {
+        op: Operation::SetProperty {
+            node: node.clone(),
+            path: PropertyPath::PluginMetadata,
+            value: Value::PluginMetadata {
+                key: key.clone(),
+                value: new_value.clone(),
+                prev: Some(prev.clone()),
+            },
+        },
+        inverse: Operation::SetProperty {
+            node: node.clone(),
+            path: PropertyPath::PluginMetadata,
+            value: Value::PluginMetadata {
+                key: key.clone(),
+                value: prev,
+                prev: Some(new_value.clone()),
+            },
+        },
+        // Metadata is invisible to the renderer — no invalidation.
+        invalidation: InvalidationHint::default(),
+    })
 }
 
 /// B-04 — group leaf page items. Fully validated BEFORE any mutation

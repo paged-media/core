@@ -381,3 +381,136 @@ fn mutate_then_undo_round_trips_byte_identical() {
     let out = write_idml(project.document(), &original).expect("write");
     assert_eq!(original, out, "mutate→undo should be a no-op write");
 }
+
+/// F1 (plugin-metadata facility §5) — the carrier round-trips: set
+/// metadata → write → reparse → metadata-equal; delete → write →
+/// reparse → gone; mutate-then-undo writes byte-identically.
+#[test]
+fn plugin_metadata_round_trips_through_write() {
+    let envelope = r#"{"v":1,"engine":{"blitz":"0.3.0-alpha.4"},"data":{"source":"<b>hi & \"bye\"</b>"}}"#;
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+    let rect_id = doc
+        .spreads
+        .iter()
+        .flat_map(|s| s.spread.rectangles.iter())
+        .find_map(|r| r.self_id.clone())
+        .expect("a rectangle");
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::SetProperty {
+            node: NodeId::Rectangle(rect_id.clone()),
+            path: PropertyPath::PluginMetadata,
+            value: Value::PluginMetadata {
+                key: "x-paged:web".to_string(),
+                value: Some(envelope.to_string()),
+                prev: None,
+            },
+        })
+        .expect("set metadata");
+
+    // Write → reparse → the label is there, value byte-equal (incl.
+    // the XML-escaped quotes/ampersands inside the JSON envelope).
+    let out = write_idml(project.document(), &original).expect("write");
+    let re = Document::open(&out).expect("reparse");
+    let labels = re
+        .spreads
+        .iter()
+        .find_map(|s| s.spread.labels.get(&rect_id))
+        .expect("label written");
+    assert_eq!(
+        labels,
+        &vec![("x-paged:web".to_string(), envelope.to_string())]
+    );
+
+    // Delete → write → gone again; and the output matches a write of
+    // the never-labelled document (carrier leaves no residue).
+    let mut project2 = Project::new(re);
+    project2
+        .apply(Operation::SetProperty {
+            node: NodeId::Rectangle(rect_id.clone()),
+            path: PropertyPath::PluginMetadata,
+            value: Value::PluginMetadata {
+                key: "x-paged:web".to_string(),
+                value: None,
+                prev: None,
+            },
+        })
+        .expect("delete metadata");
+    let out2 = write_idml(project2.document(), &out).expect("write 2");
+    let re2 = Document::open(&out2).expect("reparse 2");
+    assert!(
+        re2.spreads.iter().all(|s| !s.spread.labels.contains_key(&rect_id)),
+        "label removed"
+    );
+
+    // Undo (exact restoration) → byte-identical write.
+    let doc3 = Document::open(&original).unwrap();
+    let mut project3 = Project::new(doc3);
+    project3
+        .apply(Operation::SetProperty {
+            node: NodeId::Rectangle(rect_id.clone()),
+            path: PropertyPath::PluginMetadata,
+            value: Value::PluginMetadata {
+                key: "x-paged:web".to_string(),
+                value: Some(envelope.to_string()),
+                prev: None,
+            },
+        })
+        .unwrap();
+    project3.undo().unwrap().expect("undo");
+    let out3 = write_idml(project3.document(), &original).expect("write 3");
+    assert_eq!(original, out3, "metadata set→undo is a no-op write");
+}
+
+/// The write gates (facility §2/§3): namespace prefix, size cap, and
+/// the JSON envelope — all reject BEFORE mutation.
+#[test]
+fn plugin_metadata_write_gates_reject_cleanly() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+    let rect_id = doc
+        .spreads
+        .iter()
+        .flat_map(|s| s.spread.rectangles.iter())
+        .find_map(|r| r.self_id.clone())
+        .expect("a rectangle");
+    let mut project = Project::new(doc);
+
+    let set = |key: &str, value: Option<String>| Operation::SetProperty {
+        node: NodeId::Rectangle(rect_id.clone()),
+        path: PropertyPath::PluginMetadata,
+        value: Value::PluginMetadata {
+            key: key.to_string(),
+            value,
+            prev: None,
+        },
+    };
+
+    // Wrong namespace.
+    assert!(project
+        .apply(set("vendor:web", Some(r#"{"v":1,"data":{}}"#.into())))
+        .is_err());
+    // Bare prefix (no plugin name).
+    assert!(project
+        .apply(set("x-paged:", Some(r#"{"v":1,"data":{}}"#.into())))
+        .is_err());
+    // Over the 64 KiB cap.
+    let big = format!(r#"{{"v":1,"data":{{"blob":"{}"}}}}"#, "x".repeat(64 * 1024));
+    assert!(project.apply(set("x-paged:web", Some(big))).is_err());
+    // Not the envelope.
+    assert!(project
+        .apply(set("x-paged:web", Some("not json".into())))
+        .is_err());
+    assert!(project
+        .apply(set("x-paged:web", Some(r#"{"data":{}}"#.into())))
+        .is_err());
+    assert!(project
+        .apply(set("x-paged:web", Some(r#"{"v":1}"#.into())))
+        .is_err());
+
+    // Nothing mutated: the write is byte-identical.
+    let out = write_idml(project.document(), &original).expect("write");
+    assert_eq!(original, out, "rejected ops must not dirty the document");
+}

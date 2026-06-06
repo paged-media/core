@@ -117,7 +117,14 @@ export type WorkerToMain = WorkerToMainKind & {
 ///   the minted group id as `createdId`. Undo restores the exact
 ///   pre-group z-order via inverse-side `restore_slots` (internal —
 ///   not a wire field).
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(32);
+/// v33 (plugin-metadata carrier, decision 9 facility):
+///   `SetPluginMetadata { element_id, key, value }` — set / replace /
+///   delete (value: null) one `Properties/Label` `KeyValuePair` in the
+///   reserved `x-paged:` namespace (engine-gated: key prefix, 64 KiB
+///   cap, JSON envelope `{v, data, engine?}`). `element_properties` on
+///   a leaf page item now also returns its `x-paged:*` entries as
+///   `PropertyPath::PluginMetadata` / `Value::PluginMetadata` pairs.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(33);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -2164,6 +2171,17 @@ pub enum Mutation {
     DissolveGroup {
         group_id: String,
     },
+    /// Plugin-metadata carrier (protocol v33) — one Label
+    /// `KeyValuePair` on a leaf page item. `value: None` deletes the
+    /// entry. The engine gates the write (reserved `x-paged:` key
+    /// namespace, 64 KiB cap, JSON envelope); plugin identity is
+    /// enforced one layer up in the SDK's document door.
+    SetPluginMetadata {
+        element_id: crate::element_selection::ElementId,
+        key: String,
+        #[serde(default)]
+        value: Option<String>,
+    },
     /// Track J — toggle the curve type of an anchor between corner
     /// (handles equal to anchor) and smooth (handles derived from
     /// neighbour tangents). UI dispatches from a double-click on
@@ -2520,6 +2538,7 @@ impl Mutation {
             Self::SimplifyPath { .. } => "SimplifyPath",
             Self::CreateGroup { .. } => "CreateGroup",
             Self::DissolveGroup { .. } => "DissolveGroup",
+            Self::SetPluginMetadata { .. } => "SetPluginMetadata",
             Self::PathPointCurveType { .. } => "PathPointCurveType",
             Self::PathPointSet { .. } => "PathPointSet",
             Self::Batch { .. } => "Batch",
@@ -2842,8 +2861,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v32() {
-        assert_eq!(PROTOCOL_VERSION.0, 32);
+    fn protocol_version_is_v33() {
+        assert_eq!(PROTOCOL_VERSION.0, 33);
     }
 
     #[test]

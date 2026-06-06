@@ -229,6 +229,8 @@ pub enum PropertyPathJson {
     // Aftercare-A — table dimensions (read-only).
     TableRowCount,
     TableColumnCount,
+    /// Plugin-metadata carrier (Label KeyValuePair).
+    PluginMetadata,
 }
 
 impl From<PropertyPath> for PropertyPathJson {
@@ -466,6 +468,7 @@ impl From<PropertyPath> for PropertyPathJson {
             // Aftercare-A — table dimensions (read-only).
             PropertyPath::TableRowCount => PropertyPathJson::TableRowCount,
             PropertyPath::TableColumnCount => PropertyPathJson::TableColumnCount,
+            PropertyPath::PluginMetadata => PropertyPathJson::PluginMetadata,
         }
     }
 }
@@ -705,6 +708,7 @@ impl From<PropertyPathJson> for PropertyPath {
             // Aftercare-A — table dimensions (read-only).
             PropertyPathJson::TableRowCount => PropertyPath::TableRowCount,
             PropertyPathJson::TableColumnCount => PropertyPath::TableColumnCount,
+            PropertyPathJson::PluginMetadata => PropertyPath::PluginMetadata,
         }
     }
 }
@@ -761,6 +765,7 @@ impl From<Value> for AuthoredValue {
             // form yet — no `PropertyKind` widget renders them, and
             // `describe()` never emits descriptors for those paths — so they
             // collapse to `None` for this exhaustive conversion.
+            Value::PluginMetadata { .. } => AuthoredValue::None,
             Value::Transform(_)
             | Value::PathPoint { .. }
             | Value::PathPointInsert { .. }

@@ -197,6 +197,14 @@ pub struct Spread {
     /// Empty when no page declared margins.
     #[serde(default)]
     pub page_margins: std::collections::HashMap<String, MarginPreference>,
+    /// Per-object `Properties/Label` `KeyValuePair`s, keyed by the
+    /// host item's `Self` id — IDML's native extension point (the
+    /// plugin-metadata carrier; InDesign preserves Labels verbatim).
+    /// Side map like [`Spread::image_metadata`] so the frame literals
+    /// stay untouched. The inner Vec preserves XML order; one entry
+    /// per `Key`.
+    #[serde(default)]
+    pub labels: std::collections::HashMap<String, Vec<(String, String)>>,
 }
 
 /// Ruler guide on a spread. See [`Spread::guides`].
@@ -2514,6 +2522,44 @@ impl Spread {
                             }
                         }
                     }
+                    b"KeyValuePair" => {
+                        // `Properties/Label` entry on the current page
+                        // item — the plugin-metadata carrier. Attach to
+                        // the OPEN frame's Self id (nested anchored
+                        // frames are skipped by this parser, so their
+                        // labels are ignored rather than mis-attached
+                        // to the host).
+                        if let Some(cf) = current_frame.as_ref() {
+                            let key = crate::util::attr_unescaped(&e, b"Key");
+                            let value = crate::util::attr_unescaped(&e, b"Value");
+                            if let (Some(key), Some(value)) = (key, value) {
+                                let self_id = match cf.kind {
+                                    CurrentFrameKind::Text(i) => {
+                                        out.text_frames.get(i).and_then(|f| f.self_id.clone())
+                                    }
+                                    CurrentFrameKind::Rect(i) => {
+                                        out.rectangles.get(i).and_then(|f| f.self_id.clone())
+                                    }
+                                    CurrentFrameKind::Oval(i) => {
+                                        out.ovals.get(i).and_then(|f| f.self_id.clone())
+                                    }
+                                    CurrentFrameKind::Line(i) => {
+                                        out.graphic_lines.get(i).and_then(|f| f.self_id.clone())
+                                    }
+                                    CurrentFrameKind::Polygon(i) => {
+                                        out.polygons.get(i).and_then(|f| f.self_id.clone())
+                                    }
+                                };
+                                if let Some(self_id) = self_id {
+                                    let entries = out.labels.entry(self_id).or_default();
+                                    match entries.iter_mut().find(|(k, _)| *k == key) {
+                                        Some(slot) => slot.1 = value,
+                                        None => entries.push((key, value)),
+                                    }
+                                }
+                            }
+                        }
+                    }
                     b"PathPointType" => {
                         // Accumulate path-anchor points so the close
                         // tag can derive bounds when no
@@ -3442,6 +3488,43 @@ mod tests {
         ));
         assert!((s.guides[1].location - 240.0).abs() < 1e-3);
         assert_eq!(s.guides[1].page_index, 1);
+    }
+
+    #[test]
+    fn parses_labels_into_the_side_map() {
+        // `Properties/Label` KeyValuePairs — the plugin-metadata
+        // carrier. Attribute values are XML-unescaped; duplicate keys
+        // collapse last-write-wins; items without labels stay out of
+        // the map.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="spread1">
+    <Page Self="p1" GeometricBounds="0 0 792 612"/>
+    <Rectangle Self="u100" GeometricBounds="10 10 110 210" ItemTransform="1 0 0 1 0 0">
+      <Properties>
+        <Label>
+          <KeyValuePair Key="x-paged:web" Value="{&quot;v&quot;:1,&quot;data&quot;:{}}"/>
+          <KeyValuePair Key="vendor" Value="acme"/>
+          <KeyValuePair Key="vendor" Value="acme2"/>
+        </Label>
+      </Properties>
+    </Rectangle>
+    <Rectangle Self="u200" GeometricBounds="10 220 110 420" ItemTransform="1 0 0 1 0 0"/>
+  </Spread>
+</idPkg:Spread>"#;
+        let s = Spread::parse(xml.as_bytes()).unwrap();
+        let labels = s.labels.get("u100").expect("u100 labelled");
+        assert_eq!(
+            labels,
+            &vec![
+                (
+                    "x-paged:web".to_string(),
+                    "{\"v\":1,\"data\":{}}".to_string()
+                ),
+                ("vendor".to_string(), "acme2".to_string()),
+            ]
+        );
+        assert!(!s.labels.contains_key("u200"));
     }
 
     #[test]
