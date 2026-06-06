@@ -63,7 +63,9 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(26);
+/// v27: NodeSpec carries item_transform (RemoveNode → undo keeps the
+/// frame in place instead of snapping to the page origin).
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(27);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]

@@ -106,6 +106,7 @@ mod tests {
             self_id: "TextFrame/new".to_string(),
             bounds: [0.0, 0.0, 10.0, 10.0],
             fill_color: None,
+            item_transform: None,
         };
         assert_eq!(
             invert_insert_node(&spec),

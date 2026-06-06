@@ -721,11 +721,13 @@ pub enum Value {
 }
 
 /// Description of a node about to be inserted. Carries the minimal
-/// Stage-1 supported field set — `RemoveNode` → undo → re-insertion
-/// round-trips these reliably. Non-essential fields (item_transform,
-/// drop_shadow, anchors, …) default on re-insertion; this is a known
-/// Stage 1 limitation flagged in the plan and will tighten in later
-/// stages.
+/// Stage-1 supported field set plus `item_transform` — `RemoveNode` →
+/// undo → re-insertion round-trips these reliably. (Without the
+/// transform, undoing a deleteFrame snapped the frame back to the page
+/// origin — the editor-suite AC-E2E-PROVE-3 finding.) Remaining
+/// non-essential fields (drop_shadow, opacity, effects, …) still
+/// default on re-insertion; that residue of the Stage 1 limitation
+/// tightens in later stages.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -739,6 +741,10 @@ pub enum NodeSpec {
         stroke_color: Option<String>,
         #[serde(default)]
         stroke_weight: Option<f32>,
+        /// 6-element affine `[a b c d tx ty]` — preserved across
+        /// RemoveNode → undo so the frame re-inserts in place.
+        #[serde(default)]
+        item_transform: Option<[f32; 6]>,
     },
     Rectangle {
         self_id: String,
@@ -749,6 +755,10 @@ pub enum NodeSpec {
         stroke_color: Option<String>,
         #[serde(default)]
         stroke_weight: Option<f32>,
+        /// 6-element affine `[a b c d tx ty]` — preserved across
+        /// RemoveNode → undo so the frame re-inserts in place.
+        #[serde(default)]
+        item_transform: Option<[f32; 6]>,
     },
     /// Editor-ops — a graphic line. `anchors` carries the explicit
     /// path (two corner anchors for the Line tool; possibly more for
@@ -769,6 +779,10 @@ pub enum NodeSpec {
         stroke_color: Option<String>,
         #[serde(default)]
         stroke_weight: Option<f32>,
+        /// Captured-node transform (RemoveNode → undo). New Line-tool
+        /// creations pass `None` (anchors are already spread-space).
+        #[serde(default)]
+        item_transform: Option<[f32; 6]>,
     },
     /// Editor-ops — a polygon (the Pencil/freehand and captured-path
     /// kind). Carries the full path tables so `RemoveNode` → undo
@@ -788,6 +802,10 @@ pub enum NodeSpec {
         stroke_color: Option<String>,
         #[serde(default)]
         stroke_weight: Option<f32>,
+        /// Captured-node transform (RemoveNode → undo). Freehand
+        /// creations pass `None`.
+        #[serde(default)]
+        item_transform: Option<[f32; 6]>,
     },
     /// Phase H — deep-clone the `source` node into a new node with
     /// `self_id`, shifting its bounds (or its item_transform's tx/ty

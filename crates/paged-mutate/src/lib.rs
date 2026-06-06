@@ -391,6 +391,7 @@ mod tests {
                 parent: NodeId::Spread("Spread/u_main".to_string()),
                 position: 0,
                 node: NodeSpec::Rectangle {
+                    item_transform: None,
                     stroke_color: None,
                     stroke_weight: None,
                     self_id: "Rectangle/r1".to_string(),
@@ -1144,6 +1145,7 @@ mod tests {
             parent: NodeId::Spread("Spread/u_main".to_string()),
             position: 1,
             node: NodeSpec::TextFrame {
+                item_transform: None,
                 stroke_color: None,
                 stroke_weight: None,
                 self_id: "TextFrame/u_new".to_string(),
@@ -1169,6 +1171,7 @@ mod tests {
             parent: NodeId::Spread("Spread/u_main".to_string()),
             position: 0,
             node: NodeSpec::TextFrame {
+                item_transform: None,
                 stroke_color: None,
                 stroke_weight: None,
                 self_id: "TextFrame/u1".to_string(),
@@ -1212,6 +1215,7 @@ mod tests {
                 parent: NodeId::Spread("Spread/u_main".to_string()),
                 position: 1,
                 node: NodeSpec::TextFrame {
+                    item_transform: None,
                     stroke_color: None,
                     stroke_weight: None,
                     self_id: "TextFrame/u2".to_string(),
@@ -1261,6 +1265,7 @@ mod tests {
                 parent: NodeId::Spread("Spread/u_main".to_string()),
                 position: 1,
                 node: NodeSpec::TextFrame {
+                    item_transform: None,
                     stroke_color: None,
                     stroke_weight: None,
                     self_id: "TextFrame/u_new".to_string(),
@@ -2885,6 +2890,7 @@ mod tests {
                 parent: NodeId::Spread("Spread/u_main".to_string()),
                 position: 0,
                 node: NodeSpec::Rectangle {
+                    item_transform: None,
                     stroke_color: None,
                     stroke_weight: None,
                     self_id: "Rectangle/a".to_string(),
@@ -2899,6 +2905,7 @@ mod tests {
                 parent: NodeId::Spread("Spread/u_main".to_string()),
                 position: 1,
                 node: NodeSpec::Rectangle {
+                    item_transform: None,
                     stroke_color: None,
                     stroke_weight: None,
                     self_id: "Rectangle/b".to_string(),
@@ -3183,6 +3190,7 @@ mod tests {
                 position: 0,
                 z_slot: None,
                 node: crate::operation::NodeSpec::GraphicLine {
+                    item_transform: None,
                     self_id: "GraphicLine/u9".to_string(),
                     bounds: [0.0, 0.0, 100.0, 100.0],
                     anchors: vec![
@@ -3353,6 +3361,7 @@ mod tests {
                 parent: NodeId::Spread("Spread/u_main".to_string()),
                 position: 0,
                 node: NodeSpec::Rectangle {
+                    item_transform: None,
                     stroke_color: None,
                     stroke_weight: None,
                     self_id: "Rectangle/u1".to_string(),
@@ -3661,6 +3670,7 @@ mod tests {
     fn insert_node_registers_in_frames_in_order_and_remaps_indices() {
         let mut project = Project::new(document_with_ordered_textframes());
         let rect = |id: &str| NodeSpec::Rectangle {
+            item_transform: None,
             self_id: id.to_string(),
             bounds: [0.0, 0.0, 50.0, 50.0],
             fill_color: None,
@@ -3735,6 +3745,41 @@ mod tests {
         );
     }
 
+    /// Editor-suite AC-E2E-PROVE-3 — undoing deleteFrame must restore
+    /// the frame's `ItemTransform`, not snap it back to the page
+    /// origin. `NodeSpec` carries `item_transform` since protocol v27;
+    /// before that the RemoveNode capture dropped it.
+    #[test]
+    fn remove_node_undo_restores_item_transform() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        // a 3-4-5 rotation — clippy-clean, unlike FRAC_1_SQRT_2 approximations
+        let m = [0.6, 0.8, -0.8, 0.6, 50.0, 100.0];
+        project
+            .apply(Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FrameTransform,
+                value: Value::Transform(Some(m)),
+            })
+            .expect("set transform");
+        let before = format!("{:?}", project.document().spreads);
+
+        project
+            .apply(Operation::RemoveNode {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+            })
+            .expect("remove");
+        project.undo().expect("undo remove");
+
+        let frame = &project.document().spreads[0].spread.text_frames[0];
+        assert_eq!(
+            frame.item_transform,
+            Some(m),
+            "undo of deleteFrame must restore the item transform"
+        );
+        let after = format!("{:?}", project.document().spreads);
+        assert_eq!(before, after, "undo of remove must be byte-identical");
+    }
+
     #[test]
     fn insert_graphic_line_round_trips() {
         let mut project = Project::new(document_with_ordered_textframes());
@@ -3756,6 +3801,7 @@ mod tests {
                 parent: NodeId::Spread("Spread/u_main".to_string()),
                 position: 0,
                 node: NodeSpec::GraphicLine {
+                    item_transform: None,
                     self_id: "GraphicLine/l1".to_string(),
                     bounds: [20.0, 10.0, 80.0, 110.0],
                     anchors: anchors.clone(),
@@ -3815,6 +3861,7 @@ mod tests {
                 parent: NodeId::Spread("Spread/u_main".to_string()),
                 position: 0,
                 node: NodeSpec::Polygon {
+                    item_transform: None,
                     self_id: "Polygon/p1".to_string(),
                     bounds: [0.0, 0.0, 50.0, 60.0],
                     anchors,

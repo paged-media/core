@@ -2147,6 +2147,7 @@ fn apply_insert_node(
             fill_color,
             stroke_color,
             stroke_weight,
+            item_transform,
         } => {
             let len = spread.spread.text_frames.len();
             if position > len {
@@ -2160,6 +2161,7 @@ fn apply_insert_node(
                 new_text_frame(self_id.clone(), bounds_from_array(*bounds), fill_color.clone());
             frame.stroke_color = stroke_color.clone();
             frame.stroke_weight = *stroke_weight;
+            frame.item_transform = *item_transform;
             spread.spread.text_frames.insert(position, frame);
             register_frame_ref(&mut spread.spread, FrameRef::TextFrame(0), position, z_slot);
         }
@@ -2169,6 +2171,7 @@ fn apply_insert_node(
             fill_color,
             stroke_color,
             stroke_weight,
+            item_transform,
         } => {
             let len = spread.spread.rectangles.len();
             if position > len {
@@ -2182,6 +2185,7 @@ fn apply_insert_node(
                 new_rectangle(self_id.clone(), bounds_from_array(*bounds), fill_color.clone());
             rect.stroke_color = stroke_color.clone();
             rect.stroke_weight = *stroke_weight;
+            rect.item_transform = *item_transform;
             spread.spread.rectangles.insert(position, rect);
             register_frame_ref(&mut spread.spread, FrameRef::Rectangle(0), position, z_slot);
         }
@@ -2193,6 +2197,7 @@ fn apply_insert_node(
             subpath_open,
             stroke_color,
             stroke_weight,
+            item_transform,
         } => {
             let len = spread.spread.graphic_lines.len();
             if position > len {
@@ -2202,18 +2207,17 @@ fn apply_insert_node(
                     len,
                 });
             }
-            spread.spread.graphic_lines.insert(
-                position,
-                new_graphic_line(
-                    self_id.clone(),
-                    bounds_from_array(*bounds),
-                    anchors.iter().map(PathAnchorSpec::to_parse).collect(),
-                    subpath_starts.clone(),
-                    subpath_open.clone(),
-                    stroke_color.clone(),
-                    *stroke_weight,
-                ),
+            let mut line = new_graphic_line(
+                self_id.clone(),
+                bounds_from_array(*bounds),
+                anchors.iter().map(PathAnchorSpec::to_parse).collect(),
+                subpath_starts.clone(),
+                subpath_open.clone(),
+                stroke_color.clone(),
+                *stroke_weight,
             );
+            line.item_transform = *item_transform;
+            spread.spread.graphic_lines.insert(position, line);
             register_frame_ref(&mut spread.spread, FrameRef::GraphicLine(0), position, z_slot);
         }
         NodeSpec::Polygon {
@@ -2225,6 +2229,7 @@ fn apply_insert_node(
             fill_color,
             stroke_color,
             stroke_weight,
+            item_transform,
         } => {
             let len = spread.spread.polygons.len();
             if position > len {
@@ -2234,19 +2239,18 @@ fn apply_insert_node(
                     len,
                 });
             }
-            spread.spread.polygons.insert(
-                position,
-                new_polygon(
-                    self_id.clone(),
-                    bounds_from_array(*bounds),
-                    anchors.iter().map(PathAnchorSpec::to_parse).collect(),
-                    subpath_starts.clone(),
-                    subpath_open.clone(),
-                    fill_color.clone(),
-                    stroke_color.clone(),
-                    *stroke_weight,
-                ),
+            let mut poly = new_polygon(
+                self_id.clone(),
+                bounds_from_array(*bounds),
+                anchors.iter().map(PathAnchorSpec::to_parse).collect(),
+                subpath_starts.clone(),
+                subpath_open.clone(),
+                fill_color.clone(),
+                stroke_color.clone(),
+                *stroke_weight,
             );
+            poly.item_transform = *item_transform;
+            spread.spread.polygons.insert(position, poly);
             register_frame_ref(&mut spread.spread, FrameRef::Polygon(0), position, z_slot);
         }
         NodeSpec::CloneTranslate { .. } => {
@@ -2315,6 +2319,7 @@ fn remove_and_capture(
                         fill_color: frame.fill_color,
                         stroke_color: frame.stroke_color,
                         stroke_weight: frame.stroke_weight,
+                        item_transform: frame.item_transform,
                     };
                     return Ok((parent, pos, spec, z_slot));
                 }
@@ -2339,6 +2344,7 @@ fn remove_and_capture(
                         fill_color: rect.fill_color,
                         stroke_color: rect.stroke_color,
                         stroke_weight: rect.stroke_weight,
+                        item_transform: rect.item_transform,
                     };
                     return Ok((parent, pos, spec, z_slot));
                 }
@@ -2365,6 +2371,7 @@ fn remove_and_capture(
                         subpath_open: line.subpath_open,
                         stroke_color: line.stroke_color,
                         stroke_weight: line.stroke_weight,
+                        item_transform: line.item_transform,
                     };
                     return Ok((parent, pos, spec, z_slot));
                 }
@@ -2392,6 +2399,7 @@ fn remove_and_capture(
                         fill_color: poly.fill_color,
                         stroke_color: poly.stroke_color,
                         stroke_weight: poly.stroke_weight,
+                        item_transform: poly.item_transform,
                     };
                     return Ok((parent, pos, spec, z_slot));
                 }
@@ -2509,10 +2517,12 @@ fn insert_captured(
             fill_color,
             stroke_color,
             stroke_weight,
+            item_transform,
         } => {
             let mut frame = new_text_frame(self_id, bounds_from_array(bounds), fill_color);
             frame.stroke_color = stroke_color;
             frame.stroke_weight = stroke_weight;
+            frame.item_transform = item_transform;
             spread.spread.text_frames.insert(position, frame);
             register_frame_ref(&mut spread.spread, FrameRef::TextFrame(0), position, z_slot);
         }
@@ -2522,10 +2532,12 @@ fn insert_captured(
             fill_color,
             stroke_color,
             stroke_weight,
+            item_transform,
         } => {
             let mut rect = new_rectangle(self_id, bounds_from_array(bounds), fill_color);
             rect.stroke_color = stroke_color;
             rect.stroke_weight = stroke_weight;
+            rect.item_transform = item_transform;
             spread.spread.rectangles.insert(position, rect);
             register_frame_ref(&mut spread.spread, FrameRef::Rectangle(0), position, z_slot);
         }
@@ -2537,19 +2549,19 @@ fn insert_captured(
             subpath_open,
             stroke_color,
             stroke_weight,
+            item_transform,
         } => {
-            spread.spread.graphic_lines.insert(
-                position,
-                new_graphic_line(
-                    self_id,
-                    bounds_from_array(bounds),
-                    anchors.iter().map(PathAnchorSpec::to_parse).collect(),
-                    subpath_starts,
-                    subpath_open,
-                    stroke_color,
-                    stroke_weight,
-                ),
+            let mut line = new_graphic_line(
+                self_id,
+                bounds_from_array(bounds),
+                anchors.iter().map(PathAnchorSpec::to_parse).collect(),
+                subpath_starts,
+                subpath_open,
+                stroke_color,
+                stroke_weight,
             );
+            line.item_transform = item_transform;
+            spread.spread.graphic_lines.insert(position, line);
             register_frame_ref(&mut spread.spread, FrameRef::GraphicLine(0), position, z_slot);
         }
         NodeSpec::Polygon {
@@ -2561,20 +2573,20 @@ fn insert_captured(
             fill_color,
             stroke_color,
             stroke_weight,
+            item_transform,
         } => {
-            spread.spread.polygons.insert(
-                position,
-                new_polygon(
-                    self_id,
-                    bounds_from_array(bounds),
-                    anchors.iter().map(PathAnchorSpec::to_parse).collect(),
-                    subpath_starts,
-                    subpath_open,
-                    fill_color,
-                    stroke_color,
-                    stroke_weight,
-                ),
+            let mut poly = new_polygon(
+                self_id,
+                bounds_from_array(bounds),
+                anchors.iter().map(PathAnchorSpec::to_parse).collect(),
+                subpath_starts,
+                subpath_open,
+                fill_color,
+                stroke_color,
+                stroke_weight,
             );
+            poly.item_transform = item_transform;
+            spread.spread.polygons.insert(position, poly);
             register_frame_ref(&mut spread.spread, FrameRef::Polygon(0), position, z_slot);
         }
         // Same rationale as in apply_move_node: CloneTranslate is

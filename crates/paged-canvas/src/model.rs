@@ -1229,6 +1229,8 @@ impl CanvasModel {
                         fill_color: d.fill_color.clone(),
                         stroke_color: d.stroke_color.clone(),
                         stroke_weight: d.stroke_weight,
+                        // fresh creations carry no transform
+                        item_transform: None,
                     },
                     z_slot: None,
                 })
@@ -1265,6 +1267,8 @@ impl CanvasModel {
                             .clone()
                             .or_else(|| Some("Color/Black".to_string())),
                         stroke_weight: d.stroke_weight.or(Some(1.0)),
+                        // fresh creations carry no transform
+                        item_transform: None,
                     },
                     z_slot: None,
                 })
@@ -1322,6 +1326,8 @@ impl CanvasModel {
                             .clone()
                             .or_else(|| Some("Color/Black".to_string())),
                         stroke_weight: d.stroke_weight.or(Some(1.0)),
+                        // fresh creations carry no transform
+                        item_transform: None,
                     },
                     z_slot: None,
                 })
