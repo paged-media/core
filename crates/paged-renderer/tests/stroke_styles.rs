@@ -1,0 +1,301 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * This file is part of paged (https://paged.media) and is additionally
+ * available under the Paged Media Enterprise License (PMEL). Full
+ * copyright and license information is available in LICENSE.md which is
+ * distributed with this source code.
+ *
+ *  @copyright  Copyright (c) And The Next GmbH
+ *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
+ */
+
+//! W1.2 stroke-STYLE integration tests. Build a one-rectangle IDML whose
+//! `StrokeType` references a custom `<…StrokeStyle>` and assert the
+//! `build_document` display list carries the expected `StrokePath`
+//! commands: N rules for a striped stroke, a gap-colour under-stroke for
+//! a gap-coloured dash, a sine ribbon for a wavy stroke, and inward /
+//! outward bounds shifts for stroke alignment.
+
+use std::io::Write;
+
+use paged_compose::{DisplayCommand, PathSegment};
+use paged_renderer::{pipeline, Document, PipelineOptions};
+use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+/// Build a single-page IDML with one 200×100 rectangle at inner origin
+/// (no ItemTransform), the supplied `<Rectangle>` attributes, and the
+/// supplied custom `<…StrokeStyle>` resource XML injected into
+/// `Resources/Styles.xml`.
+fn build_idml(rect_attrs: &str, stroke_style_xml: &str) -> Vec<u8> {
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+
+    zip.start_file("designmap.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Styles src="Resources/Styles.xml"/>
+</Document>"#,
+    )
+    .unwrap();
+
+    zip.start_file("Resources/Graphic.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic>
+    <Color Self="Color/Black" Name="Black" Space="CMYK" ColorValue="0 0 0 100"/>
+    <Color Self="Color/Cyan" Name="Cyan" Space="CMYK" ColorValue="100 0 0 0"/>
+  </Graphic>
+</idPkg:Graphic>"#,
+    )
+    .unwrap();
+
+    let styles = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  {stroke_style_xml}
+</idPkg:Styles>"#
+    );
+    zip.start_file("Resources/Styles.xml", deflated).unwrap();
+    zip.write_all(styles.as_bytes()).unwrap();
+
+    let spread = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 400 300"/>
+    <Rectangle Self="r1" GeometricBounds="0 0 100 200" {rect_attrs}>
+      <Properties>
+        <PathGeometry>
+          <GeometryPathType PathOpen="false">
+            <PathPointArray>
+              <PathPointType Anchor="0 0" LeftDirection="0 0" RightDirection="0 0"/>
+              <PathPointType Anchor="200 0" LeftDirection="200 0" RightDirection="200 0"/>
+              <PathPointType Anchor="200 100" LeftDirection="200 100" RightDirection="200 100"/>
+              <PathPointType Anchor="0 100" LeftDirection="0 100" RightDirection="0 100"/>
+            </PathPointArray>
+          </GeometryPathType>
+        </PathGeometry>
+      </Properties>
+    </Rectangle>
+  </Spread>
+</idPkg:Spread>"#
+    );
+    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+    zip.write_all(spread.as_bytes()).unwrap();
+
+    zip.finish().unwrap().into_inner()
+}
+
+fn built_commands(bytes: &[u8]) -> Vec<DisplayCommand> {
+    let document = Document::open(bytes).unwrap();
+    let built = pipeline::build_document(&document, &PipelineOptions::default()).unwrap();
+    built.pages[0].list.commands.clone()
+}
+
+fn stroke_paths(cmds: &[DisplayCommand]) -> Vec<&DisplayCommand> {
+    cmds.iter()
+        .filter(|c| matches!(c, DisplayCommand::StrokePath { .. }))
+        .collect()
+}
+
+/// Bounds of the first `StrokePath` in *page* coords: the path's anchor
+/// points pushed through the command's transform. For the flat-rect emit
+/// the path is the interned unit rect and the rectangle geometry +
+/// stroke-alignment inset live in the transform, so the page-space
+/// bounds are what reflect the alignment shift.
+fn stroke_path_bounds(bytes: &[u8]) -> (f32, f32, f32, f32) {
+    let document = Document::open(bytes).unwrap();
+    let built = pipeline::build_document(&document, &PipelineOptions::default()).unwrap();
+    let page = &built.pages[0];
+    let (path_id, transform) = page
+        .list
+        .commands
+        .iter()
+        .find_map(|c| match c {
+            DisplayCommand::StrokePath {
+                path_id, transform, ..
+            } => Some((*path_id, *transform)),
+            _ => None,
+        })
+        .expect("a StrokePath");
+    let path = page.list.paths.get(path_id).expect("path data");
+    let (mut min_x, mut min_y, mut max_x, mut max_y) =
+        (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    let mut acc = |x: f32, y: f32| {
+        let (px, py) = transform.apply(x, y);
+        min_x = min_x.min(px);
+        min_y = min_y.min(py);
+        max_x = max_x.max(px);
+        max_y = max_y.max(py);
+    };
+    for seg in &path.segments {
+        match *seg {
+            PathSegment::MoveTo { x, y } | PathSegment::LineTo { x, y } => acc(x, y),
+            PathSegment::QuadTo { x, y, .. } => acc(x, y),
+            PathSegment::CubicTo { x, y, .. } => acc(x, y),
+            PathSegment::Close => {}
+        }
+    }
+    (min_x, min_y, max_x, max_y)
+}
+
+#[test]
+fn striped_stroke_emits_one_strokepath_per_stripe() {
+    let style = r#"<StripedStrokeStyle Self="StrokeStyle/Striped" Name="ThickThin">
+        <Stripe Left="0" Width="0.6"/>
+        <Stripe Left="0.8" Width="0.2"/>
+      </StripedStrokeStyle>"#;
+    let bytes = build_idml(
+        r#"StrokeColor="Color/Black" StrokeWeight="14" StrokeType="StrokeStyle/Striped""#,
+        style,
+    );
+    let cmds = built_commands(&bytes);
+    // A closed rect is one contour → one StrokePath per stripe (2).
+    assert_eq!(
+        stroke_paths(&cmds).len(),
+        2,
+        "two stripes → two StrokePath commands; got {:?}",
+        cmds
+    );
+}
+
+#[test]
+fn striped_stroke_substroke_weights_match_stripe_fractions() {
+    let style = r#"<StripedStrokeStyle Self="StrokeStyle/Striped" Name="ThickThin">
+        <Stripe Left="0" Width="0.6"/>
+        <Stripe Left="0.8" Width="0.2"/>
+      </StripedStrokeStyle>"#;
+    let bytes = build_idml(
+        r#"StrokeColor="Color/Black" StrokeWeight="10" StrokeType="StrokeStyle/Striped""#,
+        style,
+    );
+    let cmds = built_commands(&bytes);
+    let widths: Vec<f32> = stroke_paths(&cmds)
+        .iter()
+        .filter_map(|c| match c {
+            DisplayCommand::StrokePath { stroke, .. } => Some(stroke.width),
+            _ => None,
+        })
+        .collect();
+    // 0.6 × 10 = 6.0 and 0.2 × 10 = 2.0.
+    assert!(widths.iter().any(|w| (w - 6.0).abs() < 1e-3), "{widths:?}");
+    assert!(widths.iter().any(|w| (w - 2.0).abs() < 1e-3), "{widths:?}");
+}
+
+#[test]
+fn wavy_stroke_emits_a_polyline_strokepath() {
+    let style = r#"<WavyStrokeStyle Self="StrokeStyle/Wavy" Name="Wave" Width="0.5" Wavelength="2"/>"#;
+    let bytes = build_idml(
+        r#"StrokeColor="Color/Black" StrokeWeight="10" StrokeType="StrokeStyle/Wavy""#,
+        style,
+    );
+    let document = Document::open(&bytes).unwrap();
+    let built = pipeline::build_document(&document, &PipelineOptions::default()).unwrap();
+    let page = &built.pages[0];
+    let strokes = stroke_paths(&page.list.commands);
+    assert_eq!(strokes.len(), 1, "one wavy ribbon StrokePath");
+    // The wavy path is a dense polyline (many LineTo), not the 4-corner
+    // rectangle outline.
+    let path_id = match strokes[0] {
+        DisplayCommand::StrokePath { path_id, .. } => *path_id,
+        _ => unreachable!(),
+    };
+    let segs = &page.list.paths.get(path_id).unwrap().segments;
+    let line_tos = segs
+        .iter()
+        .filter(|s| matches!(s, PathSegment::LineTo { .. }))
+        .count();
+    assert!(line_tos > 8, "wavy ribbon should be densely sampled: {line_tos} LineTo");
+}
+
+#[test]
+fn gap_color_dash_emits_under_stroke_plus_dash() {
+    let style = r#"<DashedStrokeStyle Self="StrokeStyle/GapDash" Name="GapDash"
+        GapColor="Color/Cyan" GapTint="100" Pattern="8 6"/>"#;
+    let bytes = build_idml(
+        r#"StrokeColor="Color/Black" StrokeWeight="8" StrokeType="StrokeStyle/GapDash""#,
+        style,
+    );
+    let document = Document::open(&bytes).unwrap();
+    let built = pipeline::build_document(&document, &PipelineOptions::default()).unwrap();
+    let page = &built.pages[0];
+    let strokes = stroke_paths(&page.list.commands);
+    // Two StrokePaths: the gap-colour under-stroke (solid, full weight)
+    // emitted first, then the dashed black stroke.
+    assert_eq!(strokes.len(), 2, "gap under-stroke + dash; got {:?}", page.list.commands);
+    let (under, top) = match (strokes[0], strokes[1]) {
+        (DisplayCommand::StrokePath { stroke: u, .. }, DisplayCommand::StrokePath { stroke: t, .. }) => {
+            (u, t)
+        }
+        _ => unreachable!(),
+    };
+    // Under-stroke is solid full-weight; top stroke carries the dash.
+    assert!(under.dash.is_solid(), "under-stroke is solid");
+    assert!((under.width - 8.0).abs() < 1e-3, "under-stroke full weight");
+    assert!(!top.dash.is_solid(), "top stroke is dashed");
+}
+
+#[test]
+fn solid_stroke_without_style_is_a_single_strokepath() {
+    // Sanity floor: a plain solid stroke with no custom style still
+    // emits exactly one StrokePath (no gap pass, no stripes).
+    let bytes = build_idml(
+        r#"StrokeColor="Color/Black" StrokeWeight="6" StrokeType="StrokeStyle/$ID/Solid""#,
+        "",
+    );
+    let cmds = built_commands(&bytes);
+    assert_eq!(stroke_paths(&cmds).len(), 1);
+}
+
+#[test]
+fn stroke_alignment_inside_shifts_bounds_inward() {
+    // Inside alignment insets the polygon-stroke path by weight/2. The
+    // base rect outline is x∈[0,200], y∈[0,100]; weight 20 ⇒ inset 10.
+    let bytes = build_idml(
+        r#"StrokeColor="Color/Black" StrokeWeight="20" StrokeType="StrokeStyle/$ID/Solid" StrokeAlignment="InsideAlignment""#,
+        "",
+    );
+    let (min_x, min_y, max_x, max_y) = stroke_path_bounds(&bytes);
+    // Rectangle path (flat-rect emit) insets to [10,190]×[10,90].
+    assert!((min_x - 10.0).abs() < 1e-3, "min_x={min_x}");
+    assert!((min_y - 10.0).abs() < 1e-3, "min_y={min_y}");
+    assert!((max_x - 190.0).abs() < 1e-3, "max_x={max_x}");
+    assert!((max_y - 90.0).abs() < 1e-3, "max_y={max_y}");
+}
+
+#[test]
+fn stroke_alignment_outside_shifts_bounds_outward() {
+    let bytes = build_idml(
+        r#"StrokeColor="Color/Black" StrokeWeight="20" StrokeType="StrokeStyle/$ID/Solid" StrokeAlignment="OutsideAlignment""#,
+        "",
+    );
+    let (min_x, min_y, max_x, max_y) = stroke_path_bounds(&bytes);
+    // Outset to [-10,210]×[-10,110].
+    assert!((min_x + 10.0).abs() < 1e-3, "min_x={min_x}");
+    assert!((min_y + 10.0).abs() < 1e-3, "min_y={min_y}");
+    assert!((max_x - 210.0).abs() < 1e-3, "max_x={max_x}");
+    assert!((max_y - 110.0).abs() < 1e-3, "max_y={max_y}");
+}
+
+#[test]
+fn stroke_alignment_center_keeps_bounds() {
+    let bytes = build_idml(
+        r#"StrokeColor="Color/Black" StrokeWeight="20" StrokeType="StrokeStyle/$ID/Solid" StrokeAlignment="CenterAlignment""#,
+        "",
+    );
+    let (min_x, min_y, max_x, max_y) = stroke_path_bounds(&bytes);
+    assert!(min_x.abs() < 1e-3 && min_y.abs() < 1e-3, "min=({min_x},{min_y})");
+    assert!((max_x - 200.0).abs() < 1e-3 && (max_y - 100.0).abs() < 1e-3, "max=({max_x},{max_y})");
+}

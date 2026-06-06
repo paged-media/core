@@ -58,8 +58,8 @@ pub use story::{
 pub use styles::{
     CellStyleDef, CharacterStyleDef, ConditionDef, NestedDelimiter, NestedStyle, ObjectStyleDef,
     ParagraphBorder, ParagraphRule, ParagraphShading, ParagraphStyleDef, ResolvedCell,
-    ResolvedCharacter, ResolvedObject, ResolvedParagraph, ResolvedTable, StrokeStyleDef,
-    StrokeStyleKind, StyleSheet, TOCStyleDef, TOCStyleEntryDef, TableStyleDef,
+    ResolvedCharacter, ResolvedObject, ResolvedParagraph, ResolvedTable, StripeDef,
+    StrokeStyleDef, StrokeStyleKind, StyleSheet, TOCStyleDef, TOCStyleEntryDef, TableStyleDef,
 };
 
 #[derive(Debug, thiserror::Error)]

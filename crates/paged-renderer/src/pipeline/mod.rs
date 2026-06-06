@@ -46,6 +46,7 @@ mod image_decode;
 mod images;
 mod numbering;
 mod shapes;
+mod stroke_geom;
 mod tables;
 mod text_path;
 
@@ -8559,6 +8560,11 @@ mod tests {
                     name: None,
                     kind,
                     pattern: pattern.to_vec(),
+                    stripes: Vec::new(),
+                    wave_width: None,
+                    wave_length: None,
+                    gap_color: None,
+                    gap_tint: None,
                 },
             );
             m
@@ -8570,10 +8576,13 @@ mod tests {
         // Custom Dashed + Dotted patterns are consumed (a real dash).
         assert!(!go(K::Dashed, &[3.0, 2.0]).dash.is_solid(), "dashed");
         assert!(!go(K::Dotted, &[0.0, 2.0]).dash.is_solid(), "dotted");
-        // Striped / Wavy can't be modelled by a single Stroke → solid
-        // stroke of the declared width.
-        assert!(go(K::Striped, &[]).dash.is_solid(), "striped → solid");
-        assert!(go(K::Wavy, &[]).dash.is_solid(), "wavy → solid");
+        // `stroke_for` is the low-level *single*-stroke builder; Striped
+        // / Wavy can't be expressed as one dash, so it returns a solid
+        // base. The multi-rule / sine geometry for those is produced at
+        // the emit site by `classify_stroke_style` + `emit_styled_stroke`
+        // (W1.2), not here.
+        assert!(go(K::Striped, &[]).dash.is_solid(), "striped base → solid");
+        assert!(go(K::Wavy, &[]).dash.is_solid(), "wavy base → solid");
     }
 
     #[test]

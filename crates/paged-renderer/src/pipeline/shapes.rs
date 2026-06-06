@@ -465,7 +465,7 @@ fn emit_rectangle_polygon_path(
             frame_group_opacity(resolved),
         );
     }
-    let path_id = if let Geometry::Polygon {
+    let (path_id, base_path, cache_key) = if let Geometry::Polygon {
         anchors,
         subpath_starts,
         subpath_open,
@@ -477,30 +477,59 @@ fn emit_rectangle_polygon_path(
             Some(id) => fnv_1a_u64(id.as_bytes()),
             None => path_signature(anchors),
         };
-        let (id, _) = page.list.paths.intern(cache_key, path);
-        Some(id)
+        let (id, _) = page.list.paths.intern(cache_key, path.clone());
+        (Some(id), Some(path), cache_key)
     } else {
-        None
+        (None, None, 0)
     };
     crate::module::fill_paint_module(
         resolved, page, palette, cmyk_xform, fallback, outer, path_id,
     );
-    crate::module::stroke_paint_module(
-        resolved,
-        page,
-        palette,
-        cmyk_xform,
-        outer,
-        path_id,
-        stroke_for(
-            resolved.stroke_type,
-            resolved.effective_stroke_weight(),
-            resolved.end_cap,
-            resolved.end_join,
-            resolved.miter_limit,
-            Some(&document.styles.stroke_styles),
-        ),
+    let stroke_width = resolved.effective_stroke_weight();
+    let stroke = stroke_for(
+        resolved.stroke_type,
+        stroke_width,
+        resolved.end_cap,
+        resolved.end_join,
+        resolved.miter_limit,
+        Some(&document.styles.stroke_styles),
     );
+    // W1.2: striped / wavy / gap-colour styled stroke on the polygon
+    // outline. Polygon stroke alignment stays centred (open contours
+    // can't be safely inset/outset; documented in `stroke_geom`).
+    let class =
+        classify_stroke_style(resolved.stroke_type, stroke_width, &document.styles.stroke_styles);
+    let styled = !matches!(class, StrokeStyleClass::Plain { gap_color: None });
+    let handled = if styled && stroke_width > 0.0 {
+        if let (Some(base), Some(paint)) = (
+            base_path.as_ref(),
+            resolved.stroke_color.and_then(|id| {
+                color_id_to_paint_with_list_dir(
+                    id,
+                    palette,
+                    cmyk_xform,
+                    &mut page.list,
+                    resolved.gradient_stroke_angle,
+                    resolved.gradient_stroke_length,
+                    Some((bbox.w, bbox.h)),
+                )
+            }),
+        ) {
+            emit_styled_stroke(
+                page, base, cache_key, &class, &stroke, stroke_width, paint, palette, cmyk_xform,
+                outer,
+            )
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if !handled {
+        crate::module::stroke_paint_module(
+            resolved, page, palette, cmyk_xform, outer, path_id, stroke,
+        );
+    }
     if needs_group {
         pop_blend_group(page);
     }
@@ -659,20 +688,57 @@ pub(super) fn emit_rectangle_into(
                 Some((r.w, r.h)),
             )
         }) {
-            // Frame opacity is applied at the transparency-group
-            // level by the orchestrator; per-paint scaling here
-            // would double-apply the alpha.
-            emit_stroke_rect_transformed(
-                inset_rect(r, stroke_offset),
-                outer,
-                stroke,
-                paint,
-                &mut page.list,
+            let inset = inset_rect(r, stroke_offset);
+            // W1.2: striped / wavy stroke styles and the gap-colour
+            // under-stroke run against a closed path of the (alignment-
+            // adjusted) rectangle outline. A Plain style returns false →
+            // the cheap axis-aligned rect emit below still runs.
+            let class = classify_stroke_style(
+                resolved.stroke_type,
+                stroke_width,
+                &document.styles.stroke_styles,
             );
+            let styled = !matches!(class, StrokeStyleClass::Plain { gap_color: None });
+            let handled = if styled {
+                let base = axis_rect_path(inset);
+                let seed = resolved
+                    .self_id
+                    .map(|id| fnv_1a_u64(id.as_bytes()))
+                    .unwrap_or(0xFEED);
+                emit_styled_stroke(
+                    page, &base, seed, &class, &stroke, stroke_width, paint, palette,
+                    cmyk_xform, outer,
+                )
+            } else {
+                false
+            };
+            if !handled {
+                // Frame opacity is applied at the transparency-group
+                // level by the orchestrator; per-paint scaling here
+                // would double-apply the alpha.
+                emit_stroke_rect_transformed(inset, outer, stroke, paint, &mut page.list);
+            }
         }
     }
     if needs_group {
         pop_blend_group(page);
+    }
+}
+
+/// Build a closed, axis-aligned rectangle outline as a [`PathData`] in
+/// the rect's own coords. Used by the W1.2 styled-stroke emitter, which
+/// needs a polyline-able outline (the cheap `emit_stroke_rect_*`
+/// primitive doesn't expose one).
+pub(crate) fn axis_rect_path(r: Rect) -> paged_compose::PathData {
+    use paged_compose::PathSegment::{Close, LineTo, MoveTo};
+    paged_compose::PathData {
+        segments: vec![
+            MoveTo { x: r.x, y: r.y },
+            LineTo { x: r.x + r.w, y: r.y },
+            LineTo { x: r.x + r.w, y: r.y + r.h },
+            LineTo { x: r.x, y: r.y + r.h },
+            Close,
+        ],
     }
 }
 
@@ -720,6 +786,281 @@ pub(crate) fn inset_rect(r: Rect, delta: f32) -> Rect {
         y: r.y + delta,
         w: (r.w - 2.0 * delta).max(0.0),
         h: (r.h - 2.0 * delta).max(0.0),
+    }
+}
+
+/// Which W1.2 stroke-STYLE family a `StrokeType` reference resolves to.
+/// Drives whether the caller emits the default single `StrokePath`
+/// (Solid/Dashed/Dotted) or the multi-rule (Striped) / sine (Wavy)
+/// variants. `gap_color` carries the resolved gap-fill swatch ref for
+/// the dashed/dotted/striped under-stroke second pass.
+#[derive(Debug)]
+pub(crate) enum StrokeStyleClass<'a> {
+    /// Default: a single straight `StrokePath` (the existing emit). Dash
+    /// pattern, if any, already lives on the `Stroke`. `gap_color` is
+    /// the gap swatch for a patterned (dashed/dotted) stroke, if set.
+    Plain { gap_color: Option<&'a str> },
+    /// `<StripedStrokeStyle>`: N parallel rules. Each `(centre, weight)`
+    /// is the stripe centreline offset from the stroke's upper edge and
+    /// its sub-weight, both in pt.
+    Striped {
+        rules: Vec<(f32, f32)>,
+        gap_color: Option<&'a str>,
+    },
+    /// `<WavyStrokeStyle>`: a sine ribbon. `amplitude` / `period` in pt;
+    /// `sub_weight` is the pen width of the wave line.
+    Wavy {
+        amplitude: f32,
+        period: f32,
+        sub_weight: f32,
+    },
+}
+
+/// Classify a frame's `StrokeType` into a [`StrokeStyleClass`] given the
+/// total stroke weight and the document's custom-stroke-style table.
+///
+/// Striped sub-rules are derived from the `<Stripe>` table when present;
+/// otherwise from the built-in name (`Thick - Thin`, `Thin - Thick`,
+/// `Thick - Thin - Thick`, `Triple`) so a real IDML that references a
+/// canned striped style renders without declaring custom stripes. Wavy
+/// amplitude/period come from the style's `Width`/`Wavelength` ratios or
+/// IDML-sensible defaults.
+pub(crate) fn classify_stroke_style<'a>(
+    stroke_type: Option<&str>,
+    weight: f32,
+    stroke_styles: &'a std::collections::BTreeMap<String, paged_parse::StrokeStyleDef>,
+) -> StrokeStyleClass<'a> {
+    use paged_parse::StrokeStyleKind as K;
+    let Some(name) = stroke_type else {
+        return StrokeStyleClass::Plain { gap_color: None };
+    };
+    // Custom `<StrokeStyle>` definition wins over the built-in name.
+    if let Some(def) = stroke_styles.get(name) {
+        let gap_color = def.gap_color.as_deref();
+        match def.kind {
+            K::Striped => {
+                let rules = stripe_rules_from_def(&def.stripes, weight);
+                if !rules.is_empty() {
+                    return StrokeStyleClass::Striped { rules, gap_color };
+                }
+            }
+            K::Wavy => {
+                let (amplitude, period, sub_weight) =
+                    wavy_params(def.wave_width, def.wave_length, weight);
+                return StrokeStyleClass::Wavy {
+                    amplitude,
+                    period,
+                    sub_weight,
+                };
+            }
+            // Dashed / Dotted gap colour rides the default single
+            // StrokePath; the gap swatch flows through for the
+            // under-stroke pass.
+            K::Dashed | K::Dotted => return StrokeStyleClass::Plain { gap_color },
+        }
+    }
+    // Built-in names. `Canned ` prefix and the `StrokeStyle/$ID/`
+    // namespace are stripped to match the bare style name.
+    let suffix = name.strip_prefix("StrokeStyle/$ID/").unwrap_or(name);
+    let bare = suffix.strip_prefix("Canned ").unwrap_or(suffix);
+    if let Some(fractions) = builtin_stripe_fractions(bare) {
+        let rules = stripe_rules_from_def(&fractions, weight);
+        if !rules.is_empty() {
+            return StrokeStyleClass::Striped {
+                rules,
+                gap_color: None,
+            };
+        }
+    }
+    if bare == "Wavy" {
+        let (amplitude, period, sub_weight) = wavy_params(None, None, weight);
+        return StrokeStyleClass::Wavy {
+            amplitude,
+            period,
+            sub_weight,
+        };
+    }
+    StrokeStyleClass::Plain { gap_color: None }
+}
+
+/// Convert a stripe table (`left`/`width` as 0..1 fractions of the total
+/// weight) into `(centre, sub_weight)` pairs in pt, where `centre` is
+/// the stripe centreline measured from the stroke's *upper* edge
+/// (i.e. `-weight/2` … `+weight/2` once recentred by the caller).
+/// Zero-width stripes are dropped.
+fn stripe_rules_from_def(stripes: &[paged_parse::StripeDef], weight: f32) -> Vec<(f32, f32)> {
+    stripes
+        .iter()
+        .filter(|s| s.width > 1e-4)
+        .map(|s| {
+            let sub_weight = s.width * weight;
+            let centre_frac = s.left + s.width * 0.5;
+            (centre_frac * weight, sub_weight)
+        })
+        .collect()
+}
+
+/// Built-in striped stroke styles InDesign ships, expressed as a stripe
+/// table (left/width fractions of the total weight). Ordered top→bottom.
+fn builtin_stripe_fractions(name: &str) -> Option<Vec<paged_parse::StripeDef>> {
+    use paged_parse::StripeDef as S;
+    let v = match name {
+        "Thick - Thin" | "Thick-Thin" | "ThickThin" => vec![
+            S { left: 0.0, width: 0.6 },
+            S { left: 0.8, width: 0.2 },
+        ],
+        "Thin - Thick" | "Thin-Thick" | "ThinThick" => vec![
+            S { left: 0.0, width: 0.2 },
+            S { left: 0.4, width: 0.6 },
+        ],
+        "Thick - Thin - Thick" | "ThickThinThick" => vec![
+            S { left: 0.0, width: 0.25 },
+            S { left: 0.4, width: 0.2 },
+            S { left: 0.75, width: 0.25 },
+        ],
+        "Thin - Thick - Thin" | "ThinThickThin" => vec![
+            S { left: 0.0, width: 0.2 },
+            S { left: 0.35, width: 0.3 },
+            S { left: 0.8, width: 0.2 },
+        ],
+        "Triple" => vec![
+            S { left: 0.0, width: 0.25 },
+            S { left: 0.375, width: 0.25 },
+            S { left: 0.75, width: 0.25 },
+        ],
+        _ => return None,
+    };
+    Some(v)
+}
+
+/// Wavy stroke amplitude / period / pen-width in pt. `width` and
+/// `wavelength` are InDesign 0..1 ratios of the total weight; absent
+/// values fall back to IDML-sensible defaults (amplitude = the weight,
+/// period = 3× the weight, pen = 1/4 the weight, min 0.5pt).
+fn wavy_params(width: Option<f32>, wavelength: Option<f32>, weight: f32) -> (f32, f32, f32) {
+    let amplitude = width.map(|w| w * weight).unwrap_or(weight).max(0.1);
+    let period = wavelength
+        .map(|wl| (wl * weight).max(1.0))
+        .unwrap_or(weight * 3.0)
+        .max(1.0);
+    let sub_weight = (weight * 0.25).max(0.5);
+    (amplitude, period, sub_weight)
+}
+
+/// Emit a styled stroke for `base_path` (in inner coords). Handles the
+/// W1.2 stroke-STYLE families: striped (N offset rules), wavy (sine
+/// ribbon), and the dashed/dotted/striped gap-colour under-stroke. The
+/// default single `StrokePath` (Solid/Dashed/Dotted) is emitted by the
+/// caller when this returns `false`.
+///
+/// `closed` reflects whether `base_path` is a closed outline. The sine
+/// flattening always produces an open ribbon (matching InDesign).
+///
+/// Returns `true` when it fully emitted the stroke (caller must skip its
+/// own emit), `false` when the style is Plain and the caller should
+/// proceed (after this has already emitted any gap-colour under-stroke).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_styled_stroke(
+    page: &mut BuiltPage,
+    base_path: &paged_compose::PathData,
+    cache_seed: u64,
+    class: &StrokeStyleClass<'_>,
+    stroke: &Stroke,
+    weight: f32,
+    stroke_paint: Paint,
+    palette: &Graphic,
+    cmyk_xform: Option<&paged_color::IccTransform>,
+    outer: Transform,
+) -> bool {
+    use crate::pipeline::stroke_geom;
+    // Resolve a gap-colour paint (if any) so the under-stroke pass can
+    // run beneath dashed/dotted/striped patterns.
+    let gap_color = match class {
+        StrokeStyleClass::Plain { gap_color } | StrokeStyleClass::Striped { gap_color, .. } => {
+            *gap_color
+        }
+        StrokeStyleClass::Wavy { .. } => None,
+    };
+    // Gap-colour second pass: a continuous solid under-stroke of the full
+    // weight in the gap colour, beneath the patterned/striped stroke, so
+    // the gaps show the gap colour rather than the page beneath. Emitted
+    // first (drawn first ⇒ underneath).
+    if let Some(gc) = gap_color {
+        if let Some(gap_paint) = color_id_to_paint(gc, palette, cmyk_xform) {
+            let (gap_path_id, _) = page
+                .list
+                .paths
+                .intern(cache_seed ^ 0x9A7C, base_path.clone());
+            page.list.push(paged_compose::DisplayCommand::StrokePath {
+                path_id: gap_path_id,
+                paint: gap_paint,
+                stroke: Stroke::new(weight),
+                transform: outer,
+            });
+        }
+    }
+
+    match class {
+        StrokeStyleClass::Plain { .. } => false,
+        StrokeStyleClass::Striped { rules, .. } => {
+            // Flatten the outline once, then offset it per stripe. The
+            // stripe centre is measured from the upper edge, so recentre
+            // around 0 (the path centreline) by subtracting weight/2.
+            let lines = stroke_geom::flatten_path(base_path, stroke_geom::FLATTEN_STEPS);
+            for (stripe_idx, &(centre, sub_weight)) in rules.iter().enumerate() {
+                let offset = centre - weight * 0.5;
+                let mut sub_stroke = *stroke;
+                sub_stroke.width = sub_weight.max(0.05);
+                sub_stroke.dash = paged_compose::DashPattern::default();
+                for (line_idx, line) in lines.iter().enumerate() {
+                    let off = stroke_geom::offset_polyline(line, offset);
+                    let path = stroke_geom::polyline_to_path(&off);
+                    if path.is_empty() {
+                        continue;
+                    }
+                    let key = cache_seed
+                        ^ 0x57A1_0000
+                        ^ ((stripe_idx as u64) << 8)
+                        ^ (line_idx as u64);
+                    let (path_id, _) = page.list.paths.intern(key, path);
+                    page.list.push(paged_compose::DisplayCommand::StrokePath {
+                        path_id,
+                        paint: stroke_paint,
+                        stroke: sub_stroke,
+                        transform: outer,
+                    });
+                }
+            }
+            true
+        }
+        StrokeStyleClass::Wavy {
+            amplitude,
+            period,
+            sub_weight,
+        } => {
+            let lines = stroke_geom::flatten_path(base_path, stroke_geom::FLATTEN_STEPS);
+            let mut sub_stroke = *stroke;
+            sub_stroke.width = sub_weight.max(0.05);
+            sub_stroke.dash = paged_compose::DashPattern::default();
+            for (line_idx, line) in lines.iter().enumerate() {
+                let wave = stroke_geom::sine_polyline(line, *amplitude, *period, 12);
+                let path = stroke_geom::polyline_to_path(&wave);
+                if path.is_empty() {
+                    continue;
+                }
+                let (path_id, _) = page
+                    .list
+                    .paths
+                    .intern(cache_seed ^ 0x4A7E_0000 ^ line_idx as u64, path);
+                page.list.push(paged_compose::DisplayCommand::StrokePath {
+                    path_id,
+                    paint: stroke_paint,
+                    stroke: sub_stroke,
+                    transform: outer,
+                });
+            }
+            true
+        }
     }
 }
 
@@ -1328,5 +1669,102 @@ mod tests {
             (dir.0 + 3.0).abs() < 1e-6 && (dir.1 + 3.0).abs() < 1e-6,
             "curved end must use the handle tangent, got {dir:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod stroke_style_class_tests {
+    use super::*;
+    use paged_parse::{StripeDef, StrokeStyleDef, StrokeStyleKind as K};
+    use std::collections::BTreeMap;
+
+    fn styles(defs: Vec<StrokeStyleDef>) -> BTreeMap<String, StrokeStyleDef> {
+        defs.into_iter().map(|d| (d.self_id.clone(), d)).collect()
+    }
+
+    fn def(self_id: &str, kind: K) -> StrokeStyleDef {
+        StrokeStyleDef {
+            self_id: self_id.to_string(),
+            name: None,
+            kind,
+            pattern: Vec::new(),
+            stripes: Vec::new(),
+            wave_width: None,
+            wave_length: None,
+            gap_color: None,
+            gap_tint: None,
+        }
+    }
+
+    #[test]
+    fn custom_striped_yields_one_rule_per_stripe_with_scaled_weights() {
+        let mut d = def("StrokeStyle/S", K::Striped);
+        d.stripes = vec![
+            StripeDef { left: 0.0, width: 0.6 },
+            StripeDef { left: 0.8, width: 0.2 },
+        ];
+        let m = styles(vec![d]);
+        match classify_stroke_style(Some("StrokeStyle/S"), 10.0, &m) {
+            StrokeStyleClass::Striped { rules, .. } => {
+                assert_eq!(rules.len(), 2);
+                // (centre, sub_weight): centre = (left + width/2)·weight.
+                assert!((rules[0].0 - 3.0).abs() < 1e-4, "{:?}", rules[0]);
+                assert!((rules[0].1 - 6.0).abs() < 1e-4, "{:?}", rules[0]);
+                assert!((rules[1].0 - 9.0).abs() < 1e-4, "{:?}", rules[1]);
+                assert!((rules[1].1 - 2.0).abs() < 1e-4, "{:?}", rules[1]);
+            }
+            other => panic!("expected Striped, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn builtin_thick_thin_name_resolves_to_striped() {
+        let m = BTreeMap::new();
+        let class =
+            classify_stroke_style(Some("StrokeStyle/$ID/Canned Thick - Thin"), 8.0, &m);
+        assert!(matches!(class, StrokeStyleClass::Striped { .. }));
+    }
+
+    #[test]
+    fn custom_wavy_uses_width_and_wavelength_ratios() {
+        let mut d = def("StrokeStyle/W", K::Wavy);
+        d.wave_width = Some(0.5);
+        d.wave_length = Some(2.0);
+        let m = styles(vec![d]);
+        match classify_stroke_style(Some("StrokeStyle/W"), 10.0, &m) {
+            StrokeStyleClass::Wavy {
+                amplitude, period, ..
+            } => {
+                assert!((amplitude - 5.0).abs() < 1e-4, "amp={amplitude}");
+                assert!((period - 20.0).abs() < 1e-4, "period={period}");
+            }
+            other => panic!("expected Wavy, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dashed_with_gap_color_is_plain_with_gap() {
+        let mut d = def("StrokeStyle/G", K::Dashed);
+        d.gap_color = Some("Color/Cyan".to_string());
+        let m = styles(vec![d]);
+        match classify_stroke_style(Some("StrokeStyle/G"), 4.0, &m) {
+            StrokeStyleClass::Plain { gap_color } => {
+                assert_eq!(gap_color, Some("Color/Cyan"));
+            }
+            other => panic!("expected Plain with gap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_and_solid_are_plain_without_gap() {
+        let m = BTreeMap::new();
+        assert!(matches!(
+            classify_stroke_style(Some("StrokeStyle/$ID/Solid"), 2.0, &m),
+            StrokeStyleClass::Plain { gap_color: None }
+        ));
+        assert!(matches!(
+            classify_stroke_style(None, 2.0, &m),
+            StrokeStyleClass::Plain { gap_color: None }
+        ));
     }
 }

@@ -22,6 +22,10 @@
 //!   * custom stroke weights
 //!   * solid fills in CMYK + RGB swatches
 //!   * tinted fills
+//!   * W1.2 stroke STYLES (appended after the baked-PDF pages): a
+//!     thick-thin striped style (two parallel rules), a wavy style
+//!     (sine ribbon), and a dashed style with a gap colour
+//!     (under-stroke second pass).
 //!
 //! Each variant lands on its own page with the descriptor in
 //! `Page.Name`, so the diff harness can attribute failure to e.g.
@@ -36,8 +40,8 @@ use crate::builders::{
     master::{write_master, Master},
     page_item::Rect,
     resources::{
-        container_xml, fonts_xml, graphic_xml_with_extras, preferences_xml, styles_xml,
-        ExtraColor,
+        container_xml, fonts_xml, graphic_xml_with_extras, preferences_xml,
+        styles_xml_with_stroke_styles, ExtraColor, StrokeStyleSpec,
     },
     spread::{write_spread, Spread},
     story::{write_story, Paragraph, Story},
@@ -202,6 +206,85 @@ fn variants() -> Vec<Variant> {
             stroke_weight_pt: None,
             fill_color: Some("Color/Black"),
         },
+        // ---- W1.2 stroke-STYLE variants ----
+        //
+        // These land AFTER the original 19 pages so the baked reference
+        // PDF (capped at 19 in fidelity-thresholds.json) is unaffected —
+        // same append-only pattern as tables / images. They have no
+        // reference page and so don't participate in the capped diff.
+        //
+        // Thick-Thin striped: a custom `<StripedStrokeStyle>` with two
+        // stripes (60% top rule, 20% bottom rule). Heavier weight so the
+        // two parallel rules are clearly resolved.
+        Variant {
+            name: "strokes · striped · thick-thin",
+            overrides: vec![("StrokeType", STRIPED_STYLE_ID)],
+            stroke_weight_pt: Some(14.0),
+            fill_color: None,
+        },
+        // Wavy: a custom `<WavyStrokeStyle>` sampled as a sine ribbon.
+        Variant {
+            name: "strokes · wavy",
+            overrides: vec![("StrokeType", WAVY_STYLE_ID)],
+            stroke_weight_pt: Some(10.0),
+            fill_color: None,
+        },
+        // Dashed with a gap colour: the gaps are filled by an under-
+        // stroke in the custom style's `GapColor` (cyan), beneath the
+        // black dash pattern.
+        Variant {
+            name: "strokes · dashed · gap-color",
+            overrides: vec![("StrokeType", GAP_DASH_STYLE_ID)],
+            stroke_weight_pt: Some(8.0),
+            fill_color: None,
+        },
+    ]
+}
+
+/// Self-ids for the custom stroke styles the W1.2 variants reference.
+const STRIPED_STYLE_ID: &str = "StrokeStyle/ThickThin";
+const WAVY_STYLE_ID: &str = "StrokeStyle/Wavy";
+const GAP_DASH_STYLE_ID: &str = "StrokeStyle/GapDash";
+
+/// Custom `<…StrokeStyle>` resources for the W1.2 variants.
+fn stroke_styles() -> Vec<StrokeStyleSpec> {
+    vec![
+        StrokeStyleSpec {
+            self_id: STRIPED_STYLE_ID,
+            name: "Thick Thin",
+            kind: "Striped",
+            pattern: None,
+            gap_color: None,
+            gap_tint: None,
+            // Two rules: a 60%-weight top rule and a 20%-weight bottom
+            // rule, separated by a gap. Fractions of the total weight.
+            stripes: &[(0.0, 0.6), (0.8, 0.2)],
+            wave_width: None,
+            wave_length: None,
+        },
+        StrokeStyleSpec {
+            self_id: WAVY_STYLE_ID,
+            name: "Wavy",
+            kind: "Wavy",
+            pattern: None,
+            gap_color: None,
+            gap_tint: None,
+            stripes: &[],
+            // Amplitude = 0.5× weight; wavelength = 2× weight.
+            wave_width: Some("0.5"),
+            wave_length: Some("2"),
+        },
+        StrokeStyleSpec {
+            self_id: GAP_DASH_STYLE_ID,
+            name: "Gap Dash",
+            kind: "Dashed",
+            pattern: Some("8 6"),
+            gap_color: Some("Color/RGBCyan"),
+            gap_tint: Some("100"),
+            stripes: &[],
+            wave_width: None,
+            wave_length: None,
+        },
     ]
 }
 
@@ -329,7 +412,7 @@ pub fn build() -> Sample {
         designmap_xml: designmap,
         graphic_xml: graphic_xml_with_extras(&extra_colors()),
         fonts_xml: fonts_xml(),
-        styles_xml: styles_xml(),
+        styles_xml: styles_xml_with_stroke_styles(&stroke_styles()),
         preferences_xml: preferences_xml(),
         backing_story_xml: backing_story_xml(),
         tags_xml: tags_xml(),
