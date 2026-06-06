@@ -73,6 +73,32 @@ pub struct GradientStop {
     pub location_pct: f32,
 }
 
+/// One `<TableStyle>` declaration for the styles manifest. Only the
+/// attributes the samples need are modelled; absent `Option`s are
+/// omitted so InDesign / the parser fall back to their defaults.
+/// A `<Table>` references this by setting its `AppliedTableStyle` to
+/// the same `self_id`.
+#[derive(Default)]
+pub struct TableStyleSpec {
+    pub self_id: String,
+    pub name: String,
+    /// `AlternatingFills` — `"AlternatingRows"` or
+    /// `"AlternatingColumns"`. `None` ⇒ omit (no alternating fill).
+    pub alternating_fills: Option<&'static str>,
+    /// Start/End fill swatch references for the alternating pattern.
+    /// The renderer reads the row OR column set depending on
+    /// `alternating_fills`; the gen builder emits whichever pair is
+    /// set under the matching attribute names.
+    pub start_row_fill_color: Option<String>,
+    pub start_row_fill_count: Option<u32>,
+    pub end_row_fill_color: Option<String>,
+    pub end_row_fill_count: Option<u32>,
+    pub start_column_fill_color: Option<String>,
+    pub start_column_fill_count: Option<u32>,
+    pub end_column_fill_color: Option<String>,
+    pub end_column_fill_count: Option<u32>,
+}
+
 /// Same as [`graphic_xml`] but appends caller-supplied custom swatches
 /// after the built-in Black + Paper.
 pub fn graphic_xml_with_extras(extras: &[ExtraColor]) -> Vec<u8> {
@@ -213,6 +239,14 @@ pub fn fonts_xml() -> Vec<u8> {
 /// style]` and `[No character style]` plus a default Open Sans
 /// paragraph style for body text.
 pub fn styles_xml() -> Vec<u8> {
+    styles_xml_with_table_styles(&[])
+}
+
+/// Like [`styles_xml`] but also emits a `<RootTableStyleGroup>`
+/// carrying the supplied table styles. Used by the tables sample to
+/// drive the renderer's alternating-fill path (which resolves off an
+/// `AppliedTableStyle`, not per-cell fills).
+pub fn styles_xml_with_table_styles(table_styles: &[TableStyleSpec]) -> Vec<u8> {
     let mut b = XmlBuilder::new();
     b.write_decl();
     b.start(
@@ -275,6 +309,59 @@ pub fn styles_xml() -> Vec<u8> {
         ],
     );
     b.end("RootObjectStyleGroup");
+    // Table styles. The renderer's alternating-fill path resolves off
+    // an `AppliedTableStyle`, so a `<Table>` that wants fills must
+    // reference one of these.
+    b.start("RootTableStyleGroup", &[]);
+    // The built-in `[No table style]` every IDML carries.
+    b.empty(
+        "TableStyle",
+        &[
+            ("Self", "TableStyle/$ID/[No table style]"),
+            ("Name", "$ID/[No table style]"),
+        ],
+    );
+    for ts in table_styles {
+        let start_row_count_s: String;
+        let end_row_count_s: String;
+        let start_col_count_s: String;
+        let end_col_count_s: String;
+        let mut a: Vec<(&str, &str)> =
+            vec![("Self", ts.self_id.as_str()), ("Name", ts.name.as_str())];
+        if let Some(af) = ts.alternating_fills {
+            a.push(("AlternatingFills", af));
+        }
+        if let Some(c) = &ts.start_row_fill_color {
+            a.push(("StartRowFillColor", c.as_str()));
+        }
+        if let Some(n) = ts.start_row_fill_count {
+            start_row_count_s = n.to_string();
+            a.push(("StartRowFillCount", start_row_count_s.as_str()));
+        }
+        if let Some(c) = &ts.end_row_fill_color {
+            a.push(("EndRowFillColor", c.as_str()));
+        }
+        if let Some(n) = ts.end_row_fill_count {
+            end_row_count_s = n.to_string();
+            a.push(("EndRowFillCount", end_row_count_s.as_str()));
+        }
+        if let Some(c) = &ts.start_column_fill_color {
+            a.push(("StartColumnFillColor", c.as_str()));
+        }
+        if let Some(n) = ts.start_column_fill_count {
+            start_col_count_s = n.to_string();
+            a.push(("StartColumnFillCount", start_col_count_s.as_str()));
+        }
+        if let Some(c) = &ts.end_column_fill_color {
+            a.push(("EndColumnFillColor", c.as_str()));
+        }
+        if let Some(n) = ts.end_column_fill_count {
+            end_col_count_s = n.to_string();
+            a.push(("EndColumnFillCount", end_col_count_s.as_str()));
+        }
+        b.empty("TableStyle", &a);
+    }
+    b.end("RootTableStyleGroup");
     b.end("idPkg:Styles");
     b.into_bytes()
 }

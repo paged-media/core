@@ -110,6 +110,11 @@ pub struct Table {
     pub footer_row_count: u32,
     pub body_row_count: u32,
     pub column_count: u32,
+    /// `AppliedTableStyle` reference. `None` ⇒ the built-in
+    /// `"TableStyle/$ID/[No table style]"`. Set this to a custom
+    /// table-style self-id (declared via
+    /// `styles_xml_with_table_styles`) to drive alternating fills.
+    pub applied_table_style: Option<String>,
     /// Per-row height in pt. Length must equal
     /// `header + body + footer`. Each entry seeds the row's
     /// `SingleRowHeight` attribute.
@@ -152,6 +157,23 @@ pub struct Cell {
     /// when the cell carries an explicit angle; we emit both so
     /// strict readers see consistent settings.
     pub rotation_angle: Option<f32>,
+    /// Diagonal stroke settings. `LeftLine*` is the TL→BR diagonal,
+    /// `RightLine*` the TR→BL diagonal. `diagonal_in_front` maps to
+    /// `DiagonalLineInFront`.
+    pub diagonal: CellDiagonal,
+}
+
+/// Generator-side mirror of IDML's per-cell diagonal stroke
+/// attributes. Defaults to "no diagonal".
+#[derive(Default, Clone)]
+pub struct CellDiagonal {
+    pub left_line_drawn: Option<bool>,
+    pub left_line_color: Option<&'static str>,
+    pub left_line_weight: Option<f32>,
+    pub right_line_drawn: Option<bool>,
+    pub right_line_color: Option<&'static str>,
+    pub right_line_weight: Option<f32>,
+    pub diagonal_in_front: Option<bool>,
 }
 
 impl Cell {
@@ -172,6 +194,7 @@ impl Cell {
             row_span: 1,
             column_span: 1,
             rotation_angle: None,
+            diagonal: CellDiagonal::default(),
         }
     }
 
@@ -183,6 +206,11 @@ impl Cell {
 
     pub fn with_rotation_angle(mut self, deg: f32) -> Self {
         self.rotation_angle = Some(deg);
+        self
+    }
+
+    pub fn with_diagonal(mut self, diagonal: CellDiagonal) -> Self {
+        self.diagonal = diagonal;
         self
     }
 }
@@ -487,6 +515,10 @@ fn write_table(b: &mut XmlBuilder, t: &Table) {
     let footer = t.footer_row_count.to_string();
     let body = t.body_row_count.to_string();
     let cols = t.column_count.to_string();
+    let applied_style = t
+        .applied_table_style
+        .as_deref()
+        .unwrap_or("TableStyle/$ID/[No table style]");
     b.start(
         "Table",
         &[
@@ -495,10 +527,7 @@ fn write_table(b: &mut XmlBuilder, t: &Table) {
             ("FooterRowCount", footer.as_str()),
             ("BodyRowCount", body.as_str()),
             ("ColumnCount", cols.as_str()),
-            (
-                "AppliedTableStyle",
-                "TableStyle/$ID/[No table style]",
-            ),
+            ("AppliedTableStyle", applied_style),
         ],
     );
     let total_rows = t.header_row_count + t.body_row_count + t.footer_row_count;
@@ -617,6 +646,28 @@ fn write_table(b: &mut XmlBuilder, t: &Table) {
                 if let Some(t) = trot {
                     a.push(("TableTextRotation", t.to_string()));
                 }
+            }
+            let d = &cell.diagonal;
+            if let Some(v) = d.left_line_drawn {
+                a.push(("LeftLineDrawn", v.to_string()));
+            }
+            if let Some(c) = d.left_line_color {
+                a.push(("LeftLineStrokeColor", c.to_string()));
+            }
+            if let Some(w) = d.left_line_weight {
+                a.push(("LeftLineStrokeWeight", crate::xml::format_f32(w)));
+            }
+            if let Some(v) = d.right_line_drawn {
+                a.push(("RightLineDrawn", v.to_string()));
+            }
+            if let Some(c) = d.right_line_color {
+                a.push(("RightLineStrokeColor", c.to_string()));
+            }
+            if let Some(w) = d.right_line_weight {
+                a.push(("RightLineStrokeWeight", crate::xml::format_f32(w)));
+            }
+            if let Some(v) = d.diagonal_in_front {
+                a.push(("DiagonalLineInFront", v.to_string()));
             }
             let attr_refs: Vec<(&str, &str)> =
                 a.iter().map(|(k, v)| (*k, v.as_str())).collect();

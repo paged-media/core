@@ -22,21 +22,30 @@
 //! Variants:
 //!   * 2×2 plain table — body content only
 //!   * 3×3 with one header row
-//!   * 3×3 with alternating row fills
+//!   * 3×3 with alternating row fills (per-cell, no table style)
 //!   * 3×3 with per-cell stroke colour overrides
+//!   * 3×3 with table-style-driven alternating ROW fills
+//!   * 3×3 with table-style-driven alternating COLUMN fills
+//!   * 2×2 with cell diagonals (TL→BR, TR→BL, and an in-front one)
 
 use crate::builders::{
     designmap::{write_designmap, DesignMap},
     master::{write_master, Master},
     page_item::Rect,
     resources::{
-        container_xml, fonts_xml, graphic_xml_with_extras, preferences_xml, styles_xml,
-        ExtraColor,
+        container_xml, fonts_xml, graphic_xml_with_extras, preferences_xml,
+        styles_xml_with_table_styles, ExtraColor, TableStyleSpec,
     },
     spread::{write_spread, Spread},
-    story::{write_story, Cell, Paragraph, Run, Story, Table},
+    story::{write_story, Cell, CellDiagonal, Paragraph, Run, Story, Table},
     xml_folder::{backing_story_xml, mapping_xml, tags_xml},
 };
+
+/// Table-style self-ids referenced by the style-driven variants. The
+/// styles themselves are declared in [`table_styles`] and emitted into
+/// the shared styles manifest.
+const ALT_ROW_STYLE: &str = "TableStyle/AltRows";
+const ALT_COL_STYLE: &str = "TableStyle/AltCols";
 use crate::geometry::{translate, Matrix, IDENTITY};
 use crate::ids::self_id;
 use crate::package::Sample;
@@ -63,6 +72,7 @@ fn variants() -> Vec<Variant> {
             name: "tables · 2x2 · plain",
             table: Box::new(|id| Table {
                 self_id: id.to_string(),
+                applied_table_style: None,
                 header_row_count: 0,
                 footer_row_count: 0,
                 body_row_count: 2,
@@ -81,6 +91,7 @@ fn variants() -> Vec<Variant> {
             name: "tables · 3x3 · header-row",
             table: Box::new(|id| Table {
                 self_id: id.to_string(),
+                applied_table_style: None,
                 header_row_count: 1,
                 footer_row_count: 0,
                 body_row_count: 2,
@@ -112,6 +123,7 @@ fn variants() -> Vec<Variant> {
             name: "tables · 3x3 · alternating-rows",
             table: Box::new(|id| Table {
                 self_id: id.to_string(),
+                applied_table_style: None,
                 header_row_count: 0,
                 footer_row_count: 0,
                 body_row_count: 3,
@@ -138,6 +150,7 @@ fn variants() -> Vec<Variant> {
             name: "tables · 3x3 · cell-strokes",
             table: Box::new(|id| Table {
                 self_id: id.to_string(),
+                applied_table_style: None,
                 header_row_count: 0,
                 footer_row_count: 0,
                 body_row_count: 3,
@@ -179,6 +192,7 @@ fn variants() -> Vec<Variant> {
             name: "tables · 3x3 · merged-cells",
             table: Box::new(|id| Table {
                 self_id: id.to_string(),
+                applied_table_style: None,
                 header_row_count: 0,
                 footer_row_count: 0,
                 body_row_count: 3,
@@ -217,6 +231,7 @@ fn variants() -> Vec<Variant> {
             name: "tables · 2x2 · multi-paragraph-cells",
             table: Box::new(|id| Table {
                 self_id: id.to_string(),
+                applied_table_style: None,
                 header_row_count: 0,
                 footer_row_count: 0,
                 body_row_count: 2,
@@ -253,6 +268,7 @@ fn variants() -> Vec<Variant> {
             name: "tables · 2x2 · right-aligned",
             table: Box::new(|id| Table {
                 self_id: id.to_string(),
+                applied_table_style: None,
                 header_row_count: 0,
                 footer_row_count: 0,
                 body_row_count: 2,
@@ -309,6 +325,7 @@ fn variants() -> Vec<Variant> {
             name: "tables · text-orientation · 90deg-vertical",
             table: Box::new(|id| Table {
                 self_id: id.to_string(),
+                applied_table_style: None,
                 header_row_count: 1,
                 footer_row_count: 0,
                 body_row_count: 2,
@@ -337,6 +354,142 @@ fn variants() -> Vec<Variant> {
                     v
                 },
             }),
+        },
+        // Table-style-driven alternating ROW fills. Unlike the earlier
+        // "alternating-rows" variant (which fakes the effect with
+        // per-cell FillColor), this references a TableStyle carrying
+        // `AlternatingFills="AlternatingRows"` so the renderer's
+        // style-resolution + alternating-fill emit path is exercised.
+        // No per-cell fills — the fill must come entirely from the
+        // resolved table style.
+        Variant {
+            name: "tables · 3x3 · style-alt-rows",
+            table: Box::new(|id| Table {
+                self_id: id.to_string(),
+                applied_table_style: Some(ALT_ROW_STYLE.to_string()),
+                header_row_count: 0,
+                footer_row_count: 0,
+                body_row_count: 3,
+                column_count: 3,
+                row_heights_pt: vec![ROW_H_PT; 3],
+                column_widths_pt: vec![COL_W_PT; 3],
+                cells: {
+                    let mut v = Vec::new();
+                    for c in 0..3 {
+                        for r in 0..3 {
+                            v.push(Cell::plain(format!("R{}C{}", r + 1, c + 1)));
+                        }
+                    }
+                    v
+                },
+            }),
+        },
+        // Table-style-driven alternating COLUMN fills — same idea on
+        // the column axis (`AlternatingFills="AlternatingColumns"`).
+        Variant {
+            name: "tables · 3x3 · style-alt-cols",
+            table: Box::new(|id| Table {
+                self_id: id.to_string(),
+                applied_table_style: Some(ALT_COL_STYLE.to_string()),
+                header_row_count: 0,
+                footer_row_count: 0,
+                body_row_count: 3,
+                column_count: 3,
+                row_heights_pt: vec![ROW_H_PT; 3],
+                column_widths_pt: vec![COL_W_PT; 3],
+                cells: {
+                    let mut v = Vec::new();
+                    for c in 0..3 {
+                        for r in 0..3 {
+                            v.push(Cell::plain(format!("R{}C{}", r + 1, c + 1)));
+                        }
+                    }
+                    v
+                },
+            }),
+        },
+        // Cell diagonals. Top-left cell carries a TL→BR ("Left")
+        // diagonal; top-right a TR→BL ("Right") diagonal; bottom-left
+        // carries BOTH (an X); bottom-right draws a Left diagonal with
+        // `DiagonalLineInFront=true` so it paints over the cell text.
+        Variant {
+            name: "tables · 2x2 · diagonals",
+            table: Box::new(|id| Table {
+                self_id: id.to_string(),
+                applied_table_style: None,
+                header_row_count: 0,
+                footer_row_count: 0,
+                body_row_count: 2,
+                column_count: 2,
+                row_heights_pt: vec![ROW_H_PT * 1.5; 2],
+                column_widths_pt: vec![COL_W_PT; 2],
+                cells: {
+                    let left = CellDiagonal {
+                        left_line_drawn: Some(true),
+                        left_line_color: Some("Color/CMYKMagenta"),
+                        left_line_weight: Some(1.5),
+                        ..CellDiagonal::default()
+                    };
+                    let right = CellDiagonal {
+                        right_line_drawn: Some(true),
+                        right_line_color: Some("Color/CMYKMagenta"),
+                        right_line_weight: Some(1.5),
+                        ..CellDiagonal::default()
+                    };
+                    let both = CellDiagonal {
+                        left_line_drawn: Some(true),
+                        left_line_color: Some("Color/CMYKMagenta"),
+                        left_line_weight: Some(1.0),
+                        right_line_drawn: Some(true),
+                        right_line_color: Some("Color/CMYKMagenta"),
+                        right_line_weight: Some(1.0),
+                        ..CellDiagonal::default()
+                    };
+                    let in_front = CellDiagonal {
+                        left_line_drawn: Some(true),
+                        left_line_color: Some("Color/CMYKMagenta"),
+                        left_line_weight: Some(2.0),
+                        diagonal_in_front: Some(true),
+                        ..CellDiagonal::default()
+                    };
+                    // Column-major: col0row0, col0row1, col1row0, col1row1.
+                    vec![
+                        Cell::plain("TL→BR").with_diagonal(left),
+                        Cell::plain("X both").with_diagonal(both),
+                        Cell::plain("TR→BL").with_diagonal(right),
+                        Cell::plain("in-front").with_diagonal(in_front),
+                    ]
+                },
+            }),
+        },
+    ]
+}
+
+/// Table styles referenced by the style-driven alternating-fill
+/// variants. Declared once and emitted into the shared styles
+/// manifest; `<Table>` elements opt in via `AppliedTableStyle`.
+fn table_styles() -> Vec<TableStyleSpec> {
+    vec![
+        TableStyleSpec {
+            self_id: ALT_ROW_STYLE.to_string(),
+            name: "AltRows".to_string(),
+            alternating_fills: Some("AlternatingRows"),
+            // Row 0 cyan, row 1 plain, row 2 cyan, … (1-row cycle each).
+            start_row_fill_color: Some("Color/CMYKCyan20".to_string()),
+            start_row_fill_count: Some(1),
+            end_row_fill_color: Some("Swatch/None".to_string()),
+            end_row_fill_count: Some(1),
+            ..TableStyleSpec::default()
+        },
+        TableStyleSpec {
+            self_id: ALT_COL_STYLE.to_string(),
+            name: "AltCols".to_string(),
+            alternating_fills: Some("AlternatingColumns"),
+            start_column_fill_color: Some("Color/CMYKCyan20".to_string()),
+            start_column_fill_count: Some(1),
+            end_column_fill_color: Some("Swatch/None".to_string()),
+            end_column_fill_count: Some(1),
+            ..TableStyleSpec::default()
         },
     ]
 }
@@ -497,7 +650,7 @@ pub fn build() -> Sample {
         designmap_xml: designmap,
         graphic_xml: graphic_xml_with_extras(&extra_colors()),
         fonts_xml: fonts_xml(),
-        styles_xml: styles_xml(),
+        styles_xml: styles_xml_with_table_styles(&table_styles()),
         preferences_xml: preferences_xml(),
         backing_story_xml: backing_story_xml(),
         tags_xml: tags_xml(),
