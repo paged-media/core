@@ -500,6 +500,103 @@ fn decompose_flip_h(m: Option<[f32; 6]>) -> bool {
     paged_mutate::operation::decompose_transform(m).flip_h
 }
 
+/// W0.4 — read-side mirror of the transparency-effect per-field paths
+/// (gap 18). Emits one `PropertyEntry` per effect field, sourcing each
+/// from the parsed `effects: Option<FrameEffects>` block (a `None`
+/// effect surfaces the field's "empty" value: `false` for the
+/// `*Enabled` toggle, `Length(None)` / `ColorRef(None)` / `Text("")`
+/// for the rest). Shared by the TextFrame and Rectangle property
+/// blocks so the inventory stays in lockstep across kinds. The
+/// object-level `frame.blendMode` path reads the page item's own
+/// `blend_mode` slot (the `<BlendingSetting>` Opacity half is already
+/// surfaced as `FrameOpacity`).
+fn effect_property_entries(
+    effects: Option<&paged_parse::FrameEffects>,
+    blend_mode: Option<&str>,
+) -> Vec<crate::channel::PropertyEntry> {
+    use crate::channel::PropertyEntry;
+    use paged_mutate::{PropertyPath as P, Value as V};
+    let inner_shadow = effects.and_then(|e| e.inner_shadow.as_ref());
+    let outer_glow = effects.and_then(|e| e.outer_glow.as_ref());
+    let inner_glow = effects.and_then(|e| e.inner_glow.as_ref());
+    let bevel = effects.and_then(|e| e.bevel.as_ref());
+    let satin = effects.and_then(|e| e.satin.as_ref());
+    let feather = effects.and_then(|e| e.feather.as_ref());
+    let dfeather = effects.and_then(|e| e.directional_feather.as_ref());
+    let entry = |path, value| PropertyEntry { path, value: Some(value) };
+    let txt = |s: Option<&String>| V::Text(s.cloned().unwrap_or_default());
+    let col = |s: Option<&String>| V::ColorRef(s.cloned());
+    vec![
+        // Inner shadow.
+        entry(P::FrameInnerShadowEnabled, V::Bool(inner_shadow.is_some())),
+        entry(P::FrameInnerShadowBlendMode, txt(inner_shadow.and_then(|e| e.blend_mode.as_ref()))),
+        entry(P::FrameInnerShadowColor, col(inner_shadow.and_then(|e| e.effect_color.as_ref()))),
+        entry(P::FrameInnerShadowOpacity, V::Length(inner_shadow.and_then(|e| e.opacity_pct))),
+        entry(P::FrameInnerShadowAngle, V::Length(inner_shadow.and_then(|e| e.angle_deg))),
+        entry(P::FrameInnerShadowDistance, V::Length(inner_shadow.and_then(|e| e.distance))),
+        entry(P::FrameInnerShadowSize, V::Length(inner_shadow.and_then(|e| e.size))),
+        entry(P::FrameInnerShadowChoke, V::Length(inner_shadow.and_then(|e| e.choke_pct))),
+        entry(P::FrameInnerShadowNoise, V::Length(inner_shadow.and_then(|e| e.noise_pct))),
+        // Outer glow.
+        entry(P::FrameOuterGlowEnabled, V::Bool(outer_glow.is_some())),
+        entry(P::FrameOuterGlowBlendMode, txt(outer_glow.and_then(|e| e.blend_mode.as_ref()))),
+        entry(P::FrameOuterGlowColor, col(outer_glow.and_then(|e| e.effect_color.as_ref()))),
+        entry(P::FrameOuterGlowOpacity, V::Length(outer_glow.and_then(|e| e.opacity_pct))),
+        entry(P::FrameOuterGlowSpread, V::Length(outer_glow.and_then(|e| e.spread_pct))),
+        entry(P::FrameOuterGlowSize, V::Length(outer_glow.and_then(|e| e.size))),
+        entry(P::FrameOuterGlowNoise, V::Length(outer_glow.and_then(|e| e.noise_pct))),
+        // Inner glow.
+        entry(P::FrameInnerGlowEnabled, V::Bool(inner_glow.is_some())),
+        entry(P::FrameInnerGlowBlendMode, txt(inner_glow.and_then(|e| e.blend_mode.as_ref()))),
+        entry(P::FrameInnerGlowColor, col(inner_glow.and_then(|e| e.effect_color.as_ref()))),
+        entry(P::FrameInnerGlowOpacity, V::Length(inner_glow.and_then(|e| e.opacity_pct))),
+        entry(P::FrameInnerGlowChoke, V::Length(inner_glow.and_then(|e| e.choke_pct))),
+        entry(P::FrameInnerGlowSize, V::Length(inner_glow.and_then(|e| e.size))),
+        entry(P::FrameInnerGlowSource, txt(inner_glow.and_then(|e| e.source.as_ref()))),
+        entry(P::FrameInnerGlowNoise, V::Length(inner_glow.and_then(|e| e.noise_pct))),
+        // Bevel / emboss.
+        entry(P::FrameBevelEnabled, V::Bool(bevel.is_some())),
+        entry(P::FrameBevelStyle, txt(bevel.and_then(|e| e.style.as_ref()))),
+        entry(P::FrameBevelTechnique, txt(bevel.and_then(|e| e.technique.as_ref()))),
+        entry(P::FrameBevelDepth, V::Length(bevel.and_then(|e| e.depth_pct))),
+        entry(P::FrameBevelDirection, txt(bevel.and_then(|e| e.direction.as_ref()))),
+        entry(P::FrameBevelSize, V::Length(bevel.and_then(|e| e.size))),
+        entry(P::FrameBevelSoften, V::Length(bevel.and_then(|e| e.soften))),
+        entry(P::FrameBevelAngle, V::Length(bevel.and_then(|e| e.angle_deg))),
+        entry(P::FrameBevelAltitude, V::Length(bevel.and_then(|e| e.altitude_deg))),
+        entry(P::FrameBevelHighlightColor, col(bevel.and_then(|e| e.highlight_color.as_ref()))),
+        entry(P::FrameBevelShadowColor, col(bevel.and_then(|e| e.shadow_color.as_ref()))),
+        entry(P::FrameBevelHighlightOpacity, V::Length(bevel.and_then(|e| e.highlight_opacity_pct))),
+        entry(P::FrameBevelShadowOpacity, V::Length(bevel.and_then(|e| e.shadow_opacity_pct))),
+        // Satin.
+        entry(P::FrameSatinEnabled, V::Bool(satin.is_some())),
+        entry(P::FrameSatinBlendMode, txt(satin.and_then(|e| e.blend_mode.as_ref()))),
+        entry(P::FrameSatinColor, col(satin.and_then(|e| e.effect_color.as_ref()))),
+        entry(P::FrameSatinOpacity, V::Length(satin.and_then(|e| e.opacity_pct))),
+        entry(P::FrameSatinAngle, V::Length(satin.and_then(|e| e.angle_deg))),
+        entry(P::FrameSatinDistance, V::Length(satin.and_then(|e| e.distance))),
+        entry(P::FrameSatinSize, V::Length(satin.and_then(|e| e.size))),
+        entry(P::FrameSatinInvert, V::Bool(satin.and_then(|e| e.invert).unwrap_or(false))),
+        // Feather (basic).
+        entry(P::FrameFeatherEnabled, V::Bool(feather.is_some())),
+        entry(P::FrameFeatherWidth, V::Length(feather.and_then(|e| e.width))),
+        entry(P::FrameFeatherCornerType, txt(feather.and_then(|e| e.corner_type.as_ref()))),
+        entry(P::FrameFeatherNoise, V::Length(feather.and_then(|e| e.noise_pct))),
+        entry(P::FrameFeatherChoke, V::Length(feather.and_then(|e| e.choke_pct))),
+        // Directional feather.
+        entry(P::FrameDirectionalFeatherEnabled, V::Bool(dfeather.is_some())),
+        entry(P::FrameDirectionalFeatherLeftWidth, V::Length(dfeather.and_then(|e| e.left_width))),
+        entry(P::FrameDirectionalFeatherRightWidth, V::Length(dfeather.and_then(|e| e.right_width))),
+        entry(P::FrameDirectionalFeatherTopWidth, V::Length(dfeather.and_then(|e| e.top_width))),
+        entry(P::FrameDirectionalFeatherBottomWidth, V::Length(dfeather.and_then(|e| e.bottom_width))),
+        entry(P::FrameDirectionalFeatherAngle, V::Length(dfeather.and_then(|e| e.angle_deg))),
+        entry(P::FrameDirectionalFeatherNoise, V::Length(dfeather.and_then(|e| e.noise_pct))),
+        entry(P::FrameDirectionalFeatherChoke, V::Length(dfeather.and_then(|e| e.choke_pct))),
+        // Object-level transparency blend mode.
+        entry(P::FrameBlendMode, V::Text(blend_mode.unwrap_or_default().to_string())),
+    ]
+}
+
 impl From<&pipeline::PipelineStats> for DocumentStats {
     fn from(s: &pipeline::PipelineStats) -> Self {
         Self {
@@ -2113,7 +2210,7 @@ impl CanvasModel {
                     .iter()
                     .find(|f| f.self_id.as_deref() == Some(raw))
                     .map(|f| {
-                        vec![
+                        let mut entries = vec![
                             PropertyEntry {
                                 path: PropertyPath::FrameBounds,
                                 value: Some(Value::Bounds([
@@ -2353,14 +2450,20 @@ impl CanvasModel {
                                     decompose_flip_h(f.item_transform),
                                 )),
                             },
-                        ]
+                        ];
+                        // W0.4 — transparency effects (gap 18).
+                        entries.extend(effect_property_entries(
+                            f.effects.as_ref(),
+                            f.blend_mode.as_deref(),
+                        ));
+                        entries
                     }),
                 ElementId::Rectangle(_) => spread
                     .rectangles
                     .iter()
                     .find(|f| f.self_id.as_deref() == Some(raw))
                     .map(|f| {
-                        vec![
+                        let mut entries = vec![
                             PropertyEntry {
                                 path: PropertyPath::FrameBounds,
                                 value: Some(Value::Bounds([
@@ -2672,7 +2775,13 @@ impl CanvasModel {
                                     decompose_flip_h(f.item_transform),
                                 )),
                             },
-                        ]
+                        ];
+                        // W0.4 — transparency effects (gap 18).
+                        entries.extend(effect_property_entries(
+                            f.effects.as_ref(),
+                            f.blend_mode.as_deref(),
+                        ));
+                        entries
                     }),
                 // Oval / Polygon / GraphicLine / Group: v1 surfaces
                 // only the geometry common to all kinds (bounds +

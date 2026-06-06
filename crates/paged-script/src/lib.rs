@@ -648,6 +648,66 @@ fn parse_property_path(s: &str) -> Option<paged_mutate::PropertyPath> {
         "frameFlipV" => FrameFlipV,
         "frameOverprintFill" => FrameOverprintFill,
         "frameOverprintStroke" => FrameOverprintStroke,
+        // W0.4 — transparency effects.
+        "frameInnerShadow" => FrameInnerShadowEnabled,
+        "frameInnerShadowBlendMode" => FrameInnerShadowBlendMode,
+        "frameInnerShadowColor" => FrameInnerShadowColor,
+        "frameInnerShadowOpacity" => FrameInnerShadowOpacity,
+        "frameInnerShadowAngle" => FrameInnerShadowAngle,
+        "frameInnerShadowDistance" => FrameInnerShadowDistance,
+        "frameInnerShadowSize" => FrameInnerShadowSize,
+        "frameInnerShadowChoke" => FrameInnerShadowChoke,
+        "frameInnerShadowNoise" => FrameInnerShadowNoise,
+        "frameOuterGlow" => FrameOuterGlowEnabled,
+        "frameOuterGlowBlendMode" => FrameOuterGlowBlendMode,
+        "frameOuterGlowColor" => FrameOuterGlowColor,
+        "frameOuterGlowOpacity" => FrameOuterGlowOpacity,
+        "frameOuterGlowSpread" => FrameOuterGlowSpread,
+        "frameOuterGlowSize" => FrameOuterGlowSize,
+        "frameOuterGlowNoise" => FrameOuterGlowNoise,
+        "frameInnerGlow" => FrameInnerGlowEnabled,
+        "frameInnerGlowBlendMode" => FrameInnerGlowBlendMode,
+        "frameInnerGlowColor" => FrameInnerGlowColor,
+        "frameInnerGlowOpacity" => FrameInnerGlowOpacity,
+        "frameInnerGlowChoke" => FrameInnerGlowChoke,
+        "frameInnerGlowSize" => FrameInnerGlowSize,
+        "frameInnerGlowSource" => FrameInnerGlowSource,
+        "frameInnerGlowNoise" => FrameInnerGlowNoise,
+        "frameBevel" => FrameBevelEnabled,
+        "frameBevelStyle" => FrameBevelStyle,
+        "frameBevelTechnique" => FrameBevelTechnique,
+        "frameBevelDepth" => FrameBevelDepth,
+        "frameBevelDirection" => FrameBevelDirection,
+        "frameBevelSize" => FrameBevelSize,
+        "frameBevelSoften" => FrameBevelSoften,
+        "frameBevelAngle" => FrameBevelAngle,
+        "frameBevelAltitude" => FrameBevelAltitude,
+        "frameBevelHighlightColor" => FrameBevelHighlightColor,
+        "frameBevelShadowColor" => FrameBevelShadowColor,
+        "frameBevelHighlightOpacity" => FrameBevelHighlightOpacity,
+        "frameBevelShadowOpacity" => FrameBevelShadowOpacity,
+        "frameSatin" => FrameSatinEnabled,
+        "frameSatinBlendMode" => FrameSatinBlendMode,
+        "frameSatinColor" => FrameSatinColor,
+        "frameSatinOpacity" => FrameSatinOpacity,
+        "frameSatinAngle" => FrameSatinAngle,
+        "frameSatinDistance" => FrameSatinDistance,
+        "frameSatinSize" => FrameSatinSize,
+        "frameSatinInvert" => FrameSatinInvert,
+        "frameFeather" => FrameFeatherEnabled,
+        "frameFeatherWidth" => FrameFeatherWidth,
+        "frameFeatherCornerType" => FrameFeatherCornerType,
+        "frameFeatherNoise" => FrameFeatherNoise,
+        "frameFeatherChoke" => FrameFeatherChoke,
+        "frameDirectionalFeather" => FrameDirectionalFeatherEnabled,
+        "frameDirectionalFeatherLeftWidth" => FrameDirectionalFeatherLeftWidth,
+        "frameDirectionalFeatherRightWidth" => FrameDirectionalFeatherRightWidth,
+        "frameDirectionalFeatherTopWidth" => FrameDirectionalFeatherTopWidth,
+        "frameDirectionalFeatherBottomWidth" => FrameDirectionalFeatherBottomWidth,
+        "frameDirectionalFeatherAngle" => FrameDirectionalFeatherAngle,
+        "frameDirectionalFeatherNoise" => FrameDirectionalFeatherNoise,
+        "frameDirectionalFeatherChoke" => FrameDirectionalFeatherChoke,
+        "frameBlendMode" => FrameBlendMode,
         _ => return None,
     })
 }
@@ -765,6 +825,66 @@ fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
         FrameFlipV => "frameFlipV",
         FrameOverprintFill => "frameOverprintFill",
         FrameOverprintStroke => "frameOverprintStroke",
+        // W0.4 — transparency effects.
+        FrameInnerShadowEnabled => "frameInnerShadow",
+        FrameInnerShadowBlendMode => "frameInnerShadowBlendMode",
+        FrameInnerShadowColor => "frameInnerShadowColor",
+        FrameInnerShadowOpacity => "frameInnerShadowOpacity",
+        FrameInnerShadowAngle => "frameInnerShadowAngle",
+        FrameInnerShadowDistance => "frameInnerShadowDistance",
+        FrameInnerShadowSize => "frameInnerShadowSize",
+        FrameInnerShadowChoke => "frameInnerShadowChoke",
+        FrameInnerShadowNoise => "frameInnerShadowNoise",
+        FrameOuterGlowEnabled => "frameOuterGlow",
+        FrameOuterGlowBlendMode => "frameOuterGlowBlendMode",
+        FrameOuterGlowColor => "frameOuterGlowColor",
+        FrameOuterGlowOpacity => "frameOuterGlowOpacity",
+        FrameOuterGlowSpread => "frameOuterGlowSpread",
+        FrameOuterGlowSize => "frameOuterGlowSize",
+        FrameOuterGlowNoise => "frameOuterGlowNoise",
+        FrameInnerGlowEnabled => "frameInnerGlow",
+        FrameInnerGlowBlendMode => "frameInnerGlowBlendMode",
+        FrameInnerGlowColor => "frameInnerGlowColor",
+        FrameInnerGlowOpacity => "frameInnerGlowOpacity",
+        FrameInnerGlowChoke => "frameInnerGlowChoke",
+        FrameInnerGlowSize => "frameInnerGlowSize",
+        FrameInnerGlowSource => "frameInnerGlowSource",
+        FrameInnerGlowNoise => "frameInnerGlowNoise",
+        FrameBevelEnabled => "frameBevel",
+        FrameBevelStyle => "frameBevelStyle",
+        FrameBevelTechnique => "frameBevelTechnique",
+        FrameBevelDepth => "frameBevelDepth",
+        FrameBevelDirection => "frameBevelDirection",
+        FrameBevelSize => "frameBevelSize",
+        FrameBevelSoften => "frameBevelSoften",
+        FrameBevelAngle => "frameBevelAngle",
+        FrameBevelAltitude => "frameBevelAltitude",
+        FrameBevelHighlightColor => "frameBevelHighlightColor",
+        FrameBevelShadowColor => "frameBevelShadowColor",
+        FrameBevelHighlightOpacity => "frameBevelHighlightOpacity",
+        FrameBevelShadowOpacity => "frameBevelShadowOpacity",
+        FrameSatinEnabled => "frameSatin",
+        FrameSatinBlendMode => "frameSatinBlendMode",
+        FrameSatinColor => "frameSatinColor",
+        FrameSatinOpacity => "frameSatinOpacity",
+        FrameSatinAngle => "frameSatinAngle",
+        FrameSatinDistance => "frameSatinDistance",
+        FrameSatinSize => "frameSatinSize",
+        FrameSatinInvert => "frameSatinInvert",
+        FrameFeatherEnabled => "frameFeather",
+        FrameFeatherWidth => "frameFeatherWidth",
+        FrameFeatherCornerType => "frameFeatherCornerType",
+        FrameFeatherNoise => "frameFeatherNoise",
+        FrameFeatherChoke => "frameFeatherChoke",
+        FrameDirectionalFeatherEnabled => "frameDirectionalFeather",
+        FrameDirectionalFeatherLeftWidth => "frameDirectionalFeatherLeftWidth",
+        FrameDirectionalFeatherRightWidth => "frameDirectionalFeatherRightWidth",
+        FrameDirectionalFeatherTopWidth => "frameDirectionalFeatherTopWidth",
+        FrameDirectionalFeatherBottomWidth => "frameDirectionalFeatherBottomWidth",
+        FrameDirectionalFeatherAngle => "frameDirectionalFeatherAngle",
+        FrameDirectionalFeatherNoise => "frameDirectionalFeatherNoise",
+        FrameDirectionalFeatherChoke => "frameDirectionalFeatherChoke",
+        FrameBlendMode => "frameBlendMode",
     }
 }
 
@@ -834,14 +954,32 @@ fn js_value_to_wire(
             | P::FrameCornerOptionTopLeft
             | P::FrameCornerOptionTopRight
             | P::FrameCornerOptionBottomLeft
-            | P::FrameCornerOptionBottomRight => W::Text(s),
+            | P::FrameCornerOptionBottomRight
+            // W0.4 — transparency-effect enum / blend-mode strings.
+            | P::FrameInnerShadowBlendMode
+            | P::FrameOuterGlowBlendMode
+            | P::FrameInnerGlowBlendMode
+            | P::FrameInnerGlowSource
+            | P::FrameBevelStyle
+            | P::FrameBevelTechnique
+            | P::FrameBevelDirection
+            | P::FrameSatinBlendMode
+            | P::FrameFeatherCornerType
+            | P::FrameBlendMode => W::Text(s),
             // Color-ref paths.
             P::FrameFillColor
             | P::FrameStrokeColor
             | P::CharacterFillColor
             | P::FrameDropShadowColor
             // W0.3 — stroke gap colour.
-            | P::FrameStrokeGapColor => W::ColorRef(Some(s)),
+            | P::FrameStrokeGapColor
+            // W0.4 — transparency-effect colour refs.
+            | P::FrameInnerShadowColor
+            | P::FrameOuterGlowColor
+            | P::FrameInnerGlowColor
+            | P::FrameBevelHighlightColor
+            | P::FrameBevelShadowColor
+            | P::FrameSatinColor => W::ColorRef(Some(s)),
             // Anything else gets ColorRef as the legacy default —
             // callers passing other typed strings should use the
             // explicit `{ type, value }` wrapper which the

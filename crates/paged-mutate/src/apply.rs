@@ -1189,6 +1189,461 @@ fn apply_set_property(
                 },
             )
         }
+        // ---- W0.4 — transparency effects (gap 18) ----------------
+        // Per-field + per-effect-toggle editors for the non-DropShadow
+        // effect blocks parsed onto `effects: Option<FrameEffects>`.
+        // Each per-field arm materialises the effect block (and the
+        // parent bag) with its InDesign-preset default if absent, then
+        // mutates the named field. Each `*Enabled` toggle materialises
+        // (true) / clears (false) the whole `Option<…Params>` — the
+        // presence of the block is the enabled bit (the parser drops it
+        // when `Applied="false"`), so this mirrors `FrameDropShadow`.
+        // All paint-only → `frame_style`. Wired on TextFrame /
+        // Rectangle / Oval (the kinds `find_frame_effects_mut`
+        // reaches); other kinds fall through to UnsupportedProperty.
+
+        // -- Inner shadow ------------------------------------------
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameInnerShadowEnabled,
+        ) => {
+            let new_val = expect_bool(path, value)?;
+            let effects = find_frame_effects_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = effects.inner_shadow.is_some();
+            effects.inner_shadow = if new_val {
+                effects.inner_shadow.take().or_else(|| Some(default_inner_shadow()))
+            } else {
+                None
+            };
+            (Value::Bool(prev), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameInnerShadowBlendMode,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let e = find_inner_shadow_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = e.blend_mode.take();
+            e.blend_mode = if new_val.is_empty() { None } else { Some(new_val) };
+            (Value::Text(prev.unwrap_or_default()), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameInnerShadowColor,
+        ) => {
+            let new_color = expect_color_ref(path, value)?;
+            let e = find_inner_shadow_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = e.effect_color.take();
+            e.effect_color = new_color;
+            (Value::ColorRef(prev), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameInnerShadowOpacity
+            | PropertyPath::FrameInnerShadowAngle
+            | PropertyPath::FrameInnerShadowDistance
+            | PropertyPath::FrameInnerShadowSize
+            | PropertyPath::FrameInnerShadowChoke
+            | PropertyPath::FrameInnerShadowNoise,
+        ) => {
+            let new_val = expect_length(path, value)?;
+            let e = find_inner_shadow_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let slot = match path {
+                PropertyPath::FrameInnerShadowOpacity => &mut e.opacity_pct,
+                PropertyPath::FrameInnerShadowAngle => &mut e.angle_deg,
+                PropertyPath::FrameInnerShadowDistance => &mut e.distance,
+                PropertyPath::FrameInnerShadowSize => &mut e.size,
+                PropertyPath::FrameInnerShadowChoke => &mut e.choke_pct,
+                _ => &mut e.noise_pct,
+            };
+            let prev = *slot;
+            *slot = new_val;
+            (Value::Length(prev), frame_style_hint(node))
+        }
+
+        // -- Outer glow --------------------------------------------
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameOuterGlowEnabled,
+        ) => {
+            let new_val = expect_bool(path, value)?;
+            let effects = find_frame_effects_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = effects.outer_glow.is_some();
+            effects.outer_glow = if new_val {
+                effects.outer_glow.take().or_else(|| Some(default_outer_glow()))
+            } else {
+                None
+            };
+            (Value::Bool(prev), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameOuterGlowBlendMode,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let e = find_outer_glow_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = e.blend_mode.take();
+            e.blend_mode = if new_val.is_empty() { None } else { Some(new_val) };
+            (Value::Text(prev.unwrap_or_default()), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameOuterGlowColor,
+        ) => {
+            let new_color = expect_color_ref(path, value)?;
+            let e = find_outer_glow_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = e.effect_color.take();
+            e.effect_color = new_color;
+            (Value::ColorRef(prev), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameOuterGlowOpacity
+            | PropertyPath::FrameOuterGlowSpread
+            | PropertyPath::FrameOuterGlowSize
+            | PropertyPath::FrameOuterGlowNoise,
+        ) => {
+            let new_val = expect_length(path, value)?;
+            let e = find_outer_glow_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let slot = match path {
+                PropertyPath::FrameOuterGlowOpacity => &mut e.opacity_pct,
+                PropertyPath::FrameOuterGlowSpread => &mut e.spread_pct,
+                PropertyPath::FrameOuterGlowSize => &mut e.size,
+                _ => &mut e.noise_pct,
+            };
+            let prev = *slot;
+            *slot = new_val;
+            (Value::Length(prev), frame_style_hint(node))
+        }
+
+        // -- Inner glow --------------------------------------------
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameInnerGlowEnabled,
+        ) => {
+            let new_val = expect_bool(path, value)?;
+            let effects = find_frame_effects_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = effects.inner_glow.is_some();
+            effects.inner_glow = if new_val {
+                effects.inner_glow.take().or_else(|| Some(default_inner_glow()))
+            } else {
+                None
+            };
+            (Value::Bool(prev), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameInnerGlowBlendMode,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let e = find_inner_glow_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = e.blend_mode.take();
+            e.blend_mode = if new_val.is_empty() { None } else { Some(new_val) };
+            (Value::Text(prev.unwrap_or_default()), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameInnerGlowColor,
+        ) => {
+            let new_color = expect_color_ref(path, value)?;
+            let e = find_inner_glow_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = e.effect_color.take();
+            e.effect_color = new_color;
+            (Value::ColorRef(prev), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameInnerGlowSource,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let e = find_inner_glow_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = e.source.take();
+            e.source = if new_val.is_empty() { None } else { Some(new_val) };
+            (Value::Text(prev.unwrap_or_default()), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameInnerGlowOpacity
+            | PropertyPath::FrameInnerGlowChoke
+            | PropertyPath::FrameInnerGlowSize
+            | PropertyPath::FrameInnerGlowNoise,
+        ) => {
+            let new_val = expect_length(path, value)?;
+            let e = find_inner_glow_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let slot = match path {
+                PropertyPath::FrameInnerGlowOpacity => &mut e.opacity_pct,
+                PropertyPath::FrameInnerGlowChoke => &mut e.choke_pct,
+                PropertyPath::FrameInnerGlowSize => &mut e.size,
+                _ => &mut e.noise_pct,
+            };
+            let prev = *slot;
+            *slot = new_val;
+            (Value::Length(prev), frame_style_hint(node))
+        }
+
+        // -- Bevel / emboss ----------------------------------------
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameBevelEnabled,
+        ) => {
+            let new_val = expect_bool(path, value)?;
+            let effects = find_frame_effects_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = effects.bevel.is_some();
+            effects.bevel = if new_val {
+                effects.bevel.take().or_else(|| Some(default_bevel()))
+            } else {
+                None
+            };
+            (Value::Bool(prev), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameBevelStyle
+            | PropertyPath::FrameBevelTechnique
+            | PropertyPath::FrameBevelDirection,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let e = find_bevel_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let slot = match path {
+                PropertyPath::FrameBevelStyle => &mut e.style,
+                PropertyPath::FrameBevelTechnique => &mut e.technique,
+                _ => &mut e.direction,
+            };
+            let prev = slot.take();
+            *slot = if new_val.is_empty() { None } else { Some(new_val) };
+            (Value::Text(prev.unwrap_or_default()), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameBevelHighlightColor | PropertyPath::FrameBevelShadowColor,
+        ) => {
+            let new_color = expect_color_ref(path, value)?;
+            let e = find_bevel_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let slot = match path {
+                PropertyPath::FrameBevelHighlightColor => &mut e.highlight_color,
+                _ => &mut e.shadow_color,
+            };
+            let prev = slot.take();
+            *slot = new_color;
+            (Value::ColorRef(prev), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameBevelDepth
+            | PropertyPath::FrameBevelSize
+            | PropertyPath::FrameBevelSoften
+            | PropertyPath::FrameBevelAngle
+            | PropertyPath::FrameBevelAltitude
+            | PropertyPath::FrameBevelHighlightOpacity
+            | PropertyPath::FrameBevelShadowOpacity,
+        ) => {
+            let new_val = expect_length(path, value)?;
+            let e = find_bevel_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let slot = match path {
+                PropertyPath::FrameBevelDepth => &mut e.depth_pct,
+                PropertyPath::FrameBevelSize => &mut e.size,
+                PropertyPath::FrameBevelSoften => &mut e.soften,
+                PropertyPath::FrameBevelAngle => &mut e.angle_deg,
+                PropertyPath::FrameBevelAltitude => &mut e.altitude_deg,
+                PropertyPath::FrameBevelHighlightOpacity => &mut e.highlight_opacity_pct,
+                _ => &mut e.shadow_opacity_pct,
+            };
+            let prev = *slot;
+            *slot = new_val;
+            (Value::Length(prev), frame_style_hint(node))
+        }
+
+        // -- Satin -------------------------------------------------
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameSatinEnabled,
+        ) => {
+            let new_val = expect_bool(path, value)?;
+            let effects = find_frame_effects_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = effects.satin.is_some();
+            effects.satin = if new_val {
+                effects.satin.take().or_else(|| Some(default_satin()))
+            } else {
+                None
+            };
+            (Value::Bool(prev), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameSatinBlendMode,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let e = find_satin_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = e.blend_mode.take();
+            e.blend_mode = if new_val.is_empty() { None } else { Some(new_val) };
+            (Value::Text(prev.unwrap_or_default()), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameSatinColor,
+        ) => {
+            let new_color = expect_color_ref(path, value)?;
+            let e = find_satin_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = e.effect_color.take();
+            e.effect_color = new_color;
+            (Value::ColorRef(prev), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameSatinInvert,
+        ) => {
+            let new_val = expect_bool(path, value)?;
+            let e = find_satin_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = e.invert.unwrap_or(false);
+            e.invert = Some(new_val);
+            (Value::Bool(prev), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameSatinOpacity
+            | PropertyPath::FrameSatinAngle
+            | PropertyPath::FrameSatinDistance
+            | PropertyPath::FrameSatinSize,
+        ) => {
+            let new_val = expect_length(path, value)?;
+            let e = find_satin_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let slot = match path {
+                PropertyPath::FrameSatinOpacity => &mut e.opacity_pct,
+                PropertyPath::FrameSatinAngle => &mut e.angle_deg,
+                PropertyPath::FrameSatinDistance => &mut e.distance,
+                _ => &mut e.size,
+            };
+            let prev = *slot;
+            *slot = new_val;
+            (Value::Length(prev), frame_style_hint(node))
+        }
+
+        // -- Feather (basic) ---------------------------------------
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameFeatherEnabled,
+        ) => {
+            let new_val = expect_bool(path, value)?;
+            let effects = find_frame_effects_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = effects.feather.is_some();
+            effects.feather = if new_val {
+                effects.feather.take().or_else(|| Some(default_feather()))
+            } else {
+                None
+            };
+            (Value::Bool(prev), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameFeatherCornerType,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let e = find_feather_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = e.corner_type.take();
+            e.corner_type = if new_val.is_empty() { None } else { Some(new_val) };
+            (Value::Text(prev.unwrap_or_default()), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameFeatherWidth
+            | PropertyPath::FrameFeatherNoise
+            | PropertyPath::FrameFeatherChoke,
+        ) => {
+            let new_val = expect_length(path, value)?;
+            let e = find_feather_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let slot = match path {
+                PropertyPath::FrameFeatherWidth => &mut e.width,
+                PropertyPath::FrameFeatherNoise => &mut e.noise_pct,
+                _ => &mut e.choke_pct,
+            };
+            let prev = *slot;
+            *slot = new_val;
+            (Value::Length(prev), frame_style_hint(node))
+        }
+
+        // -- Directional feather -----------------------------------
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameDirectionalFeatherEnabled,
+        ) => {
+            let new_val = expect_bool(path, value)?;
+            let effects = find_frame_effects_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = effects.directional_feather.is_some();
+            effects.directional_feather = if new_val {
+                effects
+                    .directional_feather
+                    .take()
+                    .or_else(|| Some(default_directional_feather()))
+            } else {
+                None
+            };
+            (Value::Bool(prev), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            PropertyPath::FrameDirectionalFeatherLeftWidth
+            | PropertyPath::FrameDirectionalFeatherRightWidth
+            | PropertyPath::FrameDirectionalFeatherTopWidth
+            | PropertyPath::FrameDirectionalFeatherBottomWidth
+            | PropertyPath::FrameDirectionalFeatherAngle
+            | PropertyPath::FrameDirectionalFeatherNoise
+            | PropertyPath::FrameDirectionalFeatherChoke,
+        ) => {
+            let new_val = expect_length(path, value)?;
+            let e = find_directional_feather_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let slot = match path {
+                PropertyPath::FrameDirectionalFeatherLeftWidth => &mut e.left_width,
+                PropertyPath::FrameDirectionalFeatherRightWidth => &mut e.right_width,
+                PropertyPath::FrameDirectionalFeatherTopWidth => &mut e.top_width,
+                PropertyPath::FrameDirectionalFeatherBottomWidth => &mut e.bottom_width,
+                PropertyPath::FrameDirectionalFeatherAngle => &mut e.angle_deg,
+                PropertyPath::FrameDirectionalFeatherNoise => &mut e.noise_pct,
+                _ => &mut e.choke_pct,
+            };
+            let prev = *slot;
+            *slot = new_val;
+            (Value::Length(prev), frame_style_hint(node))
+        }
+
+        // -- Object-level blend mode -------------------------------
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_),
+            PropertyPath::FrameBlendMode,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let slot = find_blend_mode_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = slot.take();
+            *slot = if new_val.is_empty() { None } else { Some(new_val) };
+            (Value::Text(prev.unwrap_or_default()), frame_style_hint(node))
+        }
         // ---- SDK Phase 5 (v1 sweep) — frame fitting (Rectangle) ----
         // The placed-image crop set + fitting-type enum live in
         // `Rectangle::frame_fitting: Option<FrameFittingOption>`.
@@ -4980,6 +5435,112 @@ fn default_drop_shadow() -> paged_parse::DropShadowSetting {
     }
 }
 
+// W0.4 — paint-only single-node invalidation, the shared shape every
+// transparency-effect arm returns (the rasterizer re-reads the effect
+// fields on the next rebuild; none of them reflow text).
+fn frame_style_hint(node: &NodeId) -> InvalidationHint {
+    InvalidationHint {
+        frame_style: vec![node.clone()],
+        ..Default::default()
+    }
+}
+
+// W0.4 — InDesign-preset defaults for the non-DropShadow effect
+// blocks. Materialised when a per-field editor (or the `*Enabled`
+// toggle) writes into a prior-`None` block, exactly like
+// `default_drop_shadow`. Values mirror InDesign's "Effects" dialog
+// presets for each effect (Multiply/Screen blend, 75% opacity, the
+// 120°/19° light angles, 5 pt sizes, …).
+
+fn default_inner_shadow() -> paged_parse::InnerShadowParams {
+    paged_parse::InnerShadowParams {
+        x_offset: None,
+        y_offset: None,
+        size: Some(5.0),
+        opacity_pct: Some(75.0),
+        effect_color: None,
+        angle_deg: Some(120.0),
+        distance: Some(5.0),
+        choke_pct: Some(0.0),
+        blend_mode: Some("Multiply".to_string()),
+        noise_pct: Some(0.0),
+    }
+}
+
+fn default_outer_glow() -> paged_parse::OuterGlowParams {
+    paged_parse::OuterGlowParams {
+        size: Some(5.0),
+        opacity_pct: Some(75.0),
+        effect_color: None,
+        spread_pct: Some(0.0),
+        blend_mode: Some("Screen".to_string()),
+        noise_pct: Some(0.0),
+    }
+}
+
+fn default_inner_glow() -> paged_parse::InnerGlowParams {
+    paged_parse::InnerGlowParams {
+        size: Some(5.0),
+        opacity_pct: Some(75.0),
+        effect_color: None,
+        choke_pct: Some(0.0),
+        blend_mode: Some("Screen".to_string()),
+        source: Some("EdgeGlow".to_string()),
+        noise_pct: Some(0.0),
+    }
+}
+
+fn default_bevel() -> paged_parse::BevelEmbossParams {
+    paged_parse::BevelEmbossParams {
+        depth_pct: Some(100.0),
+        size: Some(5.0),
+        angle_deg: Some(120.0),
+        altitude_deg: Some(30.0),
+        highlight_color: None,
+        shadow_color: None,
+        highlight_opacity_pct: Some(75.0),
+        shadow_opacity_pct: Some(75.0),
+        style: Some("InnerBevel".to_string()),
+        direction: Some("Up".to_string()),
+        technique: Some("Smooth".to_string()),
+        soften: Some(0.0),
+    }
+}
+
+fn default_satin() -> paged_parse::SatinParams {
+    paged_parse::SatinParams {
+        size: Some(14.0),
+        angle_deg: Some(19.0),
+        distance: Some(11.0),
+        effect_color: None,
+        opacity_pct: Some(50.0),
+        blend_mode: Some("Multiply".to_string()),
+        invert: Some(true),
+    }
+}
+
+fn default_feather() -> paged_parse::FeatherParams {
+    paged_parse::FeatherParams {
+        width: Some(5.0),
+        corner_type: Some("Diffusion".to_string()),
+        noise_pct: Some(0.0),
+        choke_pct: Some(0.0),
+    }
+}
+
+fn default_directional_feather() -> paged_parse::DirectionalFeatherParams {
+    paged_parse::DirectionalFeatherParams {
+        left_width: Some(5.0),
+        right_width: Some(5.0),
+        top_width: Some(5.0),
+        bottom_width: Some(5.0),
+        angle_deg: Some(0.0),
+        noise_pct: Some(0.0),
+        choke_pct: Some(0.0),
+        corner_type: None,
+    }
+}
+
 /// SDK Phase 5 (v1 sweep) — locate a mutable DropShadowSetting on
 /// the named page item, materialising a default on `None` so
 /// per-field editors always have a target to mutate. Supports
@@ -5313,6 +5874,87 @@ fn find_frame_effects_mut<'a>(
         NodeId::Oval(id) => {
             find_oval_mut(doc, id).map(|o| o.effects.get_or_insert_with(Default::default))
         }
+        _ => None,
+    }
+}
+
+// W0.4 — per-effect mutable accessors. Each locates the
+// `FrameEffects` bag (materialising it + the named effect block with
+// its InDesign-preset default when the prior was `None`) so the
+// per-field apply arms always have a target. Mirrors
+// `find_drop_shadow_mut`. Returns `None` only when the node isn't an
+// effect-bearing kind (TextFrame / Rectangle / Oval).
+fn find_inner_shadow_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut paged_parse::InnerShadowParams> {
+    let effects = find_frame_effects_mut(doc, node)?;
+    Some(effects.inner_shadow.get_or_insert_with(default_inner_shadow))
+}
+
+fn find_outer_glow_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut paged_parse::OuterGlowParams> {
+    let effects = find_frame_effects_mut(doc, node)?;
+    Some(effects.outer_glow.get_or_insert_with(default_outer_glow))
+}
+
+fn find_inner_glow_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut paged_parse::InnerGlowParams> {
+    let effects = find_frame_effects_mut(doc, node)?;
+    Some(effects.inner_glow.get_or_insert_with(default_inner_glow))
+}
+
+fn find_bevel_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut paged_parse::BevelEmbossParams> {
+    let effects = find_frame_effects_mut(doc, node)?;
+    Some(effects.bevel.get_or_insert_with(default_bevel))
+}
+
+fn find_satin_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut paged_parse::SatinParams> {
+    let effects = find_frame_effects_mut(doc, node)?;
+    Some(effects.satin.get_or_insert_with(default_satin))
+}
+
+fn find_feather_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut paged_parse::FeatherParams> {
+    let effects = find_frame_effects_mut(doc, node)?;
+    Some(effects.feather.get_or_insert_with(default_feather))
+}
+
+fn find_directional_feather_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut paged_parse::DirectionalFeatherParams> {
+    let effects = find_frame_effects_mut(doc, node)?;
+    Some(
+        effects
+            .directional_feather
+            .get_or_insert_with(default_directional_feather),
+    )
+}
+
+// W0.4 — object-level transparency blend mode. Locates the
+// `blend_mode: Option<String>` slot on the kinds that parse it
+// (TextFrame / Rectangle). The `<BlendingSetting Opacity>` half is
+// already wired as `FrameOpacity`.
+fn find_blend_mode_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut Option<String>> {
+    match node {
+        NodeId::TextFrame(id) => find_text_frame_mut(doc, id).map(|f| &mut f.blend_mode),
+        NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.blend_mode),
         _ => None,
     }
 }

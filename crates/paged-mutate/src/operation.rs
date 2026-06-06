@@ -719,6 +719,168 @@ pub enum PropertyPath {
     /// W0.3 — `OverprintStroke="true"`. `Value::Bool`. Every stroked
     /// page-item kind. Paint-only.
     FrameOverprintStroke,
+
+    // ---- W0.4 — transparency effects (gap 18) -------------------
+    // Per-field editors for the non-DropShadow effect blocks that
+    // already parse onto `effects: Option<FrameEffects>` (each effect
+    // is itself an `Option<…Params>` inside that bag). The recipe
+    // mirrors the DropShadow per-field set: writing any field
+    // materialises the effect block (and the parent `FrameEffects`)
+    // with InDesign-preset defaults if the prior was `None`, then sets
+    // the named field. Each effect also carries an `*Enabled` boolean
+    // toggle whose semantics match `FrameDropShadow`: the *presence* of
+    // the `Option<…Params>` is the enabled bit (the parser drops the
+    // whole block when `Applied="false"`), so `true` materialises a
+    // default block and `false` clears it. Wired on the effect-bearing
+    // kinds (`TextFrame` / `Rectangle` / `Oval`); other kinds raise
+    // `UnsupportedProperty`. All paint-only → `frame_style` (the
+    // rasterizer's effect compositor reads them on the next rebuild;
+    // none reflow). The `*Enabled` toggle is lossy on a customised
+    // block round-tripped through false→true, same caveat as
+    // `FrameDropShadow`.
+
+    /// W0.4 — inner-shadow enabled toggle. `Value::Bool`. Materialises
+    /// a default `InnerShadowParams` on `true`, clears on `false`.
+    FrameInnerShadowEnabled,
+    /// W0.4 — `<InnerShadowSetting BlendMode="…">`. `Value::Text`
+    /// (IDML enum string, e.g. `"Multiply"`); empty clears.
+    FrameInnerShadowBlendMode,
+    /// W0.4 — `EffectColor` ref. `Value::ColorRef`.
+    FrameInnerShadowColor,
+    /// W0.4 — `Opacity` percent (0..=100). `Value::Length`.
+    FrameInnerShadowOpacity,
+    /// W0.4 — `Angle` in degrees. `Value::Length`.
+    FrameInnerShadowAngle,
+    /// W0.4 — `Distance` in pt. `Value::Length`.
+    FrameInnerShadowDistance,
+    /// W0.4 — `Size` (blur radius) in pt. `Value::Length`.
+    FrameInnerShadowSize,
+    /// W0.4 — `ChokeAmount` percent (the inner-shadow "spread"/choke).
+    /// `Value::Length`.
+    FrameInnerShadowChoke,
+    /// W0.4 — `Noise` percent. `Value::Length`.
+    FrameInnerShadowNoise,
+
+    /// W0.4 — outer-glow enabled toggle. `Value::Bool`.
+    FrameOuterGlowEnabled,
+    /// W0.4 — `<OuterGlowSetting BlendMode="…">`. `Value::Text`.
+    FrameOuterGlowBlendMode,
+    /// W0.4 — `EffectColor` ref. `Value::ColorRef`.
+    FrameOuterGlowColor,
+    /// W0.4 — `Opacity` percent. `Value::Length`.
+    FrameOuterGlowOpacity,
+    /// W0.4 — `Spread` percent. `Value::Length`.
+    FrameOuterGlowSpread,
+    /// W0.4 — `Size` in pt. `Value::Length`.
+    FrameOuterGlowSize,
+    /// W0.4 — `Noise` percent. `Value::Length`.
+    FrameOuterGlowNoise,
+
+    /// W0.4 — inner-glow enabled toggle. `Value::Bool`.
+    FrameInnerGlowEnabled,
+    /// W0.4 — `<InnerGlowSetting BlendMode="…">`. `Value::Text`.
+    FrameInnerGlowBlendMode,
+    /// W0.4 — `EffectColor` ref. `Value::ColorRef`.
+    FrameInnerGlowColor,
+    /// W0.4 — `Opacity` percent. `Value::Length`.
+    FrameInnerGlowOpacity,
+    /// W0.4 — `ChokeAmount` percent. `Value::Length`.
+    FrameInnerGlowChoke,
+    /// W0.4 — `Size` in pt. `Value::Length`.
+    FrameInnerGlowSize,
+    /// W0.4 — `Source` (`"EdgeGlow"` / `"CenterGlow"`). `Value::Text`;
+    /// empty clears.
+    FrameInnerGlowSource,
+    /// W0.4 — `Noise` percent. `Value::Length`.
+    FrameInnerGlowNoise,
+
+    /// W0.4 — bevel/emboss enabled toggle. `Value::Bool`.
+    FrameBevelEnabled,
+    /// W0.4 — `<BevelAndEmbossSetting Style="…">` (`"InnerBevel"`,
+    /// `"OuterBevel"`, `"Emboss"`, `"PillowEmboss"`,
+    /// `"StrokeEmboss"`). `Value::Text`; empty clears.
+    FrameBevelStyle,
+    /// W0.4 — `Technique` (`"Smooth"`, `"ChiselHard"`,
+    /// `"ChiselSoft"`). `Value::Text`; empty clears.
+    FrameBevelTechnique,
+    /// W0.4 — `Depth` percent. `Value::Length`.
+    FrameBevelDepth,
+    /// W0.4 — `Direction` (`"Up"` / `"Down"`). `Value::Text`; empty
+    /// clears.
+    FrameBevelDirection,
+    /// W0.4 — `Size` in pt. `Value::Length`.
+    FrameBevelSize,
+    /// W0.4 — `Soften` in pt. `Value::Length`.
+    FrameBevelSoften,
+    /// W0.4 — `Angle` in degrees. `Value::Length`.
+    FrameBevelAngle,
+    /// W0.4 — `Altitude` in degrees. `Value::Length`.
+    FrameBevelAltitude,
+    /// W0.4 — `HighlightColor` ref. `Value::ColorRef`.
+    FrameBevelHighlightColor,
+    /// W0.4 — `ShadowColor` ref. `Value::ColorRef`.
+    FrameBevelShadowColor,
+    /// W0.4 — `HighlightOpacity` percent. `Value::Length`.
+    FrameBevelHighlightOpacity,
+    /// W0.4 — `ShadowOpacity` percent. `Value::Length`.
+    FrameBevelShadowOpacity,
+
+    /// W0.4 — satin enabled toggle. `Value::Bool`.
+    FrameSatinEnabled,
+    /// W0.4 — `<SatinSetting BlendMode="…">`. `Value::Text`.
+    FrameSatinBlendMode,
+    /// W0.4 — `EffectColor` ref. `Value::ColorRef`.
+    FrameSatinColor,
+    /// W0.4 — `Opacity` percent. `Value::Length`.
+    FrameSatinOpacity,
+    /// W0.4 — `Angle` in degrees. `Value::Length`.
+    FrameSatinAngle,
+    /// W0.4 — `Distance` in pt. `Value::Length`.
+    FrameSatinDistance,
+    /// W0.4 — `Size` in pt. `Value::Length`.
+    FrameSatinSize,
+    /// W0.4 — `Invert` flag. `Value::Bool`.
+    FrameSatinInvert,
+
+    /// W0.4 — (basic) feather enabled toggle. `Value::Bool`.
+    FrameFeatherEnabled,
+    /// W0.4 — `<FeatherSetting Width="…">` in pt. `Value::Length`.
+    FrameFeatherWidth,
+    /// W0.4 — `CornerType` (`"Sharp"`, `"Rounded"`, `"Diffusion"`).
+    /// `Value::Text`; empty clears.
+    FrameFeatherCornerType,
+    /// W0.4 — `Noise` percent. `Value::Length`.
+    FrameFeatherNoise,
+    /// W0.4 — `ChokeAmount` percent. `Value::Length`.
+    FrameFeatherChoke,
+
+    /// W0.4 — directional-feather enabled toggle. `Value::Bool`.
+    FrameDirectionalFeatherEnabled,
+    /// W0.4 — `LeftWidth` in pt. `Value::Length`.
+    FrameDirectionalFeatherLeftWidth,
+    /// W0.4 — `RightWidth` in pt. `Value::Length`.
+    FrameDirectionalFeatherRightWidth,
+    /// W0.4 — `TopWidth` in pt. `Value::Length`.
+    FrameDirectionalFeatherTopWidth,
+    /// W0.4 — `BottomWidth` in pt. `Value::Length`.
+    FrameDirectionalFeatherBottomWidth,
+    /// W0.4 — `Angle` in degrees. `Value::Length`.
+    FrameDirectionalFeatherAngle,
+    /// W0.4 — `NoiseAmount` percent. `Value::Length`.
+    FrameDirectionalFeatherNoise,
+    /// W0.4 — `ChokeAmount` percent. `Value::Length`.
+    FrameDirectionalFeatherChoke,
+
+    /// W0.4 — object-level transparency blend mode
+    /// (`<BlendingSetting BlendMode="…">`). `Value::Text` carrying the
+    /// IDML enum string (`"Normal"`, `"Multiply"`, `"Screen"`,
+    /// `"Overlay"`, …); empty clears the override (`blend_mode = None`).
+    /// Carried on every page-item kind with a `blend_mode` field
+    /// (TextFrame / Rectangle). The rasterizer doesn't yet honour
+    /// non-Normal modes; the field is wired for authoring + round-trip.
+    /// Paint-only (`frame_style`). The companion `FrameOpacity` path
+    /// (the `<BlendingSetting Opacity="…">` half) already exists.
+    FrameBlendMode,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -865,6 +1027,70 @@ impl PropertyPath {
             // W0.3 — overprint.
             PropertyPath::FrameOverprintFill => "frame.overprintFill",
             PropertyPath::FrameOverprintStroke => "frame.overprintStroke",
+            // W0.4 — transparency effects.
+            PropertyPath::FrameInnerShadowEnabled => "frame.innerShadow",
+            PropertyPath::FrameInnerShadowBlendMode => "frame.innerShadow.blendMode",
+            PropertyPath::FrameInnerShadowColor => "frame.innerShadow.color",
+            PropertyPath::FrameInnerShadowOpacity => "frame.innerShadow.opacity",
+            PropertyPath::FrameInnerShadowAngle => "frame.innerShadow.angle",
+            PropertyPath::FrameInnerShadowDistance => "frame.innerShadow.distance",
+            PropertyPath::FrameInnerShadowSize => "frame.innerShadow.size",
+            PropertyPath::FrameInnerShadowChoke => "frame.innerShadow.choke",
+            PropertyPath::FrameInnerShadowNoise => "frame.innerShadow.noise",
+            PropertyPath::FrameOuterGlowEnabled => "frame.outerGlow",
+            PropertyPath::FrameOuterGlowBlendMode => "frame.outerGlow.blendMode",
+            PropertyPath::FrameOuterGlowColor => "frame.outerGlow.color",
+            PropertyPath::FrameOuterGlowOpacity => "frame.outerGlow.opacity",
+            PropertyPath::FrameOuterGlowSpread => "frame.outerGlow.spread",
+            PropertyPath::FrameOuterGlowSize => "frame.outerGlow.size",
+            PropertyPath::FrameOuterGlowNoise => "frame.outerGlow.noise",
+            PropertyPath::FrameInnerGlowEnabled => "frame.innerGlow",
+            PropertyPath::FrameInnerGlowBlendMode => "frame.innerGlow.blendMode",
+            PropertyPath::FrameInnerGlowColor => "frame.innerGlow.color",
+            PropertyPath::FrameInnerGlowOpacity => "frame.innerGlow.opacity",
+            PropertyPath::FrameInnerGlowChoke => "frame.innerGlow.choke",
+            PropertyPath::FrameInnerGlowSize => "frame.innerGlow.size",
+            PropertyPath::FrameInnerGlowSource => "frame.innerGlow.source",
+            PropertyPath::FrameInnerGlowNoise => "frame.innerGlow.noise",
+            PropertyPath::FrameBevelEnabled => "frame.bevel",
+            PropertyPath::FrameBevelStyle => "frame.bevel.style",
+            PropertyPath::FrameBevelTechnique => "frame.bevel.technique",
+            PropertyPath::FrameBevelDepth => "frame.bevel.depth",
+            PropertyPath::FrameBevelDirection => "frame.bevel.direction",
+            PropertyPath::FrameBevelSize => "frame.bevel.size",
+            PropertyPath::FrameBevelSoften => "frame.bevel.soften",
+            PropertyPath::FrameBevelAngle => "frame.bevel.angle",
+            PropertyPath::FrameBevelAltitude => "frame.bevel.altitude",
+            PropertyPath::FrameBevelHighlightColor => "frame.bevel.highlightColor",
+            PropertyPath::FrameBevelShadowColor => "frame.bevel.shadowColor",
+            PropertyPath::FrameBevelHighlightOpacity => "frame.bevel.highlightOpacity",
+            PropertyPath::FrameBevelShadowOpacity => "frame.bevel.shadowOpacity",
+            PropertyPath::FrameSatinEnabled => "frame.satin",
+            PropertyPath::FrameSatinBlendMode => "frame.satin.blendMode",
+            PropertyPath::FrameSatinColor => "frame.satin.color",
+            PropertyPath::FrameSatinOpacity => "frame.satin.opacity",
+            PropertyPath::FrameSatinAngle => "frame.satin.angle",
+            PropertyPath::FrameSatinDistance => "frame.satin.distance",
+            PropertyPath::FrameSatinSize => "frame.satin.size",
+            PropertyPath::FrameSatinInvert => "frame.satin.invert",
+            PropertyPath::FrameFeatherEnabled => "frame.feather",
+            PropertyPath::FrameFeatherWidth => "frame.feather.width",
+            PropertyPath::FrameFeatherCornerType => "frame.feather.cornerType",
+            PropertyPath::FrameFeatherNoise => "frame.feather.noise",
+            PropertyPath::FrameFeatherChoke => "frame.feather.choke",
+            PropertyPath::FrameDirectionalFeatherEnabled => "frame.directionalFeather",
+            PropertyPath::FrameDirectionalFeatherLeftWidth => "frame.directionalFeather.leftWidth",
+            PropertyPath::FrameDirectionalFeatherRightWidth => {
+                "frame.directionalFeather.rightWidth"
+            }
+            PropertyPath::FrameDirectionalFeatherTopWidth => "frame.directionalFeather.topWidth",
+            PropertyPath::FrameDirectionalFeatherBottomWidth => {
+                "frame.directionalFeather.bottomWidth"
+            }
+            PropertyPath::FrameDirectionalFeatherAngle => "frame.directionalFeather.angle",
+            PropertyPath::FrameDirectionalFeatherNoise => "frame.directionalFeather.noise",
+            PropertyPath::FrameDirectionalFeatherChoke => "frame.directionalFeather.choke",
+            PropertyPath::FrameBlendMode => "frame.blendMode",
         }
     }
 }

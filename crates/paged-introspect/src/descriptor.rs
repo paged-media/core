@@ -152,6 +152,66 @@ pub enum PropertyPathJson {
     FrameFlipV,
     FrameOverprintFill,
     FrameOverprintStroke,
+    // W0.4 — transparency effects (gap 18).
+    FrameInnerShadowEnabled,
+    FrameInnerShadowBlendMode,
+    FrameInnerShadowColor,
+    FrameInnerShadowOpacity,
+    FrameInnerShadowAngle,
+    FrameInnerShadowDistance,
+    FrameInnerShadowSize,
+    FrameInnerShadowChoke,
+    FrameInnerShadowNoise,
+    FrameOuterGlowEnabled,
+    FrameOuterGlowBlendMode,
+    FrameOuterGlowColor,
+    FrameOuterGlowOpacity,
+    FrameOuterGlowSpread,
+    FrameOuterGlowSize,
+    FrameOuterGlowNoise,
+    FrameInnerGlowEnabled,
+    FrameInnerGlowBlendMode,
+    FrameInnerGlowColor,
+    FrameInnerGlowOpacity,
+    FrameInnerGlowChoke,
+    FrameInnerGlowSize,
+    FrameInnerGlowSource,
+    FrameInnerGlowNoise,
+    FrameBevelEnabled,
+    FrameBevelStyle,
+    FrameBevelTechnique,
+    FrameBevelDepth,
+    FrameBevelDirection,
+    FrameBevelSize,
+    FrameBevelSoften,
+    FrameBevelAngle,
+    FrameBevelAltitude,
+    FrameBevelHighlightColor,
+    FrameBevelShadowColor,
+    FrameBevelHighlightOpacity,
+    FrameBevelShadowOpacity,
+    FrameSatinEnabled,
+    FrameSatinBlendMode,
+    FrameSatinColor,
+    FrameSatinOpacity,
+    FrameSatinAngle,
+    FrameSatinDistance,
+    FrameSatinSize,
+    FrameSatinInvert,
+    FrameFeatherEnabled,
+    FrameFeatherWidth,
+    FrameFeatherCornerType,
+    FrameFeatherNoise,
+    FrameFeatherChoke,
+    FrameDirectionalFeatherEnabled,
+    FrameDirectionalFeatherLeftWidth,
+    FrameDirectionalFeatherRightWidth,
+    FrameDirectionalFeatherTopWidth,
+    FrameDirectionalFeatherBottomWidth,
+    FrameDirectionalFeatherAngle,
+    FrameDirectionalFeatherNoise,
+    FrameDirectionalFeatherChoke,
+    FrameBlendMode,
 }
 
 impl From<PropertyPath> for PropertyPathJson {
@@ -293,6 +353,84 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::FrameFlipV => PropertyPathJson::FrameFlipV,
             PropertyPath::FrameOverprintFill => PropertyPathJson::FrameOverprintFill,
             PropertyPath::FrameOverprintStroke => PropertyPathJson::FrameOverprintStroke,
+            // W0.4 — transparency effects.
+            PropertyPath::FrameInnerShadowEnabled => PropertyPathJson::FrameInnerShadowEnabled,
+            PropertyPath::FrameInnerShadowBlendMode => PropertyPathJson::FrameInnerShadowBlendMode,
+            PropertyPath::FrameInnerShadowColor => PropertyPathJson::FrameInnerShadowColor,
+            PropertyPath::FrameInnerShadowOpacity => PropertyPathJson::FrameInnerShadowOpacity,
+            PropertyPath::FrameInnerShadowAngle => PropertyPathJson::FrameInnerShadowAngle,
+            PropertyPath::FrameInnerShadowDistance => PropertyPathJson::FrameInnerShadowDistance,
+            PropertyPath::FrameInnerShadowSize => PropertyPathJson::FrameInnerShadowSize,
+            PropertyPath::FrameInnerShadowChoke => PropertyPathJson::FrameInnerShadowChoke,
+            PropertyPath::FrameInnerShadowNoise => PropertyPathJson::FrameInnerShadowNoise,
+            PropertyPath::FrameOuterGlowEnabled => PropertyPathJson::FrameOuterGlowEnabled,
+            PropertyPath::FrameOuterGlowBlendMode => PropertyPathJson::FrameOuterGlowBlendMode,
+            PropertyPath::FrameOuterGlowColor => PropertyPathJson::FrameOuterGlowColor,
+            PropertyPath::FrameOuterGlowOpacity => PropertyPathJson::FrameOuterGlowOpacity,
+            PropertyPath::FrameOuterGlowSpread => PropertyPathJson::FrameOuterGlowSpread,
+            PropertyPath::FrameOuterGlowSize => PropertyPathJson::FrameOuterGlowSize,
+            PropertyPath::FrameOuterGlowNoise => PropertyPathJson::FrameOuterGlowNoise,
+            PropertyPath::FrameInnerGlowEnabled => PropertyPathJson::FrameInnerGlowEnabled,
+            PropertyPath::FrameInnerGlowBlendMode => PropertyPathJson::FrameInnerGlowBlendMode,
+            PropertyPath::FrameInnerGlowColor => PropertyPathJson::FrameInnerGlowColor,
+            PropertyPath::FrameInnerGlowOpacity => PropertyPathJson::FrameInnerGlowOpacity,
+            PropertyPath::FrameInnerGlowChoke => PropertyPathJson::FrameInnerGlowChoke,
+            PropertyPath::FrameInnerGlowSize => PropertyPathJson::FrameInnerGlowSize,
+            PropertyPath::FrameInnerGlowSource => PropertyPathJson::FrameInnerGlowSource,
+            PropertyPath::FrameInnerGlowNoise => PropertyPathJson::FrameInnerGlowNoise,
+            PropertyPath::FrameBevelEnabled => PropertyPathJson::FrameBevelEnabled,
+            PropertyPath::FrameBevelStyle => PropertyPathJson::FrameBevelStyle,
+            PropertyPath::FrameBevelTechnique => PropertyPathJson::FrameBevelTechnique,
+            PropertyPath::FrameBevelDepth => PropertyPathJson::FrameBevelDepth,
+            PropertyPath::FrameBevelDirection => PropertyPathJson::FrameBevelDirection,
+            PropertyPath::FrameBevelSize => PropertyPathJson::FrameBevelSize,
+            PropertyPath::FrameBevelSoften => PropertyPathJson::FrameBevelSoften,
+            PropertyPath::FrameBevelAngle => PropertyPathJson::FrameBevelAngle,
+            PropertyPath::FrameBevelAltitude => PropertyPathJson::FrameBevelAltitude,
+            PropertyPath::FrameBevelHighlightColor => PropertyPathJson::FrameBevelHighlightColor,
+            PropertyPath::FrameBevelShadowColor => PropertyPathJson::FrameBevelShadowColor,
+            PropertyPath::FrameBevelHighlightOpacity => {
+                PropertyPathJson::FrameBevelHighlightOpacity
+            }
+            PropertyPath::FrameBevelShadowOpacity => PropertyPathJson::FrameBevelShadowOpacity,
+            PropertyPath::FrameSatinEnabled => PropertyPathJson::FrameSatinEnabled,
+            PropertyPath::FrameSatinBlendMode => PropertyPathJson::FrameSatinBlendMode,
+            PropertyPath::FrameSatinColor => PropertyPathJson::FrameSatinColor,
+            PropertyPath::FrameSatinOpacity => PropertyPathJson::FrameSatinOpacity,
+            PropertyPath::FrameSatinAngle => PropertyPathJson::FrameSatinAngle,
+            PropertyPath::FrameSatinDistance => PropertyPathJson::FrameSatinDistance,
+            PropertyPath::FrameSatinSize => PropertyPathJson::FrameSatinSize,
+            PropertyPath::FrameSatinInvert => PropertyPathJson::FrameSatinInvert,
+            PropertyPath::FrameFeatherEnabled => PropertyPathJson::FrameFeatherEnabled,
+            PropertyPath::FrameFeatherWidth => PropertyPathJson::FrameFeatherWidth,
+            PropertyPath::FrameFeatherCornerType => PropertyPathJson::FrameFeatherCornerType,
+            PropertyPath::FrameFeatherNoise => PropertyPathJson::FrameFeatherNoise,
+            PropertyPath::FrameFeatherChoke => PropertyPathJson::FrameFeatherChoke,
+            PropertyPath::FrameDirectionalFeatherEnabled => {
+                PropertyPathJson::FrameDirectionalFeatherEnabled
+            }
+            PropertyPath::FrameDirectionalFeatherLeftWidth => {
+                PropertyPathJson::FrameDirectionalFeatherLeftWidth
+            }
+            PropertyPath::FrameDirectionalFeatherRightWidth => {
+                PropertyPathJson::FrameDirectionalFeatherRightWidth
+            }
+            PropertyPath::FrameDirectionalFeatherTopWidth => {
+                PropertyPathJson::FrameDirectionalFeatherTopWidth
+            }
+            PropertyPath::FrameDirectionalFeatherBottomWidth => {
+                PropertyPathJson::FrameDirectionalFeatherBottomWidth
+            }
+            PropertyPath::FrameDirectionalFeatherAngle => {
+                PropertyPathJson::FrameDirectionalFeatherAngle
+            }
+            PropertyPath::FrameDirectionalFeatherNoise => {
+                PropertyPathJson::FrameDirectionalFeatherNoise
+            }
+            PropertyPath::FrameDirectionalFeatherChoke => {
+                PropertyPathJson::FrameDirectionalFeatherChoke
+            }
+            PropertyPath::FrameBlendMode => PropertyPathJson::FrameBlendMode,
         }
     }
 }
@@ -436,6 +574,84 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::FrameFlipV => PropertyPath::FrameFlipV,
             PropertyPathJson::FrameOverprintFill => PropertyPath::FrameOverprintFill,
             PropertyPathJson::FrameOverprintStroke => PropertyPath::FrameOverprintStroke,
+            // W0.4 — transparency effects.
+            PropertyPathJson::FrameInnerShadowEnabled => PropertyPath::FrameInnerShadowEnabled,
+            PropertyPathJson::FrameInnerShadowBlendMode => PropertyPath::FrameInnerShadowBlendMode,
+            PropertyPathJson::FrameInnerShadowColor => PropertyPath::FrameInnerShadowColor,
+            PropertyPathJson::FrameInnerShadowOpacity => PropertyPath::FrameInnerShadowOpacity,
+            PropertyPathJson::FrameInnerShadowAngle => PropertyPath::FrameInnerShadowAngle,
+            PropertyPathJson::FrameInnerShadowDistance => PropertyPath::FrameInnerShadowDistance,
+            PropertyPathJson::FrameInnerShadowSize => PropertyPath::FrameInnerShadowSize,
+            PropertyPathJson::FrameInnerShadowChoke => PropertyPath::FrameInnerShadowChoke,
+            PropertyPathJson::FrameInnerShadowNoise => PropertyPath::FrameInnerShadowNoise,
+            PropertyPathJson::FrameOuterGlowEnabled => PropertyPath::FrameOuterGlowEnabled,
+            PropertyPathJson::FrameOuterGlowBlendMode => PropertyPath::FrameOuterGlowBlendMode,
+            PropertyPathJson::FrameOuterGlowColor => PropertyPath::FrameOuterGlowColor,
+            PropertyPathJson::FrameOuterGlowOpacity => PropertyPath::FrameOuterGlowOpacity,
+            PropertyPathJson::FrameOuterGlowSpread => PropertyPath::FrameOuterGlowSpread,
+            PropertyPathJson::FrameOuterGlowSize => PropertyPath::FrameOuterGlowSize,
+            PropertyPathJson::FrameOuterGlowNoise => PropertyPath::FrameOuterGlowNoise,
+            PropertyPathJson::FrameInnerGlowEnabled => PropertyPath::FrameInnerGlowEnabled,
+            PropertyPathJson::FrameInnerGlowBlendMode => PropertyPath::FrameInnerGlowBlendMode,
+            PropertyPathJson::FrameInnerGlowColor => PropertyPath::FrameInnerGlowColor,
+            PropertyPathJson::FrameInnerGlowOpacity => PropertyPath::FrameInnerGlowOpacity,
+            PropertyPathJson::FrameInnerGlowChoke => PropertyPath::FrameInnerGlowChoke,
+            PropertyPathJson::FrameInnerGlowSize => PropertyPath::FrameInnerGlowSize,
+            PropertyPathJson::FrameInnerGlowSource => PropertyPath::FrameInnerGlowSource,
+            PropertyPathJson::FrameInnerGlowNoise => PropertyPath::FrameInnerGlowNoise,
+            PropertyPathJson::FrameBevelEnabled => PropertyPath::FrameBevelEnabled,
+            PropertyPathJson::FrameBevelStyle => PropertyPath::FrameBevelStyle,
+            PropertyPathJson::FrameBevelTechnique => PropertyPath::FrameBevelTechnique,
+            PropertyPathJson::FrameBevelDepth => PropertyPath::FrameBevelDepth,
+            PropertyPathJson::FrameBevelDirection => PropertyPath::FrameBevelDirection,
+            PropertyPathJson::FrameBevelSize => PropertyPath::FrameBevelSize,
+            PropertyPathJson::FrameBevelSoften => PropertyPath::FrameBevelSoften,
+            PropertyPathJson::FrameBevelAngle => PropertyPath::FrameBevelAngle,
+            PropertyPathJson::FrameBevelAltitude => PropertyPath::FrameBevelAltitude,
+            PropertyPathJson::FrameBevelHighlightColor => PropertyPath::FrameBevelHighlightColor,
+            PropertyPathJson::FrameBevelShadowColor => PropertyPath::FrameBevelShadowColor,
+            PropertyPathJson::FrameBevelHighlightOpacity => {
+                PropertyPath::FrameBevelHighlightOpacity
+            }
+            PropertyPathJson::FrameBevelShadowOpacity => PropertyPath::FrameBevelShadowOpacity,
+            PropertyPathJson::FrameSatinEnabled => PropertyPath::FrameSatinEnabled,
+            PropertyPathJson::FrameSatinBlendMode => PropertyPath::FrameSatinBlendMode,
+            PropertyPathJson::FrameSatinColor => PropertyPath::FrameSatinColor,
+            PropertyPathJson::FrameSatinOpacity => PropertyPath::FrameSatinOpacity,
+            PropertyPathJson::FrameSatinAngle => PropertyPath::FrameSatinAngle,
+            PropertyPathJson::FrameSatinDistance => PropertyPath::FrameSatinDistance,
+            PropertyPathJson::FrameSatinSize => PropertyPath::FrameSatinSize,
+            PropertyPathJson::FrameSatinInvert => PropertyPath::FrameSatinInvert,
+            PropertyPathJson::FrameFeatherEnabled => PropertyPath::FrameFeatherEnabled,
+            PropertyPathJson::FrameFeatherWidth => PropertyPath::FrameFeatherWidth,
+            PropertyPathJson::FrameFeatherCornerType => PropertyPath::FrameFeatherCornerType,
+            PropertyPathJson::FrameFeatherNoise => PropertyPath::FrameFeatherNoise,
+            PropertyPathJson::FrameFeatherChoke => PropertyPath::FrameFeatherChoke,
+            PropertyPathJson::FrameDirectionalFeatherEnabled => {
+                PropertyPath::FrameDirectionalFeatherEnabled
+            }
+            PropertyPathJson::FrameDirectionalFeatherLeftWidth => {
+                PropertyPath::FrameDirectionalFeatherLeftWidth
+            }
+            PropertyPathJson::FrameDirectionalFeatherRightWidth => {
+                PropertyPath::FrameDirectionalFeatherRightWidth
+            }
+            PropertyPathJson::FrameDirectionalFeatherTopWidth => {
+                PropertyPath::FrameDirectionalFeatherTopWidth
+            }
+            PropertyPathJson::FrameDirectionalFeatherBottomWidth => {
+                PropertyPath::FrameDirectionalFeatherBottomWidth
+            }
+            PropertyPathJson::FrameDirectionalFeatherAngle => {
+                PropertyPath::FrameDirectionalFeatherAngle
+            }
+            PropertyPathJson::FrameDirectionalFeatherNoise => {
+                PropertyPath::FrameDirectionalFeatherNoise
+            }
+            PropertyPathJson::FrameDirectionalFeatherChoke => {
+                PropertyPath::FrameDirectionalFeatherChoke
+            }
+            PropertyPathJson::FrameBlendMode => PropertyPath::FrameBlendMode,
         }
     }
 }

@@ -44,12 +44,13 @@ pub use graphic::{
     SwatchEntry,
 };
 pub use spread::{
-    ArrowheadType, AutoSizingReferencePoint, AutoSizingType, Bounds, CornerOption, CornerSpec,
-    DirectionalFeatherParams, DropShadowSetting, FirstBaselineOffset, FrameEffects,
-    FrameFittingOption, FrameRef, GradientFeatherParams, GradientFeatherStop, GraphicLine, Group,
-    GroupTransparency, GuideOrientation, ImageMetadata, MarginPreference, Oval, Page, PathAnchor,
-    Polygon, Rectangle, RulerGuide, Spread, TextFrame, TextPath, TextWrap, TextWrapMode,
-    VerticalJustification,
+    ArrowheadType, AutoSizingReferencePoint, AutoSizingType, BevelEmbossParams, Bounds,
+    CornerOption, CornerSpec, DirectionalFeatherParams, DropShadowSetting, FeatherParams,
+    FirstBaselineOffset, FrameEffects, FrameFittingOption, FrameRef, GradientFeatherParams,
+    GradientFeatherStop, GraphicLine, Group, GroupTransparency, GuideOrientation, ImageMetadata,
+    InnerGlowParams, InnerShadowParams, MarginPreference, OuterGlowParams, Oval, Page, PathAnchor,
+    Polygon, Rectangle, RulerGuide, SatinParams, Spread, TextFrame, TextPath, TextWrap,
+    TextWrapMode, VerticalJustification,
 };
 pub use story::{
     AnchoredFrame, AnchoredFrameKind, AnchoredObjectSetting, CellDiagonal, CharacterRun,

@@ -4792,4 +4792,336 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, OperationError::UnsupportedProperty { .. }));
     }
+
+    // ====================================================================
+    // W0.4 — transparency effects (gap 18). Each effect family: an
+    // `*Enabled` toggle (materialise-on-true / clear-on-false, the
+    // `FrameDropShadow` recipe) plus a per-field editor that
+    // materialises the effect block with InDesign defaults when absent.
+    // The toggle on a fresh frame round-trips the document bytewise; the
+    // per-field write does NOT (the materialised block survives the
+    // undo — the same documented lossiness as `FrameFitting` /
+    // `FrameDropShadow`), so those assert the field value, not struct
+    // presence.
+    // ====================================================================
+
+    /// `*Enabled` toggle on a fresh frame: true materialises a default
+    /// block (carrying the InDesign preset), false clears it, and the
+    /// inverse of the on-write restores the prior `None` bytewise.
+    #[test]
+    fn w04_inner_shadow_toggle_materialises_default_and_round_trips() {
+        let mut p = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let node = NodeId::TextFrame("TextFrame/u1".to_string());
+        assert!(p.document().spreads[0].spread.text_frames[0].effects.is_none());
+        let applied = p
+            .apply(set_op(node.clone(), PropertyPath::FrameInnerShadowEnabled, Value::Bool(true)))
+            .unwrap();
+        let is = p.document().spreads[0].spread.text_frames[0]
+            .effects
+            .as_ref()
+            .and_then(|e| e.inner_shadow.as_ref())
+            .expect("inner shadow materialised");
+        // InDesign preset: Multiply / 75% / 120°.
+        assert_eq!(is.blend_mode.as_deref(), Some("Multiply"));
+        assert_eq!(is.opacity_pct, Some(75.0));
+        assert_eq!(is.angle_deg, Some(120.0));
+        // Inverse restores prior is_some()=false → clears the block.
+        assert_eq!(applied.inverse, set_op(node, PropertyPath::FrameInnerShadowEnabled, Value::Bool(false)));
+        crate::apply(p.document_mut(), &applied.inverse).unwrap();
+        assert!(p.document().spreads[0].spread.text_frames[0]
+            .effects
+            .as_ref()
+            .is_none_or(|e| e.inner_shadow.is_none()));
+        // Paint-only classification — no reflow.
+        assert_eq!(applied.invalidation.frame_style.len(), 1);
+        assert!(applied.invalidation.text_reflow.is_empty());
+    }
+
+    /// Per-field write on an absent effect materialises the block, sets
+    /// the named field, and leaves the other fields at their preset
+    /// defaults; a second write touches only its own field. Undo
+    /// restores the *field's* prior (preset) value, not struct absence.
+    #[test]
+    fn w04_inner_shadow_per_field_materialises_and_restores_field() {
+        let mut p = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let node = NodeId::TextFrame("TextFrame/u1".to_string());
+        let applied = p
+            .apply(set_op(node.clone(), PropertyPath::FrameInnerShadowSize, Value::Length(Some(12.0))))
+            .unwrap();
+        let is = p.document().spreads[0].spread.text_frames[0]
+            .effects
+            .as_ref()
+            .unwrap()
+            .inner_shadow
+            .as_ref()
+            .expect("materialised");
+        assert_eq!(is.size, Some(12.0));
+        assert_eq!(is.opacity_pct, Some(75.0)); // untouched preset
+        // Second field write preserves size.
+        p.apply(set_op(node, PropertyPath::FrameInnerShadowOpacity, Value::Length(Some(40.0))))
+            .unwrap();
+        let is = p.document().spreads[0].spread.text_frames[0]
+            .effects
+            .as_ref()
+            .unwrap()
+            .inner_shadow
+            .as_ref()
+            .unwrap();
+        assert_eq!(is.opacity_pct, Some(40.0));
+        assert_eq!(is.size, Some(12.0)); // preserved
+        // Undo the size write → restores the preset default (5.0) the
+        // block carried at materialisation, not absence.
+        crate::apply(p.document_mut(), &applied.inverse).unwrap();
+        let is = p.document().spreads[0].spread.text_frames[0]
+            .effects
+            .as_ref()
+            .unwrap()
+            .inner_shadow
+            .as_ref()
+            .expect("block survives partial undo");
+        assert_eq!(is.size, Some(5.0));
+    }
+
+    #[test]
+    fn w04_outer_glow_round_trips() {
+        let mut p = Project::new(document_with_one_rectangle("Rectangle/r1"));
+        let node = NodeId::Rectangle("Rectangle/r1".to_string());
+        let applied = p
+            .apply(set_op(node.clone(), PropertyPath::FrameOuterGlowEnabled, Value::Bool(true)))
+            .unwrap();
+        let og = p.document().spreads[0].spread.rectangles[0]
+            .effects
+            .as_ref()
+            .and_then(|e| e.outer_glow.as_ref())
+            .expect("outer glow");
+        assert_eq!(og.blend_mode.as_deref(), Some("Screen"));
+        // Field writes: spread + colour.
+        p.apply(set_op(node.clone(), PropertyPath::FrameOuterGlowSpread, Value::Length(Some(25.0))))
+            .unwrap();
+        p.apply(set_op(node, PropertyPath::FrameOuterGlowColor, Value::ColorRef(Some("Color/Cyan".into()))))
+            .unwrap();
+        let og = p.document().spreads[0].spread.rectangles[0]
+            .effects
+            .as_ref()
+            .unwrap()
+            .outer_glow
+            .as_ref()
+            .unwrap();
+        assert_eq!(og.spread_pct, Some(25.0));
+        assert_eq!(og.effect_color.as_deref(), Some("Color/Cyan"));
+        crate::apply(p.document_mut(), &applied.inverse).unwrap();
+        assert!(p.document().spreads[0].spread.rectangles[0]
+            .effects
+            .as_ref()
+            .is_none_or(|e| e.outer_glow.is_none()));
+    }
+
+    #[test]
+    fn w04_inner_glow_source_and_fields_round_trip() {
+        let mut p = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let node = NodeId::TextFrame("TextFrame/u1".to_string());
+        p.apply(set_op(node.clone(), PropertyPath::FrameInnerGlowSource, Value::Text("CenterGlow".into())))
+            .unwrap();
+        let ig = p.document().spreads[0].spread.text_frames[0]
+            .effects
+            .as_ref()
+            .unwrap()
+            .inner_glow
+            .as_ref()
+            .expect("materialised");
+        assert_eq!(ig.source.as_deref(), Some("CenterGlow"));
+        assert_eq!(ig.blend_mode.as_deref(), Some("Screen")); // preset
+        // Empty string clears the source override.
+        let cleared = p
+            .apply(set_op(node, PropertyPath::FrameInnerGlowSource, Value::Text(String::new())))
+            .unwrap();
+        assert!(p.document().spreads[0].spread.text_frames[0]
+            .effects
+            .as_ref()
+            .unwrap()
+            .inner_glow
+            .as_ref()
+            .unwrap()
+            .source
+            .is_none());
+        // Undo restores "CenterGlow".
+        crate::apply(p.document_mut(), &cleared.inverse).unwrap();
+        assert_eq!(
+            p.document().spreads[0].spread.text_frames[0]
+                .effects
+                .as_ref()
+                .unwrap()
+                .inner_glow
+                .as_ref()
+                .unwrap()
+                .source
+                .as_deref(),
+            Some("CenterGlow")
+        );
+    }
+
+    #[test]
+    fn w04_bevel_enum_color_and_length_fields_round_trip() {
+        let mut p = Project::new(document_with_one_rectangle("Rectangle/r1"));
+        let node = NodeId::Rectangle("Rectangle/r1".to_string());
+        p.apply(set_op(node.clone(), PropertyPath::FrameBevelStyle, Value::Text("Emboss".into())))
+            .unwrap();
+        let applied_color = p
+            .apply(set_op(node.clone(), PropertyPath::FrameBevelHighlightColor, Value::ColorRef(Some("Color/White".into()))))
+            .unwrap();
+        p.apply(set_op(node, PropertyPath::FrameBevelDepth, Value::Length(Some(150.0))))
+            .unwrap();
+        let b = p.document().spreads[0].spread.rectangles[0]
+            .effects
+            .as_ref()
+            .unwrap()
+            .bevel
+            .as_ref()
+            .unwrap();
+        assert_eq!(b.style.as_deref(), Some("Emboss"));
+        assert_eq!(b.highlight_color.as_deref(), Some("Color/White"));
+        assert_eq!(b.depth_pct, Some(150.0));
+        assert_eq!(b.technique.as_deref(), Some("Smooth")); // preset
+        assert_eq!(b.angle_deg, Some(120.0)); // preset
+        // Undo the colour write restores the preset (None highlight).
+        crate::apply(p.document_mut(), &applied_color.inverse).unwrap();
+        assert!(p.document().spreads[0].spread.rectangles[0]
+            .effects
+            .as_ref()
+            .unwrap()
+            .bevel
+            .as_ref()
+            .unwrap()
+            .highlight_color
+            .is_none());
+    }
+
+    #[test]
+    fn w04_satin_invert_bool_and_toggle_round_trip() {
+        let mut p = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let node = NodeId::TextFrame("TextFrame/u1".to_string());
+        // Toggling on materialises the preset (invert=true).
+        p.apply(set_op(node.clone(), PropertyPath::FrameSatinEnabled, Value::Bool(true)))
+            .unwrap();
+        let s = p.document().spreads[0].spread.text_frames[0]
+            .effects
+            .as_ref()
+            .unwrap()
+            .satin
+            .as_ref()
+            .unwrap();
+        assert_eq!(s.invert, Some(true));
+        assert_eq!(s.opacity_pct, Some(50.0));
+        // Flip invert off; undo restores true.
+        let applied = p
+            .apply(set_op(node, PropertyPath::FrameSatinInvert, Value::Bool(false)))
+            .unwrap();
+        assert_eq!(
+            p.document().spreads[0].spread.text_frames[0].effects.as_ref().unwrap().satin.as_ref().unwrap().invert,
+            Some(false)
+        );
+        crate::apply(p.document_mut(), &applied.inverse).unwrap();
+        assert_eq!(
+            p.document().spreads[0].spread.text_frames[0].effects.as_ref().unwrap().satin.as_ref().unwrap().invert,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn w04_feather_and_directional_feather_fields_round_trip() {
+        let mut p = Project::new(document_with_one_rectangle("Rectangle/r1"));
+        let node = NodeId::Rectangle("Rectangle/r1".to_string());
+        p.apply(set_op(node.clone(), PropertyPath::FrameFeatherWidth, Value::Length(Some(8.0))))
+            .unwrap();
+        p.apply(set_op(node.clone(), PropertyPath::FrameFeatherCornerType, Value::Text("Rounded".into())))
+            .unwrap();
+        let f = p.document().spreads[0].spread.rectangles[0]
+            .effects
+            .as_ref()
+            .unwrap()
+            .feather
+            .as_ref()
+            .unwrap();
+        assert_eq!(f.width, Some(8.0));
+        assert_eq!(f.corner_type.as_deref(), Some("Rounded"));
+        // Directional feather per-edge widths.
+        p.apply(set_op(node.clone(), PropertyPath::FrameDirectionalFeatherLeftWidth, Value::Length(Some(2.0))))
+            .unwrap();
+        p.apply(set_op(node, PropertyPath::FrameDirectionalFeatherBottomWidth, Value::Length(Some(9.0))))
+            .unwrap();
+        let df = p.document().spreads[0].spread.rectangles[0]
+            .effects
+            .as_ref()
+            .unwrap()
+            .directional_feather
+            .as_ref()
+            .unwrap();
+        assert_eq!(df.left_width, Some(2.0));
+        assert_eq!(df.bottom_width, Some(9.0));
+        assert_eq!(df.right_width, Some(5.0)); // preset
+    }
+
+    /// Object-level blend mode on the page item itself round-trips
+    /// bytewise (it's a plain `Option<String>` slot, no materialised
+    /// block). `FrameOpacity` — the `<BlendingSetting>` Opacity half —
+    /// already existed; this completes the pair.
+    #[test]
+    fn w04_frame_blend_mode_round_trips() {
+        let mut p = Project::new(document_with_one_rectangle("Rectangle/r1"));
+        let node = NodeId::Rectangle("Rectangle/r1".to_string());
+        assert_round_trips(
+            &mut p,
+            set_op(node.clone(), PropertyPath::FrameBlendMode, Value::Text("Multiply".into())),
+            |d| assert_eq!(d.spreads[0].spread.rectangles[0].blend_mode.as_deref(), Some("Multiply")),
+        );
+        // Empty string clears the override → back to None.
+        let applied = p
+            .apply(set_op(node, PropertyPath::FrameBlendMode, Value::Text(String::new())))
+            .unwrap();
+        assert!(p.document().spreads[0].spread.rectangles[0].blend_mode.is_none());
+        // Paint-only classification.
+        assert_eq!(applied.invalidation.frame_style.len(), 1);
+    }
+
+    #[test]
+    fn w04_effect_unsupported_on_graphic_line() {
+        // Effects are fill-based; GraphicLine carries no effects bag, so
+        // the per-field + toggle paths reject it.
+        let mut p = Project::new(document_with_one_textframe("TextFrame/u1"));
+        p.apply(Operation::InsertNode {
+            parent: NodeId::Spread("Spread/u_main".to_string()),
+            position: 0,
+            z_slot: None,
+            node: crate::operation::NodeSpec::GraphicLine {
+                item_transform: None,
+                self_id: "GraphicLine/u9".to_string(),
+                bounds: [0.0, 0.0, 100.0, 100.0],
+                anchors: vec![
+                    crate::operation::PathAnchorSpec {
+                        anchor: [0.0, 0.0],
+                        left: [0.0, 0.0],
+                        right: [0.0, 0.0],
+                    },
+                    crate::operation::PathAnchorSpec {
+                        anchor: [100.0, 100.0],
+                        left: [100.0, 100.0],
+                        right: [100.0, 100.0],
+                    },
+                ],
+                subpath_starts: vec![],
+                subpath_open: vec![],
+                stroke_color: Some("Color/Black".to_string()),
+                stroke_weight: Some(1.0),
+            },
+        })
+        .unwrap();
+        let err = p
+            .apply(set_op(
+                NodeId::GraphicLine("GraphicLine/u9".to_string()),
+                PropertyPath::FrameOuterGlowEnabled,
+                Value::Bool(true),
+            ))
+            .unwrap_err();
+        assert!(matches!(err, OperationError::UnsupportedProperty { .. }));
+    }
 }
