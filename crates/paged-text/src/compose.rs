@@ -208,6 +208,17 @@ pub struct ComposeOptions<'a> {
     /// opportunity. Knuth-Plass convention: 50 = mildly penalised,
     /// 100 = costly. Only consulted when `hyphenator` is set.
     pub hyphen_penalty: i32,
+    /// InDesign's "hyphenation zone" in 1/64 pt. A word is only
+    /// hyphenation-eligible when its start would fall *before*
+    /// `column_width - hyphenation_zone` (measured from the line's
+    /// left edge). Equivalently: a word that begins within `zone` of
+    /// the right margin is left whole and pushed to the next line
+    /// rather than broken, trading a more ragged right edge for fewer
+    /// hyphens. `0` (the default) ⇒ no zone restriction — the breaker
+    /// may hyphenate any opportunity the hyphenator finds. Only
+    /// consulted when `hyphenator` is set. See [`compose_paragraph`]
+    /// for how the zone gates per-word penalty emission.
+    pub hyphenation_zone: i32,
     /// When `true`, the composer emits per-character break opportunities
     /// inside CJK runs and forbids breaks that would violate the
     /// built-in "Hard Kinsoku" rules — i.e. would put a no-start
@@ -269,6 +280,7 @@ impl ComposeOptions<'_> {
             desired_space_ratio: 1.0,
             hyphenator: None,
             hyphen_penalty: 50,
+            hyphenation_zone: 0,
             kinsoku_enforce: false,
             mojikumi_half_width: false,
         }
@@ -608,8 +620,29 @@ pub fn compose_paragraph(
         });
     };
 
+    // Hyphenation-zone bookkeeping. `zone_threshold` is the rightmost
+    // within-line natural x-position at which a word may still be
+    // hyphenated; a word whose start lands at or beyond it is kept
+    // whole (pushed to the next line) rather than broken — InDesign's
+    // "hyphenation zone" semantic. We don't know the breaker's chosen
+    // line starts a priori, so we estimate the word's within-line
+    // offset as its cumulative natural x modulo the column width
+    // (`natural_x` resets to ~0 at each new line). `0` zone disables
+    // the gate entirely. The reference width is the (single) column
+    // width; per-line `column_widths` shapes don't refine the estimate.
+    let zone = options.hyphenation_zone.max(0);
+    let ref_width = options.column_width.max(1);
+    let zone_threshold = (ref_width - zone).max(0);
+    let mut natural_x: i64 = 0;
+
     for (i, w) in words.iter().enumerate() {
         let word_text = &text[w.start..w.end];
+        // Within-line natural offset estimate for the zone gate.
+        let line_offset = (natural_x % ref_width as i64) as i32;
+        // A word is hyphenation-eligible only when its start falls
+        // before the zone threshold. With `zone == 0` the threshold is
+        // the full column width, so every word stays eligible.
+        let zone_allows_hyphenation = zone == 0 || line_offset < zone_threshold;
         // No hyphenator → emit a single Box for the whole word and
         // skip the per-word break-vec construction entirely.
         // When kinsoku is enforced, we layer per-character break
@@ -640,6 +673,21 @@ pub fn compose_paragraph(
                 // line; 0 (free break) otherwise.
                 emit_word_with_kinsoku_breaks(
                     word_text, w.start, measurer, &mut items, &mut meta, &push,
+                );
+            }
+            // Hyphenation suppressed by the zone: emit the word whole
+            // (no internal penalties) so the breaker can't split it and
+            // must push it intact to the next line.
+            Some(_) if !zone_allows_hyphenation => {
+                push(
+                    &mut items,
+                    &mut meta,
+                    Item::Box {
+                        width: measurer.measure_word(word_text),
+                        data: (),
+                    },
+                    w.end,
+                    false,
                 );
             }
             Some(h) => {
@@ -692,13 +740,41 @@ pub fn compose_paragraph(
             }
         }
 
+        // Advance the natural-x cursor past this word so the next
+        // word's zone gate sees its correct within-line offset. Uses
+        // the unscaled word + natural space widths — the zone is a
+        // geometric distance, independent of the per-paragraph
+        // word-spacing scale.
+        if zone > 0 {
+            natural_x += measurer.measure_word(word_text) as i64;
+        }
+
         if i + 1 < words.len() {
+            // A zone is a ragged-paragraph feature: it explicitly
+            // permits up to `zone` of whitespace at the end of a line
+            // (rather than hyphenating into it). When a zone is active
+            // we widen every inter-word glue's stretch to at least
+            // `zone` so the breaker can end a line short — by up to the
+            // zone — without that line becoming infeasible (the
+            // internal `threshold ≈ 8.6` ratio cap would otherwise
+            // reject a short ragged line). For ragged text the breaker
+            // ratio is discarded at glyph-emit time (left-flush), so
+            // the extra stretch only changes *where* breaks land, not
+            // the rendered spacing. Paragraphs without a zone (the
+            // default, incl. all justified text) keep the calibrated
+            // stretch untouched.
+            let glue_stretch = if zone > 0 {
+                natural_x += natural_space as i64;
+                stretch.max(zone)
+            } else {
+                stretch
+            };
             push(
                 &mut items,
                 &mut meta,
                 Item::Glue {
                     width: space_width,
-                    stretch,
+                    stretch: glue_stretch,
                     shrink,
                 },
                 // A break at this glue trims the trailing space, so
@@ -1088,6 +1164,97 @@ mod tests {
             out[0].ends_with_hyphen,
             "first line should flag hyphen: {:?}",
             out
+        );
+    }
+
+    #[test]
+    fn hyphenation_zone_large_suppresses_break_zero_allows_it() {
+        // "hello world communication" in a 170-wide (17-char) column
+        // with 10-wide glyphs + spaces. "hello world " fills the line
+        // to natural-x = 50 + 10 + 50 + 10 = 120, so "communication"
+        // starts at x = 120.
+        //   - zone 0  → threshold = 170: 120 < 170 ⇒ "communication"
+        //     is hyphenation-eligible, so the breaker pulls its first
+        //     syllable up to fill line 1 ("hello world com-").
+        //   - zone 60 → threshold = 110: 120 ≥ 110 ⇒ the word starts
+        //     *inside* the zone, so it stays whole and is pushed to
+        //     line 2 ("hello world" / "communication"), accepting a
+        //     more ragged right edge — InDesign's hyphenation-zone rule.
+        // Line 1 ("hello world", 110/170) is full enough that the
+        // suppressed-hyphen layout stays feasible for the breaker.
+        let m = MonospaceMeasurer::new(10, 10);
+        let h = crate::Hyphenator::for_language(crate::Language::EnglishUS);
+        let text = "hello world communication";
+
+        let base = ComposeOptions {
+            column_width: 170,
+            tolerance: 50.0,
+            hyphenator: Some(&h),
+            ..ComposeOptions::new(0.0)
+        };
+
+        // Zone 0: the long word may be hyphenated to fill line 1.
+        let zero = ComposeOptions {
+            hyphenation_zone: 0,
+            ..base.clone()
+        };
+        let out_zero = compose_paragraph(text, &m, &zero);
+        assert!(
+            out_zero.iter().any(|l| l.ends_with_hyphen),
+            "zone 0 should permit a hyphen: {:?}",
+            out_zero.iter().map(|l| l.ends_with_hyphen).collect::<Vec<_>>()
+        );
+
+        // Zone 60: "communication" starts inside the zone, so it stays
+        // whole — no hyphenated line at all.
+        let zoned = ComposeOptions {
+            hyphenation_zone: 60,
+            ..base.clone()
+        };
+        let out_zoned = compose_paragraph(text, &m, &zoned);
+        assert!(
+            !out_zoned.is_empty(),
+            "zoned layout must still be feasible"
+        );
+        assert!(
+            out_zoned.iter().all(|l| !l.ends_with_hyphen),
+            "a zone covering the word start should suppress the hyphen: {:?}",
+            out_zoned.iter().map(|l| l.ends_with_hyphen).collect::<Vec<_>>()
+        );
+        // The whole word lands on the second line, intact.
+        let texts: Vec<String> = out_zoned
+            .iter()
+            .map(|l| text[l.byte_range.clone()].to_string())
+            .collect();
+        assert!(
+            texts.iter().any(|t| t.trim() == "communication"),
+            "zoned layout should carry 'communication' whole: {:?}",
+            texts
+        );
+    }
+
+    #[test]
+    fn hyphenation_zone_only_gates_words_starting_inside_the_zone() {
+        // Same column + text as above, but a *small* zone (20pt,
+        // threshold = 150). "communication" starts at x = 120 < 150, so
+        // it is still hyphenation-eligible and the breaker keeps the
+        // zone-0 hyphenated layout. A zone only suppresses words whose
+        // start falls *within* it.
+        let m = MonospaceMeasurer::new(10, 10);
+        let h = crate::Hyphenator::for_language(crate::Language::EnglishUS);
+        let text = "hello world communication";
+        let opts = ComposeOptions {
+            column_width: 170,
+            tolerance: 50.0,
+            hyphenator: Some(&h),
+            hyphenation_zone: 20,
+            ..ComposeOptions::new(0.0)
+        };
+        let out = compose_paragraph(text, &m, &opts);
+        assert!(
+            out.iter().any(|l| l.ends_with_hyphen),
+            "a word starting before the zone must still hyphenate: {:?}",
+            out.iter().map(|l| l.ends_with_hyphen).collect::<Vec<_>>()
         );
     }
 
