@@ -94,7 +94,7 @@ export type WorkerToMain = WorkerToMainKind & {
 ///     `DeleteTableColumn` (translate to the matching new
 ///     `paged_mutate::Operation` variants, with delete capturing the
 ///     removed line for undo).
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(29);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -345,6 +345,15 @@ pub enum MainToWorkerKind {
     RequestPathAnchors {
         id: crate::element_selection::ElementId,
     },
+    /// B-06 (protocol v30) — closest on-curve point on the element's
+    /// path. `point` is in the element's LOCAL coordinate space (the
+    /// same space `PathAnchors` reports — callers inverse-apply
+    /// `item_transform` first, exactly like the anchor tools).
+    /// Reply: `NearestPathPoint`.
+    RequestNearestPathPoint {
+        id: crate::element_selection::ElementId,
+        point: [f32; 2],
+    },
     /// Track M — list every `<Layer>` from the loaded document's
     /// designmap. Reply: `Layers`. The Layers panel polls this on
     /// mount and on every `MutationApplied` / `UndoApplied` /
@@ -433,6 +442,14 @@ pub enum MainToWorkerKind {
     /// Concept 3 — abandon an in-flight session (dialog Cancel /
     /// AbortSignal). Reply: `ExportPdfCancelled`.
     ExportPdfCancel { session: u32 },
+    /// W3.B2 (rides v29 — added before first editor sync) — serialise
+    /// the loaded (possibly-mutated) document back to an IDML package
+    /// for save-back. Unlike the PDF export this is a single one-shot
+    /// (the carry-through writer is cheap: it patches only the
+    /// model-owned Spreads/Stories and copies every other entry
+    /// verbatim), so there's no session/progress loop. Reply:
+    /// `IdmlExported` (or `ExportIdmlFailed`).
+    ExportIdml {},
     /// Inspector P1 — return a property snapshot for one element so
     /// the Inspector panel can render typed editors. Reply:
     /// `ElementProperties`. Each entry carries the property path +
@@ -754,6 +771,11 @@ pub enum WorkerToMainKind {
     PathAnchors {
         result: Option<PathAnchorsResult>,
     },
+    /// B-06 — `RequestNearestPathPoint` reply. `None` when the id
+    /// doesn't resolve or carries no path data.
+    NearestPathPoint {
+        result: Option<NearestPathPointResult>,
+    },
     /// Track M — `RequestLayers` reply. Documents without `<Layer>`
     /// elements (rare; the IDML container always emits at least a
     /// default layer) come back with an empty Vec.
@@ -821,6 +843,19 @@ pub enum WorkerToMainKind {
     /// Concept 3 — any export request that could not be honoured
     /// (unknown session, bad options, build/write failure).
     ExportPdfFailed { error: String },
+    /// W3.B2 (rides v29 — added before first editor sync) — `ExportIdml`
+    /// reply. `idml_bytes` is the re-serialised package (mirrors how
+    /// `PdfExported` carries `pdf_bytes` as a `ByteBuf` rendered as a
+    /// `number[]` on the wire). The main thread offers it to the user
+    /// as a `.idml` download / save target.
+    IdmlExported {
+        #[tsify(type = "number[]")]
+        idml_bytes: ByteBuf,
+    },
+    /// W3.B2 (rides v29 — added before first editor sync) — `ExportIdml`
+    /// failed (no document loaded, or the carry-through writer errored).
+    /// Mirrors `ExportPdfFailed`'s flat-string error shape.
+    ExportIdmlFailed { error: String },
     /// Inspector P1 — `RequestElementProperties` reply. `None` when
     /// the id doesn't resolve.
     ElementProperties {
@@ -1776,6 +1811,23 @@ pub struct PathAnchorsResult {
     pub item_transform: Option<[f32; 6]>,
 }
 
+/// B-06 — `RequestNearestPathPoint` reply payload. Coordinates are
+/// in the element's local space (the `PathAnchors` space).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct NearestPathPointResult {
+    /// Flat index of the segment's START anchor.
+    pub seg_start: u32,
+    /// Flat index of the segment's END anchor (wraps to the subpath
+    /// start on a closing segment).
+    pub seg_end: u32,
+    /// Curve parameter on that segment, 0..=1.
+    pub t: f32,
+    pub point: [f32; 2],
+    pub distance: f32,
+}
+
 /// Phase 4 Step 2 — per-rebuild layout cache statistics.
 ///
 /// Sent piggyback on `MutationApplied` / `UndoApplied` / `RedoApplied`
@@ -2031,6 +2083,32 @@ pub enum Mutation {
     PathOpenAt {
         element_id: crate::element_selection::ElementId,
         index: u32,
+    },
+    /// B-05 (protocol v30) — replace the element's path with its
+    /// stroke-expansion outline. Geometry-only: the editor composes
+    /// paint transfer (fill := old stroke, stroke := none) as a
+    /// Batch alongside this op. `cap`: `"butt"|"round"|"square"`;
+    /// `join`: `"miter"|"round"|"bevel"`.
+    OutlineStroke {
+        element_id: crate::element_selection::ElementId,
+        width: f32,
+        cap: String,
+        join: String,
+        miter_limit: f32,
+    },
+    /// B-05 (protocol v30) — inset (`delta < 0`) / outset
+    /// (`delta > 0`) of a single closed contour.
+    OffsetPath {
+        element_id: crate::element_selection::ElementId,
+        delta: f32,
+        join: String,
+        miter_limit: f32,
+    },
+    /// B-05 (protocol v30) — re-express the path within `tolerance`
+    /// pt max deviation with fewer anchors.
+    SimplifyPath {
+        element_id: crate::element_selection::ElementId,
+        tolerance: f32,
     },
     /// Track J — toggle the curve type of an anchor between corner
     /// (handles equal to anchor) and smooth (handles derived from
@@ -2383,6 +2461,9 @@ impl Mutation {
             Self::PathPointInsert { .. } => "PathPointInsert",
             Self::PathPointRemove { .. } => "PathPointRemove",
             Self::PathOpenAt { .. } => "PathOpenAt",
+            Self::OutlineStroke { .. } => "OutlineStroke",
+            Self::OffsetPath { .. } => "OffsetPath",
+            Self::SimplifyPath { .. } => "SimplifyPath",
             Self::PathPointCurveType { .. } => "PathPointCurveType",
             Self::PathPointSet { .. } => "PathPointSet",
             Self::Batch { .. } => "Batch",
@@ -2891,6 +2972,65 @@ mod tests {
             WorkerToMainKind::LineBoundsResult { bounds } => {
                 let b = bounds.expect("bounds present");
                 assert_eq!((b.line_start, b.line_end), (3, 9));
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    /// W3.B2 — the IDML save-back message kinds (ride v29) survive the
+    /// JSON envelope with the camelCase tag + field contract the editor
+    /// mirrors. `ExportIdml` (main→worker) carries no payload; the
+    /// replies `IdmlExported` / `ExportIdmlFailed` carry the bytes /
+    /// error.
+    #[test]
+    fn idml_export_message_kinds_round_trip_through_json() {
+        // Request: empty-payload struct variant. The external tag must
+        // be `exportIdml`.
+        let req = MainToWorker {
+            seq: 11,
+            protocol: PROTOCOL_VERSION,
+            kind: MainToWorkerKind::ExportIdml {},
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"kind\":\"exportIdml\""), "tag drift: {json}");
+        let back: MainToWorker = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back.kind, MainToWorkerKind::ExportIdml {}));
+
+        // Success reply: idml_bytes renders as a number[] (ByteBuf) and
+        // the field is camelCase on the wire.
+        let ok = WorkerToMain {
+            seq: Some(11),
+            protocol: PROTOCOL_VERSION,
+            kind: WorkerToMainKind::IdmlExported {
+                idml_bytes: ByteBuf::from(vec![80, 75, 3, 4]), // "PK\x03\x04"
+            },
+        };
+        let json = serde_json::to_string(&ok).unwrap();
+        assert!(json.contains("\"kind\":\"idmlExported\""), "tag drift: {json}");
+        assert!(json.contains("\"idmlBytes\":"), "field rename broken: {json}");
+        assert!(!json.contains("idml_bytes"), "snake leaked: {json}");
+        let back: WorkerToMain = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            WorkerToMainKind::IdmlExported { idml_bytes } => {
+                assert_eq!(idml_bytes.as_slice(), &[80, 75, 3, 4]);
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+
+        // Failure reply: flat-string error, mirroring ExportPdfFailed.
+        let err = WorkerToMain {
+            seq: Some(11),
+            protocol: PROTOCOL_VERSION,
+            kind: WorkerToMainKind::ExportIdmlFailed {
+                error: "no document loaded".into(),
+            },
+        };
+        let json = serde_json::to_string(&err).unwrap();
+        assert!(json.contains("\"kind\":\"exportIdmlFailed\""), "tag drift: {json}");
+        let back: WorkerToMain = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            WorkerToMainKind::ExportIdmlFailed { error } => {
+                assert_eq!(error, "no document loaded");
             }
             other => panic!("wrong variant: {other:?}"),
         }

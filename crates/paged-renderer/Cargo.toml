@@ -30,6 +30,14 @@ paged-text = { path = "../paged-text" }
 paged-color = { path = "../paged-color" }
 paged-compose = { path = "../paged-compose" }
 paged-gpu = { path = "../paged-gpu", default-features = false }
+# W3.B2 — IDML save-back, used by the `paged-inspect --roundtrip`
+# conformance hook. Lightweight (paged-parse + paged-scene + zip +
+# quick-xml, all already in the dep graph), no native-only deps.
+paged-write = { path = "../paged-write" }
+# Used by the `paged-inspect --roundtrip` per-entry byte-identity tally
+# to walk the re-zipped package. Same wasm-clean config the rest of the
+# tree reads zips with.
+zip = { workspace = true }
 anyhow = { workspace = true }
 bytes = { workspace = true }
 clap = { version = "4", features = ["derive"] }

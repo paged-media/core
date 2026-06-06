@@ -648,6 +648,15 @@ impl From<&pipeline::PipelineStats> for DocumentStats {
 pub struct CanvasModel {
     doc_id: String,
     pub(crate) scene: Document,
+    /// W3.B2 — the IDML bytes this model was parsed from, retained so
+    /// `export_idml` can hand them to `paged_write::write_idml` as the
+    /// carry-through source package (it patches only the model-owned
+    /// Spreads/Stories and copies every other entry verbatim, so it
+    /// needs the original ZIP container, not just the parsed scene).
+    /// Memory cost: one *compressed* IDML package copy — typically a
+    /// few MB at most. Cleared/replaced on every `load` (a fresh
+    /// `CanvasModel` ⇒ fresh bytes), so it never accumulates.
+    pub(crate) source_idml: Vec<u8>,
     pub(crate) built: BuiltDocument,
     /// Index from `PageId` to `BuiltDocument::pages` position. Built
     /// once at load and refreshed after every rebuild. Worker callers
@@ -917,6 +926,9 @@ impl CanvasModel {
         Ok(Self {
             doc_id,
             scene,
+            // W3.B2 — retain the source package for save-back. One
+            // compressed copy; replaced wholesale on the next load.
+            source_idml: bytes.to_vec(),
             built,
             page_index,
             font_bytes,
@@ -1627,6 +1639,55 @@ impl CanvasModel {
                 path: PropertyPath::PathOpenAt,
                 value: Value::PathOpenAt {
                     index: *index as usize,
+                    prev_anchors: None,
+                    prev_subpath_starts: None,
+                    prev_subpath_open: None,
+                },
+            }),
+            Mutation::OutlineStroke {
+                element_id,
+                width,
+                cap,
+                join,
+                miter_limit,
+            } => Some(Operation::SetProperty {
+                node: path_node_id_for(element_id)?,
+                path: PropertyPath::OutlineStroke,
+                value: Value::OutlineStroke {
+                    width: *width,
+                    cap: cap.clone(),
+                    join: join.clone(),
+                    miter_limit: *miter_limit,
+                    prev_anchors: None,
+                    prev_subpath_starts: None,
+                    prev_subpath_open: None,
+                },
+            }),
+            Mutation::OffsetPath {
+                element_id,
+                delta,
+                join,
+                miter_limit,
+            } => Some(Operation::SetProperty {
+                node: path_node_id_for(element_id)?,
+                path: PropertyPath::OffsetPath,
+                value: Value::OffsetPath {
+                    delta: *delta,
+                    join: join.clone(),
+                    miter_limit: *miter_limit,
+                    prev_anchors: None,
+                    prev_subpath_starts: None,
+                    prev_subpath_open: None,
+                },
+            }),
+            Mutation::SimplifyPath {
+                element_id,
+                tolerance,
+            } => Some(Operation::SetProperty {
+                node: path_node_id_for(element_id)?,
+                path: PropertyPath::SimplifyPath,
+                value: Value::SimplifyPath {
+                    tolerance: *tolerance,
                     prev_anchors: None,
                     prev_subpath_starts: None,
                     prev_subpath_open: None,
@@ -2360,6 +2421,18 @@ impl CanvasModel {
     /// canvas painting stale pixels.
     pub fn scene_mut(&mut self) -> &mut Document {
         &mut self.scene
+    }
+
+    /// W3.B2 — re-serialize the (possibly-mutated) scene back into an
+    /// IDML package for save-back. Hands the retained source bytes to
+    /// the carry-through writer (`paged_write::write_idml`), which
+    /// patches only the model-owned Spreads/Stories and copies every
+    /// other entry verbatim — so an unmutated document round-trips
+    /// byte-identically and a mutated one differs only in the entries
+    /// the edit touched. The model holds a `paged_scene::Document`,
+    /// which is exactly the `&Document` the writer takes.
+    pub fn export_idml(&self) -> Result<Vec<u8>, paged_write::WriteError> {
+        paged_write::write_idml(&self.scene, &self.source_idml)
     }
 
     /// Phase 4 Step 3 — return the pages whose frame chains touch
@@ -4849,6 +4922,44 @@ impl CanvasModel {
     /// `built().pages`. Convenient for the GPU scene cache which
     /// keys by index. Indices not currently in `page_index` (stale
     /// after a rebuild that removed pages) are skipped.
+    /// B-06 — `RequestNearestPathPoint` accessor: closest on-curve
+    /// point via the kurbo kernel. `point` is element-local (the
+    /// `path_anchors` space).
+    pub fn nearest_path_point(
+        &self,
+        id: &crate::element_selection::ElementId,
+        point: [f32; 2],
+    ) -> Option<crate::channel::NearestPathPointResult> {
+        let table = self.path_anchors(id)?;
+        if table.anchors.is_empty() {
+            return None;
+        }
+        let anchors: Vec<paged_parse::PathAnchor> = table
+            .anchors
+            .iter()
+            .map(|a| paged_parse::PathAnchor {
+                anchor: (a.anchor[0], a.anchor[1]),
+                left: (a.left[0], a.left[1]),
+                right: (a.right[0], a.right[1]),
+            })
+            .collect();
+        let starts: Vec<usize> =
+            table.subpath_starts.iter().map(|s| *s as usize).collect();
+        let hit = paged_mutate::kurbo_kernel::nearest_point_on_path(
+            &anchors,
+            &starts,
+            &table.subpath_open,
+            (point[0], point[1]),
+        )?;
+        Some(crate::channel::NearestPathPointResult {
+            seg_start: hit.seg_start as u32,
+            seg_end: hit.seg_end as u32,
+            t: hit.t,
+            point: [hit.point.0, hit.point.1],
+            distance: hit.distance,
+        })
+    }
+
     pub fn page_indices_for_story(&self, story_id: &str) -> Vec<usize> {
         self.pages_for_story(story_id)
             .iter()

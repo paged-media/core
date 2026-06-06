@@ -26,6 +26,11 @@ paged-text = { path = "../paged-text" }
 paged-mutate = { path = "../paged-mutate" }
 paged-color = { path = "../paged-color" }
 paged-export-pdf = { path = "../paged-export-pdf" }
+# W3.B2 — IDML save-back. paged-write deps only paged-parse +
+# paged-scene, so this introduces no cycle; both are wasm-clean
+# (no native-only deps), so the export path compiles into the wasm
+# worker too.
+paged-write = { path = "../paged-write" }
 serde = { workspace = true }
 serde_json = "1"
 tsify-next = { workspace = true }

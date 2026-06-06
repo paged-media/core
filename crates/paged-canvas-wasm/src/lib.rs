@@ -1033,6 +1033,13 @@ mod wasm {
                     let result = self.model.as_ref().and_then(|m| m.path_anchors(&id));
                     WorkerToMainKind::PathAnchors { result }
                 }
+                MainToWorkerKind::RequestNearestPathPoint { id, point } => {
+                    let result = self
+                        .model
+                        .as_ref()
+                        .and_then(|m| m.nearest_path_point(&id, point));
+                    WorkerToMainKind::NearestPathPoint { result }
+                }
                 MainToWorkerKind::RequestLayers => {
                     let items = self
                         .model
@@ -1151,6 +1158,23 @@ mod wasm {
                     self.export_sessions.remove(&session);
                     WorkerToMainKind::ExportPdfCancelled { session }
                 }
+                MainToWorkerKind::ExportIdml {} => match self.model.as_ref() {
+                    // W3.B2 — one-shot IDML save-back. The carry-through
+                    // writer is cheap (patch the model-owned entries,
+                    // copy the rest verbatim) so there's no session loop
+                    // like the PDF export.
+                    Some(m) => match m.export_idml() {
+                        Ok(bytes) => WorkerToMainKind::IdmlExported {
+                            idml_bytes: bytes.into(),
+                        },
+                        Err(e) => WorkerToMainKind::ExportIdmlFailed {
+                            error: e.to_string(),
+                        },
+                    },
+                    None => WorkerToMainKind::ExportIdmlFailed {
+                        error: "no document loaded".into(),
+                    },
+                },
                 MainToWorkerKind::RequestGradientDetail { gradient_id } => {
                     let result = self
                         .model

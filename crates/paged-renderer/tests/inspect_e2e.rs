@@ -278,3 +278,66 @@ fn display_list_flag_emits_one_command_per_frame_without_font() {
     assert!(stdout.contains("2 command(s) total"), "stdout:\n{stdout}");
     assert!(stdout.contains("1 path(s) total"), "stdout:\n{stdout}");
 }
+
+/// W3.B2 — `--roundtrip` on an unmutated package: parse → write_idml →
+/// re-parse → compare. The gate (stats match + pages hash-identical +
+/// exit 0) passes for any faithfully-round-tripped package. This
+/// fixture's `Spreads/*.xml` has a line-wrapped `<TextFrame>` the writer
+/// normalises to one line, so it is reported as *patched* (the per-entry
+/// tally distinguishes byte-identical from semantically-equal-but-
+/// re-serialised; only the stats/pixel gate decides pass/fail). The
+/// strictly byte-identical case is covered by paged-write's own suite
+/// over the writer-stable generator fixtures.
+#[test]
+fn roundtrip_flag_passes_the_gate_on_an_unmutated_package() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("hello.idml");
+    std::fs::write(&path, build_idml()).unwrap();
+
+    let output = Command::new(inspect_binary())
+        .arg("--roundtrip")
+        .arg(&path)
+        .output()
+        .expect("spawn paged-inspect");
+    assert!(
+        output.status.success(),
+        "roundtrip exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout.trim()).unwrap_or_else(|e| panic!("not JSON: {e}\n{stdout}"));
+
+    // The pass/fail gate the conformance harness (W3.B3) keys on.
+    assert_eq!(json["stats_match"], true, "{json}");
+    assert_eq!(json["pages_identical"], true, "{json}");
+    // The synthetic spread carries two pages.
+    assert_eq!(json["page_count"], 2, "{json}");
+    // Tally is informational: identical + patched covers every entry.
+    // 6 entries total: mimetype, designmap, Graphic, Spread, two Stories.
+    let identical = json["entries_identical"].as_u64().unwrap();
+    let patched = json["entries_patched"].as_u64().unwrap();
+    assert_eq!(identical + patched, 6, "{json}");
+    // The whitespace-normalised spread is the only re-serialised entry.
+    assert_eq!(patched, 1, "{json}");
+}
+
+/// `--roundtrip` on a non-IDML input fails cleanly (non-zero exit), not
+/// a panic — the conformance harness relies on the exit code.
+#[test]
+fn roundtrip_flag_fails_on_garbage_input() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("not.idml");
+    std::fs::write(&path, b"this is not a zip").unwrap();
+
+    let output = Command::new(inspect_binary())
+        .arg("--roundtrip")
+        .arg(&path)
+        .output()
+        .expect("spawn paged-inspect");
+    assert!(
+        !output.status.success(),
+        "garbage input must exit non-zero, got success"
+    );
+}
+

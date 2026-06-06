@@ -76,6 +76,17 @@ struct Args {
     /// Explicit column width in pt. Overrides any frame geometry.
     #[arg(long)]
     column_width_pt: Option<f32>,
+    /// W3.B2 — IDML save-back round-trip check. Parse the input,
+    /// re-serialise it through `paged_write::write_idml`, re-parse the
+    /// result, and compare: (a) per-entry byte-identity, (b) parsed
+    /// model stats (spreads / stories / frames / run text), (c) the
+    /// rendered page hashes (CPU backend). Prints a compact JSON report
+    /// and exits 0 iff the re-parse succeeds, the stats match, and
+    /// every page hashes identically. The conformance harness's
+    /// round-trips level (W3.B3) calls this. All other rendering /
+    /// reporting flags are ignored in this mode.
+    #[arg(long)]
+    roundtrip: bool,
     /// Build the DisplayList and report command / path counts.
     #[arg(long)]
     display_list: bool,
@@ -158,6 +169,16 @@ fn main() -> Result<()> {
     }
     let bytes =
         std::fs::read(&args.file).with_context(|| format!("read {}", args.file.display()))?;
+
+    // W3.B2 — round-trip mode is a self-contained check that
+    // short-circuits the normal inspect flow. Exits non-zero on any
+    // divergence (re-parse failure / stats mismatch / pixel mismatch).
+    if args.roundtrip {
+        let report = run_roundtrip(&bytes, args.dpi)?;
+        println!("{}", serde_json::to_string(&report.json)?);
+        std::process::exit(if report.ok { 0 } else { 1 });
+    }
+
     let document = Document::open(&bytes).context("open IDML")?;
     let palette = &document.palette;
 
@@ -502,6 +523,199 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Outcome of a `--roundtrip` run: the compact JSON report plus the
+/// overall pass/fail used for the process exit code.
+struct RoundtripReport {
+    json: serde_json::Value,
+    ok: bool,
+}
+
+/// Comparable structural fingerprint of a parsed document. Equality of
+/// two fingerprints is the "parsed-model stats equality" gate.
+#[derive(PartialEq, Eq)]
+struct ModelStats {
+    spreads: usize,
+    stories: usize,
+    frames: usize,
+    /// Concatenated run text across every story (in document order),
+    /// so a content change (or a dropped/added run) trips the gate even
+    /// when the run *count* is unchanged.
+    run_text: String,
+}
+
+impl ModelStats {
+    fn of(doc: &Document) -> Self {
+        let frames = doc
+            .spreads
+            .iter()
+            .map(|s| s.spread.text_frames.len())
+            .sum();
+        let run_text = doc
+            .stories
+            .iter()
+            .flat_map(|s| s.story.paragraphs.iter())
+            .flat_map(|p| p.runs.iter())
+            .map(|r| r.text.as_str())
+            .collect();
+        ModelStats {
+            spreads: doc.spreads.len(),
+            stories: doc.stories.len(),
+            frames,
+            run_text,
+        }
+    }
+}
+
+/// Decompress every non-directory entry of an IDML package into a
+/// path→bytes map. Used for the per-entry byte-identity tally.
+fn package_entries(idml: &[u8]) -> Result<std::collections::BTreeMap<String, Vec<u8>>> {
+    use std::io::Read as _;
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(idml)).context("open re-zip")?;
+    let mut out = std::collections::BTreeMap::new();
+    for i in 0..zip.len() {
+        let mut e = zip.by_index(i).context("zip entry")?;
+        if e.is_dir() {
+            continue;
+        }
+        let name = e.name().to_string();
+        let mut buf = Vec::new();
+        e.read_to_end(&mut buf).context("read entry")?;
+        out.insert(name, buf);
+    }
+    Ok(out)
+}
+
+/// Render every page of `doc` to RGBA and return one 32-byte content
+/// hash per page (in page order). Reuses the `--render` plumbing:
+/// `build_document` → `paged_gpu::rasterize` (CPU backend). Both sides
+/// of the round-trip are rendered with identical options + each
+/// document's own embedded images, so the comparison is apples-to-apples.
+fn render_page_hashes(doc: &Document, dpi: f32) -> Result<Vec<[u8; 32]>> {
+    // Harvest the document's own embedded images so placed-content URIs
+    // pointing inside the package resolve (same logic as the main flow).
+    let embedded: Vec<(String, bytes::Bytes)> = doc
+        .container
+        .entries
+        .iter()
+        .filter(|(name, _)| is_image_path(name))
+        .map(|(name, bytes)| (name.clone(), bytes.clone()))
+        .collect();
+    let resolver = if embedded.is_empty() {
+        None
+    } else {
+        let mut r = paged_renderer::BytesResolver::new();
+        for (path, b) in &embedded {
+            r.add_image(path.clone(), b.clone());
+            if let Some(name) = std::path::Path::new(path).file_name().and_then(|s| s.to_str()) {
+                r.add_image(name.to_string(), b.clone());
+            }
+        }
+        Some(r)
+    };
+    let opts = PipelineOptions {
+        assets: resolver
+            .as_ref()
+            .map(|r| r as &dyn paged_renderer::AssetResolver),
+        ..PipelineOptions::default()
+    };
+    let built = pipeline::build_document(doc, &opts)?;
+    let mut hashes = Vec::with_capacity(built.pages.len());
+    for page in &built.pages {
+        let mut raster_opts = paged_gpu::RasterOptions::new(page.width_pt, page.height_pt);
+        raster_opts.dpi = dpi;
+        let img = paged_gpu::rasterize(&page.list, &raster_opts);
+        // FNV-1a-ish? No — keep it a real cryptographic-strength digest
+        // so a single-pixel divergence is caught. blake3 isn't a dep
+        // here, but the renderer already pulls in nothing hash-shaped;
+        // use a stable 32-byte digest over the raw RGBA buffer.
+        hashes.push(hash_rgba(img.as_raw()));
+    }
+    Ok(hashes)
+}
+
+/// Stable 32-byte digest of an RGBA buffer. Uses the `image` crate's
+/// raw byte slice; the digest only needs to be deterministic + change
+/// on any pixel difference, not collision-resistant against an
+/// adversary — a doubled FNV-1a over interleaved halves keeps it
+/// dependency-free while spreading bytes across all 32 output bytes.
+fn hash_rgba(raw: &[u8]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    // Four independent FNV-1a lanes seeded differently, each consuming
+    // the whole buffer — cheap, deterministic, and sensitive to any
+    // single-byte change (FNV-1a's avalanche is adequate for a
+    // pixel-equality gate; this is not a security boundary).
+    const SEEDS: [u64; 4] = [
+        0xcbf29ce484222325,
+        0x100000001b3,
+        0x9e3779b97f4a7c15,
+        0xff51afd7ed558ccd,
+    ];
+    for (lane, &seed) in SEEDS.iter().enumerate() {
+        let mut h = seed;
+        for (i, &b) in raw.iter().enumerate() {
+            // Fold the index in so a transposition (same bytes, moved)
+            // also changes the digest.
+            h ^= b as u64 ^ (i as u64).rotate_left(lane as u32 * 7);
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        out[lane * 8..lane * 8 + 8].copy_from_slice(&h.to_le_bytes());
+    }
+    out
+}
+
+/// Run the full save-back round-trip and assemble the report.
+///
+/// Exit-0 criterion: re-parse succeeds AND model stats match AND every
+/// page hashes identically. The per-entry identical/patched tally is
+/// reported for visibility but is NOT a gate (a faithfully-patched
+/// entry is a correct round-trip, not a failure).
+fn run_roundtrip(original: &[u8], dpi: f32) -> Result<RoundtripReport> {
+    use serde_json::json;
+
+    let doc = Document::open(original).context("open input IDML")?;
+    let written = paged_write::write_idml(&doc, original).context("write_idml")?;
+
+    // (a) Per-entry byte-identity tally.
+    let src = package_entries(original)?;
+    let dst = package_entries(&written)?;
+    let mut entries_identical = 0usize;
+    let mut entries_patched = 0usize;
+    for (name, src_bytes) in &src {
+        match dst.get(name) {
+            Some(d) if d == src_bytes => entries_identical += 1,
+            _ => entries_patched += 1,
+        }
+    }
+
+    // (b) Re-parse + parsed-model stats equality.
+    let reparse = Document::open(&written);
+    let (reparsed_ok, stats_match) = match &reparse {
+        Ok(re) => (true, ModelStats::of(&doc) == ModelStats::of(re)),
+        Err(_) => (false, false),
+    };
+
+    // (c) Render both → per-page hash equality. Only attempted when the
+    // re-parse succeeded (no doc to render otherwise).
+    let (pages_identical, page_count) = match &reparse {
+        Ok(re) => {
+            let a = render_page_hashes(&doc, dpi)?;
+            let b = render_page_hashes(re, dpi)?;
+            (a.len() == b.len() && a == b, a.len())
+        }
+        Err(_) => (false, 0),
+    };
+
+    let ok = reparsed_ok && stats_match && pages_identical;
+    let report = json!({
+        "entries_identical": entries_identical,
+        "entries_patched": entries_patched,
+        "stats_match": stats_match,
+        "pages_identical": pages_identical,
+        "page_count": page_count,
+    });
+    Ok(RoundtripReport { json: report, ok })
 }
 
 fn build_json_report(

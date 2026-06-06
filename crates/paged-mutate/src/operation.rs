@@ -333,6 +333,17 @@ pub enum PropertyPath {
     /// `Value::PathOpenAt`; any path-bearing kind. See the Value
     /// variant for the cut semantics + the snapshot inverse.
     PathOpenAt,
+    /// B-05 kernel op — replace the path with its stroke-expansion
+    /// outline (`Value::OutlineStroke`). Geometry-only: paint
+    /// transfer (fill := old stroke, stroke := none) is the
+    /// CALLER's batch, keeping the op kind-generic.
+    OutlineStroke,
+    /// B-05 kernel op — replace a single closed contour with its
+    /// inset/outset (`Value::OffsetPath`).
+    OffsetPath,
+    /// B-05 kernel op — re-express the path within a max-deviation
+    /// tolerance with fewer anchors (`Value::SimplifyPath`).
+    SimplifyPath,
     /// Editor-ops — whole gradient-feather replacement on an
     /// effect-bearing page item (`Value::GradientFeather`). One path
     /// for the whole struct — kind + axis + the stop LIST edit
@@ -1063,6 +1074,9 @@ impl PropertyPath {
             PropertyPath::FrameGradientStrokeAngle => "frame.gradientStrokeAngle",
             PropertyPath::FrameGradientStrokeLength => "frame.gradientStrokeLength",
             PropertyPath::PathOpenAt => "path.openAt",
+            PropertyPath::OutlineStroke => "path.outlineStroke",
+            PropertyPath::OffsetPath => "path.offset",
+            PropertyPath::SimplifyPath => "path.simplify",
             PropertyPath::FrameGradientFeather => "frame.gradientFeather",
             PropertyPath::PageBounds => "page.bounds",
             PropertyPath::FrameNonprinting => "frame.nonprinting",
@@ -1653,6 +1667,46 @@ pub enum Value {
     /// serve as the inverse because it does not carry `subpath_open`.
     PathOpenAt {
         index: usize,
+        #[serde(default)]
+        prev_anchors: Option<Vec<PathAnchorSpec>>,
+        #[serde(default)]
+        prev_subpath_starts: Option<Vec<usize>>,
+        #[serde(default)]
+        prev_subpath_open: Option<Vec<bool>>,
+    },
+    /// B-05 — stroke-expansion outline. Same `prev_*` snapshot-
+    /// inverse convention as `PathOpenAt` (FramePath lacks
+    /// `subpath_open`). `cap`: `"butt" | "round" | "square"`;
+    /// `join`: `"miter" | "round" | "bevel"`.
+    OutlineStroke {
+        width: f32,
+        cap: String,
+        join: String,
+        miter_limit: f32,
+        #[serde(default)]
+        prev_anchors: Option<Vec<PathAnchorSpec>>,
+        #[serde(default)]
+        prev_subpath_starts: Option<Vec<usize>>,
+        #[serde(default)]
+        prev_subpath_open: Option<Vec<bool>>,
+    },
+    /// B-05 — inset (`delta < 0`) / outset (`delta > 0`) of a single
+    /// closed contour. Snapshot-inverse like `PathOpenAt`.
+    OffsetPath {
+        delta: f32,
+        join: String,
+        miter_limit: f32,
+        #[serde(default)]
+        prev_anchors: Option<Vec<PathAnchorSpec>>,
+        #[serde(default)]
+        prev_subpath_starts: Option<Vec<usize>>,
+        #[serde(default)]
+        prev_subpath_open: Option<Vec<bool>>,
+    },
+    /// B-05 — anchor-reduction within `tolerance` pt max deviation.
+    /// Snapshot-inverse like `PathOpenAt`.
+    SimplifyPath {
+        tolerance: f32,
         #[serde(default)]
         prev_anchors: Option<Vec<PathAnchorSpec>>,
         #[serde(default)]

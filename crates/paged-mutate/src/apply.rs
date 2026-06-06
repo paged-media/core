@@ -540,6 +540,17 @@ fn apply_set_property(
         ) => {
             return apply_path_open_at(doc, node, value);
         }
+        (
+            NodeId::Polygon(_)
+            | NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::OutlineStroke
+            | PropertyPath::OffsetPath
+            | PropertyPath::SimplifyPath,
+        ) => {
+            return apply_path_kernel_op(doc, node, &path, value);
+        }
         // W3.A1 — table-scoped writes: `AppliedTableStyle` on a
         // `NodeId::Table`, and every cell-scoped path on a
         // `NodeId::TableCell`. These resolve `(story_id, table_id[,
@@ -6440,6 +6451,206 @@ fn apply_path_open_at(
             value: value.clone(),
         },
         inverse,
+        invalidation: InvalidationHint {
+            frame_geometry: vec![node.clone()],
+            ..Default::default()
+        },
+    })
+}
+
+/// B-05 — shared apply for the whole-path-replacing kernel ops
+/// (`OutlineStroke` / `OffsetPath` / `SimplifyPath`). Identical
+/// snapshot-inverse convention to `apply_path_open_at`: the inverse
+/// carries the verbatim `(anchors, subpath_starts, subpath_open)`
+/// triple, and a value arriving WITH the triple is the restore
+/// branch (undo/redo).
+fn apply_path_kernel_op(
+    doc: &mut paged_scene::Document,
+    node: &NodeId,
+    path: &PropertyPath,
+    value: &Value,
+) -> Result<AppliedOperation, OperationError> {
+    use crate::kurbo_kernel::{self, StrokeCap, StrokeJoin};
+
+    fn parse_cap(s: &str) -> Option<StrokeCap> {
+        match s {
+            "butt" => Some(StrokeCap::Butt),
+            "round" => Some(StrokeCap::Round),
+            "square" => Some(StrokeCap::Square),
+            _ => None,
+        }
+    }
+    fn parse_join(s: &str) -> Option<StrokeJoin> {
+        match s {
+            "miter" => Some(StrokeJoin::Miter),
+            "round" => Some(StrokeJoin::Round),
+            "bevel" => Some(StrokeJoin::Bevel),
+            _ => None,
+        }
+    }
+
+    let invalid = |reason: String| OperationError::InvalidValue {
+        node: node.clone(),
+        path: path.clone(),
+        reason,
+    };
+
+    // Destructure the prev triple uniformly across the three values.
+    let (prev_anchors, prev_starts, prev_open) = match value {
+        Value::OutlineStroke {
+            prev_anchors,
+            prev_subpath_starts,
+            prev_subpath_open,
+            ..
+        }
+        | Value::OffsetPath {
+            prev_anchors,
+            prev_subpath_starts,
+            prev_subpath_open,
+            ..
+        }
+        | Value::SimplifyPath {
+            prev_anchors,
+            prev_subpath_starts,
+            prev_subpath_open,
+            ..
+        } => (
+            prev_anchors.clone(),
+            prev_subpath_starts.clone(),
+            prev_subpath_open.clone(),
+        ),
+        _ => {
+            return Err(OperationError::TypeMismatch {
+                path: path.clone(),
+                expected: "OutlineStroke | OffsetPath | SimplifyPath".to_string(),
+            })
+        }
+    };
+
+    let (anchors, subpath_starts, subpath_open) = find_path_anchors_mut(doc, node)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+
+    let snap_anchors: Vec<PathAnchorSpec> =
+        anchors.iter().map(PathAnchorSpec::from_parse).collect();
+    let snap_starts = subpath_starts.clone();
+    let snap_open = subpath_open.clone();
+
+    if let (Some(ra), Some(rs), Some(ro)) = (prev_anchors, prev_starts, prev_open) {
+        // Restore branch (undo/redo): verbatim triple.
+        *anchors = ra.iter().map(PathAnchorSpec::to_parse).collect();
+        *subpath_starts = rs;
+        *subpath_open = ro;
+    } else {
+        // Normalise parallel tables (one closed contour by default).
+        if subpath_starts.is_empty() {
+            subpath_starts.push(0);
+        }
+        if subpath_open.len() < subpath_starts.len() {
+            subpath_open.resize(subpath_starts.len(), false);
+        }
+        let result = match value {
+            Value::OutlineStroke {
+                width,
+                cap,
+                join,
+                miter_limit,
+                ..
+            } => kurbo_kernel::outline_stroke(
+                anchors,
+                subpath_starts,
+                subpath_open,
+                *width,
+                parse_cap(cap).ok_or_else(|| invalid(format!("unknown cap \"{cap}\"")))?,
+                parse_join(join)
+                    .ok_or_else(|| invalid(format!("unknown join \"{join}\"")))?,
+                *miter_limit,
+            ),
+            Value::OffsetPath {
+                delta,
+                join,
+                miter_limit,
+                ..
+            } => kurbo_kernel::offset_closed_path(
+                anchors,
+                subpath_starts,
+                subpath_open,
+                *delta,
+                parse_join(join)
+                    .ok_or_else(|| invalid(format!("unknown join \"{join}\"")))?,
+                *miter_limit,
+            ),
+            Value::SimplifyPath { tolerance, .. } => kurbo_kernel::simplify_path(
+                anchors,
+                subpath_starts,
+                subpath_open,
+                *tolerance,
+            ),
+            _ => unreachable!("matched above"),
+        };
+        let (na, ns, no) = result.ok_or_else(|| {
+            invalid(
+                "kernel produced no result (degenerate input, open path \
+                 where closed is required, or an offset past the medial axis)"
+                    .to_string(),
+            )
+        })?;
+        *anchors = na;
+        *subpath_starts = ns;
+        *subpath_open = no;
+    }
+
+    // Inverse: same params, prev triple filled.
+    let with_prev = |v: &Value| -> Value {
+        match v.clone() {
+            Value::OutlineStroke {
+                width,
+                cap,
+                join,
+                miter_limit,
+                ..
+            } => Value::OutlineStroke {
+                width,
+                cap,
+                join,
+                miter_limit,
+                prev_anchors: Some(snap_anchors.clone()),
+                prev_subpath_starts: Some(snap_starts.clone()),
+                prev_subpath_open: Some(snap_open.clone()),
+            },
+            Value::OffsetPath {
+                delta,
+                join,
+                miter_limit,
+                ..
+            } => Value::OffsetPath {
+                delta,
+                join,
+                miter_limit,
+                prev_anchors: Some(snap_anchors.clone()),
+                prev_subpath_starts: Some(snap_starts.clone()),
+                prev_subpath_open: Some(snap_open.clone()),
+            },
+            Value::SimplifyPath { tolerance, .. } => Value::SimplifyPath {
+                tolerance,
+                prev_anchors: Some(snap_anchors.clone()),
+                prev_subpath_starts: Some(snap_starts.clone()),
+                prev_subpath_open: Some(snap_open.clone()),
+            },
+            other => other,
+        }
+    };
+
+    Ok(AppliedOperation {
+        op: Operation::SetProperty {
+            node: node.clone(),
+            path: path.clone(),
+            value: value.clone(),
+        },
+        inverse: Operation::SetProperty {
+            node: node.clone(),
+            path: path.clone(),
+            value: with_prev(value),
+        },
         invalidation: InvalidationHint {
             frame_geometry: vec![node.clone()],
             ..Default::default()

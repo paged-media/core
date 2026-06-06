@@ -91,6 +91,9 @@ pub enum PropertyPathJson {
     FrameGradientStrokeAngle,
     FrameGradientStrokeLength,
     PathOpenAt,
+    OutlineStroke,
+    OffsetPath,
+    SimplifyPath,
     PageBounds,
     FrameGradientFeather,
     CharacterFontFamily,
@@ -280,6 +283,9 @@ impl From<PropertyPath> for PropertyPathJson {
                 PropertyPathJson::FrameGradientStrokeLength
             }
             PropertyPath::PathOpenAt => PropertyPathJson::PathOpenAt,
+            PropertyPath::OutlineStroke => PropertyPathJson::OutlineStroke,
+            PropertyPath::OffsetPath => PropertyPathJson::OffsetPath,
+            PropertyPath::SimplifyPath => PropertyPathJson::SimplifyPath,
             PropertyPath::PageBounds => PropertyPathJson::PageBounds,
             PropertyPath::FrameGradientFeather => PropertyPathJson::FrameGradientFeather,
             PropertyPath::CharacterFontFamily => PropertyPathJson::CharacterFontFamily,
@@ -513,6 +519,9 @@ impl From<PropertyPathJson> for PropertyPath {
                 PropertyPath::FrameGradientStrokeLength
             }
             PropertyPathJson::PathOpenAt => PropertyPath::PathOpenAt,
+            PropertyPathJson::OutlineStroke => PropertyPath::OutlineStroke,
+            PropertyPathJson::OffsetPath => PropertyPath::OffsetPath,
+            PropertyPathJson::SimplifyPath => PropertyPath::SimplifyPath,
             PropertyPathJson::PageBounds => PropertyPath::PageBounds,
             PropertyPathJson::FrameGradientFeather => PropertyPath::FrameGradientFeather,
             PropertyPathJson::CharacterFontFamily => PropertyPath::CharacterFontFamily,
@@ -750,6 +759,9 @@ impl From<Value> for AuthoredValue {
             | Value::PathPointCurveType { .. }
             | Value::FramePath { .. }
             | Value::PathOpenAt { .. }
+            | Value::OutlineStroke { .. }
+            | Value::OffsetPath { .. }
+            | Value::SimplifyPath { .. }
             | Value::GradientFeather(_)
             // W0.2 — whole-struct / whole-list paragraph payloads,
             // like the gradient-feather struct: no scalar
