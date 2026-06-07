@@ -824,3 +824,799 @@ fn path_point_mutate_then_undo_round_trips_byte_identical() {
     let out = write_idml(project.document(), &original).expect("write");
     assert_eq!(original, out, "path-point set→undo is a no-op write");
 }
+
+// ---------------------------------------------------------------------
+// 5. W1.15 — structural inserts / removes of page items.
+// ---------------------------------------------------------------------
+
+use paged_mutate::NodeSpec;
+
+/// The `Self` id of the first spread carrying page items, for use as an
+/// `InsertNode` parent.
+fn first_spread_id(doc: &Document) -> String {
+    doc.spreads
+        .iter()
+        .find_map(|s| s.spread.self_id.clone())
+        .expect("a spread with a Self id")
+}
+
+/// An inserted `<Rectangle>` (created by an op since load) serialises as
+/// a new XML element with its model geometry / fill, re-parses to the
+/// same bounds + fill, and leaves every untouched entry byte-identical.
+#[test]
+fn inserted_rectangle_saves_and_reparses() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+    let spread_id = first_spread_id(&doc);
+    let spread_idx = doc
+        .spreads
+        .iter()
+        .position(|s| s.spread.self_id.as_deref() == Some(spread_id.as_str()))
+        .unwrap();
+    // Pick a real fill swatch so the round-trip resolves to a colour.
+    let fill = doc.palette.colors.keys().next().cloned().expect("a swatch");
+    let new_id = "Rectangle/w1insert".to_string();
+    let bounds = [40.0_f32, 50.0, 140.0, 210.0]; // top, left, bottom, right
+    let rect_pos = doc.spreads[spread_idx].spread.rectangles.len();
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::InsertNode {
+            parent: NodeId::Spread(spread_id.clone()),
+            position: rect_pos,
+            node: NodeSpec::Rectangle {
+                self_id: new_id.clone(),
+                bounds,
+                fill_color: Some(fill.clone()),
+                stroke_color: None,
+                stroke_weight: None,
+                item_transform: None,
+            },
+            z_slot: None,
+        })
+        .expect("insert rectangle");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    assert_ne!(original, out, "an insert must change bytes");
+    let re = Document::open(&out).expect("reparse");
+
+    let rect = re.spreads[spread_idx]
+        .spread
+        .rectangles
+        .iter()
+        .find(|r| r.self_id.as_deref() == Some(new_id.as_str()))
+        .expect("inserted rectangle re-parsed");
+    assert_eq!(
+        rect.fill_color.as_deref(),
+        Some(fill.as_str()),
+        "fill saved"
+    );
+    // Geometry derives from the rewritten `<PathGeometry>` corners.
+    assert!((rect.bounds.top - bounds[0]).abs() < 1e-3, "top");
+    assert!((rect.bounds.left - bounds[1]).abs() < 1e-3, "left");
+    assert!((rect.bounds.bottom - bounds[2]).abs() < 1e-3, "bottom");
+    assert!((rect.bounds.right - bounds[3]).abs() < 1e-3, "right");
+
+    // Re-parsed model matches the in-memory mutated model.
+    let model_rect = project.document().spreads[spread_idx]
+        .spread
+        .rectangles
+        .iter()
+        .find(|r| r.self_id.as_deref() == Some(new_id.as_str()))
+        .expect("model rect");
+    assert!((rect.bounds.top - model_rect.bounds.top).abs() < 1e-3);
+    assert!((rect.bounds.right - model_rect.bounds.right).abs() < 1e-3);
+
+    // Only one Spread entry changed.
+    let src = entries(&original);
+    let dst = entries(&out);
+    let changed: Vec<&String> = src
+        .iter()
+        .filter(|(k, v)| dst.get(*k).map(|d| d != *v).unwrap_or(true))
+        .map(|(k, _)| k)
+        .collect();
+    assert_eq!(changed.len(), 1, "only the spread changed: {changed:?}");
+    assert!(changed[0].starts_with("Spreads/"));
+}
+
+/// An inserted `<TextFrame>` (with a parent story) serialises with the
+/// `ParentStory` / `ContentType` attributes so a re-parse recognises it
+/// as a text frame, not a rectangle.
+#[test]
+fn inserted_text_frame_saves_as_text_frame() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+    let spread_id = first_spread_id(&doc);
+    let spread_idx = doc
+        .spreads
+        .iter()
+        .position(|s| s.spread.self_id.as_deref() == Some(spread_id.as_str()))
+        .unwrap();
+    let new_id = "TextFrame/w1insert".to_string();
+    let before = doc.spreads[spread_idx].spread.text_frames.len();
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::InsertNode {
+            parent: NodeId::Spread(spread_id.clone()),
+            position: before,
+            node: NodeSpec::TextFrame {
+                self_id: new_id.clone(),
+                bounds: [10.0, 20.0, 90.0, 180.0],
+                fill_color: None,
+                stroke_color: None,
+                stroke_weight: None,
+                item_transform: None,
+            },
+            z_slot: None,
+        })
+        .expect("insert text frame");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    let re = Document::open(&out).expect("reparse");
+    assert_eq!(
+        re.spreads[spread_idx].spread.text_frames.len(),
+        before + 1,
+        "text frame count grew by one"
+    );
+    let f = re.spreads[spread_idx]
+        .spread
+        .text_frames
+        .iter()
+        .find(|f| f.self_id.as_deref() == Some(new_id.as_str()))
+        .expect("inserted text frame re-parsed as a TextFrame");
+    assert!((f.bounds.right - 180.0).abs() < 1e-3, "frame bounds saved");
+}
+
+/// A `RemoveNode` (delete a frame created-or-loaded) drops the element
+/// from the XML: the re-parse no longer carries it, and surviving
+/// siblings still parse.
+#[test]
+fn removed_rectangle_drops_from_xml() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+
+    let (spread_idx, rect_id) = doc
+        .spreads
+        .iter()
+        .enumerate()
+        .find_map(|(si, s)| {
+            s.spread
+                .rectangles
+                .iter()
+                .find_map(|r| r.self_id.clone())
+                .map(|id| (si, id))
+        })
+        .expect("a rectangle to remove");
+    let before = doc.spreads[spread_idx].spread.rectangles.len();
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::RemoveNode {
+            node: NodeId::Rectangle(rect_id.clone()),
+        })
+        .expect("remove rectangle");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    assert_ne!(original, out, "a remove must change bytes");
+    let re = Document::open(&out).expect("reparse");
+    assert!(
+        re.spreads[spread_idx]
+            .spread
+            .rectangles
+            .iter()
+            .all(|r| r.self_id.as_deref() != Some(rect_id.as_str())),
+        "removed rectangle is gone from the re-parsed model"
+    );
+    assert_eq!(
+        re.spreads[spread_idx].spread.rectangles.len(),
+        before - 1,
+        "exactly one rectangle removed"
+    );
+}
+
+/// Insert-then-undo (and remove-then-undo) write byte-identically:
+/// proves the structural rewrite is value-driven (no element appears /
+/// disappears when the net model is unchanged).
+#[test]
+fn structural_edit_then_undo_round_trips_byte_identical() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+    let spread_id = first_spread_id(&doc);
+    let rect_id = doc
+        .spreads
+        .iter()
+        .find_map(|s| s.spread.rectangles.iter().find_map(|r| r.self_id.clone()))
+        .expect("a rectangle");
+
+    // Insert → undo.
+    let mut p1 = Project::new(doc);
+    p1.apply(Operation::InsertNode {
+        parent: NodeId::Spread(spread_id),
+        position: 0,
+        node: NodeSpec::Rectangle {
+            self_id: "Rectangle/w1undo".to_string(),
+            bounds: [0.0, 0.0, 10.0, 10.0],
+            fill_color: None,
+            stroke_color: None,
+            stroke_weight: None,
+            item_transform: None,
+        },
+        z_slot: None,
+    })
+    .unwrap();
+    p1.undo().unwrap().expect("undo insert");
+    let out1 = write_idml(p1.document(), &original).expect("write");
+    assert_eq!(original, out1, "insert→undo is a no-op write");
+
+    // Remove → undo.
+    let doc2 = Document::open(&original).unwrap();
+    let mut p2 = Project::new(doc2);
+    p2.apply(Operation::RemoveNode {
+        node: NodeId::Rectangle(rect_id),
+    })
+    .unwrap();
+    p2.undo().unwrap().expect("undo remove");
+    let out2 = write_idml(p2.document(), &original).expect("write");
+    assert_eq!(original, out2, "remove→undo is a no-op write");
+}
+
+// ---------------------------------------------------------------------
+// 6. W1.15 — new resources (swatches / gradients → Graphic.xml;
+//    paragraph / character styles → Styles.xml).
+// ---------------------------------------------------------------------
+
+use paged_mutate::SwatchSpec;
+
+/// A swatch created by `CreateSwatch` serialises into `Resources/Graphic.xml`
+/// and re-parses with the same colour values — closing the
+/// "referenced-but-undefined resource" loss.
+#[test]
+fn created_swatch_saves_to_graphic_and_reparses() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::CreateSwatch {
+            spec: SwatchSpec {
+                self_id: Some("Color/w1new".to_string()),
+                name: Some("W1 New".to_string()),
+                space: "RGB".to_string(),
+                value: vec![10.0, 120.0, 240.0],
+                model: Some("Process".to_string()),
+                alternate_space: None,
+                alternate_value: Vec::new(),
+                tint: None,
+                alpha: None,
+            },
+        })
+        .expect("create swatch");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    assert_ne!(original, out, "a new swatch must change bytes");
+    let re = Document::open(&out).expect("reparse");
+
+    let color = re
+        .palette
+        .colors
+        .get("Color/w1new")
+        .expect("swatch re-parsed into the palette");
+    assert_eq!(color.name.as_deref(), Some("W1 New"));
+    assert_eq!(
+        color.value,
+        vec![10.0, 120.0, 240.0],
+        "channel values saved"
+    );
+
+    // Only Graphic.xml changed.
+    let src = entries(&original);
+    let dst = entries(&out);
+    let changed: Vec<&String> = src
+        .iter()
+        .filter(|(k, v)| dst.get(*k).map(|d| d != *v).unwrap_or(true))
+        .map(|(k, _)| k)
+        .collect();
+    assert_eq!(changed, vec!["Resources/Graphic.xml"], "only Graphic.xml");
+}
+
+/// A swatch create-then-undo writes byte-identically (value-driven, not
+/// touch-driven).
+#[test]
+fn created_swatch_then_undo_round_trips_byte_identical() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::CreateSwatch {
+            spec: SwatchSpec {
+                self_id: Some("Color/w1undo".to_string()),
+                name: Some("U".to_string()),
+                space: "RGB".to_string(),
+                value: vec![1.0, 2.0, 3.0],
+                model: None,
+                alternate_space: None,
+                alternate_value: Vec::new(),
+                tint: None,
+                alpha: None,
+            },
+        })
+        .unwrap();
+    project.undo().unwrap().expect("undo");
+    let out = write_idml(project.document(), &original).expect("write");
+    assert_eq!(original, out, "swatch create→undo is a no-op write");
+}
+
+/// A paragraph style created by `CreateParagraphStyle` serialises into
+/// `Resources/Styles.xml` (inside `RootParagraphStyleGroup`) and
+/// re-parses with its name + based-on intact.
+#[test]
+fn created_paragraph_style_saves_to_styles_and_reparses() {
+    let original = build_sample("text");
+    let doc = Document::open(&original).unwrap();
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::CreateParagraphStyle {
+            self_id: Some("ParagraphStyle/w1head".to_string()),
+            name: Some("W1 Heading".to_string()),
+            based_on: Some("ParagraphStyle/$ID/[No paragraph style]".to_string()),
+            restore_json: None,
+        })
+        .expect("create paragraph style");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    assert_ne!(original, out, "a new style must change bytes");
+    let re = Document::open(&out).expect("reparse");
+
+    let style = re
+        .styles
+        .paragraph_styles
+        .get("ParagraphStyle/w1head")
+        .expect("style re-parsed into the stylesheet");
+    assert_eq!(style.name.as_deref(), Some("W1 Heading"));
+    assert_eq!(
+        style.based_on.as_deref(),
+        Some("ParagraphStyle/$ID/[No paragraph style]")
+    );
+
+    let src = entries(&original);
+    let dst = entries(&out);
+    let changed: Vec<&String> = src
+        .iter()
+        .filter(|(k, v)| dst.get(*k).map(|d| d != *v).unwrap_or(true))
+        .map(|(k, _)| k)
+        .collect();
+    assert_eq!(changed, vec!["Resources/Styles.xml"], "only Styles.xml");
+}
+
+/// A character style created via `CreateCharacterStyle` round-trips
+/// (lands in `RootCharacterStyleGroup`).
+#[test]
+fn created_character_style_saves_to_styles() {
+    let original = build_sample("text");
+    let doc = Document::open(&original).unwrap();
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::CreateCharacterStyle {
+            self_id: Some("CharacterStyle/w1emph".to_string()),
+            name: Some("W1 Emph".to_string()),
+            based_on: None,
+            restore_json: None,
+        })
+        .expect("create character style");
+    let out = write_idml(project.document(), &original).expect("write");
+    let re = Document::open(&out).expect("reparse");
+    let style = re
+        .styles
+        .character_styles
+        .get("CharacterStyle/w1emph")
+        .expect("character style re-parsed");
+    assert_eq!(style.name.as_deref(), Some("W1 Emph"));
+}
+
+/// The full W1.15 round-trip the task asks for: a created frame whose
+/// fill references a NEW swatch, plus a NEW paragraph style — open
+/// fixture, apply ops, save, re-open, and assert every piece re-parses
+/// with its resolved appearance (frame present + fill resolves to the
+/// new swatch; style present).
+#[test]
+fn created_frame_with_new_swatch_and_style_round_trips() {
+    let original = build_sample("text");
+    let doc = Document::open(&original).unwrap();
+    let spread_id = first_spread_id(&doc);
+    let spread_idx = doc
+        .spreads
+        .iter()
+        .position(|s| s.spread.self_id.as_deref() == Some(spread_id.as_str()))
+        .unwrap();
+    let rect_pos = doc.spreads[spread_idx].spread.rectangles.len();
+
+    let mut project = Project::new(doc);
+    // New swatch.
+    project
+        .apply(Operation::CreateSwatch {
+            spec: SwatchSpec {
+                self_id: Some("Color/w1brand".to_string()),
+                name: Some("Brand".to_string()),
+                space: "RGB".to_string(),
+                value: vec![200.0, 30.0, 90.0],
+                model: Some("Process".to_string()),
+                alternate_space: None,
+                alternate_value: Vec::new(),
+                tint: None,
+                alpha: None,
+            },
+        })
+        .expect("swatch");
+    // New paragraph style.
+    project
+        .apply(Operation::CreateParagraphStyle {
+            self_id: Some("ParagraphStyle/w1body".to_string()),
+            name: Some("W1 Body".to_string()),
+            based_on: None,
+            restore_json: None,
+        })
+        .expect("style");
+    // New rectangle filled with the new swatch.
+    project
+        .apply(Operation::InsertNode {
+            parent: NodeId::Spread(spread_id.clone()),
+            position: rect_pos,
+            node: NodeSpec::Rectangle {
+                self_id: "Rectangle/w1frame".to_string(),
+                bounds: [12.0, 24.0, 96.0, 168.0],
+                fill_color: Some("Color/w1brand".to_string()),
+                stroke_color: None,
+                stroke_weight: None,
+                item_transform: None,
+            },
+            z_slot: None,
+        })
+        .expect("frame");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    let re = Document::open(&out).expect("reparse");
+
+    // The new swatch resolves.
+    let swatch = re
+        .palette
+        .colors
+        .get("Color/w1brand")
+        .expect("new swatch present after round-trip");
+    assert_eq!(swatch.value, vec![200.0, 30.0, 90.0]);
+    // The new style is present.
+    assert!(
+        re.styles
+            .paragraph_styles
+            .contains_key("ParagraphStyle/w1body"),
+        "new style present"
+    );
+    // The new frame is present AND its fill references the new swatch,
+    // which now resolves (no dangling reference).
+    let rect = re.spreads[spread_idx]
+        .spread
+        .rectangles
+        .iter()
+        .find(|r| r.self_id.as_deref() == Some("Rectangle/w1frame"))
+        .expect("new frame present");
+    assert_eq!(rect.fill_color.as_deref(), Some("Color/w1brand"));
+    assert!(
+        re.palette.resolve("Color/w1brand").is_some(),
+        "frame fill resolves to a real swatch (appearance preserved)"
+    );
+}
+
+// ---------------------------------------------------------------------
+// 7. W1.15 — table-cell text write-back.
+// ---------------------------------------------------------------------
+
+/// Locate `(story_idx, para_idx, cell_idx, run path)` of the first table
+/// cell carrying a run with text, so a cell-text edit exercises the
+/// cell-content rewrite. Returns the cell's `Self` id + first run text.
+fn first_table_cell_with_text(doc: &Document) -> Option<(usize, usize, usize, String, String)> {
+    for (si, s) in doc.stories.iter().enumerate() {
+        for (pi, p) in s.story.paragraphs.iter().enumerate() {
+            if let Some(table) = &p.table {
+                for (ci, cell) in table.cells.iter().enumerate() {
+                    if let Some(id) = cell.self_id.clone() {
+                        if let Some(run) = cell
+                            .paragraphs
+                            .iter()
+                            .flat_map(|cp| cp.runs.iter())
+                            .find(|r| !r.text.is_empty())
+                        {
+                            return Some((si, pi, ci, id, run.text.clone()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A table-cell text change (whatever the model holds for the cell
+/// paragraph) writes back: save → re-parse shows the new cell text, and
+/// untouched cells survive. Closes loss (a) — table-cell content
+/// previously passed through verbatim. The edit is applied directly to
+/// the model cell paragraph (the cell-text editing op is a parallel
+/// lane; the writer serialises whatever the model already carries).
+#[test]
+fn table_cell_text_change_writes_back() {
+    let original = build_sample("tables");
+    let mut doc = Document::open(&original).unwrap();
+    let (si, pi, ci, cell_id, old_text) =
+        first_table_cell_with_text(&doc).expect("a table cell with text");
+
+    // Edit the first run of the cell's first paragraph in the model.
+    let new_text = "WroteBack".to_string();
+    {
+        let cell = doc.stories[si].story.paragraphs[pi]
+            .table
+            .as_mut()
+            .unwrap()
+            .cells
+            .get_mut(ci)
+            .unwrap();
+        let run = cell
+            .paragraphs
+            .iter_mut()
+            .flat_map(|cp| cp.runs.iter_mut())
+            .find(|r| !r.text.is_empty())
+            .unwrap();
+        assert_eq!(run.text, old_text, "found the run we measured");
+        run.text = new_text.clone();
+    }
+
+    let out = write_idml(&doc, &original).expect("write");
+    assert_ne!(original, out, "a cell-text edit must change bytes");
+    let re = Document::open(&out).expect("reparse");
+
+    // The edited cell re-parses with the new text.
+    let cell = re.stories[si].story.paragraphs[pi]
+        .table
+        .as_ref()
+        .unwrap()
+        .cells
+        .iter()
+        .find(|c| c.self_id.as_deref() == Some(cell_id.as_str()))
+        .expect("edited cell present");
+    let got: String = cell
+        .paragraphs
+        .iter()
+        .flat_map(|cp| cp.runs.iter())
+        .map(|r| r.text.clone())
+        .collect();
+    assert!(
+        got.contains(&new_text),
+        "cell text saved + re-parsed (got {got:?})"
+    );
+
+    // A sibling cell is untouched.
+    let table = re.stories[si].story.paragraphs[pi].table.as_ref().unwrap();
+    let other = table
+        .cells
+        .iter()
+        .find(|c| c.self_id.as_deref() != Some(cell_id.as_str()))
+        .expect("a sibling cell");
+    let other_model = doc.stories[si].story.paragraphs[pi]
+        .table
+        .as_ref()
+        .unwrap()
+        .cells
+        .iter()
+        .find(|c| c.self_id == other.self_id)
+        .unwrap();
+    let other_text = |c: &paged_parse::TableCell| -> String {
+        c.paragraphs
+            .iter()
+            .flat_map(|cp| cp.runs.iter())
+            .map(|r| r.text.clone())
+            .collect()
+    };
+    assert_eq!(
+        other_text(other),
+        other_text(other_model),
+        "sibling cell survived"
+    );
+}
+
+/// A cell-text mutate-then-restore writes byte-identically — the cell
+/// rewrite is value-driven (it only diverges when the model text differs
+/// from the on-disk cell content).
+#[test]
+fn table_cell_unchanged_round_trips_byte_identical() {
+    // The tables sample's stories all carry cell content; an unmutated
+    // write must leave every Stories/* entry byte-identical (the cell
+    // pass-through is now active but value-driven).
+    let original = build_sample("tables");
+    let doc = Document::open(&original).unwrap();
+    let out = write_idml(&doc, &original).expect("write");
+    let src = entries(&original);
+    let dst = entries(&out);
+    for (path, sb) in &src {
+        if path.starts_with("Stories/") {
+            assert_eq!(
+                sb,
+                dst.get(path).expect("entry present"),
+                "{path}: table story not byte-identical unmutated"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// 8. W1.15 — group-member transforms.
+// ---------------------------------------------------------------------
+
+/// Find a group member rectangle: returns `(spread_idx, rect_id,
+/// composed_item_transform)` for a rectangle that is a member of a group
+/// (the `geometry-groups` sample's spread 0 wraps two rects in a group).
+fn first_group_member_rect(doc: &Document) -> Option<(usize, String, [f32; 6])> {
+    use paged_parse::FrameRef;
+    for (si, s) in doc.spreads.iter().enumerate() {
+        for g in &s.spread.groups {
+            for m in &g.members {
+                if let FrameRef::Rectangle(ri) = *m {
+                    if let Some(r) = s.spread.rectangles.get(ri) {
+                        if let (Some(id), Some(tx)) = (r.self_id.clone(), r.item_transform) {
+                            return Some((si, id, tx));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A transform change on an item INSIDE a group writes back to the right
+/// nested element: the writer recovers the on-disk member transform by
+/// inverting the group accumulation, and a re-parse re-composes it to the
+/// mutated (composed) model value. Closes loss (b).
+#[test]
+fn group_member_transform_writes_back() {
+    let original = build_sample("geometry-groups");
+    let mut doc = Document::open(&original).unwrap();
+    let (spread_idx, rect_id, base) =
+        first_group_member_rect(&doc).expect("a group-member rectangle");
+
+    // The model `item_transform` is the COMPOSED group∘member matrix.
+    // Translate the member by (50, -30) in composed (spread) space —
+    // what a FrameTransform edit on a grouped item produces.
+    let mut new_composed = base;
+    new_composed[4] += 50.0;
+    new_composed[5] -= 30.0;
+    {
+        let rect = doc.spreads[spread_idx]
+            .spread
+            .rectangles
+            .iter_mut()
+            .find(|r| r.self_id.as_deref() == Some(rect_id.as_str()))
+            .unwrap();
+        rect.item_transform = Some(new_composed);
+    }
+
+    let out = write_idml(&doc, &original).expect("write");
+    assert_ne!(original, out, "a group-member transform edit must save");
+    let re = Document::open(&out).expect("reparse");
+
+    let rect = re.spreads[spread_idx]
+        .spread
+        .rectangles
+        .iter()
+        .find(|r| r.self_id.as_deref() == Some(rect_id.as_str()))
+        .expect("group member present");
+    let got = rect.item_transform.expect("transform present");
+    // The re-parsed composed transform matches the mutated model value
+    // (the writer's recovery + the parser's re-composition cancel).
+    for (a, b) in got.iter().zip(new_composed.iter()) {
+        assert!(
+            (a - b).abs() < 1e-2,
+            "re-composed member transform {got:?} != mutated {new_composed:?}"
+        );
+    }
+
+    // A sibling group member is unchanged.
+    let model_other = doc.spreads[spread_idx]
+        .spread
+        .rectangles
+        .iter()
+        .find(|r| r.self_id.as_deref() != Some(rect_id.as_str()) && r.item_transform.is_some());
+    if let Some(other) = model_other {
+        let re_other = re.spreads[spread_idx]
+            .spread
+            .rectangles
+            .iter()
+            .find(|r| r.self_id == other.self_id)
+            .unwrap();
+        let a = other.item_transform.unwrap();
+        let b = re_other.item_transform.unwrap();
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert!((x - y).abs() < 1e-2, "sibling member transform survived");
+        }
+    }
+}
+
+/// A group-member transform mutate-then-restore writes byte-identically:
+/// the recovery is exact (recovered on-disk transform re-formats to the
+/// source bytes), so an unchanged grouped item round-trips bit-for-bit.
+#[test]
+fn group_member_transform_unchanged_round_trips_byte_identical() {
+    // The geometry-groups sample's spreads carry grouped items; an
+    // unmutated write must leave every Spreads/* entry byte-identical
+    // even though the group-member transform recovery is now active.
+    let original = build_sample("geometry-groups");
+    let doc = Document::open(&original).unwrap();
+    let out = write_idml(&doc, &original).expect("write");
+    let src = entries(&original);
+    let dst = entries(&out);
+    for (path, sb) in &src {
+        if path.starts_with("Spreads/") {
+            assert_eq!(
+                sb,
+                dst.get(path).expect("entry present"),
+                "{path}: grouped spread not byte-identical unmutated"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// 9. W1.15 — inserted PAGES (DEFERRED 2026-06-07). This guards the
+//    documented defer: an `InsertPage` must not crash the writer, and
+//    the existing spreads must still round-trip cleanly. Serialising the
+//    NEW spread (new ZIP entry + designmap manifest patch) is the
+//    deferred work — see the loss list in `rewrite.rs`.
+// ---------------------------------------------------------------------
+
+#[test]
+fn inserted_page_does_not_break_existing_entries() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+    let before_spreads = doc.spreads.len();
+    // Address the first page so InsertPage has a valid `after_page_id`.
+    let page_id = doc
+        .spreads
+        .iter()
+        .find_map(|s| s.spread.pages.iter().find_map(|p| p.self_id.clone()))
+        .expect("a page");
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::InsertPage {
+            after_page_id: Some(page_id),
+            master_id: None,
+            spread_self_id: None,
+            page_self_id: None,
+            restore_spread_json: None,
+        })
+        .expect("insert page");
+    // The model grew a spread...
+    assert_eq!(
+        project.document().spreads.len(),
+        before_spreads + 1,
+        "model gained a spread"
+    );
+
+    // ...but the writer (which only patches source entries) produces a
+    // valid package whose EXISTING entries are unchanged. The new spread
+    // is NOT yet serialised (deferred): the entry set is the source's.
+    let out = write_idml(project.document(), &original).expect("write must not crash");
+    let src = entries(&original);
+    let dst = entries(&out);
+    assert_eq!(
+        src.keys().collect::<Vec<_>>(),
+        dst.keys().collect::<Vec<_>>(),
+        "entry set unchanged (new spread not yet serialised — deferred)"
+    );
+    // Re-open: the output is a valid, parseable IDML with the original
+    // spread count (the inserted page is the documented loss).
+    let re = Document::open(&out).expect("output re-parses");
+    assert_eq!(
+        re.spreads.len(),
+        before_spreads,
+        "inserted page not yet in the written package (deferred lane 5)"
+    );
+}

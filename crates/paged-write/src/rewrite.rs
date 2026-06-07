@@ -77,26 +77,62 @@
 //!     `<TextVariableInstance>`, an anchored frame, an unknown entity)
 //!     passes through verbatim — never clobbered (see Known losses).
 //!
+//! # Structural edits (W1.15 — landed)
+//!
+//! * **Page-item inserts / removes.** A page item created by an
+//!   `InsertNode` op (a frame / rect / oval / polygon since load) is
+//!   serialised as a new element at the spread's close, in the canonical
+//!   `paged_gen` shape (geometry in `<Properties><PathGeometry>` at the
+//!   model bounds, identity `ItemTransform`); an item removed by
+//!   `RemoveNode` is dropped from the XML (element + subtree). See
+//!   [`write_inserted_items`] / the `remove_depth` skip in
+//!   [`rewrite_spread`].
+//! * **New resources.** Swatches / gradients / paragraph + character
+//!   styles created by ops are injected into `Resources/Graphic.xml` /
+//!   `Resources/Styles.xml` (see the `resources` module), so a frame
+//!   referencing a freshly-minted `Color/u3` resolves on re-open.
+//! * **Table-cell text + styles.** A `<Cell Self="...">` is matched to
+//!   its model `TableCell`, and its `<ParagraphStyleRange>` /
+//!   `<CharacterStyleRange>` patch against the cell paragraphs with
+//!   cell-local cursors (text + character-style attrs save).
+//! * **Group-member transforms.** The composed group∘member
+//!   `item_transform` is de-composed back to the on-disk member
+//!   transform by inverting the group-transform accumulation (see
+//!   [`recover_member_transform`]).
+//!
 //! # Known losses (documented, not silent)
 //!
-//! * **Table-cell text + styles.** `<ParagraphStyleRange>` /
-//!   `<CharacterStyleRange>` *inside* a `<Table>` belong to cell
-//!   paragraphs the parser stores on `paragraph.table.cells[]`, not on
-//!   the story's top-level `paragraphs`; patching them positionally
-//!   would misalign, so table-cell content passes through verbatim.
-//! * **Group-member transforms / paths.** Inside a `<Group>` the parser
-//!   composes the group transform into each member's `item_transform`
-//!   (and into its path anchors), so the model value isn't the on-disk
-//!   member geometry — patching it would corrupt the composition. Group
-//!   members keep their `ItemTransform` and `<PathPointArray>` verbatim.
+//! * **Inserted / removed PAGES (and their spread wrapping).** An
+//!   `InsertPage` op adds a new `ParsedSpread` (with a fresh
+//!   `Spreads/Spread_*.xml` src) and a `RemovePage` drops one, but the
+//!   writer only patches / copies the SOURCE archive's existing entries
+//!   — it has no machinery to ADD a new ZIP entry, edit `designmap.xml`'s
+//!   `<idPkg:Spread>` manifest, or drop a removed spread's entry, and no
+//!   from-scratch full-`<Spread>` serialiser. An inserted spread is
+//!   therefore silently skipped (its src isn't in the source ZIP →
+//!   `entry_bytes` returns `None`); a removed spread's entry survives
+//!   (orphaned, no longer referenced once designmap is also patched).
+//!   DEFERRED 2026-06-07 (W1.15): needs (a) a full-spread emitter, (b)
+//!   designmap.xml `<idPkg:Spread>` add/remove, (c) ZIP add/drop in
+//!   `write_idml`'s container assembly + the master-spread interaction —
+//!   roughly the size of the four landed lanes combined. Page-item
+//!   inserts WITHIN an existing spread (above) are fully handled.
+//! * **Singular group transform.** A group whose `ItemTransform` linear
+//!   part is non-invertible can't have its member transforms de-composed;
+//!   such a member keeps its `ItemTransform` verbatim (degenerate case;
+//!   InDesign never emits one for a translate/rotate/scale group).
+//! * **Group-member PATH anchors.** A group member's `<PathPointArray>`
+//!   still passes through verbatim. (The parser does NOT compose the
+//!   group transform into member anchors — it stores them raw — so a
+//!   `FramePathPoint` edit on a grouped item is not yet written; the
+//!   transform lane above covers the common move/scale/rotate gesture.)
 //! * **Runs with foreign inline markup.** A run whose text body carries
 //!   an `<?ACE?>` page-number marker, a `<TextVariableInstance>`, an
 //!   anchored frame, or an unknown entity passes through verbatim (its
 //!   attributes still patch). The structured text rewrite only fires on
 //!   pure `<Content>` / `<Br/>` / `<Tab/>` runs.
-//! * **Structural edits** (InsertNode / RemoveNode / MoveNode, new
-//!   swatches / styles / sections) are not reflected: this milestone is
-//!   the property-patch foundation. Adding / removing elements is W1.15.
+//! * **MoveNode / sections.** Reparenting a node across spreads
+//!   (`MoveNode`) and new `<Section>` definitions are not yet reflected.
 //! * Anything the parser never modeled (preferences, fonts, tags, the
 //!   XML backing store, master-spread item internals beyond the patched
 //!   attributes) is carried through verbatim and so is always faithful.
@@ -107,7 +143,7 @@ use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 
-use paged_parse::{Bounds, CharacterRun, PathAnchor, Spread, Story, TextFrame};
+use paged_parse::{Bounds, CharacterRun, PathAnchor, Spread, Story, TableCell, TextFrame};
 
 /// Mirror of `paged_gen::xml::format_f32`: round to 4 decimals, drop
 /// trailing zeros + a dangling `.`, normalise `-0` to `0`. Kept as a
@@ -115,7 +151,7 @@ use paged_parse::{Bounds, CharacterRun, PathAnchor, Spread, Story, TextFrame};
 /// crate that pulls clap/anyhow) so this runtime crate stays minimal +
 /// wasm-clean. InDesign serialises floats this way, so patched values
 /// match the surrounding hand-written / exported numbers.
-fn format_f32(v: f32) -> String {
+pub(crate) fn format_f32(v: f32) -> String {
     let rounded = (v * 10_000.0).round() / 10_000.0;
     if rounded == 0.0 {
         return "0".to_string();
@@ -137,6 +173,91 @@ fn format_f32(v: f32) -> String {
 fn format_matrix(m: &[f32; 6]) -> String {
     let parts: Vec<String> = m.iter().map(|v| format_f32(*v)).collect();
     parts.join(" ")
+}
+
+/// Parse a `"a b c d tx ty"` IDML matrix. Local copy of the parser's
+/// helper (private to `paged-parse`).
+fn parse_matrix(s: &str) -> Option<[f32; 6]> {
+    let mut it = s.split_whitespace();
+    let mut m = [0.0f32; 6];
+    for slot in &mut m {
+        *slot = it.next()?.parse().ok()?;
+    }
+    Some(m)
+}
+
+/// `a ∘ b` — compose two affine matrices, byte-for-byte matching
+/// `paged_parse`'s `compose_matrix` (apply `b` first, then `a`). Used to
+/// rebuild the group-transform accumulation the parser composes into a
+/// group member's `item_transform`, so the writer can invert it back to
+/// the on-disk member transform (W1.15 lane 4).
+fn compose_matrix(a: &[f32; 6], b: &[f32; 6]) -> [f32; 6] {
+    let [a1, b1, c1, d1, tx1, ty1] = *a;
+    let [a2, b2, c2, d2, tx2, ty2] = *b;
+    [
+        a1 * a2 + c1 * b2,
+        b1 * a2 + d1 * b2,
+        a1 * c2 + c1 * d2,
+        b1 * c2 + d1 * d2,
+        a1 * tx2 + c1 * ty2 + tx1,
+        b1 * tx2 + d1 * ty2 + ty1,
+    ]
+}
+
+/// Accumulate a group-transform stack the way the parser does (outer
+/// groups apply first). `None` ⇒ no group carries a transform (identity).
+fn accumulate_group_xforms(stack: &[Option<[f32; 6]>]) -> Option<[f32; 6]> {
+    let mut acc: Option<[f32; 6]> = None;
+    for g in stack {
+        match (acc, g) {
+            (None, Some(m)) => acc = Some(*m),
+            (Some(a), Some(m)) => acc = Some(compose_matrix(&a, m)),
+            (acc_, None) => acc = acc_,
+        }
+    }
+    acc
+}
+
+/// Recover a group member's ON-DISK `ItemTransform` from its composed
+/// model `item_transform` and the accumulated group transform `accum`:
+/// `member_on_disk = inverse(accum) ∘ composed`. `None` when the group
+/// transform is singular (the member then keeps its on-disk transform
+/// verbatim — a documented loss for that degenerate case).
+fn recover_member_transform(
+    accum: Option<[f32; 6]>,
+    composed: Option<[f32; 6]>,
+) -> Option<Option<[f32; 6]>> {
+    match accum {
+        // No group transform ⇒ the model value IS the on-disk transform.
+        None => Some(composed),
+        Some(g) => {
+            let inv = invert_matrix(&g)?;
+            // A member with no composed transform under a non-identity
+            // group is unusual; `None` falls through to verbatim (the
+            // outer `None` suppresses the patch at the call site).
+            composed.map(|c| Some(compose_matrix(&inv, &c)))
+        }
+    }
+}
+
+/// Invert an affine `[a b c d tx ty]`. `None` when the linear part is
+/// singular (a degenerate group transform — the member then can't be
+/// de-composed and keeps its on-disk transform verbatim).
+fn invert_matrix(m: &[f32; 6]) -> Option<[f32; 6]> {
+    let [a, b, c, d, tx, ty] = *m;
+    let det = a * d - b * c;
+    if det.abs() < 1e-9 {
+        return None;
+    }
+    let inv_det = 1.0 / det;
+    let ia = d * inv_det;
+    let ib = -b * inv_det;
+    let ic = -c * inv_det;
+    let id = a * inv_det;
+    // Inverse translation: -(inv_linear · t).
+    let itx = -(ia * tx + ic * ty);
+    let ity = -(ib * tx + id * ty);
+    Some([ia, ib, ic, id, itx, ity])
 }
 
 /// One attribute patch: the value to write for `key`, or `Remove` to
@@ -221,7 +342,7 @@ where
 /// Patched values are IDML ids / numbers / colour refs that almost never
 /// contain these, but a style name could — so escape defensively to keep
 /// the output well-formed.
-fn escape_attr(s: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn escape_attr(s: &str) -> std::borrow::Cow<'_, str> {
     if s.bytes()
         .any(|b| matches!(b, b'&' | b'<' | b'>' | b'"' | b'\''))
     {
@@ -518,6 +639,409 @@ fn write_path_point(
 }
 
 // ---------------------------------------------------------------------
+// New page-item emission (structural inserts — W1.15)
+// ---------------------------------------------------------------------
+//
+// A page item created by an op since load (`InsertNode`) has a model
+// entry but no XML element. We serialise it here in the canonical
+// `paged_gen` shape so the writer's own parser round-trips it:
+//
+//   * geometry lives in `<Properties><PathGeometry>` (inner coords),
+//     NOT in a `GeometricBounds` attribute. The parser derives
+//     `bounds = bounds_from_anchors(raw anchors)`, so we emit corner
+//     anchors directly AT the model's spread-space bounds with an
+//     identity `ItemTransform`. (Inserted nodes carry their placement
+//     in `bounds`; `item_transform` is `None`/identity — see
+//     `paged_mutate::apply::new_rectangle` et al.)
+//   * an explicit `StrokeWeight="0"` makes "no stroke" survive
+//     InDesign's object-style cascade, matching the generator.
+
+/// `<PathGeometry>` for an axis-aligned box whose corners sit at the
+/// given spread-space bounds (top-left, bottom-left, bottom-right,
+/// top-right — the generator + `rect_corners` order). The parser reads
+/// the anchors back verbatim, so `bounds_from_anchors` reproduces these
+/// bounds exactly.
+fn write_box_path_geometry(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    b: Bounds,
+) -> Result<(), quick_xml::Error> {
+    writer.write_event(Event::Start(BytesStart::new("PathGeometry")))?;
+    let mut gp = BytesStart::new("GeometryPathType");
+    gp.push_attribute(("PathOpen", "false"));
+    writer.write_event(Event::Start(gp))?;
+    writer.write_event(Event::Start(BytesStart::new("PathPointArray")))?;
+    for a in rect_corners(b) {
+        write_path_point(writer, &a)?;
+    }
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
+        "PathPointArray",
+    )))?;
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
+        "GeometryPathType",
+    )))?;
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new("PathGeometry")))?;
+    Ok(())
+}
+
+/// `<PathGeometry>` carrying explicit anchor contours (the Polygon /
+/// GraphicLine inserted-node case). `subpath_starts` splits `anchors`
+/// into `<GeometryPathType>` contours; `subpath_open` marks the open
+/// ones (`PathOpen="true"`). An empty `subpath_starts` is one closed
+/// contour over all anchors.
+fn write_contour_path_geometry(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    anchors: &[PathAnchor],
+    subpath_starts: &[usize],
+    subpath_open: &[bool],
+) -> Result<(), quick_xml::Error> {
+    writer.write_event(Event::Start(BytesStart::new("PathGeometry")))?;
+    let starts: Vec<usize> = if subpath_starts.is_empty() {
+        vec![0]
+    } else {
+        subpath_starts.to_vec()
+    };
+    for (ci, &start) in starts.iter().enumerate() {
+        let end = starts.get(ci + 1).copied().unwrap_or(anchors.len());
+        let open = subpath_open.get(ci).copied().unwrap_or(false);
+        let mut gp = BytesStart::new("GeometryPathType");
+        gp.push_attribute(("PathOpen", if open { "true" } else { "false" }));
+        writer.write_event(Event::Start(gp))?;
+        writer.write_event(Event::Start(BytesStart::new("PathPointArray")))?;
+        for a in anchors.get(start..end).unwrap_or(&[]) {
+            write_path_point(writer, a)?;
+        }
+        writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
+            "PathPointArray",
+        )))?;
+        writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
+            "GeometryPathType",
+        )))?;
+    }
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new("PathGeometry")))?;
+    Ok(())
+}
+
+/// Common fill/stroke/transform attributes every inserted page item
+/// carries, in the generator's order. `kind`-specific attrs (ParentStory
+/// etc.) are pushed by the caller before this runs.
+fn push_common_item_attrs(
+    attrs: &mut Vec<(&'static str, String)>,
+    item_transform: Option<[f32; 6]>,
+    fill_color: &Option<String>,
+    stroke_color: &Option<String>,
+    stroke_weight: Option<f32>,
+) {
+    attrs.push(("AppliedObjectStyle", "ObjectStyle/$ID/[None]".to_string()));
+    attrs.push((
+        "ItemTransform",
+        format_matrix(&item_transform.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])),
+    ));
+    attrs.push((
+        "FillColor",
+        fill_color
+            .clone()
+            .unwrap_or_else(|| "Swatch/None".to_string()),
+    ));
+    attrs.push((
+        "StrokeColor",
+        stroke_color
+            .clone()
+            .unwrap_or_else(|| "Swatch/None".to_string()),
+    ));
+    // Always emit StrokeWeight so the "no stroke" intent survives the
+    // object-style cascade (the generator's rationale).
+    attrs.push(("StrokeWeight", format_f32(stroke_weight.unwrap_or(0.0))));
+}
+
+/// Emit a start tag from `(key, value)` pairs (values escaped). Element
+/// name is taken verbatim.
+fn emit_start_with_attrs(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    name: &str,
+    attrs: &[(&str, String)],
+) -> Result<(), quick_xml::Error> {
+    let mut content = name.as_bytes().to_vec();
+    for (k, v) in attrs {
+        content.push(b' ');
+        content.extend_from_slice(k.as_bytes());
+        content.extend_from_slice(b"=\"");
+        content.extend_from_slice(escape_attr(v).as_bytes());
+        content.push(b'"');
+    }
+    let content = String::from_utf8(content).map_err(|e| {
+        quick_xml::Error::Io(std::sync::Arc::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            e,
+        )))
+    })?;
+    writer.write_event(Event::Start(BytesStart::from_content(content, name.len())))?;
+    Ok(())
+}
+
+/// Serialise an inserted `<TextFrame>`. The model classification is
+/// authoritative — the element is always emitted as `<TextFrame>` so the
+/// re-parse files it back under `Spread::text_frames` (the parser keys
+/// on element name, not on `ParentStory`). A frame the model carries
+/// without a story still emits `ParentStory="n"` / `ContentType` so it
+/// reads back as a (currently empty) text frame.
+fn write_new_text_frame(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    f: &TextFrame,
+) -> Result<(), quick_xml::Error> {
+    let Some(self_id) = f.self_id.as_deref() else {
+        return Ok(());
+    };
+    let mut attrs: Vec<(&str, String)> = vec![("Self", self_id.to_string())];
+    attrs.push((
+        "ParentStory",
+        f.parent_story.clone().unwrap_or_else(|| "n".to_string()),
+    ));
+    attrs.push(("PreviousTextFrame", "n".to_string()));
+    attrs.push((
+        "NextTextFrame",
+        f.next_text_frame.clone().unwrap_or_else(|| "n".to_string()),
+    ));
+    attrs.push(("ContentType", "TextType".to_string()));
+    push_common_item_attrs(
+        &mut attrs,
+        f.item_transform,
+        &f.fill_color,
+        &f.stroke_color,
+        f.stroke_weight,
+    );
+    if f.nonprinting {
+        attrs.push(("Nonprinting", "true".to_string()));
+    }
+    emit_start_with_attrs(writer, "TextFrame", &attrs)?;
+    writer.write_event(Event::Start(BytesStart::new("Properties")))?;
+    write_box_path_geometry(writer, f.bounds)?;
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new("Properties")))?;
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new("TextFrame")))?;
+    Ok(())
+}
+
+/// Serialise an inserted bounds-only vector frame (`<Rectangle>` /
+/// `<Oval>`). Geometry is the four-corner box at the model bounds.
+fn write_new_box_item(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    kind: &str,
+    self_id: &str,
+    item_transform: Option<[f32; 6]>,
+    fill_color: &Option<String>,
+    stroke_color: &Option<String>,
+    stroke_weight: Option<f32>,
+    nonprinting: bool,
+    bounds: Bounds,
+) -> Result<(), quick_xml::Error> {
+    let mut attrs: Vec<(&str, String)> = vec![("Self", self_id.to_string())];
+    push_common_item_attrs(
+        &mut attrs,
+        item_transform,
+        fill_color,
+        stroke_color,
+        stroke_weight,
+    );
+    if nonprinting {
+        attrs.push(("Nonprinting", "true".to_string()));
+    }
+    emit_start_with_attrs(writer, kind, &attrs)?;
+    writer.write_event(Event::Start(BytesStart::new("Properties")))?;
+    write_box_path_geometry(writer, bounds)?;
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new("Properties")))?;
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new(kind)))?;
+    Ok(())
+}
+
+/// Serialise an inserted path-bearing vector frame (`<Polygon>` /
+/// `<GraphicLine>`). Geometry is the explicit anchor contours; when the
+/// model has no anchors (rare for these kinds) it falls back to the
+/// bounds box so the element still parses.
+#[allow(clippy::too_many_arguments)]
+fn write_new_path_item(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    kind: &str,
+    self_id: &str,
+    item_transform: Option<[f32; 6]>,
+    fill_color: &Option<String>,
+    stroke_color: &Option<String>,
+    stroke_weight: Option<f32>,
+    nonprinting: bool,
+    bounds: Bounds,
+    anchors: &[PathAnchor],
+    subpath_starts: &[usize],
+    subpath_open: &[bool],
+) -> Result<(), quick_xml::Error> {
+    let mut attrs: Vec<(&str, String)> = vec![("Self", self_id.to_string())];
+    push_common_item_attrs(
+        &mut attrs,
+        item_transform,
+        fill_color,
+        stroke_color,
+        stroke_weight,
+    );
+    if nonprinting {
+        attrs.push(("Nonprinting", "true".to_string()));
+    }
+    emit_start_with_attrs(writer, kind, &attrs)?;
+    writer.write_event(Event::Start(BytesStart::new("Properties")))?;
+    if anchors.is_empty() {
+        write_box_path_geometry(writer, bounds)?;
+    } else {
+        write_contour_path_geometry(writer, anchors, subpath_starts, subpath_open)?;
+    }
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new("Properties")))?;
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new(kind)))?;
+    Ok(())
+}
+
+/// Append every model page item whose `Self` id was NOT seen in the
+/// source XML — the inserted nodes. Emitted at the spread's close in
+/// the model's per-kind vec order. Group members are skipped (a group's
+/// own insertion is a separate, deferred lane — see Known losses).
+fn write_inserted_items(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    spread: &Spread,
+    seen: &std::collections::HashSet<String>,
+) -> Result<(), quick_xml::Error> {
+    // Collect the `Self` ids that live inside a group so we don't emit
+    // a group member as a stray top-level item.
+    let mut grouped: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for g in &spread.groups {
+        collect_group_member_ids(spread, g, &mut grouped);
+    }
+    for f in &spread.text_frames {
+        if let Some(id) = f.self_id.as_deref() {
+            if !seen.contains(id) && !grouped.contains(id) {
+                write_new_text_frame(writer, f)?;
+            }
+        }
+    }
+    for r in &spread.rectangles {
+        if let Some(id) = r.self_id.as_deref() {
+            if !seen.contains(id) && !grouped.contains(id) {
+                write_new_box_item(
+                    writer,
+                    "Rectangle",
+                    id,
+                    r.item_transform,
+                    &r.fill_color,
+                    &r.stroke_color,
+                    r.stroke_weight,
+                    r.nonprinting,
+                    r.bounds,
+                )?;
+            }
+        }
+    }
+    for o in &spread.ovals {
+        if let Some(id) = o.self_id.as_deref() {
+            if !seen.contains(id) && !grouped.contains(id) {
+                write_new_box_item(
+                    writer,
+                    "Oval",
+                    id,
+                    o.item_transform,
+                    &o.fill_color,
+                    &o.stroke_color,
+                    o.stroke_weight,
+                    o.nonprinting,
+                    o.bounds,
+                )?;
+            }
+        }
+    }
+    for p in &spread.polygons {
+        if let Some(id) = p.self_id.as_deref() {
+            if !seen.contains(id) && !grouped.contains(id) {
+                write_new_path_item(
+                    writer,
+                    "Polygon",
+                    id,
+                    p.item_transform,
+                    &p.fill_color,
+                    &p.stroke_color,
+                    p.stroke_weight,
+                    p.nonprinting,
+                    p.bounds,
+                    &p.anchors,
+                    &p.subpath_starts,
+                    &p.subpath_open,
+                )?;
+            }
+        }
+    }
+    for l in &spread.graphic_lines {
+        if let Some(id) = l.self_id.as_deref() {
+            if !seen.contains(id) && !grouped.contains(id) {
+                write_new_path_item(
+                    writer,
+                    "GraphicLine",
+                    id,
+                    l.item_transform,
+                    &None,
+                    &l.stroke_color,
+                    l.stroke_weight,
+                    l.nonprinting,
+                    l.bounds,
+                    &l.anchors,
+                    &l.subpath_starts,
+                    &l.subpath_open,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Recursively gather the `Self` ids of every page item referenced by a
+/// group (and its sub-groups) so inserted-item emission skips them.
+fn collect_group_member_ids<'a>(
+    spread: &'a Spread,
+    group: &'a paged_parse::Group,
+    out: &mut std::collections::HashSet<&'a str>,
+) {
+    use paged_parse::FrameRef;
+    for m in &group.members {
+        match *m {
+            FrameRef::TextFrame(i) => {
+                if let Some(id) = spread.text_frames.get(i).and_then(|f| f.self_id.as_deref()) {
+                    out.insert(id);
+                }
+            }
+            FrameRef::Rectangle(i) => {
+                if let Some(id) = spread.rectangles.get(i).and_then(|r| r.self_id.as_deref()) {
+                    out.insert(id);
+                }
+            }
+            FrameRef::Oval(i) => {
+                if let Some(id) = spread.ovals.get(i).and_then(|o| o.self_id.as_deref()) {
+                    out.insert(id);
+                }
+            }
+            FrameRef::GraphicLine(i) => {
+                if let Some(id) = spread
+                    .graphic_lines
+                    .get(i)
+                    .and_then(|l| l.self_id.as_deref())
+                {
+                    out.insert(id);
+                }
+            }
+            FrameRef::Polygon(i) => {
+                if let Some(id) = spread.polygons.get(i).and_then(|p| p.self_id.as_deref()) {
+                    out.insert(id);
+                }
+            }
+            FrameRef::Group(i) => {
+                if let Some(sub) = spread.groups.get(i) {
+                    collect_group_member_ids(spread, sub, out);
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
 // Spread rewrite
 // ---------------------------------------------------------------------
 
@@ -534,6 +1058,45 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
         }
     }
 
+    // W1.15 — structural inserts/removes. `model_ids` is every page-item
+    // `Self` the model still carries; `seen_ids` accumulates the ids that
+    // appear in the source XML. A top-level XML item whose id left the
+    // model is a REMOVE (the element is dropped); a model id never seen
+    // in the XML is an INSERT (emitted at the spread's close in model
+    // order). Group members are not removed structurally here — a group
+    // dissolve / regroup is a separate deferred lane (see Known losses).
+    let mut model_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for f in &spread.text_frames {
+        if let Some(id) = f.self_id.as_deref() {
+            model_ids.insert(id);
+        }
+    }
+    for r in &spread.rectangles {
+        if let Some(id) = r.self_id.as_deref() {
+            model_ids.insert(id);
+        }
+    }
+    for o in &spread.ovals {
+        if let Some(id) = o.self_id.as_deref() {
+            model_ids.insert(id);
+        }
+    }
+    for p in &spread.polygons {
+        if let Some(id) = p.self_id.as_deref() {
+            model_ids.insert(id);
+        }
+    }
+    for l in &spread.graphic_lines {
+        if let Some(id) = l.self_id.as_deref() {
+            model_ids.insert(id);
+        }
+    }
+    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Depth of the open element being dropped as a REMOVE, plus the
+    // depth it opened at; while `> 0` every event passes through to the
+    // bit-bucket until the matching close. `0` ⇒ not removing.
+    let mut remove_depth: usize = 0;
+
     let mut reader = Reader::from_reader(original);
     let config = reader.config_mut();
     config.expand_empty_elements = false;
@@ -544,12 +1107,18 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
 
     // Depth of open `<Group>` elements. Inside a group the parser
     // COMPOSES the group transform into each member's `item_transform`
-    // (see `effective_item_transform`), so the model value is not the
-    // on-disk member transform — patching it would corrupt the geometry.
-    // We therefore suppress the ItemTransform patch for group members
-    // (a documented known loss); fills / strokes / colours are not
-    // composed and patch safely at any depth.
+    // (see `effective_item_transform`), so the model value is the
+    // group∘member matrix, NOT the on-disk member transform. W1.15 lane
+    // 4 recovers the on-disk transform by inverting the accumulated
+    // group stack (`group_xforms`): `member_on_disk = inverse(accum) ∘
+    // model.item_transform`. The stack mirrors the parser's: each open
+    // `<Group ItemTransform>` pushes its RAW transform (parsed straight
+    // off the XML, same source the parser composed from). Fills /
+    // strokes / colours are not composed and patch safely at any depth.
     let mut group_depth: usize = 0;
+    // RAW `<Group ItemTransform>` per open group, outermost first. `None`
+    // for a group with no ItemTransform (identity).
+    let mut group_xforms: Vec<Option<[f32; 6]>> = Vec::new();
 
     // ---- plugin-metadata Label patching state ----
     // Element-name stack (depth tracking) + the innermost open page
@@ -630,6 +1199,24 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
             Event::Start(e) => {
                 depth += 1;
                 let name_owned = e.name().as_ref().to_vec();
+                // Inside a REMOVE drop everything until the matching
+                // close — the element and its whole subtree vanish.
+                if remove_depth != 0 {
+                    buf.clear();
+                    continue;
+                }
+                // A top-level page item whose `Self` left the model is a
+                // structural REMOVE: drop the element + its subtree.
+                if group_depth == 0 && ITEM_KINDS.contains(&name_owned.as_slice()) {
+                    if let Some(id) = attr_value(&e, b"Self") {
+                        seen_ids.insert(id.clone());
+                        if !model_ids.contains(id.as_str()) {
+                            remove_depth = depth;
+                            buf.clear();
+                            continue;
+                        }
+                    }
+                }
                 // Buffer a `<PathPointArray>` for the innermost path
                 // item so its points can be rewritten at close.
                 if name_owned == b"PathPointArray" {
@@ -675,7 +1262,11 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                         continue;
                     }
                 }
-                let in_group = group_depth > 0;
+                let group_accum = if group_depth > 0 {
+                    Some(accumulate_group_xforms(&group_xforms))
+                } else {
+                    None
+                };
                 let patched = patch_spread_item(
                     &e,
                     &frames,
@@ -683,7 +1274,7 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                     &spread.ovals,
                     &spread.polygons,
                     &spread.graphic_lines,
-                    in_group,
+                    group_accum,
                 )?;
                 match patched {
                     Some(start) => writer.write_event(Event::Start(start))?,
@@ -691,6 +1282,8 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                 }
                 if name_owned == b"Group" {
                     group_depth += 1;
+                    group_xforms
+                        .push(attr_value(&e, b"ItemTransform").and_then(|s| parse_matrix(&s)));
                 }
                 if ITEM_KINDS.contains(&name_owned.as_slice()) {
                     let self_id = attr_value(&e, b"Self");
@@ -735,6 +1328,22 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                 }
             }
             Event::Empty(e) => {
+                // Inside a REMOVE every empty element vanishes too.
+                if remove_depth != 0 {
+                    buf.clear();
+                    continue;
+                }
+                // A self-closing top-level page item: track it as seen,
+                // and drop it when its `Self` left the model (REMOVE).
+                if group_depth == 0 && ITEM_KINDS.contains(&e.name().as_ref()) {
+                    if let Some(id) = attr_value(&e, b"Self") {
+                        seen_ids.insert(id.clone());
+                        if !model_ids.contains(id.as_str()) {
+                            buf.clear();
+                            continue;
+                        }
+                    }
+                }
                 // Buffer a `<PathPointType>` (or any empty element)
                 // inside an open `<PathPointArray>`.
                 if let Some(ctx) = path_ctx.last_mut() {
@@ -758,7 +1367,11 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                     }
                 }
                 let name_is_item = ITEM_KINDS.contains(&e.name().as_ref());
-                let in_group = group_depth > 0;
+                let group_accum = if group_depth > 0 {
+                    Some(accumulate_group_xforms(&group_xforms))
+                } else {
+                    None
+                };
                 let patched = patch_spread_item(
                     &e,
                     &frames,
@@ -766,7 +1379,7 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                     &spread.ovals,
                     &spread.polygons,
                     &spread.graphic_lines,
-                    in_group,
+                    group_accum,
                 )?;
                 // A labelled item serialised as an EMPTY tag must grow
                 // children — expand to Start + Properties/Label + End.
@@ -799,6 +1412,27 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
             }
             Event::End(e) => {
                 let name_owned = e.name().as_ref().to_vec();
+                // Closing a REMOVE: when this End matches the removed
+                // element's open depth the drop ends; otherwise it is a
+                // child of the removed subtree and also vanishes.
+                if remove_depth != 0 {
+                    if depth == remove_depth {
+                        remove_depth = 0;
+                    }
+                    depth = depth.saturating_sub(1);
+                    buf.clear();
+                    continue;
+                }
+                // Closing the `<Spread>` / `<MasterSpread>`: before the
+                // tag, flush every model page item the source XML never
+                // carried — the structural INSERTs.
+                if name_owned == b"Spread" || name_owned == b"MasterSpread" {
+                    write_inserted_items(&mut writer, spread, &seen_ids)?;
+                    depth = depth.saturating_sub(1);
+                    writer.write_event(Event::End(e))?;
+                    buf.clear();
+                    continue;
+                }
                 // Close of the buffered `<PathPointArray>`: decide whether
                 // this contour diverged and emit the model anchors, or
                 // replay the original points verbatim.
@@ -884,11 +1518,18 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                 }
                 if name_owned == b"Group" {
                     group_depth = group_depth.saturating_sub(1);
+                    group_xforms.pop();
                 }
                 depth = depth.saturating_sub(1);
                 writer.write_event(Event::End(e))?;
             }
             Event::Text(t) => {
+                // Text inside a removed subtree (incl. the indentation
+                // around it) vanishes with the element.
+                if remove_depth != 0 {
+                    buf.clear();
+                    continue;
+                }
                 // Whitespace/indentation inside a buffered
                 // `<PathPointArray>` rides with the buffered points so a
                 // verbatim replay stays byte-exact.
@@ -908,6 +1549,11 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                 writer.write_event(Event::Text(t))?;
             }
             other => {
+                // PIs / comments inside a removed subtree vanish too.
+                if remove_depth != 0 {
+                    buf.clear();
+                    continue;
+                }
                 // Any other event inside a buffered array is foreign —
                 // keep the original points (drop the rewrite) by leaving
                 // the buffer intact and replaying it at array close.
@@ -932,10 +1578,31 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
     Ok(writer.into_inner().into_inner())
 }
 
+/// Decide whether to patch a page item's `ItemTransform`, and with what
+/// value. `group_accum` is `None` for a top-level item (the model
+/// transform IS the on-disk transform → patch it). For a group member it
+/// is `Some(accumulated_group_transform)`; the on-disk transform is
+/// recovered by inverting the group accumulation (W1.15 lane 4). When the
+/// group transform is singular the recovery fails and the patch is
+/// suppressed (the attribute passes through verbatim — a documented loss
+/// for that degenerate case).
+fn resolve_item_transform(
+    group_accum: Option<Option<[f32; 6]>>,
+    model_transform: Option<[f32; 6]>,
+) -> (bool, Option<[f32; 6]>) {
+    match group_accum {
+        None => (true, model_transform),
+        Some(accum) => match recover_member_transform(accum, model_transform) {
+            Some(on_disk) => (true, on_disk),
+            None => (false, model_transform),
+        },
+    }
+}
+
 /// If `e` is a page-item start tag whose `Self` matches a model item,
 /// return the patched start tag. `None` ⇒ not a page item we patch
-/// (caller emits the original verbatim). `in_group` suppresses the
-/// composed-ItemTransform patch (see [`rewrite_spread`]).
+/// (caller emits the original verbatim). `group_accum` carries the
+/// accumulated group transform for a member (see [`resolve_item_transform`]).
 #[allow(clippy::too_many_arguments)]
 fn patch_spread_item(
     e: &BytesStart,
@@ -944,7 +1611,7 @@ fn patch_spread_item(
     ovals: &[paged_parse::Oval],
     polygons: &[paged_parse::Polygon],
     graphic_lines: &[paged_parse::GraphicLine],
-    in_group: bool,
+    group_accum: Option<Option<[f32; 6]>>,
 ) -> Result<Option<BytesStart<'static>>, quick_xml::Error> {
     let name = e.name();
     let self_id = attr_value(e, b"Self");
@@ -952,18 +1619,13 @@ fn patch_spread_item(
         return Ok(None);
     };
 
-    // Inside a group, the model's `item_transform` is the composed
-    // (group ∘ member) matrix — not the on-disk member transform — so
-    // we must NOT patch it (that would corrupt the geometry). `patch_tx`
-    // false ⇒ the ItemTransform attribute passes through verbatim.
-    let patch_tx = !in_group;
-
     match name.as_ref() {
         b"TextFrame" => {
             let Some(frame) = frames.get(self_id.as_str()) else {
                 return Ok(None);
             };
-            let item_transform = frame.item_transform;
+            let (patch_tx, item_transform) =
+                resolve_item_transform(group_accum, frame.item_transform);
             let fill = frame.fill_color.clone();
             let fill_tint = frame.fill_tint;
             let stroke = frame.stroke_color.clone();
@@ -999,14 +1661,17 @@ fn patch_spread_item(
             )?;
             Ok(Some(start.into_owned()))
         }
-        b"Rectangle" => patch_vector_item(
-            e,
-            patch_tx,
-            rectangles
+        b"Rectangle" => {
+            let item = rectangles
                 .iter()
-                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()))
-                .map(|r| VectorItem {
-                    item_transform: r.item_transform,
+                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()));
+            let (patch_tx, tx) =
+                resolve_item_transform(group_accum, item.and_then(|r| r.item_transform));
+            patch_vector_item(
+                e,
+                patch_tx,
+                item.map(|r| VectorItem {
+                    item_transform: tx,
                     fill_color: r.fill_color.clone(),
                     fill_tint: r.fill_tint,
                     stroke_color: r.stroke_color.clone(),
@@ -1014,15 +1679,19 @@ fn patch_spread_item(
                     nonprinting: r.nonprinting,
                     bounds: r.bounds,
                 }),
-        ),
-        b"Oval" => patch_vector_item(
-            e,
-            patch_tx,
-            ovals
+            )
+        }
+        b"Oval" => {
+            let item = ovals
                 .iter()
-                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()))
-                .map(|r| VectorItem {
-                    item_transform: r.item_transform,
+                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()));
+            let (patch_tx, tx) =
+                resolve_item_transform(group_accum, item.and_then(|r| r.item_transform));
+            patch_vector_item(
+                e,
+                patch_tx,
+                item.map(|r| VectorItem {
+                    item_transform: tx,
                     fill_color: r.fill_color.clone(),
                     fill_tint: r.fill_tint,
                     stroke_color: r.stroke_color.clone(),
@@ -1030,15 +1699,19 @@ fn patch_spread_item(
                     nonprinting: r.nonprinting,
                     bounds: r.bounds,
                 }),
-        ),
-        b"Polygon" => patch_vector_item(
-            e,
-            patch_tx,
-            polygons
+            )
+        }
+        b"Polygon" => {
+            let item = polygons
                 .iter()
-                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()))
-                .map(|r| VectorItem {
-                    item_transform: r.item_transform,
+                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()));
+            let (patch_tx, tx) =
+                resolve_item_transform(group_accum, item.and_then(|r| r.item_transform));
+            patch_vector_item(
+                e,
+                patch_tx,
+                item.map(|r| VectorItem {
+                    item_transform: tx,
                     fill_color: r.fill_color.clone(),
                     fill_tint: r.fill_tint,
                     stroke_color: r.stroke_color.clone(),
@@ -1046,15 +1719,19 @@ fn patch_spread_item(
                     nonprinting: r.nonprinting,
                     bounds: r.bounds,
                 }),
-        ),
-        b"GraphicLine" => patch_vector_item(
-            e,
-            patch_tx,
-            graphic_lines
+            )
+        }
+        b"GraphicLine" => {
+            let item = graphic_lines
                 .iter()
-                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()))
-                .map(|r| VectorItem {
-                    item_transform: r.item_transform,
+                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()));
+            let (patch_tx, tx) =
+                resolve_item_transform(group_accum, item.and_then(|r| r.item_transform));
+            patch_vector_item(
+                e,
+                patch_tx,
+                item.map(|r| VectorItem {
+                    item_transform: tx,
                     fill_color: None,
                     fill_tint: None,
                     stroke_color: r.stroke_color.clone(),
@@ -1062,7 +1739,8 @@ fn patch_spread_item(
                     nonprinting: r.nonprinting,
                     bounds: r.bounds,
                 }),
-        ),
+            )
+        }
         _ => Ok(None),
     }
 }
@@ -1223,6 +1901,26 @@ fn opt_f32_patch(v: Option<f32>) -> Patch {
 // Story rewrite
 // ---------------------------------------------------------------------
 
+/// Index every `<Table>` cell in the story by its `Self` id so a `<Cell
+/// Self="...">` start tag in the XML can find its model counterpart
+/// (W1.15 lane 3). Cells hang off `Paragraph::table.cells`; IDML can't
+/// nest a table inside a table, so one flat pass over the story's
+/// top-level paragraphs covers them all. A cell with no `Self` id (rare)
+/// is skipped — its content keeps passing through verbatim.
+fn collect_story_cells(story: &Story) -> std::collections::HashMap<&str, &TableCell> {
+    let mut out: std::collections::HashMap<&str, &TableCell> = std::collections::HashMap::new();
+    for p in &story.paragraphs {
+        if let Some(table) = &p.table {
+            for cell in &table.cells {
+                if let Some(id) = cell.self_id.as_deref() {
+                    out.insert(id, cell);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Rewrite a `Story_*.xml` body so its `<ParagraphStyleRange>` /
 /// `<CharacterStyleRange>` attributes + single-Content text reflect the
 /// current model. Ranges are matched positionally (IDML carries no id on
@@ -1256,26 +1954,60 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
     // Depth of open `<Table>` elements. Inside a table the
     // `<ParagraphStyleRange>` / `<CharacterStyleRange>` belong to CELL
     // paragraphs, which the parser stores on `paragraph.table.cells[]`,
-    // NOT on the story's top-level `paragraphs`. Patching them
-    // positionally against `story.paragraphs` would misalign + corrupt,
-    // so table-cell content passes through verbatim (a documented loss —
-    // cell text/style edits don't save this milestone) and does not
-    // advance the story-level cursors.
+    // NOT on the story's top-level `paragraphs`. Patching them against
+    // `story.paragraphs` would misalign, so the story-level cursors do
+    // NOT advance inside a table.
     let mut table_depth: usize = 0;
+
+    // W1.15 lane 3 — table-cell text write-back. Inside a `<Cell
+    // Self="...">` the `<ParagraphStyleRange>` / `<CharacterStyleRange>`
+    // patch against the matched model `TableCell.paragraphs[]` with
+    // cell-local positional cursors (reset on each `<Cell>` open). When
+    // a cell has no model match — or the cell text is unchanged — its
+    // content passes through verbatim, exactly as before.
+    let cells = collect_story_cells(story);
+    let mut current_cell: Option<&TableCell> = None;
+    let mut cell_depth: usize = 0; // depth of the open `<Cell>`, or 0
+    let mut cell_para_idx: isize = -1;
+    let mut cell_run_idx: isize = -1;
 
     loop {
         match reader.read_event_into(&mut buf)? {
             Event::Eof => break,
             Event::Start(e) => {
+                // True while patching cell content: inside a `<Cell>`
+                // that matched a model cell. The ranges then resolve
+                // against the cell's paragraphs with cell-local cursors.
+                let in_cell = table_depth > 0 && current_cell.is_some();
                 match e.name().as_ref() {
                     b"Table" => {
                         table_depth += 1;
+                        writer.write_event(Event::Start(e.into_owned()))?;
+                    }
+                    b"Cell" if table_depth > 0 && cell_depth == 0 => {
+                        // Enter a cell — bind its model counterpart (by
+                        // `Self`) + reset the cell-local cursors. The
+                        // start tag passes through verbatim (cell-level
+                        // attributes are patched elsewhere / not here).
+                        cell_depth = table_depth;
+                        cell_para_idx = -1;
+                        cell_run_idx = -1;
+                        current_cell =
+                            attr_value(&e, b"Self").and_then(|id| cells.get(id.as_str()).copied());
                         writer.write_event(Event::Start(e.into_owned()))?;
                     }
                     b"ParagraphStyleRange" if table_depth == 0 => {
                         para_idx += 1;
                         run_idx = -1;
                         let para = story.paragraphs.get(para_idx as usize);
+                        let start = patch_paragraph_range(&e, para)?;
+                        writer.write_event(Event::Start(start))?;
+                    }
+                    b"ParagraphStyleRange" if in_cell => {
+                        cell_para_idx += 1;
+                        cell_run_idx = -1;
+                        let para =
+                            current_cell.and_then(|c| c.paragraphs.get(cell_para_idx as usize));
                         let start = patch_paragraph_range(&e, para)?;
                         writer.write_event(Event::Start(start))?;
                     }
@@ -1289,7 +2021,16 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                         let start = patch_character_range(&e, current_run)?;
                         writer.write_event(Event::Start(start))?;
                     }
-                    b"Content" if table_depth == 0 => {
+                    b"CharacterStyleRange" if in_cell => {
+                        cell_run_idx += 1;
+                        current_run = current_cell
+                            .and_then(|c| c.paragraphs.get(cell_para_idx as usize))
+                            .and_then(|p| p.runs.get(cell_run_idx as usize));
+                        body = RunBody::default();
+                        let start = patch_character_range(&e, current_run)?;
+                        writer.write_event(Event::Start(start))?;
+                    }
+                    b"Content" if table_depth == 0 || in_cell => {
                         // A `<Content>` opens the inline body region (or
                         // continues it). Buffer the start; the text /
                         // entities inside accumulate into the body, and
@@ -1314,6 +2055,7 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                 }
             }
             Event::Empty(e) => {
+                let in_cell = table_depth > 0 && current_cell.is_some();
                 // A self-closing CharacterStyleRange / ParagraphStyleRange
                 // still advances the positional cursor + patches attrs.
                 match e.name().as_ref() {
@@ -1321,6 +2063,14 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                         para_idx += 1;
                         run_idx = -1;
                         let para = story.paragraphs.get(para_idx as usize);
+                        let start = patch_paragraph_range(&e, para)?;
+                        writer.write_event(Event::Empty(start))?;
+                    }
+                    b"ParagraphStyleRange" if in_cell => {
+                        cell_para_idx += 1;
+                        cell_run_idx = -1;
+                        let para =
+                            current_cell.and_then(|c| c.paragraphs.get(cell_para_idx as usize));
                         let start = patch_paragraph_range(&e, para)?;
                         writer.write_event(Event::Empty(start))?;
                     }
@@ -1335,7 +2085,17 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                         let start = patch_character_range(&e, run)?;
                         writer.write_event(Event::Empty(start))?;
                     }
-                    b"Br" if table_depth == 0 && !body.in_content => {
+                    b"CharacterStyleRange" if in_cell => {
+                        cell_run_idx += 1;
+                        current_run = None;
+                        body = RunBody::default();
+                        let run = current_cell
+                            .and_then(|c| c.paragraphs.get(cell_para_idx as usize))
+                            .and_then(|p| p.runs.get(cell_run_idx as usize));
+                        let start = patch_character_range(&e, run)?;
+                        writer.write_event(Event::Empty(start))?;
+                    }
+                    b"Br" if (table_depth == 0 || in_cell) && !body.in_content => {
                         // `<Br/>` is an inline leaf → `\n` in the parser's
                         // run text. It opens (or continues) the body
                         // region — a run can start with `\n` (a leading
@@ -1345,7 +2105,7 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                         body.text.push('\n');
                         body.events.push(Event::Empty(e.into_owned()));
                     }
-                    b"Tab" if table_depth == 0 && !body.in_content => {
+                    b"Tab" if (table_depth == 0 || in_cell) && !body.in_content => {
                         // `<Tab/>` is an inline leaf → `\t`. Opens or
                         // continues the body region (see `<Br/>`).
                         body.active = true;
@@ -1408,6 +2168,13 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
             Event::End(e) => {
                 match e.name().as_ref() {
                     b"Table" => table_depth = table_depth.saturating_sub(1),
+                    b"Cell" if cell_depth != 0 && table_depth == cell_depth => {
+                        // Leave the cell — unbind so sibling cells (and
+                        // any markup after the table) don't keep patching
+                        // against this cell's paragraphs.
+                        current_cell = None;
+                        cell_depth = 0;
+                    }
                     b"Content" if body.active => {
                         body.in_content = false;
                         body.events.push(Event::End(e.into_owned()));
