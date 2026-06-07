@@ -181,6 +181,7 @@ pub fn build() -> Sample {
         page_items: vec![body_rect.into()],
         override_list: Vec::new(),
         margins: None,
+        item_transform: None,
     });
 
     let designmap = write_designmap(&DesignMap {

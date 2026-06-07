@@ -14,7 +14,7 @@
 
 //! Mega-file: `text-on-path.idml` — text flowing along a shape path.
 //!
-//! Three single-page spreads, each a host `<Polygon>` carrying a
+//! Six single-page spreads, each a host `<Polygon>` carrying a
 //! `<TextPath>` child that references a story:
 //!
 //!   1. `arch` — an open cubic-Bézier arch. Default Baseline alignment,
@@ -27,6 +27,12 @@
 //!      The trailing glyphs drop and the renderer fires an
 //!      `OversetTextDropped` diagnostic (matching the body-text
 //!      overset contract).
+//!   4. `segment · baseline`, 5. `segment · ascender`, 6. `segment ·
+//!      descender` — three identical straight horizontal segments
+//!      carrying the same text under the remaining `PathTypeAlignment`
+//!      seats. On a flat path the seat shift is purely vertical, so the
+//!      conformance corpus can diff Ascender / Descender against
+//!      Baseline directly.
 //!
 //! The host polygons carry no fill (`Swatch/None`) but a thin black
 //! stroke so the curve is visible in the exported PDF; the glyphs ride
@@ -183,8 +189,47 @@ fn variants() -> Vec<Variant> {
             start_bracket: Some(0.0),
             end_bracket: Some(80.0),
         },
+        // The remaining two PathTypeAlignment seats the renderer honours
+        // (`AscenderPathType` lifts each glyph so its top rides the path;
+        // `DescenderPathType` drops it so its bottom does). Both ride a
+        // STRAIGHT horizontal segment carrying the SAME text as the
+        // baseline-segment page below, so the seat shift is purely
+        // vertical and the conformance corpus / emission test can diff
+        // the seat alone — the alignment seats the text-on-path fixture
+        // was missing (W1.6 alignment coverage).
+        Variant {
+            name: "text-on-path · segment · baseline",
+            subpath: short_segment(360.0),
+            text: SEAT_TEXT,
+            path_type_alignment: Some("BaselinePathType"),
+            path_effect: Some("RainbowPathEffect"),
+            start_bracket: None,
+            end_bracket: None,
+        },
+        Variant {
+            name: "text-on-path · segment · ascender",
+            subpath: short_segment(360.0),
+            text: SEAT_TEXT,
+            path_type_alignment: Some("AscenderPathType"),
+            path_effect: Some("RainbowPathEffect"),
+            start_bracket: None,
+            end_bracket: None,
+        },
+        Variant {
+            name: "text-on-path · segment · descender",
+            subpath: short_segment(360.0),
+            text: SEAT_TEXT,
+            path_type_alignment: Some("DescenderPathType"),
+            path_effect: Some("RainbowPathEffect"),
+            start_bracket: None,
+            end_bracket: None,
+        },
     ]
 }
+
+/// Shared text for the three straight-segment seat pages, short enough
+/// to fit the 360 pt path so no glyph oversets.
+const SEAT_TEXT: &str = "Seat the glyphs";
 
 /// Build the full `Sample` ready for `write_idml`.
 pub fn build() -> Sample {
@@ -265,6 +310,7 @@ pub fn build() -> Sample {
                 page_items: vec![PageItem::from(poly)],
                 override_list: Vec::new(),
                 margins: None,
+                item_transform: None,
             }),
         ));
         spread_refs.push(spread_id);

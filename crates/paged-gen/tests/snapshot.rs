@@ -143,6 +143,11 @@ fn tables_round_trips_through_parser() {
     assert_eq!(container.designmap.spreads.len(), sample.spreads.len());
     // Every body story must parse a Table out of its host paragraph.
     let mut tables_found = 0;
+    // W1.13 — the v2 variant carries a JustifyAlign cell with MULTIPLE
+    // paragraphs (the inter-paragraph distribute input). Assert it
+    // round-trips: at least one cell pairs VerticalJustification
+    // ="JustifyAlign" with ≥ 2 paragraphs.
+    let mut justify_multipara_cells = 0;
     for entry_path in container.entries.keys() {
         if !entry_path.starts_with("Stories/") {
             continue;
@@ -150,12 +155,24 @@ fn tables_round_trips_through_parser() {
         let xml = &container.entries[entry_path];
         let story = paged_parse::Story::parse(xml).expect("Story::parse");
         for p in &story.paragraphs {
-            if p.table.is_some() {
+            if let Some(table) = &p.table {
                 tables_found += 1;
+                for cell in &table.cells {
+                    if cell.vertical_justification.as_deref() == Some("JustifyAlign")
+                        && cell.paragraphs.len() >= 2
+                    {
+                        justify_multipara_cells += 1;
+                    }
+                }
             }
         }
     }
     assert_eq!(tables_found, sample.spreads.len());
+    assert!(
+        justify_multipara_cells >= 1,
+        "the v2 variant must carry a multi-paragraph JustifyAlign cell (W1.13), \
+         found {justify_multipara_cells}"
+    );
 }
 
 #[test]
@@ -1268,4 +1285,130 @@ fn styles_cascade_round_trips_next_style_list_cells_tables_otf_hyphenation() {
         .expect("justified style");
     assert_eq!(justified.hyphenation_zone, Some(36.0));
     assert_eq!(justified.hyphenation, Some(true));
+}
+
+// ── W4.10 — layout (margins/columns, guides, autosize, spread xform) ──
+
+#[test]
+fn layout_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::layout::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::layout::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+#[test]
+fn layout_round_trips_margins_columns_guides_and_spread_xform() {
+    // W4.10 — the layout fixture is the first generated fixture carrying
+    // a multi-column margin grid, asymmetric margins, ruler guides, a
+    // multi-column text frame, and a spread-level ItemTransform. Parse
+    // it back and assert each layout knob survives.
+    let sample = paged_gen::samples::layout::build();
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    assert_eq!(doc.spreads.len(), 6, "six layout pages");
+
+    // Page 0 — asymmetric 3-column margin grid + two boundary guides.
+    let p0 = &doc.spreads[0].spread;
+    let margins = p0
+        .page_margins
+        .values()
+        .next()
+        .expect("page 0 declares margins");
+    assert_eq!(margins.column_count, 3, "3-column grid");
+    assert!(
+        (margins.column_gutter - 18.0).abs() < 0.01,
+        "custom 18pt gutter, got {}",
+        margins.column_gutter
+    );
+    // Asymmetric edges all distinct.
+    assert!((margins.top - 48.0).abs() < 0.01);
+    assert!((margins.bottom - 64.0).abs() < 0.01);
+    assert!((margins.left - 54.0).abs() < 0.01);
+    assert!((margins.right - 36.0).abs() < 0.01);
+    assert_eq!(p0.guides.len(), 2, "two interior column-boundary guides");
+
+    // Page 1 — multi-column text frame.
+    let p1 = &doc.spreads[1].spread;
+    let multicol = p1
+        .text_frames
+        .iter()
+        .find(|f| f.column_count == Some(2))
+        .expect("a 2-column text frame on page 1");
+    assert_eq!(
+        multicol.column_gutter,
+        Some(24.0),
+        "custom 24pt text-column gutter"
+    );
+
+    // Pages 4 & 5 — spread ItemTransform present (rotation / scale).
+    let rot = doc.spreads[4]
+        .spread
+        .item_transform
+        .expect("rotate spread xform");
+    // 15° rotation ⇒ off-diagonal terms non-zero.
+    assert!(
+        rot[1].abs() > 0.1 && rot[2].abs() > 0.1,
+        "page 4 spread carries a rotation (b/c non-zero), got {rot:?}"
+    );
+    let scl = doc.spreads[5]
+        .spread
+        .item_transform
+        .expect("scale spread xform");
+    assert!(
+        (scl[0] - 1.25).abs() < 0.01 && (scl[3] - 1.25).abs() < 0.01,
+        "page 5 spread carries a 1.25x scale, got {scl:?}"
+    );
+}
+
+// ── W4.11 — nested-groups (group-of-groups, W1.20) ───────────────────
+
+#[test]
+fn nested_groups_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::nested_groups::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::nested_groups::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+#[test]
+fn nested_groups_round_trips_group_of_groups() {
+    // W4.11 — each page is an OUTER group whose direct members are
+    // GROUPS (not leaf shapes). Parse it back and assert the outer group
+    // holds sub-groups, and the sub-groups hold the leaf rects — the
+    // group-of-groups shape geometry-groups' single-rect nesting lacks.
+    use paged_parse::FrameRef;
+    let sample = paged_gen::samples::nested_groups::build();
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    assert_eq!(doc.spreads.len(), 2, "two nested-group pages");
+
+    for (i, ps) in doc.spreads.iter().enumerate() {
+        let groups = &ps.spread.groups;
+        // outer + two inner = 3 groups per page.
+        assert_eq!(groups.len(), 3, "page {i}: outer + 2 inner groups");
+        // Exactly one group (the outer) has only Group members.
+        let outer_count = groups
+            .iter()
+            .filter(|g| {
+                !g.members.is_empty() && g.members.iter().all(|m| matches!(m, FrameRef::Group(_)))
+            })
+            .count();
+        assert_eq!(
+            outer_count, 1,
+            "page {i}: exactly one group-of-groups (outer)"
+        );
+        // The two inner groups each hold two leaf rects.
+        let inner_leaf_groups = groups
+            .iter()
+            .filter(|g| {
+                g.members.len() == 2
+                    && g.members
+                        .iter()
+                        .all(|m| matches!(m, FrameRef::Rectangle(_)))
+            })
+            .count();
+        assert_eq!(
+            inner_leaf_groups, 2,
+            "page {i}: two inner groups, each with two leaf rects"
+        );
+    }
 }

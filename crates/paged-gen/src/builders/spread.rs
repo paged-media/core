@@ -45,16 +45,45 @@ pub struct Spread {
     /// (the page's content area is the full page rectangle). Parsed
     /// into `Spread::page_margins` keyed by the page's `Self` id.
     pub margins: Option<MarginPreference>,
+    /// Optional `ItemTransform` on the `<Spread>` element (W1.9). `None`
+    /// ⇒ the identity matrix (the legacy default — byte-identical to
+    /// pre-W1.9 output). A rotation/scale here propagates onto every
+    /// body item's emitted display-list transform, so a generated
+    /// fixture can exercise the spread-rotation path the hand-built
+    /// `spread_transform` test covers.
+    pub item_transform: Option<[f32; 6]>,
 }
 
-/// `<MarginPreference>` payload: per-page margins in points. Defaults to
-/// a single column with no gutter (the common case for the fixtures).
+/// `<MarginPreference>` payload: per-page margins in points + the
+/// column grid that subdivides the resulting content area. Defaults
+/// (via [`MarginPreference::symmetric`]) to a single column with no
+/// gutter (the common case for the fixtures).
 #[derive(Clone, Copy)]
 pub struct MarginPreference {
     pub top: f32,
     pub bottom: f32,
     pub left: f32,
     pub right: f32,
+    /// `ColumnCount` — number of columns the margin box is divided
+    /// into. 1 ⇒ a single column.
+    pub column_count: u32,
+    /// `ColumnGutter` — gutter width (pt) between adjacent columns.
+    pub column_gutter: f32,
+}
+
+impl MarginPreference {
+    /// A single-column margin box (no gutter) — the historical default
+    /// that earlier fixtures relied on before columns were a knob.
+    pub fn symmetric(top: f32, bottom: f32, left: f32, right: f32) -> Self {
+        Self {
+            top,
+            bottom,
+            left,
+            right,
+            column_count: 1,
+            column_gutter: 0.0,
+        }
+    }
 }
 
 pub fn write_spread(s: &Spread) -> Vec<u8> {
@@ -71,6 +100,24 @@ pub fn write_spread(s: &Spread) -> Vec<u8> {
         format_f32(IDENTITY[4]),
         format_f32(IDENTITY[5]),
     );
+    // The `<Spread>` element's ItemTransform (W1.9). The `<Page>` /
+    // MasterPageTransform stay identity — the spread transform alone
+    // maps the body items into the rendered page, matching how
+    // InDesign serialises a rotated/scaled spread.
+    let spread_xform = s
+        .item_transform
+        .map(|m| {
+            format!(
+                "{} {} {} {} {} {}",
+                format_f32(m[0]),
+                format_f32(m[1]),
+                format_f32(m[2]),
+                format_f32(m[3]),
+                format_f32(m[4]),
+                format_f32(m[5]),
+            )
+        })
+        .unwrap_or_else(|| identity.clone());
     let bounds = format!(
         "0 0 {} {}",
         format_f32(s.page_height_pt),
@@ -84,7 +131,7 @@ pub fn write_spread(s: &Spread) -> Vec<u8> {
             ("BindingLocation", "0"),
             ("ShowMasterItems", "true"),
             ("AllowPageShuffle", "true"),
-            ("ItemTransform", &identity),
+            ("ItemTransform", &spread_xform),
         ],
     );
     // AppliedMaster must reference the bare `<MasterSpread Self="...">`
@@ -115,11 +162,13 @@ pub fn write_spread(s: &Spread) -> Vec<u8> {
             format_f32(m.left),
             format_f32(m.right),
         );
+        let column_count = m.column_count.to_string();
+        let column_gutter = format_f32(m.column_gutter);
         b.empty(
             "MarginPreference",
             &[
-                ("ColumnCount", "1"),
-                ("ColumnGutter", "0"),
+                ("ColumnCount", &column_count),
+                ("ColumnGutter", &column_gutter),
                 ("Top", &top),
                 ("Bottom", &bottom),
                 ("Left", &left),

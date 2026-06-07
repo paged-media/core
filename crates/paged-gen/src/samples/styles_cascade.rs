@@ -393,6 +393,7 @@ fn build_with_otf(otf_on: bool) -> Sample {
             spread_id.clone(),
             write_spread(&Spread {
                 self_id: spread_id.clone(),
+                item_transform: None,
                 page_self_id: page_id,
                 page_name: name.to_string(),
                 applied_master: format!("MasterSpread/{master_id}"),

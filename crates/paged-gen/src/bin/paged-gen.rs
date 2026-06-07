@@ -77,9 +77,11 @@ fn emit_sample(name: &str, out_dir: &std::path::Path) -> Result<()> {
         "swatches" => paged_gen::samples::swatches::build(),
         "navigation" => paged_gen::samples::navigation::build(),
         "styles-cascade" => paged_gen::samples::styles_cascade::build(),
+        "layout" => paged_gen::samples::layout::build(),
+        "nested-groups" => paged_gen::samples::nested_groups::build(),
         other => {
             anyhow::bail!(
-                "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, text-autosize, text-letterspacing, text-on-path, text-overset, text-in-shape, text-wrap, effects, footnotes, gradients, tables, images, image-clipping, anchored, transparency, markers, masters, corners, links-broken, numbering, variables, conditions, swatches, navigation, styles-cascade"
+                "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, text-autosize, text-letterspacing, text-on-path, text-overset, text-in-shape, text-wrap, effects, footnotes, gradients, tables, images, image-clipping, anchored, transparency, markers, masters, corners, links-broken, numbering, variables, conditions, swatches, navigation, styles-cascade, layout, nested-groups"
             )
         }
     };

@@ -294,6 +294,7 @@ pub fn build() -> Sample {
         page_items: vec![body_frame.into()],
         override_list: Vec::new(),
         margins: None,
+        item_transform: None,
     });
 
     let designmap = write_designmap_with_markers(

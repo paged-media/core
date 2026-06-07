@@ -235,6 +235,7 @@ pub fn build() -> Sample {
 
     let spread_bytes = write_spread(&Spread {
         self_id: spread_id.clone(),
+        item_transform: None,
         page_self_id: page_id,
         page_name: "navigation".to_string(),
         applied_master: format!("MasterSpread/{master_id}"),

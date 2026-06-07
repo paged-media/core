@@ -214,6 +214,7 @@ pub fn build() -> Sample {
             page_items,
             override_list,
             margins: None,
+            item_transform: None,
         };
         // `ShowMasterItems="false"` is a per-page attribute; the spread
         // builder doesn't model it, so stamp it into the page via the

@@ -186,6 +186,27 @@ fn custom_line_baseline() -> AnchoredObjectSetting {
     }
 }
 
+/// Vertical reference against the anchor LINE's x-height (top of the
+/// lowercase x), with the same deterministic horizontal placement as
+/// [`custom_line_baseline`]. The x-height seat sits BETWEEN the baseline
+/// and the cap-height; the W1.16 metric the conformance corpus was
+/// missing (the renderer's `LineXHeight` arm had no generated fixture).
+fn custom_line_x_height() -> AnchoredObjectSetting {
+    AnchoredObjectSetting {
+        anchored_position: "Anchored",
+        spine_relative: false,
+        lock_position: false,
+        pin_position: true,
+        anchor_point: Some("TopRightAnchor"),
+        horizontal_reference_point: Some("TextFrame"),
+        vertical_reference_point: Some("LineXHeight"),
+        horizontal_alignment: Some("RightAlign"),
+        vertical_alignment: Some("TopAlign"),
+        anchor_x_offset: None,
+        anchor_y_offset: None,
+    }
+}
+
 /// Like [`custom_line_baseline`] but anchors the frame's vertical
 /// position against the anchor LINE's cap-height instead of the
 /// baseline. Horizontal placement is unchanged (TextFrame + RightAlign +
@@ -342,6 +363,18 @@ fn variants() -> Vec<Variant> {
             setting_factory: custom_page_margins_bottom_right,
             with_wrap: false,
             with_margins: true,
+        },
+        // W1.16 — LineXHeight seat (appended after page-margins so the
+        // earlier line-variant page indices the anchored_custom test
+        // pins stay put). Shares the deterministic TextFrame-right
+        // horizontal snap, so the emission test isolates the vertical
+        // reference: the frame's top lands x_height·pt above the anchor
+        // line's baseline — strictly between the baseline and cap-height.
+        Variant {
+            name: "anchored · custom · line-x-height",
+            setting_factory: custom_line_x_height,
+            with_wrap: false,
+            with_margins: false,
         },
     ]
 }
@@ -583,15 +616,16 @@ pub fn build() -> Sample {
                 page_items: vec![label.into(), body.into()],
                 override_list: Vec::new(),
                 margins: if variant.with_margins {
-                    Some(MarginPreference {
-                        top: MARGIN_TOP_PT,
-                        bottom: MARGIN_BOTTOM_PT,
-                        left: MARGIN_LEFT_PT,
-                        right: MARGIN_RIGHT_PT,
-                    })
+                    Some(MarginPreference::symmetric(
+                        MARGIN_TOP_PT,
+                        MARGIN_BOTTOM_PT,
+                        MARGIN_LEFT_PT,
+                        MARGIN_RIGHT_PT,
+                    ))
                 } else {
                     None
                 },
+                item_transform: None,
             }),
         ));
         spread_refs.push(spread_id);
