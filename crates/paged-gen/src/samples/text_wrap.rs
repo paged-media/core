@@ -214,6 +214,7 @@ pub fn build() -> Sample {
             placed_image: None,
             text_wrap: None,
             anchored_setting: None,
+            frame_effects: Vec::new(),
         };
 
         // Body frame fills most of the page. Centred horizontally.
@@ -236,6 +237,7 @@ pub fn build() -> Sample {
             placed_image: None,
             text_wrap: None,
             anchored_setting: None,
+            frame_effects: Vec::new(),
         };
 
         // Obstacle — yellow rectangle floating over the body. Sits
@@ -264,6 +266,7 @@ pub fn build() -> Sample {
                 side: variant.side,
             }),
             anchored_setting: None,
+            frame_effects: Vec::new(),
         };
 
         spreads.push((

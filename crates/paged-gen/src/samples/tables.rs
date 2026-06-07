@@ -601,6 +601,7 @@ pub fn build() -> Sample {
             placed_image: None,
             text_wrap: None,
             anchored_setting: None,
+            frame_effects: Vec::new(),
         };
 
         let body_frame = Rect {
@@ -623,6 +624,7 @@ pub fn build() -> Sample {
             placed_image: None,
             text_wrap: None,
             anchored_setting: None,
+            frame_effects: Vec::new(),
         };
 
         spreads.push((

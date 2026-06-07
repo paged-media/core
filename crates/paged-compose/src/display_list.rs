@@ -490,6 +490,57 @@ impl InnerGlow {
     }
 }
 
+/// Bevel-and-emboss *style* — IDML's `<BevelAndEmbossSetting Style="…">`.
+/// Selects where the lit/shaded ramp sits relative to the path edge:
+///
+/// * `InnerBevel` — the bevel lives just *inside* the edge (the
+///   classic raised-button look). This is the rasterizer's baseline.
+/// * `OuterBevel` — the bevel lives just *outside* the edge: the
+///   height field is inverted (the path interior is the "valley", the
+///   surround is the "plateau") so highlight/shadow swap sides versus
+///   the inner bevel.
+/// * `Emboss` — both an inner and outer bevel at half depth, giving a
+///   stamped-into-the-page look (symmetric ramp across the edge).
+/// * `PillowEmboss` — like `Emboss` but the inner ramp is inverted, so
+///   the interior looks pressed *in* while the edge bulges (a pillow).
+/// * `StrokeEmboss` — InDesign confines the bevel to the stroke band;
+///   without a separate stroke geometry here we treat it like
+///   `InnerBevel` (closest visual), noted for renderer-gaps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BevelStyle {
+    #[default]
+    InnerBevel,
+    OuterBevel,
+    Emboss,
+    PillowEmboss,
+    StrokeEmboss,
+}
+
+/// Bevel-and-emboss *direction* — IDML's `Direction="Up"|"Down"`. `Up`
+/// raises the surface toward the viewer (the default, light hits the
+/// near edge); `Down` presses it away, which is equivalent to flipping
+/// the light's elevation sign so highlight and shadow swap sides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BevelDirection {
+    #[default]
+    Up,
+    Down,
+}
+
+/// Bevel-and-emboss *technique* — IDML's `Technique` enum controls how
+/// hard the edge transition is. `Smooth` rounds the ramp (the default,
+/// a soft Gaussian height field); `ChiselHard` / `ChiselSoft` keep the
+/// ramp linear/sharp so the bevel reads as a cut facet. The rasterizer
+/// scales the height-field blur by this: chisel reduces the smoothing
+/// so the normal turns over a narrower band.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BevelTechnique {
+    #[default]
+    Smooth,
+    ChiselHard,
+    ChiselSoft,
+}
+
 /// Bevel-and-emboss parameters. `depth` is the relative bump
 /// strength (0..=1; 1.0 is "100% depth" in InDesign's slider);
 /// `size` is the bevel width in pt. `angle_deg` is the light's
@@ -497,6 +548,13 @@ impl InnerGlow {
 /// from below); `altitude_deg` is the light's elevation (0 =
 /// grazing, 90 = top-down). Highlight + shadow colour separately so
 /// a coloured bevel can be expressed.
+///
+/// `style` / `direction` / `technique` / `soften` mirror the IDML
+/// `<BevelAndEmbossSetting>` knobs and steer the height-field shading
+/// (W1.4 parity): `style` flips/duplicates the ramp across the edge,
+/// `direction` flips the light's elevation sign (Down presses the
+/// surface in), `technique` controls the ramp hardness, and `soften`
+/// (pt) adds an extra Gaussian over the lit/shaded result.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BevelEmboss {
     pub depth: f32,
@@ -507,6 +565,11 @@ pub struct BevelEmboss {
     pub shadow_color: Color,
     pub highlight_opacity: f32,
     pub shadow_opacity: f32,
+    pub style: BevelStyle,
+    pub direction: BevelDirection,
+    pub technique: BevelTechnique,
+    /// Extra soften in pt applied to the shaded bevel layer.
+    pub soften: f32,
 }
 
 impl BevelEmboss {
@@ -520,6 +583,10 @@ impl BevelEmboss {
             shadow_color: Color::rgba(0.0, 0.0, 0.0, 1.0),
             highlight_opacity: 0.75,
             shadow_opacity: 0.75,
+            style: BevelStyle::InnerBevel,
+            direction: BevelDirection::Up,
+            technique: BevelTechnique::Smooth,
+            soften: 0.0,
         }
     }
 }
@@ -537,6 +604,12 @@ pub struct Satin {
     pub color: Color,
     pub opacity: f32,
     pub blend_mode: BlendMode,
+    /// IDML `<SatinSetting Invert="true">`. The wave mask is the
+    /// absolute difference of two offset blurred stamps (`|am - bm|`),
+    /// which peaks bright at the edges. `invert = true` flips that to
+    /// `1 - |am - bm|`, so the contour band goes dark in the centre
+    /// and bright at the edges — InDesign's "Invert" checkbox.
+    pub invert: bool,
 }
 
 impl Satin {
@@ -548,6 +621,7 @@ impl Satin {
             color: Color::rgba(0.0, 0.0, 0.0, 1.0),
             opacity: 0.5,
             blend_mode: BlendMode::Multiply,
+            invert: false,
         }
     }
 }

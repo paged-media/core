@@ -56,7 +56,17 @@
 //!    `PathShadow` in current emitters; this arm rarely fires.
 //!  - BevelEmboss — chisel-edge approximation regresses sample
 //!    geometry without the per-pixel normal field; left as
-//!    log+skip so the rest of the page still renders.
+//!    log+skip so the rest of the page still renders. The CPU
+//!    rasterizer now honours the W1.4 parity knobs
+//!    (`style` Inner/Outer/Emboss/Pillow, `direction` Up/Down,
+//!    `technique` Smooth/Chisel*, `soften`); reproducing those in
+//!    Vello needs a height-field/normal pass it doesn't have, so
+//!    this stays a renderer-gap (CPU is the path of record).
+//!
+//! Partial-parity note: the Satin approximation below is a
+//! two-stamp additive blend; the CPU rasterizer's W1.4 `invert`
+//! flips a *difference* mask it doesn't compute, so the Vello
+//! preview ignores `invert` (renderer-gap).
 //!
 //! The CPU rasterizer (`cpu.rs`) remains the path of record for the
 //! fidelity harness; the Vello backend's job is to keep the
@@ -760,9 +770,17 @@ fn build_scene_with_transform_filtered(
                 // offset stroke fills along the light angle)
                 // regresses sample geometry visibly without the
                 // per-pixel normal field the CPU rasterizer
-                // runs. Keeping this as a log+skip is honest;
-                // the CPU pipeline remains the path of record.
-                tracing::trace!("vello: BevelEmboss skipped (no normal-field path)");
+                // runs. The CPU path now also honours the W1.4
+                // parity knobs (style Inner/Outer/Emboss/Pillow,
+                // direction Up/Down, technique Smooth/Chisel*,
+                // soften) which require that same height-field
+                // pass — so Vello stays a renderer-gap. Keeping
+                // this as a log+skip is honest; the CPU pipeline
+                // remains the path of record.
+                tracing::trace!(
+                    "vello: BevelEmboss skipped (no normal-field path; style/direction/\
+                     technique/soften are CPU-only — renderer-gap)"
+                );
             }
             DisplayCommand::Satin {
                 path_id,
@@ -808,6 +826,11 @@ fn build_scene_with_transform_filtered(
                 stamp_blurred_path(scene, page_to_px, &path_a, color, params.blur_radius, blend);
                 stamp_blurred_path(scene, page_to_px, &path_b, color, params.blur_radius, blend);
                 scene.pop_layer();
+                // `params.invert` (W1.4) flips a difference mask the
+                // CPU rasterizer computes; this two-stamp additive
+                // approximation has no such mask, so the Vello preview
+                // ignores it (renderer-gap — CPU is the path of
+                // record).
             }
             DisplayCommand::Feather {
                 path_id,
@@ -2447,7 +2470,9 @@ mod tests {
         let image_id = list.push_image(DecodedImage {
             width: 1,
             height: 1,
-            rgba: vec![255, 0, 0, 255],
+            encoded: Vec::new().into(),
+            rgba: vec![255, 0, 0, 255].into(),
+            icc: None,
         });
 
         // RadialGradient: red → blue.
@@ -3065,7 +3090,9 @@ mod tests {
         let image_id = list.push_image(DecodedImage {
             width: 1,
             height: 1,
-            rgba: vec![200, 80, 80, 255],
+            encoded: Vec::new().into(),
+            rgba: vec![200, 80, 80, 255].into(),
+            icc: None,
         });
         list.commands.push(DisplayCommand::Image {
             image_id,
@@ -3092,7 +3119,9 @@ mod tests {
         let image_id_b = baseline.push_image(DecodedImage {
             width: 1,
             height: 1,
-            rgba: vec![200, 80, 80, 255],
+            encoded: Vec::new().into(),
+            rgba: vec![200, 80, 80, 255].into(),
+            icc: None,
         });
         baseline.commands.push(DisplayCommand::Image {
             image_id: image_id_b,

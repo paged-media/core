@@ -278,6 +278,186 @@ fn build_glow_rect(applied: bool, effect_color: &str) -> Vec<u8> {
     zip.finish().unwrap().into_inner()
 }
 
+/// Build a Rectangle-frame IDML carrying an arbitrary effects payload.
+/// `effects_xml` is spliced verbatim inside the Rectangle's
+/// `<Properties>` (e.g. `<InnerShadowSetting Applied="true" .../>`).
+/// Used by the W1.3 reconcile tests to prove an IDML-declared effect
+/// flows all the way to a `DisplayCommand`.
+fn build_effect_rect(effects_xml: &str) -> Vec<u8> {
+    let mut zip = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    let designmap = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+</Document>"#;
+    let spread = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 200"/>
+    <Rectangle Self="r1" GeometricBounds="60 60 140 140" FillColor="Color/Black" StrokeWeight="0">
+      <Properties>
+        {effects_xml}
+      </Properties>
+    </Rectangle>
+  </Spread>
+</idPkg:Spread>"#
+    );
+    put(&mut zip, "designmap.xml", designmap);
+    put(&mut zip, "Resources/Graphic.xml", GRAPHIC_XML);
+    put(&mut zip, "Spreads/Spread_sp1.xml", spread.as_bytes());
+    zip.finish().unwrap().into_inner()
+}
+
+/// Build the display list for an effect-rect and return its commands.
+fn effect_rect_commands(effects_xml: &str) -> Vec<DisplayCommand> {
+    let bytes = build_effect_rect(effects_xml);
+    let document = Document::open(&bytes).unwrap();
+    let built = pipeline::build_document(&document, &PipelineOptions::default()).unwrap();
+    built.pages[0].list.commands.clone()
+}
+
+#[test]
+fn w13_inner_shadow_declared_in_idml_emits_command() {
+    // W1.3 reconcile — the registry flagged effects-transparency.
+    // inner-shadow as a RENDER gap. VERIFY: an IDML-declared
+    // `<InnerShadowSetting>` flows parse → compose → a
+    // `DisplayCommand::InnerShadow`. (The rasterizer for it has its own
+    // raster test in paged-gpu.) Claim is STALE: the path is wired.
+    let cmds = effect_rect_commands(
+        r#"<InnerShadowSetting Applied="true" Size="5" Opacity="80" XOffset="4" YOffset="4" EffectColor="Color/Black"/>"#,
+    );
+    let found = cmds.iter().find_map(|c| match c {
+        DisplayCommand::InnerShadow { params, .. } => Some(*params),
+        _ => None,
+    });
+    let p = found.expect("Applied InnerShadow must emit an InnerShadow command");
+    assert!(
+        (p.offset_x - 4.0).abs() < 1e-3 && (p.offset_y - 4.0).abs() < 1e-3,
+        "inner shadow offset must round-trip from IDML; got {:?}",
+        (p.offset_x, p.offset_y)
+    );
+    // Disabled ⇒ no command.
+    let off = effect_rect_commands(r#"<InnerShadowSetting Applied="false" Size="5"/>"#);
+    assert!(
+        !off.iter()
+            .any(|c| matches!(c, DisplayCommand::InnerShadow { .. })),
+        "disabled inner shadow must emit no command"
+    );
+}
+
+#[test]
+fn w13_inner_glow_declared_in_idml_emits_command() {
+    // W1.3 reconcile — registry flagged effects-transparency.glows as a
+    // RENDER gap. VERIFY: `<InnerGlowSetting>` reaches a
+    // `DisplayCommand::InnerGlow`. STALE: wired.
+    let cmds = effect_rect_commands(
+        r#"<InnerGlowSetting Applied="true" Size="6" Opacity="75" EffectColor="Color/Black"/>"#,
+    );
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, DisplayCommand::InnerGlow { .. })),
+        "Applied InnerGlow must emit an InnerGlow command"
+    );
+}
+
+#[test]
+fn w13_feather_declared_in_idml_emits_command() {
+    // W1.3 reconcile — registry flagged effects-transparency.feather as
+    // a RENDER gap. VERIFY: `<FeatherSetting>` reaches a
+    // `DisplayCommand::Feather`. STALE: wired.
+    let cmds =
+        effect_rect_commands(r#"<FeatherSetting Applied="true" Width="6" CornerType="Rounded"/>"#);
+    let p = cmds.iter().find_map(|c| match c {
+        DisplayCommand::Feather { params, .. } => Some(*params),
+        _ => None,
+    });
+    let p = p.expect("Applied Feather must emit a Feather command");
+    assert!((p.width - 6.0).abs() < 1e-3, "feather width round-trips");
+}
+
+#[test]
+fn w13_directional_feather_per_edge_widths_round_trip() {
+    // W1.3/W1.4 — `<DirectionalFeatherSetting>` carries four
+    // independent per-edge widths; verify each reaches the compose
+    // `DirectionalFeather` params (the per-edge raster is proven in
+    // paged-gpu). Disproves the "approximated with max width" claim at
+    // the parse/emit boundary.
+    let cmds = effect_rect_commands(
+        r#"<DirectionalFeatherSetting Applied="true" LeftWidth="3" RightWidth="6" TopWidth="9" BottomWidth="12" Angle="30"/>"#,
+    );
+    let p = cmds.iter().find_map(|c| match c {
+        DisplayCommand::DirectionalFeather { params, .. } => Some(*params),
+        _ => None,
+    });
+    let p = p.expect("Applied DirectionalFeather must emit a command");
+    assert!(
+        (p.left_width - 3.0).abs() < 1e-3
+            && (p.right_width - 6.0).abs() < 1e-3
+            && (p.top_width - 9.0).abs() < 1e-3
+            && (p.bottom_width - 12.0).abs() < 1e-3
+            && (p.angle_deg - 30.0).abs() < 1e-3,
+        "all four per-edge widths + angle must round-trip independently; got {p:?}"
+    );
+}
+
+#[test]
+fn w14_bevel_style_direction_technique_soften_round_trip() {
+    // W1.4 parity — the bevel style/direction/technique/soften knobs
+    // now flow from IDML into the compose `BevelEmboss` params (and the
+    // rasterizer honours them; see paged-gpu raster tests). Pre-W1.4
+    // these four were captured by the parser but dropped at the
+    // converter.
+    use paged_compose::{BevelDirection, BevelStyle, BevelTechnique};
+    let cmds = effect_rect_commands(
+        r#"<BevelAndEmbossSetting Applied="true" Size="5" Style="OuterBevel" Direction="Down" Technique="ChiselHard" Soften="2"/>"#,
+    );
+    let p = cmds.iter().find_map(|c| match c {
+        DisplayCommand::BevelEmboss { params, .. } => Some(*params),
+        _ => None,
+    });
+    let p = p.expect("Applied BevelAndEmboss must emit a command");
+    assert_eq!(p.style, BevelStyle::OuterBevel, "style round-trips");
+    assert_eq!(p.direction, BevelDirection::Down, "direction round-trips");
+    assert_eq!(
+        p.technique,
+        BevelTechnique::ChiselHard,
+        "technique round-trips"
+    );
+    assert!((p.soften - 2.0).abs() < 1e-3, "soften round-trips");
+}
+
+#[test]
+fn w14_satin_invert_round_trips() {
+    // W1.4 parity — `<SatinSetting Invert="true">` now reaches the
+    // compose `Satin::invert` (was captured-but-dropped pre-W1.4).
+    let on = effect_rect_commands(
+        r#"<SatinSetting Applied="true" Size="5" Invert="true" EffectColor="Color/Black"/>"#,
+    );
+    let p = on
+        .iter()
+        .find_map(|c| match c {
+            DisplayCommand::Satin { params, .. } => Some(*params),
+            _ => None,
+        })
+        .expect("Applied Satin must emit a command");
+    assert!(p.invert, "Invert=\"true\" must set Satin::invert");
+    let off = effect_rect_commands(
+        r#"<SatinSetting Applied="true" Size="5" Invert="false" EffectColor="Color/Black"/>"#,
+    );
+    let q = off
+        .iter()
+        .find_map(|c| match c {
+            DisplayCommand::Satin { params, .. } => Some(*params),
+            _ => None,
+        })
+        .expect("Satin command");
+    assert!(!q.invert, "Invert=\"false\" must clear Satin::invert");
+}
+
 #[test]
 fn frame_outer_glow_default_color_is_white_not_black() {
     // FINDING #7.4 — the emit/raster path was already wired (the effect
