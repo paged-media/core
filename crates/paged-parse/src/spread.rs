@@ -1638,10 +1638,22 @@ fn read_corner_attrs(e: &quick_xml::events::BytesStart) -> CornerAttrs {
     // matches the clockwise-from-top-left walk Rectangle::corners
     // documents.
     let per = [
-        (b"TopLeftCornerOption".as_ref(), b"TopLeftCornerRadius".as_ref()),
-        (b"TopRightCornerOption".as_ref(), b"TopRightCornerRadius".as_ref()),
-        (b"BottomRightCornerOption".as_ref(), b"BottomRightCornerRadius".as_ref()),
-        (b"BottomLeftCornerOption".as_ref(), b"BottomLeftCornerRadius".as_ref()),
+        (
+            b"TopLeftCornerOption".as_ref(),
+            b"TopLeftCornerRadius".as_ref(),
+        ),
+        (
+            b"TopRightCornerOption".as_ref(),
+            b"TopRightCornerRadius".as_ref(),
+        ),
+        (
+            b"BottomRightCornerOption".as_ref(),
+            b"BottomRightCornerRadius".as_ref(),
+        ),
+        (
+            b"BottomLeftCornerOption".as_ref(),
+            b"BottomLeftCornerRadius".as_ref(),
+        ),
     ];
     let mut corners = [CornerSpec::default(); 4];
     for (i, (oname, rname)) in per.iter().enumerate() {
@@ -1881,12 +1893,8 @@ impl Spread {
                         // host. Recorded in the spread's side map keyed by
                         // the page `Self` id (panels.md gap 10). Pages with
                         // no `Self` id (synthetic) can't be keyed, so skip.
-                        if let Some(host) =
-                            out.pages.last().and_then(|p| p.self_id.clone())
-                        {
-                            let f = |k: &[u8]| {
-                                attr(&e, k).and_then(|s| s.parse::<f32>().ok())
-                            };
+                        if let Some(host) = out.pages.last().and_then(|p| p.self_id.clone()) {
+                            let f = |k: &[u8]| attr(&e, k).and_then(|s| s.parse::<f32>().ok());
                             out.page_margins.insert(
                                 host,
                                 MarginPreference {
@@ -2408,8 +2416,8 @@ impl Spread {
                         // only fires when a gradient-feather block is
                         // actually open in the spread parser.
                         if let Some(kind) = current_gradient_feather {
-                            if let Some(bag) = effects_slot_mut(&mut out, kind)
-                                .and_then(|s| s.as_mut())
+                            if let Some(bag) =
+                                effects_slot_mut(&mut out, kind).and_then(|s| s.as_mut())
                             {
                                 if let Some(gf) = bag.gradient_feather.as_mut() {
                                     let location_pct = parse_f(&e, b"Location").unwrap_or(0.0);
@@ -2421,10 +2429,9 @@ impl Spread {
                                     let alpha_pct = parse_f(&e, b"Opacity")
                                         .or_else(|| parse_f(&e, b"Alpha"))
                                         .unwrap_or(100.0);
-                                    let midpoint_pct =
-                                        parse_f(&e, b"GradientStopMidpoint")
-                                            .or_else(|| parse_f(&e, b"Midpoint"))
-                                            .unwrap_or(50.0);
+                                    let midpoint_pct = parse_f(&e, b"GradientStopMidpoint")
+                                        .or_else(|| parse_f(&e, b"Midpoint"))
+                                        .unwrap_or(50.0);
                                     gf.stops.push(GradientFeatherStop {
                                         stop_color: attr(&e, b"StopColor"),
                                         location_pct,
@@ -2722,8 +2729,7 @@ impl Spread {
                         // (Envato template placeholders) and stamp
                         // InDesign's missing-image placeholder
                         // instead of falling back to raw fill.
-                        let is_image_element =
-                            !matches!(e.name().as_ref(), b"Link");
+                        let is_image_element = !matches!(e.name().as_ref(), b"Link");
                         let is_pdf_element = matches!(e.name().as_ref(), b"PDF");
                         let element_uri =
                             attr(&e, b"LinkResourceURI").or_else(|| attr(&e, b"href"));
@@ -2749,8 +2755,8 @@ impl Spread {
                                     }
                                 }
                                 if e.name().as_ref() == b"Image" {
-                                    if let Some(m) = attr(&e, b"ItemTransform")
-                                        .and_then(|s| parse_matrix(&s))
+                                    if let Some(m) =
+                                        attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s))
                                     {
                                         if out.rectangles[i].image_item_transform.is_none() {
                                             out.rectangles[i].image_item_transform = Some(m);
@@ -2773,8 +2779,8 @@ impl Spread {
                                     }
                                 }
                                 if e.name().as_ref() == b"Image" {
-                                    if let Some(m) = attr(&e, b"ItemTransform")
-                                        .and_then(|s| parse_matrix(&s))
+                                    if let Some(m) =
+                                        attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s))
                                     {
                                         if out.polygons[i].image_item_transform.is_none() {
                                             out.polygons[i].image_item_transform = Some(m);
@@ -2797,8 +2803,8 @@ impl Spread {
                                     }
                                 }
                                 if e.name().as_ref() == b"Image" {
-                                    if let Some(m) = attr(&e, b"ItemTransform")
-                                        .and_then(|s| parse_matrix(&s))
+                                    if let Some(m) =
+                                        attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s))
                                     {
                                         if out.ovals[i].image_item_transform.is_none() {
                                             out.ovals[i].image_item_transform = Some(m);
@@ -2859,8 +2865,7 @@ impl Spread {
                                 flip_path_effect: attr(&e, b"FlipPathEffect"),
                                 start_bracket: attr(&e, b"StartBracket")
                                     .and_then(|s| s.parse().ok()),
-                                end_bracket: attr(&e, b"EndBracket")
-                                    .and_then(|s| s.parse().ok()),
+                                end_bracket: attr(&e, b"EndBracket").and_then(|s| s.parse().ok()),
                             };
                             match cf.kind {
                                 CurrentFrameKind::Polygon(i) => {
@@ -3048,7 +3053,11 @@ impl Spread {
                                         CurrentFrameKind::Line(i) => FrameRef::GraphicLine(i),
                                         CurrentFrameKind::Polygon(i) => FrameRef::Polygon(i),
                                     };
-                                    unregister_last_in_group(&mut out, &mut group_builders, frame_ref);
+                                    unregister_last_in_group(
+                                        &mut out,
+                                        &mut group_builders,
+                                        frame_ref,
+                                    );
                                 } else {
                                     set_pending_bounds(
                                         &mut out,
@@ -3092,7 +3101,8 @@ impl Spread {
                                     for k in 0..starts.len() {
                                         if keep[k] {
                                             filtered_starts.push(starts[k]);
-                                            filtered_open.push(opens.get(k).copied().unwrap_or(false));
+                                            filtered_open
+                                                .push(opens.get(k).copied().unwrap_or(false));
                                         }
                                     }
                                     starts = filtered_starts;
@@ -3114,30 +3124,22 @@ impl Spread {
                                     }
                                 };
                                 match cf.kind {
-                                    CurrentFrameKind::Polygon(i)
-                                        if i < out.polygons.len() =>
-                                    {
+                                    CurrentFrameKind::Polygon(i) if i < out.polygons.len() => {
                                         out.polygons[i].anchors = cf.anchors;
                                         out.polygons[i].subpath_starts = subpath_starts;
                                         out.polygons[i].subpath_open = subpath_open;
                                     }
-                                    CurrentFrameKind::Line(i)
-                                        if i < out.graphic_lines.len() =>
-                                    {
+                                    CurrentFrameKind::Line(i) if i < out.graphic_lines.len() => {
                                         out.graphic_lines[i].anchors = cf.anchors;
                                         out.graphic_lines[i].subpath_starts = subpath_starts;
                                         out.graphic_lines[i].subpath_open = subpath_open;
                                     }
-                                    CurrentFrameKind::Text(i)
-                                        if i < out.text_frames.len() =>
-                                    {
+                                    CurrentFrameKind::Text(i) if i < out.text_frames.len() => {
                                         out.text_frames[i].anchors = cf.anchors;
                                         out.text_frames[i].subpath_starts = subpath_starts;
                                         out.text_frames[i].subpath_open = subpath_open;
                                     }
-                                    CurrentFrameKind::Rect(i)
-                                        if i < out.rectangles.len() =>
-                                    {
+                                    CurrentFrameKind::Rect(i) if i < out.rectangles.len() => {
                                         // Q-11: only stash when the
                                         // outline is non-rectangular
                                         // (>4 anchors). A plain 4-corner
@@ -3303,7 +3305,9 @@ fn decode_image_contents_base64(raw: &[u8]) -> Option<Vec<u8>> {
             cleaned.push(b);
         }
     }
-    base64::engine::general_purpose::STANDARD.decode(&cleaned).ok()
+    base64::engine::general_purpose::STANDARD
+        .decode(&cleaned)
+        .ok()
 }
 
 /// Q-04: borrow the effects bag slot for any frame kind. Returns
@@ -3370,9 +3374,7 @@ fn parse_ppi_x(s: &str) -> Option<f32> {
 /// doesn't allocate an empty record). `Space` is stripped of its
 /// `$ID/` namespace prefix.
 fn read_image_metadata(e: &quick_xml::events::BytesStart) -> Option<ImageMetadata> {
-    let space = attr(e, b"Space").map(|s| {
-        s.strip_prefix("$ID/").unwrap_or(&s).to_string()
-    });
+    let space = attr(e, b"Space").map(|s| s.strip_prefix("$ID/").unwrap_or(&s).to_string());
     let actual_ppi = attr(e, b"ActualPpi").as_deref().and_then(parse_ppi_x);
     let effective_ppi = attr(e, b"EffectivePpi").as_deref().and_then(parse_ppi_x);
     if space.is_none() && actual_ppi.is_none() && effective_ppi.is_none() {
@@ -3562,7 +3564,10 @@ mod tests {
         assert_eq!(s.pages.len(), 3);
         assert_eq!(s.pages[0].show_master_items, Some(false));
         assert_eq!(s.pages[1].show_master_items, Some(true));
-        assert_eq!(s.pages[2].show_master_items, None, "absent ⇒ stamp as usual");
+        assert_eq!(
+            s.pages[2].show_master_items, None,
+            "absent ⇒ stamp as usual"
+        );
     }
 
     #[test]
@@ -3733,9 +3738,15 @@ mod tests {
             Some(b"Hello, IDML!" as &[u8]),
             "inline CDATA should base64-decode and stash on the rect",
         );
-        assert!(r1.has_image_element, "rect should still flag has_image_element");
+        assert!(
+            r1.has_image_element,
+            "rect should still flag has_image_element"
+        );
         let r2 = &s.rectangles[1];
-        assert!(r2.image_bytes.is_none(), "link-only rect carries no inline bytes");
+        assert!(
+            r2.image_bytes.is_none(),
+            "link-only rect carries no inline bytes"
+        );
         assert_eq!(r2.image_link.as_deref(), Some("file:///link.jpg"));
     }
 
@@ -3743,7 +3754,8 @@ mod tests {
     fn q03_decodes_whitespace_padded_base64() {
         // InDesign's serializer wraps base64 at ~76 chars with
         // surrounding whitespace; verify the decoder strips it.
-        let xml = br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
           <Spread Self="s">
             <Rectangle Self="r" GeometricBounds="0 0 1 1">
               <Image><Properties><Contents><![CDATA[
@@ -4243,7 +4255,10 @@ mod tests {
         assert_eq!(s.polygons.len(), 2);
         let p = &s.polygons[0];
         assert_eq!(p.image_link.as_deref(), Some("file:///tmp/photo.jpg"));
-        assert_eq!(p.image_item_transform, Some([0.5, 0.0, 0.0, 0.5, 10.0, 20.0]));
+        assert_eq!(
+            p.image_item_transform,
+            Some([0.5, 0.0, 0.0, 0.5, 10.0, 20.0])
+        );
         // Plain polygon without image stays None.
         assert!(s.polygons[1].image_link.is_none());
         assert!(s.polygons[1].image_item_transform.is_none());
@@ -4371,7 +4386,10 @@ mod tests {
         assert!(s.rectangles[0].blend_mode.is_none());
         assert_eq!(s.groups.len(), 1);
         assert_eq!(s.groups[0].transparency.opacity, Some(40.0));
-        assert_eq!(s.groups[0].transparency.blend_mode.as_deref(), Some("Screen"));
+        assert_eq!(
+            s.groups[0].transparency.blend_mode.as_deref(),
+            Some("Screen")
+        );
     }
 
     #[test]
@@ -4389,7 +4407,10 @@ mod tests {
           </Spread>
         </idPkg:Spread>"#;
         let s = Spread::parse(xml).unwrap();
-        assert_eq!(s.polygons[0].image_link.as_deref(), Some("file:///tmp/cat.png"));
+        assert_eq!(
+            s.polygons[0].image_link.as_deref(),
+            Some("file:///tmp/cat.png")
+        );
         assert_eq!(
             s.polygons[0].image_item_transform,
             Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
@@ -4456,7 +4477,10 @@ mod tests {
             .as_ref()
             .and_then(|e| e.directional_feather.as_ref())
             .is_some();
-        assert!(!dir_present, "Applied=false should leave directional_feather=None");
+        assert!(
+            !dir_present,
+            "Applied=false should leave directional_feather=None"
+        );
     }
 
     #[test]

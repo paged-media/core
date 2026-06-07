@@ -29,11 +29,7 @@ use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 /// Build a 2-column × 3-row table IDML. `table_attrs` is spliced onto
 /// the `<Table>` element (e.g. `AppliedTableStyle="TableStyle/Alt"`)
 /// and `cell00_attrs` onto the first `<Cell>` (for diagonals).
-fn build_table_idml(
-    styles_body: &str,
-    table_attrs: &str,
-    cell00_attrs: &str,
-) -> Vec<u8> {
+fn build_table_idml(styles_body: &str, table_attrs: &str, cell00_attrs: &str) -> Vec<u8> {
     let buf = std::io::Cursor::new(Vec::new());
     let mut zip = ZipWriter::new(buf);
     let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);

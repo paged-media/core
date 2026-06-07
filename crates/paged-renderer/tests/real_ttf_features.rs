@@ -811,8 +811,7 @@ fn vertical_justify_distribute_threaded_per_frame() {
         let bytes = build_vj_threaded_idml(vj);
         let doc = Document::open(&bytes).unwrap();
         let (_, imgs) = pipeline::render_document(&doc, &opts, 144.0, Color::WHITE).unwrap();
-        let a = ink_extent_y_in_band_x(&imgs[0], 80, 560, 80)
-            .expect("frame A must carry ink");
+        let a = ink_extent_y_in_band_x(&imgs[0], 80, 560, 80).expect("frame A must carry ink");
         let b = ink_extent_y_in_band_x(&imgs[0], 640, 1120, 80)
             .expect("frame B must carry overflow ink");
         (a, b)

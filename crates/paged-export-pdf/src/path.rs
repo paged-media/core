@@ -42,7 +42,14 @@ pub fn emit_path(content: &mut Content, path: &PathData) {
                 content.cubic_to(c1x, c1y, c2x, c2y, x, y);
                 current = (x, y);
             }
-            PathSegment::CubicTo { cx1, cy1, cx2, cy2, x, y } => {
+            PathSegment::CubicTo {
+                cx1,
+                cy1,
+                cx2,
+                cy2,
+                x,
+                y,
+            } => {
                 content.cubic_to(cx1, cy1, cx2, cy2, x, y);
                 current = (x, y);
             }
@@ -92,7 +99,12 @@ mod tests {
         let path = PathData {
             segments: vec![
                 PathSegment::MoveTo { x: 0.0, y: 0.0 },
-                PathSegment::QuadTo { cx: 3.0, cy: 6.0, x: 6.0, y: 0.0 },
+                PathSegment::QuadTo {
+                    cx: 3.0,
+                    cy: 6.0,
+                    x: 6.0,
+                    y: 0.0,
+                },
             ],
         };
         emit_path(&mut content, &path);
@@ -109,7 +121,12 @@ mod tests {
                 PathSegment::MoveTo { x: 10.0, y: 10.0 },
                 PathSegment::LineTo { x: 20.0, y: 10.0 },
                 PathSegment::Close,
-                PathSegment::QuadTo { cx: 13.0, cy: 16.0, x: 16.0, y: 10.0 },
+                PathSegment::QuadTo {
+                    cx: 13.0,
+                    cy: 16.0,
+                    x: 16.0,
+                    y: 10.0,
+                },
             ],
         };
         emit_path(&mut content, &path);

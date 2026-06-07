@@ -19,11 +19,7 @@
 
 use std::path::PathBuf;
 
-use paged_canvas::{
-    channel::Mutation,
-    element_selection::ElementId,
-    CanvasModel, CanvasOptions,
-};
+use paged_canvas::{channel::Mutation, element_selection::ElementId, CanvasModel, CanvasOptions};
 
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

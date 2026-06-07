@@ -29,8 +29,7 @@ use crate::builders::{
     master::{write_master, Master},
     page_item::Rect,
     resources::{
-        container_xml, fonts_xml, graphic_xml_with_extras, preferences_xml, styles_xml,
-        ExtraColor,
+        container_xml, fonts_xml, graphic_xml_with_extras, preferences_xml, styles_xml, ExtraColor,
     },
     spread::{write_spread, Spread},
     story::{write_story, Paragraph, Run, Story, TabStop},

@@ -39,10 +39,10 @@ mod wasm {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use paged_introspect::tree::NodeIdJson;
-    use paged_introspect::{build_tree, describe};
     #[cfg(feature = "render")]
     use paged_introspect::render_page_png;
+    use paged_introspect::tree::NodeIdJson;
+    use paged_introspect::{build_tree, describe};
     use paged_mutate::{AppliedOperation, NodeId, Operation, Project};
     use paged_scene::Document;
     use wasm_bindgen::prelude::*;

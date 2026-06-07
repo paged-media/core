@@ -116,9 +116,7 @@ pub(super) fn bullet_marker_character_style(
     p: &paged_scene::ResolvedParagraphAttrs,
 ) -> Option<&str> {
     match p.bullets_list_type.as_deref() {
-        Some("NumberedList") => p
-            .bullets_and_numbering_digits_character_style
-            .as_deref(),
+        Some("NumberedList") => p.bullets_and_numbering_digits_character_style.as_deref(),
         Some("BulletList") => p
             .bullets_character_style
             .as_deref()
@@ -219,7 +217,11 @@ fn to_hanzi(n: u32, formal: bool) -> String {
     // Digit tables. Index 0 is empty so digit[n] is the glyph for n.
     let digits_everyday = ["", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
     let digits_formal = ["", "壹", "貳", "參", "肆", "伍", "陸", "柒", "捌", "玖"];
-    let digits = if formal { &digits_formal } else { &digits_everyday };
+    let digits = if formal {
+        &digits_formal
+    } else {
+        &digits_everyday
+    };
 
     let hundreds = (n / 100) as usize;
     let tens = ((n / 10) % 10) as usize;
@@ -302,4 +304,3 @@ fn to_alpha(mut n: u32, lower: bool) -> String {
     chars.reverse();
     String::from_utf8(chars).expect("ascii letters are valid utf-8")
 }
-

@@ -402,9 +402,8 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                     }
                     writer.write_event(Event::Start(BytesStart::new("Properties")))?;
                     write_label_entries(&mut writer, &entries)?;
-                    writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
-                        "Properties",
-                    )))?;
+                    writer
+                        .write_event(Event::End(quick_xml::events::BytesEnd::new("Properties")))?;
                     writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
                         String::from_utf8_lossy(&name_owned).into_owned(),
                     )))?;
@@ -448,9 +447,7 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                         // synthesise the whole block.
                         if !ctx.handled {
                             if let Some(entries) = ctx.entries.take() {
-                                writer.write_event(Event::Start(BytesStart::new(
-                                    "Properties",
-                                )))?;
+                                writer.write_event(Event::Start(BytesStart::new("Properties")))?;
                                 write_label_entries(&mut writer, &entries)?;
                                 writer.write_event(Event::End(
                                     quick_xml::events::BytesEnd::new("Properties"),
@@ -954,15 +951,12 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                                 // (no PI/element to clobber); otherwise
                                 // replay the source bytes verbatim so
                                 // entity choices survive byte-identical.
-                                Some(run) => {
-                                    content_text != run.text && !content_has_foreign
-                                }
+                                Some(run) => content_text != run.text && !content_has_foreign,
                                 None => false,
                             };
                             if replace {
                                 let run = current_run.expect("checked above");
-                                writer
-                                    .write_event(Event::Text(BytesText::new(&run.text)))?;
+                                writer.write_event(Event::Text(BytesText::new(&run.text)))?;
                             } else {
                                 for ev in content_events.drain(..) {
                                     writer.write_event(ev)?;

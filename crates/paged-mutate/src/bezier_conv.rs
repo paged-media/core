@@ -76,10 +76,7 @@ pub fn idml_subpath_to_flo(anchors: &[PathAnchor]) -> Option<SimpleBezierPath> {
 /// the list of `SimpleBezierPath`s that flo_curves's path
 /// arithmetic expects. An empty `subpath_starts` is treated as a
 /// single subpath covering every anchor.
-pub fn idml_path_to_flo(
-    anchors: &[PathAnchor],
-    subpath_starts: &[usize],
-) -> Vec<SimpleBezierPath> {
+pub fn idml_path_to_flo(anchors: &[PathAnchor], subpath_starts: &[usize]) -> Vec<SimpleBezierPath> {
     if anchors.is_empty() {
         return Vec::new();
     }
@@ -115,9 +112,7 @@ pub fn idml_path_to_flo(
 /// when k = 0). Its `left` handle is segment-k's `cp2`; its
 /// `right` handle is segment-(k+1)'s `cp1` (wrapping around for
 /// the last anchor).
-pub fn flo_to_idml_path(
-    paths: &[SimpleBezierPath],
-) -> (Vec<PathAnchor>, Vec<usize>) {
+pub fn flo_to_idml_path(paths: &[SimpleBezierPath]) -> (Vec<PathAnchor>, Vec<usize>) {
     let mut anchors: Vec<PathAnchor> = Vec::new();
     let mut starts: Vec<usize> = Vec::new();
     for (start_point, segments) in paths {

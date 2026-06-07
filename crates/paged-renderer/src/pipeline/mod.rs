@@ -74,13 +74,13 @@ use shapes::{
 #[cfg(test)]
 use shapes::{PLACEHOLDER_FILL_RGB, PLACEHOLDER_X_RGB, PLACEHOLDER_X_STROKE_PT};
 
+pub(crate) use color_paint::{apply_fill_tint, stroke_for};
 pub use color_paint::{
     build_run_paint_picker, build_run_paint_picker_with_cmyk, color_id_to_paint,
     color_id_to_paint_with_list, color_id_to_paint_with_list_dir, gradient_midpoint_paint,
     resolve_fill, resolve_rect_fill, resolve_rect_stroke, resolve_stroke, RunPaintPicker,
     RunStrokePicker,
 };
-pub(crate) use color_paint::{apply_fill_tint, stroke_for};
 use color_paint::{build_run_paint_picker_resolved, build_run_stroke_picker};
 #[cfg(test)]
 use color_paint::{color_lerp, linear_gradient_endpoints, midpoint_blend};
@@ -93,8 +93,8 @@ use numbering::{bullet_marker_character_style, list_prefix};
 use numbering::{format_number, substitute_numbering_expression};
 #[cfg(test)]
 use text_path::polygon_path_from_anchors;
-use text_path::{emit_polygon_into, emit_text_path_into};
 pub(crate) use text_path::polygon_path_from_anchors_with_open;
+use text_path::{emit_polygon_into, emit_text_path_into};
 
 /// Per-family override of the metrics the renderer uses for
 /// baseline-placement math. Glyph outlines still come from whichever
@@ -225,11 +225,8 @@ pub struct PipelineOptions<'a> {
     /// marked uncacheable and skip the cache — covers rare master
     /// frames with gradient fills or embedded images. ~161ms
     /// savings per rebuild on a multi-spread fixture.
-    pub master_text_emit_cache: Option<
-        &'a std::cell::RefCell<
-            HashMap<(String, usize), MasterTextEmitDelta>,
-        >,
-    >,
+    pub master_text_emit_cache:
+        Option<&'a std::cell::RefCell<HashMap<(String, usize), MasterTextEmitDelta>>>,
     /// Perf-BodyStory — per-(story_id, signature) cache of the
     /// multi-page DisplayList delta produced by the body-story
     /// pass. The signature hashes the chain's frames (bounds +
@@ -240,11 +237,8 @@ pub struct PipelineOptions<'a> {
     /// the largest single cost in `build_document` on a multi-
     /// spread fixture (~613ms); most stories are unaffected by
     /// any given gesture, so the win ratio is high.
-    pub body_story_emit_cache: Option<
-        &'a std::cell::RefCell<
-            HashMap<(String, u64), BodyStoryEmissionDelta>,
-        >,
-    >,
+    pub body_story_emit_cache:
+        Option<&'a std::cell::RefCell<HashMap<(String, u64), BodyStoryEmissionDelta>>>,
 }
 
 /// Perf-BodyStory — captured multi-page emission delta from one
@@ -603,9 +597,7 @@ impl BuiltDocument {
                 }
             }
         }
-        out.sort_by(|a, b| {
-            (a.paragraph_idx, a.line_idx).cmp(&(b.paragraph_idx, b.line_idx))
-        });
+        out.sort_by(|a, b| (a.paragraph_idx, a.line_idx).cmp(&(b.paragraph_idx, b.line_idx)));
         out
     }
 }
@@ -1173,13 +1165,7 @@ pub fn build_document(
             total_stats.frames += 1;
             let mut copy = line.clone();
             copy.item_transform = Some(compose_outer_matrix(mpt_outer, copy.item_transform));
-            emit_line_into(
-                &mut pages[i],
-                &copy,
-                document,
-                palette,
-                cmyk_xform.as_ref(),
-            );
+            emit_line_into(&mut pages[i], &copy, document, palette, cmyk_xform.as_ref());
         }
     }
 
@@ -1215,7 +1201,9 @@ pub fn build_document(
     // for the duration of the build via the `_owned_borrow` binding
     // — dropping it would invalidate the `&mut HashMap` reference.
     let mut local_image_cache: HashMap<String, paged_compose::DecodedImage> = HashMap::new();
-    let mut _owned_borrow: Option<std::cell::RefMut<'_, HashMap<String, paged_compose::DecodedImage>>> = None;
+    let mut _owned_borrow: Option<
+        std::cell::RefMut<'_, HashMap<String, paged_compose::DecodedImage>>,
+    > = None;
     let decoded_image_cache: &mut HashMap<String, paged_compose::DecodedImage> =
         match options.image_decode_cache {
             Some(rc) => {
@@ -1263,18 +1251,21 @@ pub fn build_document(
         // items resolve to the same layer-z (legacy behaviour).
         let layer_z_of = |fr: paged_parse::FrameRef| -> usize {
             let id = match fr {
-                paged_parse::FrameRef::TextFrame(i) => {
-                    spread.text_frames.get(i).and_then(|f| f.item_layer.as_deref())
-                }
-                paged_parse::FrameRef::Rectangle(i) => {
-                    spread.rectangles.get(i).and_then(|f| f.item_layer.as_deref())
-                }
+                paged_parse::FrameRef::TextFrame(i) => spread
+                    .text_frames
+                    .get(i)
+                    .and_then(|f| f.item_layer.as_deref()),
+                paged_parse::FrameRef::Rectangle(i) => spread
+                    .rectangles
+                    .get(i)
+                    .and_then(|f| f.item_layer.as_deref()),
                 paged_parse::FrameRef::Oval(i) => {
                     spread.ovals.get(i).and_then(|f| f.item_layer.as_deref())
                 }
-                paged_parse::FrameRef::GraphicLine(i) => {
-                    spread.graphic_lines.get(i).and_then(|f| f.item_layer.as_deref())
-                }
+                paged_parse::FrameRef::GraphicLine(i) => spread
+                    .graphic_lines
+                    .get(i)
+                    .and_then(|f| f.item_layer.as_deref()),
                 paged_parse::FrameRef::Polygon(i) => {
                     spread.polygons.get(i).and_then(|f| f.item_layer.as_deref())
                 }
@@ -1282,7 +1273,8 @@ pub fn build_document(
                 // an ItemLayer. If none, treat as "no layer" (MAX).
                 paged_parse::FrameRef::Group(_) => None,
             };
-            id.and_then(|s| layer_z_index.get(s).copied()).unwrap_or(usize::MAX)
+            id.and_then(|s| layer_z_index.get(s).copied())
+                .unwrap_or(usize::MAX)
         };
         let frames_ordered: Vec<paged_parse::FrameRef> = if spread.frames_in_order.is_empty() {
             // Legacy path: a parser revision predating
@@ -1764,7 +1756,9 @@ pub fn build_document(
             || !anchored_q.is_empty()
             || !new_breaks.is_empty()
             || !new_diags.is_empty();
-        if let (Some(ref key), Some(rc), false) = (&cache_key, options.master_text_emit_cache, uncacheable) {
+        if let (Some(ref key), Some(rc), false) =
+            (&cache_key, options.master_text_emit_cache, uncacheable)
+        {
             let new_paths: Vec<paged_compose::PathData> =
                 list.paths.slice(path_base, list.paths.len()).to_vec();
             let mut new_commands: Vec<paged_compose::DisplayCommand> =
@@ -2192,8 +2186,7 @@ pub fn build_document(
                     uncacheable = true;
                     break;
                 }
-                let grew_list =
-                    list.paths.len() > snap.0 || list.commands.len() > snap.1;
+                let grew_list = list.paths.len() > snap.0 || list.commands.len() > snap.1;
                 let grew_layout = page.story_layout.len() > snap.5;
                 let grew_footnotes = page.footnotes.len() > snap.6;
                 if grew_list || grew_layout || grew_footnotes {
@@ -2204,10 +2197,8 @@ pub fn build_document(
                     for cmd in new_commands.iter_mut() {
                         rebase_path_ids(cmd, -(snap.0 as i64));
                     }
-                    let new_story_layout: Vec<LineLayout> =
-                        page.story_layout[snap.5..].to_vec();
-                    let new_footnotes: Vec<EmittedFootnote> =
-                        page.footnotes[snap.6..].to_vec();
+                    let new_story_layout: Vec<LineLayout> = page.story_layout[snap.5..].to_vec();
+                    let new_footnotes: Vec<EmittedFootnote> = page.footnotes[snap.6..].to_vec();
                     per_page.push((
                         page_idx,
                         BodyStoryPageDelta {
@@ -2639,8 +2630,7 @@ impl<'a> StoryEmitter<'a> {
     /// Only page ids resolve in v1; story / text-anchor ids fall through
     /// to `None` (the caller records them as `Unresolved`).
     fn page_index_for_target(&self, target_id: &str) -> Option<u32> {
-        self.page_index_map
-            .and_then(|m| m.get(target_id).copied())
+        self.page_index_map.and_then(|m| m.get(target_id).copied())
     }
 
     fn with_story_id(mut self, story_id: &str) -> Self {
@@ -2971,22 +2961,19 @@ impl<'a> StoryEmitter<'a> {
             // `Swatch/None` so absent-stroke-color frames register
             // as invisible regardless.
             let stroke_w = frame.stroke_weight.unwrap_or(1.0);
-            let stroke_visible =
-                frame_stroke_is_visible(frame.stroke_color.as_deref(), stroke_w);
+            let stroke_visible = frame_stroke_is_visible(frame.stroke_color.as_deref(), stroke_w);
             let fill_transparent = frame_fill_is_transparent(frame.fill_color.as_deref());
-            let glyph_shadow = if !stroke_visible
-                && fill_transparent
-                && frame.stroke_drop_shadow.is_some()
-            {
-                resolve_frame_shadow(
-                    frame.stroke_drop_shadow.as_ref(),
-                    None,
-                    self.palette,
-                    self.cmyk_xform,
-                )
-            } else {
-                None
-            };
+            let glyph_shadow =
+                if !stroke_visible && fill_transparent && frame.stroke_drop_shadow.is_some() {
+                    resolve_frame_shadow(
+                        frame.stroke_drop_shadow.as_ref(),
+                        None,
+                        self.palette,
+                        self.cmyk_xform,
+                    )
+                } else {
+                    None
+                };
             if glyph_shadow.is_none() && blend_group.is_none() {
                 continue;
             }
@@ -3031,12 +3018,7 @@ impl<'a> StoryEmitter<'a> {
                         w: frame_bounds_in_page.w + 2.0 * pad,
                         h: frame_bounds_in_page.h + 2.0 * pad,
                     };
-                    crate::module::emit_glyph_shadow_pass(
-                        page,
-                        start..end,
-                        shadow,
-                        bounds_in_page,
-                    )
+                    crate::module::emit_glyph_shadow_pass(page, start..end, shadow, bounds_in_page)
                 } else {
                     0
                 };
@@ -3198,8 +3180,10 @@ fn emit_paragraph_into_chain(
     // carries any conditions (almost every paragraph).
     let paragraph_filtered_owned;
     let paragraph: &paged_parse::Paragraph = {
-        let has_conditions =
-            paragraph.runs.iter().any(|r| !r.applied_conditions.is_empty());
+        let has_conditions = paragraph
+            .runs
+            .iter()
+            .any(|r| !r.applied_conditions.is_empty());
         if !has_conditions {
             paragraph
         } else {
@@ -3208,12 +3192,9 @@ fn emit_paragraph_into_chain(
                 .runs
                 .iter()
                 .filter(|r| {
-                    r.applied_conditions.iter().all(|cid| {
-                        conditions
-                            .get(cid)
-                            .and_then(|c| c.visible)
-                            .unwrap_or(true)
-                    })
+                    r.applied_conditions
+                        .iter()
+                        .all(|cid| conditions.get(cid).and_then(|c| c.visible).unwrap_or(true))
                 })
                 .cloned()
                 .collect();
@@ -3233,12 +3214,14 @@ fn emit_paragraph_into_chain(
     // overrides; no other code path needs to know about nested styles.
     let paragraph_owned;
     let paragraph: &paged_parse::Paragraph = {
-        let nested = &em.document.resolved_paragraph_attrs(paragraph).nested_styles;
+        let nested = &em
+            .document
+            .resolved_paragraph_attrs(paragraph)
+            .nested_styles;
         if nested.is_empty() {
             paragraph
         } else {
-            let paragraph_text: String =
-                paragraph.runs.iter().map(|r| r.text.as_str()).collect();
+            let paragraph_text: String = paragraph.runs.iter().map(|r| r.text.as_str()).collect();
             let overlay = compute_nested_style_overlay(&paragraph_text, nested);
             if overlay.is_empty() {
                 paragraph
@@ -3426,10 +3409,7 @@ fn emit_paragraph_into_chain(
     let mut shaping_faces: Vec<Option<&rustybuzz::Face>> =
         (0..bytes_pool.len()).map(|_| None).collect();
     let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
-    let bytes_font_ids: Vec<u32> = bytes_pool
-        .iter()
-        .map(|b| fnv_1a_u32(b.as_ref()))
-        .collect();
+    let bytes_font_ids: Vec<u32> = bytes_pool.iter().map(|b| fnv_1a_u32(b.as_ref())).collect();
     for i in 0..bytes_pool.len() {
         if unique_idx[i] != i {
             continue;
@@ -3485,7 +3465,10 @@ fn emit_paragraph_into_chain(
     // (which lives to the end of the paragraph emission).
     for i in 0..bytes_pool.len() {
         let head = unique_idx[i];
-        if let Some(cached) = em.font_table.face(bytes_font_ids[head], wghts[head].to_bits()) {
+        if let Some(cached) = em
+            .font_table
+            .face(bytes_font_ids[head], wghts[head].to_bits())
+        {
             shaping_faces[i] = Some(cached);
         } else if let Some(owned) = owned_shaping_faces[head].as_ref() {
             shaping_faces[i] = Some(owned);
@@ -3592,9 +3575,7 @@ fn emit_paragraph_into_chain(
     };
     let var_text = |i: usize| -> Option<&str> {
         if needs_var_subst {
-            variable_resolved
-                .get(i)
-                .and_then(|o| o.as_deref())
+            variable_resolved.get(i).and_then(|o| o.as_deref())
         } else {
             None
         }
@@ -3719,9 +3700,7 @@ fn emit_paragraph_into_chain(
     // capture below only intersects byte ranges. Empty (and skipped)
     // unless `collect_link_regions` is on AND a run carries a source.
     let link_spans: Vec<(std::ops::Range<usize>, paged_compose::LinkTarget)> =
-        if em.collect_link_regions
-            && paragraph.runs.iter().any(|r| r.hyperlink_source.is_some())
-        {
+        if em.collect_link_regions && paragraph.runs.iter().any(|r| r.hyperlink_source.is_some()) {
             let mut spans = Vec::new();
             let mut byte_cursor = 0usize;
             for (i, sr) in styled_runs.iter().enumerate() {
@@ -3846,13 +3825,20 @@ fn emit_paragraph_into_chain(
     //      the drop cap, then run `layout_runs` as normal.
     //   5. After layout, splice the dropped glyphs in at the
     //      paragraph origin.
-    let drop_cap_spec_emit: Option<(usize, paged_text::DropCapSpec, paged_text::ShapedRun, f32, u32, ttf_parser::Face<'_>, paged_compose::Paint)> = if paragraph.drop_cap_characters > 0
+    let drop_cap_spec_emit: Option<(
+        usize,
+        paged_text::DropCapSpec,
+        paged_text::ShapedRun,
+        f32,
+        u32,
+        ttf_parser::Face<'_>,
+        paged_compose::Paint,
+    )> = if paragraph.drop_cap_characters > 0
         && paragraph.drop_cap_lines > 0
         && !styled_runs.is_empty()
         && !styled_runs[0].text.is_empty()
     {
-        let body_line_height_pt =
-            lopts.line_height as f32 / paged_text::shape::ADVANCE_PRECISION;
+        let body_line_height_pt = lopts.line_height as f32 / paged_text::shape::ADVANCE_PRECISION;
         let cap_point_size =
             paged_text::drop_cap_point_size(body_line_height_pt, paragraph.drop_cap_lines);
         // Byte split: take `drop_cap_characters` Unicode scalars
@@ -3874,8 +3860,7 @@ fn emit_paragraph_into_chain(
             let cap_shaped = paged_text::shape_run(cap_face_ref, dropped_slice, cap_point_size);
             // Gutter: half the body's space-glyph advance — a small
             // proxy for InDesign's `DropCapDetail` side-bearing.
-            let space_shaped =
-                paged_text::shape_run(cap_face_ref, " ", styled_runs[0].point_size);
+            let space_shaped = paged_text::shape_run(cap_face_ref, " ", styled_runs[0].point_size);
             let gutter_64 = space_shaped.total_advance / 2;
             let spec = paged_text::DropCapSpec {
                 characters: paragraph.drop_cap_characters,
@@ -3907,34 +3892,29 @@ fn emit_paragraph_into_chain(
             // wide-fallback fonts or aggressive cap sizes produced
             // an empty break list and the entire body text dropped.
             let scalar_width_64 = lopts.compose.column_width;
-            let max_word_width_64 =
-                styled_runs.iter().fold(0i32, |acc, run| {
-                    let shaped = paged_text::shape::shape_run(
-                        run.face,
-                        run.text,
-                        run.point_size,
-                    );
-                    let mut local_max = 0i32;
-                    let mut current = 0i32;
-                    let text_bytes = run.text.as_bytes();
-                    let is_break = |i: u32| -> bool {
-                        let idx = i as usize;
-                        idx < text_bytes.len()
-                            && (text_bytes[idx] == b' '
-                                || text_bytes[idx] == b'\t'
-                                || text_bytes[idx] == b'\n')
-                    };
-                    for g in &shaped.glyphs {
-                        if is_break(g.cluster) {
-                            local_max = local_max.max(current);
-                            current = 0;
-                        } else {
-                            current = current.saturating_add(g.x_advance);
-                        }
+            let max_word_width_64 = styled_runs.iter().fold(0i32, |acc, run| {
+                let shaped = paged_text::shape::shape_run(run.face, run.text, run.point_size);
+                let mut local_max = 0i32;
+                let mut current = 0i32;
+                let text_bytes = run.text.as_bytes();
+                let is_break = |i: u32| -> bool {
+                    let idx = i as usize;
+                    idx < text_bytes.len()
+                        && (text_bytes[idx] == b' '
+                            || text_bytes[idx] == b'\t'
+                            || text_bytes[idx] == b'\n')
+                };
+                for g in &shaped.glyphs {
+                    if is_break(g.cluster) {
+                        local_max = local_max.max(current);
+                        current = 0;
+                    } else {
+                        current = current.saturating_add(g.x_advance);
                     }
-                    local_max = local_max.max(current);
-                    acc.max(local_max)
-                });
+                }
+                local_max = local_max.max(current);
+                acc.max(local_max)
+            });
             let carved = paged_text::drop_cap_column_widths_with_min(
                 &spec,
                 scalar_width_64,
@@ -3992,33 +3972,32 @@ fn emit_paragraph_into_chain(
     // styled_runs vec borrowing from the same source at the new
     // offset.
     let styled_runs_storage: Vec<paged_text::StyledRun>;
-    let styled_runs_ref: &[paged_text::StyledRun] = if let Some((split, _, _, _, _, _, _)) =
-        &drop_cap_spec_emit
-    {
-        let mut adjusted: Vec<paged_text::StyledRun> = Vec::with_capacity(styled_runs.len());
-        for (i, r) in styled_runs.iter().enumerate() {
-            let new_text = if i == 0 { &r.text[*split..] } else { r.text };
-            adjusted.push(paged_text::StyledRun {
-                text: new_text,
-                face: r.face,
-                point_size: r.point_size,
-                tracking: r.tracking,
-                font_id: r.font_id,
-                underline: r.underline,
-                strikethru: r.strikethru,
-                baseline_shift_pt: r.baseline_shift_pt,
-                horizontal_scale_pct: r.horizontal_scale_pct,
-                vertical_scale_pct: r.vertical_scale_pct,
-                skew_deg: r.skew_deg,
-                fallback_faces: r.fallback_faces,
-                shaping_features: r.shaping_features,
-            });
-        }
-        styled_runs_storage = adjusted;
-        &styled_runs_storage
-    } else {
-        &styled_runs
-    };
+    let styled_runs_ref: &[paged_text::StyledRun] =
+        if let Some((split, _, _, _, _, _, _)) = &drop_cap_spec_emit {
+            let mut adjusted: Vec<paged_text::StyledRun> = Vec::with_capacity(styled_runs.len());
+            for (i, r) in styled_runs.iter().enumerate() {
+                let new_text = if i == 0 { &r.text[*split..] } else { r.text };
+                adjusted.push(paged_text::StyledRun {
+                    text: new_text,
+                    face: r.face,
+                    point_size: r.point_size,
+                    tracking: r.tracking,
+                    font_id: r.font_id,
+                    underline: r.underline,
+                    strikethru: r.strikethru,
+                    baseline_shift_pt: r.baseline_shift_pt,
+                    horizontal_scale_pct: r.horizontal_scale_pct,
+                    vertical_scale_pct: r.vertical_scale_pct,
+                    skew_deg: r.skew_deg,
+                    fallback_faces: r.fallback_faces,
+                    shaping_features: r.shaping_features,
+                });
+            }
+            styled_runs_storage = adjusted;
+            &styled_runs_storage
+        } else {
+            &styled_runs
+        };
 
     // Per-line wrap: build a `column_widths` slice + per-line
     // x-shifts + twin-pair markers based on which wrap rectangles
@@ -4100,8 +4079,7 @@ fn emit_paragraph_into_chain(
                     first_pt_size,
                 ) * scale;
                 if off_pt != 0.0 {
-                    let off_64 =
-                        (off_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+                    let off_64 = (off_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
                     line.glyphs[first_idx].x -= off_64;
                 }
             }
@@ -4123,8 +4101,7 @@ fn emit_paragraph_into_chain(
                     last_pt_size,
                 ) * scale;
                 if off_pt != 0.0 {
-                    let off_64 =
-                        (off_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+                    let off_64 = (off_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
                     let g = &mut line.glyphs[last_idx];
                     let trim = off_64.min(g.x_advance);
                     g.x_advance -= trim;
@@ -4258,10 +4235,7 @@ fn emit_paragraph_into_chain(
                 // so the tab snaps without filling. Trailing
                 // whitespace is significant — ". " produces
                 // space-separated dots — so it's kept verbatim.
-                leader: t
-                    .leader
-                    .clone()
-                    .filter(|s| !s.is_empty()),
+                leader: t.leader.clone().filter(|s| !s.is_empty()),
             })
             .collect();
         let paragraph_text: String = paragraph
@@ -4304,22 +4278,20 @@ fn emit_paragraph_into_chain(
     // run 0's fill. Font / size override via the same character
     // style is not yet wired through; this batch ships colour-only
     // and the parser fields are in place for the follow-up.
-    let bullet_paint_override: Option<(u32, Paint)> = list_first_text
-        .as_deref()
-        .and_then(|lft| {
-            let bullet_len = lft.len().saturating_sub(
-                paragraph.runs.first().map(|r| r.text.len()).unwrap_or(0),
-            );
-            if bullet_len == 0 {
-                return None;
-            }
-            let style_id = bullet_marker_character_style(&resolved_paragraph)?;
-            let resolved = em.document.styles.resolve_character(style_id);
-            let fill_id = resolved.fill_color.as_deref()?;
-            let base = color_id_to_paint(fill_id, em.palette, em.cmyk_xform)?;
-            let paint = apply_fill_tint(base, resolved.fill_tint);
-            Some((bullet_len as u32, paint))
-        });
+    let bullet_paint_override: Option<(u32, Paint)> = list_first_text.as_deref().and_then(|lft| {
+        let bullet_len = lft
+            .len()
+            .saturating_sub(paragraph.runs.first().map(|r| r.text.len()).unwrap_or(0));
+        if bullet_len == 0 {
+            return None;
+        }
+        let style_id = bullet_marker_character_style(&resolved_paragraph)?;
+        let resolved = em.document.styles.resolve_character(style_id);
+        let fill_id = resolved.fill_color.as_deref()?;
+        let base = color_id_to_paint(fill_id, em.palette, em.cmyk_xform)?;
+        let paint = apply_fill_tint(base, resolved.fill_tint);
+        Some((bullet_len as u32, paint))
+    });
 
     let picker = build_run_paint_picker_resolved(
         paragraph,
@@ -4449,8 +4421,7 @@ fn emit_paragraph_into_chain(
         // frame is the FootnoteOverflow case, handled by accepting the
         // overlap rather than dropping every line.
         let text_bottom_64 = (frame_height_64
-            - em
-                .reserved_footnote_64
+            - em.reserved_footnote_64
                 .get(em.frame_idx)
                 .copied()
                 .unwrap_or(0))
@@ -4536,9 +4507,7 @@ fn emit_paragraph_into_chain(
             let source_text = paragraph_text_for_breaks
                 .as_deref()
                 .map(|pt| {
-                    let start = if current_line_idx == 0
-                        && dropped_text_for_breaks.is_some()
-                    {
+                    let start = if current_line_idx == 0 && dropped_text_for_breaks.is_some() {
                         0
                     } else {
                         line.byte_range.start.min(pt.len())
@@ -4591,8 +4560,7 @@ fn emit_paragraph_into_chain(
         // selection math (rotation only affects how we *render* the
         // caret, not which character it points at).
         {
-            let baseline_pt_local =
-                line.baseline_y as f32 / paged_text::shape::ADVANCE_PRECISION;
+            let baseline_pt_local = line.baseline_y as f32 / paged_text::shape::ADVANCE_PRECISION;
             let line_h_pt = line_h as f32 / paged_text::shape::ADVANCE_PRECISION;
             let mut clusters: Vec<ClusterPos> = Vec::with_capacity(line.glyphs.len());
             // Coalesce glyphs that share a source cluster (ligatures,
@@ -4719,8 +4687,7 @@ fn emit_paragraph_into_chain(
                 // (line_h * 0.8 + offset). InDesign's default origin
                 // for RuleAbove is the baseline; we approximate with
                 // ascent ≈ 0.8 line_h.
-                let rule_y = text_origin_pt.1 + baseline_pt_local - line_h_pt_local * 0.8
-                    - offset;
+                let rule_y = text_origin_pt.1 + baseline_pt_local - line_h_pt_local * 0.8 - offset;
                 let x_left = text_origin_pt.0 + left;
                 let x_right = text_origin_pt.0 + col_w_pt - right;
                 if x_right > x_left {
@@ -4752,10 +4719,8 @@ fn emit_paragraph_into_chain(
             let line_h_pt = line_h as f32 / paged_text::shape::ADVANCE_PRECISION;
             let baseline_pt = line.baseline_y as f32 / paged_text::shape::ADVANCE_PRECISION;
             let col_w_pt = em.column_width_pt.unwrap_or(0.0);
-            let y_top = text_origin_pt.1 + baseline_pt - line_h_pt * 0.8
-                - shading_offsets[0];
-            let y_bot = text_origin_pt.1 + baseline_pt + line_h_pt * 0.2
-                + shading_offsets[2];
+            let y_top = text_origin_pt.1 + baseline_pt - line_h_pt * 0.8 - shading_offsets[0];
+            let y_bot = text_origin_pt.1 + baseline_pt + line_h_pt * 0.2 + shading_offsets[2];
             let x_left = text_origin_pt.0 + shading_offsets[1];
             let x_right = text_origin_pt.0 + col_w_pt - shading_offsets[3];
             if x_right > x_left && y_bot > y_top {
@@ -4900,12 +4865,7 @@ fn emit_paragraph_into_chain(
         let op_fill = resolved_paragraph.overprint_fill.unwrap_or(false);
         let op_stroke = resolved_paragraph.overprint_stroke.unwrap_or(false);
         if op_fill || op_stroke {
-            rewrite_tail_for_overprint(
-                &mut pages[target_page],
-                before_cmds,
-                op_fill,
-                op_stroke,
-            );
+            rewrite_tail_for_overprint(&mut pages[target_page], before_cmds, op_fill, op_stroke);
         }
         let frame_idx = em.frame_idx;
         match &mut em.frame_cmd_ranges[frame_idx] {
@@ -4944,8 +4904,7 @@ fn emit_paragraph_into_chain(
                 let left = r.left_indent.unwrap_or(0.0);
                 let right = r.right_indent.unwrap_or(0.0);
                 let col_w_pt = em.column_width_pt.unwrap_or(0.0);
-                let rule_y = text_origin_pt.1 + baseline_pt_local + line_h_pt_local * 0.2
-                    + offset;
+                let rule_y = text_origin_pt.1 + baseline_pt_local + line_h_pt_local * 0.2 + offset;
                 let x_left = text_origin_pt.0 + left;
                 let x_right = text_origin_pt.0 + col_w_pt - right;
                 if x_right > x_left {
@@ -4979,8 +4938,7 @@ fn emit_paragraph_into_chain(
                 let col_w_pt = em.column_width_pt.unwrap_or(0.0);
                 let x_left = text_origin_pt.0 + off_left;
                 let x_right = text_origin_pt.0 + col_w_pt - off_right;
-                let y_top =
-                    text_origin_pt.1 + first_baseline - line_h_pt_local * 0.8 - off_top;
+                let y_top = text_origin_pt.1 + first_baseline - line_h_pt_local * 0.8 - off_top;
                 let y_bot =
                     text_origin_pt.1 + baseline_pt_local + line_h_pt_local * 0.2 + off_bottom;
                 if x_right > x_left && y_bot > y_top {
@@ -4996,14 +4954,14 @@ fn emit_paragraph_into_chain(
                         };
                         let path = corner_rect_path(outline_rect, radii, kinds);
                         let path_id = pages[target_page].list.paths.push_anon(path);
-                        pages[target_page].list.push(
-                            paged_compose::DisplayCommand::StrokePath {
+                        pages[target_page]
+                            .list
+                            .push(paged_compose::DisplayCommand::StrokePath {
                                 path_id,
                                 paint,
                                 stroke: paged_compose::Stroke::new(weight),
                                 transform: Transform::IDENTITY,
-                            },
-                        );
+                            });
                     } else {
                         let top = paged_compose::Rect {
                             x: x_left - weight * 0.5,
@@ -5074,7 +5032,8 @@ fn emit_paragraph_into_chain(
             let m = paragraph.drop_cap_lines.saturating_sub(1) as i32;
             lopts.first_baseline + m * lopts.line_height
         };
-        let mut positioned: Vec<paged_text::PositionedGlyph> = Vec::with_capacity(cap_shaped.glyphs.len());
+        let mut positioned: Vec<paged_text::PositionedGlyph> =
+            Vec::with_capacity(cap_shaped.glyphs.len());
         let mut pen_x = 0i32;
         for g in &cap_shaped.glyphs {
             positioned.push(paged_text::PositionedGlyph {
@@ -5319,11 +5278,7 @@ impl WrapShape {
     /// offsets inflate the unrotated source rect *before* the
     /// transform applies so the polygon stays aligned with the host's
     /// rotation (offset is in inner-coord points, same as InDesign).
-    fn from_inner(
-        b: paged_parse::Bounds,
-        m: Option<[f32; 6]>,
-        offsets: [f32; 4],
-    ) -> Self {
+    fn from_inner(b: paged_parse::Bounds, m: Option<[f32; 6]>, offsets: [f32; 4]) -> Self {
         let inner = paged_parse::Bounds {
             top: b.top - offsets[0],
             left: b.left - offsets[1],
@@ -5942,10 +5897,7 @@ fn body_story_signature(
 /// wastes a few path slots and not correctness), then pushes the
 /// cached commands with their relative path-ids rebased to the
 /// page's NEW path-buffer base.
-fn splice_master_text_delta(
-    list: &mut paged_compose::DisplayList,
-    delta: &MasterTextEmitDelta,
-) {
+fn splice_master_text_delta(list: &mut paged_compose::DisplayList, delta: &MasterTextEmitDelta) {
     let new_base = list.paths.len() as i64;
     for path in &delta.paths {
         list.paths.push_anon(path.clone());
@@ -6212,10 +6164,10 @@ fn emit_footnote_pools(
     };
     let outliner = TtfOutliner::new(&ttf_face);
     let font_id: u32 = u32::MAX; // sentinel — fallback font for footnotes
-    // Register the font bytes into each page's glyph-cache namespace
-    // so the rasterizer can fetch them. The display list's
-    // `register_font` is idempotent — registering the same id
-    // multiple times is a no-op after the first.
+                                 // Register the font bytes into each page's glyph-cache namespace
+                                 // so the rasterizer can fetch them. The display list's
+                                 // `register_font` is idempotent — registering the same id
+                                 // multiple times is a no-op after the first.
     let point_size: f32 = FOOTNOTE_POINT_SIZE;
     let footnote_paint = Paint::Solid(Color {
         r: 0.0,
@@ -6234,10 +6186,8 @@ fn emit_footnote_pools(
         // independently. Real-world: most pages have one frame
         // hosting all the footnotes; this loop handles the rare
         // multi-host case too.
-        let mut by_frame: std::collections::BTreeMap<
-            (i32, i32, i32, i32),
-            Vec<&EmittedFootnote>,
-        > = Default::default();
+        let mut by_frame: std::collections::BTreeMap<(i32, i32, i32, i32), Vec<&EmittedFootnote>> =
+            Default::default();
         for fn_ in &pool {
             by_frame
                 .entry(footnote_frame_key(&fn_.host_frame_rect_pt))
@@ -6379,7 +6329,9 @@ fn frame_polygon_spread(frame: &TextFrame) -> Option<Vec<(f32, f32)>> {
     // Only handle upright frames. The renderer rotates rotated text
     // frames post-emit; per-line shifts pre-rotation would interact
     // badly with a non-AABB clip.
-    let m = frame.item_transform.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let m = frame
+        .item_transform
+        .unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
     let upright = (m[1].abs() < 1e-5)
         && (m[2].abs() < 1e-5)
         && ((m[0] - 1.0).abs() < 1e-5)
@@ -6898,33 +6850,37 @@ fn emit_text_frame_into(
     // interned polygon path is already in inner-anchor coords under
     // `outer`, so effects ride it directly with no unit normalisation
     // (mirrors `emit_polygon_into`).
-    let (effects_path, effects_xform, effects_unit_normalize) =
-        if frame.effects.is_some() {
-            match (&resolved.geometry, fill_path) {
-                (Geometry::TextFrameRect { rect: r }, _) => {
-                    let (id, _) = page.list.paths.intern(
-                        paged_compose::UNIT_RECT_KEY,
-                        paged_compose::PathData {
-                            segments: vec![
-                                paged_compose::PathSegment::MoveTo { x: 0.0, y: 0.0 },
-                                paged_compose::PathSegment::LineTo { x: 1.0, y: 0.0 },
-                                paged_compose::PathSegment::LineTo { x: 1.0, y: 1.0 },
-                                paged_compose::PathSegment::LineTo { x: 0.0, y: 1.0 },
-                                paged_compose::PathSegment::Close,
-                            ],
-                        },
-                    );
-                    (Some(id), Transform::for_rect_in(*r, outer), Some(*r))
-                }
-                (Geometry::Polygon { .. }, Some(pid)) => (Some(pid), outer, None),
-                _ => (None, outer, None),
+    let (effects_path, effects_xform, effects_unit_normalize) = if frame.effects.is_some() {
+        match (&resolved.geometry, fill_path) {
+            (Geometry::TextFrameRect { rect: r }, _) => {
+                let (id, _) = page.list.paths.intern(
+                    paged_compose::UNIT_RECT_KEY,
+                    paged_compose::PathData {
+                        segments: vec![
+                            paged_compose::PathSegment::MoveTo { x: 0.0, y: 0.0 },
+                            paged_compose::PathSegment::LineTo { x: 1.0, y: 0.0 },
+                            paged_compose::PathSegment::LineTo { x: 1.0, y: 1.0 },
+                            paged_compose::PathSegment::LineTo { x: 0.0, y: 1.0 },
+                            paged_compose::PathSegment::Close,
+                        ],
+                    },
+                );
+                (Some(id), Transform::for_rect_in(*r, outer), Some(*r))
             }
-        } else {
-            (None, outer, None)
-        };
+            (Geometry::Polygon { .. }, Some(pid)) => (Some(pid), outer, None),
+            _ => (None, outer, None),
+        }
+    } else {
+        (None, outer, None)
+    };
     if let (Some(path_id), Some(effects)) = (effects_path, frame.effects.as_ref()) {
         crate::module::emit_effects_pre_fill(
-            page, effects, path_id, effects_xform, palette, cmyk_xform,
+            page,
+            effects,
+            path_id,
+            effects_xform,
+            palette,
+            cmyk_xform,
         );
     }
     crate::module::fill_paint_module(
@@ -7117,12 +7073,7 @@ fn apply_vertical_writing_rotation(
     }
 }
 
-fn rotate_transform_around(
-    xf: &mut Transform,
-    linear: [f32; 4],
-    pivot_x: f32,
-    pivot_y: f32,
-) {
+fn rotate_transform_around(xf: &mut Transform, linear: [f32; 4], pivot_x: f32, pivot_y: f32) {
     let [a, b, c, d] = linear;
     // The pivoted rotation is:
     //   M = [a c (pivot_x - a*pivot_x - c*pivot_y);
@@ -7201,7 +7152,10 @@ pub(crate) fn frame_needs_blend_group(frame: &ResolvedFrame<'_>) -> bool {
 /// Group opacity normalised to 0..=1. Defaults to 1.0 when no opacity
 /// override is present on the frame.
 fn frame_group_opacity(frame: &ResolvedFrame<'_>) -> f32 {
-    frame.opacity.map(|p| (p / 100.0).clamp(0.0, 1.0)).unwrap_or(1.0)
+    frame
+        .opacity
+        .map(|p| (p / 100.0).clamp(0.0, 1.0))
+        .unwrap_or(1.0)
 }
 
 /// Push a `BeginBlendGroup` covering `geometry_bounds × outer` (axis-
@@ -7315,7 +7269,6 @@ fn paint_as_solid_with_icc(
         _ => None,
     }
 }
-
 
 /// Single-page convenience: union every page's bounds and emit all
 /// frames in spread coordinates. Kept for back-compat and for hosts
@@ -7780,7 +7733,11 @@ fn emit_ruby_for_line(
             Some(s) if !s.is_empty() => s,
             _ => continue,
         };
-        let run_start = if run_idx == 0 { 0 } else { run_byte_ends[run_idx - 1] };
+        let run_start = if run_idx == 0 {
+            0
+        } else {
+            run_byte_ends[run_idx - 1]
+        };
         let run_end = run_byte_ends[run_idx];
         // Find min/max x among glyphs in this run's cluster range.
         let mut x_min = i32::MAX;
@@ -7817,7 +7774,8 @@ fn emit_ruby_for_line(
         let ruby_origin_y_pt = baseline_y_pt - base_point_size * 1.05;
         // Convert shape glyphs to PositionedGlyph at the ruby
         // origin. Each glyph's x is the running advance sum.
-        let mut positioned: Vec<paged_text::PositionedGlyph> = Vec::with_capacity(shaped.glyphs.len());
+        let mut positioned: Vec<paged_text::PositionedGlyph> =
+            Vec::with_capacity(shaped.glyphs.len());
         let mut cursor = 0i32;
         for g in &shaped.glyphs {
             positioned.push(paged_text::PositionedGlyph {
@@ -7961,8 +7919,13 @@ pub fn compute_nested_style_overlay(
         if ns.repetition <= 0 {
             continue;
         }
-        let end =
-            find_nested_end(paragraph_text, cursor, &ns.delimiter, ns.repetition, ns.inclusive);
+        let end = find_nested_end(
+            paragraph_text,
+            cursor,
+            &ns.delimiter,
+            ns.repetition,
+            ns.inclusive,
+        );
         if end > cursor {
             out.push(NestedStyleApplication {
                 byte_range: cursor..end,
@@ -8063,9 +8026,7 @@ fn find_nested_end(
                         if inclusive {
                             idx += 1;
                             // Consume the trailing whitespace run too.
-                            while idx < slice.len()
-                                && slice.as_bytes()[idx].is_ascii_whitespace()
-                            {
+                            while idx < slice.len() && slice.as_bytes()[idx].is_ascii_whitespace() {
                                 idx += 1;
                             }
                         }
@@ -8096,9 +8057,7 @@ fn find_nested_end(
             // marker. Inserted by the user via a special character.
             find_class_end(text, start, repetition, inclusive, |c| c == '\u{0003}')
         }
-        D::Char(target) => {
-            find_class_end(text, start, repetition, inclusive, |c| c == *target)
-        }
+        D::Char(target) => find_class_end(text, start, repetition, inclusive, |c| c == *target),
         D::Unknown => start,
     }
     .min(bytes.len())
@@ -8117,11 +8076,7 @@ fn find_class_end<F: Fn(char) -> bool>(
             matches += 1;
             if matches >= repetition {
                 let abs = start + off;
-                let end = if inclusive {
-                    abs + c.len_utf8()
-                } else {
-                    abs
-                };
+                let end = if inclusive { abs + c.len_utf8() } else { abs };
                 return end;
             }
         }
@@ -8459,68 +8414,59 @@ impl FontTable {
         // `emit_cell_paragraph`, and `measure_cell_paragraph` share
         // one rustybuzz::Face across the entire render — Adobe-typical
         // docs reuse the same (font, weight) thousands of times.
-        let mut face_keys: std::collections::HashSet<(u32, u32)> =
-            std::collections::HashSet::new();
+        let mut face_keys: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
         let mut id_to_bytes: HashMap<u32, Bytes> = HashMap::new();
-        let harvest_face_keys = |paragraph: &paged_parse::Paragraph,
-                                 face_keys: &mut std::collections::HashSet<(u32, u32)>,
-                                 id_to_bytes: &mut HashMap<u32, Bytes>| {
-            // Inner walk: handle both top-level paragraphs and
-            // recursive table-cell paragraphs.
-            fn walk(
-                document: &Document,
-                cache: &HashMap<(String, Option<String>), Bytes>,
-                fallback: &Option<Bytes>,
-                paragraph: &paged_parse::Paragraph,
-                face_keys: &mut std::collections::HashSet<(u32, u32)>,
-                id_to_bytes: &mut HashMap<u32, Bytes>,
-            ) {
-                for run in &paragraph.runs {
-                    let resolved = document.resolved_run_attrs(paragraph, run);
-                    // Mirror `FontTable::bytes_for`: (family, style)
-                    // direct hit, then bare-family, then fallback.
-                    let bytes = resolved
-                        .font
-                        .as_deref()
-                        .and_then(|f| {
-                            cache
-                                .get(&(f.to_string(), resolved.font_style.clone()))
-                                .or_else(|| cache.get(&(f.to_string(), None)))
-                        })
-                        .or(fallback.as_ref());
-                    if let Some(b) = bytes {
-                        let font_id = fnv_1a_u32(b.as_ref());
-                        let wght = wght_for_font_style(resolved.font_style.as_deref());
-                        face_keys.insert((font_id, wght.to_bits()));
-                        id_to_bytes
-                            .entry(font_id)
-                            .or_insert_with(|| b.clone());
+        let harvest_face_keys =
+            |paragraph: &paged_parse::Paragraph,
+             face_keys: &mut std::collections::HashSet<(u32, u32)>,
+             id_to_bytes: &mut HashMap<u32, Bytes>| {
+                // Inner walk: handle both top-level paragraphs and
+                // recursive table-cell paragraphs.
+                fn walk(
+                    document: &Document,
+                    cache: &HashMap<(String, Option<String>), Bytes>,
+                    fallback: &Option<Bytes>,
+                    paragraph: &paged_parse::Paragraph,
+                    face_keys: &mut std::collections::HashSet<(u32, u32)>,
+                    id_to_bytes: &mut HashMap<u32, Bytes>,
+                ) {
+                    for run in &paragraph.runs {
+                        let resolved = document.resolved_run_attrs(paragraph, run);
+                        // Mirror `FontTable::bytes_for`: (family, style)
+                        // direct hit, then bare-family, then fallback.
+                        let bytes = resolved
+                            .font
+                            .as_deref()
+                            .and_then(|f| {
+                                cache
+                                    .get(&(f.to_string(), resolved.font_style.clone()))
+                                    .or_else(|| cache.get(&(f.to_string(), None)))
+                            })
+                            .or(fallback.as_ref());
+                        if let Some(b) = bytes {
+                            let font_id = fnv_1a_u32(b.as_ref());
+                            let wght = wght_for_font_style(resolved.font_style.as_deref());
+                            face_keys.insert((font_id, wght.to_bits()));
+                            id_to_bytes.entry(font_id).or_insert_with(|| b.clone());
+                        }
                     }
-                }
-                if let Some(table) = paragraph.table.as_ref() {
-                    for cell in &table.cells {
-                        for inner in &cell.paragraphs {
-                            walk(
-                                document,
-                                cache,
-                                fallback,
-                                inner,
-                                face_keys,
-                                id_to_bytes,
-                            );
+                    if let Some(table) = paragraph.table.as_ref() {
+                        for cell in &table.cells {
+                            for inner in &cell.paragraphs {
+                                walk(document, cache, fallback, inner, face_keys, id_to_bytes);
+                            }
                         }
                     }
                 }
-            }
-            walk(
-                document,
-                &cache,
-                &fallback,
-                paragraph,
-                face_keys,
-                id_to_bytes,
-            );
-        };
+                walk(
+                    document,
+                    &cache,
+                    &fallback,
+                    paragraph,
+                    face_keys,
+                    id_to_bytes,
+                );
+            };
         for parsed in &document.stories {
             for paragraph in &parsed.story.paragraphs {
                 harvest_face_keys(paragraph, &mut face_keys, &mut id_to_bytes);
@@ -8797,7 +8743,10 @@ mod tests {
         assert!((sz - 6.996).abs() < 1e-3, "sub size {sz}");
         assert!((sh + 3.996).abs() < 1e-3, "sub shift {sh}");
         // Normal: untouched size, zero shift.
-        assert_eq!(position_adjusted_metrics(12.0, None, Some("Normal")), (12.0, 0.0));
+        assert_eq!(
+            position_adjusted_metrics(12.0, None, Some("Normal")),
+            (12.0, 0.0)
+        );
         assert_eq!(position_adjusted_metrics(12.0, None, None), (12.0, 0.0));
     }
 
@@ -8862,7 +8811,11 @@ mod tests {
             .compose(&Transform::translate(-10.0, -20.0));
         // Master item sitting at inner translate(3, 4).
         let m = compose_outer_matrix(outer, Some([1.0, 0.0, 0.0, 1.0, 3.0, 4.0]));
-        assert_eq!([m[0], m[1], m[2], m[3]], [1.0, 0.0, 0.0, 1.0], "linear part untouched");
+        assert_eq!(
+            [m[0], m[1], m[2], m[3]],
+            [1.0, 0.0, 0.0, 1.0],
+            "linear part untouched"
+        );
         assert!((m[4] - 93.0).abs() < 1e-4, "tx={} (100-10+3)", m[4]);
         assert!((m[5] - 34.0).abs() < 1e-4, "ty={} (50-20+4)", m[5]);
     }
@@ -8876,7 +8829,10 @@ mod tests {
             .compose(&Transform([2.0, 0.0, 0.0, 2.0, 0.0, 0.0]))
             .compose(&Transform::translate(0.0, 0.0));
         let m = compose_outer_matrix(outer, Some([1.0, 0.0, 0.0, 1.0, 5.0, 7.0]));
-        assert!((m[0] - 2.0).abs() < 1e-4 && (m[3] - 2.0).abs() < 1e-4, "linear scaled");
+        assert!(
+            (m[0] - 2.0).abs() < 1e-4 && (m[3] - 2.0).abs() < 1e-4,
+            "linear scaled"
+        );
         assert!((m[4] - 10.0).abs() < 1e-4, "tx={} (5×2)", m[4]);
         assert!((m[5] - 14.0).abs() < 1e-4, "ty={} (7×2)", m[5]);
     }
@@ -9468,9 +9424,14 @@ mod tests {
             .segments
             .iter()
             .find_map(|s| match s {
-                PathSegment::CubicTo { cx1, cy1, cx2, cy2, x, y } => {
-                    Some((*cx1, *cy1, *cx2, *cy2, *x, *y))
-                }
+                PathSegment::CubicTo {
+                    cx1,
+                    cy1,
+                    cx2,
+                    cy2,
+                    x,
+                    y,
+                } => Some((*cx1, *cy1, *cx2, *cy2, *x, *y)),
                 _ => None,
             })
             .expect("a forward CubicTo is emitted between the two anchors");
@@ -9523,7 +9484,9 @@ mod tests {
             run_attrs(Some("Limon Script"), None),
             run_attrs(Some("Inter"), None),
         ];
-        let pool = table.resolve_paragraph_bytes(&runs).expect("paragraph kept");
+        let pool = table
+            .resolve_paragraph_bytes(&runs)
+            .expect("paragraph kept");
         assert_eq!(pool.len(), 3);
         assert_eq!(&pool[0][..], b"INTER");
         assert_eq!(&pool[1][..], b"INTER", "missing run inherits sibling");
@@ -9539,7 +9502,9 @@ mod tests {
             run_attrs(Some("Unknown A"), None),
             run_attrs(Some("Unknown B"), Some("Bold")),
         ];
-        let pool = table.resolve_paragraph_bytes(&runs).expect("paragraph kept");
+        let pool = table
+            .resolve_paragraph_bytes(&runs)
+            .expect("paragraph kept");
         assert_eq!(pool.len(), 2);
         assert_eq!(&pool[0][..], b"DEFAULT");
         assert_eq!(&pool[1][..], b"DEFAULT");
@@ -9593,7 +9558,11 @@ mod tests {
             ..paged_parse::Paragraph::default()
         };
         let subs = split_paragraph_at_breaks(&paragraph);
-        assert_eq!(subs.len(), 1, "trailing \\n must not produce a phantom sub-paragraph");
+        assert_eq!(
+            subs.len(),
+            1,
+            "trailing \\n must not produce a phantom sub-paragraph"
+        );
         assert_eq!(subs[0].runs.len(), 1);
         assert_eq!(subs[0].runs[0].text, "01");
     }
@@ -9749,11 +9718,7 @@ mod tests {
         use image::{ImageBuffer, ImageFormat, Rgb};
         use std::io::Cursor;
         let src: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(4000, 4000, |x, y| {
-            Rgb([
-                (x & 0xFF) as u8,
-                (y & 0xFF) as u8,
-                ((x ^ y) & 0xFF) as u8,
-            ])
+            Rgb([(x & 0xFF) as u8, (y & 0xFF) as u8, ((x ^ y) & 0xFF) as u8])
         });
         let mut buf: Vec<u8> = Vec::new();
         src.write_to(&mut Cursor::new(&mut buf), ImageFormat::Jpeg)
@@ -9775,9 +9740,12 @@ mod tests {
     // Track 1a: small JPEGs (longest edge ≤ cap) skip the streaming
     // ── Phase 4 typography — nested-style overlay walker ──────────
 
-    fn ns(style: &str, delim: paged_parse::NestedDelimiter, rep: i32, inc: bool)
-        -> paged_parse::NestedStyle
-    {
+    fn ns(
+        style: &str,
+        delim: paged_parse::NestedDelimiter,
+        rep: i32,
+        inc: bool,
+    ) -> paged_parse::NestedStyle {
         paged_parse::NestedStyle {
             applied_character_style: style.into(),
             delimiter: delim,
@@ -9795,7 +9763,12 @@ mod tests {
     fn nested_overlay_characters_simple() {
         let ov = compute_nested_style_overlay(
             "abcdef",
-            &[ns("S/Bold", paged_parse::NestedDelimiter::Characters, 3, true)],
+            &[ns(
+                "S/Bold",
+                paged_parse::NestedDelimiter::Characters,
+                3,
+                true,
+            )],
         );
         assert_eq!(ov.len(), 1);
         assert_eq!(ov[0].byte_range, 0..3);
@@ -9860,7 +9833,12 @@ mod tests {
     fn nested_overlay_stops_at_end_of_text() {
         let ov = compute_nested_style_overlay(
             "abc",
-            &[ns("S/X", paged_parse::NestedDelimiter::Characters, 100, true)],
+            &[ns(
+                "S/X",
+                paged_parse::NestedDelimiter::Characters,
+                100,
+                true,
+            )],
         );
         // Repetition exceeds text length → range extends to end.
         assert_eq!(ov.len(), 1);
@@ -10023,7 +10001,10 @@ mod tests {
             cond_run("hide", &["Condition/Draft"]),
         ];
         let mut table = std::collections::BTreeMap::new();
-        table.insert("Condition/Draft".to_string(), cond("Condition/Draft", false));
+        table.insert(
+            "Condition/Draft".to_string(),
+            cond("Condition/Draft", false),
+        );
         let out = filter_by_conditions(&runs, &table);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].text, "keep");
@@ -10056,12 +10037,7 @@ mod tests {
         // First 3 digits in mixed text.
         let ov = compute_nested_style_overlay(
             "a1b2c3d4",
-            &[ns(
-                "S/Num",
-                paged_parse::NestedDelimiter::AnyDigit,
-                3,
-                true,
-            )],
+            &[ns("S/Num", paged_parse::NestedDelimiter::AnyDigit, 3, true)],
         );
         assert_eq!(ov.len(), 1);
         assert_eq!(&"a1b2c3d4"[ov[0].byte_range.clone()], "a1b2c3");
@@ -10240,7 +10216,10 @@ mod tests {
             built.diagnostics.items
         );
         assert_eq!(missing[0].page_index, Some(0));
-        assert_eq!(missing[0].uri.as_deref(), Some("file:///nonexistent/photo.jpg"));
+        assert_eq!(
+            missing[0].uri.as_deref(),
+            Some("file:///nonexistent/photo.jpg")
+        );
     }
 
     fn test_section(
@@ -10362,7 +10341,8 @@ mod tests {
 
     fn inter_font_bytes() -> Vec<u8> {
         std::fs::read(
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts/Inter.ttf"),
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../corpus/fonts/Inter.ttf"),
         )
         .expect("Inter.ttf fixture")
     }
@@ -10442,8 +10422,7 @@ mod tests {
         let build = |auto: &str| -> (usize, usize) {
             let buf = std::io::Cursor::new(Vec::new());
             let mut zip = ZipWriter::new(buf);
-            let stored =
-                SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
             let deflated =
                 SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
             zip.start_file("mimetype", stored).unwrap();
@@ -10521,8 +10500,7 @@ mod tests {
         let count_fills = |right_line_end: &str| -> usize {
             let buf = std::io::Cursor::new(Vec::new());
             let mut zip = ZipWriter::new(buf);
-            let stored =
-                SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
             let deflated =
                 SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
             zip.start_file("mimetype", stored).unwrap();
@@ -11151,18 +11129,18 @@ mod tests {
         let footnotes = &built.pages[0].footnotes;
         assert_eq!(footnotes.len(), 2);
         assert_eq!(footnotes[0].number, 1);
-        assert_eq!(footnotes[0].footnote_self_id.as_deref(), Some("Footnote/fn1"));
+        assert_eq!(
+            footnotes[0].footnote_self_id.as_deref(),
+            Some("Footnote/fn1")
+        );
         assert_eq!(footnotes[1].number, 2);
-        assert_eq!(footnotes[1].footnote_self_id.as_deref(), Some("Footnote/fn2"));
+        assert_eq!(
+            footnotes[1].footnote_self_id.as_deref(),
+            Some("Footnote/fn2")
+        );
         // Footnote bodies preserved verbatim.
-        assert_eq!(
-            footnotes[0].paragraphs[0].runs[0].text,
-            "First footnote."
-        );
-        assert_eq!(
-            footnotes[1].paragraphs[0].runs[0].text,
-            "Second footnote."
-        );
+        assert_eq!(footnotes[0].paragraphs[0].runs[0].text, "First footnote.");
+        assert_eq!(footnotes[1].paragraphs[0].runs[0].text, "Second footnote.");
 
         // Phase 5 footnote pool: the post-pass should have laid out
         // the two footnotes as glyphs at the bottom of frameA.

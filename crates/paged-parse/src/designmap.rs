@@ -568,8 +568,7 @@ impl DesignMap {
                                 continue_numbering: attr(&e, b"ContinueNumbering")
                                     .and_then(|s| s.parse().ok())
                                     .unwrap_or(false),
-                                start_at: attr(&e, b"PageNumberStart")
-                                    .and_then(|s| s.parse().ok()),
+                                start_at: attr(&e, b"PageNumberStart").and_then(|s| s.parse().ok()),
                                 numbering_style: attr(&e, b"PageNumberStyle")
                                     .map(|s| NumberingStyle::from_idml(&s))
                                     .unwrap_or(NumberingStyle::Arabic),
@@ -800,7 +799,10 @@ mod tests {
         let dm = DesignMap::parse(xml).unwrap();
         assert_eq!(dm.document_name.as_deref(), Some("brochure.indd"));
         assert_eq!(dm.hyperlinks.len(), 2);
-        assert_eq!(dm.hyperlinks[0].source.as_deref(), Some("HyperlinkTextSource/src1"));
+        assert_eq!(
+            dm.hyperlinks[0].source.as_deref(),
+            Some("HyperlinkTextSource/src1")
+        );
         assert_eq!(dm.hyperlinks[0].destination.as_deref(), Some("d1"));
         assert_eq!(dm.hyperlink_destinations.len(), 3);
         assert!(matches!(

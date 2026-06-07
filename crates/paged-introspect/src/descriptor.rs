@@ -284,9 +284,7 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::FrameGradientFillAngle => PropertyPathJson::FrameGradientFillAngle,
             PropertyPath::FrameGradientFillLength => PropertyPathJson::FrameGradientFillLength,
             PropertyPath::FrameGradientStrokeAngle => PropertyPathJson::FrameGradientStrokeAngle,
-            PropertyPath::FrameGradientStrokeLength => {
-                PropertyPathJson::FrameGradientStrokeLength
-            }
+            PropertyPath::FrameGradientStrokeLength => PropertyPathJson::FrameGradientStrokeLength,
             PropertyPath::PathOpenAt => PropertyPathJson::PathOpenAt,
             PropertyPath::OutlineStroke => PropertyPathJson::OutlineStroke,
             PropertyPath::OffsetPath => PropertyPathJson::OffsetPath,
@@ -344,24 +342,16 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::FrameStrokeAlignment => PropertyPathJson::FrameStrokeAlignment,
             PropertyPath::FrameStrokeGapColor => PropertyPathJson::FrameStrokeGapColor,
             PropertyPath::FrameStrokeGapTint => PropertyPathJson::FrameStrokeGapTint,
-            PropertyPath::FrameCornerOptionTopLeft => {
-                PropertyPathJson::FrameCornerOptionTopLeft
-            }
-            PropertyPath::FrameCornerOptionTopRight => {
-                PropertyPathJson::FrameCornerOptionTopRight
-            }
+            PropertyPath::FrameCornerOptionTopLeft => PropertyPathJson::FrameCornerOptionTopLeft,
+            PropertyPath::FrameCornerOptionTopRight => PropertyPathJson::FrameCornerOptionTopRight,
             PropertyPath::FrameCornerOptionBottomLeft => {
                 PropertyPathJson::FrameCornerOptionBottomLeft
             }
             PropertyPath::FrameCornerOptionBottomRight => {
                 PropertyPathJson::FrameCornerOptionBottomRight
             }
-            PropertyPath::FrameCornerRadiusTopLeft => {
-                PropertyPathJson::FrameCornerRadiusTopLeft
-            }
-            PropertyPath::FrameCornerRadiusTopRight => {
-                PropertyPathJson::FrameCornerRadiusTopRight
-            }
+            PropertyPath::FrameCornerRadiusTopLeft => PropertyPathJson::FrameCornerRadiusTopLeft,
+            PropertyPath::FrameCornerRadiusTopRight => PropertyPathJson::FrameCornerRadiusTopRight,
             PropertyPath::FrameCornerRadiusBottomLeft => {
                 PropertyPathJson::FrameCornerRadiusBottomLeft
             }
@@ -462,9 +452,7 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::CellInsetLeft => PropertyPathJson::CellInsetLeft,
             PropertyPath::CellInsetBottom => PropertyPathJson::CellInsetBottom,
             PropertyPath::CellInsetRight => PropertyPathJson::CellInsetRight,
-            PropertyPath::CellVerticalJustification => {
-                PropertyPathJson::CellVerticalJustification
-            }
+            PropertyPath::CellVerticalJustification => PropertyPathJson::CellVerticalJustification,
             // Aftercare-A — table dimensions (read-only).
             PropertyPath::TableRowCount => PropertyPathJson::TableRowCount,
             PropertyPath::TableColumnCount => PropertyPathJson::TableColumnCount,
@@ -524,9 +512,7 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::FrameGradientFillAngle => PropertyPath::FrameGradientFillAngle,
             PropertyPathJson::FrameGradientFillLength => PropertyPath::FrameGradientFillLength,
             PropertyPathJson::FrameGradientStrokeAngle => PropertyPath::FrameGradientStrokeAngle,
-            PropertyPathJson::FrameGradientStrokeLength => {
-                PropertyPath::FrameGradientStrokeLength
-            }
+            PropertyPathJson::FrameGradientStrokeLength => PropertyPath::FrameGradientStrokeLength,
             PropertyPathJson::PathOpenAt => PropertyPath::PathOpenAt,
             PropertyPathJson::OutlineStroke => PropertyPath::OutlineStroke,
             PropertyPathJson::OffsetPath => PropertyPath::OffsetPath,
@@ -584,24 +570,16 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::FrameStrokeAlignment => PropertyPath::FrameStrokeAlignment,
             PropertyPathJson::FrameStrokeGapColor => PropertyPath::FrameStrokeGapColor,
             PropertyPathJson::FrameStrokeGapTint => PropertyPath::FrameStrokeGapTint,
-            PropertyPathJson::FrameCornerOptionTopLeft => {
-                PropertyPath::FrameCornerOptionTopLeft
-            }
-            PropertyPathJson::FrameCornerOptionTopRight => {
-                PropertyPath::FrameCornerOptionTopRight
-            }
+            PropertyPathJson::FrameCornerOptionTopLeft => PropertyPath::FrameCornerOptionTopLeft,
+            PropertyPathJson::FrameCornerOptionTopRight => PropertyPath::FrameCornerOptionTopRight,
             PropertyPathJson::FrameCornerOptionBottomLeft => {
                 PropertyPath::FrameCornerOptionBottomLeft
             }
             PropertyPathJson::FrameCornerOptionBottomRight => {
                 PropertyPath::FrameCornerOptionBottomRight
             }
-            PropertyPathJson::FrameCornerRadiusTopLeft => {
-                PropertyPath::FrameCornerRadiusTopLeft
-            }
-            PropertyPathJson::FrameCornerRadiusTopRight => {
-                PropertyPath::FrameCornerRadiusTopRight
-            }
+            PropertyPathJson::FrameCornerRadiusTopLeft => PropertyPath::FrameCornerRadiusTopLeft,
+            PropertyPathJson::FrameCornerRadiusTopRight => PropertyPath::FrameCornerRadiusTopRight,
             PropertyPathJson::FrameCornerRadiusBottomLeft => {
                 PropertyPath::FrameCornerRadiusBottomLeft
             }
@@ -702,9 +680,7 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::CellInsetLeft => PropertyPath::CellInsetLeft,
             PropertyPathJson::CellInsetBottom => PropertyPath::CellInsetBottom,
             PropertyPathJson::CellInsetRight => PropertyPath::CellInsetRight,
-            PropertyPathJson::CellVerticalJustification => {
-                PropertyPath::CellVerticalJustification
-            }
+            PropertyPathJson::CellVerticalJustification => PropertyPath::CellVerticalJustification,
             // Aftercare-A — table dimensions (read-only).
             PropertyPathJson::TableRowCount => PropertyPath::TableRowCount,
             PropertyPathJson::TableColumnCount => PropertyPath::TableColumnCount,
@@ -889,10 +865,7 @@ fn find_text_frame<'a>(
         .find(|f| f.self_id.as_deref() == Some(self_id))
 }
 
-fn find_rectangle<'a>(
-    document: &'a Document,
-    self_id: &str,
-) -> Option<&'a paged_parse::Rectangle> {
+fn find_rectangle<'a>(document: &'a Document, self_id: &str) -> Option<&'a paged_parse::Rectangle> {
     document
         .spreads
         .iter()

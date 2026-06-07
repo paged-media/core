@@ -56,10 +56,7 @@ pub struct CaretGeometry {
 /// Returns `None` when the story has no captured layout (e.g. the
 /// document carries no fonts so no glyphs were emitted) — the caller
 /// can render a no-caret placeholder.
-pub fn caret_geometry(
-    built: &BuiltDocument,
-    sel: &ContentSelection,
-) -> Option<CaretGeometry> {
+pub fn caret_geometry(built: &BuiltDocument, sel: &ContentSelection) -> Option<CaretGeometry> {
     let lines: Vec<&LineLayout> = built.story_layout(&sel.story_id);
     if lines.is_empty() {
         return None;
@@ -83,8 +80,7 @@ pub fn caret_geometry(
             // the offset equals prev's end (line-break boundary),
             // pick *this* line when affinity is downstream.
             if let Some((p, _)) = prev {
-                let p_para_start =
-                    paragraph_byte_offset(built, &sel.story_id, p.paragraph_idx);
+                let p_para_start = paragraph_byte_offset(built, &sel.story_id, p.paragraph_idx);
                 let p_end = p_para_start + p.byte_range.end;
                 if sel.affinity && target_offset == p_end {
                     chosen = Some((line, line_start));
@@ -121,10 +117,7 @@ pub fn caret_geometry(
 
 /// One rect per visible line covered by `[sel.start, sel.end)`.
 /// Empty when `sel` is a caret or when the story has no layout.
-pub fn selection_geometry(
-    built: &BuiltDocument,
-    sel: &ContentSelection,
-) -> Vec<SelectionRect> {
+pub fn selection_geometry(built: &BuiltDocument, sel: &ContentSelection) -> Vec<SelectionRect> {
     if sel.is_caret() {
         return Vec::new();
     }
@@ -195,8 +188,7 @@ pub fn caret_nav(
     let spans: Vec<(u32, u32)> = lines
         .iter()
         .map(|line| {
-            let para_start =
-                paragraph_byte_offset(built, story_id, line.paragraph_idx);
+            let para_start = paragraph_byte_offset(built, story_id, line.paragraph_idx);
             (
                 para_start + line.byte_range.start,
                 para_start + line.byte_range.end,
@@ -255,15 +247,10 @@ pub fn caret_nav(
 /// and shift-Home/shift-End without the editor re-deriving line
 /// breaks. `None` when the story has no layout or the offset doesn't
 /// fall on any visible line.
-pub fn line_bounds(
-    built: &BuiltDocument,
-    story_id: &str,
-    offset: u32,
-) -> Option<LineBounds> {
+pub fn line_bounds(built: &BuiltDocument, story_id: &str, offset: u32) -> Option<LineBounds> {
     let lines: Vec<&LineLayout> = built.story_layout(story_id);
     for line in &lines {
-        let para_start =
-            paragraph_byte_offset(built, story_id, line.paragraph_idx);
+        let para_start = paragraph_byte_offset(built, story_id, line.paragraph_idx);
         let line_start = para_start + line.byte_range.start;
         let line_end = para_start + line.byte_range.end;
         if offset >= line_start && offset <= line_end {
@@ -552,10 +539,8 @@ mod tests {
         use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
         let buf = std::io::Cursor::new(Vec::new());
         let mut zip = ZipWriter::new(buf);
-        let stored =
-            SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
-        let deflated =
-            SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
         zip.start_file("mimetype", stored).unwrap();
         zip.write_all(b"application/vnd.adobe.indesign-idml-package")
             .unwrap();
@@ -613,12 +598,15 @@ mod tests {
         let built = model.built();
         // Confirm the fixture actually wrapped to ≥2 lines.
         let lines = built.story_layout("u10");
-        assert!(lines.len() >= 2, "fixture should wrap; got {} line(s)", lines.len());
+        assert!(
+            lines.len() >= 2,
+            "fixture should wrap; got {} line(s)",
+            lines.len()
+        );
 
         // From a caret on line 0 (offset 2, inside "Hello"), Down lands
         // on line 1, and Up from there returns to line 0.
-        let down = caret_nav(built, "u10", 2, CaretDirection::Down)
-            .expect("a line below line 0");
+        let down = caret_nav(built, "u10", 2, CaretDirection::Down).expect("a line below line 0");
         // The destination must be past the first line's end (i.e. on
         // the second visible line).
         let l0_end = {
@@ -626,11 +614,17 @@ mod tests {
             let ps = crate::hit::paragraph_byte_offset(built, "u10", l.paragraph_idx);
             ps + l.byte_range.end
         };
-        assert!(down >= l0_end, "down ({down}) should be on the next line (≥ {l0_end})");
+        assert!(
+            down >= l0_end,
+            "down ({down}) should be on the next line (≥ {l0_end})"
+        );
 
-        let back_up = caret_nav(built, "u10", down, CaretDirection::Up)
-            .expect("a line above line 1");
-        assert!(back_up <= l0_end, "up ({back_up}) should land back on line 0 (≤ {l0_end})");
+        let back_up =
+            caret_nav(built, "u10", down, CaretDirection::Up).expect("a line above line 1");
+        assert!(
+            back_up <= l0_end,
+            "up ({back_up}) should land back on line 0 (≤ {l0_end})"
+        );
     }
 
     #[test]
@@ -664,7 +658,11 @@ mod tests {
         let b = line_bounds(built, "u10", 2).expect("line bounds for offset 2");
         // The first line starts at 0 and ends before the second line.
         assert_eq!(b.line_start, 0);
-        assert!(b.line_end >= 2, "line_end {} must cover offset 2", b.line_end);
+        assert!(
+            b.line_end >= 2,
+            "line_end {} must cover offset 2",
+            b.line_end
+        );
         // An offset on a later line yields a different, non-overlapping span.
         let lines = built.story_layout("u10");
         if lines.len() >= 2 {
@@ -672,7 +670,10 @@ mod tests {
             let ps = crate::hit::paragraph_byte_offset(built, "u10", l1.paragraph_idx);
             let mid = ps + l1.byte_range.start;
             let b2 = line_bounds(built, "u10", mid).expect("line bounds line 1");
-            assert!(b2.line_start >= b.line_end, "line 1 starts after line 0 ends");
+            assert!(
+                b2.line_start >= b.line_end,
+                "line 1 starts after line 0 ends"
+            );
         }
     }
 
@@ -744,7 +745,9 @@ mod tests {
         // End-to-end through the model's story-text reconstruction: a
         // mid-word offset on the loaded story returns the word span.
         let model = load_model("Hello world.");
-        let wb = model.word_bounds("u10", 8).expect("word bounds for offset 8");
+        let wb = model
+            .word_bounds("u10", 8)
+            .expect("word bounds for offset 8");
         assert_eq!((wb.start, wb.end), (6, 11));
     }
 

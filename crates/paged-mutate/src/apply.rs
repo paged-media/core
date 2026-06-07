@@ -45,13 +45,13 @@ use paged_scene::Document;
 
 use crate::error::OperationError;
 use crate::invert::{
-    invert_batch, invert_insert_node, invert_move_node, invert_remove_node,
-    invert_set_property,
+    invert_batch, invert_insert_node, invert_move_node, invert_remove_node, invert_set_property,
 };
 use crate::operation::{
-    AppliedOperation, ColorGroupSpec, FieldKind, GradientFeatherSpec, GradientSpec, GroupSpec,
-    GradientStopSpec, GuideOrientationSpec, InvalidationHint, NodeId, NodeSpec, Operation,
-    PathAnchorSpec, PathfinderKind, PropertyPath, StyleCollection, StyleScope, SwatchSpec, Value,
+    AppliedOperation, ColorGroupSpec, FieldKind, GradientFeatherSpec, GradientSpec,
+    GradientStopSpec, GroupSpec, GuideOrientationSpec, InvalidationHint, NodeId, NodeSpec,
+    Operation, PathAnchorSpec, PathfinderKind, PropertyPath, StyleCollection, StyleScope,
+    SwatchSpec, Value,
 };
 use crate::pathfinder::{pathfinder_boolean, PathfinderKind as InternalPathfinderKind};
 
@@ -61,13 +61,18 @@ use crate::pathfinder::{pathfinder_boolean, PathfinderKind as InternalPathfinder
 pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, OperationError> {
     match op {
         Operation::SetProperty { node, path, value } => apply_set_property(doc, node, *path, value),
-        Operation::InsertNode { parent, position, node, z_slot } => {
-            apply_insert_node(doc, parent, *position, *z_slot, node)
-        }
+        Operation::InsertNode {
+            parent,
+            position,
+            node,
+            z_slot,
+        } => apply_insert_node(doc, parent, *position, *z_slot, node),
         Operation::RemoveNode { node } => apply_remove_node(doc, node),
-        Operation::MoveNode { node, new_parent, position } => {
-            apply_move_node(doc, node, new_parent, *position)
-        }
+        Operation::MoveNode {
+            node,
+            new_parent,
+            position,
+        } => apply_move_node(doc, node, new_parent, *position),
         Operation::Batch { ops } => apply_batch(doc, ops),
         Operation::InsertPage {
             after_page_id,
@@ -84,9 +89,10 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             restore_spread_json.as_deref(),
         ),
         Operation::RemovePage { page_id } => apply_remove_page(doc, page_id),
-        Operation::MoveLayer { layer_id, new_index } => {
-            apply_move_layer(doc, layer_id, *new_index)
-        }
+        Operation::MoveLayer {
+            layer_id,
+            new_index,
+        } => apply_move_layer(doc, layer_id, *new_index),
         Operation::InsertLayer {
             position,
             name,
@@ -111,9 +117,7 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
         Operation::RenameParagraphStyle { style_id, name } => {
             apply_rename_paragraph_style(doc, style_id, name)
         }
-        Operation::DeleteParagraphStyle { style_id } => {
-            apply_delete_paragraph_style(doc, style_id)
-        }
+        Operation::DeleteParagraphStyle { style_id } => apply_delete_paragraph_style(doc, style_id),
         Operation::CreateCharacterStyle {
             self_id,
             name,
@@ -129,9 +133,7 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
         Operation::RenameCharacterStyle { style_id, name } => {
             apply_rename_character_style(doc, style_id, name)
         }
-        Operation::DeleteCharacterStyle { style_id } => {
-            apply_delete_character_style(doc, style_id)
-        }
+        Operation::DeleteCharacterStyle { style_id } => apply_delete_character_style(doc, style_id),
         Operation::CreateObjectStyle {
             self_id,
             name,
@@ -191,9 +193,7 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
         }
         Operation::DeleteGradient { gradient_id } => apply_delete_gradient(doc, gradient_id),
         Operation::CreateColorGroup { spec } => apply_create_color_group(doc, spec),
-        Operation::EditColorGroup { group_id, spec } => {
-            apply_edit_color_group(doc, group_id, spec)
-        }
+        Operation::EditColorGroup { group_id, spec } => apply_edit_color_group(doc, group_id, spec),
         Operation::DeleteColorGroup { group_id } => apply_delete_color_group(doc, group_id),
         Operation::SetStyleProperty {
             collection,
@@ -339,7 +339,8 @@ fn apply_pathfinder(
     //    handles the "no anchors → bounds rectangle" fallback in
     //    its callers; for Pathfinder we read anchors directly
     //    since the result IS a path replacement.
-    let mut inputs: Vec<(Vec<paged_parse::PathAnchor>, Vec<usize>)> = Vec::with_capacity(1 + others.len());
+    let mut inputs: Vec<(Vec<paged_parse::PathAnchor>, Vec<usize>)> =
+        Vec::with_capacity(1 + others.len());
     for node in std::iter::once(kept).chain(others.iter()) {
         let (anchors, starts) = read_path(doc, node)?;
         inputs.push((anchors, starts));
@@ -367,7 +368,9 @@ fn apply_pathfinder(
         },
     });
     for other in others {
-        batch_children.push(Operation::RemoveNode { node: other.clone() });
+        batch_children.push(Operation::RemoveNode {
+            node: other.clone(),
+        });
     }
     let batch = Operation::Batch {
         ops: batch_children,
@@ -550,9 +553,7 @@ fn apply_set_property(
             | NodeId::TextFrame(_)
             | NodeId::Rectangle(_)
             | NodeId::GraphicLine(_),
-            PropertyPath::OutlineStroke
-            | PropertyPath::OffsetPath
-            | PropertyPath::SimplifyPath,
+            PropertyPath::OutlineStroke | PropertyPath::OffsetPath | PropertyPath::SimplifyPath,
         ) => {
             return apply_path_kernel_op(doc, node, &path, value);
         }
@@ -796,8 +797,8 @@ fn apply_set_property(
         }
         (NodeId::Oval(id), PropertyPath::FrameTransform) => {
             let new_transform = expect_transform(path, value)?;
-            let oval = find_oval_mut(doc, id)
-                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let oval =
+                find_oval_mut(doc, id).ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let prev = oval.item_transform;
             oval.item_transform = new_transform;
             (
@@ -969,9 +970,7 @@ fn apply_set_property(
             let new_val = expect_text(path, value)?;
             let tw = find_text_wrap_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
-            let prev_mode = tw
-                .map(|t| t.mode.as_idml().to_string())
-                .unwrap_or_default();
+            let prev_mode = tw.map(|t| t.mode.as_idml().to_string()).unwrap_or_default();
             let prev_offsets = tw.map(|t| t.offsets).unwrap_or([0.0; 4]);
             let prev_invert = tw.and_then(|t| t.invert);
             if new_val.is_empty() {
@@ -1136,8 +1135,8 @@ fn apply_set_property(
         // ---- Editor-ops — Page tool: page resize -----------------
         (NodeId::Page(id), PropertyPath::PageBounds) => {
             let new_bounds = expect_bounds(path, value)?;
-            let page = find_page_mut(doc, id)
-                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let page =
+                find_page_mut(doc, id).ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let prev = bounds_to_array(page.bounds);
             page.bounds = bounds_from_array(new_bounds);
             (
@@ -1209,7 +1208,11 @@ fn apply_set_property(
             let ds = find_drop_shadow_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let prev = ds.mode.clone();
-            ds.mode = if new_val.is_empty() { "Drop".to_string() } else { new_val.clone() };
+            ds.mode = if new_val.is_empty() {
+                "Drop".to_string()
+            } else {
+                new_val.clone()
+            };
             (
                 Value::Text(prev),
                 InvalidationHint {
@@ -1365,7 +1368,10 @@ fn apply_set_property(
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let prev = effects.inner_shadow.is_some();
             effects.inner_shadow = if new_val {
-                effects.inner_shadow.take().or_else(|| Some(default_inner_shadow()))
+                effects
+                    .inner_shadow
+                    .take()
+                    .or_else(|| Some(default_inner_shadow()))
             } else {
                 None
             };
@@ -1379,8 +1385,15 @@ fn apply_set_property(
             let e = find_inner_shadow_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let prev = e.blend_mode.take();
-            e.blend_mode = if new_val.is_empty() { None } else { Some(new_val) };
-            (Value::Text(prev.unwrap_or_default()), frame_style_hint(node))
+            e.blend_mode = if new_val.is_empty() {
+                None
+            } else {
+                Some(new_val)
+            };
+            (
+                Value::Text(prev.unwrap_or_default()),
+                frame_style_hint(node),
+            )
         }
         (
             NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
@@ -1428,7 +1441,10 @@ fn apply_set_property(
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let prev = effects.outer_glow.is_some();
             effects.outer_glow = if new_val {
-                effects.outer_glow.take().or_else(|| Some(default_outer_glow()))
+                effects
+                    .outer_glow
+                    .take()
+                    .or_else(|| Some(default_outer_glow()))
             } else {
                 None
             };
@@ -1442,8 +1458,15 @@ fn apply_set_property(
             let e = find_outer_glow_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let prev = e.blend_mode.take();
-            e.blend_mode = if new_val.is_empty() { None } else { Some(new_val) };
-            (Value::Text(prev.unwrap_or_default()), frame_style_hint(node))
+            e.blend_mode = if new_val.is_empty() {
+                None
+            } else {
+                Some(new_val)
+            };
+            (
+                Value::Text(prev.unwrap_or_default()),
+                frame_style_hint(node),
+            )
         }
         (
             NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
@@ -1487,7 +1510,10 @@ fn apply_set_property(
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let prev = effects.inner_glow.is_some();
             effects.inner_glow = if new_val {
-                effects.inner_glow.take().or_else(|| Some(default_inner_glow()))
+                effects
+                    .inner_glow
+                    .take()
+                    .or_else(|| Some(default_inner_glow()))
             } else {
                 None
             };
@@ -1501,8 +1527,15 @@ fn apply_set_property(
             let e = find_inner_glow_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let prev = e.blend_mode.take();
-            e.blend_mode = if new_val.is_empty() { None } else { Some(new_val) };
-            (Value::Text(prev.unwrap_or_default()), frame_style_hint(node))
+            e.blend_mode = if new_val.is_empty() {
+                None
+            } else {
+                Some(new_val)
+            };
+            (
+                Value::Text(prev.unwrap_or_default()),
+                frame_style_hint(node),
+            )
         }
         (
             NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
@@ -1523,8 +1556,15 @@ fn apply_set_property(
             let e = find_inner_glow_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let prev = e.source.take();
-            e.source = if new_val.is_empty() { None } else { Some(new_val) };
-            (Value::Text(prev.unwrap_or_default()), frame_style_hint(node))
+            e.source = if new_val.is_empty() {
+                None
+            } else {
+                Some(new_val)
+            };
+            (
+                Value::Text(prev.unwrap_or_default()),
+                frame_style_hint(node),
+            )
         }
         (
             NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
@@ -1578,8 +1618,15 @@ fn apply_set_property(
                 _ => &mut e.direction,
             };
             let prev = slot.take();
-            *slot = if new_val.is_empty() { None } else { Some(new_val) };
-            (Value::Text(prev.unwrap_or_default()), frame_style_hint(node))
+            *slot = if new_val.is_empty() {
+                None
+            } else {
+                Some(new_val)
+            };
+            (
+                Value::Text(prev.unwrap_or_default()),
+                frame_style_hint(node),
+            )
         }
         (
             NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
@@ -1647,8 +1694,15 @@ fn apply_set_property(
             let e = find_satin_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let prev = e.blend_mode.take();
-            e.blend_mode = if new_val.is_empty() { None } else { Some(new_val) };
-            (Value::Text(prev.unwrap_or_default()), frame_style_hint(node))
+            e.blend_mode = if new_val.is_empty() {
+                None
+            } else {
+                Some(new_val)
+            };
+            (
+                Value::Text(prev.unwrap_or_default()),
+                frame_style_hint(node),
+            )
         }
         (
             NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
@@ -1717,8 +1771,15 @@ fn apply_set_property(
             let e = find_feather_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let prev = e.corner_type.take();
-            e.corner_type = if new_val.is_empty() { None } else { Some(new_val) };
-            (Value::Text(prev.unwrap_or_default()), frame_style_hint(node))
+            e.corner_type = if new_val.is_empty() {
+                None
+            } else {
+                Some(new_val)
+            };
+            (
+                Value::Text(prev.unwrap_or_default()),
+                frame_style_hint(node),
+            )
         }
         (
             NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
@@ -1786,16 +1847,20 @@ fn apply_set_property(
         }
 
         // -- Object-level blend mode -------------------------------
-        (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_),
-            PropertyPath::FrameBlendMode,
-        ) => {
+        (NodeId::TextFrame(_) | NodeId::Rectangle(_), PropertyPath::FrameBlendMode) => {
             let new_val = expect_text(path, value)?;
             let slot = find_blend_mode_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let prev = slot.take();
-            *slot = if new_val.is_empty() { None } else { Some(new_val) };
-            (Value::Text(prev.unwrap_or_default()), frame_style_hint(node))
+            *slot = if new_val.is_empty() {
+                None
+            } else {
+                Some(new_val)
+            };
+            (
+                Value::Text(prev.unwrap_or_default()),
+                frame_style_hint(node),
+            )
         }
         // ---- SDK Phase 5 (v1 sweep) — frame fitting (Rectangle) ----
         // The placed-image crop set + fitting-type enum live in
@@ -1866,7 +1931,11 @@ fn apply_set_property(
                 .as_ref()
                 .map(|f| (f.reference_point.clone(), f.auto_fit))
                 .unwrap_or((None, None));
-            let new_type = if new_val.is_empty() { None } else { Some(new_val.clone()) };
+            let new_type = if new_val.is_empty() {
+                None
+            } else {
+                Some(new_val.clone())
+            };
             // Clearing all knobs leaves frame_fitting at `None`
             // for honest defaults; otherwise materialise the
             // FrameFitting with the merged state.
@@ -2036,7 +2105,10 @@ fn apply_set_property(
             frame.column_count = new_val.map(|n| n.max(1.0).round() as u32);
             (
                 Value::Length(prev.map(|c| c as f32)),
-                InvalidationHint { text_reflow: vec![node.clone()], ..Default::default() },
+                InvalidationHint {
+                    text_reflow: vec![node.clone()],
+                    ..Default::default()
+                },
             )
         }
         (NodeId::TextFrame(id), PropertyPath::TextFrameColumnGutter) => {
@@ -2047,7 +2119,10 @@ fn apply_set_property(
             frame.column_gutter = new_val;
             (
                 Value::Length(prev),
-                InvalidationHint { text_reflow: vec![node.clone()], ..Default::default() },
+                InvalidationHint {
+                    text_reflow: vec![node.clone()],
+                    ..Default::default()
+                },
             )
         }
         (NodeId::TextFrame(id), PropertyPath::TextFrameColumnBalance) => {
@@ -2058,7 +2133,10 @@ fn apply_set_property(
             frame.column_balance = Some(new_val);
             (
                 Value::Bool(prev),
-                InvalidationHint { text_reflow: vec![node.clone()], ..Default::default() },
+                InvalidationHint {
+                    text_reflow: vec![node.clone()],
+                    ..Default::default()
+                },
             )
         }
         (NodeId::TextFrame(id), PropertyPath::TextFrameVerticalJustification) => {
@@ -2076,14 +2154,20 @@ fn apply_set_property(
             };
             (
                 Value::Text(prev.to_string()),
-                InvalidationHint { text_reflow: vec![node.clone()], ..Default::default() },
+                InvalidationHint {
+                    text_reflow: vec![node.clone()],
+                    ..Default::default()
+                },
             )
         }
         (NodeId::TextFrame(id), PropertyPath::TextFrameAutoSizing) => {
             let new_val = expect_text(path, value)?;
             let frame = find_text_frame_mut(doc, id)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
-            let prev = frame.auto_sizing.map(auto_sizing_as_idml).unwrap_or_default();
+            let prev = frame
+                .auto_sizing
+                .map(auto_sizing_as_idml)
+                .unwrap_or_default();
             frame.auto_sizing = if new_val.is_empty() {
                 None
             } else {
@@ -2091,7 +2175,10 @@ fn apply_set_property(
             };
             (
                 Value::Text(prev.to_string()),
-                InvalidationHint { text_reflow: vec![node.clone()], ..Default::default() },
+                InvalidationHint {
+                    text_reflow: vec![node.clone()],
+                    ..Default::default()
+                },
             )
         }
         (NodeId::TextFrame(id), PropertyPath::TextFrameFirstBaseline) => {
@@ -2109,7 +2196,10 @@ fn apply_set_property(
             };
             (
                 Value::Text(prev.to_string()),
-                InvalidationHint { text_reflow: vec![node.clone()], ..Default::default() },
+                InvalidationHint {
+                    text_reflow: vec![node.clone()],
+                    ..Default::default()
+                },
             )
         }
 
@@ -2126,7 +2216,9 @@ fn apply_set_property(
             let tw = find_text_wrap_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let prev = tw.and_then(|t| t.invert).unwrap_or(false);
-            let prev_mode = tw.map(|t| t.mode).unwrap_or(paged_parse::TextWrapMode::None);
+            let prev_mode = tw
+                .map(|t| t.mode)
+                .unwrap_or(paged_parse::TextWrapMode::None);
             let prev_offsets = tw.map(|t| t.offsets).unwrap_or([0.0; 4]);
             *tw = Some(paged_parse::TextWrap {
                 mode: prev_mode,
@@ -2136,7 +2228,10 @@ fn apply_set_property(
             (
                 Value::Bool(prev),
                 // The wrap exclusion changes; other frames reflow.
-                InvalidationHint { structural: true, ..Default::default() },
+                InvalidationHint {
+                    structural: true,
+                    ..Default::default()
+                },
             )
         }
 
@@ -2147,10 +2242,17 @@ fn apply_set_property(
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let ff = rect.frame_fitting.get_or_insert_with(Default::default);
             let prev = ff.reference_point.clone().unwrap_or_default();
-            ff.reference_point = if new_val.is_empty() { None } else { Some(new_val.clone()) };
+            ff.reference_point = if new_val.is_empty() {
+                None
+            } else {
+                Some(new_val.clone())
+            };
             (
                 Value::Text(prev),
-                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
             )
         }
         (NodeId::Rectangle(id), PropertyPath::FrameAutoFit) => {
@@ -2162,7 +2264,10 @@ fn apply_set_property(
             ff.auto_fit = Some(new_val);
             (
                 Value::Bool(prev),
-                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
             )
         }
 
@@ -2179,10 +2284,17 @@ fn apply_set_property(
             let slot = find_stroke_type_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let prev = slot.clone().unwrap_or_default();
-            *slot = if new_val.is_empty() { None } else { Some(new_val.clone()) };
+            *slot = if new_val.is_empty() {
+                None
+            } else {
+                Some(new_val.clone())
+            };
             (
                 Value::Text(prev),
-                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
             )
         }
         (
@@ -2200,7 +2312,10 @@ fn apply_set_property(
             *slot = new_color;
             (
                 Value::ColorRef(prev),
-                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
             )
         }
         (
@@ -2218,7 +2333,10 @@ fn apply_set_property(
             *slot = new_val;
             (
                 Value::Length(prev),
-                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
             )
         }
         // Stroke join / miter / alignment are Rectangle-only parse
@@ -2228,10 +2346,17 @@ fn apply_set_property(
             let rect = find_rectangle_mut(doc, id)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let prev = rect.end_join.clone().unwrap_or_default();
-            rect.end_join = if new_val.is_empty() { None } else { Some(new_val.clone()) };
+            rect.end_join = if new_val.is_empty() {
+                None
+            } else {
+                Some(new_val.clone())
+            };
             (
                 Value::Text(prev),
-                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
             )
         }
         (NodeId::Rectangle(id), PropertyPath::FrameStrokeAlignment) => {
@@ -2239,10 +2364,17 @@ fn apply_set_property(
             let rect = find_rectangle_mut(doc, id)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let prev = rect.stroke_alignment.clone().unwrap_or_default();
-            rect.stroke_alignment = if new_val.is_empty() { None } else { Some(new_val.clone()) };
+            rect.stroke_alignment = if new_val.is_empty() {
+                None
+            } else {
+                Some(new_val.clone())
+            };
             (
                 Value::Text(prev),
-                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
             )
         }
         (NodeId::Rectangle(id), PropertyPath::FrameStrokeMiterLimit) => {
@@ -2253,7 +2385,10 @@ fn apply_set_property(
             rect.miter_limit = new_val;
             (
                 Value::Length(prev),
-                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
             )
         }
 
@@ -2280,7 +2415,10 @@ fn apply_set_property(
             };
             (
                 Value::Text(prev.to_string()),
-                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
             )
         }
         (
@@ -2298,7 +2436,10 @@ fn apply_set_property(
             rect.corners[i].radius = new_val;
             (
                 Value::Length(prev),
-                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
             )
         }
 
@@ -2350,16 +2491,16 @@ fn apply_set_property(
             *slot = Some(crate::operation::recompose_transform(&d));
             (
                 prev_value,
-                InvalidationHint { frame_geometry: vec![node.clone()], ..Default::default() },
+                InvalidationHint {
+                    frame_geometry: vec![node.clone()],
+                    ..Default::default()
+                },
             )
         }
 
         // ============ W0.3 — overprint (fill: all fills; stroke: all) ==
         (
-            NodeId::TextFrame(_)
-            | NodeId::Rectangle(_)
-            | NodeId::Oval(_)
-            | NodeId::Polygon(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameOverprintFill,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -2369,7 +2510,10 @@ fn apply_set_property(
             *slot = new_val;
             (
                 Value::Bool(prev),
-                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
             )
         }
         (
@@ -2387,7 +2531,10 @@ fn apply_set_property(
             *slot = new_val;
             (
                 Value::Bool(prev),
-                InvalidationHint { frame_style: vec![node.clone()], ..Default::default() },
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
             )
         }
 
@@ -2542,8 +2689,7 @@ fn apply_character_property(
                     let (left, mut right) = split_run_at(run, split_at);
                     let mid_start = run_start + split_at;
                     let mid_end = run_end;
-                    let (prev_value, _) =
-                        apply_character_field_on_run(&mut right, path, value)?;
+                    let (prev_value, _) = apply_character_field_on_run(&mut right, path, value)?;
                     inverse_ops.push(Operation::SetProperty {
                         node: NodeId::StoryRange {
                             story_id: story_id.to_string(),
@@ -2562,8 +2708,7 @@ fn apply_character_property(
                     let (mut left, right) = split_run_at(run, split_at);
                     let mid_start = run_start;
                     let mid_end = run_start + split_at;
-                    let (prev_value, _) =
-                        apply_character_field_on_run(&mut left, path, value)?;
+                    let (prev_value, _) = apply_character_field_on_run(&mut left, path, value)?;
                     inverse_ops.push(Operation::SetProperty {
                         node: NodeId::StoryRange {
                             story_id: story_id.to_string(),
@@ -2583,8 +2728,7 @@ fn apply_character_property(
                     let (mut mid, right) = split_run_at(rest, right_at - left_at);
                     let mid_start = run_start + left_at;
                     let mid_end = run_start + right_at;
-                    let (prev_value, _) =
-                        apply_character_field_on_run(&mut mid, path, value)?;
+                    let (prev_value, _) = apply_character_field_on_run(&mut mid, path, value)?;
                     inverse_ops.push(Operation::SetProperty {
                         node: NodeId::StoryRange {
                             story_id: story_id.to_string(),
@@ -3063,12 +3207,8 @@ fn apply_paragraph_field(
             set_para_bool_field(path, value, &mut para.keep_lines_together, false)
         }
         // W0.2 — whole rule structs.
-        PropertyPath::ParagraphRuleAbove => {
-            set_para_rule_field(path, value, &mut para.rule_above)
-        }
-        PropertyPath::ParagraphRuleBelow => {
-            set_para_rule_field(path, value, &mut para.rule_below)
-        }
+        PropertyPath::ParagraphRuleAbove => set_para_rule_field(path, value, &mut para.rule_above),
+        PropertyPath::ParagraphRuleBelow => set_para_rule_field(path, value, &mut para.rule_below),
         // W0.2 — whole `<TabList>` replacement. The captured prior is
         // returned as a `Value::TabStops` so the inverse restores the
         // exact prior stop list (bytewise round-trip).
@@ -3320,10 +3460,7 @@ fn apply_character_field_on_run(
             run.applied_conditions = if new_val.is_empty() {
                 Vec::new()
             } else {
-                new_val
-                    .split_whitespace()
-                    .map(|s| s.to_string())
-                    .collect()
+                new_val.split_whitespace().map(|s| s.to_string()).collect()
             };
             Ok((Value::Text(prev), Value::Text(new_val.clone())))
         }
@@ -3335,9 +3472,7 @@ fn apply_character_field_on_run(
         // re-applies the captured prior string, which round-trips a
         // prior-`None` back to `None` since `unwrap_or_default()`
         // maps `None ⇒ ""`.
-        PropertyPath::CharacterFontFamily => {
-            set_run_text_field(run, path, value, |r| &mut r.font)
-        }
+        PropertyPath::CharacterFontFamily => set_run_text_field(run, path, value, |r| &mut r.font),
         PropertyPath::CharacterFontStyle => {
             set_run_text_field(run, path, value, |r| &mut r.font_style)
         }
@@ -3368,9 +3503,7 @@ fn apply_character_field_on_run(
         PropertyPath::CharacterVerticalScale => {
             set_run_length_field(run, path, value, |r| &mut r.vertical_scale)
         }
-        PropertyPath::CharacterSkew => {
-            set_run_length_field(run, path, value, |r| &mut r.skew)
-        }
+        PropertyPath::CharacterSkew => set_run_length_field(run, path, value, |r| &mut r.skew),
         // W0.1 — boolean character properties. `Value::Bool` carries
         // the new toggle; the field is `Option<bool>`. The inverse
         // captures `prev.unwrap_or(false)` — writes over an explicit
@@ -3469,11 +3602,7 @@ fn register_frame_ref(
 /// Unregister a page item removed from `vec_pos` of its kind vec;
 /// returns the z slot it occupied so the `RemoveNode` inverse can
 /// restore the exact stacking position.
-fn unregister_frame_ref(
-    spread: &mut Spread,
-    template: FrameRef,
-    vec_pos: usize,
-) -> Option<usize> {
+fn unregister_frame_ref(spread: &mut Spread, template: FrameRef, vec_pos: usize) -> Option<usize> {
     if spread.frames_in_order.is_empty() {
         return None;
     }
@@ -3553,8 +3682,11 @@ fn apply_insert_node(
                     len,
                 });
             }
-            let mut frame =
-                new_text_frame(self_id.clone(), bounds_from_array(*bounds), fill_color.clone());
+            let mut frame = new_text_frame(
+                self_id.clone(),
+                bounds_from_array(*bounds),
+                fill_color.clone(),
+            );
             frame.stroke_color = stroke_color.clone();
             frame.stroke_weight = *stroke_weight;
             frame.item_transform = *item_transform;
@@ -3577,8 +3709,11 @@ fn apply_insert_node(
                     len,
                 });
             }
-            let mut rect =
-                new_rectangle(self_id.clone(), bounds_from_array(*bounds), fill_color.clone());
+            let mut rect = new_rectangle(
+                self_id.clone(),
+                bounds_from_array(*bounds),
+                fill_color.clone(),
+            );
             rect.stroke_color = stroke_color.clone();
             rect.stroke_weight = *stroke_weight;
             rect.item_transform = *item_transform;
@@ -3601,8 +3736,11 @@ fn apply_insert_node(
                     len,
                 });
             }
-            let mut oval =
-                new_oval(self_id.clone(), bounds_from_array(*bounds), fill_color.clone());
+            let mut oval = new_oval(
+                self_id.clone(),
+                bounds_from_array(*bounds),
+                fill_color.clone(),
+            );
             oval.stroke_color = stroke_color.clone();
             oval.stroke_weight = *stroke_weight;
             oval.item_transform = *item_transform;
@@ -3638,7 +3776,12 @@ fn apply_insert_node(
             );
             line.item_transform = *item_transform;
             spread.spread.graphic_lines.insert(position, line);
-            register_frame_ref(&mut spread.spread, FrameRef::GraphicLine(0), position, z_slot);
+            register_frame_ref(
+                &mut spread.spread,
+                FrameRef::GraphicLine(0),
+                position,
+                z_slot,
+            );
         }
         NodeSpec::Polygon {
             self_id,
@@ -3780,8 +3923,7 @@ fn remove_and_capture(
                     .position(|o| o.self_id.as_deref() == Some(id.as_str()))
                 {
                     let oval = parsed.spread.ovals.remove(pos);
-                    let z_slot =
-                        unregister_frame_ref(&mut parsed.spread, FrameRef::Oval(0), pos);
+                    let z_slot = unregister_frame_ref(&mut parsed.spread, FrameRef::Oval(0), pos);
                     let parent = spread_parent_id(parsed);
                     let spec = NodeSpec::Oval {
                         self_id: id.clone(),
@@ -3811,7 +3953,11 @@ fn remove_and_capture(
                     let spec = NodeSpec::GraphicLine {
                         self_id: id.clone(),
                         bounds: bounds_to_array(line.bounds),
-                        anchors: line.anchors.iter().map(PathAnchorSpec::from_parse).collect(),
+                        anchors: line
+                            .anchors
+                            .iter()
+                            .map(PathAnchorSpec::from_parse)
+                            .collect(),
                         subpath_starts: line.subpath_starts,
                         subpath_open: line.subpath_open,
                         stroke_color: line.stroke_color,
@@ -3838,7 +3984,11 @@ fn remove_and_capture(
                     let spec = NodeSpec::Polygon {
                         self_id: id.clone(),
                         bounds: bounds_to_array(poly.bounds),
-                        anchors: poly.anchors.iter().map(PathAnchorSpec::from_parse).collect(),
+                        anchors: poly
+                            .anchors
+                            .iter()
+                            .map(PathAnchorSpec::from_parse)
+                            .collect(),
                         subpath_starts: poly.subpath_starts,
                         subpath_open: poly.subpath_open,
                         fill_color: poly.fill_color,
@@ -3896,18 +4046,36 @@ fn apply_move_node(
             // an input-only spec for Phase H's Alt-duplicate. Treat
             // as a programmer error if it ever surfaces here.
             NodeSpec::CloneTranslate { .. } => {
-                restore_capture(doc, &previous_parent, previous_position, captured, previous_z_slot);
+                restore_capture(
+                    doc,
+                    &previous_parent,
+                    previous_position,
+                    captured,
+                    previous_z_slot,
+                );
                 return Err(OperationError::NodeNotFound(node.clone()));
             }
         },
         None => {
-            restore_capture(doc, &previous_parent, previous_position, captured, previous_z_slot);
+            restore_capture(
+                doc,
+                &previous_parent,
+                previous_position,
+                captured,
+                previous_z_slot,
+            );
             return Err(OperationError::NodeNotFound(new_parent.clone()));
         }
     };
 
     if position > target_len {
-        restore_capture(doc, &previous_parent, previous_position, captured, previous_z_slot);
+        restore_capture(
+            doc,
+            &previous_parent,
+            previous_position,
+            captured,
+            previous_z_slot,
+        );
         return Err(OperationError::InvalidPosition {
             parent: new_parent.clone(),
             position,
@@ -3953,9 +4121,8 @@ fn insert_captured(
     spec: NodeSpec,
     z_slot: Option<usize>,
 ) -> Result<(), OperationError> {
-    let spread = find_spread_mut(doc, parent_self_id).ok_or_else(|| {
-        OperationError::NodeNotFound(NodeId::Spread(parent_self_id.to_string()))
-    })?;
+    let spread = find_spread_mut(doc, parent_self_id)
+        .ok_or_else(|| OperationError::NodeNotFound(NodeId::Spread(parent_self_id.to_string())))?;
     match spec {
         NodeSpec::TextFrame {
             self_id,
@@ -4023,7 +4190,12 @@ fn insert_captured(
             );
             line.item_transform = item_transform;
             spread.spread.graphic_lines.insert(position, line);
-            register_frame_ref(&mut spread.spread, FrameRef::GraphicLine(0), position, z_slot);
+            register_frame_ref(
+                &mut spread.spread,
+                FrameRef::GraphicLine(0),
+                position,
+                z_slot,
+            );
         }
         NodeSpec::Polygon {
             self_id,
@@ -4092,7 +4264,9 @@ fn mint_spread_page_ids(doc: &Document) -> (String, String) {
     let mut max: u64 = 0;
     let mut scan = |id: Option<&str>| {
         let Some(id) = id else { return };
-        let Some(hex) = id.strip_prefix('u') else { return };
+        let Some(hex) = id.strip_prefix('u') else {
+            return;
+        };
         if hex.is_empty() || hex.len() > 12 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
             return;
         }
@@ -4128,10 +4302,7 @@ fn mint_spread_page_ids(doc: &Document) -> (String, String) {
     (format!("u{:x}", max + 1), format!("u{:x}", max + 2))
 }
 
-fn find_page_mut<'a>(
-    doc: &'a mut Document,
-    self_id: &str,
-) -> Option<&'a mut paged_parse::Page> {
+fn find_page_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mut paged_parse::Page> {
     for parsed in &mut doc.spreads {
         if let Some(p) = parsed
             .spread
@@ -4161,13 +4332,12 @@ fn apply_insert_page(
     // Undo path — reinsert the captured spread verbatim at its
     // original index.
     if let Some(json) = restore_spread_json {
-        let restore: SpreadRestore = serde_json::from_str(json).map_err(|e| {
-            OperationError::InvalidValue {
+        let restore: SpreadRestore =
+            serde_json::from_str(json).map_err(|e| OperationError::InvalidValue {
                 node: NodeId::Spread(String::new()),
                 path: PropertyPath::PageBounds,
                 reason: format!("malformed spread restore payload: {e}"),
-            }
-        })?;
+            })?;
         let page_id = restore
             .spread
             .pages
@@ -4605,12 +4775,13 @@ fn apply_edit_swatch(
     spec: &SwatchSpec,
 ) -> Result<AppliedOperation, OperationError> {
     let colors = &mut doc.palette.colors;
-    let existing = colors.get(swatch_id).ok_or_else(|| {
-        OperationError::CollectionEntryNotFound {
-            collection: "swatch".to_string(),
-            id: swatch_id.to_string(),
-        }
-    })?;
+    let existing =
+        colors
+            .get(swatch_id)
+            .ok_or_else(|| OperationError::CollectionEntryNotFound {
+                collection: "swatch".to_string(),
+                id: swatch_id.to_string(),
+            })?;
     // Capture the prior state for the inverse before overwriting.
     let prior = swatch_spec_from_entry(existing);
     // Replace the editable fields in place; the id (map key) is the
@@ -4638,12 +4809,13 @@ fn apply_delete_swatch(
     swatch_id: &str,
 ) -> Result<AppliedOperation, OperationError> {
     let colors = &mut doc.palette.colors;
-    let captured = colors.remove(swatch_id).ok_or_else(|| {
-        OperationError::CollectionEntryNotFound {
-            collection: "swatch".to_string(),
-            id: swatch_id.to_string(),
-        }
-    })?;
+    let captured =
+        colors
+            .remove(swatch_id)
+            .ok_or_else(|| OperationError::CollectionEntryNotFound {
+                collection: "swatch".to_string(),
+                id: swatch_id.to_string(),
+            })?;
     // Inverse recreates the swatch at its original id with every field.
     let inverse = Operation::CreateSwatch {
         spec: swatch_spec_from_entry(&captured),
@@ -4752,10 +4924,7 @@ fn mint_group_id(doc: &paged_scene::Document) -> String {
 }
 
 /// Resolve a leaf-member NodeId to its `FrameRef` within `spread`.
-fn leaf_frame_ref(
-    spread: &paged_parse::Spread,
-    node: &NodeId,
-) -> Option<paged_parse::FrameRef> {
+fn leaf_frame_ref(spread: &paged_parse::Spread, node: &NodeId) -> Option<paged_parse::FrameRef> {
     use paged_parse::FrameRef;
     let find = |id: &str, ids: Vec<Option<&str>>| -> Option<usize> {
         ids.iter().position(|s| *s == Some(id))
@@ -4763,12 +4932,20 @@ fn leaf_frame_ref(
     match node {
         NodeId::TextFrame(id) => find(
             id,
-            spread.text_frames.iter().map(|f| f.self_id.as_deref()).collect(),
+            spread
+                .text_frames
+                .iter()
+                .map(|f| f.self_id.as_deref())
+                .collect(),
         )
         .map(FrameRef::TextFrame),
         NodeId::Rectangle(id) => find(
             id,
-            spread.rectangles.iter().map(|f| f.self_id.as_deref()).collect(),
+            spread
+                .rectangles
+                .iter()
+                .map(|f| f.self_id.as_deref())
+                .collect(),
         )
         .map(FrameRef::Rectangle),
         NodeId::Oval(id) => find(
@@ -4787,7 +4964,11 @@ fn leaf_frame_ref(
         .map(FrameRef::GraphicLine),
         NodeId::Polygon(id) => find(
             id,
-            spread.polygons.iter().map(|f| f.self_id.as_deref()).collect(),
+            spread
+                .polygons
+                .iter()
+                .map(|f| f.self_id.as_deref())
+                .collect(),
         )
         .map(FrameRef::Polygon),
         _ => None,
@@ -4807,19 +4988,13 @@ fn find_spread_for_leaf(doc: &Document, node: &NodeId) -> Option<usize> {
     for (si, parsed) in doc.spreads.iter().enumerate() {
         let s = &parsed.spread;
         let found = match node {
-            NodeId::TextFrame(id) => {
-                has(s.text_frames.iter().map(|f| f.self_id.as_deref()), id)
-            }
-            NodeId::Rectangle(id) => {
-                has(s.rectangles.iter().map(|f| f.self_id.as_deref()), id)
-            }
+            NodeId::TextFrame(id) => has(s.text_frames.iter().map(|f| f.self_id.as_deref()), id),
+            NodeId::Rectangle(id) => has(s.rectangles.iter().map(|f| f.self_id.as_deref()), id),
             NodeId::Oval(id) => has(s.ovals.iter().map(|f| f.self_id.as_deref()), id),
             NodeId::GraphicLine(id) => {
                 has(s.graphic_lines.iter().map(|f| f.self_id.as_deref()), id)
             }
-            NodeId::Polygon(id) => {
-                has(s.polygons.iter().map(|f| f.self_id.as_deref()), id)
-            }
+            NodeId::Polygon(id) => has(s.polygons.iter().map(|f| f.self_id.as_deref()), id),
             _ => false,
         };
         if found {
@@ -4845,7 +5020,12 @@ fn apply_plugin_metadata(
         path: PropertyPath::PluginMetadata,
         reason,
     };
-    let Value::PluginMetadata { key, value: new_value, .. } = value else {
+    let Value::PluginMetadata {
+        key,
+        value: new_value,
+        ..
+    } = value
+    else {
         return Err(invalid("expected Value::PluginMetadata".into()));
     };
     if !key.starts_with("x-paged:") || key.len() <= "x-paged:".len() {
@@ -4862,12 +5042,12 @@ fn apply_plugin_metadata(
         }
         let parsed: serde_json::Value = serde_json::from_str(v)
             .map_err(|e| invalid(format!("metadata value must be the JSON envelope: {e}")))?;
-        let envelope_ok = parsed
-            .as_object()
-            .is_some_and(|o| {
-                o.get("v").and_then(serde_json::Value::as_u64).is_some_and(|n| n >= 1)
-                    && o.get("data").is_some_and(serde_json::Value::is_object)
-            });
+        let envelope_ok = parsed.as_object().is_some_and(|o| {
+            o.get("v")
+                .and_then(serde_json::Value::as_u64)
+                .is_some_and(|n| n >= 1)
+                && o.get("data").is_some_and(serde_json::Value::is_object)
+        });
         if !envelope_ok {
             return Err(invalid(
                 "metadata envelope must be { v: <int >= 1>, data: {…}, engine?: {…} }".into(),
@@ -4960,10 +5140,7 @@ fn apply_create_group(
         let mut seen = std::collections::HashSet::new();
         for m in &spec.members {
             if !seen.insert(m.self_id().to_string()) {
-                return Err(invalid(format!(
-                    "duplicate member \"{}\"",
-                    m.self_id()
-                )));
+                return Err(invalid(format!("duplicate member \"{}\"", m.self_id())));
             }
         }
     }
@@ -4981,9 +5158,7 @@ fn apply_create_group(
             break;
         }
         if refs.iter().any(|r| r.is_some()) {
-            return Err(invalid(
-                "all members must live on the same spread".into(),
-            ));
+            return Err(invalid("all members must live on the same spread".into()));
         }
     }
     let Some((spread_idx, member_refs)) = located else {
@@ -4994,24 +5169,24 @@ fn apply_create_group(
     for g in &spread.groups {
         for r in &member_refs {
             if g.members.contains(r) {
-                return Err(invalid(
-                    "a member already belongs to another group".into(),
-                ));
+                return Err(invalid("a member already belongs to another group".into()));
             }
         }
     }
     // Every member must sit in frames_in_order (top-level item).
     for r in &member_refs {
         if !spread.frames_in_order.contains(r) {
-            return Err(invalid(
-                "member is not a top-level spread item".into(),
-            ));
+            return Err(invalid("member is not a top-level spread item".into()));
         }
     }
     // Mint or validate the id.
     let self_id = match &spec.self_id {
         Some(s) => {
-            if spread.groups.iter().any(|g| g.self_id.as_deref() == Some(s)) {
+            if spread
+                .groups
+                .iter()
+                .any(|g| g.self_id.as_deref() == Some(s))
+            {
                 return Err(OperationError::DuplicateNodeId { id: s.clone() });
             }
             s.clone()
@@ -5035,11 +5210,9 @@ fn apply_create_group(
         .collect();
     ordered.sort_by_key(|(pos, _)| *pos);
     let earliest = ordered[0].0;
-    let members_doc_order: Vec<FrameRef> =
-        ordered.iter().map(|(_, r)| *r).collect();
+    let members_doc_order: Vec<FrameRef> = ordered.iter().map(|(_, r)| *r).collect();
     // Snapshot for the inverse: exact pre-group slots (doc order).
-    let restore_slots: Vec<u32> =
-        ordered.iter().map(|(pos, _)| *pos as u32).collect();
+    let restore_slots: Vec<u32> = ordered.iter().map(|(pos, _)| *pos as u32).collect();
 
     let new_group_idx = spread.groups.len();
     spread.groups.push(paged_parse::Group {
@@ -5117,8 +5290,7 @@ fn apply_dissolve_group(
         .any(|g| g.members.contains(&FrameRef::Group(group_idx)))
     {
         return Err(invalid(
-            "group is nested inside another group; dissolve the outer group first"
-                .into(),
+            "group is nested inside another group; dissolve the outer group first".into(),
         ));
     }
     // The group must be a top-level frames_in_order entry.
@@ -5127,9 +5299,7 @@ fn apply_dissolve_group(
         .iter()
         .position(|r| *r == FrameRef::Group(group_idx))
     else {
-        return Err(invalid(
-            "group is not a top-level spread item".into(),
-        ));
+        return Err(invalid("group is not a top-level spread item".into()));
     };
     // Members must be resolvable to NodeIds for the inverse spec
     // (leaf members only in v1 — nested parsed groups refuse above
@@ -5169,8 +5339,7 @@ fn apply_dissolve_group(
         .collect();
     let Some(member_nodes) = member_nodes else {
         return Err(invalid(
-            "group contains nested groups or id-less members; v1 dissolves flat groups only"
-                .into(),
+            "group contains nested groups or id-less members; v1 dissolves flat groups only".into(),
         ));
     };
 
@@ -5253,7 +5422,10 @@ fn apply_create_gradient(
             id
         }
     };
-    gradients.insert(self_id.clone(), gradient_entry_from_spec(self_id.clone(), spec));
+    gradients.insert(
+        self_id.clone(),
+        gradient_entry_from_spec(self_id.clone(), spec),
+    );
     let mut resolved = spec.clone();
     resolved.self_id = Some(self_id.clone());
     Ok(AppliedOperation {
@@ -5274,12 +5446,13 @@ fn apply_edit_gradient(
     spec: &GradientSpec,
 ) -> Result<AppliedOperation, OperationError> {
     let gradients = &mut doc.palette.gradients;
-    let existing = gradients.get(gradient_id).ok_or_else(|| {
-        OperationError::CollectionEntryNotFound {
-            collection: "gradient".to_string(),
-            id: gradient_id.to_string(),
-        }
-    })?;
+    let existing =
+        gradients
+            .get(gradient_id)
+            .ok_or_else(|| OperationError::CollectionEntryNotFound {
+                collection: "gradient".to_string(),
+                id: gradient_id.to_string(),
+            })?;
     let prior = gradient_spec_from_entry(existing);
     gradients.insert(
         gradient_id.to_string(),
@@ -5380,12 +5553,12 @@ fn apply_edit_color_group(
     spec: &ColorGroupSpec,
 ) -> Result<AppliedOperation, OperationError> {
     let groups = &mut doc.palette.color_groups;
-    let existing = groups.get(group_id).ok_or_else(|| {
-        OperationError::CollectionEntryNotFound {
+    let existing = groups
+        .get(group_id)
+        .ok_or_else(|| OperationError::CollectionEntryNotFound {
             collection: "color group".to_string(),
             id: group_id.to_string(),
-        }
-    })?;
+        })?;
     let prior = ColorGroupSpec {
         self_id: Some(existing.self_id.clone()),
         name: existing.name.clone(),
@@ -5468,13 +5641,12 @@ macro_rules! style_crud {
             // Lossless-restore path (the delete inverse): the def is
             // carried whole as JSON and inserted verbatim.
             if let Some(json) = restore_json {
-                let def: $def = serde_json::from_str(json).map_err(|e| {
-                    OperationError::InvalidValue {
+                let def: $def =
+                    serde_json::from_str(json).map_err(|e| OperationError::InvalidValue {
                         node: NodeId::Layer(String::new()),
                         path: PropertyPath::LayerName,
                         reason: format!("malformed {} restore payload: {e}", $label),
-                    }
-                })?;
+                    })?;
                 let id = def.self_id.clone();
                 if map.contains_key(&id) {
                     return Err(OperationError::DuplicateNodeId { id });
@@ -5542,12 +5714,12 @@ macro_rules! style_crud {
             name: &str,
         ) -> Result<AppliedOperation, OperationError> {
             let map = &mut doc.styles.$map;
-            let def = map.get_mut(style_id).ok_or_else(|| {
-                OperationError::CollectionEntryNotFound {
-                    collection: $label.to_string(),
-                    id: style_id.to_string(),
-                }
-            })?;
+            let def =
+                map.get_mut(style_id)
+                    .ok_or_else(|| OperationError::CollectionEntryNotFound {
+                        collection: $label.to_string(),
+                        id: style_id.to_string(),
+                    })?;
             let prior = def.name.clone();
             def.name = Some(name.to_string());
             Ok(AppliedOperation {
@@ -5571,20 +5743,19 @@ macro_rules! style_crud {
             style_id: &str,
         ) -> Result<AppliedOperation, OperationError> {
             let map = &mut doc.styles.$map;
-            let captured = map.remove(style_id).ok_or_else(|| {
-                OperationError::CollectionEntryNotFound {
-                    collection: $label.to_string(),
-                    id: style_id.to_string(),
-                }
-            })?;
+            let captured =
+                map.remove(style_id)
+                    .ok_or_else(|| OperationError::CollectionEntryNotFound {
+                        collection: $label.to_string(),
+                        id: style_id.to_string(),
+                    })?;
             // Serialize the captured def for a lossless create-inverse.
-            let json = serde_json::to_string(&captured).map_err(|e| {
-                OperationError::InvalidValue {
+            let json =
+                serde_json::to_string(&captured).map_err(|e| OperationError::InvalidValue {
                     node: NodeId::Layer(String::new()),
                     path: PropertyPath::LayerName,
                     reason: format!("failed to capture {} for undo: {e}", $label),
-                }
-            })?;
+                })?;
             Ok(AppliedOperation {
                 op: Operation::$DeleteOp {
                     style_id: style_id.to_string(),
@@ -5696,43 +5867,57 @@ fn set_paragraph_style_field(
     };
     match path {
         PropertyPath::CharacterFontSize => {
-            let Value::Length(n) = value else { return Err(type_err()) };
+            let Value::Length(n) = value else {
+                return Err(type_err());
+            };
             let prior = Value::Length(def.point_size);
             def.point_size = *n;
             Ok(prior)
         }
         PropertyPath::CharacterTracking => {
-            let Value::Length(n) = value else { return Err(type_err()) };
+            let Value::Length(n) = value else {
+                return Err(type_err());
+            };
             let prior = Value::Length(def.tracking);
             def.tracking = *n;
             Ok(prior)
         }
         PropertyPath::CharacterFillColor => {
-            let Value::ColorRef(c) = value else { return Err(type_err()) };
+            let Value::ColorRef(c) = value else {
+                return Err(type_err());
+            };
             let prior = Value::ColorRef(def.fill_color.clone());
             def.fill_color = c.clone();
             Ok(prior)
         }
         PropertyPath::ParagraphSpaceBefore => {
-            let Value::Length(n) = value else { return Err(type_err()) };
+            let Value::Length(n) = value else {
+                return Err(type_err());
+            };
             let prior = Value::Length(def.space_before);
             def.space_before = *n;
             Ok(prior)
         }
         PropertyPath::ParagraphSpaceAfter => {
-            let Value::Length(n) = value else { return Err(type_err()) };
+            let Value::Length(n) = value else {
+                return Err(type_err());
+            };
             let prior = Value::Length(def.space_after);
             def.space_after = *n;
             Ok(prior)
         }
         PropertyPath::ParagraphFirstLineIndent => {
-            let Value::Length(n) = value else { return Err(type_err()) };
+            let Value::Length(n) = value else {
+                return Err(type_err());
+            };
             let prior = Value::Length(def.first_line_indent);
             def.first_line_indent = *n;
             Ok(prior)
         }
         PropertyPath::ParagraphJustification => {
-            let Value::Text(s) = value else { return Err(type_err()) };
+            let Value::Text(s) = value else {
+                return Err(type_err());
+            };
             let prior = Value::Text(
                 def.justification
                     .map(|j| j.as_idml().to_string())
@@ -5760,19 +5945,25 @@ fn set_character_style_field(
     };
     match path {
         PropertyPath::CharacterFontSize => {
-            let Value::Length(n) = value else { return Err(type_err()) };
+            let Value::Length(n) = value else {
+                return Err(type_err());
+            };
             let prior = Value::Length(def.point_size);
             def.point_size = *n;
             Ok(prior)
         }
         PropertyPath::CharacterTracking => {
-            let Value::Length(n) = value else { return Err(type_err()) };
+            let Value::Length(n) = value else {
+                return Err(type_err());
+            };
             let prior = Value::Length(def.tracking);
             def.tracking = *n;
             Ok(prior)
         }
         PropertyPath::CharacterFillColor => {
-            let Value::ColorRef(c) = value else { return Err(type_err()) };
+            let Value::ColorRef(c) = value else {
+                return Err(type_err());
+            };
             let prior = Value::ColorRef(def.fill_color.clone());
             def.fill_color = c.clone();
             Ok(prior)
@@ -5912,10 +6103,7 @@ fn find_polygon_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mut 
     None
 }
 
-fn find_graphic_line_mut<'a>(
-    doc: &'a mut Document,
-    self_id: &str,
-) -> Option<&'a mut GraphicLine> {
+fn find_graphic_line_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mut GraphicLine> {
     for parsed in &mut doc.spreads {
         if let Some(l) = parsed
             .spread
@@ -5929,10 +6117,7 @@ fn find_graphic_line_mut<'a>(
     None
 }
 
-fn find_oval_mut<'a>(
-    doc: &'a mut Document,
-    self_id: &str,
-) -> Option<&'a mut paged_parse::Oval> {
+fn find_oval_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mut paged_parse::Oval> {
     for parsed in &mut doc.spreads {
         if let Some(o) = parsed
             .spread
@@ -5959,9 +6144,7 @@ fn find_gradient_field_mut<'a>(
                 PropertyPath::FrameGradientFillAngle => Some(&mut $item.gradient_fill_angle),
                 PropertyPath::FrameGradientFillLength => Some(&mut $item.gradient_fill_length),
                 PropertyPath::FrameGradientStrokeAngle => Some(&mut $item.gradient_stroke_angle),
-                PropertyPath::FrameGradientStrokeLength => {
-                    Some(&mut $item.gradient_stroke_length)
-                }
+                PropertyPath::FrameGradientStrokeLength => Some(&mut $item.gradient_stroke_length),
                 _ => None,
             }
         };
@@ -6042,8 +6225,9 @@ fn corner_index(path: PropertyPath) -> usize {
     match path {
         PropertyPath::FrameCornerOptionTopLeft | PropertyPath::FrameCornerRadiusTopLeft => 0,
         PropertyPath::FrameCornerOptionTopRight | PropertyPath::FrameCornerRadiusTopRight => 1,
-        PropertyPath::FrameCornerOptionBottomRight
-        | PropertyPath::FrameCornerRadiusBottomRight => 2,
+        PropertyPath::FrameCornerOptionBottomRight | PropertyPath::FrameCornerRadiusBottomRight => {
+            2
+        }
         PropertyPath::FrameCornerOptionBottomLeft | PropertyPath::FrameCornerRadiusBottomLeft => 3,
         _ => unreachable!("corner_index called with a non-corner path"),
     }
@@ -6137,10 +6321,7 @@ fn find_overprint_stroke_mut<'a>(doc: &'a mut Document, node: &NodeId) -> Option
     }
 }
 
-fn find_group_mut<'a>(
-    doc: &'a mut Document,
-    self_id: &str,
-) -> Option<&'a mut paged_parse::Group> {
+fn find_group_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mut paged_parse::Group> {
     for parsed in &mut doc.spreads {
         for group in &mut parsed.spread.groups {
             if group.self_id.as_deref() == Some(self_id) {
@@ -6547,10 +6728,7 @@ fn node_exists(doc: &Document, node: &NodeId) -> bool {
 /// Track M — locate a `<Layer>` by its `Self` id in the document's
 /// designmap. The designmap is the only place layers live; spread /
 /// page items only carry an `ItemLayer` reference back into it.
-fn find_layer_mut<'a>(
-    doc: &'a mut Document,
-    self_id: &str,
-) -> Option<&'a mut paged_parse::Layer> {
+fn find_layer_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mut paged_parse::Layer> {
     doc.container
         .designmap
         .layers
@@ -6598,10 +6776,12 @@ fn find_frame_effects_mut<'a>(
     node: &NodeId,
 ) -> Option<&'a mut paged_parse::FrameEffects> {
     match node {
-        NodeId::TextFrame(id) => find_text_frame_mut(doc, id)
-            .map(|f| f.effects.get_or_insert_with(Default::default)),
-        NodeId::Rectangle(id) => find_rectangle_mut(doc, id)
-            .map(|r| r.effects.get_or_insert_with(Default::default)),
+        NodeId::TextFrame(id) => {
+            find_text_frame_mut(doc, id).map(|f| f.effects.get_or_insert_with(Default::default))
+        }
+        NodeId::Rectangle(id) => {
+            find_rectangle_mut(doc, id).map(|r| r.effects.get_or_insert_with(Default::default))
+        }
         NodeId::Oval(id) => {
             find_oval_mut(doc, id).map(|o| o.effects.get_or_insert_with(Default::default))
         }
@@ -6620,7 +6800,11 @@ fn find_inner_shadow_mut<'a>(
     node: &NodeId,
 ) -> Option<&'a mut paged_parse::InnerShadowParams> {
     let effects = find_frame_effects_mut(doc, node)?;
-    Some(effects.inner_shadow.get_or_insert_with(default_inner_shadow))
+    Some(
+        effects
+            .inner_shadow
+            .get_or_insert_with(default_inner_shadow),
+    )
 }
 
 fn find_outer_glow_mut<'a>(
@@ -6679,10 +6863,7 @@ fn find_directional_feather_mut<'a>(
 // `blend_mode: Option<String>` slot on the kinds that parse it
 // (TextFrame / Rectangle). The `<BlendingSetting Opacity>` half is
 // already wired as `FrameOpacity`.
-fn find_blend_mode_mut<'a>(
-    doc: &'a mut Document,
-    node: &NodeId,
-) -> Option<&'a mut Option<String>> {
+fn find_blend_mode_mut<'a>(doc: &'a mut Document, node: &NodeId) -> Option<&'a mut Option<String>> {
     match node {
         NodeId::TextFrame(id) => find_text_frame_mut(doc, id).map(|f| &mut f.blend_mode),
         NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.blend_mode),
@@ -6720,10 +6901,7 @@ fn expect_length(path: PropertyPath, value: &Value) -> Result<Option<f32>, Opera
     }
 }
 
-fn expect_transform(
-    path: PropertyPath,
-    value: &Value,
-) -> Result<Option<[f32; 6]>, OperationError> {
+fn expect_transform(path: PropertyPath, value: &Value) -> Result<Option<[f32; 6]>, OperationError> {
     match value {
         Value::Transform(m) => Ok(*m),
         _ => Err(OperationError::TypeMismatch {
@@ -7092,8 +7270,7 @@ fn apply_path_kernel_op(
                 subpath_open,
                 *width,
                 parse_cap(cap).ok_or_else(|| invalid(format!("unknown cap \"{cap}\"")))?,
-                parse_join(join)
-                    .ok_or_else(|| invalid(format!("unknown join \"{join}\"")))?,
+                parse_join(join).ok_or_else(|| invalid(format!("unknown join \"{join}\"")))?,
                 *miter_limit,
             ),
             Value::OffsetPath {
@@ -7106,16 +7283,12 @@ fn apply_path_kernel_op(
                 subpath_starts,
                 subpath_open,
                 *delta,
-                parse_join(join)
-                    .ok_or_else(|| invalid(format!("unknown join \"{join}\"")))?,
+                parse_join(join).ok_or_else(|| invalid(format!("unknown join \"{join}\"")))?,
                 *miter_limit,
             ),
-            Value::SimplifyPath { tolerance, .. } => kurbo_kernel::simplify_path(
-                anchors,
-                subpath_starts,
-                subpath_open,
-                *tolerance,
-            ),
+            Value::SimplifyPath { tolerance, .. } => {
+                kurbo_kernel::simplify_path(anchors, subpath_starts, subpath_open, *tolerance)
+            }
             _ => unreachable!("matched above"),
         };
         let (na, ns, no) = result.ok_or_else(|| {
@@ -7510,12 +7683,7 @@ fn apply_insert_clone_translate(
                 .ok_or_else(|| OperationError::NodeNotFound(source.clone()))?;
             let mut clone = src_frame;
             clone.self_id = Some(self_id.clone());
-            apply_translate_in_place(
-                &mut clone.bounds,
-                &mut clone.item_transform,
-                eff_dx,
-                eff_dy,
-            );
+            apply_translate_in_place(&mut clone.bounds, &mut clone.item_transform, eff_dx, eff_dy);
             let dest_spread = &mut doc.spreads[dest_idx];
             let len = dest_spread.spread.text_frames.len();
             let pos = position.min(len);
@@ -7533,12 +7701,7 @@ fn apply_insert_clone_translate(
                 .ok_or_else(|| OperationError::NodeNotFound(source.clone()))?;
             let mut clone = src_rect;
             clone.self_id = Some(self_id.clone());
-            apply_translate_in_place(
-                &mut clone.bounds,
-                &mut clone.item_transform,
-                eff_dx,
-                eff_dy,
-            );
+            apply_translate_in_place(&mut clone.bounds, &mut clone.item_transform, eff_dx, eff_dy);
             let dest_spread = &mut doc.spreads[dest_idx];
             let len = dest_spread.spread.rectangles.len();
             let pos = position.min(len);
@@ -7599,10 +7762,7 @@ fn apply_translate_in_place(
             let b = m[1];
             let c = m[2];
             let d = m[3];
-            !((a - 1.0).abs() < 1e-4
-                && (d - 1.0).abs() < 1e-4
-                && b.abs() < 1e-4
-                && c.abs() < 1e-4)
+            !((a - 1.0).abs() < 1e-4 && (d - 1.0).abs() < 1e-4 && b.abs() < 1e-4 && c.abs() < 1e-4)
         }
     };
     if rotated {
@@ -7806,7 +7966,11 @@ pub(crate) fn new_oval(self_id: String, bounds: Bounds, fill_color: Option<Strin
     }
 }
 
-pub(crate) fn new_rectangle(self_id: String, bounds: Bounds, fill_color: Option<String>) -> Rectangle {
+pub(crate) fn new_rectangle(
+    self_id: String,
+    bounds: Bounds,
+    fill_color: Option<String>,
+) -> Rectangle {
     Rectangle {
         self_id: Some(self_id),
         bounds,
@@ -8204,37 +8368,40 @@ fn apply_insert_table_row(
     }
 
     // Build the new row + its cells.
-    let (new_row, new_cells): (paged_parse::TableRow, Vec<paged_parse::TableCell>) =
-        match restore {
-            Some(blob) => {
-                let removed = parse_restore_blob(blob, story_id, table_id)?;
-                let mut cells: Vec<paged_parse::TableCell> =
-                    removed.cells.iter().map(TableCellSpec::to_parse).collect();
-                // Re-key the restored cells to the insertion row.
-                for cell in &mut cells {
-                    if let Some((c, _)) = cell.coords() {
-                        set_cell_name(cell, c, at);
-                    }
+    let (new_row, new_cells): (paged_parse::TableRow, Vec<paged_parse::TableCell>) = match restore {
+        Some(blob) => {
+            let removed = parse_restore_blob(blob, story_id, table_id)?;
+            let mut cells: Vec<paged_parse::TableCell> =
+                removed.cells.iter().map(TableCellSpec::to_parse).collect();
+            // Re-key the restored cells to the insertion row.
+            for cell in &mut cells {
+                if let Some((c, _)) = cell.coords() {
+                    set_cell_name(cell, c, at);
                 }
-                let row = removed.row.as_ref().map(TableRowSpec::to_parse).unwrap_or_default();
-                (row, cells)
             }
-            None => {
-                let row = paged_parse::TableRow {
-                    name: Some(at.to_string()),
+            let row = removed
+                .row
+                .as_ref()
+                .map(TableRowSpec::to_parse)
+                .unwrap_or_default();
+            (row, cells)
+        }
+        None => {
+            let row = paged_parse::TableRow {
+                name: Some(at.to_string()),
+                ..Default::default()
+            };
+            let cells: Vec<paged_parse::TableCell> = (0..col_count as u32)
+                .map(|c| paged_parse::TableCell {
+                    name: Some(format!("{c}:{at}")),
+                    row_span: 1,
+                    column_span: 1,
                     ..Default::default()
-                };
-                let cells: Vec<paged_parse::TableCell> = (0..col_count as u32)
-                    .map(|c| paged_parse::TableCell {
-                        name: Some(format!("{c}:{at}")),
-                        row_span: 1,
-                        column_span: 1,
-                        ..Default::default()
-                    })
-                    .collect();
-                (row, cells)
-            }
-        };
+                })
+                .collect();
+            (row, cells)
+        }
+    };
 
     table.rows.insert(at as usize, new_row);
     table.cells.extend(new_cells);
@@ -8358,9 +8525,10 @@ fn apply_insert_table_column(
             reason: format!("insert column at {at} out of range ({total_cols} cols)"),
         });
     }
-    let row_count = table.rows.len().max(
-        (table.header_row_count + table.body_row_count + table.footer_row_count) as usize,
-    );
+    let row_count = table
+        .rows
+        .len()
+        .max((table.header_row_count + table.body_row_count + table.footer_row_count) as usize);
 
     // Shift cells in columns ≥ `at` right by one.
     for cell in &mut table.cells {
@@ -8599,12 +8767,12 @@ fn apply_link_frames(
             reason: "cannot thread a frame to itself".to_string(),
         });
     }
-    let (from_si, from_fi) =
-        find_text_frame_pos(doc, from).ok_or_else(|| {
-            OperationError::NodeNotFound(NodeId::TextFrame(from.to_string()))
-        })?;
+    let (from_si, from_fi) = find_text_frame_pos(doc, from)
+        .ok_or_else(|| OperationError::NodeNotFound(NodeId::TextFrame(from.to_string())))?;
     if find_text_frame_pos(doc, to).is_none() {
-        return Err(OperationError::NodeNotFound(NodeId::TextFrame(to.to_string())));
+        return Err(OperationError::NodeNotFound(NodeId::TextFrame(
+            to.to_string(),
+        )));
     }
     // InDesign threads into empty frames only.
     if !frame_has_no_own_content(doc, to) {
@@ -8663,19 +8831,15 @@ fn apply_unlink_frames(
     frame: &str,
     prev_next: Option<&str>,
 ) -> Result<AppliedOperation, OperationError> {
-    let (si, fi) = find_text_frame_pos(doc, frame).ok_or_else(|| {
-        OperationError::NodeNotFound(NodeId::TextFrame(frame.to_string()))
-    })?;
+    let (si, fi) = find_text_frame_pos(doc, frame)
+        .ok_or_else(|| OperationError::NodeNotFound(NodeId::TextFrame(frame.to_string())))?;
     let captured = doc.spreads[si].spread.text_frames[fi]
         .next_text_frame
         .clone();
     // Forward unlink clears; the inverse-only `prev_next` restores.
-    doc.spreads[si].spread.text_frames[fi].next_text_frame =
-        prev_next.map(str::to_string);
+    doc.spreads[si].spread.text_frames[fi].next_text_frame = prev_next.map(str::to_string);
 
-    let story_id = doc.spreads[si].spread.text_frames[fi]
-        .parent_story
-        .clone();
+    let story_id = doc.spreads[si].spread.text_frames[fi].parent_story.clone();
     let invalidation = match story_id {
         Some(sid) => reflow_hint_for_story(doc, &sid),
         None => InvalidationHint {
@@ -9013,12 +9177,11 @@ fn apply_move_guide(
     guide_id: &str,
     position: f32,
 ) -> Result<AppliedOperation, OperationError> {
-    let (si, gi) = resolve_guide(doc, guide_id).ok_or_else(|| {
-        OperationError::CollectionEntryNotFound {
+    let (si, gi) =
+        resolve_guide(doc, guide_id).ok_or_else(|| OperationError::CollectionEntryNotFound {
             collection: "guides".to_string(),
             id: guide_id.to_string(),
-        }
-    })?;
+        })?;
     let prev = doc.spreads[si].spread.guides[gi].location;
     doc.spreads[si].spread.guides[gi].location = position;
     Ok(AppliedOperation {
@@ -9041,18 +9204,13 @@ fn apply_delete_guide(
     doc: &mut Document,
     guide_id: &str,
 ) -> Result<AppliedOperation, OperationError> {
-    let (si, gi) = resolve_guide(doc, guide_id).ok_or_else(|| {
-        OperationError::CollectionEntryNotFound {
+    let (si, gi) =
+        resolve_guide(doc, guide_id).ok_or_else(|| OperationError::CollectionEntryNotFound {
             collection: "guides".to_string(),
             id: guide_id.to_string(),
-        }
-    })?;
+        })?;
     let removed = doc.spreads[si].spread.guides.remove(gi);
-    let spread_id = doc.spreads[si]
-        .spread
-        .self_id
-        .clone()
-        .unwrap_or_default();
+    let spread_id = doc.spreads[si].spread.self_id.clone().unwrap_or_default();
     Ok(AppliedOperation {
         op: Operation::DeleteGuide {
             guide_id: guide_id.to_string(),
@@ -9132,8 +9290,7 @@ fn apply_activate_condition_set(
         states.push((id.clone(), def.visible.unwrap_or(true)));
     }
     // Activate: members visible, everyone else hidden.
-    let member_set: std::collections::HashSet<&str> =
-        members.iter().map(String::as_str).collect();
+    let member_set: std::collections::HashSet<&str> = members.iter().map(String::as_str).collect();
     for (id, def) in doc.styles.conditions.iter_mut() {
         def.visible = Some(member_set.contains(id.as_str()));
     }
@@ -9252,7 +9409,12 @@ fn apply_duplicate_page(
     let src_idx = doc
         .spreads
         .iter()
-        .position(|p| p.spread.pages.iter().any(|pg| pg.self_id.as_deref() == Some(page)))
+        .position(|p| {
+            p.spread
+                .pages
+                .iter()
+                .any(|pg| pg.self_id.as_deref() == Some(page))
+        })
         .ok_or_else(|| OperationError::NodeNotFound(NodeId::Page(page.to_string())))?;
     if doc.spreads[src_idx].spread.pages.len() != 1 {
         return Err(OperationError::InvalidValue {
@@ -9306,8 +9468,7 @@ fn apply_duplicate_page(
             max_bottom = max_bottom.max(sty + pty + p.bounds.bottom);
         }
     }
-    clone.spread.item_transform =
-        Some([1.0, 0.0, 0.0, 1.0, 0.0, max_bottom + SPREAD_STACK_GAP_PT]);
+    clone.spread.item_transform = Some([1.0, 0.0, 0.0, 1.0, 0.0, max_bottom + SPREAD_STACK_GAP_PT]);
     let cloned_spread_self = clone.spread.self_id.clone().unwrap_or_default();
     clone.src = format!("Spreads/Spread_{cloned_spread_self}.xml");
     let cloned_page_id = clone
@@ -9353,7 +9514,9 @@ fn next_id_seed(doc: &Document) -> u64 {
     let mut max: u64 = 0;
     let mut scan = |id: Option<&str>| {
         let Some(id) = id else { return };
-        let Some(hex) = id.strip_prefix('u') else { return };
+        let Some(hex) = id.strip_prefix('u') else {
+            return;
+        };
         if hex.is_empty() || hex.len() > 12 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
             return;
         }
@@ -9418,7 +9581,9 @@ fn apply_insert_section(
 ) -> Result<AppliedOperation, OperationError> {
     // The anchor page must exist.
     if find_page_mut(doc, at_page).is_none() {
-        return Err(OperationError::NodeNotFound(NodeId::Page(at_page.to_string())));
+        return Err(OperationError::NodeNotFound(NodeId::Page(
+            at_page.to_string(),
+        )));
     }
     let sections = &mut doc.container.designmap.sections;
     let id = match self_id {

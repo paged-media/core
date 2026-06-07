@@ -255,9 +255,7 @@ fn element_to_leaf_node_id(
     })
 }
 
-fn created_element_id(
-    op: &paged_mutate::Operation,
-) -> Option<crate::element_selection::ElementId> {
+fn created_element_id(op: &paged_mutate::Operation) -> Option<crate::element_selection::ElementId> {
     use crate::element_selection::ElementId;
     // B-04 — group creation reports the minted group id.
     if let paged_mutate::Operation::CreateGroup { spec } = op {
@@ -286,7 +284,9 @@ fn created_element_id(
 /// Editor-ops — id-minting scan helper: track the max `u<hex>` suffix.
 fn scan_page_item_id(max: &mut u64, id: Option<&str>) {
     let Some(id) = id else { return };
-    let Some(hex) = id.strip_prefix('u') else { return };
+    let Some(hex) = id.strip_prefix('u') else {
+        return;
+    };
     if hex.is_empty() || hex.len() > 12 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
         return;
     }
@@ -327,9 +327,7 @@ pub struct UndoOutcome {
 /// matching `paged_mutate::NodeId` for the apply layer. Ovals + Groups
 /// don't carry editable PathPointArrays so they translate to `None`
 /// and the calling Mutation falls through to the non-frame handler.
-fn path_node_id_for(
-    id: &crate::element_selection::ElementId,
-) -> Option<paged_mutate::NodeId> {
+fn path_node_id_for(id: &crate::element_selection::ElementId) -> Option<paged_mutate::NodeId> {
     use crate::element_selection::ElementId;
     use paged_mutate::NodeId;
     match id {
@@ -363,7 +361,11 @@ fn element_to_node_id(id: &crate::element_selection::ElementId) -> paged_mutate:
         ElementId::Polygon(s) => NodeId::Polygon(s.clone()),
         ElementId::GraphicLine(s) => NodeId::GraphicLine(s.clone()),
         ElementId::Group(s) => NodeId::Group(s.clone()),
-        ElementId::StoryRange { story_id, start, end } => NodeId::StoryRange {
+        ElementId::StoryRange {
+            story_id,
+            start,
+            end,
+        } => NodeId::StoryRange {
             story_id: story_id.clone(),
             start: *start,
             end: *end,
@@ -571,77 +573,230 @@ fn effect_property_entries(
     let satin = effects.and_then(|e| e.satin.as_ref());
     let feather = effects.and_then(|e| e.feather.as_ref());
     let dfeather = effects.and_then(|e| e.directional_feather.as_ref());
-    let entry = |path, value| PropertyEntry { path, value: Some(value) };
+    let entry = |path, value| PropertyEntry {
+        path,
+        value: Some(value),
+    };
     let txt = |s: Option<&String>| V::Text(s.cloned().unwrap_or_default());
     let col = |s: Option<&String>| V::ColorRef(s.cloned());
     vec![
         // Inner shadow.
         entry(P::FrameInnerShadowEnabled, V::Bool(inner_shadow.is_some())),
-        entry(P::FrameInnerShadowBlendMode, txt(inner_shadow.and_then(|e| e.blend_mode.as_ref()))),
-        entry(P::FrameInnerShadowColor, col(inner_shadow.and_then(|e| e.effect_color.as_ref()))),
-        entry(P::FrameInnerShadowOpacity, V::Length(inner_shadow.and_then(|e| e.opacity_pct))),
-        entry(P::FrameInnerShadowAngle, V::Length(inner_shadow.and_then(|e| e.angle_deg))),
-        entry(P::FrameInnerShadowDistance, V::Length(inner_shadow.and_then(|e| e.distance))),
-        entry(P::FrameInnerShadowSize, V::Length(inner_shadow.and_then(|e| e.size))),
-        entry(P::FrameInnerShadowChoke, V::Length(inner_shadow.and_then(|e| e.choke_pct))),
-        entry(P::FrameInnerShadowNoise, V::Length(inner_shadow.and_then(|e| e.noise_pct))),
+        entry(
+            P::FrameInnerShadowBlendMode,
+            txt(inner_shadow.and_then(|e| e.blend_mode.as_ref())),
+        ),
+        entry(
+            P::FrameInnerShadowColor,
+            col(inner_shadow.and_then(|e| e.effect_color.as_ref())),
+        ),
+        entry(
+            P::FrameInnerShadowOpacity,
+            V::Length(inner_shadow.and_then(|e| e.opacity_pct)),
+        ),
+        entry(
+            P::FrameInnerShadowAngle,
+            V::Length(inner_shadow.and_then(|e| e.angle_deg)),
+        ),
+        entry(
+            P::FrameInnerShadowDistance,
+            V::Length(inner_shadow.and_then(|e| e.distance)),
+        ),
+        entry(
+            P::FrameInnerShadowSize,
+            V::Length(inner_shadow.and_then(|e| e.size)),
+        ),
+        entry(
+            P::FrameInnerShadowChoke,
+            V::Length(inner_shadow.and_then(|e| e.choke_pct)),
+        ),
+        entry(
+            P::FrameInnerShadowNoise,
+            V::Length(inner_shadow.and_then(|e| e.noise_pct)),
+        ),
         // Outer glow.
         entry(P::FrameOuterGlowEnabled, V::Bool(outer_glow.is_some())),
-        entry(P::FrameOuterGlowBlendMode, txt(outer_glow.and_then(|e| e.blend_mode.as_ref()))),
-        entry(P::FrameOuterGlowColor, col(outer_glow.and_then(|e| e.effect_color.as_ref()))),
-        entry(P::FrameOuterGlowOpacity, V::Length(outer_glow.and_then(|e| e.opacity_pct))),
-        entry(P::FrameOuterGlowSpread, V::Length(outer_glow.and_then(|e| e.spread_pct))),
-        entry(P::FrameOuterGlowSize, V::Length(outer_glow.and_then(|e| e.size))),
-        entry(P::FrameOuterGlowNoise, V::Length(outer_glow.and_then(|e| e.noise_pct))),
+        entry(
+            P::FrameOuterGlowBlendMode,
+            txt(outer_glow.and_then(|e| e.blend_mode.as_ref())),
+        ),
+        entry(
+            P::FrameOuterGlowColor,
+            col(outer_glow.and_then(|e| e.effect_color.as_ref())),
+        ),
+        entry(
+            P::FrameOuterGlowOpacity,
+            V::Length(outer_glow.and_then(|e| e.opacity_pct)),
+        ),
+        entry(
+            P::FrameOuterGlowSpread,
+            V::Length(outer_glow.and_then(|e| e.spread_pct)),
+        ),
+        entry(
+            P::FrameOuterGlowSize,
+            V::Length(outer_glow.and_then(|e| e.size)),
+        ),
+        entry(
+            P::FrameOuterGlowNoise,
+            V::Length(outer_glow.and_then(|e| e.noise_pct)),
+        ),
         // Inner glow.
         entry(P::FrameInnerGlowEnabled, V::Bool(inner_glow.is_some())),
-        entry(P::FrameInnerGlowBlendMode, txt(inner_glow.and_then(|e| e.blend_mode.as_ref()))),
-        entry(P::FrameInnerGlowColor, col(inner_glow.and_then(|e| e.effect_color.as_ref()))),
-        entry(P::FrameInnerGlowOpacity, V::Length(inner_glow.and_then(|e| e.opacity_pct))),
-        entry(P::FrameInnerGlowChoke, V::Length(inner_glow.and_then(|e| e.choke_pct))),
-        entry(P::FrameInnerGlowSize, V::Length(inner_glow.and_then(|e| e.size))),
-        entry(P::FrameInnerGlowSource, txt(inner_glow.and_then(|e| e.source.as_ref()))),
-        entry(P::FrameInnerGlowNoise, V::Length(inner_glow.and_then(|e| e.noise_pct))),
+        entry(
+            P::FrameInnerGlowBlendMode,
+            txt(inner_glow.and_then(|e| e.blend_mode.as_ref())),
+        ),
+        entry(
+            P::FrameInnerGlowColor,
+            col(inner_glow.and_then(|e| e.effect_color.as_ref())),
+        ),
+        entry(
+            P::FrameInnerGlowOpacity,
+            V::Length(inner_glow.and_then(|e| e.opacity_pct)),
+        ),
+        entry(
+            P::FrameInnerGlowChoke,
+            V::Length(inner_glow.and_then(|e| e.choke_pct)),
+        ),
+        entry(
+            P::FrameInnerGlowSize,
+            V::Length(inner_glow.and_then(|e| e.size)),
+        ),
+        entry(
+            P::FrameInnerGlowSource,
+            txt(inner_glow.and_then(|e| e.source.as_ref())),
+        ),
+        entry(
+            P::FrameInnerGlowNoise,
+            V::Length(inner_glow.and_then(|e| e.noise_pct)),
+        ),
         // Bevel / emboss.
         entry(P::FrameBevelEnabled, V::Bool(bevel.is_some())),
-        entry(P::FrameBevelStyle, txt(bevel.and_then(|e| e.style.as_ref()))),
-        entry(P::FrameBevelTechnique, txt(bevel.and_then(|e| e.technique.as_ref()))),
-        entry(P::FrameBevelDepth, V::Length(bevel.and_then(|e| e.depth_pct))),
-        entry(P::FrameBevelDirection, txt(bevel.and_then(|e| e.direction.as_ref()))),
+        entry(
+            P::FrameBevelStyle,
+            txt(bevel.and_then(|e| e.style.as_ref())),
+        ),
+        entry(
+            P::FrameBevelTechnique,
+            txt(bevel.and_then(|e| e.technique.as_ref())),
+        ),
+        entry(
+            P::FrameBevelDepth,
+            V::Length(bevel.and_then(|e| e.depth_pct)),
+        ),
+        entry(
+            P::FrameBevelDirection,
+            txt(bevel.and_then(|e| e.direction.as_ref())),
+        ),
         entry(P::FrameBevelSize, V::Length(bevel.and_then(|e| e.size))),
         entry(P::FrameBevelSoften, V::Length(bevel.and_then(|e| e.soften))),
-        entry(P::FrameBevelAngle, V::Length(bevel.and_then(|e| e.angle_deg))),
-        entry(P::FrameBevelAltitude, V::Length(bevel.and_then(|e| e.altitude_deg))),
-        entry(P::FrameBevelHighlightColor, col(bevel.and_then(|e| e.highlight_color.as_ref()))),
-        entry(P::FrameBevelShadowColor, col(bevel.and_then(|e| e.shadow_color.as_ref()))),
-        entry(P::FrameBevelHighlightOpacity, V::Length(bevel.and_then(|e| e.highlight_opacity_pct))),
-        entry(P::FrameBevelShadowOpacity, V::Length(bevel.and_then(|e| e.shadow_opacity_pct))),
+        entry(
+            P::FrameBevelAngle,
+            V::Length(bevel.and_then(|e| e.angle_deg)),
+        ),
+        entry(
+            P::FrameBevelAltitude,
+            V::Length(bevel.and_then(|e| e.altitude_deg)),
+        ),
+        entry(
+            P::FrameBevelHighlightColor,
+            col(bevel.and_then(|e| e.highlight_color.as_ref())),
+        ),
+        entry(
+            P::FrameBevelShadowColor,
+            col(bevel.and_then(|e| e.shadow_color.as_ref())),
+        ),
+        entry(
+            P::FrameBevelHighlightOpacity,
+            V::Length(bevel.and_then(|e| e.highlight_opacity_pct)),
+        ),
+        entry(
+            P::FrameBevelShadowOpacity,
+            V::Length(bevel.and_then(|e| e.shadow_opacity_pct)),
+        ),
         // Satin.
         entry(P::FrameSatinEnabled, V::Bool(satin.is_some())),
-        entry(P::FrameSatinBlendMode, txt(satin.and_then(|e| e.blend_mode.as_ref()))),
-        entry(P::FrameSatinColor, col(satin.and_then(|e| e.effect_color.as_ref()))),
-        entry(P::FrameSatinOpacity, V::Length(satin.and_then(|e| e.opacity_pct))),
-        entry(P::FrameSatinAngle, V::Length(satin.and_then(|e| e.angle_deg))),
-        entry(P::FrameSatinDistance, V::Length(satin.and_then(|e| e.distance))),
+        entry(
+            P::FrameSatinBlendMode,
+            txt(satin.and_then(|e| e.blend_mode.as_ref())),
+        ),
+        entry(
+            P::FrameSatinColor,
+            col(satin.and_then(|e| e.effect_color.as_ref())),
+        ),
+        entry(
+            P::FrameSatinOpacity,
+            V::Length(satin.and_then(|e| e.opacity_pct)),
+        ),
+        entry(
+            P::FrameSatinAngle,
+            V::Length(satin.and_then(|e| e.angle_deg)),
+        ),
+        entry(
+            P::FrameSatinDistance,
+            V::Length(satin.and_then(|e| e.distance)),
+        ),
         entry(P::FrameSatinSize, V::Length(satin.and_then(|e| e.size))),
-        entry(P::FrameSatinInvert, V::Bool(satin.and_then(|e| e.invert).unwrap_or(false))),
+        entry(
+            P::FrameSatinInvert,
+            V::Bool(satin.and_then(|e| e.invert).unwrap_or(false)),
+        ),
         // Feather (basic).
         entry(P::FrameFeatherEnabled, V::Bool(feather.is_some())),
-        entry(P::FrameFeatherWidth, V::Length(feather.and_then(|e| e.width))),
-        entry(P::FrameFeatherCornerType, txt(feather.and_then(|e| e.corner_type.as_ref()))),
-        entry(P::FrameFeatherNoise, V::Length(feather.and_then(|e| e.noise_pct))),
-        entry(P::FrameFeatherChoke, V::Length(feather.and_then(|e| e.choke_pct))),
+        entry(
+            P::FrameFeatherWidth,
+            V::Length(feather.and_then(|e| e.width)),
+        ),
+        entry(
+            P::FrameFeatherCornerType,
+            txt(feather.and_then(|e| e.corner_type.as_ref())),
+        ),
+        entry(
+            P::FrameFeatherNoise,
+            V::Length(feather.and_then(|e| e.noise_pct)),
+        ),
+        entry(
+            P::FrameFeatherChoke,
+            V::Length(feather.and_then(|e| e.choke_pct)),
+        ),
         // Directional feather.
-        entry(P::FrameDirectionalFeatherEnabled, V::Bool(dfeather.is_some())),
-        entry(P::FrameDirectionalFeatherLeftWidth, V::Length(dfeather.and_then(|e| e.left_width))),
-        entry(P::FrameDirectionalFeatherRightWidth, V::Length(dfeather.and_then(|e| e.right_width))),
-        entry(P::FrameDirectionalFeatherTopWidth, V::Length(dfeather.and_then(|e| e.top_width))),
-        entry(P::FrameDirectionalFeatherBottomWidth, V::Length(dfeather.and_then(|e| e.bottom_width))),
-        entry(P::FrameDirectionalFeatherAngle, V::Length(dfeather.and_then(|e| e.angle_deg))),
-        entry(P::FrameDirectionalFeatherNoise, V::Length(dfeather.and_then(|e| e.noise_pct))),
-        entry(P::FrameDirectionalFeatherChoke, V::Length(dfeather.and_then(|e| e.choke_pct))),
+        entry(
+            P::FrameDirectionalFeatherEnabled,
+            V::Bool(dfeather.is_some()),
+        ),
+        entry(
+            P::FrameDirectionalFeatherLeftWidth,
+            V::Length(dfeather.and_then(|e| e.left_width)),
+        ),
+        entry(
+            P::FrameDirectionalFeatherRightWidth,
+            V::Length(dfeather.and_then(|e| e.right_width)),
+        ),
+        entry(
+            P::FrameDirectionalFeatherTopWidth,
+            V::Length(dfeather.and_then(|e| e.top_width)),
+        ),
+        entry(
+            P::FrameDirectionalFeatherBottomWidth,
+            V::Length(dfeather.and_then(|e| e.bottom_width)),
+        ),
+        entry(
+            P::FrameDirectionalFeatherAngle,
+            V::Length(dfeather.and_then(|e| e.angle_deg)),
+        ),
+        entry(
+            P::FrameDirectionalFeatherNoise,
+            V::Length(dfeather.and_then(|e| e.noise_pct)),
+        ),
+        entry(
+            P::FrameDirectionalFeatherChoke,
+            V::Length(dfeather.and_then(|e| e.choke_pct)),
+        ),
         // Object-level transparency blend mode.
-        entry(P::FrameBlendMode, V::Text(blend_mode.unwrap_or_default().to_string())),
+        entry(
+            P::FrameBlendMode,
+            V::Text(blend_mode.unwrap_or_default().to_string()),
+        ),
     ]
 }
 
@@ -774,8 +929,7 @@ pub struct CanvasModel {
     /// investigation, image decoding isn't actually the bottleneck
     /// in the current test harness; this stays as forward-looking
     /// infra for when asset resolvers wire up.
-    image_decode_cache:
-        std::cell::RefCell<HashMap<String, paged_compose::DecodedImage>>,
+    image_decode_cache: std::cell::RefCell<HashMap<String, paged_compose::DecodedImage>>,
     /// Perf-FontTable — pre-built shaping table reused across every
     /// `rebuild_after_mutation`. The `FontTable::build` walk costs
     /// ~225ms on a multi-spread fixture (harvests every paragraph's
@@ -793,9 +947,8 @@ pub struct CanvasModel {
     /// removed and the cached relative-path-id rebase would
     /// produce visually-correct but order-divergent output. ~161ms
     /// savings per rebuild on a multi-spread fixture.
-    master_text_emit_cache: std::cell::RefCell<
-        HashMap<(String, usize), paged_renderer::MasterTextEmitDelta>,
-    >,
+    master_text_emit_cache:
+        std::cell::RefCell<HashMap<(String, usize), paged_renderer::MasterTextEmitDelta>>,
     /// Perf-BodyStory — per-(story_self_id, signature) cache of
     /// the multi-page body-story emission delta. Signature
     /// hashes the chain's frames + wrap_rects on chain pages, so
@@ -805,9 +958,8 @@ pub struct CanvasModel {
     /// (~613ms); most stories are unaffected by any given gesture
     /// so the hit ratio is high. Cleared by `apply_operation` on
     /// structural commits.
-    body_story_emit_cache: std::cell::RefCell<
-        HashMap<(String, u64), paged_renderer::BodyStoryEmissionDelta>,
-    >,
+    body_story_emit_cache:
+        std::cell::RefCell<HashMap<(String, u64), paged_renderer::BodyStoryEmissionDelta>>,
 }
 
 /// One entry in the applied / redo logs.
@@ -897,16 +1049,17 @@ impl CanvasModel {
         // build_document then stored on Self below for subsequent
         // rebuilds. The cold load pays the full decode cost; every
         // mutation-driven rebuild after that reuses.
-        let image_decode_cache: std::cell::RefCell<
-            HashMap<String, paged_compose::DecodedImage>,
-        > = std::cell::RefCell::new(HashMap::new());
+        let image_decode_cache: std::cell::RefCell<HashMap<String, paged_compose::DecodedImage>> =
+            std::cell::RefCell::new(HashMap::new());
         // Perf-FontTable — pre-build the shaping table once so the
         // initial build_document + every subsequent
         // rebuild_after_mutation skips the harvest walk
         // (~225ms/call on a multi-spread fixture).
         let font_table_options = PipelineOptions {
             font: font_bytes.as_deref(),
-            assets: resolver.as_ref().map(|r| r as &dyn paged_renderer::AssetResolver),
+            assets: resolver
+                .as_ref()
+                .map(|r| r as &dyn paged_renderer::AssetResolver),
             cmyk_icc_profile: icc_bytes.as_deref(),
             ..PipelineOptions::default()
         };
@@ -924,7 +1077,9 @@ impl CanvasModel {
         let (built_result, layout_cache) = {
             let options = PipelineOptions {
                 font: font_bytes.as_deref(),
-                assets: resolver.as_ref().map(|r| r as &dyn paged_renderer::AssetResolver),
+                assets: resolver
+                    .as_ref()
+                    .map(|r| r as &dyn paged_renderer::AssetResolver),
                 cmyk_icc_profile: icc_bytes.as_deref(),
                 image_decode_cache: Some(&image_decode_cache),
                 pre_built_font_table: Some(&font_table),
@@ -1194,8 +1349,7 @@ impl CanvasModel {
                 }
             })?;
             let applied_seq = self.bump_applied_seq();
-            let page_ids: Vec<PageId> =
-                self.built.pages.iter().map(|p| p.id.clone()).collect();
+            let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
             return Ok(MutationOutcome {
                 applied_seq,
                 page_ids,
@@ -1245,8 +1399,7 @@ impl CanvasModel {
                 }
             })?;
             let applied_seq = self.bump_applied_seq();
-            let page_ids: Vec<PageId> =
-                self.built.pages.iter().map(|p| p.id.clone()).collect();
+            let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
             return Ok(MutationOutcome {
                 applied_seq,
                 page_ids,
@@ -1323,9 +1476,7 @@ impl CanvasModel {
         // (carries an inverse `TextOp`), so frame-shape mutations
         // synthesise an empty text op into the response. Future
         // convergence folds both into one shape.
-        if let Some(op) =
-            self.try_translate_frame_mutation_to_operation(mutation, &mut 0)
-        {
+        if let Some(op) = self.try_translate_frame_mutation_to_operation(mutation, &mut 0) {
             let outcome = self.apply_operation(op)?;
             let created_id = created_element_id(&outcome.applied.op);
             // Page-list mutations (M7 extends this set with ResizePage)
@@ -1394,19 +1545,21 @@ impl CanvasModel {
         // same invariant.
         self.master_text_emit_cache.borrow_mut().clear();
         self.body_story_emit_cache.borrow_mut().clear();
-        self.rebuild_after_mutation().map_err(|e| {
-            crate::channel::WorkerError::NotImplemented {
+        self.rebuild_after_mutation()
+            .map_err(|e| crate::channel::WorkerError::NotImplemented {
                 what: format!("rebuild after mutation: {e}"),
-            }
-        })?;
+            })?;
         let applied_seq = self.bump_applied_seq();
         let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
         // Shift the active selection through the mutation so caret
         // tracking survives the edit (AC-E-9).
         if let Some(sel) = self.current_selection.take() {
             let shifted = match &text_op {
-                crate::mutate::TextOp::InsertText { story_id, offset, text } => sel
-                    .shift_for_insert(story_id, *offset, text.chars().count() as u32),
+                crate::mutate::TextOp::InsertText {
+                    story_id,
+                    offset,
+                    text,
+                } => sel.shift_for_insert(story_id, *offset, text.chars().count() as u32),
                 crate::mutate::TextOp::DeleteRange {
                     story_id,
                     start,
@@ -1474,12 +1627,7 @@ impl CanvasModel {
                         // Page-local (top, left, bottom, right) →
                         // spread coords (the marquee_hits rule: y axes
                         // shift by origin.y, x axes by origin.x).
-                        bounds: [
-                            bounds.0 + oy,
-                            bounds.1 + ox,
-                            bounds.2 + oy,
-                            bounds.3 + ox,
-                        ],
+                        bounds: [bounds.0 + oy, bounds.1 + ox, bounds.2 + oy, bounds.3 + ox],
                         fill_color: d.fill_color.clone(),
                         stroke_color: d.stroke_color.clone(),
                         stroke_weight: d.stroke_weight,
@@ -1497,12 +1645,7 @@ impl CanvasModel {
                     position,
                     node: paged_mutate::NodeSpec::TextFrame {
                         self_id: self.mint_page_item_id_with_offset(mint_offset),
-                        bounds: [
-                            bounds.0 + oy,
-                            bounds.1 + ox,
-                            bounds.2 + oy,
-                            bounds.3 + ox,
-                        ],
+                        bounds: [bounds.0 + oy, bounds.1 + ox, bounds.2 + oy, bounds.3 + ox],
                         // Text frames carry no fill/stroke by default —
                         // an empty threading/Type-tool target.
                         fill_color: None,
@@ -1513,7 +1656,11 @@ impl CanvasModel {
                     z_slot: None,
                 })
             }
-            Mutation::InsertLine { page_id, start, end } => {
+            Mutation::InsertLine {
+                page_id,
+                start,
+                end,
+            } => {
                 let (spread_id, (ox, oy), idx) = self.page_insert_context(page_id)?;
                 let position = self.scene.spreads[idx].spread.graphic_lines.len();
                 let s = [start.0 + ox, start.1 + oy];
@@ -1632,11 +1779,7 @@ impl CanvasModel {
                 let node = self.resolve_frame_node_id(frame_id)?;
                 Some(Operation::RemoveNode { node })
             }
-            Mutation::PathfinderBoolean {
-                kept,
-                others,
-                kind,
-            } => {
+            Mutation::PathfinderBoolean { kept, others, kind } => {
                 let kept_node = path_node_id_for(kept)?;
                 let other_nodes: Vec<NodeId> = others
                     .iter()
@@ -1837,8 +1980,7 @@ impl CanvasModel {
                     };
                     // FINDING #6 — thread the SAME mint counter so each
                     // child insert in the batch mints a distinct self_id.
-                    let op = self
-                        .try_translate_frame_mutation_to_operation(child, mint_offset)?;
+                    let op = self.try_translate_frame_mutation_to_operation(child, mint_offset)?;
                     if let Some(id) = created_element_id(&op) {
                         last_created = Some(id);
                     }
@@ -1895,9 +2037,7 @@ impl CanvasModel {
             }),
             // ── Collection mutations — 1:1 with the matching Operation
             //    (no NodeId resolution; they target collections by id).
-            Mutation::CreateSwatch { spec } => {
-                Some(Operation::CreateSwatch { spec: spec.clone() })
-            }
+            Mutation::CreateSwatch { spec } => Some(Operation::CreateSwatch { spec: spec.clone() }),
             // Concept 2 — one undoable Batch: every .ase colour as a
             // CreateSwatch (+ one CreateColorGroup per .ase group).
             // Ids are minted HERE (translate time) so the group
@@ -1951,7 +2091,9 @@ impl CanvasModel {
                     for entry in &g.entries {
                         let id = mint(&mut taken);
                         members.push(id.clone());
-                        ops.push(Operation::CreateSwatch { spec: spec_of(entry, id) });
+                        ops.push(Operation::CreateSwatch {
+                            spec: spec_of(entry, id),
+                        });
                     }
                     groups.push((g.name.clone(), members));
                 }
@@ -1959,7 +2101,9 @@ impl CanvasModel {
                 for entry in &lib.loose {
                     let id = mint(&mut taken);
                     loose_members.push(id.clone());
-                    ops.push(Operation::CreateSwatch { spec: spec_of(entry, id) });
+                    ops.push(Operation::CreateSwatch {
+                        spec: spec_of(entry, id),
+                    });
                 }
                 if let (Some(name), false) = (group_name.as_ref(), loose_members.is_empty()) {
                     groups.push((name.clone(), loose_members));
@@ -2117,12 +2261,7 @@ impl CanvasModel {
                         self_id: self.mint_page_item_id_with_offset(mint_offset),
                         // Page-local (top, left, bottom, right) → spread
                         // coords (same rule as InsertFrame).
-                        bounds: [
-                            bounds.0 + oy,
-                            bounds.1 + ox,
-                            bounds.2 + oy,
-                            bounds.3 + ox,
-                        ],
+                        bounds: [bounds.0 + oy, bounds.1 + ox, bounds.2 + oy, bounds.3 + ox],
                         fill_color: d.fill_color.clone(),
                         stroke_color: d.stroke_color.clone(),
                         stroke_weight: d.stroke_weight,
@@ -2340,9 +2479,11 @@ impl CanvasModel {
     ) -> Option<(String, (f32, f32), usize)> {
         let origin = self.page(page_id)?.spread_origin;
         let (idx, parsed) = self.scene.spreads.iter().enumerate().find(|(_, parsed)| {
-            parsed.spread.pages.iter().any(|p| {
-                p.self_id.as_deref() == Some(page_id.as_str()) || p.self_id.is_none()
-            })
+            parsed
+                .spread
+                .pages
+                .iter()
+                .any(|p| p.self_id.as_deref() == Some(page_id.as_str()) || p.self_id.is_none())
         })?;
         // Well-formed IDMLs always carry a spread self_id; synthetic
         // docs fall back to the manifest src (mirrors spread_parent_id
@@ -2355,27 +2496,39 @@ impl CanvasModel {
         Some((spread_id, origin, idx))
     }
 
-    pub(crate) fn resolve_frame_node_id(
-        &self,
-        frame_id: &str,
-    ) -> Option<paged_mutate::NodeId> {
+    pub(crate) fn resolve_frame_node_id(&self, frame_id: &str) -> Option<paged_mutate::NodeId> {
         for parsed in &self.scene.spreads {
             let s = &parsed.spread;
-            if s.text_frames.iter().any(|f| f.self_id.as_deref() == Some(frame_id)) {
+            if s.text_frames
+                .iter()
+                .any(|f| f.self_id.as_deref() == Some(frame_id))
+            {
                 return Some(paged_mutate::NodeId::TextFrame(frame_id.to_string()));
             }
-            if s.rectangles.iter().any(|f| f.self_id.as_deref() == Some(frame_id)) {
+            if s.rectangles
+                .iter()
+                .any(|f| f.self_id.as_deref() == Some(frame_id))
+            {
                 return Some(paged_mutate::NodeId::Rectangle(frame_id.to_string()));
             }
             // Editor-ops — the insert ops create lines/polygons, so
             // ResizeFrame/DeleteFrame must resolve them too.
-            if s.graphic_lines.iter().any(|l| l.self_id.as_deref() == Some(frame_id)) {
+            if s.graphic_lines
+                .iter()
+                .any(|l| l.self_id.as_deref() == Some(frame_id))
+            {
                 return Some(paged_mutate::NodeId::GraphicLine(frame_id.to_string()));
             }
-            if s.polygons.iter().any(|p| p.self_id.as_deref() == Some(frame_id)) {
+            if s.polygons
+                .iter()
+                .any(|p| p.self_id.as_deref() == Some(frame_id))
+            {
                 return Some(paged_mutate::NodeId::Polygon(frame_id.to_string()));
             }
-            if s.ovals.iter().any(|o| o.self_id.as_deref() == Some(frame_id)) {
+            if s.ovals
+                .iter()
+                .any(|o| o.self_id.as_deref() == Some(frame_id))
+            {
                 return Some(paged_mutate::NodeId::Oval(frame_id.to_string()));
             }
         }
@@ -2410,11 +2563,10 @@ impl CanvasModel {
         // so the cache survives the whole drag.
         self.master_text_emit_cache.borrow_mut().clear();
         self.body_story_emit_cache.borrow_mut().clear();
-        self.rebuild_after_mutation().map_err(|e| {
-            crate::channel::WorkerError::NotImplemented {
+        self.rebuild_after_mutation()
+            .map_err(|e| crate::channel::WorkerError::NotImplemented {
                 what: format!("rebuild after frame mutation: {e}"),
-            }
-        })?;
+            })?;
         let applied_seq = self.bump_applied_seq();
         let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
         self.applied_log.push(AppliedRecord {
@@ -2618,7 +2770,12 @@ impl CanvasModel {
         // SDK Phase 3 — StoryRange snapshot. Story lives in
         // `self.scene.stories`, not in spreads, so this branch
         // returns early before the spread loop below.
-        if let ElementId::StoryRange { story_id, start, end } = id {
+        if let ElementId::StoryRange {
+            story_id,
+            start,
+            end,
+        } = id
+        {
             return self.story_range_properties(story_id, *start, *end, id);
         }
         // W3.A1 — tables / cells likewise live in stories, not spreads.
@@ -3418,8 +3575,7 @@ impl CanvasModel {
                 space_before.push(para.space_before);
                 space_after.push(para.space_after);
                 first_line_indent.push(para.first_line_indent);
-                applied_paragraph_styles
-                    .push(para.paragraph_style.clone().unwrap_or_default());
+                applied_paragraph_styles.push(para.paragraph_style.clone().unwrap_or_default());
                 justifications.push(
                     para.justification
                         .map(|j| j.as_idml().to_string())
@@ -3454,8 +3610,7 @@ impl CanvasModel {
                 leadings.push(run.leading);
                 trackings.push(run.tracking);
                 fill_colors.push(run.fill_color.clone());
-                applied_character_styles
-                    .push(run.character_style.clone().unwrap_or_default());
+                applied_character_styles.push(run.character_style.clone().unwrap_or_default());
                 font_families.push(run.font.clone());
                 font_styles.push(run.font_style.clone());
                 kerning_methods.push(run.kerning_method.clone());
@@ -3533,13 +3688,11 @@ impl CanvasModel {
             // surface `Some(_)` collapsed (None ⇒ inherit ⇒ false).
             PropertyEntry {
                 path: PropertyPath::CharacterFontFamily,
-                value: collapse_uniform(&font_families)
-                    .map(|o| Value::Text(o.unwrap_or_default())),
+                value: collapse_uniform(&font_families).map(|o| Value::Text(o.unwrap_or_default())),
             },
             PropertyEntry {
                 path: PropertyPath::CharacterFontStyle,
-                value: collapse_uniform(&font_styles)
-                    .map(|o| Value::Text(o.unwrap_or_default())),
+                value: collapse_uniform(&font_styles).map(|o| Value::Text(o.unwrap_or_default())),
             },
             PropertyEntry {
                 path: PropertyPath::CharacterKerningMethod,
@@ -3561,8 +3714,7 @@ impl CanvasModel {
             },
             PropertyEntry {
                 path: PropertyPath::CharacterOtfFeatures,
-                value: collapse_uniform(&otf_features)
-                    .map(|o| Value::Text(o.unwrap_or_default())),
+                value: collapse_uniform(&otf_features).map(|o| Value::Text(o.unwrap_or_default())),
             },
             PropertyEntry {
                 path: PropertyPath::CharacterBaselineShift,
@@ -3614,13 +3766,11 @@ impl CanvasModel {
             },
             PropertyEntry {
                 path: PropertyPath::ParagraphDropCapLines,
-                value: collapse_uniform(&drop_cap_lines)
-                    .map(|n| Value::Length(Some(n as f32))),
+                value: collapse_uniform(&drop_cap_lines).map(|n| Value::Length(Some(n as f32))),
             },
             PropertyEntry {
                 path: PropertyPath::ParagraphHyphenation,
-                value: collapse_uniform(&hyphenations)
-                    .map(|o| Value::Bool(o.unwrap_or(true))),
+                value: collapse_uniform(&hyphenations).map(|o| Value::Bool(o.unwrap_or(true))),
             },
             PropertyEntry {
                 path: PropertyPath::ParagraphKeepLinesTogether,
@@ -3634,8 +3784,7 @@ impl CanvasModel {
             },
             PropertyEntry {
                 path: PropertyPath::ParagraphListType,
-                value: collapse_uniform(&list_types)
-                    .map(|o| Value::Text(o.unwrap_or_default())),
+                value: collapse_uniform(&list_types).map(|o| Value::Text(o.unwrap_or_default())),
             },
             PropertyEntry {
                 path: PropertyPath::ParagraphBulletCharacter,
@@ -3691,16 +3840,8 @@ impl CanvasModel {
 
     /// W3.A1 — locate a `<Table>` by `(story_id, table_id)` for the
     /// inspector read-side. Returns the host paragraph's table ref.
-    fn find_table_read(
-        &self,
-        story_id: &str,
-        table_id: &str,
-    ) -> Option<&paged_parse::Table> {
-        let story = self
-            .scene
-            .stories
-            .iter()
-            .find(|s| s.self_id == story_id)?;
+    fn find_table_read(&self, story_id: &str, table_id: &str) -> Option<&paged_parse::Table> {
+        let story = self.scene.stories.iter().find(|s| s.self_id == story_id)?;
         story.story.paragraphs.iter().find_map(|p| {
             p.table
                 .as_ref()
@@ -3723,8 +3864,7 @@ impl CanvasModel {
         // Aftercare-A — total physical rows = header + body + footer
         // (the three IDML `*RowCount` attributes). Read-only, carried
         // as the integer-as-`Length` convention drop-cap counts use.
-        let row_count =
-            table.header_row_count + table.body_row_count + table.footer_row_count;
+        let row_count = table.header_row_count + table.body_row_count + table.footer_row_count;
         let entries = vec![
             PropertyEntry {
                 path: PropertyPath::AppliedTableStyle,
@@ -3764,7 +3904,10 @@ impl CanvasModel {
         use paged_mutate::{PropertyPath, Value};
 
         let table = self.find_table_read(story_id, table_id)?;
-        let cell = table.cells.iter().find(|c| c.coords() == Some((col, row)))?;
+        let cell = table
+            .cells
+            .iter()
+            .find(|c| c.coords() == Some((col, row)))?;
         let entries = vec![
             PropertyEntry {
                 path: PropertyPath::CellFillColor,
@@ -3829,10 +3972,7 @@ impl CanvasModel {
                     ColorModel::Unknown => "unknown",
                 },
             };
-            let name = color
-                .name
-                .clone()
-                .unwrap_or_else(|| self_id.clone());
+            let name = color.name.clone().unwrap_or_else(|| self_id.clone());
             out.push(SwatchSummary {
                 self_id: self_id.clone(),
                 name,
@@ -3879,10 +4019,7 @@ impl CanvasModel {
     /// effective colour is in CMYK space, plus a display RGB hex
     /// string the panel can render directly. None when the swatch
     /// id doesn't resolve.
-    pub fn color_preview(
-        &self,
-        swatch_id: &str,
-    ) -> Option<crate::channel::ColorPreview> {
+    pub fn color_preview(&self, swatch_id: &str) -> Option<crate::channel::ColorPreview> {
         use paged_parse::graphic::ColorModel;
         let color = self.scene.palette.colors.get(swatch_id)?;
         let model = match color.model {
@@ -3899,12 +4036,14 @@ impl CanvasModel {
         // (0..=100); the old `* 100.0` here clamped every mid-tone
         // channel to 100% in the preview readout (pre-existing bug,
         // caught by the Concept-2 mixer work).
-        let cmyk = color.effective_cmyk().map(|c| [
-            c[0].clamp(0.0, 100.0),
-            c[1].clamp(0.0, 100.0),
-            c[2].clamp(0.0, 100.0),
-            c[3].clamp(0.0, 100.0),
-        ]);
+        let cmyk = color.effective_cmyk().map(|c| {
+            [
+                c[0].clamp(0.0, 100.0),
+                c[1].clamp(0.0, 100.0),
+                c[2].clamp(0.0, 100.0),
+                c[3].clamp(0.0, 100.0),
+            ]
+        });
         // Concept 2 — resolve through the active CMM: ICC-accurate
         // when a CMYK working profile is configured (the unconfigured
         // path inside IccCmm is the exact pre-existing naive math),
@@ -4338,10 +4477,7 @@ impl CanvasModel {
                 self_id: self_id.clone(),
                 name: cond.name.clone().unwrap_or_else(|| self_id.clone()),
                 visible: cond.visible.unwrap_or(true),
-                indicator_method: cond
-                    .indicator_method
-                    .clone()
-                    .unwrap_or_default(),
+                indicator_method: cond.indicator_method.clone().unwrap_or_default(),
             })
             .collect()
     }
@@ -4359,11 +4495,17 @@ impl CanvasModel {
         let missing = self.built.diagnostics.missing_image_frame_ids();
         // panels.md gap 3 — placed-image colour space + ppi lives in
         // the per-spread side map keyed by host-frame self_id.
-        let summary = |self_id: String, host_kind: &str, uri: String,
+        let summary = |self_id: String,
+                       host_kind: &str,
+                       uri: String,
                        meta: Option<&paged_parse::ImageMetadata>| {
             LinkSummary {
-                status: if missing.contains(&self_id) { "missing" } else { "ok" }
-                    .to_string(),
+                status: if missing.contains(&self_id) {
+                    "missing"
+                } else {
+                    "ok"
+                }
+                .to_string(),
                 colorspace: meta.and_then(|m| m.space.clone()),
                 effective_ppi: meta.and_then(|m| m.effective_ppi),
                 host_self_id: self_id,
@@ -4444,10 +4586,7 @@ impl CanvasModel {
     /// the swatch REF (the model identity) plus a display hex
     /// resolved through the active CMM, so the ramp editor paints
     /// faithfully under the current working space.
-    pub fn gradient_detail(
-        &self,
-        gradient_id: &str,
-    ) -> Option<crate::channel::GradientDetail> {
+    pub fn gradient_detail(&self, gradient_id: &str) -> Option<crate::channel::GradientDetail> {
         use paged_parse::GradientKind;
         let g = self.scene.palette.gradients.get(gradient_id)?;
         let kind = match g.kind {
@@ -4617,57 +4756,30 @@ impl CanvasModel {
     /// without a backing accessor return `Value::Array(vec![])` — the
     /// audit pass per §10 flags these as "wire-shape exists, accessor
     /// pending."
-    pub fn collection(
-        &self,
-        name: crate::channel::CollectionName,
-    ) -> serde_json::Value {
+    pub fn collection(&self, name: crate::channel::CollectionName) -> serde_json::Value {
         use crate::channel::CollectionName::*;
         match name {
             Swatches => serde_json::to_value(self.swatches()).unwrap_or_default(),
             Gradients => serde_json::to_value(self.gradients()).unwrap_or_default(),
-            ParagraphStyles => {
-                serde_json::to_value(self.paragraph_styles()).unwrap_or_default()
-            }
-            CharacterStyles => {
-                serde_json::to_value(self.character_styles()).unwrap_or_default()
-            }
+            ParagraphStyles => serde_json::to_value(self.paragraph_styles()).unwrap_or_default(),
+            CharacterStyles => serde_json::to_value(self.character_styles()).unwrap_or_default(),
             Layers => serde_json::to_value(self.layers()).unwrap_or_default(),
-            ObjectStyles => {
-                serde_json::to_value(self.object_styles()).unwrap_or_default()
-            }
+            ObjectStyles => serde_json::to_value(self.object_styles()).unwrap_or_default(),
             Links => serde_json::to_value(self.links()).unwrap_or_default(),
-            Conditions => {
-                serde_json::to_value(self.conditions()).unwrap_or_default()
-            }
+            Conditions => serde_json::to_value(self.conditions()).unwrap_or_default(),
             Spreads => serde_json::to_value(self.spreads()).unwrap_or_default(),
             Pages => serde_json::to_value(self.pages()).unwrap_or_default(),
-            MasterPages => {
-                serde_json::to_value(self.master_pages()).unwrap_or_default()
-            }
-            CellStyles => {
-                serde_json::to_value(self.cell_styles()).unwrap_or_default()
-            }
-            TableStyles => {
-                serde_json::to_value(self.table_styles()).unwrap_or_default()
-            }
+            MasterPages => serde_json::to_value(self.master_pages()).unwrap_or_default(),
+            CellStyles => serde_json::to_value(self.cell_styles()).unwrap_or_default(),
+            TableStyles => serde_json::to_value(self.table_styles()).unwrap_or_default(),
             Fonts => serde_json::to_value(self.fonts()).unwrap_or_default(),
-            ConditionSets => {
-                serde_json::to_value(self.condition_sets()).unwrap_or_default()
-            }
-            ColorGroups => {
-                serde_json::to_value(self.color_groups()).unwrap_or_default()
-            }
+            ConditionSets => serde_json::to_value(self.condition_sets()).unwrap_or_default(),
+            ColorGroups => serde_json::to_value(self.color_groups()).unwrap_or_default(),
             Articles => serde_json::to_value(self.articles()).unwrap_or_default(),
-            Hyperlinks => {
-                serde_json::to_value(self.hyperlinks()).unwrap_or_default()
-            }
+            Hyperlinks => serde_json::to_value(self.hyperlinks()).unwrap_or_default(),
             Bookmarks => serde_json::to_value(self.bookmarks()).unwrap_or_default(),
-            CrossReferences => {
-                serde_json::to_value(self.cross_references()).unwrap_or_default()
-            }
-            IndexTopics => {
-                serde_json::to_value(self.index_topics()).unwrap_or_default()
-            }
+            CrossReferences => serde_json::to_value(self.cross_references()).unwrap_or_default(),
+            IndexTopics => serde_json::to_value(self.index_topics()).unwrap_or_default(),
             Inks => serde_json::to_value(self.inks()).unwrap_or_default(),
             Sections => serde_json::to_value(self.sections()).unwrap_or_default(),
             Stories => serde_json::to_value(self.stories()).unwrap_or_default(),
@@ -4699,27 +4811,20 @@ impl CanvasModel {
             // working space so the settings dialog can show what the
             // document asks for even before a registered profile
             // activates it.
-            cmyk_profile_name: self
-                .color_settings
-                .cmyk_profile_name
-                .clone()
-                .or_else(|| {
-                    self.scene
-                        .container
-                        .designmap
-                        .color_settings
-                        .cmyk_profile
-                        .clone()
-                }),
+            cmyk_profile_name: self.color_settings.cmyk_profile_name.clone().or_else(|| {
+                self.scene
+                    .container
+                    .designmap
+                    .color_settings
+                    .cmyk_profile
+                    .clone()
+            }),
             rgb_policy: self.color_settings.rgb_policy.clone(),
             cmyk_profile_active: self.icc_bytes.is_some(),
             rendering_intent: Some(self.color_settings.intent.name().to_string()),
             black_point_compensation: Some(self.color_settings.bpc),
             proof_profile_name: self.proof_state.as_ref().map(|p| p.name.clone()),
-            proof_simulate_paper_white: self
-                .proof_state
-                .as_ref()
-                .map(|p| p.simulate_paper_white),
+            proof_simulate_paper_white: self.proof_state.as_ref().map(|p| p.simulate_paper_white),
             use_standard_lab_for_spots: Some(self.use_standard_lab_for_spots),
         }
     }
@@ -4778,17 +4883,16 @@ impl CanvasModel {
         spread_nodes
     }
 
-    pub fn group_leaves(
-        &self,
-        group_self_id: &str,
-    ) -> Vec<crate::element_selection::ElementId> {
+    pub fn group_leaves(&self, group_self_id: &str) -> Vec<crate::element_selection::ElementId> {
         use crate::element_selection::ElementId;
         let mut out = Vec::new();
         for parsed in &self.scene.spreads {
             let spread = &parsed.spread;
-            let Some(group) = spread.groups.iter().find(|g| {
-                g.self_id.as_deref() == Some(group_self_id)
-            }) else {
+            let Some(group) = spread
+                .groups
+                .iter()
+                .find(|g| g.self_id.as_deref() == Some(group_self_id))
+            else {
                 continue;
             };
             // Recurse via a worklist instead of true recursion so we
@@ -4854,16 +4958,8 @@ impl CanvasModel {
     /// word-selection drives this. `None` when the story id doesn't
     /// resolve or the story has no text. See [`geometry::word_bounds`]
     /// for the whitespace / boundary / clamp behaviour.
-    pub fn word_bounds(
-        &self,
-        story_id: &str,
-        offset: u32,
-    ) -> Option<crate::geometry::WordBounds> {
-        let story = self
-            .scene
-            .stories
-            .iter()
-            .find(|s| s.self_id == story_id)?;
+    pub fn word_bounds(&self, story_id: &str, offset: u32) -> Option<crate::geometry::WordBounds> {
+        let story = self.scene.stories.iter().find(|s| s.self_id == story_id)?;
         // Join paragraphs with the single synthetic `\n` that
         // `paragraph_byte_offset` accounts for (`end + 1` per prior
         // paragraph), so the reconstructed byte string is index-
@@ -4927,11 +5023,7 @@ impl CanvasModel {
             let raw = id.raw_id();
             for parsed in &self.scene().spreads {
                 let spread = &parsed.spread;
-                let resolved: Option<(
-                    paged_parse::Bounds,
-                    Option<[f32; 6]>,
-                    bool,
-                )> = match id {
+                let resolved: Option<(paged_parse::Bounds, Option<[f32; 6]>, bool)> = match id {
                     ElementId::TextFrame(_) => spread
                         .text_frames
                         .iter()
@@ -4996,9 +5088,7 @@ impl CanvasModel {
                 });
                 let built_page = host_page
                     .and_then(|p| p.self_id.as_deref())
-                    .and_then(|sid| {
-                        self.built().pages.iter().find(|bp| bp.id.as_str() == sid)
-                    });
+                    .and_then(|sid| self.built().pages.iter().find(|bp| bp.id.as_str() == sid));
                 if let Some(bp) = built_page {
                     out.push(crate::channel::ElementGeometryItem {
                         id: id.clone(),
@@ -5170,8 +5260,7 @@ impl CanvasModel {
                 right: (a.right[0], a.right[1]),
             })
             .collect();
-        let starts: Vec<usize> =
-            table.subpath_starts.iter().map(|s| *s as usize).collect();
+        let starts: Vec<usize> = table.subpath_starts.iter().map(|s| *s as usize).collect();
         let hit = paged_mutate::kurbo_kernel::nearest_point_on_path(
             &anchors,
             &starts,
@@ -5214,7 +5303,9 @@ impl CanvasModel {
         let resolver = build_font_resolver(&self.font_registry, self.font_bytes.as_deref());
         let options = PipelineOptions {
             font: self.font_bytes.as_deref(),
-            assets: resolver.as_ref().map(|r| r as &dyn paged_renderer::AssetResolver),
+            assets: resolver
+                .as_ref()
+                .map(|r| r as &dyn paged_renderer::AssetResolver),
             cmyk_icc_profile: self.icc_bytes.as_deref(),
             cmyk_intent: self.color_settings.intent,
             cmyk_bpc: self.color_settings.bpc,
@@ -5266,7 +5357,9 @@ impl CanvasModel {
         let resolver = build_font_resolver(&self.font_registry, self.font_bytes.as_deref());
         let options = PipelineOptions {
             font: self.font_bytes.as_deref(),
-            assets: resolver.as_ref().map(|r| r as &dyn paged_renderer::AssetResolver),
+            assets: resolver
+                .as_ref()
+                .map(|r| r as &dyn paged_renderer::AssetResolver),
             // Soft-proof active => CMYK renders through the PROOF
             // condition (paper white = absolute colorimetric);
             // otherwise the working space + document settings.
@@ -5275,9 +5368,7 @@ impl CanvasModel {
                 None => self.icc_bytes.as_deref(),
             },
             cmyk_intent: match &self.proof_state {
-                Some(p) if p.simulate_paper_white => {
-                    paged_color::Intent::AbsoluteColorimetric
-                }
+                Some(p) if p.simulate_paper_white => paged_color::Intent::AbsoluteColorimetric,
                 Some(p) => p.intent,
                 None => self.color_settings.intent,
             },
@@ -5312,13 +5403,11 @@ impl CanvasModel {
         };
         let mut cache = std::mem::take(&mut self.layout_cache);
         cache.reset_stats();
-        let (build_result, cache) =
-            paged_text::cache::with_layout_cache(cache, || {
-                pipeline::build_document(&self.scene, &options)
-            });
+        let (build_result, cache) = paged_text::cache::with_layout_cache(cache, || {
+            pipeline::build_document(&self.scene, &options)
+        });
         self.layout_cache = cache;
-        let built = build_result
-            .map_err(|e| crate::channel::LoadError::Build(e.to_string()))?;
+        let built = build_result.map_err(|e| crate::channel::LoadError::Build(e.to_string()))?;
         self.page_index = built
             .pages
             .iter()
@@ -5503,7 +5592,10 @@ fn working_color_of_with(
     {
         // Swatch-level tint scales toward paper white in Lab: only
         // L* lightens, chroma fades proportionally.
-        let t = entry.tint.map(|v| (v / 100.0).clamp(0.0, 1.0)).unwrap_or(1.0);
+        let t = entry
+            .tint
+            .map(|v| (v / 100.0).clamp(0.0, 1.0))
+            .unwrap_or(1.0);
         return Some(paged_color::WorkingColor::Lab {
             l: 100.0 - (100.0 - entry.value[0]) * t,
             a: entry.value[1] * t,
@@ -5511,7 +5603,12 @@ fn working_color_of_with(
         });
     }
     if let Some([c, m, y, k]) = entry.effective_cmyk() {
-        return Some(paged_color::WorkingColor::Cmyk(paged_color::Cmyk { c, m, y, k }));
+        return Some(paged_color::WorkingColor::Cmyk(paged_color::Cmyk {
+            c,
+            m,
+            y,
+            k,
+        }));
     }
     match entry.space {
         ColorSpace::Rgb if entry.value.len() == 3 => Some(paged_color::WorkingColor::Rgb([
@@ -5541,7 +5638,12 @@ fn rgb_to_hex(rgb: [f32; 3]) -> String {
         };
         (s.clamp(0.0, 1.0) * 255.0).round() as u8
     };
-    format!("#{:02x}{:02x}{:02x}", to_byte(rgb[0]), to_byte(rgb[1]), to_byte(rgb[2]))
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        to_byte(rgb[0]),
+        to_byte(rgb[1]),
+        to_byte(rgb[2])
+    )
 }
 
 fn build_font_resolver(
@@ -5587,9 +5689,8 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-            let opts: zip::write::SimpleFileOptions =
-                zip::write::SimpleFileOptions::default()
-                    .compression_method(zip::CompressionMethod::Stored);
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
 
             // mimetype must be the first file, stored uncompressed.
             zip.start_file("mimetype", opts).unwrap();
@@ -5697,11 +5798,11 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-            let opts: zip::write::SimpleFileOptions =
-                zip::write::SimpleFileOptions::default()
-                    .compression_method(zip::CompressionMethod::Stored);
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
             zip.start_file("mimetype", opts).unwrap();
-            zip.write_all(b"application/vnd.adobe.indesign-idml-package").unwrap();
+            zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+                .unwrap();
             zip.start_file("META-INF/container.xml", opts).unwrap();
             zip.write_all(
                 br#"<?xml version="1.0" encoding="UTF-8"?>
@@ -5802,11 +5903,11 @@ mod tests {
         };
         let mut buf = Vec::new();
         let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-        let opts: zip::write::SimpleFileOptions =
-            zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Stored);
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         zip.start_file("mimetype", opts).unwrap();
-        zip.write_all(b"application/vnd.adobe.indesign-idml-package").unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
         zip.start_file("META-INF/container.xml", opts).unwrap();
         zip.write_all(br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="designmap.xml" media-type="text/xml"/></rootfiles></container>"#).unwrap();
         zip.start_file("designmap.xml", opts).unwrap();
@@ -5814,7 +5915,9 @@ mod tests {
         // A 40pt-tall frame can't hold 12 lines → overset.
         zip.start_file("Spreads/Spread_s1.xml", opts).unwrap();
         zip.write_all(br#"<?xml version="1.0"?><idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Spread Self="s1"><Page Self="p1" GeometricBounds="0 0 800 400"/><TextFrame Self="f1" ParentStory="u10" GeometricBounds="20 20 60 200"/></Spread></idPkg:Spread>"#).unwrap();
-        let mut story = String::from(r#"<?xml version="1.0"?><idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Story Self="u10">"#);
+        let mut story = String::from(
+            r#"<?xml version="1.0"?><idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Story Self="u10">"#,
+        );
         for i in 0..12 {
             story.push_str(&format!(r#"<ParagraphStyleRange><CharacterStyleRange AppliedFont="Inter" PointSize="10"><Content>Line {i}</Content></CharacterStyleRange></ParagraphStyleRange>"#));
         }
@@ -5852,11 +5955,11 @@ mod tests {
             use std::io::Write;
             let mut buf = Vec::new();
             let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-            let opts: zip::write::SimpleFileOptions =
-                zip::write::SimpleFileOptions::default()
-                    .compression_method(zip::CompressionMethod::Stored);
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
             zip.start_file("mimetype", opts).unwrap();
-            zip.write_all(b"application/vnd.adobe.indesign-idml-package").unwrap();
+            zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+                .unwrap();
             zip.start_file("META-INF/container.xml", opts).unwrap();
             zip.write_all(br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="designmap.xml" media-type="text/xml"/></rootfiles></container>"#).unwrap();
             zip.start_file("designmap.xml", opts).unwrap();

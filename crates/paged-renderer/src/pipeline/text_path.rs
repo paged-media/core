@@ -34,7 +34,10 @@ use super::*;
 /// Only the pipeline tests call this no-`subpath_open` convenience
 /// wrapper; production code goes through `..._with_open` directly.
 #[cfg(test)]
-pub(super) fn polygon_path_from_anchors(anchors: &[PathAnchor], subpath_starts: &[usize]) -> PathData {
+pub(super) fn polygon_path_from_anchors(
+    anchors: &[PathAnchor],
+    subpath_starts: &[usize],
+) -> PathData {
     polygon_path_from_anchors_with_open(anchors, subpath_starts, &[])
 }
 
@@ -196,17 +199,13 @@ pub(super) fn emit_polygon_into(
     // the page-origin shift, so `effects_unit_normalize = None` (the
     // effects module reads coordinates from the path directly).
     if let (Some(pid), Some(effects)) = (path_id, poly.effects.as_ref()) {
-        crate::module::emit_effects_pre_fill(
-            page, effects, pid, outer, palette, cmyk_xform,
-        );
+        crate::module::emit_effects_pre_fill(page, effects, pid, outer, palette, cmyk_xform);
     }
     crate::module::fill_paint_module(
         &resolved, page, palette, cmyk_xform, fallback, outer, path_id,
     );
     if let (Some(pid), Some(effects)) = (path_id, poly.effects.as_ref()) {
-        crate::module::emit_effects_post_fill(
-            page, effects, pid, outer, palette, cmyk_xform, None,
-        );
+        crate::module::emit_effects_post_fill(page, effects, pid, outer, palette, cmyk_xform, None);
     }
     crate::module::stroke_paint_module(
         &resolved,
@@ -424,20 +423,15 @@ pub(super) fn emit_text_path_into(
     let mut face_bytes: Vec<Bytes> = Vec::new();
     let mut face_font_ids: Vec<u32> = Vec::new();
 
-    let find_or_push_face = |bytes: &Bytes,
-                              face_bytes: &mut Vec<Bytes>,
-                              face_font_ids: &mut Vec<u32>|
-     -> usize {
-        if let Some(i) = face_bytes
-            .iter()
-            .position(|b| b.as_ptr() == bytes.as_ptr())
-        {
-            return i;
-        }
-        face_bytes.push(bytes.clone());
-        face_font_ids.push(fnv_1a_u32(bytes.as_ref()));
-        face_bytes.len() - 1
-    };
+    let find_or_push_face =
+        |bytes: &Bytes, face_bytes: &mut Vec<Bytes>, face_font_ids: &mut Vec<u32>| -> usize {
+            if let Some(i) = face_bytes.iter().position(|b| b.as_ptr() == bytes.as_ptr()) {
+                return i;
+            }
+            face_bytes.push(bytes.clone());
+            face_font_ids.push(fnv_1a_u32(bytes.as_ref()));
+            face_bytes.len() - 1
+        };
 
     let default_paint = options.fallback_text_paint;
     for paragraph in &parsed_story.story.paragraphs {
@@ -468,9 +462,7 @@ pub(super) fn emit_text_path_into(
                 continue;
             };
             let face_idx = find_or_push_face(&face_bytes_b, &mut face_bytes, &mut face_font_ids);
-            let point_size = resolved
-                .point_size
-                .unwrap_or(options.default_point_size);
+            let point_size = resolved.point_size.unwrap_or(options.default_point_size);
             let paint = resolved
                 .fill_color
                 .as_deref()
@@ -483,25 +475,26 @@ pub(super) fn emit_text_path_into(
             // fallback path that `harvest_face_keys` didn't see).
             let font_id = fnv_1a_u32(face_bytes_b.as_ref());
             let wght_bits = wght_for_font_style(resolved.font_style.as_deref()).to_bits();
-            let owned_face: Option<rustybuzz::Face> = if font_table.face(font_id, wght_bits).is_none() {
-                let Some(mut rf) = rustybuzz::Face::from_slice(face_bytes_b.as_ref(), 0) else {
-                    continue;
+            let owned_face: Option<rustybuzz::Face> =
+                if font_table.face(font_id, wght_bits).is_none() {
+                    let Some(mut rf) = rustybuzz::Face::from_slice(face_bytes_b.as_ref(), 0) else {
+                        continue;
+                    };
+                    let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
+                    let has_wght_axis = rf
+                        .variation_axes()
+                        .into_iter()
+                        .any(|axis| axis.tag == wght_tag);
+                    if has_wght_axis {
+                        rf.set_variations(&[rustybuzz::Variation {
+                            tag: wght_tag,
+                            value: f32::from_bits(wght_bits),
+                        }]);
+                    }
+                    Some(rf)
+                } else {
+                    None
                 };
-                let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
-                let has_wght_axis = rf
-                    .variation_axes()
-                    .into_iter()
-                    .any(|axis| axis.tag == wght_tag);
-                if has_wght_axis {
-                    rf.set_variations(&[rustybuzz::Variation {
-                        tag: wght_tag,
-                        value: f32::from_bits(wght_bits),
-                    }]);
-                }
-                Some(rf)
-            } else {
-                None
-            };
             let rb_face: &rustybuzz::Face = match font_table.face(font_id, wght_bits) {
                 Some(f) => f,
                 None => owned_face.as_ref().unwrap(),

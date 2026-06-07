@@ -24,8 +24,12 @@ use paged_scene::Document;
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
-    let idml = args.next().expect("usage: export_fixture <idml> <out.pdf> [profile.icc]");
-    let out = args.next().expect("usage: export_fixture <idml> <out.pdf> [profile.icc]");
+    let idml = args
+        .next()
+        .expect("usage: export_fixture <idml> <out.pdf> [profile.icc]");
+    let out = args
+        .next()
+        .expect("usage: export_fixture <idml> <out.pdf> [profile.icc]");
     let profile = args.next().map(std::fs::read).transpose()?;
 
     let bytes = std::fs::read(&idml)?;
@@ -56,7 +60,11 @@ fn main() -> anyhow::Result<()> {
         },
         inks: ExportInkSettings::default(),
         options: ExportOptions {
-            standard: if profile.is_some() { PdfStandard::PdfX4 } else { PdfStandard::Pdf17 },
+            standard: if profile.is_some() {
+                PdfStandard::PdfX4
+            } else {
+                PdfStandard::Pdf17
+            },
             output_condition: profile.as_ref().map(|_| "Coated FOGRA39".to_string()),
             effect_dpi: 150.0,
             ..Default::default()

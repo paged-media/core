@@ -36,8 +36,7 @@ fn font_dir() -> PathBuf {
 }
 
 fn read_font(name: &str) -> Vec<u8> {
-    std::fs::read(font_dir().join(name))
-        .unwrap_or_else(|e| panic!("read font fixture {name}: {e}"))
+    std::fs::read(font_dir().join(name)).unwrap_or_else(|e| panic!("read font fixture {name}: {e}"))
 }
 
 fn write_zip<F: FnOnce(&mut ZipWriter<std::io::Cursor<Vec<u8>>>)>(f: F) -> Vec<u8> {
@@ -71,8 +70,13 @@ fn fill_paths<'a>(
 /// All `StrokePath` commands on a page, ordered as emitted.
 fn stroke_paths<'a>(
     cmds: &'a [DisplayCommand],
-) -> impl Iterator<Item = (&'a paged_compose::PathId, &'a paged_compose::Stroke, &'a Transform)> + 'a
-{
+) -> impl Iterator<
+    Item = (
+        &'a paged_compose::PathId,
+        &'a paged_compose::Stroke,
+        &'a Transform,
+    ),
+> + 'a {
     cmds.iter().filter_map(|c| match c {
         DisplayCommand::StrokePath {
             path_id,
@@ -97,12 +101,7 @@ fn glyph_xys(cmds: &[DisplayCommand]) -> Vec<(f32, f32, f32)> {
             let [a, b, c2, d, tx, ty] = transform.0;
             // Glyph emit always uses a uniform-scale-with-y-flip matrix:
             // (a > 0, d < 0, b == c == 0). Frame fills don't.
-            if b.abs() < 1e-5
-                && c2.abs() < 1e-5
-                && a > 0.0
-                && d < 0.0
-                && (a + d).abs() < 1e-4
-            {
+            if b.abs() < 1e-5 && c2.abs() < 1e-5 && a > 0.0 && d < 0.0 && (a + d).abs() < 1e-4 {
                 out.push((tx, ty, a));
             }
         }
@@ -359,10 +358,16 @@ fn threaded_story_glyphs_land_in_both_frames_with_monotonic_baselines() {
     );
     // Baselines within a frame are strictly increasing.
     for w in a_baselines.windows(2) {
-        assert!(w[1] > w[0], "frame A baselines not monotonic: {a_baselines:?}");
+        assert!(
+            w[1] > w[0],
+            "frame A baselines not monotonic: {a_baselines:?}"
+        );
     }
     for w in b_baselines.windows(2) {
-        assert!(w[1] > w[0], "frame B baselines not monotonic: {b_baselines:?}");
+        assert!(
+            w[1] > w[0],
+            "frame B baselines not monotonic: {b_baselines:?}"
+        );
     }
 }
 
@@ -486,9 +491,10 @@ fn strikethrough_emits_horizontal_stroke_above_baseline() {
     )
     .unwrap();
     let both = pipeline::build_document(
-        &Document::open(
-            &build_decoration_idml(r#" StrikeThru="true" Underline="true""#, "Both"),
-        )
+        &Document::open(&build_decoration_idml(
+            r#" StrikeThru="true" Underline="true""#,
+            "Both",
+        ))
         .unwrap(),
         &opts,
     )
@@ -514,8 +520,14 @@ fn strikethrough_emits_horizontal_stroke_above_baseline() {
     // baseline (strike), one below (under).
     let both_lines = horizontal_stroke_lines(&both.pages[0]);
     let both_baseline = glyph_xys(&both.pages[0].list.commands)[0].1;
-    let above = both_lines.iter().filter(|(y, _, _)| *y < both_baseline).count();
-    let below = both_lines.iter().filter(|(y, _, _)| *y > both_baseline).count();
+    let above = both_lines
+        .iter()
+        .filter(|(y, _, _)| *y < both_baseline)
+        .count();
+    let below = both_lines
+        .iter()
+        .filter(|(y, _, _)| *y > both_baseline)
+        .count();
     assert!(
         above >= 1 && below >= 1,
         "Underline+StrikeThru should emit a stripe on each side of the baseline; above={above}, below={below}",
@@ -811,12 +823,7 @@ fn bullet_character_style_paints_bullet_differently_from_content() {
                 paint, transform, ..
             } => {
                 let [a, b, c2, d, tx, _] = transform.0;
-                if b.abs() < 1e-5
-                    && c2.abs() < 1e-5
-                    && a > 0.0
-                    && d < 0.0
-                    && (a + d).abs() < 1e-4
-                {
+                if b.abs() < 1e-5 && c2.abs() < 1e-5 && a > 0.0 && d < 0.0 && (a + d).abs() < 1e-4 {
                     Some((tx, *paint))
                 } else {
                     None
@@ -923,12 +930,12 @@ fn numbered_list_emits_three_distinct_counter_prefixes() {
     // paragraphs → three distinct baselines.
     let mut by_baseline: std::collections::BTreeMap<i32, Vec<(f32, u32)>> =
         std::collections::BTreeMap::new();
-    for ((_, _, _), (path_id, transform)) in xys
-        .iter()
-        .zip(fill_paths(&built.pages[0].list.commands).filter(|(_, t)| {
-            let [a, b, c, d, _, _] = t.0;
-            b.abs() < 1e-5 && c.abs() < 1e-5 && a > 0.0 && d < 0.0
-        }))
+    for ((_, _, _), (path_id, transform)) in
+        xys.iter()
+            .zip(fill_paths(&built.pages[0].list.commands).filter(|(_, t)| {
+                let [a, b, c, d, _, _] = t.0;
+                b.abs() < 1e-5 && c.abs() < 1e-5 && a > 0.0 && d < 0.0
+            }))
     {
         let [_, _, _, _, tx, ty] = transform.0;
         by_baseline
@@ -976,9 +983,7 @@ fn numbered_list_emits_three_distinct_counter_prefixes() {
     // glyph's x is identical across paragraphs (the numbering
     // marker starts in the same column).
     let leftmost_x = |row: &Vec<(f32, u32)>| -> f32 {
-        row.iter()
-            .map(|(x, _)| *x)
-            .fold(f32::INFINITY, f32::min)
+        row.iter().map(|(x, _)| *x).fold(f32::INFINITY, f32::min)
     };
     let x1 = leftmost_x(paras[0]);
     let x2 = leftmost_x(paras[1]);
@@ -1159,7 +1164,11 @@ fn numbering_start_at_5_emits_5_glyph_not_1_glyph() {
     let doc = Document::open(&build_numbering_idml(paragraphs)).unwrap();
     let built = pipeline::build_document(&doc, &opts).unwrap();
     let rows = glyphs_by_baseline(&built.pages[0].list.commands);
-    assert!(rows.len() >= 2, "expected 2 paragraphs, got {} rows", rows.len());
+    assert!(
+        rows.len() >= 2,
+        "expected 2 paragraphs, got {} rows",
+        rows.len()
+    );
     // Plain leads with "1"; StartAt=5 with "5". Different glyph
     // outlines ⇒ different path_ids.
     let plain_id = rows[0][0].1;
@@ -1459,8 +1468,16 @@ fn threaded_table_replays_header_row_at_top_of_each_frame() {
     // = approximately y ∈ [20, 220] since both frames sit on the same page).
     // Actually frameB GeometricBounds = "20 280 220 480" → x ∈ [280, 480],
     // y ∈ [20, 220]. Use x to differentiate the two frames.
-    let in_a: Vec<_> = glyphs.iter().filter(|(x, _, _)| *x < 250.0).copied().collect();
-    let in_b: Vec<_> = glyphs.iter().filter(|(x, _, _)| *x > 260.0).copied().collect();
+    let in_a: Vec<_> = glyphs
+        .iter()
+        .filter(|(x, _, _)| *x < 250.0)
+        .copied()
+        .collect();
+    let in_b: Vec<_> = glyphs
+        .iter()
+        .filter(|(x, _, _)| *x > 260.0)
+        .copied()
+        .collect();
     assert!(
         !in_a.is_empty() && !in_b.is_empty(),
         "both frames should receive cell glyphs; got a={} b={}",
@@ -1915,8 +1932,7 @@ fn toc_story_swaps_in_resolved_entries_with_heading_text_and_page_numbers() {
     // but the *count* of distinct path_ids on the TOC page is a
     // strong proxy: 3 headings + 3 digits cover ≥ 12 distinct
     // letters (C/h/a/p/t/e/r/O/n/T/w/h/r/e + digits 1/2/3).
-    let mut distinct_path_ids: std::collections::BTreeSet<u32> =
-        std::collections::BTreeSet::new();
+    let mut distinct_path_ids: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
     for c in toc_cmds {
         if let DisplayCommand::FillPath {
             path_id, transform, ..
@@ -1945,7 +1961,9 @@ fn toc_story_swaps_in_resolved_entries_with_heading_text_and_page_numbers() {
         std::collections::BTreeMap::new();
     for &(x, y, _) in &toc_glyphs {
         let key = y.round() as i32;
-        let entry = per_line.entry(key).or_insert((f32::INFINITY, f32::NEG_INFINITY));
+        let entry = per_line
+            .entry(key)
+            .or_insert((f32::INFINITY, f32::NEG_INFINITY));
         entry.0 = entry.0.min(x);
         entry.1 = entry.1.max(x);
     }
@@ -2262,10 +2280,7 @@ fn horizontal_scale_folds_into_glyph_advance_and_affine() {
     };
     let g0 = gap(&baseline_xs);
     let g1 = gap(&stretched_xs);
-    assert!(
-        g0 > 0.5,
-        "baseline glyph gap should be positive; got {g0}"
-    );
+    assert!(g0 > 0.5, "baseline glyph gap should be positive; got {g0}");
     let ratio = g1 / g0;
     assert!(
         (1.7..=2.3).contains(&ratio),

@@ -179,7 +179,13 @@ pub(super) fn emit_anchored_frames_for_paragraph(
                 // `resolve_custom_anchor_pos` is the pure composition
                 // exercised directly by the reference-point unit tests.
                 resolve_custom_anchor_pos(
-                    ref_x, ref_y, anchor_point, frame_w, frame_h, offset_x, offset_y,
+                    ref_x,
+                    ref_y,
+                    anchor_point,
+                    frame_w,
+                    frame_h,
+                    offset_x,
+                    offset_y,
                 )
             }
             _ => {
@@ -241,8 +247,7 @@ fn horizontal_reference_x(
             let insets = frame.inset_spacing.unwrap_or([0.0; 4]);
             let (sx, _sy) = (frame_spread_bounds.left, frame_spread_bounds.top);
             let left_page = sx - page.spread_origin.0 + insets[1];
-            let width = (frame_spread_bounds.right - frame_spread_bounds.left)
-                .max(0.0)
+            let width = (frame_spread_bounds.right - frame_spread_bounds.left).max(0.0)
                 - insets[1]
                 - insets[3];
             (left_page, left_page + width)
@@ -403,8 +408,7 @@ fn emit_one_anchored_frame(
     let frame_w = af.bounds.map(|b| b.width()).unwrap_or(0.0);
     let frame_h = af.bounds.map(|b| b.height()).unwrap_or(0.0);
     match af.frame_kind {
-        paged_parse::AnchoredFrameKind::Rectangle
-        | paged_parse::AnchoredFrameKind::TextFrame => {
+        paged_parse::AnchoredFrameKind::Rectangle | paged_parse::AnchoredFrameKind::TextFrame => {
             // Rectangles AND TextFrames render the frame's box +
             // fill / stroke through the same `emit_rectangle_into`
             // pipeline used by spread-level Rectangles. TextFrames
@@ -477,27 +481,20 @@ fn emit_one_anchored_frame(
                 .item_transform
                 .map(|m| (m[4], m[5]))
                 .unwrap_or((0.0, 0.0));
-            let (group_bx, group_by) = af
-                .bounds
-                .map(|b| (b.left, b.top))
-                .unwrap_or((0.0, 0.0));
+            let (group_bx, group_by) = af.bounds.map(|b| (b.left, b.top)).unwrap_or((0.0, 0.0));
             for child in &af.children {
                 // Child's offset within the group's inner coord
                 // system is `child.bounds.{left,top} - group.bounds.{left,top}`.
                 // Plus the child's own item_transform (translate
                 // component) and the group's item_transform.
-                let (child_bx, child_by) = child
-                    .bounds
-                    .map(|b| (b.left, b.top))
-                    .unwrap_or((0.0, 0.0));
+                let (child_bx, child_by) =
+                    child.bounds.map(|b| (b.left, b.top)).unwrap_or((0.0, 0.0));
                 let (child_tx, child_ty) = child
                     .item_transform
                     .map(|m| (m[4], m[5]))
                     .unwrap_or((0.0, 0.0));
-                let child_place_x =
-                    place_x + group_tx + child_tx + (child_bx - group_bx);
-                let child_place_y =
-                    place_y + group_ty + child_ty + (child_by - group_by);
+                let child_place_x = place_x + group_tx + child_tx + (child_bx - group_bx);
+                let child_place_y = place_y + group_ty + child_ty + (child_by - group_by);
                 emit_one_anchored_frame(
                     em,
                     child,
@@ -719,12 +716,7 @@ pub(super) fn emit_anchored_textframe_story<'a>(
         );
         return;
     }
-    let Some(parsed) = em
-        .document
-        .stories
-        .iter()
-        .find(|s| s.self_id == story_id)
-    else {
+    let Some(parsed) = em.document.stories.iter().find(|s| s.self_id == story_id) else {
         return;
     };
     // Build the synthetic TextFrame's bounds in spread coords. The
@@ -862,7 +854,10 @@ mod tests {
     #[test]
     fn horizontal_corner_offset_left_center_right() {
         let w = 60.0;
-        assert!(close(anchor_horizontal_corner_offset("TopLeftAnchor", w), 0.0));
+        assert!(close(
+            anchor_horizontal_corner_offset("TopLeftAnchor", w),
+            0.0
+        ));
         assert!(close(
             anchor_horizontal_corner_offset("BottomLeftAnchor", w),
             0.0
@@ -871,7 +866,10 @@ mod tests {
             anchor_horizontal_corner_offset("TopCenterAnchor", w),
             30.0
         ));
-        assert!(close(anchor_horizontal_corner_offset("CenterAnchor", w), 30.0));
+        assert!(close(
+            anchor_horizontal_corner_offset("CenterAnchor", w),
+            30.0
+        ));
         assert!(close(
             anchor_horizontal_corner_offset("TopRightAnchor", w),
             60.0
@@ -887,12 +885,18 @@ mod tests {
     #[test]
     fn vertical_corner_offset_top_center_bottom() {
         let h = 36.0;
-        assert!(close(anchor_vertical_corner_offset("TopLeftAnchor", h), 0.0));
+        assert!(close(
+            anchor_vertical_corner_offset("TopLeftAnchor", h),
+            0.0
+        ));
         assert!(close(
             anchor_vertical_corner_offset("TopRightAnchor", h),
             0.0
         ));
-        assert!(close(anchor_vertical_corner_offset("CenterAnchor", h), 18.0));
+        assert!(close(
+            anchor_vertical_corner_offset("CenterAnchor", h),
+            18.0
+        ));
         assert!(close(
             anchor_vertical_corner_offset("RightCenterAnchor", h),
             18.0
@@ -926,8 +930,7 @@ mod tests {
         //    exactly on the reference's top-left.
         let rx = align_in_span(REF_L, REF_R, "LeftAlign");
         let ry = align_in_span(REF_T, REF_B, "TopAlign");
-        let (x, y) =
-            resolve_custom_anchor_pos(rx, ry, "TopLeftAnchor", FRAME_W, FRAME_H, 0.0, 0.0);
+        let (x, y) = resolve_custom_anchor_pos(rx, ry, "TopLeftAnchor", FRAME_W, FRAME_H, 0.0, 0.0);
         assert!(close(x, 100.0) && close(y, 200.0), "got ({x}, {y})");
     }
 
@@ -960,8 +963,7 @@ mod tests {
         //    top-left = centre - (w/2, h/2) = (140-30, 260-18).
         let rx = align_in_span(REF_L, REF_R, "CenterAlign");
         let ry = align_in_span(REF_T, REF_B, "CenterAlign");
-        let (x, y) =
-            resolve_custom_anchor_pos(rx, ry, "CenterAnchor", FRAME_W, FRAME_H, 0.0, 0.0);
+        let (x, y) = resolve_custom_anchor_pos(rx, ry, "CenterAnchor", FRAME_W, FRAME_H, 0.0, 0.0);
         assert!(close(x, 110.0) && close(y, 242.0), "got ({x}, {y})");
     }
 
@@ -972,15 +974,8 @@ mod tests {
         //    x = 180 - 60 = 120; y = 320 - 36 = 284.
         let rx = align_in_span(REF_L, REF_R, "RightAlign");
         let ry = align_in_span(REF_T, REF_B, "BottomAlign");
-        let (x, y) = resolve_custom_anchor_pos(
-            rx,
-            ry,
-            "BottomRightAnchor",
-            FRAME_W,
-            FRAME_H,
-            0.0,
-            0.0,
-        );
+        let (x, y) =
+            resolve_custom_anchor_pos(rx, ry, "BottomRightAnchor", FRAME_W, FRAME_H, 0.0, 0.0);
         assert!(close(x, 120.0) && close(y, 284.0), "got ({x}, {y})");
     }
 

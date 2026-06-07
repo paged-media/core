@@ -69,12 +69,8 @@ pub fn export_page(
     let media_h = trim_h + bleed_top + bleed_bottom + marks_margin * 2.0;
 
     // Boxes in PDF (y-up media) coords.
-    let trim_box = pdf_writer::Rect::new(
-        off_left,
-        off_bottom,
-        off_left + trim_w,
-        off_bottom + trim_h,
-    );
+    let trim_box =
+        pdf_writer::Rect::new(off_left, off_bottom, off_left + trim_w, off_bottom + trim_h);
     let bleed_box = pdf_writer::Rect::new(
         off_left - bleed_left,
         off_bottom - bleed_bottom,
@@ -157,7 +153,13 @@ pub fn export_page(
                 off_bottom + trim_h + bleed_top,
             ],
         };
-        crate::marks::emit_marks(&mut content, state, &mut page_resources, &geo, &input.options.marks);
+        crate::marks::emit_marks(
+            &mut content,
+            state,
+            &mut page_resources,
+            &geo,
+            &input.options.marks,
+        );
     }
 
     // Captured transparency groups / luminosity masks, written once
@@ -254,8 +256,7 @@ fn find_group_end(commands: &[DisplayCommand], start: usize) -> usize {
         match (is_layer, cmd) {
             (false, DisplayCommand::BeginBlendGroup { .. })
             | (true, DisplayCommand::PushLayer { .. }) => depth += 1,
-            (false, DisplayCommand::EndBlendGroup(_))
-            | (true, DisplayCommand::PopLayer(_)) => {
+            (false, DisplayCommand::EndBlendGroup(_)) | (true, DisplayCommand::PopLayer(_)) => {
                 depth -= 1;
                 if depth == 0 {
                     return idx;
@@ -305,9 +306,7 @@ impl Walker<'_, '_> {
                         let ok = input
                             .fonts
                             .and_then(|f| f.font_bytes(entry.font_id))
-                            .map(|bytes| {
-                                self.state.fonts.check_embeddable(entry.font_id, bytes)
-                            })
+                            .map(|bytes| self.state.fonts.check_embeddable(entry.font_id, bytes))
                             .unwrap_or(false);
                         self.outline_font.insert(entry.font_id, ok);
                         ok
@@ -350,7 +349,10 @@ impl Walker<'_, '_> {
                                 (*e, new_gid)
                             })
                             .collect();
-                        self.resources.fonts.entry(font_name.clone()).or_insert(font_ref);
+                        self.resources
+                            .fonts
+                            .entry(font_name.clone())
+                            .or_insert(font_ref);
                         let upem = *self.upem_cache.entry(entry.font_id).or_insert_with(|| {
                             input
                                 .fonts
@@ -387,19 +389,49 @@ impl Walker<'_, '_> {
             }
 
             match &commands[i] {
-                DisplayCommand::FillPath { path_id, paint, transform } => {
+                DisplayCommand::FillPath {
+                    path_id,
+                    paint,
+                    transform,
+                } => {
                     self.emit_fill(content, *path_id, paint, transform, None, false);
                 }
-                DisplayCommand::FillPathBlend { path_id, paint, transform, blend_mode } => {
-                    self.emit_fill(content, *path_id, paint, transform, Some(*blend_mode), false);
+                DisplayCommand::FillPathBlend {
+                    path_id,
+                    paint,
+                    transform,
+                    blend_mode,
+                } => {
+                    self.emit_fill(
+                        content,
+                        *path_id,
+                        paint,
+                        transform,
+                        Some(*blend_mode),
+                        false,
+                    );
                 }
-                DisplayCommand::FillPathOverprint { path_id, paint, transform } => {
+                DisplayCommand::FillPathOverprint {
+                    path_id,
+                    paint,
+                    transform,
+                } => {
                     self.emit_fill(content, *path_id, paint, transform, None, true);
                 }
-                DisplayCommand::StrokePath { path_id, paint, stroke, transform } => {
+                DisplayCommand::StrokePath {
+                    path_id,
+                    paint,
+                    stroke,
+                    transform,
+                } => {
                     self.emit_stroke(content, *path_id, paint, stroke, transform, false);
                 }
-                DisplayCommand::StrokePathOverprint { path_id, paint, stroke, transform } => {
+                DisplayCommand::StrokePathOverprint {
+                    path_id,
+                    paint,
+                    stroke,
+                    transform,
+                } => {
                     self.emit_stroke(content, *path_id, paint, stroke, transform, true);
                 }
                 DisplayCommand::PushClip { path_id, transform } => {
@@ -414,15 +446,23 @@ impl Walker<'_, '_> {
                 DisplayCommand::PopClip(_) => {
                     stack.pop(content, FrameKind::Clip);
                 }
-                DisplayCommand::BeginBlendGroup { blend_mode, opacity, .. }
-                | DisplayCommand::PushLayer { blend_mode, opacity, .. } => {
+                DisplayCommand::BeginBlendGroup {
+                    blend_mode,
+                    opacity,
+                    ..
+                }
+                | DisplayCommand::PushLayer {
+                    blend_mode,
+                    opacity,
+                    ..
+                } => {
                     let kind = if matches!(commands[i], DisplayCommand::PushLayer { .. }) {
                         FrameKind::Layer
                     } else {
                         FrameKind::BlendGroup
                     };
-                    let needs_group = *blend_mode != paged_compose::BlendMode::Normal
-                        || *opacity < 0.999;
+                    let needs_group =
+                        *blend_mode != paged_compose::BlendMode::Normal || *opacity < 0.999;
                     if needs_group {
                         // Capture the bracketed commands into their
                         // own stream → transparency-group Form
@@ -466,7 +506,10 @@ impl Walker<'_, '_> {
                 DisplayCommand::PopLayer(_) => {
                     stack.pop(content, FrameKind::Layer);
                 }
-                DisplayCommand::Image { image_id, transform } => {
+                DisplayCommand::Image {
+                    image_id,
+                    transform,
+                } => {
                     if let Some(img) = list.image(*image_id) {
                         // Placed size for the downsampling gate: the
                         // transform maps the unit square to the page.
@@ -491,8 +534,7 @@ impl Walker<'_, '_> {
                             // transform maps a y-DOWN unit square; pre-
                             // compose a unit flip so rows land upright
                             // under the page CTM.
-                            let t = transform
-                                .compose(&Transform([1.0, 0.0, 0.0, -1.0, 0.0, 1.0]));
+                            let t = transform.compose(&Transform([1.0, 0.0, 0.0, -1.0, 0.0, 1.0]));
                             content.save_state();
                             content.transform(t.0);
                             content.x_object(Name(name.as_bytes()));
@@ -500,8 +542,16 @@ impl Walker<'_, '_> {
                         }
                     }
                 }
-                DisplayCommand::DropShadow { path_id, transform, shadow }
-                | DisplayCommand::PathShadow { path_id, transform, shadow } => {
+                DisplayCommand::DropShadow {
+                    path_id,
+                    transform,
+                    shadow,
+                }
+                | DisplayCommand::PathShadow {
+                    path_id,
+                    transform,
+                    shadow,
+                } => {
                     if let Some(path) = list.paths.get(*path_id) {
                         crate::transparency::emit_shadow_stamp(
                             content,
@@ -515,7 +565,11 @@ impl Walker<'_, '_> {
                         );
                     }
                 }
-                DisplayCommand::GradientFeather { path_id, transform, params } => {
+                DisplayCommand::GradientFeather {
+                    path_id,
+                    transform,
+                    params,
+                } => {
                     if let Some(path) = list.paths.get(*path_id) {
                         crate::transparency::emit_gradient_feather(
                             content,
@@ -555,7 +609,9 @@ impl Walker<'_, '_> {
         overprint: bool,
     ) {
         let list = self.list;
-        let Some(path) = list.paths.get(path_id) else { return };
+        let Some(path) = list.paths.get(path_id) else {
+            return;
+        };
         content.save_state();
         if blend.is_some() || (overprint && crate::paint_is_cmyk(paint)) {
             crate::transparency::apply_gs(
@@ -625,7 +681,9 @@ impl Walker<'_, '_> {
         overprint: bool,
     ) {
         let list = self.list;
-        let Some(path) = list.paths.get(path_id) else { return };
+        let Some(path) = list.paths.get(path_id) else {
+            return;
+        };
         content.save_state();
         if overprint && crate::paint_is_cmyk(paint) {
             crate::transparency::apply_gs(
@@ -674,9 +732,8 @@ pub(crate) fn transform_path(
 ) -> paged_compose::PathData {
     use paged_compose::PathSegment as S;
     let m = t.0;
-    let map = |x: f32, y: f32| -> (f32, f32) {
-        (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5])
-    };
+    let map =
+        |x: f32, y: f32| -> (f32, f32) { (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]) };
     paged_compose::PathData {
         segments: path
             .segments
@@ -695,11 +752,25 @@ pub(crate) fn transform_path(
                     let (x, y) = map(x, y);
                     S::QuadTo { cx, cy, x, y }
                 }
-                S::CubicTo { cx1, cy1, cx2, cy2, x, y } => {
+                S::CubicTo {
+                    cx1,
+                    cy1,
+                    cx2,
+                    cy2,
+                    x,
+                    y,
+                } => {
                     let (cx1, cy1) = map(cx1, cy1);
                     let (cx2, cy2) = map(cx2, cy2);
                     let (x, y) = map(x, y);
-                    S::CubicTo { cx1, cy1, cx2, cy2, x, y }
+                    S::CubicTo {
+                        cx1,
+                        cy1,
+                        cx2,
+                        cy2,
+                        x,
+                        y,
+                    }
                 }
                 S::Close => S::Close,
             })
@@ -724,7 +795,14 @@ pub(crate) fn path_bbox(path: &paged_compose::PathData) -> paged_compose::Rect {
                 consider(cx, cy);
                 consider(x, y);
             }
-            S::CubicTo { cx1, cy1, cx2, cy2, x, y } => {
+            S::CubicTo {
+                cx1,
+                cy1,
+                cx2,
+                cy2,
+                x,
+                y,
+            } => {
                 consider(cx1, cy1);
                 consider(cx2, cy2);
                 consider(x, y);
@@ -733,7 +811,12 @@ pub(crate) fn path_bbox(path: &paged_compose::PathData) -> paged_compose::Rect {
         }
     }
     if min.0 > max.0 {
-        return paged_compose::Rect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 };
+        return paged_compose::Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+        };
     }
     paged_compose::Rect {
         x: min.0,
@@ -753,7 +836,9 @@ fn paint_key(p: &Paint) -> u64 {
             let a = (c.a * 1000.0) as u64;
             1 << 60 | r << 40 | g << 24 | b << 8 | a & 0xFF
         }
-        Paint::Cmyk { c, m, y, k, spot, .. } => {
+        Paint::Cmyk {
+            c, m, y, k, spot, ..
+        } => {
             let cc = (*c * 255.0) as u64;
             let mm = (*m * 255.0) as u64;
             let yy = (*y * 255.0) as u64;

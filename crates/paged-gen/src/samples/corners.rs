@@ -92,10 +92,7 @@ pub fn build() -> Sample {
             self_id: rect_id,
             width_pt: DEMO_W_PT,
             height_pt: DEMO_H_PT,
-            item_transform: translate(
-                (PAGE_W_PT - DEMO_W_PT) * 0.5,
-                (PAGE_H_PT - DEMO_H_PT) * 0.5,
-            ),
+            item_transform: translate((PAGE_W_PT - DEMO_W_PT) * 0.5, (PAGE_H_PT - DEMO_H_PT) * 0.5),
             fill_color: Some("Color/Paper".into()),
             stroke_color: Some("Color/Black".into()),
             stroke_weight_pt: Some(3.0),

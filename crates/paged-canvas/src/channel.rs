@@ -286,10 +286,7 @@ pub enum MainToWorkerKind {
     /// the actual command buffer over `postMessage` — it stays in
     /// shared worker memory; the JS side calls into wasm directly
     /// for the bytes when it needs them.
-    RequestPage {
-        page_id: PageId,
-        lod: LodTier,
-    },
+    RequestPage { page_id: PageId, lod: LodTier },
     /// Hit-test a document-space point. Reply: `HitResult`.
     HitTest {
         page_id: PageId,
@@ -367,10 +364,7 @@ pub enum MainToWorkerKind {
     /// Phase A — return every selectable element whose oriented bounds
     /// intersect `rect` (page-local `[top, left, bottom, right]`).
     /// Reply: `MarqueeHits`.
-    RequestMarqueeHits {
-        page_id: PageId,
-        rect: [f32; 4],
-    },
+    RequestMarqueeHits { page_id: PageId, rect: [f32; 4] },
     /// Phase A — fetch oriented geometry (raw bounds + composed
     /// transform) for one or more elements so the overlay can draw
     /// selection chrome without re-deriving the math in TS.
@@ -381,9 +375,7 @@ pub enum MainToWorkerKind {
     /// Phase H — return every leaf descendant of the named group.
     /// Used by the canvas's double-click-to-enter-group gesture.
     /// Reply: `GroupLeaves`.
-    RequestGroupLeaves {
-        group_id: String,
-    },
+    RequestGroupLeaves { group_id: String },
     /// Step 5 — request the path-anchor table for a single Polygon /
     /// Rectangle / Oval / TextFrame so the path-edit overlay can draw
     /// one dot per anchor + Bezier-handle pair. Reply: `PathAnchors`.
@@ -418,9 +410,7 @@ pub enum MainToWorkerKind {
     /// to the typed `*Summary[]` it expects (matching the
     /// `documentCollection:<name>` ReadSpec it declared). Unknown /
     /// unimplemented collections come back with an empty array.
-    RequestCollection {
-        name: CollectionName,
-    },
+    RequestCollection { name: CollectionName },
     /// SDK Phase 5 (D1) — singleton document meta read per
     /// `panel-catalog-and-sdk-extension.md` §5.6. Backs the
     /// `documentMeta:<key>` ReadSpec form. The reply carries every
@@ -433,9 +423,7 @@ pub enum MainToWorkerKind {
     /// Editor sliders (which would mutate the swatch's channel
     /// values) are a v2 follow-up needing
     /// `Operation::SetSwatchValue` + a Color NodeId variant.
-    RequestColorPreview {
-        swatch_id: String,
-    },
+    RequestColorPreview { swatch_id: String },
     /// Concept 2 — resolve an ARBITRARY colour value (not a swatch
     /// ref) through the document's active colour management:
     /// display RGB + out-of-gamut verdict. Powers the mixer's live
@@ -699,7 +687,9 @@ pub enum WorkerToMainKind {
     /// main thread can detect staleness before drawing.
     SnapshotReady(crate::snapshot::SnapshotPng),
     /// `RequestSnapshot` failed (e.g. unknown page id).
-    SnapshotFailed { error: crate::snapshot::SnapshotError },
+    SnapshotFailed {
+        error: crate::snapshot::SnapshotError,
+    },
     /// Phase 3 Item 6 — a mutation was successfully applied. The
     /// worker assigns `applied_seq` (monotone); the main thread
     /// matches against its own `client_seq` to ack pending sends.
@@ -734,9 +724,7 @@ pub enum WorkerToMainKind {
         page_sizes_pt: Option<Vec<(f32, f32)>>,
     },
     /// Phase 3 Item 4 — rect-per-line geometry for a selection range.
-    SelectionGeometry {
-        rects: Vec<crate::SelectionRect>,
-    },
+    SelectionGeometry { rects: Vec<crate::SelectionRect> },
     /// Phase 3 Item 3 — caret position for a selection.
     CaretGeometry {
         caret: Option<crate::geometry::CaretGeometry>,
@@ -812,9 +800,7 @@ pub enum WorkerToMainKind {
     /// Phase A — `RequestElementGeometry` reply. One entry per id;
     /// elements that don't resolve (id missing or not on a body page)
     /// are dropped silently.
-    ElementGeometry {
-        items: Vec<ElementGeometryItem>,
-    },
+    ElementGeometry { items: Vec<ElementGeometryItem> },
     /// Phase H — `RequestGroupLeaves` reply. Empty when the group id
     /// doesn't resolve.
     GroupLeaves {
@@ -824,9 +810,7 @@ pub enum WorkerToMainKind {
     /// resolve or sits on a master spread; `Some` even when the
     /// element's anchor list is empty (lets the caller distinguish
     /// "no path data" from "didn't resolve").
-    PathAnchors {
-        result: Option<PathAnchorsResult>,
-    },
+    PathAnchors { result: Option<PathAnchorsResult> },
     /// B-06 — `RequestNearestPathPoint` reply. `None` when the id
     /// doesn't resolve or carries no path data.
     NearestPathPoint {
@@ -835,9 +819,7 @@ pub enum WorkerToMainKind {
     /// Track M — `RequestLayers` reply. Documents without `<Layer>`
     /// elements (rare; the IDML container always emits at least a
     /// default layer) come back with an empty Vec.
-    Layers {
-        items: Vec<LayerSummary>,
-    },
+    Layers { items: Vec<LayerSummary> },
     /// SDK Phase 5 (D1) — `RequestCollection` reply. `items` is a
     /// `serde_json::Value` (always an array on the wire) so a single
     /// envelope handles every collection's typed shape. The consumer
@@ -854,14 +836,10 @@ pub enum WorkerToMainKind {
     },
     /// SDK Phase 5 (D1) — `RequestDocumentMeta` reply. Per
     /// `panel-catalog-and-sdk-extension.md` §5.6.
-    DocumentMetaReply {
-        meta: DocumentMeta,
-    },
+    DocumentMetaReply { meta: DocumentMeta },
     /// SDK Phase 5 (v1 sweep) — `RequestColorPreview` reply.
     /// `result` is `None` when the swatch id doesn't resolve.
-    ColorPreviewReply {
-        result: Option<ColorPreview>,
-    },
+    ColorPreviewReply { result: Option<ColorPreview> },
     /// Concept 2 — `RequestColorCompute` reply.
     ColorComputeReply {
         rgb_hex: String,
@@ -870,9 +848,7 @@ pub enum WorkerToMainKind {
     },
     /// Concept 2 — `RequestGradientDetail` reply. `None` when the
     /// id doesn't resolve to a gradient.
-    GradientDetailReply {
-        result: Option<GradientDetail>,
-    },
+    GradientDetailReply { result: Option<GradientDetail> },
     /// Concept 2 — `ExportSwatchLibrary` reply.
     SwatchLibraryExported {
         #[tsify(type = "number[]")]
@@ -914,13 +890,9 @@ pub enum WorkerToMainKind {
     ExportIdmlFailed { error: String },
     /// Inspector P1 — `RequestElementProperties` reply. `None` when
     /// the id doesn't resolve.
-    ElementProperties {
-        result: Option<ElementProperties>,
-    },
+    ElementProperties { result: Option<ElementProperties> },
     /// Inspector P1 — `RequestSceneTree` reply.
-    SceneTree {
-        roots: Vec<SceneTreeNode>,
-    },
+    SceneTree { roots: Vec<SceneTreeNode> },
     /// Scripting Stage 2 — `ExecuteScript` reply. `output` is the
     /// concatenated console.* lines; `error` is non-null when the
     /// script threw an unhandled exception.
@@ -997,15 +969,25 @@ pub enum WorkerToMainKind {
 #[serde(rename_all = "camelCase", tag = "kind", content = "details")]
 pub enum GestureFailure {
     NoDocument,
-    UnsupportedGesture { reason: String },
-    AlreadyActive { handle: crate::gesture::GestureHandle },
+    UnsupportedGesture {
+        reason: String,
+    },
+    AlreadyActive {
+        handle: crate::gesture::GestureHandle,
+    },
     HandleMismatch,
-    ElementNotFound { id: crate::element_selection::ElementId },
+    ElementNotFound {
+        id: crate::element_selection::ElementId,
+    },
     RotatedFrameUnsupported,
     EmptySelection,
     MissingAnchor,
-    UnknownAnchorPage { page_id: PageId },
-    Other { message: String },
+    UnknownAnchorPage {
+        page_id: PageId,
+    },
+    Other {
+        message: String,
+    },
 }
 
 impl From<crate::gesture::GestureError> for GestureFailure {
@@ -1923,7 +1905,12 @@ impl From<paged_text::CacheStats> for LayoutCacheStats {
 /// Phase 3 lights these up incrementally.
 #[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "op", content = "args")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "op",
+    content = "args"
+)]
 pub enum Mutation {
     InsertText {
         story_id: String,
@@ -2102,7 +2089,9 @@ pub enum Mutation {
     /// Lab PRIMARY over its CMYK alternate when resolving previews
     /// (InDesign's "Use Standard Lab Values for Spots"). Repaints
     /// previews; not undoable.
-    SetUseStandardLabForSpots { enabled: bool },
+    SetUseStandardLabForSpots {
+        enabled: bool,
+    },
     /// Track J — insert a new anchor into a path-bearing element's
     /// PathPointArray at flat `index`. UI dispatches from a segment
     /// click in path-edit mode; `anchor` is the de Casteljau split
@@ -2221,7 +2210,9 @@ pub enum Mutation {
     /// mid-anchor in one Cmd-Z step. Children translate
     /// recursively; an empty ops vec is a valid no-op (mirrors
     /// `Operation::Batch` semantics in paged-mutate).
-    Batch { ops: Vec<Mutation> },
+    Batch {
+        ops: Vec<Mutation>,
+    },
     /// Track M — `<Layer>` visibility toggle. The Layers panel
     /// dispatches this when the user clicks the eye icon.
     LayerSetVisible {
@@ -2631,7 +2622,12 @@ pub enum LoadError {
 /// kept stable across protocol versions.
 #[derive(Debug, Clone, Error, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind", content = "details")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind",
+    content = "details"
+)]
 pub enum WorkerError {
     /// Feature not yet implemented in this phase. `what` carries a
     /// short identifier (e.g. `"Mutation::InsertText"`).
@@ -2739,10 +2735,20 @@ mod tests {
             ruler_guides: Vec::new(),
         };
         let json = serde_json::to_string(&h).unwrap();
-        for needle in ["\"docId\":", "\"pageCount\":", "\"pageIds\":", "\"pageSizesPt\":"] {
+        for needle in [
+            "\"docId\":",
+            "\"pageCount\":",
+            "\"pageIds\":",
+            "\"pageSizesPt\":",
+        ] {
             assert!(json.contains(needle), "{needle} missing in {json}");
         }
-        for snake in ["\"doc_id\":", "\"page_count\":", "\"page_ids\":", "\"page_sizes_pt\":"] {
+        for snake in [
+            "\"doc_id\":",
+            "\"page_count\":",
+            "\"page_ids\":",
+            "\"page_sizes_pt\":",
+        ] {
             assert!(!json.contains(snake), "{snake} leaked snake_case: {json}");
         }
     }
@@ -2991,7 +2997,10 @@ mod tests {
         // panels.md gaps 9/10/19 — the new collection name maps both
         // ways and serialises as the camelCase tag the TS union uses.
         assert_eq!(CollectionName::Sections.as_str(), "sections");
-        assert_eq!(CollectionName::from_str("sections"), Some(CollectionName::Sections));
+        assert_eq!(
+            CollectionName::from_str("sections"),
+            Some(CollectionName::Sections)
+        );
         let json = serde_json::to_string(&CollectionName::Sections).unwrap();
         assert_eq!(json, "\"sections\"");
     }
@@ -3137,7 +3146,10 @@ mod tests {
             kind: MainToWorkerKind::ExportIdml {},
         };
         let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains("\"kind\":\"exportIdml\""), "tag drift: {json}");
+        assert!(
+            json.contains("\"kind\":\"exportIdml\""),
+            "tag drift: {json}"
+        );
         let back: MainToWorker = serde_json::from_str(&json).unwrap();
         assert!(matches!(back.kind, MainToWorkerKind::ExportIdml {}));
 
@@ -3151,8 +3163,14 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&ok).unwrap();
-        assert!(json.contains("\"kind\":\"idmlExported\""), "tag drift: {json}");
-        assert!(json.contains("\"idmlBytes\":"), "field rename broken: {json}");
+        assert!(
+            json.contains("\"kind\":\"idmlExported\""),
+            "tag drift: {json}"
+        );
+        assert!(
+            json.contains("\"idmlBytes\":"),
+            "field rename broken: {json}"
+        );
         assert!(!json.contains("idml_bytes"), "snake leaked: {json}");
         let back: WorkerToMain = serde_json::from_str(&json).unwrap();
         match back.kind {
@@ -3171,7 +3189,10 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&err).unwrap();
-        assert!(json.contains("\"kind\":\"exportIdmlFailed\""), "tag drift: {json}");
+        assert!(
+            json.contains("\"kind\":\"exportIdmlFailed\""),
+            "tag drift: {json}"
+        );
         let back: WorkerToMain = serde_json::from_str(&json).unwrap();
         match back.kind {
             WorkerToMainKind::ExportIdmlFailed { error } => {

@@ -28,8 +28,7 @@ fn font_dir() -> PathBuf {
 }
 
 fn read_font(name: &str) -> Vec<u8> {
-    std::fs::read(font_dir().join(name))
-        .unwrap_or_else(|e| panic!("read font fixture {name}: {e}"))
+    std::fs::read(font_dir().join(name)).unwrap_or_else(|e| panic!("read font fixture {name}: {e}"))
 }
 
 fn build_idml(text: &str) -> Vec<u8> {

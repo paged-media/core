@@ -164,9 +164,7 @@ pub enum GestureType {
     Translate,
     /// Phase C — resize via an edge / corner handle. The handle id
     /// identifies which of the eight handles the pointer grabbed.
-    Resize {
-        handle: ResizeHandle,
-    },
+    Resize { handle: ResizeHandle },
     /// Reserved (Phase D). Rotate about a pivot.
     Rotate,
     /// Phase D — scale about a pivot.
@@ -515,10 +513,8 @@ impl CanvasModel {
             // lookup once per gesture tick. Walks each parsed spread,
             // bucketing each guide by its `page_index` into the
             // spread's pages. Plan-2 §8.3.
-            let mut guides_by_page: std::collections::HashMap<
-                String,
-                (Vec<f32>, Vec<f32>),
-            > = std::collections::HashMap::new();
+            let mut guides_by_page: std::collections::HashMap<String, (Vec<f32>, Vec<f32>)> =
+                std::collections::HashMap::new();
             for parsed in &self.scene.spreads {
                 let pages_of_spread = &parsed.spread.pages;
                 if pages_of_spread.is_empty() {
@@ -575,10 +571,7 @@ impl CanvasModel {
             crate::snap::compute_snap_adjustment(&session_clone, delta, &pages, &siblings);
         let snapped_delta = adjustment.delta;
         {
-            let session = self
-                .active_gesture
-                .as_mut()
-                .expect("session still present");
+            let session = self.active_gesture.as_mut().expect("session still present");
             session.current_delta = Some(snapped_delta);
         }
         // Re-write previewed state from the snapshot + snapped delta.
@@ -618,8 +611,7 @@ impl CanvasModel {
             // an empty-batch outcome so the caller can update the UI.
             self.restore_from_snapshots(&session.snapshots)
                 .map_err(|e| GestureError::Mutate(e.to_string()))?;
-            let page_ids: Vec<PageId> =
-                self.built.pages.iter().map(|p| p.id.clone()).collect();
+            let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
             // Synthesise an empty Batch so the channel's reply shape
             // stays uniform.
             let empty = paged_mutate::AppliedOperation {
@@ -662,9 +654,7 @@ impl CanvasModel {
             // the gesture-spine half of cross-spread routing fired.
             #[cfg(target_arch = "wasm32")]
             if dest_spread_id.is_some() {
-                web_sys::console::log_1(
-                    &"[K-debug] dest spread origin = (resolved)".into(),
-                );
+                web_sys::console::log_1(&"[K-debug] dest spread origin = (resolved)".into());
             }
             build_alt_duplicate_ops(&session.snapshots, delta, dest_spread_id)
         } else {
@@ -752,10 +742,7 @@ impl CanvasModel {
 
     /// Drop the in-flight gesture. Restores the snapshot, rebuilds,
     /// returns the dirty page set so the overlay clears.
-    pub fn cancel_gesture(
-        &mut self,
-        handle: GestureHandle,
-    ) -> Result<Vec<PageId>, GestureError> {
+    pub fn cancel_gesture(&mut self, handle: GestureHandle) -> Result<Vec<PageId>, GestureError> {
         let session = self
             .active_gesture
             .take()
@@ -781,7 +768,11 @@ impl CanvasModel {
         for parsed in &self.scene.spreads {
             let s = &parsed.spread;
             if let ElementId::TextFrame(_) = id {
-                if let Some(f) = s.text_frames.iter().find(|f| f.self_id.as_deref() == Some(raw)) {
+                if let Some(f) = s
+                    .text_frames
+                    .iter()
+                    .find(|f| f.self_id.as_deref() == Some(raw))
+                {
                     return Ok(NodeSnapshot {
                         id: id.clone(),
                         node_id: NodeId::TextFrame(raw.to_string()),
@@ -793,7 +784,11 @@ impl CanvasModel {
                 }
             }
             if let ElementId::Rectangle(_) = id {
-                if let Some(f) = s.rectangles.iter().find(|f| f.self_id.as_deref() == Some(raw)) {
+                if let Some(f) = s
+                    .rectangles
+                    .iter()
+                    .find(|f| f.self_id.as_deref() == Some(raw))
+                {
                     return Ok(NodeSnapshot {
                         id: id.clone(),
                         node_id: NodeId::Rectangle(raw.to_string()),
@@ -805,7 +800,11 @@ impl CanvasModel {
                 }
             }
             if let ElementId::Polygon(_) = id {
-                if let Some(p) = s.polygons.iter().find(|p| p.self_id.as_deref() == Some(raw)) {
+                if let Some(p) = s
+                    .polygons
+                    .iter()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
                     return Ok(NodeSnapshot {
                         id: id.clone(),
                         node_id: NodeId::Polygon(raw.to_string()),
@@ -907,7 +906,11 @@ impl CanvasModel {
         // spread-local but ids are document-unique).
         for parsed in &self.scene.spreads {
             let s = &parsed.spread;
-            let Some(g) = s.groups.iter().find(|g| g.self_id.as_deref() == Some(group_id)) else {
+            let Some(g) = s
+                .groups
+                .iter()
+                .find(|g| g.self_id.as_deref() == Some(group_id))
+            else {
                 continue;
             };
             for fr in &g.members {
@@ -976,10 +979,7 @@ fn is_pure_translate_or_identity(m: Option<[f32; 6]>) -> bool {
         // strings InDesign emits ("1 0 0 1 0 0" is exact, but parsed
         // rotations like 90° round-trip through f32).
         Some([a, b, c, d, _, _]) => {
-            (a - 1.0).abs() < 1e-4
-                && (d - 1.0).abs() < 1e-4
-                && b.abs() < 1e-4
-                && c.abs() < 1e-4
+            (a - 1.0).abs() < 1e-4 && (d - 1.0).abs() < 1e-4 && b.abs() < 1e-4 && c.abs() < 1e-4
         }
     }
 }
@@ -1127,7 +1127,10 @@ fn compute_node_mutation(
             // about `pivot_local` instead. Rebuild using the
             // computed θ + local pivot.
             let theta = signed_angle_between(
-                (anchor_world.0 - pivot_world.0, anchor_world.1 - pivot_world.1),
+                (
+                    anchor_world.0 - pivot_world.0,
+                    anchor_world.1 - pivot_world.1,
+                ),
                 (
                     anchor_world.0 + delta.0 - pivot_world.0,
                     anchor_world.1 + delta.1 - pivot_world.1,
@@ -1152,15 +1155,15 @@ fn compute_node_mutation(
             // gets inverse-rotated through the polygon's
             // item_transform (same trick as Phase G's resize).
             let local_delta = inverse_rotate_delta(snap.item_transform, delta);
-            let anchor = snap
-                .path_anchors
-                .get(address.index)
-                .copied()
-                .unwrap_or(paged_parse::PathAnchor {
-                    anchor: (0.0, 0.0),
-                    left: (0.0, 0.0),
-                    right: (0.0, 0.0),
-                });
+            let anchor =
+                snap.path_anchors
+                    .get(address.index)
+                    .copied()
+                    .unwrap_or(paged_parse::PathAnchor {
+                        anchor: (0.0, 0.0),
+                        left: (0.0, 0.0),
+                        right: (0.0, 0.0),
+                    });
             let original = match address.role {
                 paged_mutate::PathPointRole::Anchor => anchor.anchor,
                 paged_mutate::PathPointRole::Left => anchor.left,
@@ -1184,12 +1187,8 @@ fn compute_node_mutation(
                 (snap.bounds.left + snap.bounds.right) * 0.5,
                 (snap.bounds.top + snap.bounds.bottom) * 0.5,
             );
-            let (sx, sy) = compute_scale_factors(
-                anchor_world,
-                delta,
-                pivot_world,
-                session.modifiers,
-            );
+            let (sx, sy) =
+                compute_scale_factors(anchor_world, delta, pivot_world, session.modifiers);
             let next = scale_matrix_about_pivot_local(
                 snap.image_item_transform.unwrap_or(IDENTITY),
                 sx,
@@ -1318,14 +1317,7 @@ pub(crate) fn shear_about_pivot(
     let [a, b, c, d, tx, ty] = m;
     // S·M with S = [1 k; 0 1] (row form on column vectors), then the
     // pivot correction keeps `pivot` a fixed point.
-    [
-        a + k * b,
-        b,
-        c + k * d,
-        d,
-        tx + k * ty - k * pivot.1,
-        ty,
-    ]
+    [a + k * b, b, c + k * d, d, tx + k * ty - k * pivot.1, ty]
 }
 
 /// Phase G — signed angle (radians) from `from` to `to` about the
@@ -1346,11 +1338,7 @@ fn snap_angle_to_15deg(theta: f32) -> f32 {
 /// expressed in `m`'s OUTPUT coord frame (i.e. the same frame `m`'s
 /// translation lands in). Used for content gestures where the
 /// pivot is the frame-inner bounds centroid.
-fn rotate_matrix_about_pivot_local(
-    m: [f32; 6],
-    theta: f32,
-    pivot: (f32, f32),
-) -> [f32; 6] {
+fn rotate_matrix_about_pivot_local(m: [f32; 6], theta: f32, pivot: (f32, f32)) -> [f32; 6] {
     let (s, c) = theta.sin_cos();
     let [a, b, cc, d, tx, ty] = m;
     let new_a = c * a - s * b;
@@ -1402,12 +1390,7 @@ fn compute_scale_factors(
 
 /// Phase G — scale `m` about a pivot expressed in `m`'s output
 /// coord frame. Mirrors `rotate_matrix_about_pivot_local`.
-fn scale_matrix_about_pivot_local(
-    m: [f32; 6],
-    sx: f32,
-    sy: f32,
-    pivot: (f32, f32),
-) -> [f32; 6] {
+fn scale_matrix_about_pivot_local(m: [f32; 6], sx: f32, sy: f32, pivot: (f32, f32)) -> [f32; 6] {
     let [a, b, c, d, tx, ty] = m;
     [
         sx * a,
@@ -1514,19 +1497,39 @@ fn collect_sibling_frames(
 /// `raw_id`? Walks every per-kind vec until one is found. Returns
 /// false for unknown ids.
 fn spread_contains_frame(spread: &paged_parse::Spread, raw_id: &str) -> bool {
-    if spread.text_frames.iter().any(|f| f.self_id.as_deref() == Some(raw_id)) {
+    if spread
+        .text_frames
+        .iter()
+        .any(|f| f.self_id.as_deref() == Some(raw_id))
+    {
         return true;
     }
-    if spread.rectangles.iter().any(|r| r.self_id.as_deref() == Some(raw_id)) {
+    if spread
+        .rectangles
+        .iter()
+        .any(|r| r.self_id.as_deref() == Some(raw_id))
+    {
         return true;
     }
-    if spread.polygons.iter().any(|p| p.self_id.as_deref() == Some(raw_id)) {
+    if spread
+        .polygons
+        .iter()
+        .any(|p| p.self_id.as_deref() == Some(raw_id))
+    {
         return true;
     }
-    if spread.ovals.iter().any(|o| o.self_id.as_deref() == Some(raw_id)) {
+    if spread
+        .ovals
+        .iter()
+        .any(|o| o.self_id.as_deref() == Some(raw_id))
+    {
         return true;
     }
-    if spread.graphic_lines.iter().any(|g| g.self_id.as_deref() == Some(raw_id)) {
+    if spread
+        .graphic_lines
+        .iter()
+        .any(|g| g.self_id.as_deref() == Some(raw_id))
+    {
         return true;
     }
     false
@@ -1535,10 +1538,22 @@ fn spread_contains_frame(spread: &paged_parse::Spread, raw_id: &str) -> bool {
 fn transformed_aabb(b: Bounds, m: Option<[f32; 6]>) -> [f32; 4] {
     let m = m.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
     let corners = [
-        (m[0] * b.left + m[2] * b.top + m[4], m[1] * b.left + m[3] * b.top + m[5]),
-        (m[0] * b.right + m[2] * b.top + m[4], m[1] * b.right + m[3] * b.top + m[5]),
-        (m[0] * b.right + m[2] * b.bottom + m[4], m[1] * b.right + m[3] * b.bottom + m[5]),
-        (m[0] * b.left + m[2] * b.bottom + m[4], m[1] * b.left + m[3] * b.bottom + m[5]),
+        (
+            m[0] * b.left + m[2] * b.top + m[4],
+            m[1] * b.left + m[3] * b.top + m[5],
+        ),
+        (
+            m[0] * b.right + m[2] * b.top + m[4],
+            m[1] * b.right + m[3] * b.top + m[5],
+        ),
+        (
+            m[0] * b.right + m[2] * b.bottom + m[4],
+            m[1] * b.right + m[3] * b.bottom + m[5],
+        ),
+        (
+            m[0] * b.left + m[2] * b.bottom + m[4],
+            m[1] * b.left + m[3] * b.bottom + m[5],
+        ),
     ];
     let mut min_x = f32::INFINITY;
     let mut max_x = f32::NEG_INFINITY;
@@ -1647,7 +1662,12 @@ fn apply_resize(
         let orig_w = snap.right - snap.left;
         let orig_h = snap.bottom - snap.top;
         if orig_w.abs() < 1e-6 || orig_h.abs() < 1e-6 {
-            return Bounds { top, left, bottom, right };
+            return Bounds {
+                top,
+                left,
+                bottom,
+                right,
+            };
         }
         let new_w = right - left;
         let new_h = bottom - top;
@@ -1703,7 +1723,12 @@ fn apply_resize(
             }
         }
     }
-    Bounds { top, left, bottom, right }
+    Bounds {
+        top,
+        left,
+        bottom,
+        right,
+    }
 }
 
 fn write_mutation_to_scene(
@@ -2060,16 +2085,23 @@ mod tests {
     fn assert_close(a: Bounds, e: Bounds) {
         let d = |x: f32, y: f32| (x - y).abs() < 1e-3;
         assert!(d(a.top, e.top), "top: got {} expected {}", a.top, e.top);
-        assert!(d(a.left, e.left), "left: got {} expected {}", a.left, e.left);
+        assert!(
+            d(a.left, e.left),
+            "left: got {} expected {}",
+            a.left,
+            e.left
+        );
         assert!(
             d(a.bottom, e.bottom),
             "bottom: got {} expected {}",
-            a.bottom, e.bottom
+            a.bottom,
+            e.bottom
         );
         assert!(
             d(a.right, e.right),
             "right: got {} expected {}",
-            a.right, e.right
+            a.right,
+            e.right
         );
     }
 
@@ -2116,7 +2148,11 @@ mod tests {
             snap,
             GestureType::Translate,
             (30.0, 5.0),
-            GestureModifiers { shift: true, alt: false, disable_snap: false },
+            GestureModifiers {
+                shift: true,
+                alt: false,
+                disable_snap: false,
+            },
         );
         assert_close(out, b(0.0, 30.0, 100.0, 130.0));
         // |dy| > |dx| → x is dropped.
@@ -2124,7 +2160,11 @@ mod tests {
             snap,
             GestureType::Translate,
             (3.0, -40.0),
-            GestureModifiers { shift: true, alt: false, disable_snap: false },
+            GestureModifiers {
+                shift: true,
+                alt: false,
+                disable_snap: false,
+            },
         );
         assert_close(out, b(-40.0, 0.0, 60.0, 100.0));
     }
@@ -2141,7 +2181,9 @@ mod tests {
         let snap = b(100.0, 100.0, 200.0, 200.0);
         let out = compute_new_bounds(
             snap,
-            GestureType::Resize { handle: ResizeHandle::North },
+            GestureType::Resize {
+                handle: ResizeHandle::North,
+            },
             (15.0, -20.0),
             NONE,
         );
@@ -2156,7 +2198,9 @@ mod tests {
         let snap = b(0.0, 0.0, 100.0, 100.0);
         let out = compute_new_bounds(
             snap,
-            GestureType::Resize { handle: ResizeHandle::East },
+            GestureType::Resize {
+                handle: ResizeHandle::East,
+            },
             (25.0, 10.0),
             NONE,
         );
@@ -2168,7 +2212,9 @@ mod tests {
         let snap = b(0.0, 0.0, 100.0, 100.0);
         let out = compute_new_bounds(
             snap,
-            GestureType::Resize { handle: ResizeHandle::SouthEast },
+            GestureType::Resize {
+                handle: ResizeHandle::SouthEast,
+            },
             (10.0, 20.0),
             NONE,
         );
@@ -2180,7 +2226,9 @@ mod tests {
         let snap = b(50.0, 50.0, 150.0, 150.0);
         let out = compute_new_bounds(
             snap,
-            GestureType::Resize { handle: ResizeHandle::NorthWest },
+            GestureType::Resize {
+                handle: ResizeHandle::NorthWest,
+            },
             (-5.0, -10.0),
             NONE,
         );
@@ -2194,7 +2242,9 @@ mod tests {
         let snap = b(0.0, 0.0, 100.0, 100.0);
         let out = compute_new_bounds(
             snap,
-            GestureType::Resize { handle: ResizeHandle::SouthEast },
+            GestureType::Resize {
+                handle: ResizeHandle::SouthEast,
+            },
             (10.0, 20.0),
             ALT,
         );
@@ -2206,7 +2256,9 @@ mod tests {
         let snap = b(0.0, 0.0, 100.0, 100.0);
         let out = compute_new_bounds(
             snap,
-            GestureType::Resize { handle: ResizeHandle::North },
+            GestureType::Resize {
+                handle: ResizeHandle::North,
+            },
             (0.0, -15.0),
             ALT,
         );
@@ -2222,7 +2274,9 @@ mod tests {
         let snap = b(0.0, 0.0, 100.0, 100.0);
         let out = compute_new_bounds(
             snap,
-            GestureType::Resize { handle: ResizeHandle::SouthEast },
+            GestureType::Resize {
+                handle: ResizeHandle::SouthEast,
+            },
             (40.0, 20.0),
             SHIFT,
         );
@@ -2236,7 +2290,9 @@ mod tests {
         let snap = b(0.0, 0.0, 50.0, 100.0);
         let out = compute_new_bounds(
             snap,
-            GestureType::Resize { handle: ResizeHandle::SouthEast },
+            GestureType::Resize {
+                handle: ResizeHandle::SouthEast,
+            },
             (50.0, 10.0),
             SHIFT,
         );
@@ -2254,9 +2310,15 @@ mod tests {
         let snap = b(0.0, 0.0, 100.0, 100.0);
         let out = compute_new_bounds(
             snap,
-            GestureType::Resize { handle: ResizeHandle::SouthEast },
+            GestureType::Resize {
+                handle: ResizeHandle::SouthEast,
+            },
             (50.0, 30.0),
-            GestureModifiers { shift: true, alt: true, disable_snap: false },
+            GestureModifiers {
+                shift: true,
+                alt: true,
+                disable_snap: false,
+            },
         );
         // Centre stays at (50, 50); dominant scale_w = 1.5 → 150×150.
         // Centre-anchored: bounds = (-25, -25, 125, 125).
@@ -2276,7 +2338,9 @@ mod tests {
         let snap = b(0.0, 0.0, 100.0, 100.0);
         let out = compute_new_bounds(
             snap,
-            GestureType::Resize { handle: ResizeHandle::East },
+            GestureType::Resize {
+                handle: ResizeHandle::East,
+            },
             (50.0, 0.0),
             SHIFT,
         );
@@ -2309,7 +2373,8 @@ mod tests {
     #[test]
     fn rotate_content_90_maps_basis_correctly() {
         // 90° CCW about the origin: x-basis (1,0) → (0,1).
-        let out = rotate_matrix_about_pivot_local(IDENTITY, std::f32::consts::FRAC_PI_2, (0.0, 0.0));
+        let out =
+            rotate_matrix_about_pivot_local(IDENTITY, std::f32::consts::FRAC_PI_2, (0.0, 0.0));
         let [a, b, _c, _d, _tx, _ty] = out;
         assert!(a.abs() < 1e-3, "a={a}");
         assert!((b - 1.0).abs() < 1e-3, "b={b}");

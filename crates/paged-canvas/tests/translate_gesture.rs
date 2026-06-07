@@ -339,7 +339,8 @@ fn resize_with_alt_keeps_centre_fixed() {
         (20.0, 10.0),
         GestureModifiers {
             shift: false,
-            alt: true, disable_snap: false,
+            alt: true,
+            disable_snap: false,
         },
     )
     .unwrap();
@@ -415,7 +416,8 @@ fn alt_translate_duplicates_instead_of_moving() {
         (15.0, 25.0),
         GestureModifiers {
             shift: false,
-            alt: true, disable_snap: false,
+            alt: true,
+            disable_snap: false,
         },
     )
     .expect("update");

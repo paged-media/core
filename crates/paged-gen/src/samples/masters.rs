@@ -249,10 +249,6 @@ fn write_spread_with_hidden_masters(s: &Spread) -> Vec<u8> {
     // Insert the attribute right after the page's `Self="…"` so it lands
     // on the `<Page>` element (the only element carrying that Self id).
     let needle = format!("<Page Self=\"{}\"", s.page_self_id);
-    let patched = xml.replacen(
-        &needle,
-        &format!("{needle} ShowMasterItems=\"false\""),
-        1,
-    );
+    let patched = xml.replacen(&needle, &format!("{needle} ShowMasterItems=\"false\""), 1);
     patched.into_bytes()
 }

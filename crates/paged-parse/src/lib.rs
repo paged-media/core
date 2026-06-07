@@ -36,8 +36,8 @@ pub mod styles;
 mod util;
 
 pub use designmap::{
-    ColorSettings, DesignMap, DocumentPreference, HyperlinkDestination, HyperlinkDestinationKind,
-    Hyperlink, Layer, NumberingStyle, Section, SpreadRef, StoryRef, TextVariable,
+    ColorSettings, DesignMap, DocumentPreference, Hyperlink, HyperlinkDestination,
+    HyperlinkDestinationKind, Layer, NumberingStyle, Section, SpreadRef, StoryRef, TextVariable,
 };
 pub use graphic::{
     ColorEntry, ColorModel, ColorSpace, GradientEntry, GradientKind, GradientStopRef, Graphic,
@@ -60,8 +60,8 @@ pub use story::{
 pub use styles::{
     CellStyleDef, CharacterStyleDef, ConditionDef, NestedDelimiter, NestedStyle, ObjectStyleDef,
     ParagraphBorder, ParagraphRule, ParagraphShading, ParagraphStyleDef, ResolvedCell,
-    ResolvedCharacter, ResolvedObject, ResolvedParagraph, ResolvedTable, StripeDef,
-    StrokeStyleDef, StrokeStyleKind, StyleSheet, TOCStyleDef, TOCStyleEntryDef, TableStyleDef,
+    ResolvedCharacter, ResolvedObject, ResolvedParagraph, ResolvedTable, StripeDef, StrokeStyleDef,
+    StrokeStyleKind, StyleSheet, TOCStyleDef, TOCStyleEntryDef, TableStyleDef,
 };
 
 #[derive(Debug, thiserror::Error)]

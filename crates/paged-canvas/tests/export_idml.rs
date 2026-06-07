@@ -76,7 +76,8 @@ fn idml_with_story_text(content: &str) -> Vec<u8> {
 </Spread></idPkg:Spread>"#,
         )
         .unwrap();
-        zip.start_file("Stories/Story_story1.xml", deflated).unwrap();
+        zip.start_file("Stories/Story_story1.xml", deflated)
+            .unwrap();
         zip.write_all(
             format!(
                 r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -180,7 +181,10 @@ fn export_reflects_the_latest_load_not_a_stale_package() {
     // A second, genuinely-different package: the export must match the
     // SECOND source, proving the retained bytes were replaced.
     let second = idml_with_story_text("Goodbye all");
-    assert_ne!(first, second, "fixtures must differ for this test to mean anything");
+    assert_ne!(
+        first, second,
+        "fixtures must differ for this test to mean anything"
+    );
 
     let model2 = CanvasModel::load("doc2", &second, CanvasOptions::default()).expect("reload");
     assert_eq!(

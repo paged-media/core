@@ -31,7 +31,8 @@ fn small_idml() -> Vec<u8> {
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
         zip.start_file("mimetype", opts).unwrap();
-        zip.write_all(b"application/vnd.adobe.indesign-idml-package").unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
         zip.start_file("META-INF/container.xml", opts).unwrap();
         zip.write_all(
             br#"<?xml version="1.0" encoding="UTF-8"?>
@@ -198,7 +199,11 @@ fn shear_undo_redo_round_trips() {
     let sheared = tf_transform(&m, "tf1").expect("sheared");
 
     m.undo().expect("undo");
-    assert_eq!(tf_transform(&m, "tf1"), before, "undo restores the prior transform");
+    assert_eq!(
+        tf_transform(&m, "tf1"),
+        before,
+        "undo restores the prior transform"
+    );
     m.redo().expect("redo");
     assert_eq!(
         tf_transform(&m, "tf1"),

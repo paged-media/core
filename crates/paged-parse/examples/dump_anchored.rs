@@ -21,7 +21,9 @@ use std::env;
 use std::fs;
 
 fn main() {
-    let path = env::args().nth(1).expect("usage: dump_anchored <story.xml>");
+    let path = env::args()
+        .nth(1)
+        .expect("usage: dump_anchored <story.xml>");
     let bytes = fs::read(&path).expect("read story");
     let s = paged_parse::Story::parse(&bytes).expect("parse story");
     println!("story: {} paragraphs", s.paragraphs.len());
@@ -33,11 +35,7 @@ fn main() {
         for af in &p.anchored_frames {
             println!(
                 "    kind={:?} self={:?} fill={:?} stroke={:?} stroke_weight={:?}",
-                af.frame_kind,
-                af.self_id,
-                af.fill_color,
-                af.stroke_color,
-                af.stroke_weight
+                af.frame_kind, af.self_id, af.fill_color, af.stroke_color, af.stroke_weight
             );
             println!(
                 "      bounds={:?} item_transform={:?} setting={:?}",

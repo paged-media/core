@@ -40,9 +40,9 @@ use tsify_next::Tsify;
 #[cfg(feature = "cpu")]
 use crate::model::CanvasModel;
 #[cfg(feature = "cpu")]
-use paged_renderer::render_built_page;
-#[cfg(feature = "cpu")]
 use image::{codecs::png::PngEncoder, ImageEncoder};
+#[cfg(feature = "cpu")]
+use paged_renderer::render_built_page;
 
 /// A rendered page bitmap. RGBA8, tightly packed (no row padding),
 /// row-major from top to bottom. Caller decides whether to encode to
@@ -211,9 +211,8 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-            let opts: zip::write::SimpleFileOptions =
-                zip::write::SimpleFileOptions::default()
-                    .compression_method(zip::CompressionMethod::Stored);
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
 
             zip.start_file("mimetype", opts).unwrap();
             zip.write_all(b"application/vnd.adobe.indesign-idml-package")
@@ -270,7 +269,10 @@ mod tests {
             "expected ~331 height, got {}",
             snap.height_px
         );
-        assert_eq!(snap.rgba.len(), (snap.width_px * snap.height_px * 4) as usize);
+        assert_eq!(
+            snap.rgba.len(),
+            (snap.width_px * snap.height_px * 4) as usize
+        );
         assert_eq!(snap.page_id.as_str(), "p1");
         assert_eq!(snap.layout_generation, 0);
         assert_eq!(snap.numbering_generation, 0);

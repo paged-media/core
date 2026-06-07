@@ -794,7 +794,10 @@ pub enum DisplayCommand {
     /// backend currently no-ops them (matching its existing
     /// "unsupported feature ⇒ skip" behaviour for `Image` and
     /// `DropShadow`).
-    PushClip { path_id: PathId, transform: Transform },
+    PushClip {
+        path_id: PathId,
+        transform: Transform,
+    },
     /// Pop the most-recently-pushed clip. Mismatched Push/Pop pairs
     /// are tolerated — a stray `PopClip` drops back to the base
     /// (un-clipped) state. The contained transform is unused; it

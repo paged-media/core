@@ -96,9 +96,16 @@ pub(crate) struct ResolvedFrame<'a> {
 /// read cross-cutting state ignore it.
 #[allow(dead_code)]
 pub(crate) enum Geometry<'a> {
-    Rect { rect: Rect },
-    Oval { rect: Rect },
-    Line { p0: (f32, f32), p1: (f32, f32) },
+    Rect {
+        rect: Rect,
+    },
+    Oval {
+        rect: Rect,
+    },
+    Line {
+        p0: (f32, f32),
+        p1: (f32, f32),
+    },
     Polygon {
         anchors: &'a [PathAnchor],
         /// Start indices of `<GeometryPathType>` contours within
@@ -119,7 +126,9 @@ pub(crate) enum Geometry<'a> {
     /// TextFrames render as rectangles today; carrying a distinct
     /// variant lets the geometry adapter add path-shaped clipping
     /// later without touching modules.
-    TextFrameRect { rect: Rect },
+    TextFrameRect {
+        rect: Rect,
+    },
 }
 
 /// Mutable scratch passed to every module. Holds the page's display
@@ -519,7 +528,12 @@ mod tests {
         TextFrame {
             self_id: None,
             parent_story: None,
-            bounds: Bounds { top: 0.0, left: 0.0, bottom: 20.0, right: 20.0 },
+            bounds: Bounds {
+                top: 0.0,
+                left: 0.0,
+                bottom: 20.0,
+                right: 20.0,
+            },
             item_transform: None,
             fill_color: None,
             fill_tint: None,
@@ -626,12 +640,7 @@ mod tests {
         assert!(!text_frame_is_rect_path(&tri, &[], &[]));
 
         // Four axis-aligned corners but a compound path (two contours).
-        let two_contours = vec![
-            pa(0.0, 0.0),
-            pa(20.0, 0.0),
-            pa(20.0, 10.0),
-            pa(0.0, 10.0),
-        ];
+        let two_contours = vec![pa(0.0, 0.0), pa(20.0, 0.0), pa(20.0, 10.0), pa(0.0, 10.0)];
         assert!(!text_frame_is_rect_path(&two_contours, &[0, 2], &[]));
 
         // Four axis-aligned corners but the path is flagged open.
@@ -661,7 +670,10 @@ mod tests {
     fn from_text_frame_lifts_non_rect_path_to_polygon() {
         let tri = text_frame_with(vec![pa(0.0, 0.0), pa(20.0, 0.0), pa(10.0, 20.0)]);
         assert!(
-            matches!(ResolvedFrame::from_text_frame(&tri).geometry, Geometry::Polygon { .. }),
+            matches!(
+                ResolvedFrame::from_text_frame(&tri).geometry,
+                Geometry::Polygon { .. }
+            ),
             "triangular text frame must lift to Polygon"
         );
         let rect = text_frame_with(vec![
@@ -684,7 +696,12 @@ mod tests {
         use paged_parse::Oval;
         let oval = Oval {
             self_id: None,
-            bounds: Bounds { top: 0.0, left: 0.0, bottom: 10.0, right: 10.0 },
+            bounds: Bounds {
+                top: 0.0,
+                left: 0.0,
+                bottom: 10.0,
+                right: 10.0,
+            },
             item_transform: None,
             fill_color: None,
             fill_tint: None,
@@ -723,7 +740,12 @@ mod tests {
         use paged_parse::Polygon;
         let poly = Polygon {
             self_id: None,
-            bounds: Bounds { top: 0.0, left: 0.0, bottom: 10.0, right: 10.0 },
+            bounds: Bounds {
+                top: 0.0,
+                left: 0.0,
+                bottom: 10.0,
+                right: 10.0,
+            },
             item_transform: None,
             fill_color: None,
             fill_tint: None,
@@ -764,7 +786,12 @@ mod tests {
         use paged_parse::GraphicLine;
         let line = GraphicLine {
             self_id: None,
-            bounds: Bounds { top: 0.0, left: 0.0, bottom: 10.0, right: 10.0 },
+            bounds: Bounds {
+                top: 0.0,
+                left: 0.0,
+                bottom: 10.0,
+                right: 10.0,
+            },
             item_transform: None,
             stroke_color: None,
             stroke_weight: None,

@@ -91,7 +91,10 @@ struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8], AseError> {
-        let end = self.pos.checked_add(n).ok_or(AseError::Truncated(self.pos))?;
+        let end = self
+            .pos
+            .checked_add(n)
+            .ok_or(AseError::Truncated(self.pos))?;
         if end > self.data.len() {
             return Err(AseError::Truncated(self.pos));
         }
@@ -133,7 +136,10 @@ const BLOCK_COLOR: u16 = 0x0001;
 /// Parse `.ase` bytes. Unknown block types are skipped (the format
 /// reserves room for extensions); unknown colour models fail loudly.
 pub fn parse_ase(bytes: &[u8]) -> Result<AseLibrary, AseError> {
-    let mut r = Reader { data: bytes, pos: 0 };
+    let mut r = Reader {
+        data: bytes,
+        pos: 0,
+    };
     if r.take(4)? != SIG {
         return Err(AseError::BadSignature);
     }

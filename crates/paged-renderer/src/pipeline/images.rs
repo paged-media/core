@@ -93,7 +93,13 @@ pub(super) fn emit_rectangle_image(
         resolve_inline_image_bytes(bytes, &mut page.list, page_image_cache, decoded_cache)
     } else {
         match rect.image_link.as_deref() {
-            Some(uri) => resolve_image_id(uri, options, &mut page.list, page_image_cache, decoded_cache),
+            Some(uri) => resolve_image_id(
+                uri,
+                options,
+                &mut page.list,
+                page_image_cache,
+                decoded_cache,
+            ),
             None => ImageResolution::LinkMissing,
         }
     };
@@ -114,10 +120,7 @@ pub(super) fn emit_rectangle_image(
             // through to the frame's intrinsic FillColor (already
             // emitted by the earlier shape-fill pass) rather than
             // stamping the grey-X missing-image placeholder over it.
-            if rect.has_image_element
-                && !rect.has_inline_pdf
-                && options.missing_image_placeholder
-            {
+            if rect.has_image_element && !rect.has_inline_pdf && options.missing_image_placeholder {
                 emit_rectangle_missing_image_placeholder(page, rect, outer);
             }
             return;
@@ -204,7 +207,13 @@ pub(super) fn emit_polygon_image(
         resolve_inline_image_bytes(bytes, &mut page.list, page_image_cache, decoded_cache)
     } else {
         match poly.image_link.as_deref() {
-            Some(uri) => resolve_image_id(uri, options, &mut page.list, page_image_cache, decoded_cache),
+            Some(uri) => resolve_image_id(
+                uri,
+                options,
+                &mut page.list,
+                page_image_cache,
+                decoded_cache,
+            ),
             None => ImageResolution::LinkMissing,
         }
     };
@@ -221,10 +230,7 @@ pub(super) fn emit_polygon_image(
         ImageResolution::Resolved(id, w, h) => (id, w, h),
         ImageResolution::DecodeFailed => return,
         ImageResolution::LinkMissing => {
-            if poly.has_image_element
-                && !poly.has_inline_pdf
-                && options.missing_image_placeholder
-            {
+            if poly.has_image_element && !poly.has_inline_pdf && options.missing_image_placeholder {
                 emit_polygon_missing_image_placeholder(page, poly, outer);
             }
             return;
@@ -348,7 +354,13 @@ pub(super) fn emit_oval_image(
         resolve_inline_image_bytes(bytes, &mut page.list, page_image_cache, decoded_cache)
     } else {
         match oval.image_link.as_deref() {
-            Some(uri) => resolve_image_id(uri, options, &mut page.list, page_image_cache, decoded_cache),
+            Some(uri) => resolve_image_id(
+                uri,
+                options,
+                &mut page.list,
+                page_image_cache,
+                decoded_cache,
+            ),
             None => ImageResolution::LinkMissing,
         }
     };
@@ -365,10 +377,7 @@ pub(super) fn emit_oval_image(
         ImageResolution::Resolved(id, w, h) => (id, w, h),
         ImageResolution::DecodeFailed => return,
         ImageResolution::LinkMissing => {
-            if oval.has_image_element
-                && !oval.has_inline_pdf
-                && options.missing_image_placeholder
-            {
+            if oval.has_image_element && !oval.has_inline_pdf && options.missing_image_placeholder {
                 emit_oval_missing_image_placeholder(page, oval, outer);
             }
             return;
@@ -579,10 +588,7 @@ fn resolve_inline_image_bytes(
                 d.clone()
             } else {
                 let Some(d) = decode_image_bytes(bytes) else {
-                    tracing::warn!(
-                        len = bytes.len(),
-                        "inline image decode failed; skipping"
-                    );
+                    tracing::warn!(len = bytes.len(), "inline image decode failed; skipping");
                     return ImageResolution::DecodeFailed;
                 };
                 decoded_cache.insert(key.clone(), d.clone());

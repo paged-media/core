@@ -34,8 +34,7 @@ fn font_dir() -> PathBuf {
 }
 
 fn read_font(name: &str) -> Vec<u8> {
-    std::fs::read(font_dir().join(name))
-        .unwrap_or_else(|e| panic!("read font fixture {name}: {e}"))
+    std::fs::read(font_dir().join(name)).unwrap_or_else(|e| panic!("read font fixture {name}: {e}"))
 }
 
 /// A single-page IDML whose `Story/u10` carries a 2×2 table `Table/t1`
@@ -184,7 +183,10 @@ fn cell_property_read_entries() {
         .iter()
         .find(|e| e.path == paged_mutate::PropertyPath::CellFillColor)
         .and_then(|e| e.value.clone());
-    assert_eq!(fill, Some(paged_mutate::Value::ColorRef(Some("Color/B".into()))));
+    assert_eq!(
+        fill,
+        Some(paged_mutate::Value::ColorRef(Some("Color/B".into())))
+    );
     // The inset + vjust + applied-style entries are present.
     for p in [
         paged_mutate::PropertyPath::CellInsetTop,
@@ -235,7 +237,10 @@ fn cell_fill_mutation_round_trips_through_the_wire() {
         .iter()
         .find(|e| e.path == paged_mutate::PropertyPath::CellFillColor)
         .and_then(|e| e.value.clone());
-    assert_eq!(fill, Some(paged_mutate::Value::ColorRef(Some("Color/Z".into()))));
+    assert_eq!(
+        fill,
+        Some(paged_mutate::Value::ColorRef(Some("Color/Z".into())))
+    );
 }
 
 #[test]
@@ -363,5 +368,8 @@ fn insert_table_row_mutation_applies() {
         .find(|e| e.path == paged_mutate::PropertyPath::CellFillColor)
         .and_then(|e| e.value.clone());
     // Original (0,1) cell carried Color/C; it is now at row 2.
-    assert_eq!(fill, Some(paged_mutate::Value::ColorRef(Some("Color/C".into()))));
+    assert_eq!(
+        fill,
+        Some(paged_mutate::Value::ColorRef(Some("Color/C".into())))
+    );
 }

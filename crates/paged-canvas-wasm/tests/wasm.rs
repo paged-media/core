@@ -165,5 +165,8 @@ fn mutate_in_wasm_fills_rebuild_ms_from_js_date() {
     let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
     assert_eq!(v["kind"], "mutationApplied", "{v}");
     let rebuild_ms = v["payload"]["cacheStats"]["rebuildMs"].as_f64().unwrap();
-    assert!(rebuild_ms >= 0.0 && rebuild_ms.is_finite(), "rebuildMs = {rebuild_ms}");
+    assert!(
+        rebuild_ms >= 0.0 && rebuild_ms.is_finite(),
+        "rebuildMs = {rebuild_ms}"
+    );
 }

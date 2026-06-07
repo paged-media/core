@@ -107,8 +107,6 @@ pub struct ImageOptions {
     pub jpeg_quality: Option<u8>,
 }
 
-
-
 /// What to do with fonts whose fsType forbids embedding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RestrictedFontPolicy {
@@ -219,9 +217,9 @@ impl ExportDiagnostic {
             ExportDiagnostic::FontNotEmbeddable {
                 font_id,
                 runs_outlined,
-            } => format!(
-                "font {font_id} forbids embedding; {runs_outlined} run(s) kept as outlines"
-            ),
+            } => {
+                format!("font {font_id} forbids embedding; {runs_outlined} run(s) kept as outlines")
+            }
             ExportDiagnostic::ImageMissingBytes { image_index } => {
                 format!("placed image {image_index} had no usable bytes; placeholder drawn")
             }
@@ -344,9 +342,7 @@ pub struct ExportSession {
 
 impl ExportSession {
     pub fn begin(input: &ExportInput<'_>) -> Result<Self, ExportError> {
-        if input.options.standard == PdfStandard::PdfX4
-            && input.profiles.output_intent.is_none()
-        {
+        if input.options.standard == PdfStandard::PdfX4 && input.profiles.output_intent.is_none() {
             return Err(ExportError::MissingOutputIntent);
         }
         let total = input.doc.pages.len();
@@ -399,7 +395,9 @@ impl ExportSession {
 
     pub fn finish(mut self, input: &ExportInput<'_>) -> Result<ExportResult, ExportError> {
         if self.pages_remaining() > 0 {
-            return Err(ExportError::SessionState("pages remaining; export them first"));
+            return Err(ExportError::SessionState(
+                "pages remaining; export them first",
+            ));
         }
         let bytes = self.state.finish(input, &mut self.diagnostics)?;
         // Document-`finish` diagnostics have no single page.

@@ -37,8 +37,7 @@ fn fixture_path() -> PathBuf {
 
 fn load() -> CanvasModel {
     let bytes = std::fs::read(fixture_path()).expect("read fixture");
-    CanvasModel::load("doc-script", &bytes, CanvasOptions::default())
-        .expect("load + build")
+    CanvasModel::load("doc-script", &bytes, CanvasOptions::default()).expect("load + build")
 }
 
 const TEXT_FRAME_ID: &str = "ua365e1";
@@ -63,11 +62,7 @@ fn paged_set_via_js_routes_through_apply_layer() {
         &mut model,
         r#"paged.set("textFrame:ua365e1", "frameOpacity", 50);"#,
     );
-    assert!(
-        result.error.is_none(),
-        "script error: {:?}",
-        result.error
-    );
+    assert!(result.error.is_none(), "script error: {:?}", result.error);
     assert_eq!(current_opacity(&model), Some(50.0));
 }
 
@@ -81,11 +76,7 @@ fn paged_frame_proxy_sugar_works() {
             f.frameOpacity = 30;
         "#,
     );
-    assert!(
-        result.error.is_none(),
-        "script error: {:?}",
-        result.error
-    );
+    assert!(result.error.is_none(), "script error: {:?}", result.error);
     assert_eq!(current_opacity(&model), Some(30.0));
 }
 
@@ -255,10 +246,7 @@ fn paged_inspect_matches_element_properties_json() {
     let id = ElementId::TextFrame(TEXT_FRAME_ID.to_string());
 
     // Path A — through the script bridge.
-    let script_result = execute_script(
-        &mut model,
-        r#"paged.inspect("textFrame:ua365e1");"#,
-    );
+    let script_result = execute_script(&mut model, r#"paged.inspect("textFrame:ua365e1");"#);
     assert!(
         script_result.error.is_none(),
         "script error: {:?}",
@@ -300,13 +288,8 @@ fn paged_selection_returns_current_element_selection() {
 
     let result = execute_script(&mut model, "paged.selection();");
     assert!(result.error.is_none(), "script error: {:?}", result.error);
-    let line = result
-        .output
-        .into_iter()
-        .next()
-        .expect("no output line");
-    let parsed: Vec<ElementId> =
-        serde_json::from_str(&line).expect("selection JSON parses");
+    let line = result.output.into_iter().next().expect("no output line");
+    let parsed: Vec<ElementId> = serde_json::from_str(&line).expect("selection JSON parses");
     assert_eq!(parsed, vec![target]);
 }
 
@@ -316,13 +299,8 @@ fn paged_selection_returns_empty_array_when_no_selection() {
     model.element_selection.clear();
     let result = execute_script(&mut model, "paged.selection();");
     assert!(result.error.is_none(), "{:?}", result.error);
-    let line = result
-        .output
-        .into_iter()
-        .next()
-        .expect("no output line");
-    let parsed: Vec<ElementId> =
-        serde_json::from_str(&line).expect("selection JSON parses");
+    let line = result.output.into_iter().next().expect("no output line");
+    let parsed: Vec<ElementId> = serde_json::from_str(&line).expect("selection JSON parses");
     assert!(parsed.is_empty());
 }
 
@@ -336,11 +314,7 @@ fn paged_content_selection_returns_caret_when_set() {
 
     let result = execute_script(&mut model, "paged.contentSelection();");
     assert!(result.error.is_none(), "{:?}", result.error);
-    let line = result
-        .output
-        .into_iter()
-        .next()
-        .expect("no output line");
+    let line = result.output.into_iter().next().expect("no output line");
     let parsed: ContentSelection =
         serde_json::from_str(&line).expect("content selection JSON parses");
     assert_eq!(parsed, caret);
@@ -354,11 +328,7 @@ fn paged_content_selection_returns_null_when_unset() {
     assert!(result.error.is_none(), "{:?}", result.error);
     // Top-level `null` is a JS value but our formatter renders it as
     // the literal string "null"; that's what scripts see.
-    let line = result
-        .output
-        .into_iter()
-        .next()
-        .expect("no output line");
+    let line = result.output.into_iter().next().expect("no output line");
     assert_eq!(line, "null");
 }
 
@@ -399,7 +369,10 @@ fn paged_set_against_story_range_reaches_the_apply_arm() {
     assert!(result.error.is_none(), "{:?}", result.error);
     // Write succeeded.
     assert!(
-        result.output.iter().any(|l| l.contains("[log] write ok true")),
+        result
+            .output
+            .iter()
+            .any(|l| l.contains("[log] write ok true")),
         "write didn't return true: {:?}",
         result.output
     );
@@ -559,7 +532,11 @@ fn paged_stories_lists_loaded_stories_with_character_counts() {
     assert!(n > 0, "expected at least one story, got {n}");
     // Each entry has selfId (string), characterCount (number),
     // paragraphCount (number).
-    for needle in ["first selfId string", "first chars number", "first paras number"] {
+    for needle in [
+        "first selfId string",
+        "first chars number",
+        "first paras number",
+    ] {
         assert!(
             result.output.iter().any(|l| l.contains(needle)),
             "missing {needle} in {:?}",

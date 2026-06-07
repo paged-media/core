@@ -29,10 +29,7 @@ pub(crate) fn attr(e: &quick_xml::events::BytesStart, key: &[u8]) -> Option<Stri
 /// `KeyValuePair` values hold JSON, which InDesign serialises with
 /// escaped quotes. The plain [`attr`] stays raw because the numeric /
 /// enum attributes it reads never contain entities.
-pub(crate) fn attr_unescaped(
-    e: &quick_xml::events::BytesStart,
-    key: &[u8],
-) -> Option<String> {
+pub(crate) fn attr_unescaped(e: &quick_xml::events::BytesStart, key: &[u8]) -> Option<String> {
     e.attributes()
         .flatten()
         .find(|a| a.key.as_ref() == key)

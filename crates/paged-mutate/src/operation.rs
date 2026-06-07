@@ -798,7 +798,6 @@ pub enum PropertyPath {
     // none reflow). The `*Enabled` toggle is lossy on a customised
     // block round-tripped through false→true, same caveat as
     // `FrameDropShadow`.
-
     /// W0.4 — inner-shadow enabled toggle. `Value::Bool`. Materialises
     /// a default `InnerShadowParams` on `true`, clears on `false`.
     FrameInnerShadowEnabled,
@@ -1909,7 +1908,9 @@ impl NodeSpec {
             NodeSpec::Oval { self_id, .. } => NodeId::Oval(self_id.clone()),
             NodeSpec::GraphicLine { self_id, .. } => NodeId::GraphicLine(self_id.clone()),
             NodeSpec::Polygon { self_id, .. } => NodeId::Polygon(self_id.clone()),
-            NodeSpec::CloneTranslate { self_id, source, .. } => match source {
+            NodeSpec::CloneTranslate {
+                self_id, source, ..
+            } => match source {
                 NodeId::TextFrame(_) => NodeId::TextFrame(self_id.clone()),
                 NodeId::Rectangle(_) => NodeId::Rectangle(self_id.clone()),
                 // Other shape kinds aren't supported yet — apply.rs

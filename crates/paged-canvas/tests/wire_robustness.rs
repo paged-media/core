@@ -8,16 +8,22 @@ use paged_canvas::model::CanvasModel;
 #[test]
 fn link_frames_to_rectangle_errors_and_reply_serializes() {
     let bytes = std::fs::read("../../corpus/generated/text.idml").expect("fixture");
-    let mut model = CanvasModel::load("d", &bytes, paged_canvas::model::CanvasOptions::default()).expect("load");
+    let mut model = CanvasModel::load("d", &bytes, paged_canvas::model::CanvasOptions::default())
+        .expect("load");
     // find a text frame + a rectangle id from the built doc
-    let m = Mutation::LinkFrames { from: "u7f28c9".into(), to: "not-a-frame".into() };
+    let m = Mutation::LinkFrames {
+        from: "u7f28c9".into(),
+        to: "not-a-frame".into(),
+    };
     let out = model.apply_mutation(&m);
     println!("apply result: {:?}", out.as_ref().err());
     assert!(out.is_err(), "expected validation error");
     let reply = WorkerToMain {
         seq: Some(1),
         protocol: PROTOCOL_VERSION,
-        kind: WorkerToMainKind::MutationFailed { error: out.unwrap_err() },
+        kind: WorkerToMainKind::MutationFailed {
+            error: out.unwrap_err(),
+        },
     };
     let json = serde_json::to_string(&reply).expect("reply must serialize");
     println!("serialized: {}", &json[..json.len().min(400)]);

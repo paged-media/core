@@ -590,8 +590,7 @@ pub fn compose_paragraph(
     // width; the stretch/shrink ratios are still expressed against the
     // raw glyph advance, so the breaker sees a Min..=Desired..=Max
     // band shifted by `desired_space_ratio` (P-07).
-    let space_width =
-        (natural_space as f32 * options.desired_space_ratio.max(0.0)).round() as i32;
+    let space_width = (natural_space as f32 * options.desired_space_ratio.max(0.0)).round() as i32;
     let stretch = (natural_space as f32 * options.stretch_ratio).round() as i32;
     let shrink = (natural_space as f32 * options.shrink_ratio).round() as i32;
     let hyphen_width = if options.hyphenator.is_some() {
@@ -824,11 +823,7 @@ pub fn compose_paragraph(
     let mut breaks: Vec<Breakpoint> =
         paragraph_breaker::total_fit(&items, lengths, options.tolerance, options.looseness);
     if breaks.is_empty() && !items.is_empty() {
-        for fallback_tol in [
-            options.tolerance * 4.0,
-            options.tolerance * 16.0,
-            1000.0,
-        ] {
+        for fallback_tol in [options.tolerance * 4.0, options.tolerance * 16.0, 1000.0] {
             breaks = paragraph_breaker::total_fit(&items, lengths, fallback_tol, options.looseness);
             if !breaks.is_empty() {
                 break;
@@ -1202,7 +1197,10 @@ mod tests {
         assert!(
             out_zero.iter().any(|l| l.ends_with_hyphen),
             "zone 0 should permit a hyphen: {:?}",
-            out_zero.iter().map(|l| l.ends_with_hyphen).collect::<Vec<_>>()
+            out_zero
+                .iter()
+                .map(|l| l.ends_with_hyphen)
+                .collect::<Vec<_>>()
         );
 
         // Zone 60: "communication" starts inside the zone, so it stays
@@ -1212,14 +1210,14 @@ mod tests {
             ..base.clone()
         };
         let out_zoned = compose_paragraph(text, &m, &zoned);
-        assert!(
-            !out_zoned.is_empty(),
-            "zoned layout must still be feasible"
-        );
+        assert!(!out_zoned.is_empty(), "zoned layout must still be feasible");
         assert!(
             out_zoned.iter().all(|l| !l.ends_with_hyphen),
             "a zone covering the word start should suppress the hyphen: {:?}",
-            out_zoned.iter().map(|l| l.ends_with_hyphen).collect::<Vec<_>>()
+            out_zoned
+                .iter()
+                .map(|l| l.ends_with_hyphen)
+                .collect::<Vec<_>>()
         );
         // The whole word lands on the second line, intact.
         let texts: Vec<String> = out_zoned
@@ -1390,7 +1388,11 @@ mod tests {
             composed.lines.len() >= 4,
             "expected >=4 lines got {}: {:?}",
             composed.lines.len(),
-            composed.lines.iter().map(|l| line_text(text, l)).collect::<Vec<_>>()
+            composed
+                .lines
+                .iter()
+                .map(|l| line_text(text, l))
+                .collect::<Vec<_>>()
         );
         // First 3 lines fit inside the carved (300-unit) column.
         for line in composed.lines.iter().take(3) {
@@ -1508,7 +1510,11 @@ mod tests {
         );
         // First line uses min(850, 400) = 400.
         let first = &composed.lines[0];
-        assert!(first.width <= 400, "first line should be wrap-narrow: {:?}", first);
+        assert!(
+            first.width <= 400,
+            "first line should be wrap-narrow: {:?}",
+            first
+        );
     }
 
     #[test]

@@ -32,8 +32,7 @@ fn fixture_path() -> PathBuf {
 
 fn load() -> CanvasModel {
     let bytes = std::fs::read(fixture_path()).expect("read fixture");
-    CanvasModel::load("doc-budget", &bytes, CanvasOptions::default())
-        .expect("load + build")
+    CanvasModel::load("doc-budget", &bytes, CanvasOptions::default()).expect("load + build")
 }
 
 #[test]

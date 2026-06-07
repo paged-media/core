@@ -163,11 +163,8 @@ pub fn lab_entry_to_paint(entry: &paged_parse::graphic::ColorEntry) -> Option<Pa
     if entry.space != paged_parse::graphic::ColorSpace::Lab || entry.value.len() != 3 {
         return None;
     }
-    let paged_color::LinearRgb([r, g, b]) = paged_color::lab::lab_d50_to_linear_srgb(
-        entry.value[0],
-        entry.value[1],
-        entry.value[2],
-    );
+    let paged_color::LinearRgb([r, g, b]) =
+        paged_color::lab::lab_d50_to_linear_srgb(entry.value[0], entry.value[1], entry.value[2]);
     Some(Paint::Solid(Color::rgba(r, g, b, 1.0)))
 }
 
@@ -197,9 +194,7 @@ pub(super) fn linear_gradient_endpoints(
     let (sin, cos) = rad.sin_cos();
     let (cx, cy) = (0.5_f32, 0.5_f32);
     let (hx, hy) = match (length_pt, dims_pt) {
-        (Some(l), Some((w, h))) if w > 0.0 && h > 0.0 => {
-            (cos * l / (2.0 * w), sin * l / (2.0 * h))
-        }
+        (Some(l), Some((w, h))) if w > 0.0 && h > 0.0 => (cos * l / (2.0 * w), sin * l / (2.0 * h)),
         _ => {
             let half = 0.5_f32;
             (cos * half, sin * half)
@@ -259,7 +254,11 @@ pub(super) fn midpoint_blend(t: f32, mid: f32) -> f32 {
     t.powf(exponent)
 }
 
-pub(super) fn color_lerp(a: paged_compose::Color, b: paged_compose::Color, f: f32) -> paged_compose::Color {
+pub(super) fn color_lerp(
+    a: paged_compose::Color,
+    b: paged_compose::Color,
+    f: f32,
+) -> paged_compose::Color {
     paged_compose::Color::rgba(
         a.r * (1.0 - f) + b.r * f,
         a.g * (1.0 - f) + b.g * f,
@@ -468,11 +467,7 @@ pub fn color_id_to_paint_with_list_dir(
         }
         let (start, end) =
             linear_gradient_endpoints(gradient_angle_deg, gradient_length_pt, path_dims_pt);
-        let id = list.push_linear_gradient(paged_compose::LinearGradient {
-            start,
-            end,
-            stops,
-        });
+        let id = list.push_linear_gradient(paged_compose::LinearGradient { start, end, stops });
         return Some(Paint::LinearGradient(id));
     }
     let paint = color_id_to_paint(id, palette, cmyk_xform)?;
@@ -784,9 +779,7 @@ pub(crate) fn stroke_for(
     // common ones to the same pattern table the bare names use so
     // real IDMLs render with the right dash/dot style without each
     // sample needing to declare a custom <StrokeStyle>.
-    let normalised = suffix
-        .strip_prefix("Canned ")
-        .unwrap_or(suffix);
+    let normalised = suffix.strip_prefix("Canned ").unwrap_or(suffix);
     let is_dotted = matches!(
         normalised,
         "Dotted" | "Dotted2" | "Dotted4" | "Dotted8" | "Japanese Dots"
@@ -868,7 +861,14 @@ pub(crate) fn apply_fill_tint(paint: Paint, tint_pct: Option<f32>) -> Paint {
             1.0 + (c.b - 1.0) * t,
             c.a,
         )),
-        Paint::Cmyk { c, m, y, k, rgb, spot } => Paint::Cmyk {
+        Paint::Cmyk {
+            c,
+            m,
+            y,
+            k,
+            rgb,
+            spot,
+        } => Paint::Cmyk {
             c: c * t,
             m: m * t,
             y: y * t,

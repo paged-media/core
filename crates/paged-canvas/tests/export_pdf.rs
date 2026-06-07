@@ -31,7 +31,8 @@ fn small_idml() -> Vec<u8> {
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
         zip.start_file("mimetype", opts).unwrap();
-        zip.write_all(b"application/vnd.adobe.indesign-idml-package").unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
         zip.start_file("META-INF/container.xml", opts).unwrap();
         zip.write_all(
             br#"<?xml version="1.0" encoding="UTF-8"?>
@@ -96,7 +97,10 @@ fn find_profile() -> Option<Vec<u8>> {
     if let Ok(entries) = std::fs::read_dir(&corpus) {
         for e in entries.flatten() {
             let path = e.path();
-            if path.extension().is_some_and(|x| x.eq_ignore_ascii_case("icc")) {
+            if path
+                .extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("icc"))
+            {
                 if let Ok(bytes) = std::fs::read(&path) {
                     return Some(bytes);
                 }
@@ -109,8 +113,7 @@ fn find_profile() -> Option<Vec<u8>> {
 
 #[test]
 fn session_exports_page_by_page() {
-    let model =
-        CanvasModel::load("doc1", &small_idml(), CanvasOptions::default()).expect("load");
+    let model = CanvasModel::load("doc1", &small_idml(), CanvasOptions::default()).expect("load");
     let (mut session, pages) =
         CanvasExportSession::begin(&model, &ExportPdfWireOptions::default()).expect("begin");
     assert_eq!(pages, 2);
@@ -133,29 +136,38 @@ fn session_exports_page_by_page() {
         "unexpected diagnostics: {:?}",
         done.diagnostics
     );
-    assert!(done.findings.is_empty(), "unexpected findings: {:?}", done.findings);
+    assert!(
+        done.findings.is_empty(),
+        "unexpected findings: {:?}",
+        done.findings
+    );
 
     // Without a CMYK working profile the pipeline collapses swatches
     // to RGB solids (Stage A/B display behaviour) — no Separation to
     // assert here; the profile-gated X-4 test below covers the spot
     // plate. Just pin that the pages actually painted.
-    assert!(bytes.len() > 900, "suspiciously empty export: {} bytes", bytes.len());
+    assert!(
+        bytes.len() > 900,
+        "suspiciously empty export: {} bytes",
+        bytes.len()
+    );
 }
 
 #[test]
 fn finishing_early_is_an_error() {
-    let model =
-        CanvasModel::load("doc1", &small_idml(), CanvasOptions::default()).expect("load");
+    let model = CanvasModel::load("doc1", &small_idml(), CanvasOptions::default()).expect("load");
     let (session, _pages) =
         CanvasExportSession::begin(&model, &ExportPdfWireOptions::default()).expect("begin");
-    assert!(session.finish().is_err(), "finish with pages remaining must fail");
+    assert!(
+        session.finish().is_err(),
+        "finish with pages remaining must fail"
+    );
 }
 
 #[test]
 fn x4_requires_a_profile_and_honours_a_registered_one() {
     // Without any profile: X-4 must refuse at begin.
-    let model =
-        CanvasModel::load("doc1", &small_idml(), CanvasOptions::default()).expect("load");
+    let model = CanvasModel::load("doc1", &small_idml(), CanvasOptions::default()).expect("load");
     let wire = ExportPdfWireOptions {
         standard: Some("pdfx4".into()),
         ..Default::default()
@@ -200,8 +212,7 @@ fn x4_requires_a_profile_and_honours_a_registered_one() {
 
 #[test]
 fn unknown_profile_name_fails_at_begin() {
-    let model =
-        CanvasModel::load("doc1", &small_idml(), CanvasOptions::default()).expect("load");
+    let model = CanvasModel::load("doc1", &small_idml(), CanvasOptions::default()).expect("load");
     let wire = ExportPdfWireOptions {
         output_intent_profile: Some("No Such Profile".into()),
         ..Default::default()
@@ -217,8 +228,7 @@ fn unknown_profile_name_fails_at_begin() {
 fn document_bleed_grows_the_media_box() {
     // The synthetic designmap declares 8.5pt bleed on all sides; the
     // exported MediaBox must be trim + 2x8.5 in each axis.
-    let model =
-        CanvasModel::load("doc1", &small_idml(), CanvasOptions::default()).expect("load");
+    let model = CanvasModel::load("doc1", &small_idml(), CanvasOptions::default()).expect("load");
     let (mut session, pages) =
         CanvasExportSession::begin(&model, &ExportPdfWireOptions::default()).expect("begin");
     for _ in 0..pages {

@@ -175,8 +175,13 @@ pub fn write_fonts(
             .map_err(|e| ExportError::Subset(format!("{e:?}")))?;
         let is_cff = {
             let face = ttf_parser::Face::parse(face_bytes, 0).ok();
-            face.map(|f| f.tables().cff.is_some() || f.raw_face().table(ttf_parser::Tag::from_bytes(b"CFF2")).is_some())
-                .unwrap_or(false)
+            face.map(|f| {
+                f.tables().cff.is_some()
+                    || f.raw_face()
+                        .table(ttf_parser::Tag::from_bytes(b"CFF2"))
+                        .is_some()
+            })
+            .unwrap_or(false)
         };
 
         // Metrics for the CIDFont (from the ORIGINAL face; ids are
@@ -196,10 +201,8 @@ pub fn write_fonts(
             let data = subset.as_ref();
             let compressed = {
                 use std::io::Write as _;
-                let mut enc = flate2::write::ZlibEncoder::new(
-                    Vec::new(),
-                    flate2::Compression::default(),
-                );
+                let mut enc =
+                    flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
                 let _ = enc.write_all(data);
                 enc.finish().unwrap_or_default()
             };
@@ -259,10 +262,11 @@ pub fn write_fonts(
             if !is_cff {
                 cid.cid_to_gid_map_predefined(Name(b"Identity"));
             }
-            cid.default_width(face
-                .glyph_hor_advance(ttf_parser::GlyphId(0))
-                .map(|a| a as f32 * scale)
-                .unwrap_or(500.0));
+            cid.default_width(
+                face.glyph_hor_advance(ttf_parser::GlyphId(0))
+                    .map(|a| a as f32 * scale)
+                    .unwrap_or(500.0),
+            );
             // `remapped_gids()` yields old ids in NEW-gid order
             // (0, 1, 2, …) — one consecutive widths run.
             let advances: Vec<f32> = old_gids
@@ -295,11 +299,12 @@ pub fn write_fonts(
             for (gid, ch) in pairs {
                 let mut buf = [0u16; 2];
                 let encoded = ch.encode_utf16(&mut buf);
-                let hex: String =
-                    encoded.iter().map(|u| format!("{u:04X}")).collect();
+                let hex: String = encoded.iter().map(|u| format!("{u:04X}")).collect();
                 cmap.push_str(&format!("<{gid:04X}> <{hex}>\n"));
             }
-            cmap.push_str("endbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+            cmap.push_str(
+                "endbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n",
+            );
             let stream = pdf.stream(tounicode_ref, cmap.as_bytes());
             stream.finish();
         }

@@ -409,8 +409,7 @@ pub fn styles_xml_full(
             "Wavy" => "WavyStrokeStyle",
             other => panic!("unknown stroke style kind {other}"),
         };
-        let mut attrs: Vec<(&str, &str)> =
-            vec![("Self", ss.self_id), ("Name", ss.name)];
+        let mut attrs: Vec<(&str, &str)> = vec![("Self", ss.self_id), ("Name", ss.name)];
         if let Some(p) = ss.pattern {
             attrs.push(("Pattern", p));
         }

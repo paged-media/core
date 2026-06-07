@@ -93,9 +93,7 @@ impl ElementId {
             // variant. `raw_id` returns the story for table addresses
             // (callers needing the table / cell coords match on the
             // variant) — consistent with `StoryRange`.
-            ElementId::Table { story_id, .. } | ElementId::TableCell { story_id, .. } => {
-                story_id
-            }
+            ElementId::Table { story_id, .. } | ElementId::TableCell { story_id, .. } => story_id,
         }
     }
 

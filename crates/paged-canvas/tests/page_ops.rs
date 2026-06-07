@@ -28,7 +28,8 @@ fn idml(spread_xml: &str) -> Vec<u8> {
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
         zip.start_file("mimetype", opts).unwrap();
-        zip.write_all(b"application/vnd.adobe.indesign-idml-package").unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
         zip.start_file("META-INF/container.xml", opts).unwrap();
         zip.write_all(
             br#"<?xml version="1.0" encoding="UTF-8"?>
@@ -201,8 +202,16 @@ fn resize_page_round_trips_and_rebuilds_size() {
         .expect("resize page");
     assert!(outcome.page_structure_changed);
     let built = model.page(&PageId("p1".into())).expect("page");
-    assert!((built.width_pt - 400.0).abs() < 1e-3, "w={}", built.width_pt);
-    assert!((built.height_pt - 600.0).abs() < 1e-3, "h={}", built.height_pt);
+    assert!(
+        (built.width_pt - 400.0).abs() < 1e-3,
+        "w={}",
+        built.width_pt
+    );
+    assert!(
+        (built.height_pt - 600.0).abs() < 1e-3,
+        "h={}",
+        built.height_pt
+    );
     model.undo().expect("undo");
     let built = model.page(&PageId("p1".into())).expect("page");
     assert!((built.width_pt - 612.0).abs() < 1e-3);

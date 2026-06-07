@@ -260,7 +260,8 @@ fn host_paragraphs(anchor_frame: Rect) -> Vec<Paragraph> {
                 anchored_frame: Some(anchor_frame),
             },
             Run {
-                text: " in voluptate velit esse cillum dolore eu fugiat nulla pariatur.".to_string(),
+                text: " in voluptate velit esse cillum dolore eu fugiat nulla pariatur."
+                    .to_string(),
                 point_size: None,
                 fill_color: None,
                 font_style: None,

@@ -42,19 +42,13 @@ fn fixture_bytes() -> Vec<u8> {
 /// Resolve a leaf FrameRef to a NodeId within a spread.
 fn node_for(spread: &paged_parse::Spread, r: FrameRef) -> Option<NodeId> {
     Some(match r {
-        FrameRef::TextFrame(i) => {
-            NodeId::TextFrame(spread.text_frames.get(i)?.self_id.clone()?)
-        }
-        FrameRef::Rectangle(i) => {
-            NodeId::Rectangle(spread.rectangles.get(i)?.self_id.clone()?)
-        }
+        FrameRef::TextFrame(i) => NodeId::TextFrame(spread.text_frames.get(i)?.self_id.clone()?),
+        FrameRef::Rectangle(i) => NodeId::Rectangle(spread.rectangles.get(i)?.self_id.clone()?),
         FrameRef::Oval(i) => NodeId::Oval(spread.ovals.get(i)?.self_id.clone()?),
         FrameRef::GraphicLine(i) => {
             NodeId::GraphicLine(spread.graphic_lines.get(i)?.self_id.clone()?)
         }
-        FrameRef::Polygon(i) => {
-            NodeId::Polygon(spread.polygons.get(i)?.self_id.clone()?)
-        }
+        FrameRef::Polygon(i) => NodeId::Polygon(spread.polygons.get(i)?.self_id.clone()?),
         FrameRef::Group(_) => return None,
     })
 }
@@ -84,9 +78,7 @@ fn adjacent_leaf_pair(doc: &Document) -> (usize, Vec<NodeId>) {
     for (si, parsed) in doc.spreads.iter().enumerate() {
         let spread = &parsed.spread;
         for w in spread.frames_in_order.windows(2) {
-            if let (Some(a), Some(b)) =
-                (node_for(spread, w[0]), node_for(spread, w[1]))
-            {
+            if let (Some(a), Some(b)) = (node_for(spread, w[0]), node_for(spread, w[1])) {
                 return (si, vec![a, b]);
             }
         }
@@ -127,9 +119,7 @@ fn create_group_is_z_order_neutral_and_round_trips() {
     )
     .expect("create group");
     let group_id = match &applied.op {
-        Operation::CreateGroup { spec } => {
-            spec.self_id.clone().expect("minted id echoed")
-        }
+        Operation::CreateGroup { spec } => spec.self_id.clone().expect("minted id echoed"),
         other => panic!("unexpected echoed op: {other:?}"),
     };
 
@@ -173,7 +163,11 @@ fn create_group_is_z_order_neutral_and_round_trips() {
 
     // UNDO — bytewise restore of frames_in_order + groups count.
     let undone = apply(&mut doc, &applied.inverse).expect("dissolve (undo)");
-    assert_eq!(order_snapshot(&doc, si), before_order, "undo restores order");
+    assert_eq!(
+        order_snapshot(&doc, si),
+        before_order,
+        "undo restores order"
+    );
     assert_eq!(command_stream_digest(&doc), before_paint);
 
     // REDO — same id, same structure.
@@ -208,10 +202,8 @@ fn scattered_members_collect_deterministically_and_undo_is_exact() {
                 (
                     si,
                     vec![
-                        node_for(spread, spread.frames_in_order[slots[0]])
-                            .unwrap(),
-                        node_for(spread, spread.frames_in_order[slots[1]])
-                            .unwrap(),
+                        node_for(spread, spread.frames_in_order[slots[0]]).unwrap(),
+                        node_for(spread, spread.frames_in_order[slots[1]]).unwrap(),
                     ],
                 )
             })
@@ -268,13 +260,8 @@ fn dissolve_parsed_group_round_trips_with_index_fixup() {
     'outer: for (si, parsed) in doc.spreads.iter().enumerate() {
         let spread = &parsed.spread;
         for (gi, g) in spread.groups.iter().enumerate() {
-            let top_level = spread
-                .frames_in_order
-                .contains(&FrameRef::Group(gi));
-            let flat = g
-                .members
-                .iter()
-                .all(|m| !matches!(m, FrameRef::Group(_)));
+            let top_level = spread.frames_in_order.contains(&FrameRef::Group(gi));
+            let flat = g.members.iter().all(|m| !matches!(m, FrameRef::Group(_)));
             let not_nested = !spread
                 .groups
                 .iter()

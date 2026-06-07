@@ -600,10 +600,22 @@ impl ParagraphBorder {
     pub fn from_attrs(e: &quick_xml::events::BytesStart) -> Self {
         // Order matches Rectangle::corners — clockwise from top-left.
         let per = [
-            ("ParagraphBorderTopLeftCornerOption", "ParagraphBorderTopLeftCornerRadius"),
-            ("ParagraphBorderTopRightCornerOption", "ParagraphBorderTopRightCornerRadius"),
-            ("ParagraphBorderBottomRightCornerOption", "ParagraphBorderBottomRightCornerRadius"),
-            ("ParagraphBorderBottomLeftCornerOption", "ParagraphBorderBottomLeftCornerRadius"),
+            (
+                "ParagraphBorderTopLeftCornerOption",
+                "ParagraphBorderTopLeftCornerRadius",
+            ),
+            (
+                "ParagraphBorderTopRightCornerOption",
+                "ParagraphBorderTopRightCornerRadius",
+            ),
+            (
+                "ParagraphBorderBottomRightCornerOption",
+                "ParagraphBorderBottomRightCornerRadius",
+            ),
+            (
+                "ParagraphBorderBottomLeftCornerOption",
+                "ParagraphBorderBottomLeftCornerRadius",
+            ),
         ];
         let mut corners = [CornerSpec::default(); 4];
         for (i, (oname, rname)) in per.iter().enumerate() {
@@ -1165,10 +1177,9 @@ impl StyleSheet {
                         // appears when InDesign attaches `<Properties>`
                         // children. The attributes we care about all live
                         // on the start tag, so reuse the same parser.
-                        if let (Some(id), Some(entry)) = (
-                            current_toc_style.as_deref(),
-                            parse_toc_style_entry(&e),
-                        ) {
+                        if let (Some(id), Some(entry)) =
+                            (current_toc_style.as_deref(), parse_toc_style_entry(&e))
+                        {
                             if let Some(t) = out.toc_styles.get_mut(id) {
                                 t.entries.push(entry);
                             }
@@ -1313,10 +1324,9 @@ impl StyleSheet {
                         }
                     }
                     b"TOCStyleEntry" => {
-                        if let (Some(id), Some(entry)) = (
-                            current_toc_style.as_deref(),
-                            parse_toc_style_entry(&e),
-                        ) {
+                        if let (Some(id), Some(entry)) =
+                            (current_toc_style.as_deref(), parse_toc_style_entry(&e))
+                        {
                             if let Some(t) = out.toc_styles.get_mut(id) {
                                 t.entries.push(entry);
                             }
@@ -1333,10 +1343,9 @@ impl StyleSheet {
                         }
                     }
                     b"NestedStyle" => {
-                        if let (Some(id), Some(ns)) = (
-                            current_paragraph_style.as_deref(),
-                            parse_nested_style(&e),
-                        ) {
+                        if let (Some(id), Some(ns)) =
+                            (current_paragraph_style.as_deref(), parse_nested_style(&e))
+                        {
                             if let Some(p) = out.paragraph_styles.get_mut(id) {
                                 p.nested_styles.push(ns);
                             }
@@ -1586,9 +1595,7 @@ impl ResolvedTable {
         self.skip_last_alternating_fill_rows = self
             .skip_last_alternating_fill_rows
             .or(def.skip_last_alternating_fill_rows);
-        self.start_column_fill_count = self
-            .start_column_fill_count
-            .or(def.start_column_fill_count);
+        self.start_column_fill_count = self.start_column_fill_count.or(def.start_column_fill_count);
         self.start_column_fill_tint = self.start_column_fill_tint.or(def.start_column_fill_tint);
         self.end_column_fill_count = self.end_column_fill_count.or(def.end_column_fill_count);
         self.end_column_fill_tint = self.end_column_fill_tint.or(def.end_column_fill_tint);
@@ -1762,18 +1769,12 @@ impl ResolvedParagraph {
         self.desired_word_spacing = self.desired_word_spacing.or(def.desired_word_spacing);
         self.maximum_word_spacing = self.maximum_word_spacing.or(def.maximum_word_spacing);
         // Q-20: letter / glyph spacing per-field inheritance.
-        self.minimum_letter_spacing =
-            self.minimum_letter_spacing.or(def.minimum_letter_spacing);
-        self.desired_letter_spacing =
-            self.desired_letter_spacing.or(def.desired_letter_spacing);
-        self.maximum_letter_spacing =
-            self.maximum_letter_spacing.or(def.maximum_letter_spacing);
-        self.minimum_glyph_scaling =
-            self.minimum_glyph_scaling.or(def.minimum_glyph_scaling);
-        self.desired_glyph_scaling =
-            self.desired_glyph_scaling.or(def.desired_glyph_scaling);
-        self.maximum_glyph_scaling =
-            self.maximum_glyph_scaling.or(def.maximum_glyph_scaling);
+        self.minimum_letter_spacing = self.minimum_letter_spacing.or(def.minimum_letter_spacing);
+        self.desired_letter_spacing = self.desired_letter_spacing.or(def.desired_letter_spacing);
+        self.maximum_letter_spacing = self.maximum_letter_spacing.or(def.maximum_letter_spacing);
+        self.minimum_glyph_scaling = self.minimum_glyph_scaling.or(def.minimum_glyph_scaling);
+        self.desired_glyph_scaling = self.desired_glyph_scaling.or(def.desired_glyph_scaling);
+        self.maximum_glyph_scaling = self.maximum_glyph_scaling.or(def.maximum_glyph_scaling);
         self.drop_cap_characters = self.drop_cap_characters.or(def.drop_cap_characters);
         self.drop_cap_lines = self.drop_cap_lines.or(def.drop_cap_lines);
         self.drop_cap_detail = self.drop_cap_detail.or(def.drop_cap_detail);
@@ -2482,9 +2483,15 @@ mod tests {
         // top-left inherited fully; top-right radius overridden but
         // option still inherited from parent.
         assert_eq!(r.border.corners[0].radius, Some(5.0));
-        assert_eq!(r.border.corners[0].option, Some(crate::CornerOption::Rounded));
+        assert_eq!(
+            r.border.corners[0].option,
+            Some(crate::CornerOption::Rounded)
+        );
         assert_eq!(r.border.corners[1].radius, Some(8.0));
-        assert_eq!(r.border.corners[1].option, Some(crate::CornerOption::Rounded));
+        assert_eq!(
+            r.border.corners[1].option,
+            Some(crate::CornerOption::Rounded)
+        );
     }
 
     #[test]
@@ -2528,10 +2535,10 @@ mod tests {
         </idPkg:Styles>"#;
         let s = StyleSheet::parse(xml).unwrap();
         let r = s.resolve_paragraph("ParagraphStyle/Child");
-        assert_eq!(r.minimum_letter_spacing, Some(-3.0));   // inherited
-        assert_eq!(r.maximum_letter_spacing, Some(15.0));   // overridden
-        assert_eq!(r.minimum_glyph_scaling, Some(97.0));    // inherited
-        assert_eq!(r.maximum_glyph_scaling, Some(103.0));   // inherited
+        assert_eq!(r.minimum_letter_spacing, Some(-3.0)); // inherited
+        assert_eq!(r.maximum_letter_spacing, Some(15.0)); // overridden
+        assert_eq!(r.minimum_glyph_scaling, Some(97.0)); // inherited
+        assert_eq!(r.maximum_glyph_scaling, Some(103.0)); // inherited
     }
 
     #[test]
@@ -3035,8 +3042,20 @@ mod tests {
         assert_eq!(striped.kind, StrokeStyleKind::Striped);
         assert_eq!(striped.name.as_deref(), Some("ThickThin"));
         assert_eq!(striped.stripes.len(), 2);
-        assert_eq!(striped.stripes[0], StripeDef { left: 0.0, width: 0.6 });
-        assert_eq!(striped.stripes[1], StripeDef { left: 0.8, width: 0.2 });
+        assert_eq!(
+            striped.stripes[0],
+            StripeDef {
+                left: 0.0,
+                width: 0.6
+            }
+        );
+        assert_eq!(
+            striped.stripes[1],
+            StripeDef {
+                left: 0.8,
+                width: 0.2
+            }
+        );
     }
 
     #[test]

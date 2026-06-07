@@ -29,7 +29,9 @@ use paragraph_breaker::{Breakpoint, Item};
 use rustybuzz::Face;
 
 use crate::compose::{compose_paragraph, ComposeOptions, TextShaper};
-use crate::shape::{apply_tracking, shape_run, shape_run_with_features, ShapedRun, ADVANCE_PRECISION};
+use crate::shape::{
+    apply_tracking, shape_run, shape_run_with_features, ShapedRun, ADVANCE_PRECISION,
+};
 
 /// A glyph positioned in frame space, ready for rasterization.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -434,12 +436,11 @@ fn shape_with_per_cluster_fallback(
         groups.push((start_cluster, next_cluster, (i..j).collect()));
         i = j;
     }
-    let mut out_glyphs: Vec<crate::shape::ShapedGlyph> = Vec::with_capacity(primary_shape.glyphs.len());
+    let mut out_glyphs: Vec<crate::shape::ShapedGlyph> =
+        Vec::with_capacity(primary_shape.glyphs.len());
     let mut total: i32 = 0;
     for (start, end, idxs) in groups {
-        let group_has_notdef = idxs
-            .iter()
-            .any(|&i| primary_shape.glyphs[i].glyph_id == 0);
+        let group_has_notdef = idxs.iter().any(|&i| primary_shape.glyphs[i].glyph_id == 0);
         if !group_has_notdef || start >= end || end > bytes.len() {
             for k in &idxs {
                 let g = primary_shape.glyphs[*k];
@@ -538,21 +539,14 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     for r in runs {
         run_starts.push(paragraph_text.len());
         paragraph_text.push_str(r.text);
-        let mut s = shape_run_with_features(
-            r.face,
-            r.text,
-            r.point_size,
-            r.shaping_features,
-        );
+        let mut s = shape_run_with_features(r.face, r.text, r.point_size, r.shaping_features);
         // P-20: per-cluster glyph fallback. When the primary face
         // shapes a cluster to `.notdef` (glyph id 0), retry that
         // cluster's source bytes against each fallback face in turn
         // and substitute the first all-non-notdef result. The
         // run-level fallback only covers "primary face missing"; this
         // covers "primary face present but glyph missing".
-        if !r.fallback_faces.is_empty()
-            && s.glyphs.iter().any(|g| g.glyph_id == 0)
-        {
+        if !r.fallback_faces.is_empty() && s.glyphs.iter().any(|g| g.glyph_id == 0) {
             s = shape_with_per_cluster_fallback(r.face, r.fallback_faces, r.text, r.point_size);
         }
         if let Some(t) = r.tracking {
@@ -635,8 +629,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     let raw_space = shape_run(runs[0].face, " ", runs[0].point_size).total_advance;
     let hs_factor = (runs[0].horizontal_scale_pct / 100.0).max(0.0);
     let natural_space = (raw_space as f32 * hs_factor).round() as i32;
-    let space_width =
-        (natural_space as f32 * opts.desired_space_ratio.max(0.0)).round() as i32;
+    let space_width = (natural_space as f32 * opts.desired_space_ratio.max(0.0)).round() as i32;
     let stretch = (natural_space as f32 * opts.stretch_ratio).round() as i32;
     let shrink = (natural_space as f32 * opts.shrink_ratio).round() as i32;
 
@@ -796,10 +789,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     // width, the right/center/justify alignments should snap glyphs
     // against THAT width, not the original scalar column. Defaults
     // to the scalar width when no per-line override is configured.
-    let per_line_widths: Option<&[i32]> = opts
-        .column_widths
-        .as_deref()
-        .filter(|v| !v.is_empty());
+    let per_line_widths: Option<&[i32]> = opts.column_widths.as_deref().filter(|v| !v.is_empty());
     for (i, bp) in breaks.iter().enumerate() {
         let Some(&end) = byte_ends.get(bp.index) else {
             continue;
@@ -1440,7 +1430,11 @@ pub fn apply_bidi_reorder(line: &mut LaidOutLine, text: &str, base: BidiDirectio
     // glyphs by ascending cluster and reverse for odd levels).
     let mut new_glyphs: Vec<PositionedGlyph> = Vec::with_capacity(line.glyphs.len());
     for run in &visual_runs {
-        let run_level = bidi.levels.get(run.start).copied().unwrap_or(para_info.level);
+        let run_level = bidi
+            .levels
+            .get(run.start)
+            .copied()
+            .unwrap_or(para_info.level);
         // Collect this run's glyphs in source order (ascending cluster).
         let mut run_glyphs: Vec<PositionedGlyph> = line
             .glyphs
@@ -2019,14 +2013,35 @@ mod tests {
         let text = "abc";
         let mut shape = ShapedRun {
             glyphs: vec![
-                ShapedGlyph { glyph_id: 1, cluster: 0, x_advance: 100, y_offset: 0, x_offset: 0 },
-                ShapedGlyph { glyph_id: 2, cluster: 1, x_advance: 100, y_offset: 0, x_offset: 0 },
-                ShapedGlyph { glyph_id: 3, cluster: 2, x_advance: 100, y_offset: 0, x_offset: 0 },
+                ShapedGlyph {
+                    glyph_id: 1,
+                    cluster: 0,
+                    x_advance: 100,
+                    y_offset: 0,
+                    x_offset: 0,
+                },
+                ShapedGlyph {
+                    glyph_id: 2,
+                    cluster: 1,
+                    x_advance: 100,
+                    y_offset: 0,
+                    x_offset: 0,
+                },
+                ShapedGlyph {
+                    glyph_id: 3,
+                    cluster: 2,
+                    x_advance: 100,
+                    y_offset: 0,
+                    x_offset: 0,
+                },
             ],
             total_advance: 300,
         };
         apply_mojikumi_half_width(&mut shape, text);
-        assert_eq!(shape.glyphs.iter().map(|g| g.x_advance).collect::<Vec<_>>(), vec![100, 100, 100]);
+        assert_eq!(
+            shape.glyphs.iter().map(|g| g.x_advance).collect::<Vec<_>>(),
+            vec![100, 100, 100]
+        );
         assert_eq!(shape.total_advance, 300);
     }
 
@@ -2064,7 +2079,11 @@ mod tests {
         let text = "AB\u{5D0}\u{5D1}CD";
         let mut line = line_for_bidi(text, text);
         apply_bidi_reorder(&mut line, text, BidiDirection::Ltr);
-        let visual: Vec<char> = line.glyphs.iter().map(|g| g.glyph_id as u8 as char).collect();
+        let visual: Vec<char> = line
+            .glyphs
+            .iter()
+            .map(|g| g.glyph_id as u8 as char)
+            .collect();
         // First two glyphs are A, B (LTR).
         assert_eq!(visual[0], 'A');
         assert_eq!(visual[1], 'B');
@@ -2072,7 +2091,7 @@ mod tests {
         // the char codepoint, so we compare codepoints directly.
         assert_eq!(line.glyphs[2].glyph_id, 0x5D1); // Bet first
         assert_eq!(line.glyphs[3].glyph_id, 0x5D0); // Alef second
-        // Then C, D (LTR).
+                                                    // Then C, D (LTR).
         assert_eq!(line.glyphs[4].glyph_id, 'C' as u32);
         assert_eq!(line.glyphs[5].glyph_id, 'D' as u32);
     }

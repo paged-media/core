@@ -370,10 +370,8 @@ pub fn write_story(s: &Story) -> Vec<u8> {
                 for stop in &paragraph.tab_list {
                     let pos = crate::xml::format_f32(stop.position_pt);
                     b.start("ListItem", &[("type", "object")]);
-                    let mut attrs: Vec<(&str, &str)> = vec![
-                        ("Position", pos.as_str()),
-                        ("Alignment", stop.alignment),
-                    ];
+                    let mut attrs: Vec<(&str, &str)> =
+                        vec![("Position", pos.as_str()), ("Alignment", stop.alignment)];
                     if let Some(ld) = &stop.leader {
                         attrs.push(("Leader", ld.as_str()));
                     }
@@ -572,8 +570,7 @@ fn write_table(b: &mut XmlBuilder, t: &Table) {
     // by RowSpan / ColumnSpan as occupied so spans don't double-stamp
     // a covered grid position.
     let mut idx = 0usize;
-    let mut occupied: Vec<bool> =
-        vec![false; (t.column_count as usize) * (total_rows as usize)];
+    let mut occupied: Vec<bool> = vec![false; (t.column_count as usize) * (total_rows as usize)];
     let slot = |col: u32, row: u32| (col as usize) * (total_rows as usize) + (row as usize);
     for c in 0..t.column_count {
         for r in 0..total_rows {
@@ -669,8 +666,7 @@ fn write_table(b: &mut XmlBuilder, t: &Table) {
             if let Some(v) = d.diagonal_in_front {
                 a.push(("DiagonalLineInFront", v.to_string()));
             }
-            let attr_refs: Vec<(&str, &str)> =
-                a.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            let attr_refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
             b.start("Cell", &attr_refs);
             for p in &cell.paragraphs {
                 write_cell_paragraph(b, p);

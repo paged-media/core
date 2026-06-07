@@ -60,7 +60,11 @@ pub fn invert_remove_node(
     }
 }
 
-pub fn invert_move_node(node: NodeId, previous_parent: NodeId, previous_position: usize) -> Operation {
+pub fn invert_move_node(
+    node: NodeId,
+    previous_parent: NodeId,
+    previous_position: usize,
+) -> Operation {
     Operation::MoveNode {
         node,
         new_parent: previous_parent,

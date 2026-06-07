@@ -65,13 +65,9 @@ impl Intent {
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "Perceptual" | "perceptual" => Some(Self::Perceptual),
-            "RelativeColorimetric" | "relativeColorimetric" => {
-                Some(Self::RelativeColorimetric)
-            }
+            "RelativeColorimetric" | "relativeColorimetric" => Some(Self::RelativeColorimetric),
             "Saturation" | "saturation" => Some(Self::Saturation),
-            "AbsoluteColorimetric" | "absoluteColorimetric" => {
-                Some(Self::AbsoluteColorimetric)
-            }
+            "AbsoluteColorimetric" | "absoluteColorimetric" => Some(Self::AbsoluteColorimetric),
             _ => None,
         }
     }
@@ -201,11 +197,7 @@ impl IccCmm {
     /// identity with a warning — the PDF exporter enforces "X-4
     /// needs an output intent" before it gets here, so this is a
     /// programmer-error guard, not a user path.
-    pub fn configure_export(
-        &mut self,
-        destination_profile: Option<&[u8]>,
-        policy: ExportPolicy,
-    ) {
+    pub fn configure_export(&mut self, destination_profile: Option<&[u8]>, policy: ExportPolicy) {
         self.export_policy = policy;
         self.export_dest = destination_profile.and_then(|bytes| {
             match ExportDestination::new(bytes, self.setup) {
@@ -439,7 +431,11 @@ mod native_export {
             .ok()?;
             let lab_profile = Profile::new_lab4_context(
                 GlobalContext::new(),
-                &lcms2::CIExyY { x: 0.3457, y: 0.3585, Y: 1.0 },
+                &lcms2::CIExyY {
+                    x: 0.3457,
+                    y: 0.3585,
+                    Y: 1.0,
+                },
             )
             .ok()?;
             let lab = lcms2::Transform::new_flags(
@@ -610,9 +606,7 @@ mod native_gamut {
             WorkingColor::Cmyk(_) => None,
             WorkingColor::Lab { l, a, b } => Some([l, a, b]),
             WorkingColor::Rgb(rgb) => Some(lab::srgb_to_lab_d50(rgb)),
-            WorkingColor::Gray(pct) => {
-                Some(lab::srgb_to_lab_d50([1.0 - pct / 100.0; 3]))
-            }
+            WorkingColor::Gray(pct) => Some(lab::srgb_to_lab_d50([1.0 - pct / 100.0; 3])),
         }
     }
 }
@@ -732,12 +726,19 @@ mod tests {
         assert_eq!(rgb, [1.0, 0.0, 0.0]);
         let LinearRgb(gray) = cmm.resolve_display(WorkingColor::Gray(100.0));
         assert!(gray[0].abs() < 1e-6);
-        let LinearRgb(lab_white) =
-            cmm.resolve_display(WorkingColor::Lab { l: 100.0, a: 0.0, b: 0.0 });
+        let LinearRgb(lab_white) = cmm.resolve_display(WorkingColor::Lab {
+            l: 100.0,
+            a: 0.0,
+            b: 0.0,
+        });
         assert!(lab_white.iter().all(|v| (v - 1.0).abs() < 1e-3));
         // No working space configured ⇒ never out of gamut.
         assert_eq!(
-            cmm.check_gamut(WorkingColor::Lab { l: 50.0, a: 120.0, b: -100.0 }),
+            cmm.check_gamut(WorkingColor::Lab {
+                l: 50.0,
+                a: 120.0,
+                b: -100.0
+            }),
             GamutStatus::InGamut
         );
     }
@@ -746,7 +747,12 @@ mod tests {
     fn export_preserve_numbers_is_identity() {
         let cmm = IccCmm::new(None, DisplaySetup::default());
         // Default policy: every space passes through untouched.
-        let cmyk = Cmyk { c: 0.0, m: 0.0, y: 0.0, k: 100.0 };
+        let cmyk = Cmyk {
+            c: 0.0,
+            m: 0.0,
+            y: 0.0,
+            k: 100.0,
+        };
         match cmm.convert_for_export(WorkingColor::Cmyk(cmyk)) {
             WorkingColor::Cmyk(out) => assert_eq!(out.k, 100.0),
             other => panic!("expected Cmyk, got {other:?}"),
@@ -763,7 +769,12 @@ mod tests {
         cmm.configure_export(None, ExportPolicy::ConvertToDestination);
         // CMYK numbers preserved even under Convert (no PCS
         // re-separation — pure K must stay pure K).
-        let cmyk = Cmyk { c: 0.0, m: 0.0, y: 0.0, k: 100.0 };
+        let cmyk = Cmyk {
+            c: 0.0,
+            m: 0.0,
+            y: 0.0,
+            k: 100.0,
+        };
         match cmm.convert_for_export(WorkingColor::Cmyk(cmyk)) {
             WorkingColor::Cmyk(out) => {
                 assert_eq!((out.c, out.m, out.y, out.k), (0.0, 0.0, 0.0, 100.0));

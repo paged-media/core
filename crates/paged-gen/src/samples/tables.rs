@@ -242,10 +242,7 @@ fn variants() -> Vec<Variant> {
                 cells: vec![
                     // col 0 row 0: two paragraphs in one cell
                     Cell {
-                        paragraphs: vec![
-                            Paragraph::plain("Line 1"),
-                            Paragraph::plain("Line 2"),
-                        ],
+                        paragraphs: vec![Paragraph::plain("Line 1"), Paragraph::plain("Line 2")],
                         ..Cell::plain("")
                     },
                     Cell::plain("Single line"),

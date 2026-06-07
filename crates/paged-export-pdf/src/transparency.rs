@@ -64,7 +64,9 @@ pub fn apply_gs(
     let key = format!(
         "B{}A{}O{}",
         blend.map(blend_name).unwrap_or("-"),
-        alpha.map(|a| format!("{:.3}", a)).unwrap_or_else(|| "-".into()),
+        alpha
+            .map(|a| format!("{:.3}", a))
+            .unwrap_or_else(|| "-".into()),
         overprint as u8,
     );
     let gs_ref = match state.gs_pool.get(&key) {
@@ -146,9 +148,8 @@ pub fn blurred_alpha_stamp(
 ) -> Option<AlphaStamp> {
     // Transform points into page space and find bounds.
     let t = transform.0;
-    let map = |x: f32, y: f32| -> (f32, f32) {
-        (t[0] * x + t[2] * y + t[4], t[1] * x + t[3] * y + t[5])
-    };
+    let map =
+        |x: f32, y: f32| -> (f32, f32) { (t[0] * x + t[2] * y + t[4], t[1] * x + t[3] * y + t[5]) };
     let mut min = (f32::MAX, f32::MAX);
     let mut max = (f32::MIN, f32::MIN);
     let mut consider = |p: (f32, f32)| {
@@ -165,7 +166,14 @@ pub fn blurred_alpha_stamp(
                 consider(map(cx, cy));
                 consider(map(x, y));
             }
-            S::CubicTo { cx1, cy1, cx2, cy2, x, y } => {
+            S::CubicTo {
+                cx1,
+                cy1,
+                cx2,
+                cy2,
+                x,
+                y,
+            } => {
                 consider(map(cx1, cy1));
                 consider(map(cx2, cy2));
                 consider(map(x, y));
@@ -188,9 +196,8 @@ pub fn blurred_alpha_stamp(
     let mut alpha = vec![0u8; (w * h) as usize];
     let mut polys: Vec<Vec<(f32, f32)>> = Vec::new();
     let mut current: Vec<(f32, f32)> = Vec::new();
-    let to_px = |p: (f32, f32)| -> (f32, f32) {
-        ((p.0 - origin.0) * scale, (p.1 - origin.1) * scale)
-    };
+    let to_px =
+        |p: (f32, f32)| -> (f32, f32) { ((p.0 - origin.0) * scale, (p.1 - origin.1) * scale) };
     let mut last = (0.0f32, 0.0f32);
     for seg in &path.segments {
         use paged_compose::PathSegment as S;
@@ -219,7 +226,14 @@ pub fn blurred_alpha_stamp(
                 }
                 last = (x, y);
             }
-            S::CubicTo { cx1, cy1, cx2, cy2, x, y } => {
+            S::CubicTo {
+                cx1,
+                cy1,
+                cx2,
+                cy2,
+                x,
+                y,
+            } => {
                 for i in 1..=12 {
                     let s = i as f32 / 12.0;
                     let inv = 1.0 - s;
@@ -364,8 +378,7 @@ pub fn emit_shadow_stamp(
     };
     let compressed = {
         use std::io::Write as _;
-        let mut enc =
-            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
         let _ = enc.write_all(&data);
         enc.finish().unwrap_or_default()
     };
@@ -446,9 +459,8 @@ pub fn emit_gradient_feather(
     let page_path = crate::page::transform_path(path, transform);
     let bbox = crate::page::path_bbox(&page_path);
     let t = transform.0;
-    let map = |x: f32, y: f32| -> (f32, f32) {
-        (t[0] * x + t[2] * y + t[4], t[1] * x + t[3] * y + t[5])
-    };
+    let map =
+        |x: f32, y: f32| -> (f32, f32) { (t[0] * x + t[2] * y + t[4], t[1] * x + t[3] * y + t[5]) };
     let (sx, sy) = map(params.start_x, params.start_y);
     let (ex, ey) = map(params.end_x, params.end_y);
 

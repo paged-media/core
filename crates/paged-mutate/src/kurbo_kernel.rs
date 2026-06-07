@@ -45,7 +45,6 @@ use kurbo::{
 };
 use paged_parse::PathAnchor;
 
-
 /// Stroke joins the wire/ops layer can request. Mirrors IDML's
 /// stroke-join vocabulary (miter/round/bevel).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,7 +240,6 @@ pub fn bezpath_to_anchors(path: &BezPath) -> (Vec<PathAnchor>, Vec<usize>, Vec<b
     (anchors, starts, open_flags)
 }
 
-
 fn kurbo_join(j: StrokeJoin) -> kurbo::Join {
     match j {
         StrokeJoin::Miter => kurbo::Join::Miter,
@@ -304,11 +302,7 @@ pub fn simplify_path(
         return None;
     }
     let path = anchors_to_bezpath(anchors, subpath_starts, subpath_open);
-    let simplified = simplify_bezpath(
-        path,
-        f64::from(tolerance),
-        &SimplifyOptions::default(),
-    );
+    let simplified = simplify_bezpath(path, f64::from(tolerance), &SimplifyOptions::default());
     let (a, s, o) = bezpath_to_anchors(&simplified);
     if a.len() < 2 {
         return None;
@@ -347,8 +341,7 @@ pub fn offset_closed_path(
     if anchors.len() < 3 || delta == 0.0 {
         return None;
     }
-    let single_closed =
-        subpath_starts.len() <= 1 && !subpath_open.iter().any(|open| *open);
+    let single_closed = subpath_starts.len() <= 1 && !subpath_open.iter().any(|open| *open);
     if !single_closed {
         return None; // single closed contour only, v1 by design
     }
@@ -368,21 +361,14 @@ pub fn offset_closed_path(
         for (s, e) in segment_pairs(anchors, subpath_starts, subpath_open) {
             let a = &anchors[s];
             let b = &anchors[e];
-            let curve = Curve::from_points(
-                c2(a.anchor),
-                (c2(a.right), c2(b.left)),
-                c2(b.anchor),
-            );
+            let curve = Curve::from_points(c2(a.anchor), (c2(a.right), c2(b.left)), c2(b.anchor));
             let pieces = offset(&curve, d, d);
             if pieces.is_empty() {
                 return None;
             }
             for (pi, piece) in pieces.iter().enumerate() {
-                let (ps, (cp1, cp2), pe) = (
-                    piece.start_point,
-                    piece.control_points,
-                    piece.end_point,
-                );
+                let (ps, (cp1, cp2), pe) =
+                    (piece.start_point, piece.control_points, piece.end_point);
                 if pi == 0 {
                     match (start, prev_end) {
                         (None, _) => start = Some(ps),
@@ -418,8 +404,7 @@ pub fn offset_closed_path(
         );
         segs.push((l1, l2, start));
         let raw: SimpleBezierPath = (start, segs);
-        let resolved: Vec<SimpleBezierPath> =
-            path_remove_interior_points(&vec![raw], 0.01);
+        let resolved: Vec<SimpleBezierPath> = path_remove_interior_points(&vec![raw], 0.01);
         if resolved.is_empty() {
             return None;
         }
@@ -432,9 +417,7 @@ pub fn offset_closed_path(
             if ce - cs < 3 {
                 continue;
             }
-            let area = anchors_to_bezpath(&ra[cs..ce], &[0], &[false])
-                .area()
-                .abs();
+            let area = anchors_to_bezpath(&ra[cs..ce], &[0], &[false]).area().abs();
             if best.map(|(ba, ..)| area > ba).unwrap_or(true) {
                 best = Some((area, cs, ce));
             }
@@ -444,8 +427,10 @@ pub fn offset_closed_path(
     };
 
     let d = f64::from(delta.abs());
-    let mut options: Vec<(Vec<PathAnchor>, f64)> =
-        [candidate(d), candidate(-d)].into_iter().flatten().collect();
+    let mut options: Vec<(Vec<PathAnchor>, f64)> = [candidate(d), candidate(-d)]
+        .into_iter()
+        .flatten()
+        .collect();
     let picked = if delta > 0.0 {
         options.retain(|(_, area)| *area > original_area + 1e-3);
         options.sort_by(|x, y| x.1.total_cmp(&y.1));
@@ -466,9 +451,7 @@ pub fn offset_closed_path(
         let min_clearance = picked
             .0
             .iter()
-            .filter_map(|a| {
-                nearest_point_on_path(anchors, subpath_starts, subpath_open, a.anchor)
-            })
+            .filter_map(|a| nearest_point_on_path(anchors, subpath_starts, subpath_open, a.anchor))
             .map(|hit| hit.distance)
             .fold(f32::MAX, f32::min);
         if min_clearance < delta.abs() * 0.9 {
@@ -580,10 +563,8 @@ mod tests {
     #[test]
     fn simplify_collapses_redundant_collinear_anchors() {
         // 11 anchors along one straight line → simplify to its ends.
-        let anchors: Vec<PathAnchor> =
-            (0..=10).map(|i| corner(i as f32 * 10.0, 0.0)).collect();
-        let (a, _s, o) =
-            simplify_path(&anchors, &[0], &[true], 0.25).expect("simplify");
+        let anchors: Vec<PathAnchor> = (0..=10).map(|i| corner(i as f32 * 10.0, 0.0)).collect();
+        let (a, _s, o) = simplify_path(&anchors, &[0], &[true], 0.25).expect("simplify");
         assert!(o[0], "stays open");
         assert!(
             a.len() <= 3,
@@ -591,24 +572,20 @@ mod tests {
             a.len()
         );
         assert!((pt(a[0].anchor) - Point::new(0.0, 0.0)).hypot() < 1e-3);
-        assert!(
-            (pt(a.last().unwrap().anchor) - Point::new(100.0, 0.0)).hypot() < 1e-3
-        );
+        assert!((pt(a.last().unwrap().anchor) - Point::new(100.0, 0.0)).hypot() < 1e-3);
     }
 
     #[test]
     fn offset_outset_and_inset_move_the_bbox_by_delta() {
         let (a, s, o) = square();
         let (oa, ..) =
-            offset_closed_path(&a, &s, &o, 10.0, StrokeJoin::Miter, 4.0)
-                .expect("outset");
+            offset_closed_path(&a, &s, &o, 10.0, StrokeJoin::Miter, 4.0).expect("outset");
         let (x0, y0, x1, y1) = bbox(&oa);
         assert!((x0 + 10.0).abs() < 0.5 && (y0 + 10.0).abs() < 0.5);
         assert!((x1 - 110.0).abs() < 0.5 && (y1 - 110.0).abs() < 0.5);
 
         let (ia, ..) =
-            offset_closed_path(&a, &s, &o, -10.0, StrokeJoin::Miter, 4.0)
-                .expect("inset");
+            offset_closed_path(&a, &s, &o, -10.0, StrokeJoin::Miter, 4.0).expect("inset");
         let (x0, y0, x1, y1) = bbox(&ia);
         assert!((x0 - 10.0).abs() < 0.5 && (y0 - 10.0).abs() < 0.5);
         assert!((x1 - 90.0).abs() < 0.5 && (y1 - 90.0).abs() < 0.5);
@@ -616,9 +593,14 @@ mod tests {
 
     #[test]
     fn offset_rejects_open_paths_and_total_inset() {
-        let open = (vec![corner(0.0, 0.0), corner(100.0, 0.0)], vec![0], vec![true]);
-        assert!(offset_closed_path(&open.0, &open.1, &open.2, 5.0, StrokeJoin::Miter, 4.0)
-            .is_none());
+        let open = (
+            vec![corner(0.0, 0.0), corner(100.0, 0.0)],
+            vec![0],
+            vec![true],
+        );
+        assert!(
+            offset_closed_path(&open.0, &open.1, &open.2, 5.0, StrokeJoin::Miter, 4.0).is_none()
+        );
         let (a, s, o) = square();
         assert!(
             offset_closed_path(&a, &s, &o, -60.0, StrokeJoin::Miter, 4.0).is_none(),
@@ -638,4 +620,3 @@ mod tests {
         assert!((hit.t - 0.5).abs() < 1e-2);
     }
 }
-

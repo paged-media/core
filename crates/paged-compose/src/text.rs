@@ -501,7 +501,12 @@ mod tests {
         // d (y-scale) doubles with VerticalScale=200%; a (x-scale) is
         // untouched. Both d's stay negative (the page-down y-flip).
         assert!(m1[3] < 0.0 && m2[3] < 0.0);
-        assert!((m2[3] - 2.0 * m1[3]).abs() < 1e-4, "d1={} d2={}", m1[3], m2[3]);
+        assert!(
+            (m2[3] - 2.0 * m1[3]).abs() < 1e-4,
+            "d1={} d2={}",
+            m1[3],
+            m2[3]
+        );
         assert!((m1[0] - m2[0]).abs() < 1e-4, "x-scale must not change");
     }
 
@@ -542,7 +547,12 @@ mod tests {
             other => panic!("expected FillPath, got {other:?}"),
         };
         let (m1, m2) = (aff(0), aff(1));
-        assert!((m2[0] - 2.0 * m1[0]).abs() < 1e-4, "a1={} a2={}", m1[0], m2[0]);
+        assert!(
+            (m2[0] - 2.0 * m1[0]).abs() < 1e-4,
+            "a1={} a2={}",
+            m1[0],
+            m2[0]
+        );
         assert!((m1[3] - m2[3]).abs() < 1e-4, "y-scale must not change");
     }
 

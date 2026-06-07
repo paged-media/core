@@ -74,8 +74,7 @@ pub struct WorkerCore {
     /// In-flight PDF export sessions, keyed by the id handed out in
     /// `ExportPdfBegun`. Cleared on `LoadDocument` (they own a build of
     /// the PREVIOUS scene).
-    pub export_sessions:
-        std::collections::HashMap<u32, paged_canvas::export::CanvasExportSession>,
+    pub export_sessions: std::collections::HashMap<u32, paged_canvas::export::CanvasExportSession>,
     /// Monotone id source for export sessions.
     pub next_export_session: u32,
 }
@@ -314,14 +313,14 @@ impl WorkerCore {
                     frame_id: result.frame_id,
                     story_id: result.story_id,
                     offset_within_story: result.offset_within_story,
-                    frame_bounds: result.frame_bounds.map(|b| {
-                        paged_canvas::channel::FrameBounds {
+                    frame_bounds: result
+                        .frame_bounds
+                        .map(|b| paged_canvas::channel::FrameBounds {
                             left: b[0],
                             top: b[1],
                             right: b[2],
                             bottom: b[3],
-                        }
-                    }),
+                        }),
                     element: result.element,
                     bounds: result.bounds,
                     item_transform: result.item_transform,
@@ -545,11 +544,8 @@ impl WorkerCore {
                 WorkerToMainKind::CollectionReply { name, items }
             }
             MainToWorkerKind::RequestDocumentMeta => {
-                let meta = self
-                    .model
-                    .as_ref()
-                    .map(|m| m.document_meta())
-                    .unwrap_or(paged_canvas::channel::DocumentMeta {
+                let meta = self.model.as_ref().map(|m| m.document_meta()).unwrap_or(
+                    paged_canvas::channel::DocumentMeta {
                         page_count: 0,
                         active_page: None,
                         units: String::new(),
@@ -567,7 +563,8 @@ impl WorkerCore {
                         proof_profile_name: None,
                         proof_simulate_paper_white: None,
                         use_standard_lab_for_spots: None,
-                    });
+                    },
+                );
                 WorkerToMainKind::DocumentMetaReply { meta }
             }
             MainToWorkerKind::RequestColorPreview { swatch_id } => {

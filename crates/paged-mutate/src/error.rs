@@ -56,10 +56,7 @@ pub enum OperationError {
     },
 
     #[error("parent {parent:?} cannot host a {child_kind} child")]
-    InvalidParent {
-        parent: NodeId,
-        child_kind: String,
-    },
+    InvalidParent { parent: NodeId, child_kind: String },
 
     #[error("position {position} out of range for parent {parent:?} (len {len})")]
     InvalidPosition {

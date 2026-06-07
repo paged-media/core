@@ -34,8 +34,8 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use paged_compose::{Color, DisplayList};
 use image::ImageEncoder;
+use paged_compose::{Color, DisplayList};
 use vello::kurbo;
 use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene};
 
@@ -152,8 +152,7 @@ impl SurfacePresenter {
         width: u32,
         height: u32,
     ) -> Result<Self, SurfaceError> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let surface = instance
             .create_surface(target)
             .map_err(|e| SurfaceError::CreateSurface(format!("{e:?}")))?;
@@ -371,12 +370,8 @@ impl SurfacePresenter {
         let surface_view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        self.blitter.copy(
-            &self.device,
-            &mut encoder,
-            &self.target_view,
-            &surface_view,
-        );
+        self.blitter
+            .copy(&self.device, &mut encoder, &self.target_view, &surface_view);
         self.queue.submit([encoder.finish()]);
         frame.present();
         Ok(())
@@ -445,12 +440,8 @@ impl SurfacePresenter {
         let surface_view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        self.blitter.copy(
-            &self.device,
-            &mut encoder,
-            &self.target_view,
-            &surface_view,
-        );
+        self.blitter
+            .copy(&self.device, &mut encoder, &self.target_view, &surface_view);
         self.queue.submit([encoder.finish()]);
         frame.present();
         Ok(())
@@ -504,12 +495,8 @@ impl SurfacePresenter {
         let surface_view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        self.blitter.copy(
-            &self.device,
-            &mut encoder,
-            &self.target_view,
-            &surface_view,
-        );
+        self.blitter
+            .copy(&self.device, &mut encoder, &self.target_view, &surface_view);
         self.queue.submit([encoder.finish()]);
 
         frame.present();
@@ -652,7 +639,9 @@ impl SurfacePresenter {
     ) -> Result<Vec<u8>, SurfaceError> {
         let width_px = width_px.max(1);
         let height_px = height_px.max(1);
-        let rgba = self.render_scene_to_rgba(scene, width_px, height_px).await?;
+        let rgba = self
+            .render_scene_to_rgba(scene, width_px, height_px)
+            .await?;
         let mut png_bytes = Vec::with_capacity(rgba.len() / 4);
         image::codecs::png::PngEncoder::new(&mut png_bytes)
             .write_image(&rgba, width_px, height_px, image::ExtendedColorType::Rgba8)

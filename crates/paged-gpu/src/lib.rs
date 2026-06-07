@@ -72,14 +72,14 @@ pub(crate) fn rgb_to_naive_cmyk_8bit(r: u8, g: u8, b: u8) -> (u8, u8, u8, u8) {
     (calc(r), calc(g), calc(b), k)
 }
 
+#[cfg(feature = "vello-backend")]
+pub mod cmyk_compute;
 #[cfg(feature = "cpu")]
 pub mod cpu;
 #[cfg(all(feature = "vello-backend", target_arch = "wasm32"))]
 pub mod surface;
 #[cfg(feature = "vello-backend")]
 pub mod vello_rs;
-#[cfg(feature = "vello-backend")]
-pub mod cmyk_compute;
 
 #[cfg(feature = "cpu")]
 pub use cpu::rasterize;
@@ -90,9 +90,9 @@ pub use surface::{SurfaceError, SurfacePresenter, Viewport};
 // Re-export vello::Scene so consumers (paged-canvas-wasm) don't need
 // vello as a direct dependency to hold cached scenes.
 #[cfg(all(feature = "vello-backend", target_arch = "wasm32"))]
-pub use vello::Scene as VelloScene;
-#[cfg(all(feature = "vello-backend", target_arch = "wasm32"))]
 pub use vello::kurbo as vello_kurbo;
+#[cfg(all(feature = "vello-backend", target_arch = "wasm32"))]
+pub use vello::Scene as VelloScene;
 #[cfg(feature = "vello-backend")]
 pub use vello_rs::VelloRasterizer;
 

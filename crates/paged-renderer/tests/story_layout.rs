@@ -33,8 +33,7 @@ fn font_dir() -> PathBuf {
 }
 
 fn read_font(name: &str) -> Vec<u8> {
-    std::fs::read(font_dir().join(name))
-        .unwrap_or_else(|e| panic!("read font fixture {name}: {e}"))
+    std::fs::read(font_dir().join(name)).unwrap_or_else(|e| panic!("read font fixture {name}: {e}"))
 }
 
 /// Single-page IDML with one paragraph hosted in a TextFrame whose
@@ -124,7 +123,10 @@ fn single_line_story_captures_one_line_with_clusters() {
     assert_eq!(first.story_id, "u10");
     assert_eq!(first.paragraph_idx, 0);
     assert_eq!(first.line_idx, 0);
-    assert_eq!(first.byte_range.start, 0, "line starts at paragraph offset 0");
+    assert_eq!(
+        first.byte_range.start, 0,
+        "line starts at paragraph offset 0"
+    );
 
     // Clusters: 17 source chars (counting the period); allowing for
     // any ligature coalescing, we expect at least 12 distinct

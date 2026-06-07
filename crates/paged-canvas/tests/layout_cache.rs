@@ -23,16 +23,15 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use paged_canvas::{CanvasModel, CanvasOptions};
 use paged_canvas::channel::Mutation;
+use paged_canvas::{CanvasModel, CanvasOptions};
 
 fn font_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts")
 }
 
 fn read_font(name: &str) -> Vec<u8> {
-    std::fs::read(font_dir().join(name))
-        .unwrap_or_else(|e| panic!("read font fixture {name}: {e}"))
+    std::fs::read(font_dir().join(name)).unwrap_or_else(|e| panic!("read font fixture {name}: {e}"))
 }
 
 /// Build an IDML with a single story containing `n` short paragraphs.
@@ -187,7 +186,10 @@ fn pages_for_story_updates_after_mutation() {
         })
         .unwrap();
     let after = model.pages_for_story("u10").to_vec();
-    assert_eq!(before, after, "story-pages map should survive a same-page edit");
+    assert_eq!(
+        before, after,
+        "story-pages map should survive a same-page edit"
+    );
 }
 
 #[test]

@@ -73,17 +73,17 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use paged_compose::{
-    BlendMode as ComposeBlendMode, Color as ComposeColor, DisplayCommand, DisplayList,
-    LayerEffect, LineCap, LineJoin, Paint, PathSegment,
+    BlendMode as ComposeBlendMode, Color as ComposeColor, DisplayCommand, DisplayList, LayerEffect,
+    LineCap, LineJoin, Paint, PathSegment,
 };
 use vello::kurbo::{self, Shape as KurboShape, Stroke as KurboStroke};
 use vello::peniko::{
-    BlendMode as PenikoBlendMode, Blob, BrushRef, Color as PenikoColor, ColorStop as PenikoColorStop,
-    Compose, Fill, Gradient as PenikoGradient, ImageAlphaType, ImageBrush, ImageData, ImageFormat,
-    Mix,
+    BlendMode as PenikoBlendMode, Blob, BrushRef, Color as PenikoColor,
+    ColorStop as PenikoColorStop, Compose, Fill, Gradient as PenikoGradient, ImageAlphaType,
+    ImageBrush, ImageData, ImageFormat, Mix,
 };
-use wgpu;
 use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene};
+use wgpu;
 
 use crate::{PathRasterizer, RasterOptions};
 
@@ -225,8 +225,7 @@ fn count_overprints(list: &DisplayList) -> usize {
 }
 
 fn init_gpu() -> Result<GpuState, String> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: None,
@@ -355,11 +354,7 @@ fn build_scene_with_transform_filtered(
                 layer_stack.push(LayerKind::Encoded);
             }
             DisplayCommand::PopClip(_) | DisplayCommand::EndBlendGroup(_) => {
-                pop_layer_or_blur(
-                    &mut scene_stack,
-                    &mut layer_stack,
-                    page_to_px,
-                );
+                pop_layer_or_blur(&mut scene_stack, &mut layer_stack, page_to_px);
             }
             DisplayCommand::BeginBlendGroup {
                 bounds,
@@ -431,11 +426,7 @@ fn build_scene_with_transform_filtered(
                 }
             },
             DisplayCommand::PopLayer(_) => {
-                pop_layer_or_blur(
-                    &mut scene_stack,
-                    &mut layer_stack,
-                    page_to_px,
-                );
+                pop_layer_or_blur(&mut scene_stack, &mut layer_stack, page_to_px);
             }
             DisplayCommand::FillPath {
                 path_id,
@@ -607,12 +598,7 @@ fn build_scene_with_transform_filtered(
                 let inv_h = 1.0 / img.height as f64;
                 let [a, b, c, d, tx, ty] = transform.0;
                 let unit_to_page = kurbo::Affine::new([
-                    a as f64,
-                    b as f64,
-                    c as f64,
-                    d as f64,
-                    tx as f64,
-                    ty as f64,
+                    a as f64, b as f64, c as f64, d as f64, tx as f64, ty as f64,
                 ]);
                 let pixel_to_unit = kurbo::Affine::scale_non_uniform(inv_w, inv_h);
                 let pixel_to_px = page_to_px * unit_to_page * pixel_to_unit;
@@ -819,22 +805,8 @@ fn build_scene_with_transform_filtered(
                 b.0[5] -= dy;
                 let path_b = path_to_bez(path_data, &b);
                 let blend = blend_to_peniko(params.blend_mode);
-                stamp_blurred_path(
-                    scene,
-                    page_to_px,
-                    &path_a,
-                    color,
-                    params.blur_radius,
-                    blend,
-                );
-                stamp_blurred_path(
-                    scene,
-                    page_to_px,
-                    &path_b,
-                    color,
-                    params.blur_radius,
-                    blend,
-                );
+                stamp_blurred_path(scene, page_to_px, &path_a, color, params.blur_radius, blend);
+                stamp_blurred_path(scene, page_to_px, &path_b, color, params.blur_radius, blend);
                 scene.pop_layer();
             }
             DisplayCommand::Feather {
@@ -1060,13 +1032,7 @@ fn pop_layer_or_blur(
                 .last_mut()
                 .expect("Blurred layer with no parent scene");
             emit_blurred_layer(
-                parent,
-                page_to_px,
-                &sub,
-                sigma_pt,
-                bounds,
-                blend_mode,
-                opacity,
+                parent, page_to_px, &sub, sigma_pt, bounds, blend_mode, opacity,
             );
         }
     }
@@ -1184,20 +1150,11 @@ fn emit_blurred_layer(
             if w < 1.0e-3 {
                 continue;
             }
-            parent.push_layer(
-                Fill::NonZero,
-                plus,
-                w,
-                page_to_px,
-                &outer_clip,
-            );
+            parent.push_layer(Fill::NonZero, plus, w, page_to_px, &outer_clip);
             // Translation is in page-pt because the captured sub-scene
             // emitted its commands in page-pt space (the outer
             // `page_to_px` transform applies at draw time).
-            parent.append(
-                sub,
-                Some(kurbo::Affine::translate((dx as f64, dy as f64))),
-            );
+            parent.append(sub, Some(kurbo::Affine::translate((dx as f64, dy as f64))));
             parent.pop_layer();
         }
     }
@@ -2018,30 +1975,30 @@ fn build_overprint_batches(list: &DisplayList) -> Vec<OverprintBatch> {
             _ => continue,
         };
         let (ink_mask_packed, spot_id, spot_tint_8) = match paint {
-            Paint::Cmyk { c, m, y, k, spot, .. } => {
-                let pack =
-                    crate::cmyk_compute::pack_cmyk_unit([*c, *m, *y, *k]);
+            Paint::Cmyk {
+                c, m, y, k, spot, ..
+            } => {
+                let pack = crate::cmyk_compute::pack_cmyk_unit([*c, *m, *y, *k]);
                 match spot {
                     Some(paged_compose::SpotInkId(id)) => {
                         // Spot tint = max ink channel / max alternate
                         // channel, per the CPU rasterizer's logic in
                         // `compose_cmyk_overprint_dispatch`.
-                        let tint_unit = if let Some(ink) =
-                            list.spot_ink(paged_compose::SpotInkId(*id))
-                        {
-                            let alt_max = ink
-                                .cmyk_alternate
-                                .iter()
-                                .map(|v| *v as f32 / 255.0)
-                                .fold(0.0_f32, f32::max);
-                            if alt_max <= f32::EPSILON {
-                                0.0
+                        let tint_unit =
+                            if let Some(ink) = list.spot_ink(paged_compose::SpotInkId(*id)) {
+                                let alt_max = ink
+                                    .cmyk_alternate
+                                    .iter()
+                                    .map(|v| *v as f32 / 255.0)
+                                    .fold(0.0_f32, f32::max);
+                                if alt_max <= f32::EPSILON {
+                                    0.0
+                                } else {
+                                    (c.max(*m).max(*y).max(*k) / alt_max).clamp(0.0, 1.0)
+                                }
                             } else {
-                                (c.max(*m).max(*y).max(*k) / alt_max).clamp(0.0, 1.0)
-                            }
-                        } else {
-                            0.0
-                        };
+                                0.0
+                            };
                         let tint_8 = (tint_unit * 255.0).round() as u32;
                         (pack, Some(*id), tint_8)
                     }
@@ -2113,13 +2070,7 @@ fn build_overprint_batch_scene(
                 .with_caps(map_cap(stroke.cap))
                 .with_join(map_join(stroke.join))
                 .with_miter_limit(stroke.miter_limit.max(1.0) as f64);
-            scene.stroke(
-                &ks,
-                page_to_px,
-                BrushRef::Solid(opaque_white),
-                None,
-                &bez,
-            );
+            scene.stroke(&ks, page_to_px, BrushRef::Solid(opaque_white), None, &bez);
         } else {
             scene.fill(
                 Fill::NonZero,
@@ -2368,9 +2319,8 @@ fn resolve_paint(
                     color: linear_to_peniko(s.color).into(),
                 })
                 .collect();
-            let pg =
-                PenikoGradient::new_radial(kurbo::Point::new(cx as f64, cy as f64), radius)
-                    .with_stops(stops.as_slice());
+            let pg = PenikoGradient::new_radial(kurbo::Point::new(cx as f64, cy as f64), radius)
+                .with_stops(stops.as_slice());
             Some(VelloBrush::Gradient(pg))
         }
     }
@@ -2478,10 +2428,18 @@ mod tests {
 
         // A simple unit-rect path used for both clip and group bounds.
         let mut rect_path = PathData::default();
-        rect_path.segments.push(PathSegment::MoveTo { x: 0.0, y: 0.0 });
-        rect_path.segments.push(PathSegment::LineTo { x: 1.0, y: 0.0 });
-        rect_path.segments.push(PathSegment::LineTo { x: 1.0, y: 1.0 });
-        rect_path.segments.push(PathSegment::LineTo { x: 0.0, y: 1.0 });
+        rect_path
+            .segments
+            .push(PathSegment::MoveTo { x: 0.0, y: 0.0 });
+        rect_path
+            .segments
+            .push(PathSegment::LineTo { x: 1.0, y: 0.0 });
+        rect_path
+            .segments
+            .push(PathSegment::LineTo { x: 1.0, y: 1.0 });
+        rect_path
+            .segments
+            .push(PathSegment::LineTo { x: 0.0, y: 1.0 });
         rect_path.segments.push(PathSegment::Close);
         let rect_id = list.paths.push_anon(rect_path);
 
@@ -2534,10 +2492,10 @@ mod tests {
             paint: Paint::RadialGradient(radial_id),
             transform: Transform([15.0, 0.0, 0.0, 15.0, 6.0, 6.0]),
         });
-        list.commands.push(DisplayCommand::EndBlendGroup(
-            Transform::IDENTITY,
-        ));
-        list.commands.push(DisplayCommand::PopClip(Transform::IDENTITY));
+        list.commands
+            .push(DisplayCommand::EndBlendGroup(Transform::IDENTITY));
+        list.commands
+            .push(DisplayCommand::PopClip(Transform::IDENTITY));
 
         // Encoding shouldn't panic. We don't dig into Scene internals;
         // a successful return is enough to verify the variants are
@@ -2560,10 +2518,18 @@ mod tests {
 
         let mut list = DisplayList::new();
         let mut rect_path = PathData::default();
-        rect_path.segments.push(PathSegment::MoveTo { x: 0.0, y: 0.0 });
-        rect_path.segments.push(PathSegment::LineTo { x: 1.0, y: 0.0 });
-        rect_path.segments.push(PathSegment::LineTo { x: 1.0, y: 1.0 });
-        rect_path.segments.push(PathSegment::LineTo { x: 0.0, y: 1.0 });
+        rect_path
+            .segments
+            .push(PathSegment::MoveTo { x: 0.0, y: 0.0 });
+        rect_path
+            .segments
+            .push(PathSegment::LineTo { x: 1.0, y: 0.0 });
+        rect_path
+            .segments
+            .push(PathSegment::LineTo { x: 1.0, y: 1.0 });
+        rect_path
+            .segments
+            .push(PathSegment::LineTo { x: 0.0, y: 1.0 });
         rect_path.segments.push(PathSegment::Close);
         let rect_id = list.paths.push_anon(rect_path);
 
@@ -2669,10 +2635,18 @@ mod tests {
 
         let mut list = DisplayList::new();
         let mut rect_path = PathData::default();
-        rect_path.segments.push(PathSegment::MoveTo { x: 0.0, y: 0.0 });
-        rect_path.segments.push(PathSegment::LineTo { x: 1.0, y: 0.0 });
-        rect_path.segments.push(PathSegment::LineTo { x: 1.0, y: 1.0 });
-        rect_path.segments.push(PathSegment::LineTo { x: 0.0, y: 1.0 });
+        rect_path
+            .segments
+            .push(PathSegment::MoveTo { x: 0.0, y: 0.0 });
+        rect_path
+            .segments
+            .push(PathSegment::LineTo { x: 1.0, y: 0.0 });
+        rect_path
+            .segments
+            .push(PathSegment::LineTo { x: 1.0, y: 1.0 });
+        rect_path
+            .segments
+            .push(PathSegment::LineTo { x: 0.0, y: 1.0 });
         rect_path.segments.push(PathSegment::Close);
         let rect_id = list.paths.push_anon(rect_path);
 
@@ -2693,7 +2667,8 @@ mod tests {
             paint: Paint::Solid(DLColor::rgba(0.0, 0.0, 0.0, 1.0)),
             transform: Transform([20.0, 0.0, 0.0, 20.0, 10.0, 10.0]),
         });
-        list.commands.push(DisplayCommand::PopLayer(Transform::IDENTITY));
+        list.commands
+            .push(DisplayCommand::PopLayer(Transform::IDENTITY));
 
         let _ = build_scene_with_transform(&list, kurbo::Affine::scale(1.0));
     }
@@ -2717,10 +2692,18 @@ mod tests {
 
         let mut list = DisplayList::new();
         let mut rect_path = PathData::default();
-        rect_path.segments.push(PathSegment::MoveTo { x: 0.0, y: 0.0 });
-        rect_path.segments.push(PathSegment::LineTo { x: 1.0, y: 0.0 });
-        rect_path.segments.push(PathSegment::LineTo { x: 1.0, y: 1.0 });
-        rect_path.segments.push(PathSegment::LineTo { x: 0.0, y: 1.0 });
+        rect_path
+            .segments
+            .push(PathSegment::MoveTo { x: 0.0, y: 0.0 });
+        rect_path
+            .segments
+            .push(PathSegment::LineTo { x: 1.0, y: 0.0 });
+        rect_path
+            .segments
+            .push(PathSegment::LineTo { x: 1.0, y: 1.0 });
+        rect_path
+            .segments
+            .push(PathSegment::LineTo { x: 0.0, y: 1.0 });
         rect_path.segments.push(PathSegment::Close);
         let rect_id = list.paths.push_anon(rect_path);
 
@@ -2742,7 +2725,8 @@ mod tests {
             paint: Paint::Solid(DLColor::rgba(0.0, 0.0, 0.0, 1.0)),
             transform: Transform([40.0, 0.0, 0.0, 40.0, 20.0, 20.0]),
         });
-        list.commands.push(DisplayCommand::PopLayer(Transform::IDENTITY));
+        list.commands
+            .push(DisplayCommand::PopLayer(Transform::IDENTITY));
 
         let v = VelloRasterizer::new();
         let mut opts = RasterOptions::new(80.0, 80.0);
@@ -2842,9 +2826,7 @@ mod tests {
     struct CmykTestLock(std::sync::MutexGuard<'static, ()>);
     impl CmykTestLock {
         fn acquire() -> Self {
-            let lock = CMYK_TEST_LOCK
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
+            let lock = CMYK_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
             // Reset to a known state on entry; a poisoned lock could
             // leave the flag set from a previous panic.
             crate::cmyk_compute::FORCE_COMPUTE_PATH
@@ -3042,7 +3024,8 @@ mod tests {
             paint: Paint::Solid(DLColor::rgba(0.0, 0.4, 0.8, 1.0)),
             transform: Transform([30.0, 0.0, 0.0, 30.0, 5.0, 5.0]),
         });
-        list.commands.push(DisplayCommand::EndBlendGroup(Transform::IDENTITY));
+        list.commands
+            .push(DisplayCommand::EndBlendGroup(Transform::IDENTITY));
         // Quiet the unused path warning for tests on no-effect paths.
         let _ = PathSegment::Close;
         let _ = PathData::default();
@@ -3074,9 +3057,7 @@ mod tests {
         // passthrough). Text-covered pixels must darken (K plane
         // splat) vs. the baseline image-only render.
         let _lock = CmykTestLock::acquire();
-        use paged_compose::{
-            Color as DLColor, DecodedImage, DisplayCommand, Paint, Transform,
-        };
+        use paged_compose::{Color as DLColor, DecodedImage, DisplayCommand, Paint, Transform};
         let mut list = paged_compose::DisplayList::new();
         let rect_id = unit_rect_path(&mut list);
         // 1×1 red image; the placement transform scales it across
@@ -3146,9 +3127,7 @@ mod tests {
         let inside_b = at(&baseline_buf, 20, 20);
         let inside = at(&buf, 20, 20);
         assert!(
-            inside[0] < inside_b[0]
-                && inside[1] < inside_b[1]
-                && inside[2] < inside_b[2],
+            inside[0] < inside_b[0] && inside[1] < inside_b[1] && inside[2] < inside_b[2],
             "K overprint should darken every channel; before={inside_b:?} after={inside:?}"
         );
     }
@@ -3158,9 +3137,7 @@ mod tests {
         // Two overprint draws of the same spot ink at 50% and 80%
         // tints. The union pixel should reflect 80% — `max(50%, 80%)`.
         // We assert by comparing to a single-draw 80% pixel.
-        use paged_compose::{
-            Color as DLColor, DisplayCommand, Paint, SpotInk, Transform,
-        };
+        use paged_compose::{Color as DLColor, DisplayCommand, Paint, SpotInk, Transform};
         let _lock = CmykTestLock::acquire();
         let _force = ForceComputeScope::engage();
         // Spot with strong cyan alternate (so any tint is visible).
@@ -3237,9 +3214,7 @@ mod tests {
         // verify each ink reads back from the right channel by drawing
         // 5 overprints in disjoint regions and checking that each
         // region shows a distinct visible colour matching its alt.
-        use paged_compose::{
-            Color as DLColor, DisplayCommand, Paint, SpotInk, Transform,
-        };
+        use paged_compose::{Color as DLColor, DisplayCommand, Paint, SpotInk, Transform};
         let _lock = CmykTestLock::acquire();
         let _force = ForceComputeScope::engage();
         let mut list = paged_compose::DisplayList::new();
@@ -3399,6 +3374,9 @@ mod tests {
         // Some colour at the interior — the rect is filled with
         // something rather than left at background or zero.
         let nonzero = interior[0] > 0 || interior[1] > 0 || interior[2] > 0;
-        assert!(nonzero, "knockout fallback produced black, got {interior:?}");
+        assert!(
+            nonzero,
+            "knockout fallback produced black, got {interior:?}"
+        );
     }
 }

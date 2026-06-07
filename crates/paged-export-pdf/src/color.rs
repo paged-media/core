@@ -45,7 +45,11 @@ pub fn linear_to_srgb(v: f32) -> f32 {
 }
 
 fn srgb_of(c: Color) -> [f32; 3] {
-    [linear_to_srgb(c.r), linear_to_srgb(c.g), linear_to_srgb(c.b)]
+    [
+        linear_to_srgb(c.r),
+        linear_to_srgb(c.g),
+        linear_to_srgb(c.b),
+    ]
 }
 
 /// Resolve the effective spot handling for a paint after the Ink
@@ -83,7 +87,14 @@ pub fn set_fill_paint(
             set_solid(content, state, resources, input, *c, false);
             true
         }
-        Paint::Cmyk { c, m, y, k, spot, rgb: _ } => {
+        Paint::Cmyk {
+            c,
+            m,
+            y,
+            k,
+            spot,
+            rgb: _,
+        } => {
             let spot_ink = spot
                 .and_then(|id| list_spot_inks.get(id.0 as usize))
                 .and_then(|s| effective_spot(s, &input.inks, list_spot_inks));
@@ -126,16 +137,23 @@ pub fn set_stroke_paint(
             set_solid(content, state, resources, input, *c, true);
             true
         }
-        Paint::Cmyk { c, m, y, k, spot, rgb: _ } => {
+        Paint::Cmyk {
+            c,
+            m,
+            y,
+            k,
+            spot,
+            rgb: _,
+        } => {
             let spot_ink = spot
                 .and_then(|id| list_spot_inks.get(id.0 as usize))
                 .and_then(|s| effective_spot(s, &input.inks, list_spot_inks));
             match spot_ink {
                 Some(ink) => {
                     let cs_name = separation_space(state, resources, input, ink);
-                    content.set_stroke_color_space(
-                        pdf_writer::types::ColorSpaceOperand::Named(Name(cs_name.as_bytes())),
-                    );
+                    content.set_stroke_color_space(pdf_writer::types::ColorSpaceOperand::Named(
+                        Name(cs_name.as_bytes()),
+                    ));
                     let t = separation_tint(ink, [*c, *m, *y, *k]);
                     content.set_stroke_color([t]);
                 }
@@ -172,7 +190,14 @@ fn set_solid(
         }
         paged_color::WorkingColor::Gray(pct) => {
             // Defensive — the seam never returns Gray today.
-            set_cmyk(content, state, resources, input, [0.0, 0.0, 0.0, pct / 100.0], stroke);
+            set_cmyk(
+                content,
+                state,
+                resources,
+                input,
+                [0.0, 0.0, 0.0, pct / 100.0],
+                stroke,
+            );
         }
         // Rgb passthrough (and Lab, which cannot arise from an Rgb
         // input — encode its analytic sRGB if it ever does).
@@ -218,8 +243,7 @@ fn set_cmyk(
 ) {
     match cmyk_space(state, resources, input) {
         Some(name) => {
-            let operand =
-                pdf_writer::types::ColorSpaceOperand::Named(Name(name.as_bytes()));
+            let operand = pdf_writer::types::ColorSpaceOperand::Named(Name(name.as_bytes()));
             if stroke {
                 content.set_stroke_color_space(operand);
                 content.set_stroke_color(cmyk);
@@ -368,23 +392,22 @@ fn separation_space(
             cs_ref
         }
     };
-    intern_space(resources, &format!("CsSep{}", short_hash(&colorant)), cs_ref)
+    intern_space(
+        resources,
+        &format!("CsSep{}", short_hash(&colorant)),
+        cs_ref,
+    )
 }
 
 /// `/Separation /All` for registration content (printer marks hit
 /// every plate).
-pub fn registration_all_space(
-    state: &mut DocState,
-    resources: &mut PageResources,
-) -> String {
+pub fn registration_all_space(state: &mut DocState, resources: &mut PageResources) -> String {
     let cs_ref = match state.separation_pool.get("\u{0}All") {
         Some(r) => *r,
         None => {
             let fn_ref = state.refs.alloc();
             {
-                let mut f = state
-                    .pdf
-                    .post_script_function(fn_ref, b"{ dup dup dup }");
+                let mut f = state.pdf.post_script_function(fn_ref, b"{ dup dup dup }");
                 f.domain([0.0, 1.0]);
                 f.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
                 f.finish();
@@ -476,11 +499,18 @@ fn write_shading(
     // Build the colour function: a single Type-2 for two stops, a
     // Type-3 stitch otherwise. Stops are sRGB-encoded here.
     let mut sorted: Vec<&paged_compose::GradientStop> = stops.iter().collect();
-    sorted.sort_by(|a, b| a.offset.partial_cmp(&b.offset).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| {
+        a.offset
+            .partial_cmp(&b.offset)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let fn_ref = state.refs.alloc();
     if sorted.len() <= 1 {
-        let c = sorted.first().map(|s| srgb_of(s.color)).unwrap_or([0.0, 0.0, 0.0]);
+        let c = sorted
+            .first()
+            .map(|s| srgb_of(s.color))
+            .unwrap_or([0.0, 0.0, 0.0]);
         let mut f = state.pdf.exponential_function(fn_ref);
         f.domain([0.0, 1.0]);
         f.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
@@ -514,7 +544,10 @@ fn write_shading(
         f.domain([0.0, 1.0]);
         f.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
         f.functions(seg_refs.iter().copied());
-        let bounds: Vec<f32> = sorted[1..sorted.len() - 1].iter().map(|s| s.offset).collect();
+        let bounds: Vec<f32> = sorted[1..sorted.len() - 1]
+            .iter()
+            .map(|s| s.offset)
+            .collect();
         f.bounds(bounds.iter().copied());
         let encode: Vec<f32> = seg_refs.iter().flat_map(|_| [0.0, 1.0]).collect();
         f.encode(encode.iter().copied());

@@ -151,7 +151,11 @@ fn spreads_collection_carries_guides_after_insert_guide() {
     // The spreads collection now reflects the live guide.
     let after = spreads_collection(&m);
     let guides: &[GuideSummary] = &after[0].guides;
-    assert_eq!(guides.len(), 1, "one live guide after insert; got {guides:?}");
+    assert_eq!(
+        guides.len(),
+        1,
+        "one live guide after insert; got {guides:?}"
+    );
     assert_eq!(guides[0].id, "Guide/s1/0", "positional id matches mint");
     assert!((guides[0].position - 144.0).abs() < 1e-3);
     assert_eq!(guides[0].page_index, 0);
@@ -261,7 +265,10 @@ fn frame_flip_v_entry_present_and_round_trips_through_apply() {
 
     let props = m.element_properties(&id).expect("props after flip");
     assert!(
-        props.entries.iter().any(|e| e.path == PropertyPath::FrameFlipV),
+        props
+            .entries
+            .iter()
+            .any(|e| e.path == PropertyPath::FrameFlipV),
         "FrameFlipV entry still present after the apply",
     );
     assert_eq!(
@@ -326,5 +333,8 @@ fn stories_collection_returns_summaries_with_overset_flags() {
 
     // The string round-trips through CollectionName::from_str (the
     // path paged.collection("stories") takes).
-    assert_eq!(CollectionName::from_str("stories"), Some(CollectionName::Stories));
+    assert_eq!(
+        CollectionName::from_str("stories"),
+        Some(CollectionName::Stories)
+    );
 }

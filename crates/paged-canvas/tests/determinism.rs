@@ -17,9 +17,7 @@
 
 use std::io::Write;
 
-use paged_canvas::{
-    channel::Mutation, mutate::TextOp, CanvasModel, CanvasOptions,
-};
+use paged_canvas::{channel::Mutation, mutate::TextOp, CanvasModel, CanvasOptions};
 
 fn small_idml() -> Vec<u8> {
     let mut buf = Vec::new();

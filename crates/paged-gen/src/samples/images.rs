@@ -132,7 +132,12 @@ fn variants() -> Vec<Variant> {
         Variant {
             name: "images · fit · None",
             fitting: "None",
-            crops: (0.0, 0.0, FRAME_W_PT - IMG_NATIVE_PX, FRAME_H_PT - IMG_NATIVE_PX),
+            crops: (
+                0.0,
+                0.0,
+                FRAME_W_PT - IMG_NATIVE_PX,
+                FRAME_H_PT - IMG_NATIVE_PX,
+            ),
             extra_transform: None,
             link_uri: None,
             image_native_pt: None,
@@ -448,8 +453,14 @@ pub fn build() -> Sample {
                 right_crop: rc,
                 bottom_crop: bc,
                 image_self_id: image_id,
-                image_w_pt: variant.image_native_pt.map(|(w, _)| w).unwrap_or(IMG_NATIVE_PX),
-                image_h_pt: variant.image_native_pt.map(|(_, h)| h).unwrap_or(IMG_NATIVE_PX),
+                image_w_pt: variant
+                    .image_native_pt
+                    .map(|(w, _)| w)
+                    .unwrap_or(IMG_NATIVE_PX),
+                image_h_pt: variant
+                    .image_native_pt
+                    .map(|(_, h)| h)
+                    .unwrap_or(IMG_NATIVE_PX),
                 image_item_transform: variant.image_transform,
                 effective_ppi: variant.effective_ppi,
                 actual_ppi: None,

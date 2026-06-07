@@ -99,7 +99,14 @@ pub(crate) fn fill_paint_module(
         _ => fill,
     };
     let start = page.list.commands.len();
-    emit_filled(&frame.geometry, page, fill, BlendMode::Normal, outer, fill_path);
+    emit_filled(
+        &frame.geometry,
+        page,
+        fill,
+        BlendMode::Normal,
+        outer,
+        fill_path,
+    );
     rewrite_tail_for_overprint(page, start, frame.overprint_fill, false);
 }
 
@@ -174,7 +181,12 @@ mod tests {
             ],
         });
         let mut page = page_with(list);
-        let bbox = Rect { x: 10.0, y: 20.0, w: 100.0, h: 200.0 };
+        let bbox = Rect {
+            x: 10.0,
+            y: 20.0,
+            w: 100.0,
+            h: 200.0,
+        };
 
         rebase_radial_gradient_to_bbox(&mut page, gid, bbox);
 

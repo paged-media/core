@@ -69,23 +69,27 @@ pub(super) fn emit_oval_into(
     // outer affine, mirroring how `emit_ellipse_transformed` builds
     // the fill itself. `effects_unit_normalize = Some(rect)` flags the
     // effects module to treat path-local coords as unit-ellipse space.
-    let (effects_path, effects_xform, effects_unit_normalize) =
-        if oval.effects.is_some() {
-            if let Geometry::Oval { rect: r } = &frame.geometry {
-                let (id, _) = page
-                    .list
-                    .paths
-                    .intern(paged_compose::UNIT_ELLIPSE_KEY, paged_compose::unit_ellipse());
-                (Some(id), Transform::for_rect_in(*r, outer), Some(*r))
-            } else {
-                (None, outer, None)
-            }
+    let (effects_path, effects_xform, effects_unit_normalize) = if oval.effects.is_some() {
+        if let Geometry::Oval { rect: r } = &frame.geometry {
+            let (id, _) = page.list.paths.intern(
+                paged_compose::UNIT_ELLIPSE_KEY,
+                paged_compose::unit_ellipse(),
+            );
+            (Some(id), Transform::for_rect_in(*r, outer), Some(*r))
         } else {
             (None, outer, None)
-        };
+        }
+    } else {
+        (None, outer, None)
+    };
     if let (Some(pid), Some(effects)) = (effects_path, oval.effects.as_ref()) {
         crate::module::emit_effects_pre_fill(
-            page, effects, pid, effects_xform, palette, cmyk_xform,
+            page,
+            effects,
+            pid,
+            effects_xform,
+            palette,
+            cmyk_xform,
         );
     }
     crate::module::fill_paint_module(&frame, page, palette, cmyk_xform, fallback, outer, None);
@@ -366,11 +370,7 @@ pub(super) fn emit_line_into(
                 page,
                 line.start_arrow,
                 a0,
-                path_end_outward_dir(
-                    a0,
-                    line.anchors[0].right,
-                    line.anchors[1].anchor,
-                ),
+                path_end_outward_dir(a0, line.anchors[0].right, line.anchors[1].anchor),
                 stroke_width,
                 line.start_arrow_scale,
                 stroke_paint,
@@ -383,11 +383,7 @@ pub(super) fn emit_line_into(
                 page,
                 line.end_arrow,
                 an,
-                path_end_outward_dir(
-                    an,
-                    line.anchors[n - 1].left,
-                    line.anchors[n - 2].anchor,
-                ),
+                path_end_outward_dir(an, line.anchors[n - 1].left, line.anchors[n - 2].anchor),
                 stroke_width,
                 line.end_arrow_scale,
                 stroke_paint,
@@ -497,8 +493,11 @@ fn emit_rectangle_polygon_path(
     // W1.2: striped / wavy / gap-colour styled stroke on the polygon
     // outline. Polygon stroke alignment stays centred (open contours
     // can't be safely inset/outset; documented in `stroke_geom`).
-    let class =
-        classify_stroke_style(resolved.stroke_type, stroke_width, &document.styles.stroke_styles);
+    let class = classify_stroke_style(
+        resolved.stroke_type,
+        stroke_width,
+        &document.styles.stroke_styles,
+    );
     // FINDING #7.5 — a per-frame GapColor turns a dashed/dotted stroke
     // (whose gaps would otherwise show the page) into a gap-filled
     // styled stroke even when the style def declares no gap colour.
@@ -621,10 +620,9 @@ pub(super) fn emit_rectangle_into(
     let (effects_path, effects_xform, effects_unit_normalize) = match corner.fill {
         Some(id) => (id, outer, None),
         None => {
-            let (id, _) = page
-                .list
-                .paths
-                .intern(paged_compose::UNIT_RECT_KEY, paged_compose::PathData {
+            let (id, _) = page.list.paths.intern(
+                paged_compose::UNIT_RECT_KEY,
+                paged_compose::PathData {
                     segments: vec![
                         paged_compose::PathSegment::MoveTo { x: 0.0, y: 0.0 },
                         paged_compose::PathSegment::LineTo { x: 1.0, y: 0.0 },
@@ -632,18 +630,30 @@ pub(super) fn emit_rectangle_into(
                         paged_compose::PathSegment::LineTo { x: 0.0, y: 1.0 },
                         paged_compose::PathSegment::Close,
                     ],
-                });
+                },
+            );
             (id, Transform::for_rect_in(r, outer), Some(r))
         }
     };
     if let Some(effects) = rect.effects.as_ref() {
         crate::module::emit_effects_pre_fill(
-            page, effects, effects_path, effects_xform, palette, cmyk_xform,
+            page,
+            effects,
+            effects_path,
+            effects_xform,
+            palette,
+            cmyk_xform,
         );
     }
 
     crate::module::fill_paint_module(
-        &resolved, page, palette, cmyk_xform, fallback, outer, corner.fill,
+        &resolved,
+        page,
+        palette,
+        cmyk_xform,
+        fallback,
+        outer,
+        corner.fill,
     );
 
     if let Some(effects) = rect.effects.as_ref() {
@@ -761,9 +771,18 @@ pub(crate) fn axis_rect_path(r: Rect) -> paged_compose::PathData {
     paged_compose::PathData {
         segments: vec![
             MoveTo { x: r.x, y: r.y },
-            LineTo { x: r.x + r.w, y: r.y },
-            LineTo { x: r.x + r.w, y: r.y + r.h },
-            LineTo { x: r.x, y: r.y + r.h },
+            LineTo {
+                x: r.x + r.w,
+                y: r.y,
+            },
+            LineTo {
+                x: r.x + r.w,
+                y: r.y + r.h,
+            },
+            LineTo {
+                x: r.x,
+                y: r.y + r.h,
+            },
             Close,
         ],
     }
@@ -956,27 +975,66 @@ fn builtin_stripe_fractions(name: &str) -> Option<Vec<paged_parse::StripeDef>> {
     use paged_parse::StripeDef as S;
     let v = match name {
         "Thick - Thin" | "Thick-Thin" | "ThickThin" => vec![
-            S { left: 0.0, width: 0.6 },
-            S { left: 0.8, width: 0.2 },
+            S {
+                left: 0.0,
+                width: 0.6,
+            },
+            S {
+                left: 0.8,
+                width: 0.2,
+            },
         ],
         "Thin - Thick" | "Thin-Thick" | "ThinThick" => vec![
-            S { left: 0.0, width: 0.2 },
-            S { left: 0.4, width: 0.6 },
+            S {
+                left: 0.0,
+                width: 0.2,
+            },
+            S {
+                left: 0.4,
+                width: 0.6,
+            },
         ],
         "Thick - Thin - Thick" | "ThickThinThick" => vec![
-            S { left: 0.0, width: 0.25 },
-            S { left: 0.4, width: 0.2 },
-            S { left: 0.75, width: 0.25 },
+            S {
+                left: 0.0,
+                width: 0.25,
+            },
+            S {
+                left: 0.4,
+                width: 0.2,
+            },
+            S {
+                left: 0.75,
+                width: 0.25,
+            },
         ],
         "Thin - Thick - Thin" | "ThinThickThin" => vec![
-            S { left: 0.0, width: 0.2 },
-            S { left: 0.35, width: 0.3 },
-            S { left: 0.8, width: 0.2 },
+            S {
+                left: 0.0,
+                width: 0.2,
+            },
+            S {
+                left: 0.35,
+                width: 0.3,
+            },
+            S {
+                left: 0.8,
+                width: 0.2,
+            },
         ],
         "Triple" => vec![
-            S { left: 0.0, width: 0.25 },
-            S { left: 0.375, width: 0.25 },
-            S { left: 0.75, width: 0.25 },
+            S {
+                left: 0.0,
+                width: 0.25,
+            },
+            S {
+                left: 0.375,
+                width: 0.25,
+            },
+            S {
+                left: 0.75,
+                width: 0.25,
+            },
         ],
         _ => return None,
     };
@@ -1079,10 +1137,8 @@ pub(crate) fn emit_styled_stroke(
                     if path.is_empty() {
                         continue;
                     }
-                    let key = cache_seed
-                        ^ 0x57A1_0000
-                        ^ ((stripe_idx as u64) << 8)
-                        ^ (line_idx as u64);
+                    let key =
+                        cache_seed ^ 0x57A1_0000 ^ ((stripe_idx as u64) << 8) ^ (line_idx as u64);
                     let (path_id, _) = page.list.paths.intern(key, path);
                     page.list.push(paged_compose::DisplayCommand::StrokePath {
                         path_id,
@@ -1205,10 +1261,7 @@ pub(crate) fn per_corner_radii(
         if !rounds {
             continue;
         }
-        let r = spec
-            .radius
-            .or(corner_radius)
-            .filter(|r| *r > 0.0);
+        let r = spec.radius.or(corner_radius).filter(|r| *r > 0.0);
         // When the per-corner spec carries an option but no explicit
         // radius, inherit from the global fallback. When no fallback
         // either, the corner squares back off via `out[i] = None`.
@@ -1216,7 +1269,10 @@ pub(crate) fn per_corner_radii(
     }
     // Fast path: if no per-corner override touched the array, fall
     // back to the symmetric fallback for all four corners.
-    if corners.iter().all(|s| s.option.is_none() && s.radius.is_none()) {
+    if corners
+        .iter()
+        .all(|s| s.option.is_none() && s.radius.is_none())
+    {
         return [fallback, fallback, fallback, fallback];
     }
     out
@@ -1302,143 +1358,152 @@ pub(crate) fn corner_rect_path(
         // TL: from left edge to top edge.
         ((l, t + tl), (l + tl, t), (l, t), (l + tl, t + tl)),
         // TR: from top edge to right edge.
-        ((right - tr, t), (right, t + tr), (right, t), (right - tr, t + tr)),
+        (
+            (right - tr, t),
+            (right, t + tr),
+            (right, t),
+            (right - tr, t + tr),
+        ),
         // BR: from right edge to bottom edge.
-        ((right, bot - br), (right - br, bot), (right, bot), (right - br, bot - br)),
+        (
+            (right, bot - br),
+            (right - br, bot),
+            (right, bot),
+            (right - br, bot - br),
+        ),
         // BL: from bottom edge to left edge.
         ((l + bl, bot), (l, bot - bl), (l, bot), (l + bl, bot - bl)),
     ];
 
     // Emit one corner's segments (assuming the path's current point is
     // already at `p_in`), ending at `p_out`.
-    let emit_corner =
-        |segs: &mut Vec<paged_compose::PathSegment>,
-         kind: CornerOption,
-         r: f32,
-         p_in: (f32, f32),
-         p_out: (f32, f32),
-         c: (f32, f32),
-         m: (f32, f32)| {
-            if r <= 0.0 || matches!(kind, CornerOption::None) {
-                // Sharp: p_in == p_out == vertex; nothing to add.
-                return;
-            }
-            // Control point a fraction `f` of the way from `p` toward
-            // `toward` (the corner vertex `c` for convex, the inner
-            // centre `m` for concave).
-            let ctl = |p: (f32, f32), toward: (f32, f32), f: f32| {
-                (p.0 + (toward.0 - p.0) * f, p.1 + (toward.1 - p.1) * f)
-            };
-            match kind {
-                CornerOption::Rounded => {
-                    let c1 = ctl(p_in, c, KAPPA);
-                    let c2 = ctl(p_out, c, KAPPA);
-                    segs.push(CubicTo {
-                        cx1: c1.0,
-                        cy1: c1.1,
-                        cx2: c2.0,
-                        cy2: c2.1,
-                        x: p_out.0,
-                        y: p_out.1,
-                    });
-                }
-                CornerOption::Inverse => {
-                    // Concave: same endpoints, controls pulled toward
-                    // the inner centre so the arc bulges inward.
-                    let c1 = ctl(p_in, m, KAPPA);
-                    let c2 = ctl(p_out, m, KAPPA);
-                    segs.push(CubicTo {
-                        cx1: c1.0,
-                        cy1: c1.1,
-                        cx2: c2.0,
-                        cy2: c2.1,
-                        x: p_out.0,
-                        y: p_out.1,
-                    });
-                }
-                CornerOption::Bevel => {
-                    segs.push(LineTo {
-                        x: p_out.0,
-                        y: p_out.1,
-                    });
-                }
-                CornerOption::Inset => {
-                    // InDesign's Inset is the SHARP "fold-in" corner: the
-                    // edge steps inward to the inner rounding centre `m`
-                    // and back out to the outgoing edge — two straight
-                    // segments forming a right-angle notch. Applied to a
-                    // square this yields the cross / plus-sign silhouette
-                    // Adobe documents ("corners folding in on
-                    // themselves"). It is deliberately NOT a quarter-
-                    // circle: that is Inverse Rounded (a smooth concave
-                    // arc), and a circular Inset would collapse the two
-                    // options onto byte-identical geometry. W1.8
-                    // calibration verified the two stay visually distinct.
-                    segs.push(LineTo { x: m.0, y: m.1 });
-                    segs.push(LineTo {
-                        x: p_out.0,
-                        y: p_out.1,
-                    });
-                }
-                CornerOption::Fancy => {
-                    // InDesign's Fancy corner is an ornamental scallop:
-                    // three small arcs running p_in → q1 → q2 → p_out.
-                    // The two outer arcs are convex quarter-bumps (pulled
-                    // toward the sharp vertex `c`); the middle arc is a
-                    // concave notch (pulled toward the inner centre `m`).
-                    // That concave-between-two-convex rhythm is the
-                    // decorative three-arc pattern InDesign draws (an
-                    // honest approximation of the precise ornament, whose
-                    // exact radii Adobe never published — the segment
-                    // count, endpoints, and convex/concave rhythm match).
-                    //
-                    // q1 / q2 split the corner span into thirds along the
-                    // straight chord from p_in to p_out; each arc's
-                    // control points pull a third of the way toward `c`
-                    // (convex) or `m` (concave).
-                    let lerp = |a: (f32, f32), b: (f32, f32), f: f32| {
-                        (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f)
-                    };
-                    let q1 = lerp(p_in, p_out, 1.0 / 3.0);
-                    let q2 = lerp(p_in, p_out, 2.0 / 3.0);
-                    // Arc 1: p_in → q1, convex bump toward the vertex.
-                    let a1 = ctl(p_in, c, 0.5);
-                    let a2 = ctl(q1, c, 0.5);
-                    segs.push(CubicTo {
-                        cx1: a1.0,
-                        cy1: a1.1,
-                        cx2: a2.0,
-                        cy2: a2.1,
-                        x: q1.0,
-                        y: q1.1,
-                    });
-                    // Arc 2: q1 → q2, concave notch toward the inner
-                    // centre (the ornament's central dip).
-                    let b1 = ctl(q1, m, 0.5);
-                    let b2 = ctl(q2, m, 0.5);
-                    segs.push(CubicTo {
-                        cx1: b1.0,
-                        cy1: b1.1,
-                        cx2: b2.0,
-                        cy2: b2.1,
-                        x: q2.0,
-                        y: q2.1,
-                    });
-                    // Arc 3: q2 → p_out, convex bump toward the vertex.
-                    let d1 = ctl(q2, c, 0.5);
-                    let d2 = ctl(p_out, c, 0.5);
-                    segs.push(CubicTo {
-                        cx1: d1.0,
-                        cy1: d1.1,
-                        cx2: d2.0,
-                        cy2: d2.1,
-                        x: p_out.0,
-                        y: p_out.1,
-                    });
-                }
-                CornerOption::None => {}
-            }
+    let emit_corner = |segs: &mut Vec<paged_compose::PathSegment>,
+                       kind: CornerOption,
+                       r: f32,
+                       p_in: (f32, f32),
+                       p_out: (f32, f32),
+                       c: (f32, f32),
+                       m: (f32, f32)| {
+        if r <= 0.0 || matches!(kind, CornerOption::None) {
+            // Sharp: p_in == p_out == vertex; nothing to add.
+            return;
+        }
+        // Control point a fraction `f` of the way from `p` toward
+        // `toward` (the corner vertex `c` for convex, the inner
+        // centre `m` for concave).
+        let ctl = |p: (f32, f32), toward: (f32, f32), f: f32| {
+            (p.0 + (toward.0 - p.0) * f, p.1 + (toward.1 - p.1) * f)
         };
+        match kind {
+            CornerOption::Rounded => {
+                let c1 = ctl(p_in, c, KAPPA);
+                let c2 = ctl(p_out, c, KAPPA);
+                segs.push(CubicTo {
+                    cx1: c1.0,
+                    cy1: c1.1,
+                    cx2: c2.0,
+                    cy2: c2.1,
+                    x: p_out.0,
+                    y: p_out.1,
+                });
+            }
+            CornerOption::Inverse => {
+                // Concave: same endpoints, controls pulled toward
+                // the inner centre so the arc bulges inward.
+                let c1 = ctl(p_in, m, KAPPA);
+                let c2 = ctl(p_out, m, KAPPA);
+                segs.push(CubicTo {
+                    cx1: c1.0,
+                    cy1: c1.1,
+                    cx2: c2.0,
+                    cy2: c2.1,
+                    x: p_out.0,
+                    y: p_out.1,
+                });
+            }
+            CornerOption::Bevel => {
+                segs.push(LineTo {
+                    x: p_out.0,
+                    y: p_out.1,
+                });
+            }
+            CornerOption::Inset => {
+                // InDesign's Inset is the SHARP "fold-in" corner: the
+                // edge steps inward to the inner rounding centre `m`
+                // and back out to the outgoing edge — two straight
+                // segments forming a right-angle notch. Applied to a
+                // square this yields the cross / plus-sign silhouette
+                // Adobe documents ("corners folding in on
+                // themselves"). It is deliberately NOT a quarter-
+                // circle: that is Inverse Rounded (a smooth concave
+                // arc), and a circular Inset would collapse the two
+                // options onto byte-identical geometry. W1.8
+                // calibration verified the two stay visually distinct.
+                segs.push(LineTo { x: m.0, y: m.1 });
+                segs.push(LineTo {
+                    x: p_out.0,
+                    y: p_out.1,
+                });
+            }
+            CornerOption::Fancy => {
+                // InDesign's Fancy corner is an ornamental scallop:
+                // three small arcs running p_in → q1 → q2 → p_out.
+                // The two outer arcs are convex quarter-bumps (pulled
+                // toward the sharp vertex `c`); the middle arc is a
+                // concave notch (pulled toward the inner centre `m`).
+                // That concave-between-two-convex rhythm is the
+                // decorative three-arc pattern InDesign draws (an
+                // honest approximation of the precise ornament, whose
+                // exact radii Adobe never published — the segment
+                // count, endpoints, and convex/concave rhythm match).
+                //
+                // q1 / q2 split the corner span into thirds along the
+                // straight chord from p_in to p_out; each arc's
+                // control points pull a third of the way toward `c`
+                // (convex) or `m` (concave).
+                let lerp = |a: (f32, f32), b: (f32, f32), f: f32| {
+                    (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f)
+                };
+                let q1 = lerp(p_in, p_out, 1.0 / 3.0);
+                let q2 = lerp(p_in, p_out, 2.0 / 3.0);
+                // Arc 1: p_in → q1, convex bump toward the vertex.
+                let a1 = ctl(p_in, c, 0.5);
+                let a2 = ctl(q1, c, 0.5);
+                segs.push(CubicTo {
+                    cx1: a1.0,
+                    cy1: a1.1,
+                    cx2: a2.0,
+                    cy2: a2.1,
+                    x: q1.0,
+                    y: q1.1,
+                });
+                // Arc 2: q1 → q2, concave notch toward the inner
+                // centre (the ornament's central dip).
+                let b1 = ctl(q1, m, 0.5);
+                let b2 = ctl(q2, m, 0.5);
+                segs.push(CubicTo {
+                    cx1: b1.0,
+                    cy1: b1.1,
+                    cx2: b2.0,
+                    cy2: b2.1,
+                    x: q2.0,
+                    y: q2.1,
+                });
+                // Arc 3: q2 → p_out, convex bump toward the vertex.
+                let d1 = ctl(q2, c, 0.5);
+                let d2 = ctl(p_out, c, 0.5);
+                segs.push(CubicTo {
+                    cx1: d1.0,
+                    cy1: d1.1,
+                    cx2: d2.0,
+                    cy2: d2.1,
+                    x: p_out.0,
+                    y: p_out.1,
+                });
+            }
+            CornerOption::None => {}
+        }
+    };
 
     let radius_of = [tl, tr, br, bl];
     let mut segments = Vec::with_capacity(17);
@@ -1479,10 +1544,7 @@ pub(super) fn unit_ellipse_path() -> paged_compose::PathData {
     let ky = ry * K;
     paged_compose::PathData {
         segments: vec![
-            PathSegment::MoveTo {
-                x: cx + rx,
-                y: cy,
-            },
+            PathSegment::MoveTo { x: cx + rx, y: cy },
             PathSegment::CubicTo {
                 cx1: cx + rx,
                 cy1: cy + ky,
@@ -1575,7 +1637,6 @@ pub(super) fn emit_oval_missing_image_placeholder(
         dark,
     );
 }
-
 
 /// 50% grey fill + two 1.5pt diagonal stroke lines stamped over a
 /// rectangle's path, matching InDesign's placeholder visual for image
@@ -1804,8 +1865,14 @@ mod stroke_style_class_tests {
     fn custom_striped_yields_one_rule_per_stripe_with_scaled_weights() {
         let mut d = def("StrokeStyle/S", K::Striped);
         d.stripes = vec![
-            StripeDef { left: 0.0, width: 0.6 },
-            StripeDef { left: 0.8, width: 0.2 },
+            StripeDef {
+                left: 0.0,
+                width: 0.6,
+            },
+            StripeDef {
+                left: 0.8,
+                width: 0.2,
+            },
         ];
         let m = styles(vec![d]);
         match classify_stroke_style(Some("StrokeStyle/S"), 10.0, &m) {
@@ -1824,8 +1891,7 @@ mod stroke_style_class_tests {
     #[test]
     fn builtin_thick_thin_name_resolves_to_striped() {
         let m = BTreeMap::new();
-        let class =
-            classify_stroke_style(Some("StrokeStyle/$ID/Canned Thick - Thin"), 8.0, &m);
+        let class = classify_stroke_style(Some("StrokeStyle/$ID/Canned Thick - Thin"), 8.0, &m);
         assert!(matches!(class, StrokeStyleClass::Striped { .. }));
     }
 

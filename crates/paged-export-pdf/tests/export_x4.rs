@@ -53,7 +53,10 @@ fn find_cmyk_profile() -> Option<Vec<u8>> {
     if let Ok(entries) = std::fs::read_dir(&corpus) {
         for e in entries.flatten() {
             let path = e.path();
-            if path.extension().is_some_and(|x| x.eq_ignore_ascii_case("icc")) {
+            if path
+                .extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("icc"))
+            {
                 if let Ok(bytes) = std::fs::read(&path) {
                     return Some(bytes);
                 }
@@ -89,7 +92,11 @@ fn build_fixture(name: &str, font: &Option<Vec<u8>>) -> Option<Built> {
         pipeline::build_document(&document, &opts2).ok()?
     };
     let palette = document.palette.clone();
-    Some(Built { doc, fonts, palette })
+    Some(Built {
+        doc,
+        fonts,
+        palette,
+    })
 }
 
 fn export(built: &Built, profile: Option<&[u8]>) -> Vec<u8> {
@@ -165,14 +172,20 @@ fn x4_export_validates_with_lopdf() {
             oi.get(b"S").and_then(|s| s.as_name()).expect("S"),
             b"GTS_PDFX"
         );
-        assert!(oi.get(b"DestOutputProfile").is_ok(), "missing DestOutputProfile");
+        assert!(
+            oi.get(b"DestOutputProfile").is_ok(),
+            "missing DestOutputProfile"
+        );
 
         // XMP metadata stream with the PDF/X-4 version tag.
         let meta = catalog.get(b"Metadata").expect("Metadata");
         let (_, meta_obj) = doc.dereference(meta).expect("deref Metadata");
         let stream = meta_obj.as_stream().expect("stream");
         let xmp = String::from_utf8_lossy(&stream.content);
-        assert!(xmp.contains("PDF/X-4"), "XMP missing GTS_PDFXVersion PDF/X-4");
+        assert!(
+            xmp.contains("PDF/X-4"),
+            "XMP missing GTS_PDFXVersion PDF/X-4"
+        );
 
         // Info /Trapped must be a definite value.
         let info = doc.trailer.get(b"Info").expect("Info");
@@ -191,8 +204,16 @@ fn x4_export_validates_with_lopdf() {
     assert!(!pages.is_empty());
     for (_, page_id) in pages {
         let page = doc.get_dictionary(page_id).expect("page dict");
-        let trim = page.get(b"TrimBox").expect("TrimBox").as_array().expect("arr");
-        let media = page.get(b"MediaBox").expect("MediaBox").as_array().expect("arr");
+        let trim = page
+            .get(b"TrimBox")
+            .expect("TrimBox")
+            .as_array()
+            .expect("arr");
+        let media = page
+            .get(b"MediaBox")
+            .expect("MediaBox")
+            .as_array()
+            .expect("arr");
         let f = |o: &lopdf::Object| o.as_float().unwrap_or(0.0);
         assert!(f(&trim[0]) >= f(&media[0]) - 1e-3);
         assert!(f(&trim[1]) >= f(&media[1]) - 1e-3);
@@ -251,7 +272,9 @@ fn effects_fixture_exports_transparency_groups() {
     // least one transparency-group form XObject in the output.
     let mut groups = 0;
     for (_, obj) in doc.objects.iter() {
-        let Ok(stream) = obj.as_stream() else { continue };
+        let Ok(stream) = obj.as_stream() else {
+            continue;
+        };
         let dict = &stream.dict;
         if dict.get(b"Subtype").and_then(|s| s.as_name()).ok() == Some(b"Form".as_slice())
             && dict.get(b"Group").is_ok()
@@ -259,5 +282,8 @@ fn effects_fixture_exports_transparency_groups() {
             groups += 1;
         }
     }
-    assert!(groups > 0, "expected transparency-group forms in effects.idml export");
+    assert!(
+        groups > 0,
+        "expected transparency-group forms in effects.idml export"
+    );
 }

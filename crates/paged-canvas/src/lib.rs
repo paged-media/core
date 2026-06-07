@@ -48,8 +48,8 @@ pub mod camera;
 pub mod channel;
 pub mod element_selection;
 pub mod export;
-pub mod gesture;
 pub mod geometry;
+pub mod gesture;
 pub mod hit;
 pub mod model;
 pub mod mutate;
@@ -64,6 +64,10 @@ pub use channel::{
     ProtocolVersion, WorkerError, WorkerToMain, WorkerToMainKind, PROTOCOL_VERSION,
 };
 pub use element_selection::{ElementId, ElementSelection, SelectionMode};
+pub use geometry::{
+    caret_geometry, caret_nav, line_bounds, selection_geometry, word_bounds, CaretDirection,
+    CaretGeometry, LineBounds, WordBounds,
+};
 pub use gesture::{
     GestureAnchor, GestureError, GestureHandle, GestureModifiers, GestureSabLayout, GestureType,
     ResizeHandle, GESTURE_MODIFIER_ALT, GESTURE_MODIFIER_DISABLE_SNAP, GESTURE_MODIFIER_SHIFT,
@@ -71,14 +75,10 @@ pub use gesture::{
     GESTURE_OFFSET_HANDLE_HI, GESTURE_OFFSET_HANDLE_LO, GESTURE_OFFSET_MODIFIERS,
     GESTURE_OFFSET_SEQ, GESTURE_SAB_BYTES,
 };
-pub use snap::{SnapAxis, SnapLine};
 pub use hit::HitTestResult;
-pub use geometry::{
-    caret_geometry, caret_nav, line_bounds, selection_geometry, word_bounds, CaretDirection,
-    CaretGeometry, LineBounds, WordBounds,
-};
 pub use mutate::{AppliedText, TextOp, TextOpError};
 pub use selection::{ContentSelection, Side};
+pub use snap::{SnapAxis, SnapLine};
 
 /// Phase 3 Item 4 — one rect-per-line in page-local coords for a
 /// content selection range. Defined in the root so the channel
@@ -102,12 +102,12 @@ pub use model::{
 pub use resolve::{
     resolve, AnchorPosition, FieldChange, NumberingMap, ResolutionResult, ResolveOptions,
 };
-pub use snapshot::{SnapshotError, SnapshotPng};
 #[cfg(feature = "cpu")]
 pub use snapshot::{
     render_snapshot, render_snapshot_at_dpi, render_snapshot_png, render_snapshot_png_at_dpi,
     Snapshot,
 };
+pub use snapshot::{SnapshotError, SnapshotPng};
 
 // Re-export upstream identifiers + the display-list IR so consumers
 // depend on a single root crate.

@@ -49,11 +49,7 @@ fn jpeg_components(bytes: &[u8]) -> Option<u8> {
             return None;
         }
         // SOF0..SOF15 minus DHT/JPG/DAC (C4, C8, CC).
-        if (0xC0..=0xCF).contains(&marker)
-            && marker != 0xC4
-            && marker != 0xC8
-            && marker != 0xCC
-        {
+        if (0xC0..=0xCF).contains(&marker) && marker != 0xC4 && marker != 0xC8 && marker != 0xCC {
             // SOF payload: precision(1) h(2) w(2) components(1).
             return bytes.get(i + 9).copied();
         }
@@ -73,8 +69,7 @@ fn icc_component_count(icc: &[u8]) -> i32 {
 }
 
 fn flate(data: &[u8]) -> Vec<u8> {
-    let mut enc =
-        flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
     let _ = enc.write_all(data);
     enc.finish().unwrap_or_default()
 }
@@ -176,12 +171,8 @@ pub fn write_image(
     let (out_w, out_h, rgba) = match downsample_to {
         Some((w, h)) => {
             let buf = image::RgbaImage::from_raw(img.width, img.height, rgba.to_vec())?;
-            let resized = image::imageops::resize(
-                &buf,
-                w,
-                h,
-                image::imageops::FilterType::CatmullRom,
-            );
+            let resized =
+                image::imageops::resize(&buf, w, h, image::imageops::FilterType::CatmullRom);
             (w, h, bytes::Bytes::from(resized.into_raw()))
         }
         None => (img.width, img.height, rgba),

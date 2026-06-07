@@ -97,8 +97,7 @@ fn spot_color_at_half_tint_renders_lighter_than_full_tint() {
     let bytes = build_spot_tint_idml();
     let document = Document::open(&bytes).unwrap();
     let opts = PipelineOptions::default();
-    let (_built, images) =
-        pipeline::render_document(&document, &opts, 72.0, Color::WHITE).unwrap();
+    let (_built, images) = pipeline::render_document(&document, &opts, 72.0, Color::WHITE).unwrap();
 
     assert_eq!(images.len(), 2, "two pages → two rasters");
     let full = images[0].get_pixel(100, 100);
@@ -113,19 +112,22 @@ fn spot_color_at_half_tint_renders_lighter_than_full_tint() {
     assert!(
         half.0[0] > full.0[0] + 20,
         "half-tint R should be markedly higher than full-tint R: half={:?} full={:?}",
-        half, full,
+        half,
+        full,
     );
     assert!(
         half.0[1] > full.0[1] + 20,
         "half-tint G should be higher than full-tint G: half={:?} full={:?}",
-        half, full,
+        half,
+        full,
     );
     // Blue is saturated in both — pin equality within 2 LSBs of
     // sRGB encoding noise.
     assert!(
         (half.0[2] as i32 - full.0[2] as i32).abs() <= 2,
         "blue should be ~identical: half={:?} full={:?}",
-        half, full,
+        half,
+        full,
     );
     // Both must be opaque.
     assert_eq!(full.0[3], 255);

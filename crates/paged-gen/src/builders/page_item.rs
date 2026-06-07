@@ -78,10 +78,7 @@ impl Group {
         let xform = format_matrix(&self.item_transform);
         b.start(
             "Group",
-            &[
-                ("Self", self.self_id.as_str()),
-                ("ItemTransform", &xform),
-            ],
+            &[("Self", self.self_id.as_str()), ("ItemTransform", &xform)],
         );
         for child in &self.children {
             child.write(b);
@@ -486,10 +483,7 @@ impl Rect {
         // overrides our per-rectangle BlendingSetting back to Normal,
         // and StrokeColor="Swatch/None" gets shadowed by the default
         // 1pt stroke.
-        attrs.push((
-            "AppliedObjectStyle",
-            "ObjectStyle/$ID/[None]".to_string(),
-        ));
+        attrs.push(("AppliedObjectStyle", "ObjectStyle/$ID/[None]".to_string()));
         attrs.push(("Visible", "true".to_string()));
         attrs.push(("Name", "$ID/".to_string()));
         attrs.push(("ItemTransform", format_matrix(&self.item_transform)));
@@ -689,10 +683,7 @@ impl Rect {
                 "LockPosition",
                 if a.lock_position { "true" } else { "false" },
             ));
-            aa.push((
-                "PinPosition",
-                if a.pin_position { "true" } else { "false" },
-            ));
+            aa.push(("PinPosition", if a.pin_position { "true" } else { "false" }));
             if let Some(p) = a.anchor_point {
                 aa.push(("AnchorPoint", p));
             }

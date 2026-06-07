@@ -49,9 +49,9 @@ pub mod bezier_conv;
 pub mod error;
 pub mod history;
 pub mod invert;
+pub mod kurbo_kernel;
 pub mod notify;
 pub mod operation;
-pub mod kurbo_kernel;
 pub mod path_math;
 pub mod pathfinder;
 
@@ -59,12 +59,12 @@ pub use apply::apply;
 pub use error::OperationError;
 pub use history::{History, DEFAULT_HISTORY_CAPACITY};
 pub use notify::Notifier;
-pub use path_math::fit_polyline_to_anchors;
 pub use operation::{
     AppliedOperation, ColorGroupSpec, FieldKind, GradientSpec, GradientStopSpec, GroupSpec,
     GuideOrientationSpec, InvalidationHint, NodeId, NodeSpec, Operation, PathPointAddress,
     PathPointRole, PathfinderKind, PropertyPath, StyleCollection, StyleScope, SwatchSpec, Value,
 };
+pub use path_math::fit_polyline_to_anchors;
 
 /// Holds a [`Document`] plus the Operation surface, undo/redo
 /// history, and change-notification fan-out around it.
@@ -163,14 +163,14 @@ mod tests {
     use std::cell::Cell;
     use std::collections::{BTreeMap, HashMap};
 
-    use bytes::Bytes;
-    use paged_parse::{
-        Bounds, Container, DesignMap, FrameRef, Graphic, PathAnchor, Polygon, Spread,
-        StyleSheet, TextFrame as ParsedTextFrame,
-    };
-    use paged_scene::{ParsedSpread, ParsedStory};
     use crate::operation::PathAnchorSpec;
     use crate::path_math::smooth_handles_from_neighbours;
+    use bytes::Bytes;
+    use paged_parse::{
+        Bounds, Container, DesignMap, FrameRef, Graphic, PathAnchor, Polygon, Spread, StyleSheet,
+        TextFrame as ParsedTextFrame,
+    };
+    use paged_scene::{ParsedSpread, ParsedStory};
 
     // ---- Fixtures ---------------------------------------------------------
 
@@ -301,9 +301,7 @@ mod tests {
     #[test]
     fn set_frame_transform_sets_matrix_and_inverse_carries_previous() {
         let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
-        let m = [
-            0.7071, 0.7071, -0.7071, 0.7071, 50.0, 100.0,
-        ];
+        let m = [0.7071, 0.7071, -0.7071, 0.7071, 50.0, 100.0];
         let applied = project
             .apply(Operation::SetProperty {
                 node: NodeId::TextFrame("TextFrame/u1".to_string()),
@@ -514,7 +512,11 @@ mod tests {
 
     // ---- Swatch collection CRUD ------------------------------------------
 
-    fn cmyk_swatch(self_id: Option<&str>, name: &str, cmyk: [f32; 4]) -> crate::operation::SwatchSpec {
+    fn cmyk_swatch(
+        self_id: Option<&str>,
+        name: &str,
+        cmyk: [f32; 4],
+    ) -> crate::operation::SwatchSpec {
         crate::operation::SwatchSpec {
             self_id: self_id.map(String::from),
             name: Some(name.to_string()),
@@ -598,13 +600,19 @@ mod tests {
             tint: Some(80.0),
             alpha: None,
         };
-        project.apply(Operation::CreateSwatch { spec: spot }).unwrap();
+        project
+            .apply(Operation::CreateSwatch { spec: spot })
+            .unwrap();
         project
             .apply(Operation::DeleteSwatch {
                 swatch_id: "Color/Pantone".to_string(),
             })
             .unwrap();
-        assert!(!project.document().palette.colors.contains_key("Color/Pantone"));
+        assert!(!project
+            .document()
+            .palette
+            .colors
+            .contains_key("Color/Pantone"));
         project.undo().unwrap().expect("undo delete");
         let e = &project.document().palette.colors["Color/Pantone"];
         assert_eq!(e.name.as_deref(), Some("PANTONE 286"));
@@ -839,9 +847,21 @@ mod tests {
                 restore_json: None,
             })
             .unwrap();
-        assert!(project.document().styles.object_styles.contains_key("ObjectStyle/Card"));
-        assert!(project.document().styles.cell_styles.contains_key("CellStyle/Head"));
-        assert!(project.document().styles.table_styles.contains_key("TableStyle/Grid"));
+        assert!(project
+            .document()
+            .styles
+            .object_styles
+            .contains_key("ObjectStyle/Card"));
+        assert!(project
+            .document()
+            .styles
+            .cell_styles
+            .contains_key("CellStyle/Head"));
+        assert!(project
+            .document()
+            .styles
+            .table_styles
+            .contains_key("TableStyle/Grid"));
 
         // Delete the table style then undo — lands back in the right map.
         project
@@ -849,9 +869,17 @@ mod tests {
                 style_id: "TableStyle/Grid".to_string(),
             })
             .unwrap();
-        assert!(!project.document().styles.table_styles.contains_key("TableStyle/Grid"));
+        assert!(!project
+            .document()
+            .styles
+            .table_styles
+            .contains_key("TableStyle/Grid"));
         project.undo().unwrap().expect("undo");
-        assert!(project.document().styles.table_styles.contains_key("TableStyle/Grid"));
+        assert!(project
+            .document()
+            .styles
+            .table_styles
+            .contains_key("TableStyle/Grid"));
     }
 
     #[test]
@@ -863,12 +891,25 @@ mod tests {
             name: Some("Sunset".to_string()),
             kind: "Linear".to_string(),
             stops: vec![
-                GradientStopSpec { stop_color: "Color/Red".into(), location_pct: 0.0, midpoint_pct: Some(40.0) },
-                GradientStopSpec { stop_color: "Color/Yellow".into(), location_pct: 100.0, midpoint_pct: None },
+                GradientStopSpec {
+                    stop_color: "Color/Red".into(),
+                    location_pct: 0.0,
+                    midpoint_pct: Some(40.0),
+                },
+                GradientStopSpec {
+                    stop_color: "Color/Yellow".into(),
+                    location_pct: 100.0,
+                    midpoint_pct: None,
+                },
             ],
         };
         project.apply(Operation::CreateGradient { spec }).unwrap();
-        assert_eq!(project.document().palette.gradients["Gradient/Sunset"].stops.len(), 2);
+        assert_eq!(
+            project.document().palette.gradients["Gradient/Sunset"]
+                .stops
+                .len(),
+            2
+        );
         // Edit (reverse to radial, drop a stop) then undo restores.
         project
             .apply(Operation::EditGradient {
@@ -877,21 +918,40 @@ mod tests {
                     self_id: None,
                     name: Some("Sunset".to_string()),
                     kind: "Radial".to_string(),
-                    stops: vec![GradientStopSpec { stop_color: "Color/Blue".into(), location_pct: 0.0, midpoint_pct: None }],
+                    stops: vec![GradientStopSpec {
+                        stop_color: "Color/Blue".into(),
+                        location_pct: 0.0,
+                        midpoint_pct: None,
+                    }],
                 },
             })
             .unwrap();
-        assert_eq!(project.document().palette.gradients["Gradient/Sunset"].kind, paged_parse::GradientKind::Radial);
+        assert_eq!(
+            project.document().palette.gradients["Gradient/Sunset"].kind,
+            paged_parse::GradientKind::Radial
+        );
         project.undo().unwrap().expect("undo edit");
         let g = &project.document().palette.gradients["Gradient/Sunset"];
         assert_eq!(g.kind, paged_parse::GradientKind::Linear);
         assert_eq!(g.stops.len(), 2);
         assert_eq!(g.stops[0].midpoint_pct, Some(40.0));
         // Delete then undo recreates.
-        project.apply(Operation::DeleteGradient { gradient_id: "Gradient/Sunset".to_string() }).unwrap();
-        assert!(!project.document().palette.gradients.contains_key("Gradient/Sunset"));
+        project
+            .apply(Operation::DeleteGradient {
+                gradient_id: "Gradient/Sunset".to_string(),
+            })
+            .unwrap();
+        assert!(!project
+            .document()
+            .palette
+            .gradients
+            .contains_key("Gradient/Sunset"));
         project.undo().unwrap().expect("undo delete");
-        assert!(project.document().palette.gradients.contains_key("Gradient/Sunset"));
+        assert!(project
+            .document()
+            .palette
+            .gradients
+            .contains_key("Gradient/Sunset"));
     }
 
     #[test]
@@ -907,9 +967,22 @@ mod tests {
                 },
             })
             .unwrap();
-        assert_eq!(project.document().palette.color_groups["ColorGroup/Brand"].members.len(), 2);
-        project.apply(Operation::DeleteColorGroup { group_id: "ColorGroup/Brand".to_string() }).unwrap();
-        assert!(!project.document().palette.color_groups.contains_key("ColorGroup/Brand"));
+        assert_eq!(
+            project.document().palette.color_groups["ColorGroup/Brand"]
+                .members
+                .len(),
+            2
+        );
+        project
+            .apply(Operation::DeleteColorGroup {
+                group_id: "ColorGroup/Brand".to_string(),
+            })
+            .unwrap();
+        assert!(!project
+            .document()
+            .palette
+            .color_groups
+            .contains_key("ColorGroup/Brand"));
         project.undo().unwrap().expect("undo");
         assert_eq!(
             project.document().palette.color_groups["ColorGroup/Brand"].members,
@@ -1084,7 +1157,9 @@ mod tests {
         let counter = Rc::new(Cell::new(0));
         {
             let c = counter.clone();
-            project.notifier_mut().subscribe(move |_| c.set(c.get() + 1));
+            project
+                .notifier_mut()
+                .subscribe(move |_| c.set(c.get() + 1));
         }
         let batch = Operation::Batch {
             ops: vec![
@@ -1421,14 +1496,8 @@ mod tests {
             self_id: Some("Spread/u_src".to_string()),
             ..Default::default()
         };
-        src_spread.item_transform = Some([
-            1.0,
-            0.0,
-            0.0,
-            1.0,
-            src_spread_origin.0,
-            src_spread_origin.1,
-        ]);
+        src_spread.item_transform =
+            Some([1.0, 0.0, 0.0, 1.0, src_spread_origin.0, src_spread_origin.1]);
         src_spread
             .text_frames
             .push(empty_text_frame(src_id, src_bounds));
@@ -1557,7 +1626,10 @@ mod tests {
         let dest_spread = &project.document().spreads[1].spread;
         // Source spread still has only its original frame.
         assert_eq!(src_spread.text_frames.len(), 1);
-        assert_eq!(src_spread.text_frames[0].self_id.as_deref(), Some("TextFrame/u1"));
+        assert_eq!(
+            src_spread.text_frames[0].self_id.as_deref(),
+            Some("TextFrame/u1")
+        );
         // Destination spread now hosts the duplicate.
         assert_eq!(dest_spread.text_frames.len(), 1);
         let dup = &dest_spread.text_frames[0];
@@ -1688,10 +1760,7 @@ mod tests {
         let group = &project.document().spreads[0].spread.groups[0];
         assert_eq!(group.item_transform, Some(m));
         // Inverse carries previous (None).
-        assert_eq!(
-            applied.inverse,
-            group_xform_op("Group/g1", None),
-        );
+        assert_eq!(applied.inverse, group_xform_op("Group/g1", None),);
         // Leaves untouched at the apply layer — the gesture spine
         // (L.2) emits their rebases as separate Batch children.
         let frames = &project.document().spreads[0].spread.text_frames;
@@ -1704,9 +1773,7 @@ mod tests {
         let m0 = [1.0, 0.0, 0.0, 1.0, 10.0, 20.0];
         let m1 = [0.7071, 0.7071, -0.7071, 0.7071, 0.0, 0.0];
         let mut project = Project::new(document_with_group(Some(m0)));
-        let applied = project
-            .apply(group_xform_op("Group/g1", Some(m1)))
-            .unwrap();
+        let applied = project.apply(group_xform_op("Group/g1", Some(m1))).unwrap();
         crate::apply(project.document_mut(), &applied.inverse).unwrap();
         let group = &project.document().spreads[0].spread.groups[0];
         assert_eq!(group.item_transform, Some(m0));
@@ -1716,7 +1783,10 @@ mod tests {
     fn group_transform_apply_to_missing_id_fails() {
         let mut project = Project::new(document_with_group(None));
         let err = project
-            .apply(group_xform_op("Group/missing", Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])))
+            .apply(group_xform_op(
+                "Group/missing",
+                Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+            ))
             .unwrap_err();
         assert!(matches!(err, OperationError::NodeNotFound(_)));
     }
@@ -2033,13 +2103,21 @@ mod tests {
         let applied = project.apply(remove_op("Polygon/p1", 1)).expect("remove");
         // Anchor count shrunk; middle anchor gone.
         assert_eq!(polygon_of(&project).anchors.len(), 2);
-        assert_eq!(anchor_positions(polygon_of(&project)), vec![(0.0, 0.0), (10.0, 0.0)]);
+        assert_eq!(
+            anchor_positions(polygon_of(&project)),
+            vec![(0.0, 0.0), (10.0, 0.0)]
+        );
         // Inverse re-inserts the captured anchor at the same index
         // and restores subpath_starts verbatim.
         match &applied.inverse {
             Operation::SetProperty {
                 path: PropertyPath::PathPointInsert,
-                value: Value::PathPointInsert { index, anchor, prev_subpath_starts },
+                value:
+                    Value::PathPointInsert {
+                        index,
+                        anchor,
+                        prev_subpath_starts,
+                    },
                 ..
             } => {
                 assert_eq!(*index, 1);
@@ -2175,9 +2253,9 @@ mod tests {
             right: [24.0, 5.0],
         };
         let ops = vec![
-            insert_op("Polygon/p1", 4, mid_anchor),    // inside subpath 1
-            curve_op("Polygon/p1", 1, true),           // smooth-derive interior of subpath 0
-            remove_op("Polygon/p1", 2),                // collapses nothing (subpath 0 still has 2 anchors)
+            insert_op("Polygon/p1", 4, mid_anchor), // inside subpath 1
+            curve_op("Polygon/p1", 1, true),        // smooth-derive interior of subpath 0
+            remove_op("Polygon/p1", 2), // collapses nothing (subpath 0 still has 2 anchors)
         ];
         let mut applied_stack = Vec::new();
         for op in ops {
@@ -3490,9 +3568,7 @@ mod tests {
         };
         let applied = project.apply(op).expect("apply");
         assert_eq!(
-            project.document().spreads[0]
-                .spread
-                .rectangles[0]
+            project.document().spreads[0].spread.rectangles[0]
                 .end_cap
                 .as_deref(),
             Some("RoundEndCap")
@@ -3659,7 +3735,10 @@ mod tests {
         };
         let applied = project.apply(op).expect("apply must succeed");
         let story = &project.document().stories[0].story;
-        assert_eq!(story.paragraphs[0].runs[0].font.as_deref(), Some("Minion Pro"));
+        assert_eq!(
+            story.paragraphs[0].runs[0].font.as_deref(),
+            Some("Minion Pro")
+        );
         // Neighbour run untouched.
         assert_eq!(story.paragraphs[0].runs[1].font, None);
 
@@ -3850,7 +3929,10 @@ mod tests {
         assert_eq!(story.paragraphs[0].runs[0].text, "He");
         assert_eq!(story.paragraphs[0].runs[0].font_style, None);
         assert_eq!(story.paragraphs[0].runs[1].text, "ll");
-        assert_eq!(story.paragraphs[0].runs[1].font_style.as_deref(), Some("Bold"));
+        assert_eq!(
+            story.paragraphs[0].runs[1].font_style.as_deref(),
+            Some("Bold")
+        );
         assert_eq!(story.paragraphs[0].runs[2].text, "o ");
         assert_eq!(story.paragraphs[0].runs[2].font_style, None);
         assert_eq!(story.paragraphs[0].runs[3].text, "world");
@@ -4363,7 +4445,10 @@ mod tests {
             })
             .expect("insert r2");
         let spread = &project.document().spreads[0].spread;
-        assert_eq!(spread.rectangles[0].self_id.as_deref(), Some("Rectangle/r2"));
+        assert_eq!(
+            spread.rectangles[0].self_id.as_deref(),
+            Some("Rectangle/r2")
+        );
         assert_eq!(
             spread.frames_in_order,
             vec![
@@ -4488,10 +4573,7 @@ mod tests {
         let after = format!("{:?}", project.document().spreads);
         assert_eq!(before, after);
         project.redo().expect("redo");
-        assert_eq!(
-            project.document().spreads[0].spread.graphic_lines.len(),
-            1
-        );
+        assert_eq!(project.document().spreads[0].spread.graphic_lines.len(), 1);
     }
 
     #[test]
@@ -4561,7 +4643,12 @@ mod tests {
             .rectangles
             .push(crate::apply::new_rectangle(
                 self_id.to_string(),
-                Bounds { top: 0.0, left: 0.0, bottom: 100.0, right: 200.0 },
+                Bounds {
+                    top: 0.0,
+                    left: 0.0,
+                    bottom: 100.0,
+                    right: 200.0,
+                },
                 None,
             ));
         doc
@@ -4573,11 +4660,7 @@ mod tests {
 
     /// Apply, assert the value landed via `check`, then apply the
     /// inverse and assert the document matches its pre-apply snapshot.
-    fn assert_round_trips(
-        project: &mut Project,
-        op: Operation,
-        check: impl Fn(&Document),
-    ) {
+    fn assert_round_trips(project: &mut Project, op: Operation, check: impl Fn(&Document)) {
         let before = format!("{:?}", project.document().spreads);
         let applied = project.apply(op).expect("apply");
         check(project.document());
@@ -4592,12 +4675,20 @@ mod tests {
         let node = NodeId::TextFrame("TextFrame/u1".to_string());
         assert_round_trips(
             &mut p,
-            set_op(node.clone(), PropertyPath::TextFrameColumnCount, Value::Length(Some(3.0))),
+            set_op(
+                node.clone(),
+                PropertyPath::TextFrameColumnCount,
+                Value::Length(Some(3.0)),
+            ),
             |d| assert_eq!(d.spreads[0].spread.text_frames[0].column_count, Some(3)),
         );
         assert_round_trips(
             &mut p,
-            set_op(node.clone(), PropertyPath::TextFrameColumnGutter, Value::Length(Some(14.0))),
+            set_op(
+                node.clone(),
+                PropertyPath::TextFrameColumnGutter,
+                Value::Length(Some(14.0)),
+            ),
             |d| assert_eq!(d.spreads[0].spread.text_frames[0].column_gutter, Some(14.0)),
         );
         // column_balance is `Option<bool>`; `Value::Bool` carries no
@@ -4606,16 +4697,29 @@ mod tests {
         // `CharacterUnderline` lossy-default precedent. Assert value +
         // semantic restore rather than bytewise identity.
         let applied = p
-            .apply(set_op(node, PropertyPath::TextFrameColumnBalance, Value::Bool(true)))
+            .apply(set_op(
+                node,
+                PropertyPath::TextFrameColumnBalance,
+                Value::Bool(true),
+            ))
             .unwrap();
-        assert_eq!(p.document().spreads[0].spread.text_frames[0].column_balance, Some(true));
-        assert_eq!(applied.inverse, set_op(
-            NodeId::TextFrame("TextFrame/u1".to_string()),
-            PropertyPath::TextFrameColumnBalance,
-            Value::Bool(false),
-        ));
+        assert_eq!(
+            p.document().spreads[0].spread.text_frames[0].column_balance,
+            Some(true)
+        );
+        assert_eq!(
+            applied.inverse,
+            set_op(
+                NodeId::TextFrame("TextFrame/u1".to_string()),
+                PropertyPath::TextFrameColumnBalance,
+                Value::Bool(false),
+            )
+        );
         crate::apply(p.document_mut(), &applied.inverse).unwrap();
-        assert_eq!(p.document().spreads[0].spread.text_frames[0].column_balance, Some(false));
+        assert_eq!(
+            p.document().spreads[0].spread.text_frames[0].column_balance,
+            Some(false)
+        );
     }
 
     #[test]
@@ -4642,7 +4746,11 @@ mod tests {
         );
         assert_round_trips(
             &mut p,
-            set_op(node.clone(), PropertyPath::TextFrameAutoSizing, Value::Text("HeightOnly".into())),
+            set_op(
+                node.clone(),
+                PropertyPath::TextFrameAutoSizing,
+                Value::Text("HeightOnly".into()),
+            ),
             |d| {
                 assert_eq!(
                     d.spreads[0].spread.text_frames[0].auto_sizing,
@@ -4652,7 +4760,11 @@ mod tests {
         );
         assert_round_trips(
             &mut p,
-            set_op(node, PropertyPath::TextFrameFirstBaseline, Value::Text("CapHeight".into())),
+            set_op(
+                node,
+                PropertyPath::TextFrameFirstBaseline,
+                Value::Text("CapHeight".into()),
+            ),
             |d| {
                 assert_eq!(
                     d.spreads[0].spread.text_frames[0].first_baseline_offset,
@@ -4667,7 +4779,11 @@ mod tests {
         let mut p = Project::new(document_with_one_rectangle("Rectangle/r1"));
         let node = NodeId::Rectangle("Rectangle/r1".to_string());
         let applied = p
-            .apply(set_op(node.clone(), PropertyPath::TextWrapInvert, Value::Bool(true)))
+            .apply(set_op(
+                node.clone(),
+                PropertyPath::TextWrapInvert,
+                Value::Bool(true),
+            ))
             .unwrap();
         assert_eq!(
             p.document().spreads[0].spread.rectangles[0]
@@ -4756,7 +4872,10 @@ mod tests {
         assert_eq!(applied.invalidation.frame_style.len(), 1);
         assert!(applied.invalidation.text_reflow.is_empty());
         crate::apply(p.document_mut(), &applied.inverse).unwrap();
-        assert_eq!(p.document().spreads[0].spread.rectangles[0].stroke_type, None);
+        assert_eq!(
+            p.document().spreads[0].spread.rectangles[0].stroke_type,
+            None
+        );
         for (path, value, check) in [
             (
                 PropertyPath::FrameStrokeJoin,
@@ -4774,23 +4893,42 @@ mod tests {
         }
         assert_round_trips(
             &mut p,
-            set_op(node.clone(), PropertyPath::FrameStrokeMiterLimit, Value::Length(Some(8.0))),
+            set_op(
+                node.clone(),
+                PropertyPath::FrameStrokeMiterLimit,
+                Value::Length(Some(8.0)),
+            ),
             |d| assert_eq!(d.spreads[0].spread.rectangles[0].miter_limit, Some(8.0)),
         );
         assert_round_trips(
             &mut p,
-            set_op(node.clone(), PropertyPath::FrameStrokeGapColor, Value::ColorRef(Some("Color/Cyan".into()))),
+            set_op(
+                node.clone(),
+                PropertyPath::FrameStrokeGapColor,
+                Value::ColorRef(Some("Color/Cyan".into())),
+            ),
             |d| {
                 assert_eq!(
-                    d.spreads[0].spread.rectangles[0].stroke_gap_color.as_deref(),
+                    d.spreads[0].spread.rectangles[0]
+                        .stroke_gap_color
+                        .as_deref(),
                     Some("Color/Cyan")
                 )
             },
         );
         assert_round_trips(
             &mut p,
-            set_op(node, PropertyPath::FrameStrokeGapTint, Value::Length(Some(60.0))),
-            |d| assert_eq!(d.spreads[0].spread.rectangles[0].stroke_gap_tint, Some(60.0)),
+            set_op(
+                node,
+                PropertyPath::FrameStrokeGapTint,
+                Value::Length(Some(60.0)),
+            ),
+            |d| {
+                assert_eq!(
+                    d.spreads[0].spread.rectangles[0].stroke_gap_tint,
+                    Some(60.0)
+                )
+            },
         );
     }
 
@@ -4815,10 +4953,17 @@ mod tests {
         );
         assert_round_trips(
             &mut p,
-            set_op(node, PropertyPath::FrameCornerRadiusTopRight, Value::Length(Some(12.0))),
+            set_op(
+                node,
+                PropertyPath::FrameCornerRadiusTopRight,
+                Value::Length(Some(12.0)),
+            ),
             |d| {
                 // top_right is index 1.
-                assert_eq!(d.spreads[0].spread.rectangles[0].corners[1].radius, Some(12.0))
+                assert_eq!(
+                    d.spreads[0].spread.rectangles[0].corners[1].radius,
+                    Some(12.0)
+                )
             },
         );
     }
@@ -4829,7 +4974,11 @@ mod tests {
         let node = NodeId::TextFrame("TextFrame/u1".to_string());
         // Rotate 30°.
         let applied = p
-            .apply(set_op(node.clone(), PropertyPath::FrameRotationAngle, Value::Length(Some(30.0))))
+            .apply(set_op(
+                node.clone(),
+                PropertyPath::FrameRotationAngle,
+                Value::Length(Some(30.0)),
+            ))
             .unwrap();
         // Geometry invalidation — rotating a text frame re-lays content.
         assert_eq!(applied.invalidation.frame_geometry.len(), 1);
@@ -4848,7 +4997,11 @@ mod tests {
         // Scale X to 2.0, then flip H, then back — each round-trips.
         assert_round_trips(
             &mut p,
-            set_op(node.clone(), PropertyPath::FrameScaleX, Value::Length(Some(2.0))),
+            set_op(
+                node.clone(),
+                PropertyPath::FrameScaleX,
+                Value::Length(Some(2.0)),
+            ),
             |doc| {
                 let dd = crate::operation::decompose_transform(
                     doc.spreads[0].spread.text_frames[0].item_transform,
@@ -4874,7 +5027,11 @@ mod tests {
         let node = NodeId::Rectangle("Rectangle/r1".to_string());
         assert_round_trips(
             &mut p,
-            set_op(node.clone(), PropertyPath::FrameOverprintFill, Value::Bool(true)),
+            set_op(
+                node.clone(),
+                PropertyPath::FrameOverprintFill,
+                Value::Bool(true),
+            ),
             |d| assert!(d.spreads[0].spread.rectangles[0].overprint_fill),
         );
         assert_round_trips(
@@ -4917,9 +5074,15 @@ mod tests {
     fn w04_inner_shadow_toggle_materialises_default_and_round_trips() {
         let mut p = Project::new(document_with_one_textframe("TextFrame/u1"));
         let node = NodeId::TextFrame("TextFrame/u1".to_string());
-        assert!(p.document().spreads[0].spread.text_frames[0].effects.is_none());
+        assert!(p.document().spreads[0].spread.text_frames[0]
+            .effects
+            .is_none());
         let applied = p
-            .apply(set_op(node.clone(), PropertyPath::FrameInnerShadowEnabled, Value::Bool(true)))
+            .apply(set_op(
+                node.clone(),
+                PropertyPath::FrameInnerShadowEnabled,
+                Value::Bool(true),
+            ))
             .unwrap();
         let is = p.document().spreads[0].spread.text_frames[0]
             .effects
@@ -4931,7 +5094,14 @@ mod tests {
         assert_eq!(is.opacity_pct, Some(75.0));
         assert_eq!(is.angle_deg, Some(120.0));
         // Inverse restores prior is_some()=false → clears the block.
-        assert_eq!(applied.inverse, set_op(node, PropertyPath::FrameInnerShadowEnabled, Value::Bool(false)));
+        assert_eq!(
+            applied.inverse,
+            set_op(
+                node,
+                PropertyPath::FrameInnerShadowEnabled,
+                Value::Bool(false)
+            )
+        );
         crate::apply(p.document_mut(), &applied.inverse).unwrap();
         assert!(p.document().spreads[0].spread.text_frames[0]
             .effects
@@ -4951,7 +5121,11 @@ mod tests {
         let mut p = Project::new(document_with_one_textframe("TextFrame/u1"));
         let node = NodeId::TextFrame("TextFrame/u1".to_string());
         let applied = p
-            .apply(set_op(node.clone(), PropertyPath::FrameInnerShadowSize, Value::Length(Some(12.0))))
+            .apply(set_op(
+                node.clone(),
+                PropertyPath::FrameInnerShadowSize,
+                Value::Length(Some(12.0)),
+            ))
             .unwrap();
         let is = p.document().spreads[0].spread.text_frames[0]
             .effects
@@ -4962,9 +5136,13 @@ mod tests {
             .expect("materialised");
         assert_eq!(is.size, Some(12.0));
         assert_eq!(is.opacity_pct, Some(75.0)); // untouched preset
-        // Second field write preserves size.
-        p.apply(set_op(node, PropertyPath::FrameInnerShadowOpacity, Value::Length(Some(40.0))))
-            .unwrap();
+                                                // Second field write preserves size.
+        p.apply(set_op(
+            node,
+            PropertyPath::FrameInnerShadowOpacity,
+            Value::Length(Some(40.0)),
+        ))
+        .unwrap();
         let is = p.document().spreads[0].spread.text_frames[0]
             .effects
             .as_ref()
@@ -4974,8 +5152,8 @@ mod tests {
             .unwrap();
         assert_eq!(is.opacity_pct, Some(40.0));
         assert_eq!(is.size, Some(12.0)); // preserved
-        // Undo the size write → restores the preset default (5.0) the
-        // block carried at materialisation, not absence.
+                                         // Undo the size write → restores the preset default (5.0) the
+                                         // block carried at materialisation, not absence.
         crate::apply(p.document_mut(), &applied.inverse).unwrap();
         let is = p.document().spreads[0].spread.text_frames[0]
             .effects
@@ -4992,7 +5170,11 @@ mod tests {
         let mut p = Project::new(document_with_one_rectangle("Rectangle/r1"));
         let node = NodeId::Rectangle("Rectangle/r1".to_string());
         let applied = p
-            .apply(set_op(node.clone(), PropertyPath::FrameOuterGlowEnabled, Value::Bool(true)))
+            .apply(set_op(
+                node.clone(),
+                PropertyPath::FrameOuterGlowEnabled,
+                Value::Bool(true),
+            ))
             .unwrap();
         let og = p.document().spreads[0].spread.rectangles[0]
             .effects
@@ -5001,10 +5183,18 @@ mod tests {
             .expect("outer glow");
         assert_eq!(og.blend_mode.as_deref(), Some("Screen"));
         // Field writes: spread + colour.
-        p.apply(set_op(node.clone(), PropertyPath::FrameOuterGlowSpread, Value::Length(Some(25.0))))
-            .unwrap();
-        p.apply(set_op(node, PropertyPath::FrameOuterGlowColor, Value::ColorRef(Some("Color/Cyan".into()))))
-            .unwrap();
+        p.apply(set_op(
+            node.clone(),
+            PropertyPath::FrameOuterGlowSpread,
+            Value::Length(Some(25.0)),
+        ))
+        .unwrap();
+        p.apply(set_op(
+            node,
+            PropertyPath::FrameOuterGlowColor,
+            Value::ColorRef(Some("Color/Cyan".into())),
+        ))
+        .unwrap();
         let og = p.document().spreads[0].spread.rectangles[0]
             .effects
             .as_ref()
@@ -5025,8 +5215,12 @@ mod tests {
     fn w04_inner_glow_source_and_fields_round_trip() {
         let mut p = Project::new(document_with_one_textframe("TextFrame/u1"));
         let node = NodeId::TextFrame("TextFrame/u1".to_string());
-        p.apply(set_op(node.clone(), PropertyPath::FrameInnerGlowSource, Value::Text("CenterGlow".into())))
-            .unwrap();
+        p.apply(set_op(
+            node.clone(),
+            PropertyPath::FrameInnerGlowSource,
+            Value::Text("CenterGlow".into()),
+        ))
+        .unwrap();
         let ig = p.document().spreads[0].spread.text_frames[0]
             .effects
             .as_ref()
@@ -5036,9 +5230,13 @@ mod tests {
             .expect("materialised");
         assert_eq!(ig.source.as_deref(), Some("CenterGlow"));
         assert_eq!(ig.blend_mode.as_deref(), Some("Screen")); // preset
-        // Empty string clears the source override.
+                                                              // Empty string clears the source override.
         let cleared = p
-            .apply(set_op(node, PropertyPath::FrameInnerGlowSource, Value::Text(String::new())))
+            .apply(set_op(
+                node,
+                PropertyPath::FrameInnerGlowSource,
+                Value::Text(String::new()),
+            ))
             .unwrap();
         assert!(p.document().spreads[0].spread.text_frames[0]
             .effects
@@ -5069,13 +5267,25 @@ mod tests {
     fn w04_bevel_enum_color_and_length_fields_round_trip() {
         let mut p = Project::new(document_with_one_rectangle("Rectangle/r1"));
         let node = NodeId::Rectangle("Rectangle/r1".to_string());
-        p.apply(set_op(node.clone(), PropertyPath::FrameBevelStyle, Value::Text("Emboss".into())))
-            .unwrap();
+        p.apply(set_op(
+            node.clone(),
+            PropertyPath::FrameBevelStyle,
+            Value::Text("Emboss".into()),
+        ))
+        .unwrap();
         let applied_color = p
-            .apply(set_op(node.clone(), PropertyPath::FrameBevelHighlightColor, Value::ColorRef(Some("Color/White".into()))))
+            .apply(set_op(
+                node.clone(),
+                PropertyPath::FrameBevelHighlightColor,
+                Value::ColorRef(Some("Color/White".into())),
+            ))
             .unwrap();
-        p.apply(set_op(node, PropertyPath::FrameBevelDepth, Value::Length(Some(150.0))))
-            .unwrap();
+        p.apply(set_op(
+            node,
+            PropertyPath::FrameBevelDepth,
+            Value::Length(Some(150.0)),
+        ))
+        .unwrap();
         let b = p.document().spreads[0].spread.rectangles[0]
             .effects
             .as_ref()
@@ -5088,7 +5298,7 @@ mod tests {
         assert_eq!(b.depth_pct, Some(150.0));
         assert_eq!(b.technique.as_deref(), Some("Smooth")); // preset
         assert_eq!(b.angle_deg, Some(120.0)); // preset
-        // Undo the colour write restores the preset (None highlight).
+                                              // Undo the colour write restores the preset (None highlight).
         crate::apply(p.document_mut(), &applied_color.inverse).unwrap();
         assert!(p.document().spreads[0].spread.rectangles[0]
             .effects
@@ -5106,8 +5316,12 @@ mod tests {
         let mut p = Project::new(document_with_one_textframe("TextFrame/u1"));
         let node = NodeId::TextFrame("TextFrame/u1".to_string());
         // Toggling on materialises the preset (invert=true).
-        p.apply(set_op(node.clone(), PropertyPath::FrameSatinEnabled, Value::Bool(true)))
-            .unwrap();
+        p.apply(set_op(
+            node.clone(),
+            PropertyPath::FrameSatinEnabled,
+            Value::Bool(true),
+        ))
+        .unwrap();
         let s = p.document().spreads[0].spread.text_frames[0]
             .effects
             .as_ref()
@@ -5119,15 +5333,33 @@ mod tests {
         assert_eq!(s.opacity_pct, Some(50.0));
         // Flip invert off; undo restores true.
         let applied = p
-            .apply(set_op(node, PropertyPath::FrameSatinInvert, Value::Bool(false)))
+            .apply(set_op(
+                node,
+                PropertyPath::FrameSatinInvert,
+                Value::Bool(false),
+            ))
             .unwrap();
         assert_eq!(
-            p.document().spreads[0].spread.text_frames[0].effects.as_ref().unwrap().satin.as_ref().unwrap().invert,
+            p.document().spreads[0].spread.text_frames[0]
+                .effects
+                .as_ref()
+                .unwrap()
+                .satin
+                .as_ref()
+                .unwrap()
+                .invert,
             Some(false)
         );
         crate::apply(p.document_mut(), &applied.inverse).unwrap();
         assert_eq!(
-            p.document().spreads[0].spread.text_frames[0].effects.as_ref().unwrap().satin.as_ref().unwrap().invert,
+            p.document().spreads[0].spread.text_frames[0]
+                .effects
+                .as_ref()
+                .unwrap()
+                .satin
+                .as_ref()
+                .unwrap()
+                .invert,
             Some(true)
         );
     }
@@ -5136,10 +5368,18 @@ mod tests {
     fn w04_feather_and_directional_feather_fields_round_trip() {
         let mut p = Project::new(document_with_one_rectangle("Rectangle/r1"));
         let node = NodeId::Rectangle("Rectangle/r1".to_string());
-        p.apply(set_op(node.clone(), PropertyPath::FrameFeatherWidth, Value::Length(Some(8.0))))
-            .unwrap();
-        p.apply(set_op(node.clone(), PropertyPath::FrameFeatherCornerType, Value::Text("Rounded".into())))
-            .unwrap();
+        p.apply(set_op(
+            node.clone(),
+            PropertyPath::FrameFeatherWidth,
+            Value::Length(Some(8.0)),
+        ))
+        .unwrap();
+        p.apply(set_op(
+            node.clone(),
+            PropertyPath::FrameFeatherCornerType,
+            Value::Text("Rounded".into()),
+        ))
+        .unwrap();
         let f = p.document().spreads[0].spread.rectangles[0]
             .effects
             .as_ref()
@@ -5150,10 +5390,18 @@ mod tests {
         assert_eq!(f.width, Some(8.0));
         assert_eq!(f.corner_type.as_deref(), Some("Rounded"));
         // Directional feather per-edge widths.
-        p.apply(set_op(node.clone(), PropertyPath::FrameDirectionalFeatherLeftWidth, Value::Length(Some(2.0))))
-            .unwrap();
-        p.apply(set_op(node, PropertyPath::FrameDirectionalFeatherBottomWidth, Value::Length(Some(9.0))))
-            .unwrap();
+        p.apply(set_op(
+            node.clone(),
+            PropertyPath::FrameDirectionalFeatherLeftWidth,
+            Value::Length(Some(2.0)),
+        ))
+        .unwrap();
+        p.apply(set_op(
+            node,
+            PropertyPath::FrameDirectionalFeatherBottomWidth,
+            Value::Length(Some(9.0)),
+        ))
+        .unwrap();
         let df = p.document().spreads[0].spread.rectangles[0]
             .effects
             .as_ref()
@@ -5176,14 +5424,29 @@ mod tests {
         let node = NodeId::Rectangle("Rectangle/r1".to_string());
         assert_round_trips(
             &mut p,
-            set_op(node.clone(), PropertyPath::FrameBlendMode, Value::Text("Multiply".into())),
-            |d| assert_eq!(d.spreads[0].spread.rectangles[0].blend_mode.as_deref(), Some("Multiply")),
+            set_op(
+                node.clone(),
+                PropertyPath::FrameBlendMode,
+                Value::Text("Multiply".into()),
+            ),
+            |d| {
+                assert_eq!(
+                    d.spreads[0].spread.rectangles[0].blend_mode.as_deref(),
+                    Some("Multiply")
+                )
+            },
         );
         // Empty string clears the override → back to None.
         let applied = p
-            .apply(set_op(node, PropertyPath::FrameBlendMode, Value::Text(String::new())))
+            .apply(set_op(
+                node,
+                PropertyPath::FrameBlendMode,
+                Value::Text(String::new()),
+            ))
             .unwrap();
-        assert!(p.document().spreads[0].spread.rectangles[0].blend_mode.is_none());
+        assert!(p.document().spreads[0].spread.rectangles[0]
+            .blend_mode
+            .is_none());
         // Paint-only classification.
         assert_eq!(applied.invalidation.frame_style.len(), 1);
     }
@@ -5299,7 +5562,9 @@ mod tests {
                 self_id: Some("Spread/u_main".to_string()),
                 ..Default::default()
             };
-            spread.text_frames.push(text_frame("TextFrame/from", Some("Story/u1")));
+            spread
+                .text_frames
+                .push(text_frame("TextFrame/from", Some("Story/u1")));
             spread.text_frames.push(text_frame("TextFrame/to", None));
             let story = Story {
                 paragraphs: vec![{
@@ -5338,7 +5603,9 @@ mod tests {
                 })
                 .expect("link must succeed");
             assert_eq!(
-                p.document().spreads[0].spread.text_frames[0].next_text_frame.as_deref(),
+                p.document().spreads[0].spread.text_frames[0]
+                    .next_text_frame
+                    .as_deref(),
                 Some("TextFrame/to")
             );
             // Inverse clears the link.
@@ -5355,7 +5622,9 @@ mod tests {
                 .is_none());
             p.redo().expect("redo");
             assert_eq!(
-                p.document().spreads[0].spread.text_frames[0].next_text_frame.as_deref(),
+                p.document().spreads[0].spread.text_frames[0]
+                    .next_text_frame
+                    .as_deref(),
                 Some("TextFrame/to")
             );
         }
@@ -5395,8 +5664,7 @@ mod tests {
             let mut doc = doc_two_frames();
             // Pre-thread: from → to already. Linking to → from closes a
             // cycle.
-            doc.spreads[0].spread.text_frames[0].next_text_frame =
-                Some("TextFrame/to".to_string());
+            doc.spreads[0].spread.text_frames[0].next_text_frame = Some("TextFrame/to".to_string());
             let mut p = Project::new(doc);
             let err = p
                 .apply(Operation::LinkFrames {
@@ -5422,7 +5690,9 @@ mod tests {
                 })
                 .expect("apply style");
             assert_eq!(
-                p.document().stories[0].story.paragraphs[0].paragraph_style.as_deref(),
+                p.document().stories[0].story.paragraphs[0]
+                    .paragraph_style
+                    .as_deref(),
                 Some("ParagraphStyle/Heading")
             );
             crate::apply(p.document_mut(), &applied.inverse).expect("undo");
@@ -5445,7 +5715,9 @@ mod tests {
                 })
                 .expect("apply char style");
             assert_eq!(
-                p.document().stories[0].story.paragraphs[0].runs[0].character_style.as_deref(),
+                p.document().stories[0].story.paragraphs[0].runs[0]
+                    .character_style
+                    .as_deref(),
                 Some("CharacterStyle/Emph")
             );
             crate::apply(p.document_mut(), &applied.inverse).expect("undo");
@@ -5533,8 +5805,10 @@ mod tests {
                 }
             );
             // Delete it; undo restores geometry.
-            p.apply(Operation::DeleteGuide { guide_id: gid.clone() })
-                .expect("delete guide");
+            p.apply(Operation::DeleteGuide {
+                guide_id: gid.clone(),
+            })
+            .expect("delete guide");
             assert_eq!(p.document().spreads[0].spread.guides.len(), 0);
             p.undo().expect("undo delete");
             assert_eq!(p.document().spreads[0].spread.guides.len(), 1);
@@ -5549,7 +5823,10 @@ mod tests {
                     guide_id: "Guide/Spread/u_main/0".to_string(),
                 })
                 .unwrap_err();
-            assert!(matches!(err, OperationError::CollectionEntryNotFound { .. }));
+            assert!(matches!(
+                err,
+                OperationError::CollectionEntryNotFound { .. }
+            ));
         }
 
         // ---- Conditions --------------------------------------------------
@@ -5656,7 +5933,9 @@ mod tests {
                 })
                 .expect("apply master");
             assert_eq!(
-                p.document().spreads[0].spread.pages[0].applied_master.as_deref(),
+                p.document().spreads[0].spread.pages[0]
+                    .applied_master
+                    .as_deref(),
                 Some("MasterSpread/uA")
             );
             assert_eq!(
@@ -5678,11 +5957,19 @@ mod tests {
         fn duplicate_page_clones_with_fresh_ids_and_round_trips() {
             let mut doc = doc_with_spread();
             // Put a rectangle on the source spread so the clone copies it.
-            doc.spreads[0].spread.rectangles.push(crate::apply::new_rectangle(
-                "Rectangle/r1".to_string(),
-                Bounds { top: 1.0, left: 1.0, bottom: 50.0, right: 50.0 },
-                Some("Color/Red".to_string()),
-            ));
+            doc.spreads[0]
+                .spread
+                .rectangles
+                .push(crate::apply::new_rectangle(
+                    "Rectangle/r1".to_string(),
+                    Bounds {
+                        top: 1.0,
+                        left: 1.0,
+                        bottom: 50.0,
+                        right: 50.0,
+                    },
+                    Some("Color/Red".to_string()),
+                ));
             let mut p = Project::new(doc);
             let applied = p
                 .apply(Operation::DuplicatePage {
@@ -5697,7 +5984,9 @@ mod tests {
             // The clone carries a copied rectangle with a fresh id.
             assert_eq!(p.document().spreads[1].spread.rectangles.len(), 1);
             assert_ne!(
-                p.document().spreads[1].spread.rectangles[0].self_id.as_deref(),
+                p.document().spreads[1].spread.rectangles[0]
+                    .self_id
+                    .as_deref(),
                 Some("Rectangle/r1")
             );
             // Inverse removes the cloned page.
@@ -5754,12 +6043,16 @@ mod tests {
                 paged_parse::NumberingStyle::UpperRoman
             );
             assert_eq!(
-                p.document().container.designmap.sections[0].section_prefix.as_deref(),
+                p.document().container.designmap.sections[0]
+                    .section_prefix
+                    .as_deref(),
                 Some("A-")
             );
             // Delete + undo restores it.
-            p.apply(Operation::DeleteSection { section_id: sid.clone() })
-                .expect("delete section");
+            p.apply(Operation::DeleteSection {
+                section_id: sid.clone(),
+            })
+            .expect("delete section");
             assert_eq!(p.document().container.designmap.sections.len(), 0);
             p.undo().expect("undo delete");
             assert_eq!(p.document().container.designmap.sections.len(), 1);
@@ -5943,7 +6236,9 @@ mod tests {
                 })
                 .expect("set cell fill");
             assert_eq!(
-                cell_named(table_of(p.document()), 0, 1).fill_color.as_deref(),
+                cell_named(table_of(p.document()), 0, 1)
+                    .fill_color
+                    .as_deref(),
                 Some("Color/Z")
             );
             // Reflow targets the host frame.
@@ -5954,12 +6249,16 @@ mod tests {
             // Inverse restores the prior fill ("Color/C").
             p.undo().expect("undo");
             assert_eq!(
-                cell_named(table_of(p.document()), 0, 1).fill_color.as_deref(),
+                cell_named(table_of(p.document()), 0, 1)
+                    .fill_color
+                    .as_deref(),
                 Some("Color/C")
             );
             p.redo().expect("redo");
             assert_eq!(
-                cell_named(table_of(p.document()), 0, 1).fill_color.as_deref(),
+                cell_named(table_of(p.document()), 0, 1)
+                    .fill_color
+                    .as_deref(),
                 Some("Color/Z")
             );
         }

@@ -16,8 +16,8 @@
 //! per-conversion math is in `IccTransform`; this example also tries
 //! a direct lcms2 path so anomalies between the two can be diagnosed
 //! at a glance.
-use paged_color::{Cmyk, IccTransform, LinearRgb};
 use lcms2::{CIExyY, CIExyYTRIPLE, Flags, Intent, PixelFormat, Profile, ToneCurve, Transform};
+use paged_color::{Cmyk, IccTransform, LinearRgb};
 
 fn main() {
     let path = std::env::args()

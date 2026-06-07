@@ -34,8 +34,8 @@ pub use cache::{CacheStats, LayoutCache, LayoutKeyHasher};
 pub use compose::{
     compose_paragraph, compose_paragraph_with_drop_cap, drop_cap_column_widths,
     drop_cap_column_widths_with_min, drop_cap_point_size, AdvanceMeasurer, ComposeOptions,
-    ComposedLine, DropCapComposition,
-    DropCapSpec, MonospaceMeasurer, RustybuzzMeasurer, TextShaper,
+    ComposedLine, DropCapComposition, DropCapSpec, MonospaceMeasurer, RustybuzzMeasurer,
+    TextShaper,
 };
 pub use hyphenate::{Hyphenator, Language};
 pub use layout::{

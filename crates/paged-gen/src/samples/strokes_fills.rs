@@ -363,10 +363,8 @@ pub fn build() -> Sample {
 
         // Demo rectangle centred on the page. Baseline: black 6pt
         // stroke, paper fill, identity ItemTransform after centering.
-        let demo_transform: Matrix = compose_translate(
-            (PAGE_W_PT - DEMO_W_PT) * 0.5,
-            (PAGE_H_PT - DEMO_H_PT) * 0.5,
-        );
+        let demo_transform: Matrix =
+            compose_translate((PAGE_W_PT - DEMO_W_PT) * 0.5, (PAGE_H_PT - DEMO_H_PT) * 0.5);
         let demo = Rect {
             self_id: demo_id,
             width_pt: DEMO_W_PT,

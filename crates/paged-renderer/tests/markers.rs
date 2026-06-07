@@ -115,7 +115,10 @@ fn hyperlink_spans_become_link_regions() {
         .regions
         .iter()
         .any(|r| matches!(r.target, LinkTarget::PageIndex(1)));
-    assert!(has_page, "expected a page link region targeting page index 1");
+    assert!(
+        has_page,
+        "expected a page link region targeting page index 1"
+    );
 
     // Rect sanity: every region has a positive area and sits within the
     // page bounds.

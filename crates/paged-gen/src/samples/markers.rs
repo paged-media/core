@@ -170,7 +170,10 @@ pub fn build() -> Sample {
     let pagecount_var = format!("TextVariable/{}", self_id(SAMPLE, "TextVariable", 1));
     let url_source = format!("HyperlinkTextSource/{}", self_id(SAMPLE, "HLSource", 0));
     let page_source = format!("HyperlinkTextSource/{}", self_id(SAMPLE, "HLSource", 1));
-    let url_dest = format!("HyperlinkURLDestination/{}", self_id(SAMPLE, "HLUrlDest", 0));
+    let url_dest = format!(
+        "HyperlinkURLDestination/{}",
+        self_id(SAMPLE, "HLUrlDest", 0)
+    );
     let page_dest = format!(
         "HyperlinkPageDestination/{}",
         self_id(SAMPLE, "HLPageDest", 0)

@@ -32,9 +32,7 @@ use crate::builders::{
     designmap::{write_designmap, DesignMap},
     master::{write_master, Master},
     page_item::Rect,
-    resources::{
-        container_xml, fonts_xml, graphic_xml, preferences_xml, styles_xml,
-    },
+    resources::{container_xml, fonts_xml, graphic_xml, preferences_xml, styles_xml},
     spread::{write_spread, Spread},
     story::{write_story, Paragraph, Run, Story},
     xml_folder::{backing_story_xml, mapping_xml, tags_xml},

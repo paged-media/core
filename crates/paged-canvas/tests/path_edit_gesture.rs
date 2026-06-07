@@ -16,9 +16,7 @@
 
 use std::io::Write;
 
-use paged_canvas::{
-    CanvasModel, CanvasOptions, ElementId, GestureModifiers, GestureType,
-};
+use paged_canvas::{CanvasModel, CanvasOptions, ElementId, GestureModifiers, GestureType};
 use paged_mutate::{PathPointAddress, PathPointRole};
 
 fn small_idml() -> Vec<u8> {
@@ -28,7 +26,8 @@ fn small_idml() -> Vec<u8> {
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
         zip.start_file("mimetype", opts).unwrap();
-        zip.write_all(b"application/vnd.adobe.indesign-idml-package").unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
         zip.start_file("META-INF/container.xml", opts).unwrap();
         zip.write_all(
             br#"<?xml version="1.0" encoding="UTF-8"?>

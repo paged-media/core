@@ -61,11 +61,7 @@ fn overprint_fill_darkens_top_color_against_bottom_color() {
     // Helper: render a yellow rect with a top rect of `top_cmyk`,
     // optionally OverprintFill. Returns the pixel at the centre of
     // the top rect (in the overlap region).
-    fn render_with_top(
-        top_color_self: &str,
-        top_color_xml: &str,
-        top_overprint: bool,
-    ) -> [u8; 4] {
+    fn render_with_top(top_color_self: &str, top_color_xml: &str, top_overprint: bool) -> [u8; 4] {
         let buf = std::io::Cursor::new(Vec::new());
         let mut zip = ZipWriter::new(buf);
         let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);

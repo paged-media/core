@@ -179,9 +179,7 @@ pub(crate) fn group_pass(
         }
         let mut by_page: HashMap<usize, (usize, usize)> = HashMap::new();
         for s in &members {
-            let entry = by_page
-                .entry(s.page_idx)
-                .or_insert((s.start, s.end));
+            let entry = by_page.entry(s.page_idx).or_insert((s.start, s.end));
             if s.start < entry.0 {
                 entry.0 = s.start;
             }
@@ -189,10 +187,7 @@ pub(crate) fn group_pass(
                 entry.1 = s.end;
             }
         }
-        let per_page: Vec<PageWindow> = by_page
-            .into_iter()
-            .map(|(p, (a, b))| (p, a, b))
-            .collect();
+        let per_page: Vec<PageWindow> = by_page.into_iter().map(|(p, (a, b))| (p, a, b)).collect();
         entries.push((gi, per_page));
     }
 
@@ -220,10 +215,9 @@ pub(crate) fn group_pass(
             let bounds = group_bounds_in_page(page, start, end);
             // Insert end first so the start-insert doesn't shift the
             // end index forward.
-            page.list.commands.insert(
-                end,
-                DisplayCommand::EndBlendGroup(Transform::IDENTITY),
-            );
+            page.list
+                .commands
+                .insert(end, DisplayCommand::EndBlendGroup(Transform::IDENTITY));
             page.list.commands.insert(
                 start,
                 DisplayCommand::BeginBlendGroup {

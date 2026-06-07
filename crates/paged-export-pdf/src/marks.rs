@@ -45,8 +45,16 @@ pub fn emit_marks(
     if !(opts.crop_marks || opts.registration_marks || opts.color_bars || opts.page_info) {
         return;
     }
-    let weight = if opts.weight_pt > 0.0 { opts.weight_pt } else { 0.25 };
-    let offset = if opts.offset_pt > 0.0 { opts.offset_pt } else { 6.0 };
+    let weight = if opts.weight_pt > 0.0 {
+        opts.weight_pt
+    } else {
+        0.25
+    };
+    let offset = if opts.offset_pt > 0.0 {
+        opts.offset_pt
+    } else {
+        6.0
+    };
 
     content.save_state();
     // Registration colour: full coverage on every plate.

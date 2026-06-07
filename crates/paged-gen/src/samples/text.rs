@@ -30,8 +30,7 @@ use crate::builders::{
     master::{write_master, Master},
     page_item::Rect,
     resources::{
-        container_xml, fonts_xml, graphic_xml_with_extras, preferences_xml, styles_xml,
-        ExtraColor,
+        container_xml, fonts_xml, graphic_xml_with_extras, preferences_xml, styles_xml, ExtraColor,
     },
     spread::{write_spread, Spread},
     story::{write_story, Paragraph, Run, Story},
@@ -478,11 +477,15 @@ pub fn build() -> Sample {
                         right_indent: p.right_indent,
                         drop_cap_characters: p.drop_cap_characters,
                         drop_cap_lines: p.drop_cap_lines,
-                        tab_list: p.tab_list.iter().map(|s| crate::builders::story::TabStop {
-                            position_pt: s.position_pt,
-                            alignment: s.alignment,
-                            leader: s.leader.clone(),
-                        }).collect(),
+                        tab_list: p
+                            .tab_list
+                            .iter()
+                            .map(|s| crate::builders::story::TabStop {
+                                position_pt: s.position_pt,
+                                alignment: s.alignment,
+                                leader: s.leader.clone(),
+                            })
+                            .collect(),
                         bullets_list_type: p.bullets_list_type,
                         bullet_character: p.bullet_character,
                         table: None,

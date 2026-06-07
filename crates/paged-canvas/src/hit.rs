@@ -124,9 +124,11 @@ impl CanvasModel {
 
         let mut hits: Vec<(usize, usize, ElementId)> = Vec::new();
         for parsed in &scene.spreads {
-            let on_this_spread = parsed.spread.pages.iter().any(|p| {
-                p.self_id.as_deref() == Some(page_id.as_str()) || p.self_id.is_none()
-            });
+            let on_this_spread = parsed
+                .spread
+                .pages
+                .iter()
+                .any(|p| p.self_id.as_deref() == Some(page_id.as_str()) || p.self_id.is_none());
             if !on_this_spread {
                 continue;
             }
@@ -181,9 +183,11 @@ impl CanvasModel {
         let layer_z = paged_scene::layer_z_index(designmap);
 
         for parsed in &scene.spreads {
-            let on_this_spread = parsed.spread.pages.iter().any(|p| {
-                p.self_id.as_deref() == Some(page_id.as_str()) || p.self_id.is_none()
-            });
+            let on_this_spread = parsed
+                .spread
+                .pages
+                .iter()
+                .any(|p| p.self_id.as_deref() == Some(page_id.as_str()) || p.self_id.is_none());
             if !on_this_spread {
                 continue;
             }
@@ -223,25 +227,17 @@ impl CanvasModel {
                 // the hit frame's story owns a table whose cells landed
                 // on this page. `doc_point` and `cell_rects` are both
                 // page-local pt.
-                let table_context = c.parent_story.as_deref().and_then(|sid| {
-                    table_cell_at_point(built_page, sid, doc_point)
-                });
+                let table_context = c
+                    .parent_story
+                    .as_deref()
+                    .and_then(|sid| table_cell_at_point(built_page, sid, doc_point));
                 let bbox = transform_bbox(c.bounds, c.item_transform);
                 return HitTestResult {
                     element: Some(c.element_id.clone()),
                     frame_id: Some(c.element_id.raw_id().to_string()),
                     story_id: c.parent_story.clone(),
-                    frame_bounds: Some(bbox_to_page_local(
-                        bbox,
-                        page_origin_x,
-                        page_origin_y,
-                    )),
-                    bounds: Some([
-                        c.bounds.top,
-                        c.bounds.left,
-                        c.bounds.bottom,
-                        c.bounds.right,
-                    ]),
+                    frame_bounds: Some(bbox_to_page_local(bbox, page_origin_x, page_origin_y)),
+                    bounds: Some([c.bounds.top, c.bounds.left, c.bounds.bottom, c.bounds.right]),
                     item_transform: c.item_transform,
                     group_chain: c.group_chain.clone(),
                     offset_within_story: offset,
@@ -600,9 +596,21 @@ pub fn hit_path_anchor(
     for (i, &(ax, ay, lx, ly, rx, ry)) in anchors.iter().enumerate() {
         let cands = [
             // (role, world-x, world-y, role-priority — higher wins on tie)
-            (paged_mutate::PathPointRole::Anchor, apply_matrix(&m, ax, ay), 2_u8),
-            (paged_mutate::PathPointRole::Right, apply_matrix(&m, rx, ry), 1_u8),
-            (paged_mutate::PathPointRole::Left, apply_matrix(&m, lx, ly), 0_u8),
+            (
+                paged_mutate::PathPointRole::Anchor,
+                apply_matrix(&m, ax, ay),
+                2_u8,
+            ),
+            (
+                paged_mutate::PathPointRole::Right,
+                apply_matrix(&m, rx, ry),
+                1_u8,
+            ),
+            (
+                paged_mutate::PathPointRole::Left,
+                apply_matrix(&m, lx, ly),
+                0_u8,
+            ),
         ];
         for (role, (wx, wy), prio) in cands {
             let dx = wx - point_in_page.0;
@@ -638,12 +646,7 @@ pub(crate) fn obb_intersects_aabb(
         apply_matrix(&m, bounds.right, bounds.bottom),
         apply_matrix(&m, bounds.left, bounds.bottom),
     ];
-    let aabb_corners = [
-        (left, top),
-        (right, top),
-        (right, bottom),
-        (left, bottom),
-    ];
+    let aabb_corners = [(left, top), (right, top), (right, bottom), (left, bottom)];
     // Test four candidate separating axes: the two AABB world axes
     // plus the two OBB edge directions (the transformed x and y unit
     // vectors). For axis-aligned + axis-aligned this collapses to a
@@ -903,11 +906,23 @@ mod tests {
         // Identical rect → hit.
         assert!(obb_intersects_aabb(bounds, None, [0.0, 0.0, 100.0, 100.0]));
         // Partial overlap → hit.
-        assert!(obb_intersects_aabb(bounds, None, [50.0, 50.0, 150.0, 150.0]));
+        assert!(obb_intersects_aabb(
+            bounds,
+            None,
+            [50.0, 50.0, 150.0, 150.0]
+        ));
         // Disjoint to the right → miss.
-        assert!(!obb_intersects_aabb(bounds, None, [0.0, 200.0, 100.0, 300.0]));
+        assert!(!obb_intersects_aabb(
+            bounds,
+            None,
+            [0.0, 200.0, 100.0, 300.0]
+        ));
         // Disjoint above → miss.
-        assert!(!obb_intersects_aabb(bounds, None, [-200.0, 0.0, -100.0, 100.0]));
+        assert!(!obb_intersects_aabb(
+            bounds,
+            None,
+            [-200.0, 0.0, -100.0, 100.0]
+        ));
     }
 
     #[test]
@@ -921,13 +936,25 @@ mod tests {
         // The OBB extends to roughly y = ±70.7 along the world y-axis;
         // a rect from y=40 to y=90, x=-5 to x=5 sits in the AABB but
         // also touches the rotated edge.
-        assert!(obb_intersects_aabb(bounds, Some(m), [40.0, -5.0, 90.0, 5.0]));
+        assert!(obb_intersects_aabb(
+            bounds,
+            Some(m),
+            [40.0, -5.0, 90.0, 5.0]
+        ));
         // A rect far outside even the AABB → miss.
-        assert!(!obb_intersects_aabb(bounds, Some(m), [200.0, 200.0, 300.0, 300.0]));
+        assert!(!obb_intersects_aabb(
+            bounds,
+            Some(m),
+            [200.0, 200.0, 300.0, 300.0]
+        ));
         // A rect that lies in the AABB-corner that the OBB does NOT
         // occupy (e.g. (60, 60)–(70, 70) — outside the rotated rect).
         // AABB test would say "maybe" but SAT correctly rules it out.
-        assert!(!obb_intersects_aabb(bounds, Some(m), [60.0, 60.0, 70.0, 70.0]));
+        assert!(!obb_intersects_aabb(
+            bounds,
+            Some(m),
+            [60.0, 60.0, 70.0, 70.0]
+        ));
     }
 
     #[test]
@@ -945,13 +972,11 @@ mod tests {
         // One anchor at (0,0) with handles at (-10,0) and (10,0).
         let anchors = [(0.0_f32, 0.0, -10.0, 0.0, 10.0, 0.0)];
         // Click right on the anchor.
-        let hit =
-            super::hit_path_anchor(&anchors, None, (0.0, 0.0), 4.0).expect("anchor hit");
+        let hit = super::hit_path_anchor(&anchors, None, (0.0, 0.0), 4.0).expect("anchor hit");
         assert_eq!(hit.index, 0);
         assert_eq!(hit.role, paged_mutate::PathPointRole::Anchor);
         // Click near the left handle.
-        let hit =
-            super::hit_path_anchor(&anchors, None, (-10.5, 0.0), 4.0).expect("left hit");
+        let hit = super::hit_path_anchor(&anchors, None, (-10.5, 0.0), 4.0).expect("left hit");
         assert_eq!(hit.role, paged_mutate::PathPointRole::Left);
         // Click far away — no hit.
         assert!(super::hit_path_anchor(&anchors, None, (50.0, 50.0), 4.0).is_none());
@@ -962,8 +987,8 @@ mod tests {
         // Anchor at (10, 0) in inner coords; transform shifts +5 in x.
         let anchors = [(10.0_f32, 0.0, 0.0, 0.0, 20.0, 0.0)];
         let m = [1.0, 0.0, 0.0, 1.0, 5.0, 0.0]; // translate +5x
-        // World position of the anchor is (15, 0); the click must
-        // land there, not at (10, 0).
+                                                // World position of the anchor is (15, 0); the click must
+                                                // land there, not at (10, 0).
         assert!(super::hit_path_anchor(&anchors, Some(m), (10.0, 0.0), 1.0).is_none());
         let hit = super::hit_path_anchor(&anchors, Some(m), (15.0, 0.0), 1.0)
             .expect("hit after transform");

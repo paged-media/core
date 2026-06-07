@@ -34,7 +34,8 @@ fn small_idml() -> Vec<u8> {
             .compression_method(zip::CompressionMethod::Stored);
 
         zip.start_file("mimetype", opts).unwrap();
-        zip.write_all(b"application/vnd.adobe.indesign-idml-package").unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
         zip.start_file("META-INF/container.xml", opts).unwrap();
         zip.write_all(
             br#"<?xml version="1.0" encoding="UTF-8"?>
@@ -123,7 +124,8 @@ fn translate_content_shifts_image_transform_tx_ty_only() {
         assert!(
             (after[i] - before[i]).abs() < 1e-3,
             "matrix[{i}] changed: {} -> {}",
-            before[i], after[i]
+            before[i],
+            after[i]
         );
     }
     // tx/ty shifted by delta.
@@ -177,11 +179,17 @@ fn translate_content_on_rotated_frame_uses_inverse_rotated_delta() {
         .unwrap();
     m.commit_gesture(h).unwrap();
     let after = rect_image_tx(&m, "r2").expect("after");
-    assert!((after[4] - before[4]).abs() < 1e-3, "tx={} prev={}", after[4], before[4]);
+    assert!(
+        (after[4] - before[4]).abs() < 1e-3,
+        "tx={} prev={}",
+        after[4],
+        before[4]
+    );
     assert!(
         (after[5] - before[5] + 10.0).abs() < 1e-3,
         "ty={} prev={}",
-        after[5], before[5]
+        after[5],
+        before[5]
     );
     // The 2×2 part stays untouched.
     for i in 0..4 {
@@ -255,7 +263,12 @@ fn scale_content_doubles_image_about_frame_centroid() {
     m.commit_gesture(h).unwrap();
     let after = rect_image_tx(&m, "r1").expect("after");
     // sx = 2: a doubles, c (off-diagonal x) doubles.
-    assert!((after[0] - 2.0 * before[0]).abs() < 1e-3, "a={} prev={}", after[0], before[0]);
+    assert!(
+        (after[0] - 2.0 * before[0]).abs() < 1e-3,
+        "a={} prev={}",
+        after[0],
+        before[0]
+    );
     // sy = 1: b and d unchanged.
     assert!((after[1] - before[1]).abs() < 1e-3, "b={}", after[1]);
     assert!((after[3] - before[3]).abs() < 1e-3, "d={}", after[3]);

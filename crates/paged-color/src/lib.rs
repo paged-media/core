@@ -103,11 +103,7 @@ impl IccTransform {
     pub fn cmyk_to_linear_rgb(cmyk_profile: &[u8]) -> Result<Self, IccError> {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            Self::cmyk_to_linear_rgb_with(
-                cmyk_profile,
-                cmm::Intent::RelativeColorimetric,
-                true,
-            )
+            Self::cmyk_to_linear_rgb_with(cmyk_profile, cmm::Intent::RelativeColorimetric, true)
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -184,8 +180,7 @@ impl IccTransform {
         // standard TRC, decode-to-linear after the trip. qcms's
         // `Transform::new` builds an sRGB destination internally; we
         // request 8-bit CMYK in, 8-bit RGB out, RelativeColorimetric.
-        let src =
-            qcms::Profile::new_from_slice(cmyk_profile, true).ok_or(IccError::Invalid)?;
+        let src = qcms::Profile::new_from_slice(cmyk_profile, true).ok_or(IccError::Invalid)?;
         let mut dst = qcms::Profile::new_sRGB();
         // qcms requires `precache_output_transform` for non-trivial
         // CMYK lookups; without it the transform LUT stays unpopulated
@@ -240,7 +235,11 @@ impl IccTransform {
                 ((s + 0.055) / 1.055).powf(2.4)
             }
         };
-        LinearRgb([to_linear(output[0][0]), to_linear(output[0][1]), to_linear(output[0][2])])
+        LinearRgb([
+            to_linear(output[0][0]),
+            to_linear(output[0][1]),
+            to_linear(output[0][2]),
+        ])
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -248,7 +247,12 @@ impl IccTransform {
         // Same byte quantisation as the lcms2 path so the two
         // backends produce matching outputs for the same input.
         let to_byte = |pct: f32| (pct * 2.55).round().clamp(0.0, 255.0) as u8;
-        let input = [to_byte(cmyk.c), to_byte(cmyk.m), to_byte(cmyk.y), to_byte(cmyk.k)];
+        let input = [
+            to_byte(cmyk.c),
+            to_byte(cmyk.m),
+            to_byte(cmyk.y),
+            to_byte(cmyk.k),
+        ];
         let mut output = [0u8; 3];
         self.inner.transform.convert(&input, &mut output);
         let to_linear = |b: u8| -> f32 {
@@ -259,7 +263,11 @@ impl IccTransform {
                 ((s + 0.055) / 1.055).powf(2.4)
             }
         };
-        LinearRgb([to_linear(output[0]), to_linear(output[1]), to_linear(output[2])])
+        LinearRgb([
+            to_linear(output[0]),
+            to_linear(output[1]),
+            to_linear(output[2]),
+        ])
     }
 
     /// Track 1b: batch CMYK-8 → sRGB-8 byte transform. Used by the

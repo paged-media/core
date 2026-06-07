@@ -302,7 +302,11 @@ mod wasm {
         /// document is loaded.
         #[wasm_bindgen(js_name = pageCount)]
         pub fn page_count(&self) -> usize {
-            self.core.model.as_ref().map(|m| m.page_count()).unwrap_or(0)
+            self.core
+                .model
+                .as_ref()
+                .map(|m| m.page_count())
+                .unwrap_or(0)
         }
 
         /// Phase 3 — caret geometry for a JSON-encoded
@@ -312,8 +316,7 @@ mod wasm {
         /// position the caret.
         #[wasm_bindgen(js_name = caretGeometryJson)]
         pub fn caret_geometry_json(&self, selection_json: &str) -> Option<String> {
-            let sel: paged_canvas::ContentSelection =
-                serde_json::from_str(selection_json).ok()?;
+            let sel: paged_canvas::ContentSelection = serde_json::from_str(selection_json).ok()?;
             let model = self.core.model.as_ref()?;
             let geom = paged_canvas::caret_geometry(model.built(), &sel)?;
             serde_json::to_string(&geom).ok()
@@ -324,8 +327,7 @@ mod wasm {
         /// `SelectionRect`. Empty array for caret selections.
         #[wasm_bindgen(js_name = selectionGeometryJson)]
         pub fn selection_geometry_json(&self, selection_json: &str) -> Option<String> {
-            let sel: paged_canvas::ContentSelection =
-                serde_json::from_str(selection_json).ok()?;
+            let sel: paged_canvas::ContentSelection = serde_json::from_str(selection_json).ok()?;
             let model = self.core.model.as_ref()?;
             let rects = paged_canvas::selection_geometry(model.built(), &sel);
             serde_json::to_string(&rects).ok()
@@ -612,9 +614,7 @@ mod wasm {
             match effect {
                 CacheEffect::None => {}
                 CacheEffect::ClearAll => self.scene_cache.clear(),
-                CacheEffect::InvalidatePages(pages) => {
-                    self.scene_cache.invalidate_pages(&pages)
-                }
+                CacheEffect::InvalidatePages(pages) => self.scene_cache.invalidate_pages(&pages),
             }
         }
 

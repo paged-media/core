@@ -208,11 +208,10 @@ mod wasm {
             // with the native digest-equivalence test ("same code,
             // same scene"). `font` is the last-resort fallback; the
             // registered `fonts` resolver handles per-family lookup.
-            let built =
-                match crate::viewer_build(&document, font.as_deref(), &self.fonts) {
-                    Ok(built) => built,
-                    Err(e) => return Diagnostics::error("build", &e),
-                };
+            let built = match crate::viewer_build(&document, font.as_deref(), &self.fonts) {
+                Ok(built) => built,
+                Err(e) => return Diagnostics::error("build", &e),
+            };
             self.built = Some(built);
             self.page = 0;
             self.scenes.clear();
@@ -220,7 +219,10 @@ mod wasm {
         }
 
         pub fn page_count(&self) -> u32 {
-            self.built.as_ref().map(|b| b.pages.len() as u32).unwrap_or(0)
+            self.built
+                .as_ref()
+                .map(|b| b.pages.len() as u32)
+                .unwrap_or(0)
         }
 
         pub fn set_page(&mut self, index: u32) {
@@ -398,11 +400,7 @@ mod wasm {
                     continue;
                 }
                 self.scenes.entry(idx).or_insert_with(|| {
-                    SurfacePresenter::build_page_scene(
-                        &page.list,
-                        page.width_pt,
-                        page.height_pt,
-                    )
+                    SurfacePresenter::build_page_scene(&page.list, page.width_pt, page.height_pt)
                 });
                 visible.push((idx, y_here));
             }
@@ -455,8 +453,7 @@ mod wasm {
                     SurfacePresenter::build_page_scene(&page.list, page.width_pt, page.height_pt);
                 let width_px = target_width_px.max(1);
                 let scale = f64::from(width_px) / f64::from(page.width_pt.max(1.0));
-                let height_px =
-                    ((f64::from(page.height_pt) * scale).ceil() as u32).max(1);
+                let height_px = ((f64::from(page.height_pt) * scale).ceil() as u32).max(1);
                 let mut scene = VelloScene::new();
                 scene.append(&page_scene, Some(Affine::scale(scale)));
                 (scene, width_px, height_px)

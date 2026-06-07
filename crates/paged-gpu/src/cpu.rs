@@ -27,13 +27,13 @@
 //! boundary. Fidelity-level ICC colour management comes through
 //! `paged-color` — this module stays in the simple path.
 
+use image::{Rgba, RgbaImage};
 use paged_compose::{
     BevelEmboss, BlendMode, Color as CComposeColor, DirectionalFeather, DisplayCommand,
     DisplayList, Feather, FeatherCornerType, GradientFeather, GradientFeatherKind, InnerGlow,
     InnerShadow, LayerEffect, LineCap, LineJoin, OuterGlow, Paint, PathData, PathSegment, Satin,
     SpotInkId, Transform as CTransform,
 };
-use image::{Rgba, RgbaImage};
 use tiny_skia::{
     BlendMode as TsBlendMode, FillRule, GradientStop as TsGradientStop, LineCap as TsLineCap,
     LineJoin as TsLineJoin, LinearGradient as TsLinearGradient, Mask as TsMask, Paint as TsPaint,
@@ -357,9 +357,8 @@ fn compose_cmyk_overprint_via_planes(
                 } else if t_a == 255 {
                     (t_pixel.red(), t_pixel.green(), t_pixel.blue())
                 } else {
-                    let demul = |c: u8| {
-                        ((c as u32 * 255 + (t_a as u32 / 2)) / t_a as u32).min(255) as u8
-                    };
+                    let demul =
+                        |c: u8| ((c as u32 * 255 + (t_a as u32 / 2)) / t_a as u32).min(255) as u8;
                     (
                         demul(t_pixel.red()),
                         demul(t_pixel.green()),
@@ -426,7 +425,10 @@ fn splat_cmyk_draw(
     off_x: i32,
     off_y: i32,
 ) {
-    let Paint::Cmyk { c, m, y, k, spot, .. } = *paint else {
+    let Paint::Cmyk {
+        c, m, y, k, spot, ..
+    } = *paint
+    else {
         return;
     };
     if let Some(SpotInkId(spot_id)) = spot {
@@ -467,7 +469,15 @@ fn splat_cmyk_draw(
                 }
             };
             let tint_8 = (tint_unit * 255.0).round() as u16;
-            splat_spot_into_plane(planes, spot_id as usize, target_mask, off_x, off_y, scratch, tint_8);
+            splat_spot_into_plane(
+                planes,
+                spot_id as usize,
+                target_mask,
+                off_x,
+                off_y,
+                scratch,
+                tint_8,
+            );
             return;
         }
     }
@@ -640,8 +650,12 @@ fn compose_spot_overprint_via_plane(
                 acc_y = acc_y.max(contrib(alt[2]));
                 acc_k = acc_k.max(contrib(alt[3]));
             }
-            let (nr, ng, nb) =
-                naive_cmyk_to_rgb_8bit(acc_c.min(255) as u8, acc_m.min(255) as u8, acc_y.min(255) as u8, acc_k.min(255) as u8);
+            let (nr, ng, nb) = naive_cmyk_to_rgb_8bit(
+                acc_c.min(255) as u8,
+                acc_m.min(255) as u8,
+                acc_y.min(255) as u8,
+                acc_k.min(255) as u8,
+            );
             let t_pixel = target_pixels[t_idx];
             let out_a = t_pixel.alpha().max(s_a);
             let pre = |c: u8| ((c as u32 * out_a as u32 + 127) / 255).min(255) as u8;
@@ -675,7 +689,10 @@ fn compose_cmyk_overprint_dispatch(
     off_y: i32,
     scratch: &Pixmap,
 ) {
-    let Paint::Cmyk { c, m, y, k, spot, .. } = *paint else {
+    let Paint::Cmyk {
+        c, m, y, k, spot, ..
+    } = *paint
+    else {
         return;
     };
     if let Some(SpotInkId(spot_id)) = spot {
@@ -693,13 +710,26 @@ fn compose_cmyk_overprint_dispatch(
             };
             let tint_8 = (tint_unit * 255.0).round() as u16;
             compose_spot_overprint_via_plane(
-                target, target_mask, planes, spot_id as usize, off_x, off_y, scratch, tint_8,
+                target,
+                target_mask,
+                planes,
+                spot_id as usize,
+                off_x,
+                off_y,
+                scratch,
+                tint_8,
             );
             return;
         }
     }
     compose_cmyk_overprint_via_planes(
-        target, target_mask, planes, off_x, off_y, scratch, [c, m, y, k],
+        target,
+        target_mask,
+        planes,
+        off_x,
+        off_y,
+        scratch,
+        [c, m, y, k],
     );
 }
 
@@ -784,8 +814,8 @@ fn rasterize_cmyk_scratch_fill(
         pad_pt,
     );
     let mut scratch = Pixmap::new(w_px, h_px)?;
-    let scratch_xform = TsTransform::from_translate(-off_x_px as f32, -off_y_px as f32)
-        .pre_concat(target_xform);
+    let scratch_xform =
+        TsTransform::from_translate(-off_x_px as f32, -off_y_px as f32).pre_concat(target_xform);
     let scratch_paint = paint_to_ts(paint, list, transform, scratch_xform);
     scratch.fill_path(path, &scratch_paint, FillRule::Winding, scratch_xform, None);
     Some((scratch, off_x_px, off_y_px))
@@ -811,8 +841,8 @@ fn rasterize_cmyk_scratch_stroke(
         pad_pt,
     );
     let mut scratch = Pixmap::new(w_px, h_px)?;
-    let scratch_xform = TsTransform::from_translate(-off_x_px as f32, -off_y_px as f32)
-        .pre_concat(target_xform);
+    let scratch_xform =
+        TsTransform::from_translate(-off_x_px as f32, -off_y_px as f32).pre_concat(target_xform);
     let scratch_paint = paint_to_ts(paint, list, transform, scratch_xform);
     scratch.stroke_path(path, &scratch_paint, ts_stroke, scratch_xform, None);
     Some((scratch, off_x_px, off_y_px))
@@ -944,8 +974,8 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
             .map(|e| &e.mask);
         if let Some(top) = group_stack.last_mut() {
             let off = top.offset;
-            let xform = TsTransform::from_translate(-off.0 as f32, -off.1 as f32)
-                .pre_concat(page_to_px);
+            let xform =
+                TsTransform::from_translate(-off.0 as f32, -off.1 as f32).pre_concat(page_to_px);
             (&mut top.pixmap, xform, mask)
         } else {
             (page_pixmap, page_to_px, mask)
@@ -969,7 +999,13 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 let (target, target_xform, target_mask) =
                     resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
                 let ts_paint = paint_to_ts(paint, list, transform, target_xform);
-                target.fill_path(&path, &ts_paint, FillRule::Winding, target_xform, target_mask);
+                target.fill_path(
+                    &path,
+                    &ts_paint,
+                    FillRule::Winding,
+                    target_xform,
+                    target_mask,
+                );
                 // Stage B/C: when the paint is CMYK and we're drawing
                 // directly to the page (not inside a transparency
                 // group), also splat the per-channel ink amounts into
@@ -1020,18 +1056,24 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     // so CMYK fills routed through FillPathBlend
                     // (Normal) keep the plane state coherent.
                     if !in_group && matches!(paint, Paint::Cmyk { .. }) {
-                        if let Some((scratch, off_x, off_y)) =
-                            rasterize_cmyk_scratch_fill(
-                                &path,
-                                paint,
-                                list,
-                                transform,
-                                target_xform,
-                                1.0,
-                            )
-                        {
+                        if let Some((scratch, off_x, off_y)) = rasterize_cmyk_scratch_fill(
+                            &path,
+                            paint,
+                            list,
+                            transform,
+                            target_xform,
+                            1.0,
+                        ) {
                             let planes = ensure_planes(&mut cmyk_planes, px_w, px_h);
-                            splat_cmyk_draw(planes, list, paint, target_mask, &scratch, off_x, off_y);
+                            splat_cmyk_draw(
+                                planes,
+                                list,
+                                paint,
+                                target_mask,
+                                &scratch,
+                                off_x,
+                                off_y,
+                            );
                         }
                     }
                 } else {
@@ -1066,13 +1108,10 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     let w_px = (max_x_px - off_x_px).max(1) as u32;
                     let h_px = (max_y_px - off_y_px).max(1) as u32;
                     if let Some(mut scratch) = Pixmap::new(w_px, h_px) {
-                        let scratch_xform = TsTransform::from_translate(
-                            -off_x_px as f32,
-                            -off_y_px as f32,
-                        )
-                        .pre_concat(target_xform);
-                        let scratch_paint =
-                            paint_to_ts(paint, list, transform, scratch_xform);
+                        let scratch_xform =
+                            TsTransform::from_translate(-off_x_px as f32, -off_y_px as f32)
+                                .pre_concat(target_xform);
+                        let scratch_paint = paint_to_ts(paint, list, transform, scratch_xform);
                         scratch.fill_path(
                             &path,
                             &scratch_paint,
@@ -1130,13 +1169,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                         tiny_skia::StrokeDash::new(stroke.dash.as_slice().to_vec(), 0.0)
                     },
                 };
-                target.stroke_path(
-                    &path,
-                    &ts_paint,
-                    &ts_stroke,
-                    target_xform,
-                    target_mask,
-                );
+                target.stroke_path(&path, &ts_paint, &ts_stroke, target_xform, target_mask);
                 // Stage B/C plane splat for CMYK strokes on the page.
                 if !in_group && matches!(paint, Paint::Cmyk { .. }) {
                     if let Some((scratch, off_x, off_y)) = rasterize_cmyk_scratch_stroke(
@@ -1172,12 +1205,8 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 };
                 let in_group = !group_stack.is_empty();
                 if !in_group && matches!(paint, Paint::Cmyk { .. }) {
-                    let (target, target_xform, target_mask) = resolve_target(
-                        &mut pixmap,
-                        &mut group_stack,
-                        page_to_px,
-                        &clip_stack,
-                    );
+                    let (target, target_xform, target_mask) =
+                        resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
                     if let Some((scratch, off_x, off_y)) = rasterize_cmyk_scratch_fill(
                         &path,
                         paint,
@@ -1188,12 +1217,18 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     ) {
                         let planes = ensure_planes(&mut cmyk_planes, px_w, px_h);
                         compose_cmyk_overprint_dispatch(
-                            target, target_mask, planes, list, paint, off_x, off_y, &scratch,
+                            target,
+                            target_mask,
+                            planes,
+                            list,
+                            paint,
+                            off_x,
+                            off_y,
+                            &scratch,
                         );
                     } else {
                         // Defensive fallback: knockout fill.
-                        let ts_paint =
-                            paint_to_ts(paint, list, transform, target_xform);
+                        let ts_paint = paint_to_ts(paint, list, transform, target_xform);
                         target.fill_path(
                             &path,
                             &ts_paint,
@@ -1243,12 +1278,8 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 };
                 let in_group = !group_stack.is_empty();
                 if !in_group && matches!(paint, Paint::Cmyk { .. }) {
-                    let (target, target_xform, target_mask) = resolve_target(
-                        &mut pixmap,
-                        &mut group_stack,
-                        page_to_px,
-                        &clip_stack,
-                    );
+                    let (target, target_xform, target_mask) =
+                        resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
                     if let Some((scratch, off_x, off_y)) = rasterize_cmyk_scratch_stroke(
                         &path,
                         paint,
@@ -1259,18 +1290,18 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     ) {
                         let planes = ensure_planes(&mut cmyk_planes, px_w, px_h);
                         compose_cmyk_overprint_dispatch(
-                            target, target_mask, planes, list, paint, off_x, off_y, &scratch,
+                            target,
+                            target_mask,
+                            planes,
+                            list,
+                            paint,
+                            off_x,
+                            off_y,
+                            &scratch,
                         );
                     } else {
-                        let ts_paint =
-                            paint_to_ts(paint, list, transform, target_xform);
-                        target.stroke_path(
-                            &path,
-                            &ts_paint,
-                            &ts_stroke,
-                            target_xform,
-                            target_mask,
-                        );
+                        let ts_paint = paint_to_ts(paint, list, transform, target_xform);
+                        target.stroke_path(&path, &ts_paint, &ts_stroke, target_xform, target_mask);
                     }
                     continue;
                 }
@@ -1346,13 +1377,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     // Fast path: blur is sub-pixel; the existing
                     // hard-edge fill is visually indistinguishable
                     // from a 0.5σ kernel, so skip the offscreen.
-                    target.fill_path(
-                        &path,
-                        &p,
-                        FillRule::Winding,
-                        target_xform,
-                        target_mask,
-                    );
+                    target.fill_path(&path, &p, FillRule::Winding, target_xform, target_mask);
                 } else {
                     // Offscreen path: rasterise the shadow stamp
                     // into a padded scratch pixmap, blur with a
@@ -1369,11 +1394,8 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     // place the stamp at buffer-local pixel coords.
                     let (lx_px, ly_px) =
                         ts_xform_apply(target_xform, bbox.left() - pad_pt, bbox.top() - pad_pt);
-                    let (rx_px, ry_px) = ts_xform_apply(
-                        target_xform,
-                        bbox.right() + pad_pt,
-                        bbox.bottom() + pad_pt,
-                    );
+                    let (rx_px, ry_px) =
+                        ts_xform_apply(target_xform, bbox.right() + pad_pt, bbox.bottom() + pad_pt);
                     let off_x_px = lx_px.min(rx_px).floor() as i32;
                     let off_y_px = ly_px.min(ry_px).floor() as i32;
                     let max_x_px = lx_px.max(rx_px).ceil() as i32;
@@ -1385,11 +1407,9 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                         // corresponds to (off_x_px / scale, off_y_px / scale)
                         // in page space, then apply the same pt→px
                         // scale used elsewhere.
-                        let scratch_xform = TsTransform::from_translate(
-                            -off_x_px as f32,
-                            -off_y_px as f32,
-                        )
-                        .pre_concat(target_xform);
+                        let scratch_xform =
+                            TsTransform::from_translate(-off_x_px as f32, -off_y_px as f32)
+                                .pre_concat(target_xform);
                         scratch.fill_path(&path, &p, FillRule::Winding, scratch_xform, None);
                         // tiny-skia stores RGBA8 premultiplied — the
                         // Gaussian blurs each channel independently
@@ -1411,13 +1431,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                         // Allocation failed (pathological size) —
                         // fall back to the hard-edge fill rather
                         // than skipping the shadow entirely.
-                        target.fill_path(
-                            &path,
-                            &p,
-                            FillRule::Winding,
-                            target_xform,
-                            target_mask,
-                        );
+                        target.fill_path(&path, &p, FillRule::Winding, target_xform, target_mask);
                     }
                 }
             }
@@ -1448,9 +1462,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 } else {
                     continue;
                 };
-                let rgba_slice: &[u8] = lazy_rgba
-                    .as_deref()
-                    .unwrap_or_else(|| img.rgba.as_ref());
+                let rgba_slice: &[u8] = lazy_rgba.as_deref().unwrap_or_else(|| img.rgba.as_ref());
                 // Build a tiny_skia source pixmap from the decoded
                 // RGBA8 buffer. This is one alloc + memcpy per
                 // command; image dedup happens upstream when the
@@ -1495,31 +1507,26 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 // sized to that target's pixmap, and the clip path is
                 // pre-translated by the group's `(off_x_px, off_y_px)`
                 // so it lands in the buffer's local pixel coords.
-                let (scope, mask_w, mask_h, target_off) =
-                    if let Some(top) = group_stack.last() {
-                        (
-                            ClipScope::Group(group_stack.len()),
-                            top.pixmap.width(),
-                            top.pixmap.height(),
-                            top.offset,
-                        )
-                    } else {
-                        (ClipScope::Page, px_w, px_h, (0, 0))
-                    };
+                let (scope, mask_w, mask_h, target_off) = if let Some(top) = group_stack.last() {
+                    (
+                        ClipScope::Group(group_stack.len()),
+                        top.pixmap.width(),
+                        top.pixmap.height(),
+                        top.offset,
+                    )
+                } else {
+                    (ClipScope::Page, px_w, px_h, (0, 0))
+                };
                 // `to_pixel` maps page-space pt → active target's
                 // local pixel coords: scale by pt→px, then subtract
                 // the group buffer's pixel offset (zero for the page).
-                let to_pixel = TsTransform::from_translate(
-                    -target_off.0 as f32,
-                    -target_off.1 as f32,
-                )
-                .pre_concat(page_to_px);
+                let to_pixel =
+                    TsTransform::from_translate(-target_off.0 as f32, -target_off.1 as f32)
+                        .pre_concat(page_to_px);
                 let Some(path_data) = list.paths.get(*path_id) else {
                     // Push a no-op (white) mask sized to the active
                     // target so the matching pop balances the stack.
-                    if let Some(parent) =
-                        clip_stack.iter().rev().find(|e| e.scope == scope)
-                    {
+                    if let Some(parent) = clip_stack.iter().rev().find(|e| e.scope == scope) {
                         clip_stack.push(ClipEntry {
                             mask: parent.mask.clone(),
                             scope,
@@ -1533,9 +1540,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     continue;
                 };
                 let Some(path) = build_path_transformed(path_data, transform) else {
-                    if let Some(parent) =
-                        clip_stack.iter().rev().find(|e| e.scope == scope)
-                    {
+                    if let Some(parent) = clip_stack.iter().rev().find(|e| e.scope == scope) {
                         clip_stack.push(ClipEntry {
                             mask: parent.mask.clone(),
                             scope,
@@ -1543,23 +1548,15 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     }
                     continue;
                 };
-                if let Some(parent) =
-                    clip_stack.iter().rev().find(|e| e.scope == scope)
-                {
+                if let Some(parent) = clip_stack.iter().rev().find(|e| e.scope == scope) {
                     let mut child = parent.mask.clone();
                     child.intersect_path(&path, FillRule::Winding, true, to_pixel);
-                    clip_stack.push(ClipEntry {
-                        mask: child,
-                        scope,
-                    });
+                    clip_stack.push(ClipEntry { mask: child, scope });
                 } else if let Some(mut fresh) = TsMask::new(mask_w, mask_h) {
                     // First clip on the active target: build from a
                     // fresh (transparent) mask filled with the path.
                     fresh.fill_path(&path, FillRule::Winding, true, to_pixel);
-                    clip_stack.push(ClipEntry {
-                        mask: fresh,
-                        scope,
-                    });
+                    clip_stack.push(ClipEntry { mask: fresh, scope });
                 }
             }
             DisplayCommand::PopClip(_) => {
@@ -1570,9 +1567,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 };
                 // Pop the topmost clip belonging to the active scope.
                 // Stray pops (mismatched pairs) tolerated as before.
-                if let Some(idx) =
-                    clip_stack.iter().rposition(|e| e.scope == scope)
-                {
+                if let Some(idx) = clip_stack.iter().rposition(|e| e.scope == scope) {
                     clip_stack.remove(idx);
                 }
             }
@@ -1609,8 +1604,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                         // for non-SourceOver blend modes — SourceOver
                         // against opaque paper already produces the
                         // right answer (no correction needed).
-                        let mut backdrop_snapshot = if matches!(ts_blend, TsBlendMode::SourceOver)
-                        {
+                        let mut backdrop_snapshot = if matches!(ts_blend, TsBlendMode::SourceOver) {
                             None
                         } else if let Some(parent) = group_stack.last() {
                             snapshot_parent_region(
@@ -1839,14 +1833,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 };
                 let (target, target_xform, target_mask) =
                     resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
-                render_directional_feather(
-                    target,
-                    target_xform,
-                    target_mask,
-                    &path,
-                    params,
-                    scale,
-                );
+                render_directional_feather(target, target_xform, target_mask, &path, params, scale);
             }
             DisplayCommand::GradientFeather {
                 path_id,
@@ -1920,9 +1907,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 } else {
                     ClipScope::Group(group_stack.len())
                 };
-                let parent_mask_idx = clip_stack
-                    .iter()
-                    .rposition(|e| e.scope == parent_scope);
+                let parent_mask_idx = clip_stack.iter().rposition(|e| e.scope == parent_scope);
                 let parent_mask = parent_mask_idx.map(|i| &clip_stack[i].mask);
                 // Paper-backdrop premultiplied colour. The second
                 // pass below uses this to detect "still paper"
@@ -2053,26 +2038,30 @@ fn overprint_fill(
 ) {
     let bbox = path.bounds();
     let pad_pt = 1.0;
-    let (off_x_px, off_y_px, w_px, h_px) =
-        scratch_bbox(target_xform, bbox.left(), bbox.top(), bbox.right(), bbox.bottom(), pad_pt);
+    let (off_x_px, off_y_px, w_px, h_px) = scratch_bbox(
+        target_xform,
+        bbox.left(),
+        bbox.top(),
+        bbox.right(),
+        bbox.bottom(),
+        pad_pt,
+    );
     if let Some(mut scratch) = Pixmap::new(w_px, h_px) {
-        let scratch_xform =
-            TsTransform::from_translate(-off_x_px as f32, -off_y_px as f32)
-                .pre_concat(target_xform);
+        let scratch_xform = TsTransform::from_translate(-off_x_px as f32, -off_y_px as f32)
+            .pre_concat(target_xform);
         let scratch_paint = paint_to_ts(paint, list, transform, scratch_xform);
         scratch.fill_path(path, &scratch_paint, FillRule::Winding, scratch_xform, None);
-        composite_overprint(
-            target,
-            target_mask,
-            off_x_px,
-            off_y_px,
-            &scratch,
-            paint,
-        );
+        composite_overprint(target, target_mask, off_x_px, off_y_px, &scratch, paint);
     } else {
         // Defensive fallback: knock out as a normal fill.
         let ts_paint = paint_to_ts(paint, list, transform, target_xform);
-        target.fill_path(path, &ts_paint, FillRule::Winding, target_xform, target_mask);
+        target.fill_path(
+            path,
+            &ts_paint,
+            FillRule::Winding,
+            target_xform,
+            target_mask,
+        );
     }
 }
 
@@ -2092,22 +2081,20 @@ fn overprint_stroke(
     // Stroke pads outside the path by half the line width; add that to
     // the scratch bbox so antialiased edges don't get clipped.
     let pad_pt = ts_stroke.width.max(0.0) * 0.5 + 1.0;
-    let (off_x_px, off_y_px, w_px, h_px) =
-        scratch_bbox(target_xform, bbox.left(), bbox.top(), bbox.right(), bbox.bottom(), pad_pt);
+    let (off_x_px, off_y_px, w_px, h_px) = scratch_bbox(
+        target_xform,
+        bbox.left(),
+        bbox.top(),
+        bbox.right(),
+        bbox.bottom(),
+        pad_pt,
+    );
     if let Some(mut scratch) = Pixmap::new(w_px, h_px) {
-        let scratch_xform =
-            TsTransform::from_translate(-off_x_px as f32, -off_y_px as f32)
-                .pre_concat(target_xform);
+        let scratch_xform = TsTransform::from_translate(-off_x_px as f32, -off_y_px as f32)
+            .pre_concat(target_xform);
         let scratch_paint = paint_to_ts(paint, list, transform, scratch_xform);
         scratch.stroke_path(path, &scratch_paint, ts_stroke, scratch_xform, None);
-        composite_overprint(
-            target,
-            target_mask,
-            off_x_px,
-            off_y_px,
-            &scratch,
-            paint,
-        );
+        composite_overprint(target, target_mask, off_x_px, off_y_px, &scratch, paint);
     } else {
         let ts_paint = paint_to_ts(paint, list, transform, target_xform);
         target.stroke_path(path, &ts_paint, ts_stroke, target_xform, target_mask);
@@ -2153,7 +2140,14 @@ fn composite_overprint(
     paint: &Paint,
 ) {
     if let Paint::Cmyk { c, m, y, k, .. } = *paint {
-        compose_cmyk_overprint_at(target, target_mask, off_x_px, off_y_px, scratch, [c, m, y, k]);
+        compose_cmyk_overprint_at(
+            target,
+            target_mask,
+            off_x_px,
+            off_y_px,
+            scratch,
+            [c, m, y, k],
+        );
     } else {
         let composite = PixmapPaint {
             blend_mode: TsBlendMode::Darken,
@@ -2238,8 +2232,13 @@ fn compose_cmyk_overprint_at(
             } else if t_a == 255 {
                 (t_pixel.red(), t_pixel.green(), t_pixel.blue())
             } else {
-                let demul = |c: u8| ((c as u32 * 255 + (t_a as u32 / 2)) / t_a as u32).min(255) as u8;
-                (demul(t_pixel.red()), demul(t_pixel.green()), demul(t_pixel.blue()))
+                let demul =
+                    |c: u8| ((c as u32 * 255 + (t_a as u32 / 2)) / t_a as u32).min(255) as u8;
+                (
+                    demul(t_pixel.red()),
+                    demul(t_pixel.green()),
+                    demul(t_pixel.blue()),
+                )
             };
             let (bot_c8, bot_m8, bot_y8, bot_k8) = rgb_to_naive_cmyk_8bit(tr, tg, tb);
             // Channel-wise max: top wins where it's heavier ink.
@@ -2270,13 +2269,9 @@ fn compose_cmyk_overprint_at(
             // we mark it opaque — the overprint draw added ink.
             let out_a = t_a.max(s_a);
             let pre = |c: u8| ((c as u32 * out_a as u32 + 127) / 255).min(255) as u8;
-            target_pixels[t_idx] = PremultipliedColorU8::from_rgba(
-                pre(nr),
-                pre(ng),
-                pre(nb),
-                out_a,
-            )
-            .unwrap_or(t_pixel);
+            target_pixels[t_idx] =
+                PremultipliedColorU8::from_rgba(pre(nr), pre(ng), pre(nb), out_a)
+                    .unwrap_or(t_pixel);
         }
     }
 }
@@ -2713,8 +2708,7 @@ fn gaussian_blur_premul(data: &mut [u8], width: u32, height: u32, kernel: &[f32]
         for x in 0..w {
             let mut acc = [0.0f32; 4];
             for (k_idx, &coeff) in kernel.iter().enumerate() {
-                let sx = (x as isize + k_idx as isize - radius)
-                    .clamp(0, w as isize - 1) as usize;
+                let sx = (x as isize + k_idx as isize - radius).clamp(0, w as isize - 1) as usize;
                 let p = row + sx * 4;
                 acc[0] += data[p] as f32 * coeff;
                 acc[1] += data[p + 1] as f32 * coeff;
@@ -2734,8 +2728,7 @@ fn gaussian_blur_premul(data: &mut [u8], width: u32, height: u32, kernel: &[f32]
         for x in 0..w {
             let mut acc = [0.0f32; 4];
             for (k_idx, &coeff) in kernel.iter().enumerate() {
-                let sy = (y as isize + k_idx as isize - radius)
-                    .clamp(0, h as isize - 1) as usize;
+                let sy = (y as isize + k_idx as isize - radius).clamp(0, h as isize - 1) as usize;
                 let p = (sy * w + x) * 4;
                 acc[0] += tmp[p] as f32 * coeff;
                 acc[1] += tmp[p + 1] as f32 * coeff;
@@ -2815,8 +2808,7 @@ fn effect_scratch_bounds(
     pad_pt: f32,
 ) -> Option<(i32, i32, u32, u32, TsTransform)> {
     let bbox = path.bounds();
-    let (lx_px, ly_px) =
-        ts_xform_apply(target_xform, bbox.left() - pad_pt, bbox.top() - pad_pt);
+    let (lx_px, ly_px) = ts_xform_apply(target_xform, bbox.left() - pad_pt, bbox.top() - pad_pt);
     let (rx_px, ry_px) =
         ts_xform_apply(target_xform, bbox.right() + pad_pt, bbox.bottom() + pad_pt);
     let off_x_px = lx_px.min(rx_px).floor() as i32;
@@ -2883,8 +2875,7 @@ fn gaussian_blur_mask(mask: &mut [u8], width: u32, height: u32, kernel: &[f32]) 
         for x in 0..w {
             let mut acc = 0.0f32;
             for (k_idx, &coeff) in kernel.iter().enumerate() {
-                let sx = (x as isize + k_idx as isize - radius)
-                    .clamp(0, w as isize - 1) as usize;
+                let sx = (x as isize + k_idx as isize - radius).clamp(0, w as isize - 1) as usize;
                 acc += mask[row + sx] as f32 * coeff;
             }
             tmp[row + x] = acc.round().clamp(0.0, 255.0) as u8;
@@ -2894,8 +2885,7 @@ fn gaussian_blur_mask(mask: &mut [u8], width: u32, height: u32, kernel: &[f32]) 
         for x in 0..w {
             let mut acc = 0.0f32;
             for (k_idx, &coeff) in kernel.iter().enumerate() {
-                let sy = (y as isize + k_idx as isize - radius)
-                    .clamp(0, h as isize - 1) as usize;
+                let sy = (y as isize + k_idx as isize - radius).clamp(0, h as isize - 1) as usize;
                 acc += tmp[sy * w + x] as f32 * coeff;
             }
             mask[y * w + x] = acc.round().clamp(0.0, 255.0) as u8;
@@ -2942,8 +2932,10 @@ fn render_inner_shadow(
     // Build the offset path mask: same path but translated by
     // (offset_x, offset_y) in pt-space (pre-concat the translate
     // *into* scratch_xform so it lands in pixel-space correctly).
-    let offset_xform = scratch_xform
-        .pre_concat(TsTransform::from_translate(params.offset_x, params.offset_y));
+    let offset_xform = scratch_xform.pre_concat(TsTransform::from_translate(
+        params.offset_x,
+        params.offset_y,
+    ));
     let Some(offset_pix) = stamp_path_alpha(w_px, h_px, path, offset_xform) else {
         return;
     };
@@ -3214,10 +3206,7 @@ fn render_bevel_emboss(
     let sigma_px = params.size.max(0.0) * scale * 0.5;
     if sigma_px > 0.5 {
         // Convert to u8, blur, convert back.
-        let mut h8: Vec<u8> = height
-            .iter()
-            .map(|&v| (v * 255.0).round() as u8)
-            .collect();
+        let mut h8: Vec<u8> = height.iter().map(|&v| (v * 255.0).round() as u8).collect();
         let kernel = gaussian_kernel(sigma_px);
         gaussian_blur_mask(&mut h8, w_px, h_px, &kernel);
         for (slot, src) in height.iter_mut().zip(h8.iter()) {
@@ -3581,10 +3570,26 @@ fn render_directional_feather(
                 let d_right = hw - rx;
                 let d_top = ry + hh;
                 let d_bot = hh - ry;
-                let a_left = if lw > 0.0 { (d_left / lw).clamp(0.0, 1.0) } else { 1.0 };
-                let a_right = if rw > 0.0 { (d_right / rw).clamp(0.0, 1.0) } else { 1.0 };
-                let a_top = if tw > 0.0 { (d_top / tw).clamp(0.0, 1.0) } else { 1.0 };
-                let a_bot = if bw > 0.0 { (d_bot / bw).clamp(0.0, 1.0) } else { 1.0 };
+                let a_left = if lw > 0.0 {
+                    (d_left / lw).clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
+                let a_right = if rw > 0.0 {
+                    (d_right / rw).clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
+                let a_top = if tw > 0.0 {
+                    (d_top / tw).clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
+                let a_bot = if bw > 0.0 {
+                    (d_bot / bw).clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
                 let combined = a_left * a_right * a_top * a_bot;
                 feather_mask[idx] = (m as f32 * combined).clamp(0.0, 255.0) as u8;
             }
@@ -3624,7 +3629,15 @@ fn render_directional_feather(
         }
     }
 
-    composite_alpha_mask(target, target_mask, off_x_px, off_y_px, w_px, h_px, &feather_mask);
+    composite_alpha_mask(
+        target,
+        target_mask,
+        off_x_px,
+        off_y_px,
+        w_px,
+        h_px,
+        &feather_mask,
+    );
 }
 
 /// Gradient feather: alpha-modulate whatever's already been
@@ -4074,32 +4087,27 @@ mod tests {
         // rasterizer is responsible for re-anchoring it to the
         // group's local pixel grid.
         let mut clip_path = paged_compose::PathData::default();
-        clip_path.segments.push(paged_compose::PathSegment::MoveTo {
-            x: 0.0,
-            y: 0.0,
-        });
-        clip_path.segments.push(paged_compose::PathSegment::LineTo {
-            x: 1.0,
-            y: 0.0,
-        });
-        clip_path.segments.push(paged_compose::PathSegment::LineTo {
-            x: 1.0,
-            y: 1.0,
-        });
-        clip_path.segments.push(paged_compose::PathSegment::LineTo {
-            x: 0.0,
-            y: 1.0,
-        });
+        clip_path
+            .segments
+            .push(paged_compose::PathSegment::MoveTo { x: 0.0, y: 0.0 });
+        clip_path
+            .segments
+            .push(paged_compose::PathSegment::LineTo { x: 1.0, y: 0.0 });
+        clip_path
+            .segments
+            .push(paged_compose::PathSegment::LineTo { x: 1.0, y: 1.0 });
+        clip_path
+            .segments
+            .push(paged_compose::PathSegment::LineTo { x: 0.0, y: 1.0 });
         clip_path.segments.push(paged_compose::PathSegment::Close);
         let clip_id = list.paths.push_anon(clip_path);
         // unit-rect [0,1]² → page rect [10,10..20,30] (left half of
         // the inner rect, full vertical extent).
         let clip_xform = paged_compose::Transform([10.0, 0.0, 0.0, 20.0, 10.0, 10.0]);
-        list.commands
-            .push(paged_compose::DisplayCommand::PushClip {
-                path_id: clip_id,
-                transform: clip_xform,
-            });
+        list.commands.push(paged_compose::DisplayCommand::PushClip {
+            path_id: clip_id,
+            transform: clip_xform,
+        });
         // Black rect at (10, 10, 20, 20) — wider than the clip.
         emit_rect(
             Rect {
@@ -4111,10 +4119,9 @@ mod tests {
             black,
             &mut list,
         );
-        list.commands
-            .push(paged_compose::DisplayCommand::PopClip(
-                paged_compose::Transform::IDENTITY,
-            ));
+        list.commands.push(paged_compose::DisplayCommand::PopClip(
+            paged_compose::Transform::IDENTITY,
+        ));
         list.commands
             .push(paged_compose::DisplayCommand::EndBlendGroup(
                 paged_compose::Transform::IDENTITY,
@@ -4126,18 +4133,14 @@ mod tests {
         // yellow) = yellow.
         let inside_clip = at(&img, 12, 15);
         assert!(
-            inside_clip[0] > 240
-                && inside_clip[1] > 240
-                && inside_clip[2] < 15,
+            inside_clip[0] > 240 && inside_clip[1] > 240 && inside_clip[2] < 15,
             "inside clip+inner: expected yellow, got {inside_clip:?}"
         );
         // (25, 15): outside clip but inside inner rect ⇒ group buffer
         // empty there, Lighten composite no-op, page yellow shows.
         let outside_clip = at(&img, 25, 15);
         assert!(
-            outside_clip[0] > 240
-                && outside_clip[1] > 240
-                && outside_clip[2] < 15,
+            outside_clip[0] > 240 && outside_clip[1] > 240 && outside_clip[2] < 15,
             "outside clip+inner: expected yellow page, got {outside_clip:?}"
         );
         // (2, 2): outside the yellow background ⇒ canvas white.
@@ -4187,10 +4190,7 @@ mod tests {
         // 50% black on white = ~127 per channel. Allow some slack
         // for sRGB gamma round-trip.
         let p = at(&img, 15, 15);
-        assert!(
-            p[0] > 100 && p[0] < 180,
-            "expected mid-gray, got {p:?}"
-        );
+        assert!(p[0] > 100 && p[0] < 180, "expected mid-gray, got {p:?}");
     }
 
     #[test]
@@ -4211,14 +4211,10 @@ mod tests {
         // Anonymous unit-rect path (avoids the interned-key
         // collision with later test isolation).
         let mut p = PathData::default();
-        p.segments
-            .push(PathSegment::MoveTo { x: 0.0, y: 0.0 });
-        p.segments
-            .push(PathSegment::LineTo { x: 1.0, y: 0.0 });
-        p.segments
-            .push(PathSegment::LineTo { x: 1.0, y: 1.0 });
-        p.segments
-            .push(PathSegment::LineTo { x: 0.0, y: 1.0 });
+        p.segments.push(PathSegment::MoveTo { x: 0.0, y: 0.0 });
+        p.segments.push(PathSegment::LineTo { x: 1.0, y: 0.0 });
+        p.segments.push(PathSegment::LineTo { x: 1.0, y: 1.0 });
+        p.segments.push(PathSegment::LineTo { x: 0.0, y: 1.0 });
         p.segments.push(PathSegment::Close);
         let path_id = list.paths.push_anon(p);
         // Place the unit rect at (10, 10) with size 10×10, shadow
@@ -4270,18 +4266,19 @@ mod tests {
         // darkened by the blur halo.
         let mut list = DisplayList::new();
         let black = Paint::Solid(Color::rgba(0.0, 0.0, 0.0, 1.0));
-        list.commands.push(paged_compose::DisplayCommand::PushLayer {
-            bounds: paged_compose::Rect {
-                x: 10.0,
-                y: 10.0,
-                w: 20.0,
-                h: 20.0,
-            },
-            effect: paged_compose::LayerEffect::GaussianBlur { sigma_pt: 3.0 },
-            blend_mode: paged_compose::BlendMode::Normal,
-            opacity: 1.0,
-            transform: paged_compose::Transform::IDENTITY,
-        });
+        list.commands
+            .push(paged_compose::DisplayCommand::PushLayer {
+                bounds: paged_compose::Rect {
+                    x: 10.0,
+                    y: 10.0,
+                    w: 20.0,
+                    h: 20.0,
+                },
+                effect: paged_compose::LayerEffect::GaussianBlur { sigma_pt: 3.0 },
+                blend_mode: paged_compose::BlendMode::Normal,
+                opacity: 1.0,
+                transform: paged_compose::Transform::IDENTITY,
+            });
         emit_rect(
             Rect {
                 x: 10.0,
@@ -4332,18 +4329,19 @@ mod tests {
         // a transparency-group fallback for callers that want the
         // generic plumbing without an effect.
         let mut list = DisplayList::new();
-        list.commands.push(paged_compose::DisplayCommand::PushLayer {
-            bounds: paged_compose::Rect {
-                x: 10.0,
-                y: 10.0,
-                w: 20.0,
-                h: 20.0,
-            },
-            effect: paged_compose::LayerEffect::None,
-            blend_mode: paged_compose::BlendMode::Normal,
-            opacity: 0.5,
-            transform: paged_compose::Transform::IDENTITY,
-        });
+        list.commands
+            .push(paged_compose::DisplayCommand::PushLayer {
+                bounds: paged_compose::Rect {
+                    x: 10.0,
+                    y: 10.0,
+                    w: 20.0,
+                    h: 20.0,
+                },
+                effect: paged_compose::LayerEffect::None,
+                blend_mode: paged_compose::BlendMode::Normal,
+                opacity: 0.5,
+                transform: paged_compose::Transform::IDENTITY,
+            });
         let black = Paint::Solid(Color::rgba(0.0, 0.0, 0.0, 1.0));
         emit_rect(
             Rect {
@@ -4642,7 +4640,10 @@ mod tests {
                 break;
             }
         }
-        assert!(found_dark, "satin should darken at least one interior pixel");
+        assert!(
+            found_dark,
+            "satin should darken at least one interior pixel"
+        );
         // Outside the path: stays background white.
         let outside = at(&img, 2, 2);
         assert!(
@@ -4701,8 +4702,10 @@ mod tests {
             DirectionalFeather, DisplayCommand as Cmd, FeatherCornerType, Transform as XF,
         };
         let mut list = DisplayList::new();
-        let (path_id, _) =
-            list.paths.intern(paged_compose::UNIT_ELLIPSE_KEY, paged_compose::unit_ellipse());
+        let (path_id, _) = list.paths.intern(
+            paged_compose::UNIT_ELLIPSE_KEY,
+            paged_compose::unit_ellipse(),
+        );
         let xform = XF([20.0, 0.0, 0.0, 20.0, 10.0, 10.0]);
         let params = DirectionalFeather {
             left_width: 8.0,
@@ -4825,8 +4828,14 @@ mod tests {
             end_x: 1.0,
             end_y: 0.5,
             stops: vec![
-                GradientFeatherStop { location: 0.0, alpha: 1.0 },
-                GradientFeatherStop { location: 1.0, alpha: 0.0 },
+                GradientFeatherStop {
+                    location: 0.0,
+                    alpha: 1.0,
+                },
+                GradientFeatherStop {
+                    location: 1.0,
+                    alpha: 0.0,
+                },
             ],
         };
         list.commands.push(Cmd::GradientFeather {
@@ -5266,7 +5275,12 @@ mod tests {
             spot: Some(spot_id),
         };
         emit_rect(
-            Rect { x: 20.0, y: 20.0, w: 60.0, h: 60.0 },
+            Rect {
+                x: 20.0,
+                y: 20.0,
+                w: 60.0,
+                h: 60.0,
+            },
             spot,
             &mut list,
         );
@@ -5333,19 +5347,32 @@ mod tests {
             spot: Some(spot_id),
         };
         emit_rect(
-            Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 },
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 100.0,
+            },
             spot_30,
             &mut list,
         );
         emit_rect(
-            Rect { x: 20.0, y: 20.0, w: 60.0, h: 60.0 },
+            Rect {
+                x: 20.0,
+                y: 20.0,
+                w: 60.0,
+                h: 60.0,
+            },
             spot_50,
             &mut list,
         );
         // Upgrade the top draw to overprint.
         let last = list.commands.len() - 1;
-        if let paged_compose::DisplayCommand::FillPath { path_id, paint, transform } =
-            list.commands[last]
+        if let paged_compose::DisplayCommand::FillPath {
+            path_id,
+            paint,
+            transform,
+        } = list.commands[last]
         {
             list.commands[last] = paged_compose::DisplayCommand::FillPathOverprint {
                 path_id,
@@ -5413,18 +5440,31 @@ mod tests {
             spot: Some(spot_b),
         };
         emit_rect(
-            Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 },
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 100.0,
+            },
             paint_a,
             &mut list,
         );
         emit_rect(
-            Rect { x: 20.0, y: 20.0, w: 60.0, h: 60.0 },
+            Rect {
+                x: 20.0,
+                y: 20.0,
+                w: 60.0,
+                h: 60.0,
+            },
             paint_b,
             &mut list,
         );
         let last = list.commands.len() - 1;
-        if let paged_compose::DisplayCommand::FillPath { path_id, paint, transform } =
-            list.commands[last]
+        if let paged_compose::DisplayCommand::FillPath {
+            path_id,
+            paint,
+            transform,
+        } = list.commands[last]
         {
             list.commands[last] = paged_compose::DisplayCommand::FillPathOverprint {
                 path_id,
@@ -5481,18 +5521,31 @@ mod tests {
             spot: Some(yellow_spot),
         };
         emit_rect(
-            Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 },
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 100.0,
+            },
             magenta,
             &mut list,
         );
         emit_rect(
-            Rect { x: 20.0, y: 20.0, w: 60.0, h: 60.0 },
+            Rect {
+                x: 20.0,
+                y: 20.0,
+                w: 60.0,
+                h: 60.0,
+            },
             yellow_spot_paint,
             &mut list,
         );
         let last = list.commands.len() - 1;
-        if let paged_compose::DisplayCommand::FillPath { path_id, paint, transform } =
-            list.commands[last]
+        if let paged_compose::DisplayCommand::FillPath {
+            path_id,
+            paint,
+            transform,
+        } = list.commands[last]
         {
             list.commands[last] = paged_compose::DisplayCommand::FillPathOverprint {
                 path_id,
@@ -5536,7 +5589,12 @@ mod tests {
         use paged_compose::{BlendMode, Color, DisplayCommand as Cmd, Paint, Transform as XF};
         let mut list = DisplayList::new();
         // Begin a Multiply blend group covering (10,10)-(40,40).
-        let bounds = Rect { x: 10.0, y: 10.0, w: 30.0, h: 30.0 };
+        let bounds = Rect {
+            x: 10.0,
+            y: 10.0,
+            w: 30.0,
+            h: 30.0,
+        };
         list.commands.push(Cmd::BeginBlendGroup {
             bounds,
             blend_mode: BlendMode::Multiply,
@@ -5550,7 +5608,8 @@ mod tests {
             paint: Paint::Solid(Color::rgba(0.5, 0.5, 0.5, 1.0)),
             transform: xform,
         });
-        list.commands.push(Cmd::EndBlendGroup(XF([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])));
+        list.commands
+            .push(Cmd::EndBlendGroup(XF([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])));
         let mut opts = RasterOptions::new(50.0, 50.0);
         opts.dpi = 72.0;
         let img = rasterize(&list, &opts);

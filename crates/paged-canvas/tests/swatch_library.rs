@@ -29,7 +29,8 @@ fn small_idml() -> Vec<u8> {
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
         zip.start_file("mimetype", opts).unwrap();
-        zip.write_all(b"application/vnd.adobe.indesign-idml-package").unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
         zip.start_file("META-INF/container.xml", opts).unwrap();
         zip.write_all(
             br#"<?xml version="1.0" encoding="UTF-8"?>
@@ -219,10 +220,7 @@ fn standard_lab_for_spots_prefers_the_lab_primary() {
     model
         .apply_mutation(&Mutation::SetUseStandardLabForSpots { enabled: true })
         .expect("toggle");
-    assert_eq!(
-        model.document_meta().use_standard_lab_for_spots,
-        Some(true)
-    );
+    assert_eq!(model.document_meta().use_standard_lab_for_spots, Some(true));
     let via_lab = model.color_preview("Color/pms").expect("preview").rgb_hex;
     assert_ne!(
         via_alternate, via_lab,

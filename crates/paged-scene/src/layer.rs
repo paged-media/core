@@ -103,7 +103,12 @@ pub fn build_layer_render_map(designmap: &DesignMap) -> HashMap<&str, bool> {
     designmap
         .layers
         .iter()
-        .map(|l| (l.self_id.as_str(), chain_render_visible(designmap, &l.self_id)))
+        .map(|l| {
+            (
+                l.self_id.as_str(),
+                chain_render_visible(designmap, &l.self_id),
+            )
+        })
         .collect()
 }
 
@@ -207,13 +212,7 @@ mod tests {
         }
     }
 
-    fn child_layer(
-        id: &str,
-        parent: &str,
-        visible: bool,
-        locked: bool,
-        printable: bool,
-    ) -> Layer {
+    fn child_layer(id: &str, parent: &str, visible: bool, locked: bool, printable: bool) -> Layer {
         Layer {
             parent_id: Some(parent.to_string()),
             ..layer(id, visible, locked, printable)

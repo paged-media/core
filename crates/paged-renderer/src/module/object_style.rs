@@ -49,10 +49,7 @@ pub(crate) fn resolve_applied_style(
 /// cascade only on rectangle-shaped geometry — they have no
 /// semantic meaning on Ovals, Polygons, GraphicLines, or
 /// TextFrames.
-pub(crate) fn object_style_cascade<'a>(
-    frame: &mut ResolvedFrame<'a>,
-    style: &'a ResolvedObject,
-) {
+pub(crate) fn object_style_cascade<'a>(frame: &mut ResolvedFrame<'a>, style: &'a ResolvedObject) {
     if frame.fill_color.is_none() {
         frame.fill_color = style.fill_color.as_deref();
     }

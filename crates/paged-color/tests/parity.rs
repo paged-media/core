@@ -33,18 +33,18 @@ use paged_color::{lab, Cmyk, IccTransform, LinearRgb};
 
 /// Patch set: IDML-style CMYK percentages.
 const PATCHES: &[[f32; 4]] = &[
-    [0.0, 0.0, 0.0, 0.0],       // paper
-    [100.0, 0.0, 0.0, 0.0],     // pure cyan
-    [0.0, 100.0, 0.0, 0.0],     // pure magenta
-    [0.0, 0.0, 100.0, 0.0],     // pure yellow
-    [0.0, 0.0, 0.0, 100.0],     // pure black (THE 100%-K patch)
-    [60.0, 40.0, 40.0, 100.0],  // rich black
-    [50.0, 0.0, 100.0, 0.0],    // green mix
-    [0.0, 80.0, 95.0, 0.0],     // warm red
-    [20.0, 20.0, 20.0, 20.0],   // muddy quad
-    [100.0, 100.0, 0.0, 0.0],   // violet-blue
-    [10.0, 5.0, 5.0, 0.0],      // near-paper tint
-    [50.0, 50.0, 50.0, 50.0],   // mid quad
+    [0.0, 0.0, 0.0, 0.0],      // paper
+    [100.0, 0.0, 0.0, 0.0],    // pure cyan
+    [0.0, 100.0, 0.0, 0.0],    // pure magenta
+    [0.0, 0.0, 100.0, 0.0],    // pure yellow
+    [0.0, 0.0, 0.0, 100.0],    // pure black (THE 100%-K patch)
+    [60.0, 40.0, 40.0, 100.0], // rich black
+    [50.0, 0.0, 100.0, 0.0],   // green mix
+    [0.0, 80.0, 95.0, 0.0],    // warm red
+    [20.0, 20.0, 20.0, 20.0],  // muddy quad
+    [100.0, 100.0, 0.0, 0.0],  // violet-blue
+    [10.0, 5.0, 5.0, 0.0],     // near-paper tint
+    [50.0, 50.0, 50.0, 50.0],  // mid quad
 ];
 
 /// Acceptance bound, ΔE*ab per patch. The two CMMs share the same
@@ -64,7 +64,10 @@ fn find_profile() -> Option<Vec<u8>> {
     if let Ok(entries) = std::fs::read_dir(&corpus) {
         for e in entries.flatten() {
             let path = e.path();
-            if path.extension().is_some_and(|x| x.eq_ignore_ascii_case("icc")) {
+            if path
+                .extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("icc"))
+            {
                 if let Ok(bytes) = std::fs::read(&path) {
                     return Some(bytes);
                 }
@@ -102,7 +105,12 @@ impl QcmsNative {
 
     fn convert(&self, cmyk: Cmyk) -> LinearRgb {
         let to_byte = |pct: f32| (pct * 2.55).round().clamp(0.0, 255.0) as u8;
-        let input = [to_byte(cmyk.c), to_byte(cmyk.m), to_byte(cmyk.y), to_byte(cmyk.k)];
+        let input = [
+            to_byte(cmyk.c),
+            to_byte(cmyk.m),
+            to_byte(cmyk.y),
+            to_byte(cmyk.k),
+        ];
         let mut output = [0u8; 3];
         self.transform.convert(&input, &mut output);
         let to_linear = |b: u8| -> f32 {
@@ -113,7 +121,11 @@ impl QcmsNative {
                 ((s + 0.055) / 1.055).powf(2.4)
             }
         };
-        LinearRgb([to_linear(output[0]), to_linear(output[1]), to_linear(output[2])])
+        LinearRgb([
+            to_linear(output[0]),
+            to_linear(output[1]),
+            to_linear(output[2]),
+        ])
     }
 }
 
@@ -127,7 +139,11 @@ fn linear_to_srgb(v: f32) -> f32 {
 
 fn delta_e(a: LinearRgb, b: LinearRgb) -> f32 {
     let enc = |LinearRgb(c): LinearRgb| {
-        [linear_to_srgb(c[0]), linear_to_srgb(c[1]), linear_to_srgb(c[2])]
+        [
+            linear_to_srgb(c[0]),
+            linear_to_srgb(c[1]),
+            linear_to_srgb(c[2]),
+        ]
     };
     let la = lab::srgb_to_lab_d50(enc(a));
     let lb = lab::srgb_to_lab_d50(enc(b));
@@ -176,7 +192,12 @@ fn pure_black_stays_black_on_both_cmms() {
         eprintln!("parity: no CMYK profile — skipping");
         return;
     };
-    let black = Cmyk { c: 0.0, m: 0.0, y: 0.0, k: 100.0 };
+    let black = Cmyk {
+        c: 0.0,
+        m: 0.0,
+        y: 0.0,
+        k: 100.0,
+    };
     let lcms = IccTransform::cmyk_to_linear_rgb(&profile).expect("lcms2 transform");
     let qcms = QcmsNative::new(&profile).expect("qcms transform");
     for (name, LinearRgb(rgb)) in [
@@ -226,18 +247,24 @@ fn convert_to_destination_over_real_profile() {
         other => panic!("expected Cmyk, got {other:?}"),
     }
     // Lab mid-grey → roughly neutral separation.
-    match cmm.convert_for_export(WorkingColor::Lab { l: 50.0, a: 0.0, b: 0.0 }) {
+    match cmm.convert_for_export(WorkingColor::Lab {
+        l: 50.0,
+        a: 0.0,
+        b: 0.0,
+    }) {
         WorkingColor::Cmyk(out) => {
             let coverage = out.c + out.m + out.y + out.k;
-            assert!(
-                coverage > 20.0 && coverage < 250.0,
-                "Lab grey → {out:?}"
-            );
+            assert!(coverage > 20.0 && coverage < 250.0, "Lab grey → {out:?}");
         }
         other => panic!("expected Cmyk, got {other:?}"),
     }
     // CMYK still byte-preserved with a destination configured.
-    let k100 = Cmyk { c: 0.0, m: 0.0, y: 0.0, k: 100.0 };
+    let k100 = Cmyk {
+        c: 0.0,
+        m: 0.0,
+        y: 0.0,
+        k: 100.0,
+    };
     match cmm.convert_for_export(WorkingColor::Cmyk(k100)) {
         WorkingColor::Cmyk(out) => {
             assert_eq!((out.c, out.m, out.y, out.k), (0.0, 0.0, 0.0, 100.0));

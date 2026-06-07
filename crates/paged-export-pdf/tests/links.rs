@@ -94,7 +94,10 @@ fn markers_export_carries_link_annotations() {
             let annot = annot.as_dict().expect("annot dict");
             // Subtype must be /Link.
             assert_eq!(
-                annot.get(b"Subtype").and_then(|s| s.as_name()).expect("Subtype"),
+                annot
+                    .get(b"Subtype")
+                    .and_then(|s| s.as_name())
+                    .expect("Subtype"),
                 b"Link",
                 "annotation must be a Link"
             );
@@ -102,7 +105,11 @@ fn markers_export_carries_link_annotations() {
             let action = annot.get(b"A").expect("Link action /A");
             let (_, action) = doc.dereference(action).expect("deref action");
             let action = action.as_dict().expect("action dict");
-            match action.get(b"S").and_then(|s| s.as_name()).expect("action /S") {
+            match action
+                .get(b"S")
+                .and_then(|s| s.as_name())
+                .expect("action /S")
+            {
                 b"URI" => {
                     let uri = action.get(b"URI").and_then(|u| u.as_str()).expect("/URI");
                     assert_eq!(uri, b"https://paged.media", "URI target");
@@ -124,7 +131,10 @@ fn markers_export_carries_link_annotations() {
         }
     }
 
-    assert_eq!(pages_with_annots, 1, "only the body page carries annotations");
+    assert_eq!(
+        pages_with_annots, 1,
+        "only the body page carries annotations"
+    );
     assert_eq!(link_annots, 2, "two Link annotations (URL + page jump)");
     assert_eq!(uri_actions, 1, "one /URI action");
     assert_eq!(goto_actions, 1, "one /GoTo action");
@@ -134,5 +144,8 @@ fn markers_export_carries_link_annotations() {
 fn markers_export_is_byte_deterministic() {
     let a = export_markers_pdf();
     let b = export_markers_pdf();
-    assert_eq!(a, b, "two exports of the markers scene must be byte-identical");
+    assert_eq!(
+        a, b,
+        "two exports of the markers scene must be byte-identical"
+    );
 }

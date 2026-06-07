@@ -450,11 +450,7 @@ impl Document {
         for parsed in &self.stories {
             let host_page = body_page_index.get(&parsed.self_id).copied();
             for paragraph in &parsed.story.paragraphs {
-                Self::collect_index_markers_from_paragraph(
-                    paragraph,
-                    host_page,
-                    &mut by_topic,
-                );
+                Self::collect_index_markers_from_paragraph(paragraph, host_page, &mut by_topic);
                 // Markers can also appear inside table cells.
                 if let Some(table) = paragraph.table.as_ref() {
                     for cell in &table.cells {
@@ -489,16 +485,14 @@ impl Document {
     ) {
         for marker in &paragraph.index_markers {
             let key = marker.topic_name.to_lowercase();
-            let entry = by_topic
-                .entry(key)
-                .or_insert_with(|| IndexEntry {
-                    topic: marker.topic_name.clone(),
-                    sort_key: marker
-                        .sort_order
-                        .clone()
-                        .unwrap_or_else(|| marker.topic_name.to_lowercase()),
-                    pages: Vec::new(),
-                });
+            let entry = by_topic.entry(key).or_insert_with(|| IndexEntry {
+                topic: marker.topic_name.clone(),
+                sort_key: marker
+                    .sort_order
+                    .clone()
+                    .unwrap_or_else(|| marker.topic_name.to_lowercase()),
+                pages: Vec::new(),
+            });
             if let Some(p) = host_page {
                 entry.pages.push(p);
             }
@@ -553,7 +547,10 @@ impl Document {
                     level: entry_def.level.unwrap_or(1),
                     text,
                     page_number,
-                    separator: entry_def.separator.clone().unwrap_or_else(|| "^t".to_string()),
+                    separator: entry_def
+                        .separator
+                        .clone()
+                        .unwrap_or_else(|| "^t".to_string()),
                     format_style: entry_def.format_style.clone(),
                     include_style: applied.to_string(),
                     page_number_visible: !matches!(
@@ -599,8 +596,8 @@ impl Document {
                 Some(s) => &s.spread,
                 None => continue,
             };
-            let local_page = page_index_for_bounds(&spread.pages, head.bounds, head.item_transform)
-                .unwrap_or(0);
+            let local_page =
+                page_index_for_bounds(&spread.pages, head.bounds, head.item_transform).unwrap_or(0);
             out.insert(
                 parsed_story.self_id.clone(),
                 spread_page_offsets[spread_idx] + local_page,
@@ -652,7 +649,8 @@ fn paragraph_plain_text(p: &Paragraph) -> String {
     let mut buf = String::new();
     for run in &p.runs {
         for ch in run.text.chars() {
-            if ch == paged_parse::AUTO_PAGE_NUMBER_MARKER || ch == paged_parse::NEXT_PAGE_NUMBER_MARKER
+            if ch == paged_parse::AUTO_PAGE_NUMBER_MARKER
+                || ch == paged_parse::NEXT_PAGE_NUMBER_MARKER
             {
                 continue;
             }
@@ -954,18 +952,12 @@ impl ResolvedParagraphAttrs {
         self.desired_word_spacing = self.desired_word_spacing.or(p.desired_word_spacing);
         self.maximum_word_spacing = self.maximum_word_spacing.or(p.maximum_word_spacing);
         // Q-20: letter / glyph spacing per-field inheritance.
-        self.minimum_letter_spacing =
-            self.minimum_letter_spacing.or(p.minimum_letter_spacing);
-        self.desired_letter_spacing =
-            self.desired_letter_spacing.or(p.desired_letter_spacing);
-        self.maximum_letter_spacing =
-            self.maximum_letter_spacing.or(p.maximum_letter_spacing);
-        self.minimum_glyph_scaling =
-            self.minimum_glyph_scaling.or(p.minimum_glyph_scaling);
-        self.desired_glyph_scaling =
-            self.desired_glyph_scaling.or(p.desired_glyph_scaling);
-        self.maximum_glyph_scaling =
-            self.maximum_glyph_scaling.or(p.maximum_glyph_scaling);
+        self.minimum_letter_spacing = self.minimum_letter_spacing.or(p.minimum_letter_spacing);
+        self.desired_letter_spacing = self.desired_letter_spacing.or(p.desired_letter_spacing);
+        self.maximum_letter_spacing = self.maximum_letter_spacing.or(p.maximum_letter_spacing);
+        self.minimum_glyph_scaling = self.minimum_glyph_scaling.or(p.minimum_glyph_scaling);
+        self.desired_glyph_scaling = self.desired_glyph_scaling.or(p.desired_glyph_scaling);
+        self.maximum_glyph_scaling = self.maximum_glyph_scaling.or(p.maximum_glyph_scaling);
         self.drop_cap_characters = self.drop_cap_characters.or(p.drop_cap_characters);
         self.drop_cap_lines = self.drop_cap_lines.or(p.drop_cap_lines);
         self.drop_cap_detail = self.drop_cap_detail.or(p.drop_cap_detail);
@@ -1589,9 +1581,7 @@ mod tests {
         // Each marker becomes its own Story file.
         let mut story_refs = String::new();
         for (sid, _topic, _page) in markers {
-            story_refs.push_str(&format!(
-                "<idPkg:Story src=\"Stories/Story_{sid}.xml\"/>"
-            ));
+            story_refs.push_str(&format!("<idPkg:Story src=\"Stories/Story_{sid}.xml\"/>"));
         }
         zip.write_all(
             format!(

@@ -29,7 +29,8 @@ fn small_idml() -> Vec<u8> {
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
         zip.start_file("mimetype", opts).unwrap();
-        zip.write_all(b"application/vnd.adobe.indesign-idml-package").unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
         zip.start_file("META-INF/container.xml", opts).unwrap();
         zip.write_all(
             br#"<?xml version="1.0" encoding="UTF-8"?>
@@ -151,7 +152,8 @@ fn rotate_shift_snaps_to_nearest_15_degrees() {
         (0.0, -30.0),
         GestureModifiers {
             shift: true,
-            alt: false, disable_snap: false,
+            alt: false,
+            disable_snap: false,
         },
     )
     .unwrap();
@@ -163,12 +165,14 @@ fn rotate_shift_snaps_to_nearest_15_degrees() {
     assert!(
         (mt[0] - expected_a).abs() < 1e-3,
         "a={} expected ~{}",
-        mt[0], expected_a
+        mt[0],
+        expected_a
     );
     assert!(
         (mt[1] - expected_b).abs() < 1e-3,
         "b={} expected ~{}",
-        mt[1], expected_b
+        mt[1],
+        expected_b
     );
 }
 
@@ -375,7 +379,8 @@ fn scale_with_shift_locks_aspect() {
         (50.0, 50.0),
         GestureModifiers {
             shift: true,
-            alt: false, disable_snap: false,
+            alt: false,
+            disable_snap: false,
         },
     )
     .unwrap();
@@ -384,6 +389,7 @@ fn scale_with_shift_locks_aspect() {
     assert!(
         (mt[0] - mt[3]).abs() < 1e-3,
         "aspect not locked: sx={}, sy={}",
-        mt[0], mt[3]
+        mt[0],
+        mt[3]
     );
 }

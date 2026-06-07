@@ -217,12 +217,12 @@ pub fn affine_multiply(a: Affine, b: Affine) -> Affine {
     // | a1 a3 a5 | * | b1 b3 b5 |
     // | 0  0  1  |   | 0  0  1  |
     [
-        a[0] * b[0] + a[2] * b[1],          // m0 = a*b0 + c*b1
-        a[1] * b[0] + a[3] * b[1],          // m1
-        a[0] * b[2] + a[2] * b[3],          // m2
-        a[1] * b[2] + a[3] * b[3],          // m3
-        a[0] * b[4] + a[2] * b[5] + a[4],   // m4 = a*tx_b + c*ty_b + tx_a
-        a[1] * b[4] + a[3] * b[5] + a[5],   // m5
+        a[0] * b[0] + a[2] * b[1],        // m0 = a*b0 + c*b1
+        a[1] * b[0] + a[3] * b[1],        // m1
+        a[0] * b[2] + a[2] * b[3],        // m2
+        a[1] * b[2] + a[3] * b[3],        // m3
+        a[0] * b[4] + a[2] * b[5] + a[4], // m4 = a*tx_b + c*ty_b + tx_a
+        a[1] * b[4] + a[3] * b[5] + a[5], // m5
     ]
 }
 
@@ -414,7 +414,11 @@ mod tests {
         assert_eq!(fitted.first().unwrap().anchor, [0.0, 0.0]);
         assert_eq!(fitted.last().unwrap().anchor, [90.0, 0.0]);
         for a in &fitted {
-            assert!(a.anchor[1].abs() < 1e-3, "anchor off the line: {:?}", a.anchor);
+            assert!(
+                a.anchor[1].abs() < 1e-3,
+                "anchor off the line: {:?}",
+                a.anchor
+            );
             assert!(a.left[1].abs() < 1.0 && a.right[1].abs() < 1.0);
         }
     }
@@ -422,8 +426,16 @@ mod tests {
     #[test]
     fn fit_declines_below_three_points() {
         let pts = vec![
-            PathAnchorSpec { anchor: [0.0, 0.0], left: [0.0, 0.0], right: [0.0, 0.0] },
-            PathAnchorSpec { anchor: [10.0, 5.0], left: [10.0, 5.0], right: [10.0, 5.0] },
+            PathAnchorSpec {
+                anchor: [0.0, 0.0],
+                left: [0.0, 0.0],
+                right: [0.0, 0.0],
+            },
+            PathAnchorSpec {
+                anchor: [10.0, 5.0],
+                left: [10.0, 5.0],
+                right: [10.0, 5.0],
+            },
         ];
         assert_eq!(fit_polyline_to_anchors(&pts), pts);
     }

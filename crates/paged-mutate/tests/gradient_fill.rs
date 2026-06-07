@@ -24,10 +24,7 @@
 use std::path::PathBuf;
 
 use paged_compose::{DisplayCommand, Paint};
-use paged_mutate::{
-    apply, GradientSpec, GradientStopSpec, NodeId, Operation, PropertyPath,
-    Value,
-};
+use paged_mutate::{apply, GradientSpec, GradientStopSpec, NodeId, Operation, PropertyPath, Value};
 use paged_renderer::pipeline::{build_document, PipelineOptions};
 use paged_scene::Document;
 
@@ -75,8 +72,7 @@ fn gradient_assignment_round_trips_to_a_gradient_paint() {
 
     // Baseline: how many gradient fills does the document already
     // paint? (The geometry fixture may legitimately contain some.)
-    let before =
-        build_document(&doc, &PipelineOptions::default()).expect("build before");
+    let before = build_document(&doc, &PipelineOptions::default()).expect("build before");
     let baseline: usize = before
         .pages
         .iter()
@@ -139,8 +135,7 @@ fn gradient_assignment_round_trips_to_a_gradient_paint() {
 
     // 3 · The render path resolves it: one MORE gradient paint than
     // the baseline.
-    let after =
-        build_document(&doc, &PipelineOptions::default()).expect("build after");
+    let after = build_document(&doc, &PipelineOptions::default()).expect("build after");
     let count: usize = after
         .pages
         .iter()
@@ -165,4 +160,3 @@ fn gradient_assignment_round_trips_to_a_gradient_paint() {
     // 5 · Cleanup symmetry: deleting the gradient inverts too.
     apply(&mut doc, &created.inverse).expect("undo gradient creation");
 }
-

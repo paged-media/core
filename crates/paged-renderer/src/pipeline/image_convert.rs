@@ -59,7 +59,12 @@ pub(super) fn rgb24_to_rgba(src: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
 /// ICC profile when present (and the platform supports lcms2),
 /// falling back to the Adobe-naive multiplicative form on
 /// missing/invalid profiles or wasm32 targets.
-pub(super) fn cmyk32_to_rgba(src: &[u8], w: u32, h: u32, icc_profile: Option<&[u8]>) -> Option<Vec<u8>> {
+pub(super) fn cmyk32_to_rgba(
+    src: &[u8],
+    w: u32,
+    h: u32,
+    icc_profile: Option<&[u8]>,
+) -> Option<Vec<u8>> {
     if let Some(profile) = icc_profile {
         match paged_color::IccTransform::cmyk_to_linear_rgb(profile) {
             Ok(xform) => {

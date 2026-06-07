@@ -84,7 +84,8 @@ pub(crate) fn drop_shadow_module(
             if anchors.is_empty() {
                 ShadowTarget::Rect(*bbox)
             } else {
-                let path = polygon_path_from_anchors_with_open(anchors, subpath_starts, subpath_open);
+                let path =
+                    polygon_path_from_anchors_with_open(anchors, subpath_starts, subpath_open);
                 let cache_key = match frame.self_id {
                     Some(id) => fnv_1a_u64(id.as_bytes()),
                     None => path_signature(anchors),
@@ -99,8 +100,7 @@ pub(crate) fn drop_shadow_module(
     // Fill shadow — gated on a visible fill so the stamp doesn't
     // leak a solid backdrop through a transparent frame.
     if !frame_fill_is_transparent(frame.fill_color) {
-        if let Some(shadow) =
-            resolve_frame_shadow(frame.drop_shadow, fallback, palette, cmyk_xform)
+        if let Some(shadow) = resolve_frame_shadow(frame.drop_shadow, fallback, palette, cmyk_xform)
         {
             emit_shadow(target, outer, shadow, page);
         }
@@ -110,9 +110,7 @@ pub(crate) fn drop_shadow_module(
     // Resolving via `resolve_frame_shadow(..., None, ...)` so the
     // synthetic fallback only ever supplies the *fill* shadow.
     if frame_stroke_is_visible(frame.stroke_color, frame.effective_stroke_weight()) {
-        if let Some(shadow) =
-            resolve_frame_shadow(stroke_drop_shadow, None, palette, cmyk_xform)
-        {
+        if let Some(shadow) = resolve_frame_shadow(stroke_drop_shadow, None, palette, cmyk_xform) {
             emit_shadow(target, outer, shadow, page);
         }
     }

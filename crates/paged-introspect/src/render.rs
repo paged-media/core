@@ -23,10 +23,10 @@
 //! moderately-sized fixtures this is acceptable; profiling will tell
 //! us when it isn't.
 
+use image::ImageEncoder;
 use paged_compose::Color;
 use paged_renderer::pipeline;
 use paged_scene::Document;
-use image::ImageEncoder;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RenderError {

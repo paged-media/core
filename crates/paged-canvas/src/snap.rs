@@ -269,9 +269,7 @@ fn push_unique_line(lines: &mut Vec<SnapLine>, line: SnapLine) {
 fn promote_winner(lines: &mut Vec<SnapLine>, winner: Option<&SnapMatch>, axis: SnapAxis) {
     let Some(m) = winner else { return };
     let Some(pos) = lines.iter().position(|l| {
-        l.axis == axis
-            && l.page_id == m.page_id
-            && (l.position - m.target).abs() < 1e-3
+        l.axis == axis && l.page_id == m.page_id && (l.position - m.target).abs() < 1e-3
     }) else {
         return;
     };
@@ -326,10 +324,7 @@ fn is_pure_translate_or_identity(m: Option<[f32; 6]>) -> bool {
     match m {
         None => true,
         Some([a, b, c, d, _, _]) => {
-            (a - 1.0).abs() < 1e-4
-                && (d - 1.0).abs() < 1e-4
-                && b.abs() < 1e-4
-                && c.abs() < 1e-4
+            (a - 1.0).abs() < 1e-4 && (d - 1.0).abs() < 1e-4 && b.abs() < 1e-4 && c.abs() < 1e-4
         }
     }
 }
@@ -414,7 +409,9 @@ fn union_aabb_in_page(
 
 fn snapshot_aabb_in_spread(snap: &crate::gesture::NodeSnapshot) -> [f32; 4] {
     let b = snap.bounds;
-    let m = snap.item_transform.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let m = snap
+        .item_transform
+        .unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
     let corners = [
         apply(m, b.left, b.top),
         apply(m, b.right, b.top),
@@ -445,11 +442,7 @@ fn snap_targets_x(
 ) -> Vec<f32> {
     let moving_ids: std::collections::HashSet<&crate::element_selection::ElementId> =
         moving.iter().map(|s| &s.id).collect();
-    let mut out = vec![
-        0.0,
-        host_page.width_pt * 0.5,
-        host_page.width_pt,
-    ];
+    let mut out = vec![0.0, host_page.width_pt * 0.5, host_page.width_pt];
     for f in siblings {
         if f.page_id != host_page.page_id {
             continue;
@@ -474,11 +467,7 @@ fn snap_targets_y(
 ) -> Vec<f32> {
     let moving_ids: std::collections::HashSet<&crate::element_selection::ElementId> =
         moving.iter().map(|s| &s.id).collect();
-    let mut out = vec![
-        0.0,
-        host_page.height_pt * 0.5,
-        host_page.height_pt,
-    ];
+    let mut out = vec![0.0, host_page.height_pt * 0.5, host_page.height_pt];
     for f in siblings {
         if f.page_id != host_page.page_id {
             continue;
@@ -500,11 +489,7 @@ fn snap_targets_y(
 /// as a typed pair instead of an unzipped tuple. Used by the
 /// multi-member snap pass to track the page each chosen target
 /// belongs to.
-fn snap_axis_match(
-    candidates: &[f32],
-    targets: &[f32],
-    tolerance: f32,
-) -> Option<(f32, f32)> {
+fn snap_axis_match(candidates: &[f32], targets: &[f32], tolerance: f32) -> Option<(f32, f32)> {
     let mut best: Option<(f32, f32)> = None;
     for &cand in candidates {
         for &target in targets {
@@ -611,7 +596,12 @@ mod tests {
         // Frame at left=20, drag by dx=-19 → would land at left=1.
         // Tolerance 4 → snaps left edge to 0. Effective delta = -20.
         let s = snap_for(
-            Bounds { top: 100.0, left: 20.0, bottom: 200.0, right: 200.0 },
+            Bounds {
+                top: 100.0,
+                left: 20.0,
+                bottom: 200.0,
+                right: 200.0,
+            },
             "tf",
             "u1",
         );
@@ -632,7 +622,12 @@ mod tests {
         // delta -20). With `disable_snap` set the raw delta passes
         // through and no snap lines surface.
         let s = snap_for(
-            Bounds { top: 100.0, left: 20.0, bottom: 200.0, right: 200.0 },
+            Bounds {
+                top: 100.0,
+                left: 20.0,
+                bottom: 200.0,
+                right: 200.0,
+            },
             "tf",
             "u1",
         );
@@ -650,7 +645,12 @@ mod tests {
         // Move by dx = -10. Closest target (page left) at x=0 from
         // candidate 10 → diff 10 → outside 4pt tolerance.
         let s = snap_for(
-            Bounds { top: 100.0, left: 20.0, bottom: 200.0, right: 200.0 },
+            Bounds {
+                top: 100.0,
+                left: 20.0,
+                bottom: 200.0,
+                right: 200.0,
+            },
             "tf",
             "u1",
         );
@@ -665,7 +665,12 @@ mod tests {
     fn snap_to_sibling_frame_right_edge() {
         // Moving frame's left edge approaches sibling's right edge.
         let s = snap_for(
-            Bounds { top: 100.0, left: 100.0, bottom: 200.0, right: 200.0 },
+            Bounds {
+                top: 100.0,
+                left: 100.0,
+                bottom: 200.0,
+                right: 200.0,
+            },
             "tf",
             "u1",
         );
@@ -698,7 +703,12 @@ mod tests {
         // the moving frame already lines up with A's left edge AND
         // B's right edge → smart guides should surface both.
         let s = snap_for(
-            Bounds { top: 100.0, left: 50.0, bottom: 130.0, right: 100.0 },
+            Bounds {
+                top: 100.0,
+                left: 50.0,
+                bottom: 130.0,
+                right: 100.0,
+            },
             "tf",
             "u_move",
         );
@@ -752,7 +762,12 @@ mod tests {
         // candidate left lands at 19, within 4pt of the guide
         // (delta 1 < 4) → snap pulls left to 18 (effective dx=-2).
         let s = snap_for(
-            Bounds { top: 100.0, left: 20.0, bottom: 200.0, right: 200.0 },
+            Bounds {
+                top: 100.0,
+                left: 20.0,
+                bottom: 200.0,
+                right: 200.0,
+            },
             "tf",
             "u1",
         );
@@ -762,8 +777,10 @@ mod tests {
         let pages = vec![pg];
         let adj = compute_snap_adjustment(&sess, (-1.0, 0.0), &pages, &[]);
         assert!((adj.delta.0 - -2.0).abs() < 1e-3, "{:?}", adj);
-        assert!(adj.lines.iter().any(|l| matches!(l.axis, SnapAxis::X)
-            && (l.position - 18.0).abs() < 1e-3));
+        assert!(adj
+            .lines
+            .iter()
+            .any(|l| matches!(l.axis, SnapAxis::X) && (l.position - 18.0).abs() < 1e-3));
     }
 
     #[test]
@@ -772,7 +789,12 @@ mod tests {
         // otherwise dx=0 would always snap to dx=0 and the user could
         // never move it.
         let s = snap_for(
-            Bounds { top: 100.0, left: 100.0, bottom: 200.0, right: 200.0 },
+            Bounds {
+                top: 100.0,
+                left: 100.0,
+                bottom: 200.0,
+                right: 200.0,
+            },
             "tf",
             "u1",
         );
@@ -817,7 +839,12 @@ mod tests {
             node_id: NodeId::TextFrame("a".into()),
             // Page1 spread coords (0..612). Right edge at 610, snap
             // to 612 needs +2pt of dx.
-            bounds: Bounds { top: 100.0, left: 500.0, bottom: 200.0, right: 610.0 },
+            bounds: Bounds {
+                top: 100.0,
+                left: 500.0,
+                bottom: 200.0,
+                right: 610.0,
+            },
             item_transform: None,
             image_item_transform: None,
             path_anchors: Vec::new(),
@@ -826,7 +853,12 @@ mod tests {
             id: ElementId::TextFrame("b".into()),
             node_id: NodeId::TextFrame("b".into()),
             // Page2 spread coords (612..1224). Comfortably middle.
-            bounds: Bounds { top: 100.0, left: 800.0, bottom: 200.0, right: 900.0 },
+            bounds: Bounds {
+                top: 100.0,
+                left: 800.0,
+                bottom: 200.0,
+                right: 900.0,
+            },
             item_transform: None,
             image_item_transform: None,
             path_anchors: Vec::new(),
@@ -854,7 +886,12 @@ mod tests {
         // halves to 2pt. A 3pt-near-edge candidate that snaps at scale
         // 1 should NOT snap at scale 2.
         let s = snap_for(
-            Bounds { top: 100.0, left: 20.0, bottom: 200.0, right: 200.0 },
+            Bounds {
+                top: 100.0,
+                left: 20.0,
+                bottom: 200.0,
+                right: 200.0,
+            },
             "tf",
             "u1",
         );
@@ -862,24 +899,16 @@ mod tests {
         // dx = -17 → candidate left = 3, diff = -3 from page-left (0).
         // |diff| = 3pt is inside the 4pt tolerance at scale=1
         // (snaps) but outside the 2pt tolerance at scale=2 (doesn't).
-        let snap_at_1 = compute_snap_adjustment(
-            &session(vec![s.clone()]),
-            (-17.0, 0.0),
-            &pages,
-            &[],
-        );
+        let snap_at_1 =
+            compute_snap_adjustment(&session(vec![s.clone()]), (-17.0, 0.0), &pages, &[]);
         assert!(
             !snap_at_1.lines.is_empty(),
             "should snap at scale 1: {:?}",
             snap_at_1
         );
 
-        let snap_at_2 = compute_snap_adjustment(
-            &session_at_scale(vec![s], 2.0),
-            (-17.0, 0.0),
-            &pages,
-            &[],
-        );
+        let snap_at_2 =
+            compute_snap_adjustment(&session_at_scale(vec![s], 2.0), (-17.0, 0.0), &pages, &[]);
         assert!(
             snap_at_2.lines.is_empty(),
             "should NOT snap at scale 2: {:?}",
@@ -890,7 +919,12 @@ mod tests {
     #[test]
     fn non_translate_gestures_pass_through() {
         let s = snap_for(
-            Bounds { top: 0.0, left: 0.0, bottom: 100.0, right: 100.0 },
+            Bounds {
+                top: 0.0,
+                left: 0.0,
+                bottom: 100.0,
+                right: 100.0,
+            },
             "tf",
             "u1",
         );

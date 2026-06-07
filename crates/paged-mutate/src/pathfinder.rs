@@ -78,22 +78,14 @@ pub fn pathfinder_boolean(
         PathfinderKind::Union => {
             let mut acc: Vec<SimpleBezierPath> = flo_inputs[0].clone();
             for other in &flo_inputs[1..] {
-                acc = path_add::<SimpleBezierPath>(
-                    &acc,
-                    other,
-                    PATHFINDER_ACCURACY,
-                );
+                acc = path_add::<SimpleBezierPath>(&acc, other, PATHFINDER_ACCURACY);
             }
             acc
         }
         PathfinderKind::Intersect => {
             let mut acc: Vec<SimpleBezierPath> = flo_inputs[0].clone();
             for other in &flo_inputs[1..] {
-                acc = path_intersect::<SimpleBezierPath>(
-                    &acc,
-                    other,
-                    PATHFINDER_ACCURACY,
-                );
+                acc = path_intersect::<SimpleBezierPath>(&acc, other, PATHFINDER_ACCURACY);
             }
             acc
         }
@@ -106,21 +98,13 @@ pub fn pathfinder_boolean(
                 if rest.is_empty() {
                     rest = other.clone();
                 } else {
-                    rest = path_add::<SimpleBezierPath>(
-                        &rest,
-                        other,
-                        PATHFINDER_ACCURACY,
-                    );
+                    rest = path_add::<SimpleBezierPath>(&rest, other, PATHFINDER_ACCURACY);
                 }
             }
             if rest.is_empty() {
                 flo_inputs[0].clone()
             } else {
-                path_sub::<SimpleBezierPath>(
-                    &flo_inputs[0],
-                    &rest,
-                    PATHFINDER_ACCURACY,
-                )
+                path_sub::<SimpleBezierPath>(&flo_inputs[0], &rest, PATHFINDER_ACCURACY)
             }
         }
         PathfinderKind::Exclude => {
@@ -132,28 +116,17 @@ pub fn pathfinder_boolean(
             // InDesign uses.
             let mut union_acc: Vec<SimpleBezierPath> = flo_inputs[0].clone();
             for other in &flo_inputs[1..] {
-                union_acc = path_add::<SimpleBezierPath>(
-                    &union_acc,
-                    other,
-                    PATHFINDER_ACCURACY,
-                );
+                union_acc = path_add::<SimpleBezierPath>(&union_acc, other, PATHFINDER_ACCURACY);
             }
             let mut isect_acc: Vec<SimpleBezierPath> = flo_inputs[0].clone();
             for other in &flo_inputs[1..] {
-                isect_acc = path_intersect::<SimpleBezierPath>(
-                    &isect_acc,
-                    other,
-                    PATHFINDER_ACCURACY,
-                );
+                isect_acc =
+                    path_intersect::<SimpleBezierPath>(&isect_acc, other, PATHFINDER_ACCURACY);
             }
             if isect_acc.is_empty() {
                 union_acc
             } else {
-                path_sub::<SimpleBezierPath>(
-                    &union_acc,
-                    &isect_acc,
-                    PATHFINDER_ACCURACY,
-                )
+                path_sub::<SimpleBezierPath>(&union_acc, &isect_acc, PATHFINDER_ACCURACY)
             }
         }
     };
@@ -194,10 +167,8 @@ mod tests {
     fn union_of_two_disjoint_rects_keeps_both() {
         let a = rect(0.0, 0.0, 10.0, 10.0);
         let b = rect(20.0, 20.0, 30.0, 30.0);
-        let (anchors, starts) = pathfinder_boolean(
-            &[(a, vec![]), (b, vec![])],
-            PathfinderKind::Union,
-        );
+        let (anchors, starts) =
+            pathfinder_boolean(&[(a, vec![]), (b, vec![])], PathfinderKind::Union);
         // Two subpaths: one per disjoint rect.
         assert_eq!(starts.len(), 2);
         // 4 corners per rect = 8 anchors total.
@@ -208,10 +179,8 @@ mod tests {
     fn intersect_of_non_overlapping_rects_is_empty() {
         let a = rect(0.0, 0.0, 10.0, 10.0);
         let b = rect(20.0, 20.0, 30.0, 30.0);
-        let (anchors, _) = pathfinder_boolean(
-            &[(a, vec![]), (b, vec![])],
-            PathfinderKind::Intersect,
-        );
+        let (anchors, _) =
+            pathfinder_boolean(&[(a, vec![]), (b, vec![])], PathfinderKind::Intersect);
         assert!(anchors.is_empty());
     }
 
@@ -220,10 +189,8 @@ mod tests {
         // A = [0..20, 0..20], B = [10..30, 10..30] → intersect = [10..20, 10..20].
         let a = rect(0.0, 0.0, 20.0, 20.0);
         let b = rect(10.0, 10.0, 30.0, 30.0);
-        let (anchors, starts) = pathfinder_boolean(
-            &[(a, vec![]), (b, vec![])],
-            PathfinderKind::Intersect,
-        );
+        let (anchors, starts) =
+            pathfinder_boolean(&[(a, vec![]), (b, vec![])], PathfinderKind::Intersect);
         assert_eq!(starts.len(), 1);
         assert_eq!(anchors.len(), 4);
         let xs: Vec<f32> = anchors.iter().map(|a| a.anchor.0).collect();
@@ -243,10 +210,8 @@ mod tests {
         // A = [0..20, 0..20], B = [10..30, 10..30] → A \ B = L-shape.
         let a = rect(0.0, 0.0, 20.0, 20.0);
         let b = rect(10.0, 10.0, 30.0, 30.0);
-        let (anchors, starts) = pathfinder_boolean(
-            &[(a, vec![]), (b, vec![])],
-            PathfinderKind::Subtract,
-        );
+        let (anchors, starts) =
+            pathfinder_boolean(&[(a, vec![]), (b, vec![])], PathfinderKind::Subtract);
         assert!(!anchors.is_empty(), "L-shape should be non-empty");
         assert_eq!(starts.len(), 1, "L-shape is one subpath");
         // An L-shape from this subtraction has 6 corner vertices.
@@ -259,10 +224,8 @@ mod tests {
         // L-shapes (one per input minus the overlap).
         let a = rect(0.0, 0.0, 20.0, 20.0);
         let b = rect(10.0, 10.0, 30.0, 30.0);
-        let (anchors, starts) = pathfinder_boolean(
-            &[(a, vec![]), (b, vec![])],
-            PathfinderKind::Exclude,
-        );
+        let (anchors, starts) =
+            pathfinder_boolean(&[(a, vec![]), (b, vec![])], PathfinderKind::Exclude);
         assert!(!anchors.is_empty());
         // Two disjoint L-shapes = 2 subpaths.
         assert_eq!(starts.len(), 2);

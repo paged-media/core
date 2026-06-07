@@ -209,10 +209,18 @@ impl ShapingFeatures {
     fn to_rustybuzz(self) -> Vec<rustybuzz::Feature> {
         let mut out: Vec<rustybuzz::Feature> = Vec::new();
         let on = |out: &mut Vec<rustybuzz::Feature>, tag: &[u8; 4]| {
-            out.push(rustybuzz::Feature::new(ttf_parser::Tag::from_bytes(tag), 1, ..));
+            out.push(rustybuzz::Feature::new(
+                ttf_parser::Tag::from_bytes(tag),
+                1,
+                ..,
+            ));
         };
         let off = |out: &mut Vec<rustybuzz::Feature>, tag: &[u8; 4]| {
-            out.push(rustybuzz::Feature::new(ttf_parser::Tag::from_bytes(tag), 0, ..));
+            out.push(rustybuzz::Feature::new(
+                ttf_parser::Tag::from_bytes(tag),
+                0,
+                ..,
+            ));
         };
         if !self.ligatures_on {
             // Standard + contextual ligatures off.
@@ -739,15 +747,26 @@ mod tests {
             figure_style: FigureStyle::OldStyle,
             ..Default::default()
         };
-        assert_eq!(tag_pairs(&oldstyle.to_rustybuzz()), vec![("onum".into(), 1)]);
+        assert_eq!(
+            tag_pairs(&oldstyle.to_rustybuzz()),
+            vec![("onum".into(), 1)]
+        );
         // Combined styles force both the figure and width axes.
         let prop_old = ShapingFeatures {
             figure_style: FigureStyle::ProportionalOldstyle,
             ..Default::default()
         };
         let rb = prop_old.to_rustybuzz();
-        assert!(has_tag_on(&rb, "onum"), "expected onum: {:?}", tag_pairs(&rb));
-        assert!(has_tag_on(&rb, "pnum"), "expected pnum: {:?}", tag_pairs(&rb));
+        assert!(
+            has_tag_on(&rb, "onum"),
+            "expected onum: {:?}",
+            tag_pairs(&rb)
+        );
+        assert!(
+            has_tag_on(&rb, "pnum"),
+            "expected pnum: {:?}",
+            tag_pairs(&rb)
+        );
         assert_eq!(rb.len(), 2);
         let tab_lin = ShapingFeatures {
             figure_style: FigureStyle::TabularLining,
@@ -763,7 +782,10 @@ mod tests {
     #[test]
     fn figure_style_from_idml_parses_known_strings() {
         assert_eq!(FigureStyle::from_idml(Some("Lining")), FigureStyle::Lining);
-        assert_eq!(FigureStyle::from_idml(Some("OldStyle")), FigureStyle::OldStyle);
+        assert_eq!(
+            FigureStyle::from_idml(Some("OldStyle")),
+            FigureStyle::OldStyle
+        );
         assert_eq!(
             FigureStyle::from_idml(Some("ProportionalOldstyle")),
             FigureStyle::ProportionalOldstyle
@@ -773,7 +795,10 @@ mod tests {
             FigureStyle::TabularLining
         );
         // Unknown / Default / absent ⇒ Default (font's own digits).
-        assert_eq!(FigureStyle::from_idml(Some("Default")), FigureStyle::Default);
+        assert_eq!(
+            FigureStyle::from_idml(Some("Default")),
+            FigureStyle::Default
+        );
         assert_eq!(FigureStyle::from_idml(Some("Bogus")), FigureStyle::Default);
         assert_eq!(FigureStyle::from_idml(None), FigureStyle::Default);
     }

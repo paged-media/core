@@ -387,7 +387,8 @@ fn mutate_then_undo_round_trips_byte_identical() {
 /// reparse → gone; mutate-then-undo writes byte-identically.
 #[test]
 fn plugin_metadata_round_trips_through_write() {
-    let envelope = r#"{"v":1,"engine":{"blitz":"0.3.0-alpha.4"},"data":{"source":"<b>hi & \"bye\"</b>"}}"#;
+    let envelope =
+        r#"{"v":1,"engine":{"blitz":"0.3.0-alpha.4"},"data":{"source":"<b>hi & \"bye\"</b>"}}"#;
     let original = build_sample("geometry");
     let doc = Document::open(&original).unwrap();
     let rect_id = doc
@@ -441,7 +442,9 @@ fn plugin_metadata_round_trips_through_write() {
     let out2 = write_idml(project2.document(), &out).expect("write 2");
     let re2 = Document::open(&out2).expect("reparse 2");
     assert!(
-        re2.spreads.iter().all(|s| !s.spread.labels.contains_key(&rect_id)),
+        re2.spreads
+            .iter()
+            .all(|s| !s.spread.labels.contains_key(&rect_id)),
         "label removed"
     );
 

@@ -29,9 +29,7 @@ fn build_corners() -> paged_renderer::pipeline::BuiltDocument {
 }
 
 /// Collect the segment kinds of every `FillPath` path on the page.
-fn fill_path_segments(
-    page: &paged_renderer::pipeline::BuiltPage,
-) -> Vec<&[PathSegment]> {
+fn fill_path_segments(page: &paged_renderer::pipeline::BuiltPage) -> Vec<&[PathSegment]> {
     page.list
         .commands
         .iter()

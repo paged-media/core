@@ -20,9 +20,7 @@
 
 use std::io::Write;
 
-use paged_canvas::{
-    channel::Mutation, CanvasModel, CanvasOptions, LoggedMutation,
-};
+use paged_canvas::{channel::Mutation, CanvasModel, CanvasOptions, LoggedMutation};
 
 fn small_idml() -> Vec<u8> {
     let mut buf = Vec::new();
@@ -80,8 +78,7 @@ fn small_idml() -> Vec<u8> {
 #[test]
 fn resize_frame_routes_through_idml_mutate_and_logs() {
     let bytes = small_idml();
-    let mut model =
-        CanvasModel::load("doc1", &bytes, CanvasOptions::default()).expect("load");
+    let mut model = CanvasModel::load("doc1", &bytes, CanvasOptions::default()).expect("load");
 
     // Move tf1's bounds. Channel coords are (top, left, bottom, right).
     let new_bounds = (110.0, 110.0, 410.0, 410.0);
@@ -125,8 +122,7 @@ fn resize_frame_routes_through_idml_mutate_and_logs() {
 #[test]
 fn frame_resize_undo_redo_round_trip_restores_scene() {
     let bytes = small_idml();
-    let mut model =
-        CanvasModel::load("doc1", &bytes, CanvasOptions::default()).expect("load");
+    let mut model = CanvasModel::load("doc1", &bytes, CanvasOptions::default()).expect("load");
 
     let mutation = Mutation::ResizeFrame {
         frame_id: "tf1".into(),
@@ -163,8 +159,7 @@ fn frame_resize_undo_redo_round_trip_restores_scene() {
 #[test]
 fn unified_undo_alternates_text_and_frame_entries() {
     let bytes = small_idml();
-    let mut model =
-        CanvasModel::load("doc1", &bytes, CanvasOptions::default()).expect("load");
+    let mut model = CanvasModel::load("doc1", &bytes, CanvasOptions::default()).expect("load");
 
     // Text mutation first.
     model
@@ -196,8 +191,7 @@ fn unified_undo_alternates_text_and_frame_entries() {
 #[test]
 fn rectangle_resize_also_bridges() {
     let bytes = small_idml();
-    let mut model =
-        CanvasModel::load("doc1", &bytes, CanvasOptions::default()).expect("load");
+    let mut model = CanvasModel::load("doc1", &bytes, CanvasOptions::default()).expect("load");
 
     model
         .apply_mutation(&Mutation::ResizeFrame {

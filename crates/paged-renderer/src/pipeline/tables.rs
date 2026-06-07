@@ -143,18 +143,17 @@ pub(super) fn emit_table_into_chain(
     let mut cell_required: std::collections::HashMap<(u32, u32), f32> =
         std::collections::HashMap::with_capacity(table.cells.len());
     for cell in &table.cells {
-        let Some((c, r)) = cell.coords() else { continue };
+        let Some((c, r)) = cell.coords() else {
+            continue;
+        };
         let (cu, ru) = (c as usize, r as usize);
         if cu >= col_widths.len() || ru >= total_rows {
             continue;
         }
         let span_cols = cell.column_span.max(1) as usize;
         let last_c = (cu + span_cols).min(col_widths.len());
-        let inner_w = (col_x[last_c]
-            - col_x[cu]
-            - cell.text_left_inset
-            - cell.text_right_inset)
-            .max(0.0);
+        let inner_w =
+            (col_x[last_c] - col_x[cu] - cell.text_left_inset - cell.text_right_inset).max(0.0);
         let mut paragraph_y = 0.0f32;
         for paragraph in &cell.paragraphs {
             if paragraph.runs.is_empty() {
@@ -182,7 +181,9 @@ pub(super) fn emit_table_into_chain(
     for r in 0..total_rows {
         let mut required = row_heights[r];
         for cell in &table.cells {
-            let Some((c, sr)) = cell.coords() else { continue };
+            let Some((c, sr)) = cell.coords() else {
+                continue;
+            };
             let span = cell.row_span.max(1) as usize;
             let (cu, sru) = (c as usize, sr as usize);
             if sru + span - 1 != r {
@@ -547,7 +548,9 @@ pub(super) fn emit_table_into_chain(
             skip_first: resolved_table
                 .skip_first_alternating_fill_columns
                 .unwrap_or(0) as usize,
-            skip_last: resolved_table.skip_last_alternating_fill_columns.unwrap_or(0) as usize,
+            skip_last: resolved_table
+                .skip_last_alternating_fill_columns
+                .unwrap_or(0) as usize,
             start_color: resolved_table.start_column_fill_color.as_deref(),
             start_count: resolved_table.start_column_fill_count.unwrap_or(0) as usize,
             start_tint: resolved_table.start_column_fill_tint,
@@ -601,378 +604,378 @@ pub(super) fn emit_table_into_chain(
             let Some(cell) = cell_by_origin.get(&(c as u32, r as u32)).copied() else {
                 continue;
             };
-        let target_page = prow.target_page;
-        let cell_x_pt = prow.table_left_pt + col_x[c];
-        let cell_y_pt = prow.row_top_in_page;
-        let last_c = (c + cell.column_span.max(1) as usize).min(col_widths.len());
-        // For row spans, accumulate heights of the contiguous
-        // *physical* rows that sit in the same frame as this cell's
-        // starting row. Spans that would straddle a frame boundary
-        // clip to the originating frame's bottom (same conservative
-        // policy as before). Walk physical rows starting at the
-        // current physical row, advancing while their template_idx
-        // is within `[r, r + span)` and `chain_idx` matches.
-        let span_rows = cell.row_span.max(1) as usize;
-        let mut cell_h_pt = 0.0f32;
-        let mut step = 0usize;
-        while step < span_rows && prow_i + step < physical_rows.len() {
-            let next = &physical_rows[prow_i + step];
-            if next.chain_idx != prow.chain_idx {
-                break;
+            let target_page = prow.target_page;
+            let cell_x_pt = prow.table_left_pt + col_x[c];
+            let cell_y_pt = prow.row_top_in_page;
+            let last_c = (c + cell.column_span.max(1) as usize).min(col_widths.len());
+            // For row spans, accumulate heights of the contiguous
+            // *physical* rows that sit in the same frame as this cell's
+            // starting row. Spans that would straddle a frame boundary
+            // clip to the originating frame's bottom (same conservative
+            // policy as before). Walk physical rows starting at the
+            // current physical row, advancing while their template_idx
+            // is within `[r, r + span)` and `chain_idx` matches.
+            let span_rows = cell.row_span.max(1) as usize;
+            let mut cell_h_pt = 0.0f32;
+            let mut step = 0usize;
+            while step < span_rows && prow_i + step < physical_rows.len() {
+                let next = &physical_rows[prow_i + step];
+                if next.chain_idx != prow.chain_idx {
+                    break;
+                }
+                // Only accumulate template rows in [r, r + span). A
+                // continuation frame whose first row is a HeaderReplay
+                // would otherwise add the header's height to the body
+                // cell's span. The replay rows live in a *different*
+                // physical row index, so we'd never reach them mid-span
+                // anyway — but the explicit range guard makes this
+                // robust if the physical-row sequence ever interleaves
+                // replays differently.
+                let t = next.template_idx;
+                if t < r || t >= r + span_rows {
+                    break;
+                }
+                cell_h_pt += next.height;
+                step += 1;
             }
-            // Only accumulate template rows in [r, r + span). A
-            // continuation frame whose first row is a HeaderReplay
-            // would otherwise add the header's height to the body
-            // cell's span. The replay rows live in a *different*
-            // physical row index, so we'd never reach them mid-span
-            // anyway — but the explicit range guard makes this
-            // robust if the physical-row sequence ever interleaves
-            // replays differently.
-            let t = next.template_idx;
-            if t < r || t >= r + span_rows {
-                break;
+            if cell_h_pt <= 0.0 {
+                cell_h_pt = prow.height;
             }
-            cell_h_pt += next.height;
-            step += 1;
-        }
-        if cell_h_pt <= 0.0 {
-            cell_h_pt = prow.height;
-        }
-        let cell_w_pt = col_x[last_c] - col_x[c];
+            let cell_w_pt = col_x[last_c] - col_x[c];
 
-        // W3.A1 — retain this cell's page-local rect for hit-testing.
-        // `r` is the template row (header / footer replays report their
-        // source row, so a click on a replayed header resolves to the
-        // original cell). Only addressable tables (those with a `Self`)
-        // are recorded; others fall back to the frame-level hit.
-        if let Some(table_id) = table.self_id.as_deref() {
-            pages[target_page].cell_rects.push(CellRect {
-                story_id: em.current_story_id.clone(),
-                table_id: table_id.to_string(),
-                row: r as u32,
-                col: c as u32,
-                rect: [cell_x_pt, cell_y_pt, cell_w_pt, cell_h_pt],
-            });
-        }
+            // W3.A1 — retain this cell's page-local rect for hit-testing.
+            // `r` is the template row (header / footer replays report their
+            // source row, so a click on a replayed header resolves to the
+            // original cell). Only addressable tables (those with a `Self`)
+            // are recorded; others fall back to the frame-level hit.
+            if let Some(table_id) = table.self_id.as_deref() {
+                pages[target_page].cell_rects.push(CellRect {
+                    story_id: em.current_story_id.clone(),
+                    table_id: table_id.to_string(),
+                    row: r as u32,
+                    col: c as u32,
+                    rect: [cell_x_pt, cell_y_pt, cell_w_pt, cell_h_pt],
+                });
+            }
 
-        let inner_left = cell_x_pt + cell.text_left_inset;
-        let inner_top = cell_y_pt + cell.text_top_inset;
-        let inner_w = (cell_w_pt - cell.text_left_inset - cell.text_right_inset).max(0.0);
-        let inner_h = (cell_h_pt - cell.text_top_inset - cell.text_bottom_inset).max(0.0);
+            let inner_left = cell_x_pt + cell.text_left_inset;
+            let inner_top = cell_y_pt + cell.text_top_inset;
+            let inner_w = (cell_w_pt - cell.text_left_inset - cell.text_right_inset).max(0.0);
+            let inner_h = (cell_h_pt - cell.text_top_inset - cell.text_bottom_inset).max(0.0);
 
-        // Resolve the cell's CellStyle. Per-cell AppliedCellStyle
-        // wins; fall through to the table-style region default
-        // (Header / Body / Footer / left or right column).
-        let cell_style_id = cell
-            .applied_cell_style
-            .as_deref()
-            .filter(|id| !is_none_style_id(id))
-            .or_else(|| region_cell_style_for(c, r));
-        let resolved_cell = cell_style_id
-            .map(|id| em.document.styles.resolve_cell(id))
-            .unwrap_or_default();
+            // Resolve the cell's CellStyle. Per-cell AppliedCellStyle
+            // wins; fall through to the table-style region default
+            // (Header / Body / Footer / left or right column).
+            let cell_style_id = cell
+                .applied_cell_style
+                .as_deref()
+                .filter(|id| !is_none_style_id(id))
+                .or_else(|| region_cell_style_for(c, r));
+            let resolved_cell = cell_style_id
+                .map(|id| em.document.styles.resolve_cell(id))
+                .unwrap_or_default();
 
-        // Cell fill — drawn before text so glyphs paint on top.
-        // Inline FillColor on the <Cell> wins over the cascaded
-        // cell-style fill — same precedence as the per-edge stroke
-        // overrides above.
-        let cell_fill_id = cell
-            .fill_color
-            .as_deref()
-            .filter(|c| !is_none_swatch_id(c))
-            .or(resolved_cell.fill_color.as_deref());
-        if let Some(fill) =
-            cell_fill_id.and_then(|id| color_id_to_paint(id, em.palette, em.cmyk_xform))
-        {
-            emit_rect(
-                Rect {
-                    x: cell_x_pt,
-                    y: cell_y_pt,
-                    w: cell_w_pt,
-                    h: cell_h_pt,
-                },
-                fill,
-                &mut pages[target_page].list,
-            );
-        }
-        // Per-edge cell strokes. Each edge gets its own thin rect
-        // (filled, since rect-stroke aligns to centerlines and we
-        // want the edge to sit precisely on the cell boundary).
-        // Per-cell overrides (declared inline on the <Cell> element)
-        // win over the cascaded CellStyle — IDML serialises real row
-        // dividers there even when AppliedCellStyle is `[None]`.
-        let cell_top_color = cell
-            .top_edge_stroke_color
-            .as_deref()
-            .filter(|c| !is_none_swatch_id(c))
-            .or(resolved_cell.top_edge_stroke_color.as_deref());
-        let cell_top_weight = cell
-            .top_edge_stroke_weight
-            .or(resolved_cell.top_edge_stroke_weight);
-        let cell_bot_color = cell
-            .bottom_edge_stroke_color
-            .as_deref()
-            .filter(|c| !is_none_swatch_id(c))
-            .or(resolved_cell.bottom_edge_stroke_color.as_deref());
-        let cell_bot_weight = cell
-            .bottom_edge_stroke_weight
-            .or(resolved_cell.bottom_edge_stroke_weight);
-        let edges = [
-            (
-                cell_top_color,
-                cell_top_weight,
-                cell.top_edge_stroke_tint,
-                cell_x_pt,
-                cell_y_pt,
-                cell_w_pt,
-            ),
-            (
-                cell_bot_color,
-                cell_bot_weight,
-                cell.bottom_edge_stroke_tint,
-                cell_x_pt,
-                cell_y_pt + cell_h_pt,
-                cell_w_pt,
-            ),
-        ];
-        for (color, weight, tint, x, y, w) in edges {
-            if let (Some(color_id), Some(weight)) = (color, weight) {
-                if weight > 0.0 {
-                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform)
-                        .map(|p| apply_fill_tint(p, tint))
-                    {
-                        emit_rect(
-                            Rect {
-                                x,
-                                y: y - weight * 0.5,
-                                w,
-                                h: weight,
-                            },
-                            paint,
-                            &mut pages[target_page].list,
-                        );
+            // Cell fill — drawn before text so glyphs paint on top.
+            // Inline FillColor on the <Cell> wins over the cascaded
+            // cell-style fill — same precedence as the per-edge stroke
+            // overrides above.
+            let cell_fill_id = cell
+                .fill_color
+                .as_deref()
+                .filter(|c| !is_none_swatch_id(c))
+                .or(resolved_cell.fill_color.as_deref());
+            if let Some(fill) =
+                cell_fill_id.and_then(|id| color_id_to_paint(id, em.palette, em.cmyk_xform))
+            {
+                emit_rect(
+                    Rect {
+                        x: cell_x_pt,
+                        y: cell_y_pt,
+                        w: cell_w_pt,
+                        h: cell_h_pt,
+                    },
+                    fill,
+                    &mut pages[target_page].list,
+                );
+            }
+            // Per-edge cell strokes. Each edge gets its own thin rect
+            // (filled, since rect-stroke aligns to centerlines and we
+            // want the edge to sit precisely on the cell boundary).
+            // Per-cell overrides (declared inline on the <Cell> element)
+            // win over the cascaded CellStyle — IDML serialises real row
+            // dividers there even when AppliedCellStyle is `[None]`.
+            let cell_top_color = cell
+                .top_edge_stroke_color
+                .as_deref()
+                .filter(|c| !is_none_swatch_id(c))
+                .or(resolved_cell.top_edge_stroke_color.as_deref());
+            let cell_top_weight = cell
+                .top_edge_stroke_weight
+                .or(resolved_cell.top_edge_stroke_weight);
+            let cell_bot_color = cell
+                .bottom_edge_stroke_color
+                .as_deref()
+                .filter(|c| !is_none_swatch_id(c))
+                .or(resolved_cell.bottom_edge_stroke_color.as_deref());
+            let cell_bot_weight = cell
+                .bottom_edge_stroke_weight
+                .or(resolved_cell.bottom_edge_stroke_weight);
+            let edges = [
+                (
+                    cell_top_color,
+                    cell_top_weight,
+                    cell.top_edge_stroke_tint,
+                    cell_x_pt,
+                    cell_y_pt,
+                    cell_w_pt,
+                ),
+                (
+                    cell_bot_color,
+                    cell_bot_weight,
+                    cell.bottom_edge_stroke_tint,
+                    cell_x_pt,
+                    cell_y_pt + cell_h_pt,
+                    cell_w_pt,
+                ),
+            ];
+            for (color, weight, tint, x, y, w) in edges {
+                if let (Some(color_id), Some(weight)) = (color, weight) {
+                    if weight > 0.0 {
+                        if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform)
+                            .map(|p| apply_fill_tint(p, tint))
+                        {
+                            emit_rect(
+                                Rect {
+                                    x,
+                                    y: y - weight * 0.5,
+                                    w,
+                                    h: weight,
+                                },
+                                paint,
+                                &mut pages[target_page].list,
+                            );
+                        }
                     }
                 }
             }
-        }
-        let cell_left_color = cell
-            .left_edge_stroke_color
-            .as_deref()
-            .filter(|c| !is_none_swatch_id(c))
-            .or(resolved_cell.left_edge_stroke_color.as_deref());
-        let cell_left_weight = cell
-            .left_edge_stroke_weight
-            .or(resolved_cell.left_edge_stroke_weight);
-        let cell_right_color = cell
-            .right_edge_stroke_color
-            .as_deref()
-            .filter(|c| !is_none_swatch_id(c))
-            .or(resolved_cell.right_edge_stroke_color.as_deref());
-        let cell_right_weight = cell
-            .right_edge_stroke_weight
-            .or(resolved_cell.right_edge_stroke_weight);
-        let v_edges = [
-            (
-                cell_left_color,
-                cell_left_weight,
-                cell.left_edge_stroke_tint,
-                cell_x_pt,
-                cell_y_pt,
-                cell_h_pt,
-            ),
-            (
-                cell_right_color,
-                cell_right_weight,
-                cell.right_edge_stroke_tint,
-                cell_x_pt + cell_w_pt,
-                cell_y_pt,
-                cell_h_pt,
-            ),
-        ];
-        for (color, weight, tint, x, y, h) in v_edges {
-            if let (Some(color_id), Some(weight)) = (color, weight) {
-                if weight > 0.0 {
-                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform)
-                        .map(|p| apply_fill_tint(p, tint))
-                    {
-                        emit_rect(
-                            Rect {
-                                x: x - weight * 0.5,
-                                y,
-                                w: weight,
-                                h,
-                            },
-                            paint,
-                            &mut pages[target_page].list,
-                        );
+            let cell_left_color = cell
+                .left_edge_stroke_color
+                .as_deref()
+                .filter(|c| !is_none_swatch_id(c))
+                .or(resolved_cell.left_edge_stroke_color.as_deref());
+            let cell_left_weight = cell
+                .left_edge_stroke_weight
+                .or(resolved_cell.left_edge_stroke_weight);
+            let cell_right_color = cell
+                .right_edge_stroke_color
+                .as_deref()
+                .filter(|c| !is_none_swatch_id(c))
+                .or(resolved_cell.right_edge_stroke_color.as_deref());
+            let cell_right_weight = cell
+                .right_edge_stroke_weight
+                .or(resolved_cell.right_edge_stroke_weight);
+            let v_edges = [
+                (
+                    cell_left_color,
+                    cell_left_weight,
+                    cell.left_edge_stroke_tint,
+                    cell_x_pt,
+                    cell_y_pt,
+                    cell_h_pt,
+                ),
+                (
+                    cell_right_color,
+                    cell_right_weight,
+                    cell.right_edge_stroke_tint,
+                    cell_x_pt + cell_w_pt,
+                    cell_y_pt,
+                    cell_h_pt,
+                ),
+            ];
+            for (color, weight, tint, x, y, h) in v_edges {
+                if let (Some(color_id), Some(weight)) = (color, weight) {
+                    if weight > 0.0 {
+                        if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform)
+                            .map(|p| apply_fill_tint(p, tint))
+                        {
+                            emit_rect(
+                                Rect {
+                                    x: x - weight * 0.5,
+                                    y,
+                                    w: weight,
+                                    h,
+                                },
+                                paint,
+                                &mut pages[target_page].list,
+                            );
+                        }
                     }
                 }
             }
-        }
 
-        // Diagonal cell strokes. IDML's "Left" diagonal goes
-        // top-left → bottom-right; "Right" goes top-right →
-        // bottom-left, each with its own colour / weight / tint. The
-        // `DiagonalLineInFront` flag decides the paint order relative
-        // to the cell content: when true the diagonal lands AFTER the
-        // glyphs (drawn over them); otherwise it sits behind, on top
-        // of the fill but under the text. We capture the closure here
-        // and invoke it at the chosen point below.
-        let diag = &cell.diagonal;
-        let emit_diagonals = |em: &StoryEmitter, pages: &mut [BuiltPage]| {
-            let one = |drawn: Option<bool>,
+            // Diagonal cell strokes. IDML's "Left" diagonal goes
+            // top-left → bottom-right; "Right" goes top-right →
+            // bottom-left, each with its own colour / weight / tint. The
+            // `DiagonalLineInFront` flag decides the paint order relative
+            // to the cell content: when true the diagonal lands AFTER the
+            // glyphs (drawn over them); otherwise it sits behind, on top
+            // of the fill but under the text. We capture the closure here
+            // and invoke it at the chosen point below.
+            let diag = &cell.diagonal;
+            let emit_diagonals = |em: &StoryEmitter, pages: &mut [BuiltPage]| {
+                let one = |drawn: Option<bool>,
                            color: Option<&str>,
                            weight: Option<f32>,
                            tint: Option<f32>,
                            (x1, y1): (f32, f32),
                            (x2, y2): (f32, f32),
                            pages: &mut [BuiltPage]| {
-                if drawn != Some(true) {
-                    return;
-                }
-                let Some(weight) = weight.filter(|w| *w > 0.0) else {
-                    return;
+                    if drawn != Some(true) {
+                        return;
+                    }
+                    let Some(weight) = weight.filter(|w| *w > 0.0) else {
+                        return;
+                    };
+                    let Some(color_id) = color else {
+                        return;
+                    };
+                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform)
+                        .map(|p| apply_fill_tint(p, tint))
+                    {
+                        paged_compose::emit_line(
+                            x1,
+                            y1,
+                            x2,
+                            y2,
+                            Stroke::new(weight),
+                            paint,
+                            &mut pages[target_page].list,
+                        );
+                    }
                 };
-                let Some(color_id) = color else {
-                    return;
-                };
-                if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform)
-                    .map(|p| apply_fill_tint(p, tint))
-                {
-                    paged_compose::emit_line(
-                        x1,
-                        y1,
-                        x2,
-                        y2,
-                        Stroke::new(weight),
-                        paint,
-                        &mut pages[target_page].list,
-                    );
-                }
+                one(
+                    diag.left_line_drawn,
+                    diag.left_line_color.as_deref(),
+                    diag.left_line_weight,
+                    diag.left_line_tint,
+                    (cell_x_pt, cell_y_pt),
+                    (cell_x_pt + cell_w_pt, cell_y_pt + cell_h_pt),
+                    pages,
+                );
+                one(
+                    diag.right_line_drawn,
+                    diag.right_line_color.as_deref(),
+                    diag.right_line_weight,
+                    diag.right_line_tint,
+                    (cell_x_pt + cell_w_pt, cell_y_pt),
+                    (cell_x_pt, cell_y_pt + cell_h_pt),
+                    pages,
+                );
             };
-            one(
-                diag.left_line_drawn,
-                diag.left_line_color.as_deref(),
-                diag.left_line_weight,
-                diag.left_line_tint,
-                (cell_x_pt, cell_y_pt),
-                (cell_x_pt + cell_w_pt, cell_y_pt + cell_h_pt),
-                pages,
-            );
-            one(
-                diag.right_line_drawn,
-                diag.right_line_color.as_deref(),
-                diag.right_line_weight,
-                diag.right_line_tint,
-                (cell_x_pt + cell_w_pt, cell_y_pt),
-                (cell_x_pt, cell_y_pt + cell_h_pt),
-                pages,
-            );
-        };
-        let diagonal_in_front = diag.diagonal_in_front == Some(true);
-        if !diagonal_in_front {
-            emit_diagonals(em, pages);
-        }
+            let diagonal_in_front = diag.diagonal_in_front == Some(true);
+            if !diagonal_in_front {
+                emit_diagonals(em, pages);
+            }
 
-        // Lay out the cell paragraphs into a working buffer first
-        // so we know their total height; then apply vertical
-        // justification by shifting all of them by a uniform dy.
-        let mut paragraph_y = 0.0f32;
-        let mut emitted_extents: Vec<(usize, usize)> = Vec::new();
-        for paragraph in &cell.paragraphs {
-            if paragraph.runs.is_empty() {
-                // Phase 5 — nested table inside a cell paragraph.
-                // Lay it out at the current cell-paragraph cursor
-                // and advance by its consumed height. Inner content
-                // (further nested tables, cell paragraphs) recurses
-                // through emit_nested_table_inline.
-                if let Some(inner_t) = paragraph.table.as_ref() {
-                    let cmd_start = pages[target_page].list.commands.len();
-                    let consumed = emit_nested_table_inline(
-                        em,
-                        inner_t,
-                        inner_left,
-                        inner_top + paragraph_y,
-                        inner_w,
-                        target_page,
-                        pages,
-                        total_stats,
-                    );
-                    let cmd_end = pages[target_page].list.commands.len();
-                    if cmd_end > cmd_start {
-                        emitted_extents.push((cmd_start, cmd_end));
+            // Lay out the cell paragraphs into a working buffer first
+            // so we know their total height; then apply vertical
+            // justification by shifting all of them by a uniform dy.
+            let mut paragraph_y = 0.0f32;
+            let mut emitted_extents: Vec<(usize, usize)> = Vec::new();
+            for paragraph in &cell.paragraphs {
+                if paragraph.runs.is_empty() {
+                    // Phase 5 — nested table inside a cell paragraph.
+                    // Lay it out at the current cell-paragraph cursor
+                    // and advance by its consumed height. Inner content
+                    // (further nested tables, cell paragraphs) recurses
+                    // through emit_nested_table_inline.
+                    if let Some(inner_t) = paragraph.table.as_ref() {
+                        let cmd_start = pages[target_page].list.commands.len();
+                        let consumed = emit_nested_table_inline(
+                            em,
+                            inner_t,
+                            inner_left,
+                            inner_top + paragraph_y,
+                            inner_w,
+                            target_page,
+                            pages,
+                            total_stats,
+                        );
+                        let cmd_end = pages[target_page].list.commands.len();
+                        if cmd_end > cmd_start {
+                            emitted_extents.push((cmd_start, cmd_end));
+                        }
+                        paragraph_y += consumed;
+                        if paragraph_y >= inner_h {
+                            break;
+                        }
                     }
-                    paragraph_y += consumed;
-                    if paragraph_y >= inner_h {
-                        break;
+                    continue;
+                }
+                let cmd_start = pages[target_page].list.commands.len();
+                let consumed = emit_cell_paragraph(
+                    em,
+                    paragraph,
+                    target_page,
+                    (inner_left, inner_top),
+                    inner_w,
+                    paragraph_y,
+                    pages,
+                    total_stats,
+                );
+                let cmd_end = pages[target_page].list.commands.len();
+                if cmd_end > cmd_start {
+                    emitted_extents.push((cmd_start, cmd_end));
+                }
+                paragraph_y += consumed;
+                if paragraph_y >= inner_h {
+                    break;
+                }
+            }
+            // Apply CellStyle vertical justification by shifting every
+            // glyph command we emitted in this cell by dy = slack/factor.
+            // CenterAlign → centre vertically; BottomAlign → push to the
+            // bottom inset. Top is the default (no shift).
+            let used_h = paragraph_y;
+            if used_h > 0.0 && used_h < inner_h {
+                let dy = match resolved_cell.vertical_justification.as_deref() {
+                    Some("CenterAlign") => Some((inner_h - used_h) * 0.5),
+                    Some("BottomAlign") => Some(inner_h - used_h),
+                    _ => None,
+                };
+                if let Some(dy) = dy {
+                    for (s, e) in &emitted_extents {
+                        for cmd in &mut pages[target_page].list.commands[*s..*e] {
+                            cmd.transform_mut().0[5] += dy;
+                        }
                     }
                 }
-                continue;
             }
-            let cmd_start = pages[target_page].list.commands.len();
-            let consumed = emit_cell_paragraph(
-                em,
-                paragraph,
-                target_page,
-                (inner_left, inner_top),
-                inner_w,
-                paragraph_y,
-                pages,
-                total_stats,
-            );
-            let cmd_end = pages[target_page].list.commands.len();
-            if cmd_end > cmd_start {
-                emitted_extents.push((cmd_start, cmd_end));
-            }
-            paragraph_y += consumed;
-            if paragraph_y >= inner_h {
-                break;
-            }
-        }
-        // Apply CellStyle vertical justification by shifting every
-        // glyph command we emitted in this cell by dy = slack/factor.
-        // CenterAlign → centre vertically; BottomAlign → push to the
-        // bottom inset. Top is the default (no shift).
-        let used_h = paragraph_y;
-        if used_h > 0.0 && used_h < inner_h {
-            let dy = match resolved_cell.vertical_justification.as_deref() {
-                Some("CenterAlign") => Some((inner_h - used_h) * 0.5),
-                Some("BottomAlign") => Some(inner_h - used_h),
-                _ => None,
-            };
-            if let Some(dy) = dy {
+            // Cell RotationAngle: rotate the (already vertically-justified)
+            // content about the cell's centre. Borders / fills are emitted
+            // outside `emitted_extents`, so they stay unrotated — matching
+            // InDesign, which rotates only the cell's content. Cardinal
+            // angles (90/180/270) are the real-world case; arbitrary angles
+            // rotate too but may need content re-fit (a follow-up).
+            let cell_rotation = cell.rotation_angle.or(resolved_cell.rotation_angle);
+            if let Some(deg) = cell_rotation.filter(|a| a.abs() > f32::EPSILON) {
+                let cx = cell_x_pt + cell_w_pt * 0.5;
+                let cy = cell_y_pt + cell_h_pt * 0.5;
+                let rot = Transform::translate(cx, cy)
+                    .compose(&Transform::rotate_deg(deg))
+                    .compose(&Transform::translate(-cx, -cy));
                 for (s, e) in &emitted_extents {
                     for cmd in &mut pages[target_page].list.commands[*s..*e] {
-                        cmd.transform_mut().0[5] += dy;
+                        let t = cmd.transform_mut();
+                        *t = rot.compose(t);
                     }
                 }
             }
-        }
-        // Cell RotationAngle: rotate the (already vertically-justified)
-        // content about the cell's centre. Borders / fills are emitted
-        // outside `emitted_extents`, so they stay unrotated — matching
-        // InDesign, which rotates only the cell's content. Cardinal
-        // angles (90/180/270) are the real-world case; arbitrary angles
-        // rotate too but may need content re-fit (a follow-up).
-        let cell_rotation = cell.rotation_angle.or(resolved_cell.rotation_angle);
-        if let Some(deg) = cell_rotation.filter(|a| a.abs() > f32::EPSILON) {
-            let cx = cell_x_pt + cell_w_pt * 0.5;
-            let cy = cell_y_pt + cell_h_pt * 0.5;
-            let rot = Transform::translate(cx, cy)
-                .compose(&Transform::rotate_deg(deg))
-                .compose(&Transform::translate(-cx, -cy));
-            for (s, e) in &emitted_extents {
-                for cmd in &mut pages[target_page].list.commands[*s..*e] {
-                    let t = cmd.transform_mut();
-                    *t = rot.compose(t);
-                }
+            // `DiagonalLineInFront` → paint the diagonal(s) over the
+            // (now vertically-justified / rotated) cell content.
+            if diagonal_in_front {
+                emit_diagonals(em, pages);
             }
-        }
-        // `DiagonalLineInFront` → paint the diagonal(s) over the
-        // (now vertically-justified / rotated) cell content.
-        if diagonal_in_front {
-            emit_diagonals(em, pages);
-        }
         } // close inner `for c in 0..col_widths.len()`
     } // close outer `for prow_i in 0..physical_rows.len()`
 
@@ -1063,10 +1066,7 @@ pub(super) fn emit_table_into_chain(
     let row_start_weight = row_decl
         .start_weight
         .unwrap_or(if has_row_decl { 1.0 } else { 0.0 });
-    let row_end_type = row_decl
-        .end_type
-        .clone()
-        .or_else(|| row_start_type.clone());
+    let row_end_type = row_decl.end_type.clone().or_else(|| row_start_type.clone());
     let row_end_color = row_decl
         .end_color
         .clone()
@@ -1287,7 +1287,9 @@ fn resolve_table_line_strokes(decl: &paged_parse::TableLineStrokes) -> ResolvedL
     } else {
         start_color_raw
     };
-    let start_weight = decl.start_weight.unwrap_or(if has_decl { 1.0 } else { 0.0 });
+    let start_weight = decl
+        .start_weight
+        .unwrap_or(if has_decl { 1.0 } else { 0.0 });
     ResolvedLineStroke {
         end_type: decl.end_type.clone().or_else(|| start_type.clone()),
         end_color: decl.end_color.clone().or_else(|| start_color.clone()),
@@ -1592,15 +1594,14 @@ fn emit_nested_table_inline(
     // Pre-measure every cell so row heights can grow to fit content.
     // Spans are clamped to 1 here — proper span layout is a follow-up.
     for cell in &table.cells {
-        let Some((c, r)) = cell.coords() else { continue };
+        let Some((c, r)) = cell.coords() else {
+            continue;
+        };
         let (cu, ru) = (c as usize, r as usize);
         if cu >= col_widths.len() || ru >= total_rows {
             continue;
         }
-        let inner_w = (col_widths[cu]
-            - cell.text_left_inset
-            - cell.text_right_inset)
-            .max(0.0);
+        let inner_w = (col_widths[cu] - cell.text_left_inset - cell.text_right_inset).max(0.0);
         let mut paragraph_y = 0.0f32;
         for paragraph in &cell.paragraphs {
             // Nested table inside the nested table's cell — recurse.
@@ -1683,7 +1684,9 @@ fn emit_nested_table_inline(
 
     // Emit cell content.
     for cell in &table.cells {
-        let Some((c, r)) = cell.coords() else { continue };
+        let Some((c, r)) = cell.coords() else {
+            continue;
+        };
         let (cu, ru) = (c as usize, r as usize);
         if cu >= col_widths.len() || ru >= total_rows {
             continue;
@@ -1778,15 +1781,14 @@ fn measure_nested_table_height(
         })
         .collect();
     for cell in &table.cells {
-        let Some((c, r)) = cell.coords() else { continue };
+        let Some((c, r)) = cell.coords() else {
+            continue;
+        };
         let (cu, ru) = (c as usize, r as usize);
         if cu >= col_widths.len() || ru >= total_rows {
             continue;
         }
-        let inner_w = (col_widths[cu]
-            - cell.text_left_inset
-            - cell.text_right_inset)
-            .max(0.0);
+        let inner_w = (col_widths[cu] - cell.text_left_inset - cell.text_right_inset).max(0.0);
         let mut paragraph_y = 0.0f32;
         for paragraph in &cell.paragraphs {
             if paragraph.runs.is_empty() {
@@ -1851,10 +1853,7 @@ fn measure_cell_paragraph(
     let mut shaping_faces: Vec<Option<&rustybuzz::Face>> =
         (0..bytes_pool.len()).map(|_| None).collect();
     let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
-    let bytes_font_ids: Vec<u32> = bytes_pool
-        .iter()
-        .map(|b| fnv_1a_u32(b.as_ref()))
-        .collect();
+    let bytes_font_ids: Vec<u32> = bytes_pool.iter().map(|b| fnv_1a_u32(b.as_ref())).collect();
     for i in 0..bytes_pool.len() {
         if unique_idx[i] != i {
             continue;
@@ -1883,7 +1882,10 @@ fn measure_cell_paragraph(
     }
     for i in 0..bytes_pool.len() {
         let head = unique_idx[i];
-        if let Some(cached) = em.font_table.face(bytes_font_ids[head], wghts[head].to_bits()) {
+        if let Some(cached) = em
+            .font_table
+            .face(bytes_font_ids[head], wghts[head].to_bits())
+        {
             shaping_faces[i] = Some(cached);
         } else if let Some(owned) = owned_shaping_faces[head].as_ref() {
             shaping_faces[i] = Some(owned);
@@ -2020,10 +2022,7 @@ pub(super) fn emit_cell_paragraph(
     let mut shaping_faces: Vec<Option<&rustybuzz::Face>> =
         (0..bytes_pool.len()).map(|_| None).collect();
     let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
-    let bytes_font_ids: Vec<u32> = bytes_pool
-        .iter()
-        .map(|b| fnv_1a_u32(b.as_ref()))
-        .collect();
+    let bytes_font_ids: Vec<u32> = bytes_pool.iter().map(|b| fnv_1a_u32(b.as_ref())).collect();
     for i in 0..bytes_pool.len() {
         if unique_idx[i] != i {
             continue;
@@ -2074,7 +2073,10 @@ pub(super) fn emit_cell_paragraph(
     }
     for i in 0..bytes_pool.len() {
         let head = unique_idx[i];
-        if let Some(cached) = em.font_table.face(bytes_font_ids[head], wghts[head].to_bits()) {
+        if let Some(cached) = em
+            .font_table
+            .face(bytes_font_ids[head], wghts[head].to_bits())
+        {
             shaping_faces[i] = Some(cached);
         } else if let Some(owned) = owned_shaping_faces[head].as_ref() {
             shaping_faces[i] = Some(owned);
@@ -2149,13 +2151,8 @@ pub(super) fn emit_cell_paragraph(
         em.options.fallback_text_paint,
         None,
     );
-    let stroke_picker = build_run_stroke_picker(
-        paragraph,
-        &resolved_runs,
-        em.palette,
-        em.cmyk_xform,
-        0,
-    );
+    let stroke_picker =
+        build_run_stroke_picker(paragraph, &resolved_runs, em.palette, em.cmyk_xform, 0);
     let any_text_stroke = stroke_picker.any_visible();
     let leading_pt = paragraph_size * 1.2;
     let cell_origin = (origin_pt.0, origin_pt.1 + paragraph_y);
@@ -2177,10 +2174,7 @@ pub(super) fn emit_cell_paragraph(
         for (line_idx, line) in laid_out.lines.iter().enumerate() {
             let start = line.byte_range.start.min(paragraph_text.len());
             let end = line.byte_range.end.min(paragraph_text.len());
-            let source_text = paragraph_text
-                .get(start..end)
-                .unwrap_or("")
-                .to_string();
+            let source_text = paragraph_text.get(start..end).unwrap_or("").to_string();
             em.breaks.push(BreakRecord {
                 story_id: em.current_story_id.clone(),
                 paragraph_idx: em.paragraph_idx,
@@ -2209,8 +2203,7 @@ pub(super) fn emit_cell_paragraph(
     {
         let host_page_id = pages[target_page].id.clone();
         for (line_idx, line) in laid_out.lines.iter().enumerate() {
-            let baseline_pt_local =
-                line.baseline_y as f32 / paged_text::shape::ADVANCE_PRECISION;
+            let baseline_pt_local = line.baseline_y as f32 / paged_text::shape::ADVANCE_PRECISION;
             let line_h_pt = leading_pt; // cell paragraphs use 1.2 × point size
             let mut clusters: Vec<ClusterPos> = Vec::with_capacity(line.glyphs.len());
             let mut last_cluster: Option<u32> = None;
@@ -2223,8 +2216,7 @@ pub(super) fn emit_cell_paragraph(
                     continue;
                 }
                 last_cluster = Some(g.cluster);
-                let x_pt_page =
-                    cell_origin.0 + g.x as f32 / paged_text::shape::ADVANCE_PRECISION;
+                let x_pt_page = cell_origin.0 + g.x as f32 / paged_text::shape::ADVANCE_PRECISION;
                 clusters.push(ClusterPos {
                     byte: g.cluster,
                     x_pt: x_pt_page,

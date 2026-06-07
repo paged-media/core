@@ -56,10 +56,10 @@ fn viewer_build_matches_stock_build_document_for_every_page() {
         };
         let document = Document::open(&bytes).expect("open fixture");
 
-        let viewer = paged_sdk::viewer_build(&document, None, &BytesResolver::new())
-            .expect("viewer_build");
-        let stock = pipeline::build_document(&document, &PipelineOptions::default())
-            .expect("stock build");
+        let viewer =
+            paged_sdk::viewer_build(&document, None, &BytesResolver::new()).expect("viewer_build");
+        let stock =
+            pipeline::build_document(&document, &PipelineOptions::default()).expect("stock build");
 
         assert_eq!(
             viewer.pages.len(),
@@ -88,14 +88,18 @@ fn digest_is_order_and_content_sensitive() {
         return;
     };
     let document = Document::open(&bytes).expect("open fixture");
-    let built = paged_sdk::viewer_build(&document, None, &BytesResolver::new())
-        .expect("viewer_build");
+    let built =
+        paged_sdk::viewer_build(&document, None, &BytesResolver::new()).expect("viewer_build");
 
     // Re-building yields identical digests (determinism)…
     let again = paged_sdk::viewer_build(&document, None, &BytesResolver::new())
         .expect("viewer_build again");
     for (a, b) in built.pages.iter().zip(again.pages.iter()) {
-        assert_eq!(a.list.digest(), b.list.digest(), "build must be deterministic");
+        assert_eq!(
+            a.list.digest(),
+            b.list.digest(),
+            "build must be deterministic"
+        );
     }
     // …and two different pages hash differently (sanity that the
     // digest actually reads the content).

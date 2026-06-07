@@ -419,7 +419,10 @@ fn batch_created_sentinel_attaches_metadata_in_one_undo_step() {
         model.scene().spreads[0].spread.rectangles.len(),
         before_rects
     );
-    assert!(!model.scene().spreads[0].spread.labels.contains_key(&created));
+    assert!(!model.scene().spreads[0]
+        .spread
+        .labels
+        .contains_key(&created));
 }
 
 /// The sentinel without a preceding create is a coherent error, not a

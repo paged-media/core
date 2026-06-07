@@ -198,11 +198,7 @@ impl Default for ResolveOptions {
 /// and the iteration loop never needs to re-run. The structure is
 /// in place for Phase 2 to plug field resolution into the same
 /// API surface.
-pub fn resolve(
-    scene: &Document,
-    built: &BuiltDocument,
-    opts: &ResolveOptions,
-) -> ResolutionResult {
+pub fn resolve(scene: &Document, built: &BuiltDocument, opts: &ResolveOptions) -> ResolutionResult {
     let mut result = ResolutionResult::default();
     if opts.max_iterations == 0 {
         return result;
@@ -293,7 +289,10 @@ pub fn resolve(
         headers.push(RunningHeader {
             page_id: page.id.clone(),
             page_number,
-            text: last_seen.as_ref().map(|(t, _)| t.clone()).unwrap_or_default(),
+            text: last_seen
+                .as_ref()
+                .map(|(t, _)| t.clone())
+                .unwrap_or_default(),
             level: last_seen.as_ref().map(|(_, l)| *l).unwrap_or(0),
         });
     }
@@ -351,11 +350,7 @@ fn anchor_text_and_level(scene: &Document, anchor: &Anchor) -> (String, u8) {
         AnchorKind::HeadingParagraph { level } => *level,
         _ => 0,
     };
-    let Some(parsed_story) = scene
-        .stories
-        .iter()
-        .find(|s| s.self_id == anchor.story_id)
-    else {
+    let Some(parsed_story) = scene.stories.iter().find(|s| s.self_id == anchor.story_id) else {
         return (String::new(), level);
     };
     let Some(paragraph) = parsed_story.story.paragraphs.get(anchor.paragraph_index) else {
@@ -403,14 +398,16 @@ mod tests {
                 .compression_method(zip::CompressionMethod::Stored);
 
             zip.start_file("mimetype", opts).unwrap();
-            zip.write_all(b"application/vnd.adobe.indesign-idml-package").unwrap();
+            zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+                .unwrap();
 
             zip.start_file("META-INF/container.xml", opts).unwrap();
             zip.write_all(
                 br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
 <rootfiles><rootfile full-path="designmap.xml" media-type="text/xml"/></rootfiles></container>"#,
-            ).unwrap();
+            )
+            .unwrap();
 
             zip.start_file("designmap.xml", opts).unwrap();
             zip.write_all(
@@ -449,7 +446,8 @@ mod tests {
 <CharacterStyleRange><Content>Section A</Content></CharacterStyleRange>
 </ParagraphStyleRange>
 </Story></idPkg:Story>"#,
-            ).unwrap();
+            )
+            .unwrap();
 
             zip.finish().unwrap();
         }

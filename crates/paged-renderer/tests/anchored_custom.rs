@@ -112,9 +112,7 @@ fn custom_anchored_frame_snaps_to_textframe_top_right() {
     // emits glyphs only).
     let mut anchored = axis_aligned_fills(&page.list.commands)
         .into_iter()
-        .filter(|(_, _, a, d)| {
-            (a - ANCHOR_W_PT).abs() < 0.5 && (d - ANCHOR_H_PT).abs() < 0.5
-        });
+        .filter(|(_, _, a, d)| (a - ANCHOR_W_PT).abs() < 0.5 && (d - ANCHOR_H_PT).abs() < 0.5);
     let (anchor_x, anchor_y, _, _) = anchored
         .next()
         .expect("anchored frame fill (60x36) present on the custom page");

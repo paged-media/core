@@ -37,8 +37,7 @@ use std::num::NonZeroU64;
 
 /// Source for `splat_or_overprint.wgsl`. Inlined at compile time so
 /// the binary doesn't carry a runtime file-load path.
-pub const SPLAT_OR_OVERPRINT_WGSL: &str =
-    include_str!("shaders/splat_or_overprint.wgsl");
+pub const SPLAT_OR_OVERPRINT_WGSL: &str = include_str!("shaders/splat_or_overprint.wgsl");
 
 /// Source for `recomposite.wgsl`. See the module-level `recomposite`
 /// docstring for the pixel-by-pixel composite rule.
@@ -88,7 +87,12 @@ pub fn pack_cmyk_bytes(c: u8, m: u8, y: u8, k: u8) -> u32 {
 /// packed-byte u32 the shader expects.
 pub fn pack_cmyk_unit(cmyk: [f32; 4]) -> u32 {
     let to_u8 = |v: f32| -> u8 { (v.clamp(0.0, 1.0) * 255.0).round() as u8 };
-    pack_cmyk_bytes(to_u8(cmyk[0]), to_u8(cmyk[1]), to_u8(cmyk[2]), to_u8(cmyk[3]))
+    pack_cmyk_bytes(
+        to_u8(cmyk[0]),
+        to_u8(cmyk[1]),
+        to_u8(cmyk[2]),
+        to_u8(cmyk[3]),
+    )
 }
 
 /// Plumbing handle for the two compute pipelines + their bind-group
@@ -129,96 +133,99 @@ impl Pipelines {
             source: wgpu::ShaderSource::Wgsl(RECOMPOSITE_WGSL.into()),
         });
 
-        let splat_group0_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("paged-gpu splat bg0"),
-            entries: &[
-                // plane_cmyk (read_write)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+        let splat_group0_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("paged-gpu splat bg0"),
+                entries: &[
+                    // plane_cmyk (read_write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // coverage (read_write)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // coverage (read_write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // scratch_rgba (read)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // scratch_rgba (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // params uniform
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(
-                            std::mem::size_of::<SplatParams>() as u64,
-                        ),
+                    // params uniform
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: NonZeroU64::new(
+                                std::mem::size_of::<SplatParams>() as u64
+                            ),
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // vello_target (read). Needed for the
-                // `rgb_to_naive_cmyk_8bit` fallback on virgin pixels —
-                // the shader recovers the bottom-side CMYK from any
-                // prior non-overprint colour so we don't drop it.
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // vello_target (read). Needed for the
+                    // `rgb_to_naive_cmyk_8bit` fallback on virgin pixels —
+                    // the shader recovers the bottom-side CMYK from any
+                    // prior non-overprint colour so we don't drop it.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
+                ],
+            });
 
-        let splat_group1_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("paged-gpu splat bg1 (spot)"),
-            entries: &[
-                // spot_plane (read_write). Sentinel-bound on process
-                // dispatches; the shader branch on `spot_id` keeps the
-                // sentinel untouched.
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+        let splat_group1_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("paged-gpu splat bg1 (spot)"),
+                entries: &[
+                    // spot_plane (read_write). Sentinel-bound on process
+                    // dispatches; the shader branch on `spot_id` keeps the
+                    // sentinel untouched.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
+                ],
+            });
 
-        let splat_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("paged-gpu splat pipeline layout"),
-            bind_group_layouts: &[Some(&splat_group0_layout), Some(&splat_group1_layout)],
-            immediate_size: 0,
-        });
+        let splat_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("paged-gpu splat pipeline layout"),
+                bind_group_layouts: &[Some(&splat_group0_layout), Some(&splat_group1_layout)],
+                immediate_size: 0,
+            });
         let splat = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("paged-gpu splat_or_overprint pipeline"),
             layout: Some(&splat_pipeline_layout),

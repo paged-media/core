@@ -260,7 +260,10 @@ fn transparency_round_trips_through_parser() {
     // drop-shadow pages omit blending, so 12 - 2 = 10). Re-counting
     // against the variant table: 3 opacity + 5 blend + 2 combos =
     // 10 pages with `<BlendingSetting>`.
-    assert_eq!(blends, 10, "expected 10 BlendingSetting blocks, got {blends}");
+    assert_eq!(
+        blends, 10,
+        "expected 10 BlendingSetting blocks, got {blends}"
+    );
     // 3 variants set a DropShadow (default, explicit, shadow+opacity
     // combo).
     assert_eq!(shadows, 3, "expected 3 DropShadow blocks, got {shadows}");
@@ -384,8 +387,11 @@ fn markers_round_trips_through_parser() {
         .map(|(_, v)| v)
         .expect("a story entry");
     let story = paged_parse::Story::parse(story_xml).expect("Story::parse");
-    let runs: Vec<&paged_parse::CharacterRun> =
-        story.paragraphs.iter().flat_map(|p| p.runs.iter()).collect();
+    let runs: Vec<&paged_parse::CharacterRun> = story
+        .paragraphs
+        .iter()
+        .flat_map(|p| p.runs.iter())
+        .collect();
     let link_runs = runs.iter().filter(|r| r.hyperlink_source.is_some()).count();
     let var_runs = runs.iter().filter(|r| r.text_variable.is_some()).count();
     assert_eq!(link_runs, 2, "two hyperlink-source-tagged runs");

@@ -135,7 +135,10 @@ impl ColorEntry {
         if base_space != ColorSpace::Cmyk || base_value.len() != 4 {
             return None;
         }
-        let t = self.tint.map(|v| (v / 100.0).clamp(0.0, 1.0)).unwrap_or(1.0);
+        let t = self
+            .tint
+            .map(|v| (v / 100.0).clamp(0.0, 1.0))
+            .unwrap_or(1.0);
         Some([
             base_value[0] * t,
             base_value[1] * t,
@@ -366,7 +369,13 @@ fn parse_color(e: &quick_xml::events::BytesStart) -> Option<ColorEntry> {
     let alpha = attr(e, b"AlphaPercentage")
         .or_else(|| attr(e, b"Alpha"))
         .and_then(|s| s.parse::<f32>().ok())
-        .map(|v| if v > 1.0 { (v / 100.0).clamp(0.0, 1.0) } else { v.clamp(0.0, 1.0) });
+        .map(|v| {
+            if v > 1.0 {
+                (v / 100.0).clamp(0.0, 1.0)
+            } else {
+                v.clamp(0.0, 1.0)
+            }
+        });
     Some(ColorEntry {
         self_id,
         name: attr(e, b"Name"),

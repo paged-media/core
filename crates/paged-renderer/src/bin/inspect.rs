@@ -307,11 +307,17 @@ fn main() -> Result<()> {
             .parse()
             .with_context(|| format!("parse ascender in {spec}"))?;
         let cap_height = match parts.next() {
-            Some(s) if !s.is_empty() => Some(s.parse::<f32>().with_context(|| format!("parse cap_height in {spec}"))?),
+            Some(s) if !s.is_empty() => Some(
+                s.parse::<f32>()
+                    .with_context(|| format!("parse cap_height in {spec}"))?,
+            ),
             _ => None,
         };
         let x_height = match parts.next() {
-            Some(s) if !s.is_empty() => Some(s.parse::<f32>().with_context(|| format!("parse x_height in {spec}"))?),
+            Some(s) if !s.is_empty() => Some(
+                s.parse::<f32>()
+                    .with_context(|| format!("parse x_height in {spec}"))?,
+            ),
             _ => None,
         };
         metric_overrides.push((
@@ -429,8 +435,8 @@ fn main() -> Result<()> {
 
     if let Some(path) = args.emit_breaks.as_deref() {
         use std::io::Write;
-        let file = std::fs::File::create(path)
-            .with_context(|| format!("create {}", path.display()))?;
+        let file =
+            std::fs::File::create(path).with_context(|| format!("create {}", path.display()))?;
         let mut w = std::io::BufWriter::new(file);
         for rec in &built.breaks {
             serde_json::to_writer(&mut w, rec)?;
@@ -438,7 +444,11 @@ fn main() -> Result<()> {
         }
         w.flush()?;
         if !args.json {
-            eprintln!("breaks        {} record(s) → {}", built.breaks.len(), path.display());
+            eprintln!(
+                "breaks        {} record(s) → {}",
+                built.breaks.len(),
+                path.display()
+            );
         }
     }
 
@@ -547,11 +557,7 @@ struct ModelStats {
 
 impl ModelStats {
     fn of(doc: &Document) -> Self {
-        let frames = doc
-            .spreads
-            .iter()
-            .map(|s| s.spread.text_frames.len())
-            .sum();
+        let frames = doc.spreads.iter().map(|s| s.spread.text_frames.len()).sum();
         let run_text = doc
             .stories
             .iter()
@@ -608,7 +614,10 @@ fn render_page_hashes(doc: &Document, dpi: f32) -> Result<Vec<[u8; 32]>> {
         let mut r = paged_renderer::BytesResolver::new();
         for (path, b) in &embedded {
             r.add_image(path.clone(), b.clone());
-            if let Some(name) = std::path::Path::new(path).file_name().and_then(|s| s.to_str()) {
+            if let Some(name) = std::path::Path::new(path)
+                .file_name()
+                .and_then(|s| s.to_str())
+            {
                 r.add_image(name.to_string(), b.clone());
             }
         }

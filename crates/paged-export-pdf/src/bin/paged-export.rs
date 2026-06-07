@@ -23,14 +23,18 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use paged_export_pdf::{
-    export_pdf, ExportColorPolicy, ExportInkSettings, ExportInput, ExportOptions,
-    ExportProfiles, MarkOptions, PdfStandard,
+    export_pdf, ExportColorPolicy, ExportInkSettings, ExportInput, ExportOptions, ExportProfiles,
+    MarkOptions, PdfStandard,
 };
 use paged_renderer::pipeline::{self, FontTable, PipelineOptions};
 use paged_scene::Document;
 
 #[derive(Parser, Debug)]
-#[command(name = "paged-export", version, about = "Export an IDML document to print PDF")]
+#[command(
+    name = "paged-export",
+    version,
+    about = "Export an IDML document to print PDF"
+)]
 struct Args {
     /// IDML file to export.
     file: PathBuf,
@@ -131,7 +135,11 @@ fn main() -> anyhow::Result<()> {
         },
         inks: ExportInkSettings::default(),
         options: ExportOptions {
-            standard: if args.pdfx4 { PdfStandard::PdfX4 } else { PdfStandard::Pdf17 },
+            standard: if args.pdfx4 {
+                PdfStandard::PdfX4
+            } else {
+                PdfStandard::Pdf17
+            },
             color_policy: policy,
             output_condition: Some(args.output_condition.clone()),
             page_range,
@@ -143,7 +151,9 @@ fn main() -> anyhow::Result<()> {
                 offset_pt: 0.0,
                 weight_pt: 0.0,
             },
-            bleed: paged_export_pdf::BleedOptions { override_pt: bleed_override },
+            bleed: paged_export_pdf::BleedOptions {
+                override_pt: bleed_override,
+            },
             images: paged_export_pdf::ImageOptions {
                 downsample_ppi: args.downsample_ppi,
                 jpeg_quality: None,
@@ -174,7 +184,11 @@ fn main() -> anyhow::Result<()> {
         if result.diagnostics.is_empty() {
             String::new()
         } else {
-            format!(", {} diagnostic(s): {:?}", result.diagnostics.len(), result.diagnostics)
+            format!(
+                ", {} diagnostic(s): {:?}",
+                result.diagnostics.len(),
+                result.diagnostics
+            )
         }
     );
     Ok(())

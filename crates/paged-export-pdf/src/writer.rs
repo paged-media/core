@@ -291,7 +291,10 @@ impl DocState {
                     .output_condition
                     .as_deref()
                     .unwrap_or("Custom");
-                let mut oi = self.pdf.indirect(oi_ref).start::<pdf_writer::writers::OutputIntent>();
+                let mut oi = self
+                    .pdf
+                    .indirect(oi_ref)
+                    .start::<pdf_writer::writers::OutputIntent>();
                 oi.subtype(pdf_writer::types::OutputIntentSubtype::PDFX);
                 oi.output_condition_identifier(pdf_writer::TextStr(condition));
                 oi.output_condition(pdf_writer::TextStr(condition));

@@ -52,7 +52,11 @@ pub struct AppliedText {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 pub enum TextOp {
     InsertText {
         story_id: String,
@@ -398,10 +402,7 @@ fn locate_para_local(story: &paged_parse::Story, offset: u32) -> (usize, usize) 
             byte_in_run,
         } => {
             let para = &story.paragraphs[paragraph_idx];
-            let head: usize = para.runs[..run_idx]
-                .iter()
-                .map(|r| r.text.len())
-                .sum();
+            let head: usize = para.runs[..run_idx].iter().map(|r| r.text.len()).sum();
             (paragraph_idx, head + byte_in_run)
         }
         Locate::EndOfStory { paragraph_idx } => {
@@ -652,9 +653,12 @@ mod tests {
             zip.write_all(b"application/vnd.adobe.indesign-idml-package")
                 .unwrap();
             zip.start_file("META-INF/container.xml", opts).unwrap();
-            zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?>
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-<rootfiles><rootfile full-path="designmap.xml" media-type="text/xml"/></rootfiles></container>"#).unwrap();
+<rootfiles><rootfile full-path="designmap.xml" media-type="text/xml"/></rootfiles></container>"#,
+            )
+            .unwrap();
             zip.start_file("designmap.xml", opts).unwrap();
             zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?>
 <Document DOMVersion="13.1" Self="d1">
@@ -669,13 +673,16 @@ mod tests {
 <TextFrame Self="tf1" ParentStory="story1" GeometricBounds="100 100 400 400" ItemTransform="1 0 0 1 0 0"/>
 </Spread></idPkg:Spread>"#).unwrap();
             zip.start_file("Stories/Story_story1.xml", opts).unwrap();
-            zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?>
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
 <idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="13.1">
 <Story Self="story1">
 <ParagraphStyleRange>
 <CharacterStyleRange><Content>Hello world</Content></CharacterStyleRange>
 </ParagraphStyleRange>
-</Story></idPkg:Story>"#).unwrap();
+</Story></idPkg:Story>"#,
+            )
+            .unwrap();
             zip.finish().unwrap();
         }
         buf
@@ -747,11 +754,19 @@ mod tests {
             },
         )
         .unwrap();
-        assert_ne!(initial, model.current_state_hash(), "mutation must change state");
+        assert_ne!(
+            initial,
+            model.current_state_hash(),
+            "mutation must change state"
+        );
         // Apply inverse (delete the ","), expect back to original.
         let scene_mut = model.scene_mut();
         apply(scene_mut, &applied.inverse).unwrap();
-        assert_eq!(initial, model.current_state_hash(), "inverse must restore state");
+        assert_eq!(
+            initial,
+            model.current_state_hash(),
+            "inverse must restore state"
+        );
     }
 
     #[test]

@@ -29,7 +29,8 @@ fn small_idml() -> Vec<u8> {
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
         zip.start_file("mimetype", opts).unwrap();
-        zip.write_all(b"application/vnd.adobe.indesign-idml-package").unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
         zip.start_file("META-INF/container.xml", opts).unwrap();
         zip.write_all(
             br#"<?xml version="1.0" encoding="UTF-8"?>
@@ -85,7 +86,10 @@ fn find_profile() -> Option<Vec<u8>> {
     if let Ok(entries) = std::fs::read_dir(&corpus) {
         for e in entries.flatten() {
             let path = e.path();
-            if path.extension().is_some_and(|x| x.eq_ignore_ascii_case("icc")) {
+            if path
+                .extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("icc"))
+            {
                 if let Ok(bytes) = std::fs::read(&path) {
                     return Some(bytes);
                 }
@@ -161,8 +165,7 @@ fn designmap_profile_name_activates_a_matching_registered_profile() {
     let meta = model.document_meta();
     assert_eq!(meta.cmyk_profile_name.as_deref(), Some("Test CMYK Profile"));
     // And the preview takes the ICC path (differs from naive).
-    let bare =
-        CanvasModel::load("doc2", &small_idml(), CanvasOptions::default()).expect("load");
+    let bare = CanvasModel::load("doc2", &small_idml(), CanvasOptions::default()).expect("load");
     assert_ne!(
         model.color_preview("Color/cyan").unwrap().rgb_hex,
         bare.color_preview("Color/cyan").unwrap().rgb_hex,
@@ -207,8 +210,7 @@ fn color_compute_resolves_and_flags_gamut() {
         })
         .expect("activate");
     // A screaming Lab green-violet far outside any coated CMYK space.
-    let (hex, _, oog) =
-        model.color_compute("LAB", &[50.0, 120.0, -100.0], None, None, None, None);
+    let (hex, _, oog) = model.color_compute("LAB", &[50.0, 120.0, -100.0], None, None, None, None);
     assert!(oog, "vivid Lab must flag out-of-gamut against coated CMYK");
     assert!(hex.starts_with('#') && hex.len() == 7);
     // A neutral mid grey is comfortably inside.
@@ -225,12 +227,17 @@ fn color_compute_resolves_and_flags_gamut() {
 
 #[test]
 fn swatch_tint_folds_into_compute() {
-    let model =
-        CanvasModel::load("doc1", &small_idml(), CanvasOptions::default()).expect("load");
+    let model = CanvasModel::load("doc1", &small_idml(), CanvasOptions::default()).expect("load");
     // 50% tint of pure cyan = CMYK(50,0,0,0) after the swatch-level
     // tint fold.
-    let (_, cmyk, _) =
-        model.color_compute("CMYK", &[100.0, 0.0, 0.0, 0.0], Some(50.0), None, None, None);
+    let (_, cmyk, _) = model.color_compute(
+        "CMYK",
+        &[100.0, 0.0, 0.0, 0.0],
+        Some(50.0),
+        None,
+        None,
+        None,
+    );
     assert_eq!(cmyk, Some([50.0, 0.0, 0.0, 0.0]));
 }
 
@@ -279,8 +286,7 @@ fn proof_setup_swaps_the_display_condition_and_back() {
 
 #[test]
 fn gradient_detail_resolves_stops_with_refs_and_midpoints() {
-    let model =
-        CanvasModel::load("doc1", &small_idml(), CanvasOptions::default()).expect("load");
+    let model = CanvasModel::load("doc1", &small_idml(), CanvasOptions::default()).expect("load");
     let detail = model.gradient_detail("Gradient/g1").expect("detail");
     assert_eq!(detail.kind, "linear");
     assert_eq!(detail.name, "Cyan Fade");

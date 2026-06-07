@@ -340,4 +340,3 @@ fn roundtrip_flag_fails_on_garbage_input() {
         "garbage input must exit non-zero, got success"
     );
 }
-

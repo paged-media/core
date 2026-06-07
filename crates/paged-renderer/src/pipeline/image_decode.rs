@@ -98,7 +98,9 @@ fn peek_image_lazy(bytes: &[u8], max_px: u32) -> Option<paged_compose::DecodedIm
 /// may not.
 fn is_svg_magic(bytes: &[u8]) -> bool {
     let head = &bytes[..bytes.len().min(512)];
-    let Ok(s) = std::str::from_utf8(head) else { return false; };
+    let Ok(s) = std::str::from_utf8(head) else {
+        return false;
+    };
     let s = s.trim_start_matches('\u{FEFF}').trim_start();
     s.starts_with("<?xml") || s.starts_with("<svg") || s.starts_with("<!DOCTYPE svg")
 }
@@ -209,7 +211,6 @@ pub(super) fn decode_image_bytes_with_target_max(
         icc: extract_icc(bytes),
     })
 }
-
 
 /// Extract an embedded ICC profile from JPEG (APP2 `ICC_PROFILE`
 /// segments, reassembled in chunk order) or PNG (`iCCP` chunk,

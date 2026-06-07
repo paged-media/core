@@ -43,9 +43,7 @@ use serde::{Deserialize, Serialize};
 /// so the id stays stable across re-builds. For IDML-declared
 /// anchors (Hyperlink destinations, bookmarks), this is the IDML
 /// `Self` attribute on the anchor element.
-#[derive(
-    Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AnchorId(pub String);
 

@@ -138,7 +138,10 @@ fn protocol() -> u64 {
 fn loaded_core() -> WorkerCore {
     let mut core = WorkerCore::new();
     let reply = roundtrip(&mut core, &load_msg(1));
-    assert_eq!(reply["kind"], "documentLoaded", "fixture must load: {reply}");
+    assert_eq!(
+        reply["kind"], "documentLoaded",
+        "fixture must load: {reply}"
+    );
     core
 }
 
@@ -244,14 +247,23 @@ fn mutate_insert_text_replies_mutation_applied() {
     assert_eq!(reply["kind"], "mutationApplied", "{reply}");
     assert_eq!(reply["payload"]["clientSeq"].as_u64().unwrap(), 10);
     // rebuild_ms is the frozen-clock delta: exactly 0.
-    assert_eq!(reply["payload"]["cacheStats"]["rebuildMs"].as_f64().unwrap(), 0.0);
+    assert_eq!(
+        reply["payload"]["cacheStats"]["rebuildMs"]
+            .as_f64()
+            .unwrap(),
+        0.0
+    );
     // A content edit to story1 invalidates the GPU scene cache. The
     // dispatch scopes it to the story's pages when the post-rebuild
     // story→pages map resolves them, and falls back to a full clear
     // when the story has no on-page frames (the documented behaviour).
     // Either way it MUST NOT be a no-op — the edited page can't keep a
     // stale cached scene.
-    assert_ne!(effect, CacheEffect::None, "an applied edit must dirty the cache");
+    assert_ne!(
+        effect,
+        CacheEffect::None,
+        "an applied edit must dirty the cache"
+    );
 }
 
 #[test]
@@ -398,7 +410,9 @@ fn request_page_unknown_replies_unknown_page() {
     assert_eq!(reply["kind"], "mutationFailed");
     assert_eq!(reply["payload"]["error"]["kind"], "unknownPage");
     assert_eq!(
-        reply["payload"]["error"]["details"]["pageId"].as_str().unwrap(),
+        reply["payload"]["error"]["details"]["pageId"]
+            .as_str()
+            .unwrap(),
         "does-not-exist"
     );
 }
@@ -456,7 +470,11 @@ fn every_reply_stamps_the_current_protocol_version() {
     // so the client can detect a stale worker. We assert the constant is
     // 34 (the documented current version) AND that an arbitrary reply
     // stamps it.
-    assert_eq!(protocol(), 34, "PROTOCOL_VERSION drifted from documented v34");
+    assert_eq!(
+        protocol(),
+        34,
+        "PROTOCOL_VERSION drifted from documented v34"
+    );
     let mut core = loaded_core();
     let reply = roundtrip(
         &mut core,

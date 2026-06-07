@@ -131,8 +131,12 @@ fn stroke_path_bounds(bytes: &[u8]) -> (f32, f32, f32, f32) {
         })
         .expect("a StrokePath");
     let path = page.list.paths.get(path_id).expect("path data");
-    let (mut min_x, mut min_y, mut max_x, mut max_y) =
-        (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (
+        f32::INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+    );
     let mut acc = |x: f32, y: f32| {
         let (px, py) = transform.apply(x, y);
         min_x = min_x.min(px);
@@ -196,7 +200,8 @@ fn striped_stroke_substroke_weights_match_stripe_fractions() {
 
 #[test]
 fn wavy_stroke_emits_a_polyline_strokepath() {
-    let style = r#"<WavyStrokeStyle Self="StrokeStyle/Wavy" Name="Wave" Width="0.5" Wavelength="2"/>"#;
+    let style =
+        r#"<WavyStrokeStyle Self="StrokeStyle/Wavy" Name="Wave" Width="0.5" Wavelength="2"/>"#;
     let bytes = build_idml(
         r#"StrokeColor="Color/Black" StrokeWeight="10" StrokeType="StrokeStyle/Wavy""#,
         style,
@@ -217,7 +222,10 @@ fn wavy_stroke_emits_a_polyline_strokepath() {
         .iter()
         .filter(|s| matches!(s, PathSegment::LineTo { .. }))
         .count();
-    assert!(line_tos > 8, "wavy ribbon should be densely sampled: {line_tos} LineTo");
+    assert!(
+        line_tos > 8,
+        "wavy ribbon should be densely sampled: {line_tos} LineTo"
+    );
 }
 
 #[test]
@@ -234,11 +242,17 @@ fn gap_color_dash_emits_under_stroke_plus_dash() {
     let strokes = stroke_paths(&page.list.commands);
     // Two StrokePaths: the gap-colour under-stroke (solid, full weight)
     // emitted first, then the dashed black stroke.
-    assert_eq!(strokes.len(), 2, "gap under-stroke + dash; got {:?}", page.list.commands);
+    assert_eq!(
+        strokes.len(),
+        2,
+        "gap under-stroke + dash; got {:?}",
+        page.list.commands
+    );
     let (under, top) = match (strokes[0], strokes[1]) {
-        (DisplayCommand::StrokePath { stroke: u, .. }, DisplayCommand::StrokePath { stroke: t, .. }) => {
-            (u, t)
-        }
+        (
+            DisplayCommand::StrokePath { stroke: u, .. },
+            DisplayCommand::StrokePath { stroke: t, .. },
+        ) => (u, t),
         _ => unreachable!(),
     };
     // Under-stroke is solid full-weight; top stroke carries the dash.
@@ -363,6 +377,12 @@ fn stroke_alignment_center_keeps_bounds() {
         "",
     );
     let (min_x, min_y, max_x, max_y) = stroke_path_bounds(&bytes);
-    assert!(min_x.abs() < 1e-3 && min_y.abs() < 1e-3, "min=({min_x},{min_y})");
-    assert!((max_x - 200.0).abs() < 1e-3 && (max_y - 100.0).abs() < 1e-3, "max=({max_x},{max_y})");
+    assert!(
+        min_x.abs() < 1e-3 && min_y.abs() < 1e-3,
+        "min=({min_x},{min_y})"
+    );
+    assert!(
+        (max_x - 200.0).abs() < 1e-3 && (max_y - 100.0).abs() < 1e-3,
+        "max=({max_x},{max_y})"
+    );
 }

@@ -41,10 +41,8 @@
 use std::cell::RefCell;
 
 use boa_engine::{
-    js_string,
-    object::ObjectInitializer,
-    property::Attribute,
-    Context, JsArgs, JsResult, JsValue, NativeFunction, Source,
+    js_string, object::ObjectInitializer, property::Attribute, Context, JsArgs, JsResult, JsValue,
+    NativeFunction, Source,
 };
 use paged_canvas::channel::Mutation;
 use paged_canvas::CanvasModel;
@@ -174,8 +172,16 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
     let paged = ObjectInitializer::new(ctx)
         .function(NativeFunction::from_fn_ptr(paged_set), js_string!("set"), 3)
         .function(NativeFunction::from_fn_ptr(paged_get), js_string!("get"), 2)
-        .function(NativeFunction::from_fn_ptr(paged_undo), js_string!("undo"), 0)
-        .function(NativeFunction::from_fn_ptr(paged_redo), js_string!("redo"), 0)
+        .function(
+            NativeFunction::from_fn_ptr(paged_undo),
+            js_string!("undo"),
+            0,
+        )
+        .function(
+            NativeFunction::from_fn_ptr(paged_redo),
+            js_string!("redo"),
+            0,
+        )
         .function(
             NativeFunction::from_fn_ptr(paged_inspect),
             js_string!("inspect"),
@@ -186,7 +192,11 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             js_string!("layers"),
             0,
         )
-        .function(NativeFunction::from_fn_ptr(paged_tree), js_string!("tree"), 0)
+        .function(
+            NativeFunction::from_fn_ptr(paged_tree),
+            js_string!("tree"),
+            0,
+        )
         .function(
             NativeFunction::from_fn_ptr(paged_stories),
             js_string!("stories"),
@@ -261,8 +271,16 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
     ctx.register_global_property(js_string!("paged"), paged, Attribute::all())?;
 
     let console = ObjectInitializer::new(ctx)
-        .function(NativeFunction::from_fn_ptr(console_log), js_string!("log"), 0)
-        .function(NativeFunction::from_fn_ptr(console_warn), js_string!("warn"), 0)
+        .function(
+            NativeFunction::from_fn_ptr(console_log),
+            js_string!("log"),
+            0,
+        )
+        .function(
+            NativeFunction::from_fn_ptr(console_warn),
+            js_string!("warn"),
+            0,
+        )
         .function(
             NativeFunction::from_fn_ptr(console_error),
             js_string!("error"),
@@ -282,8 +300,14 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
 // ---------------------------------------------------------------- paged.*
 
 fn paged_set(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let id = args.get_or_undefined(0).to_string(ctx)?.to_std_string_escaped();
-    let path = args.get_or_undefined(1).to_string(ctx)?.to_std_string_escaped();
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let path = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
     let value_arg = args.get_or_undefined(2).clone();
 
     let Some(element_id) = parse_element_id(&id) else {
@@ -307,8 +331,14 @@ fn paged_set(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
 }
 
 fn paged_get(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let id = args.get_or_undefined(0).to_string(ctx)?.to_std_string_escaped();
-    let path = args.get_or_undefined(1).to_string(ctx)?.to_std_string_escaped();
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let path = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
     let Some(element_id) = parse_element_id(&id) else {
         return Ok(JsValue::null());
     };
@@ -321,9 +351,9 @@ fn paged_get(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
         })
     });
     match entry {
-        Some(e) => Ok(JsValue::from(
-            js_string!(serde_json::to_string(&e.value).unwrap_or_default()),
-        )),
+        Some(e) => Ok(JsValue::from(js_string!(
+            serde_json::to_string(&e.value).unwrap_or_default()
+        ))),
         None => Ok(JsValue::null()),
     }
 }
@@ -337,7 +367,10 @@ fn paged_redo(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResul
 }
 
 fn paged_inspect(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let id = args.get_or_undefined(0).to_string(ctx)?.to_std_string_escaped();
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
     let Some(element_id) = parse_element_id(&id) else {
         return Ok(JsValue::null());
     };
@@ -423,11 +456,7 @@ fn paged_links(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResu
 
 /// SDK Phase 5 (v1 sweep) — `paged.conditions()` legacy-shape
 /// alias for `paged.collection("conditions")`.
-fn paged_conditions(
-    _this: &JsValue,
-    _args: &[JsValue],
-    _ctx: &mut Context,
-) -> JsResult<JsValue> {
+fn paged_conditions(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let s = with_model(|m| serde_json::to_string(&m.conditions()).unwrap_or_default());
     Ok(JsValue::from(js_string!(s)))
 }
@@ -443,11 +472,7 @@ fn paged_condition_sets(
 }
 
 /// SDK Phase 5 (v1 sweep) — `paged.colorGroups()` alias.
-fn paged_color_groups(
-    _this: &JsValue,
-    _args: &[JsValue],
-    _ctx: &mut Context,
-) -> JsResult<JsValue> {
+fn paged_color_groups(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let s = with_model(|m| serde_json::to_string(&m.color_groups()).unwrap_or_default());
     Ok(JsValue::from(js_string!(s)))
 }
@@ -1106,7 +1131,9 @@ fn format_value(value: &JsValue, ctx: &mut Context) -> String {
         // Error-shaped objects: pull `.name`, `.message`, `.stack`.
         let name_v = obj.get(js_string!("name"), ctx).ok();
         let msg_v = obj.get(js_string!("message"), ctx).ok();
-        let has_msg = msg_v.as_ref().is_some_and(|v| !v.is_undefined() && !v.is_null());
+        let has_msg = msg_v
+            .as_ref()
+            .is_some_and(|v| !v.is_undefined() && !v.is_null());
         if has_msg {
             let mut head = String::new();
             if let Some(nv) = name_v {

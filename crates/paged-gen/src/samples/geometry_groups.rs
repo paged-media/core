@@ -47,8 +47,7 @@ use crate::builders::{
     master::{write_master, Master},
     page_item::{Group, PageItem, Polygon, PolygonSubPath, Rect},
     resources::{
-        container_xml, fonts_xml, graphic_xml_with_extras, preferences_xml, styles_xml,
-        ExtraColor,
+        container_xml, fonts_xml, graphic_xml_with_extras, preferences_xml, styles_xml, ExtraColor,
     },
     spread::{write_spread, Spread},
     story::{write_story, Paragraph, Story},
@@ -220,12 +219,10 @@ fn build_variant(seq: u32, idx: usize) -> Vec<PageItem> {
         //    Group's local frame at (0, 0) and (RECT_W + gap, 0).
         //    The Group itself sits at GROUP_ANCHOR.
         0 => {
-            let children: Vec<PageItem> = vec![
-                two_rect_pair(&rect_a_id, &rect_b_id),
-            ]
-            .into_iter()
-            .flatten()
-            .collect();
+            let children: Vec<PageItem> = vec![two_rect_pair(&rect_a_id, &rect_b_id)]
+                .into_iter()
+                .flatten()
+                .collect();
             vec![Group {
                 self_id: group_id,
                 item_transform: translate(GROUP_ANCHOR_X, GROUP_ANCHOR_Y),
@@ -375,12 +372,7 @@ fn build_variant(seq: u32, idx: usize) -> Vec<PageItem> {
             let inner_inset = (outer - 80.0) * 0.5;
             let inner = inner_inset + 80.0;
             let outer_path = PolygonSubPath {
-                anchors: vec![
-                    (0.0, 0.0),
-                    (outer, 0.0),
-                    (outer, outer),
-                    (0.0, outer),
-                ],
+                anchors: vec![(0.0, 0.0), (outer, 0.0), (outer, outer), (0.0, outer)],
                 closed: true,
             };
             // Inner sub-path walked in opposite winding so the
@@ -397,10 +389,7 @@ fn build_variant(seq: u32, idx: usize) -> Vec<PageItem> {
             };
             let polygon = Polygon {
                 self_id: polygon_id,
-                item_transform: translate(
-                    (PAGE_W_PT - outer) * 0.5,
-                    (PAGE_H_PT - outer) * 0.5,
-                ),
+                item_transform: translate((PAGE_W_PT - outer) * 0.5, (PAGE_H_PT - outer) * 0.5),
                 fill_color: Some("Color/RGBMagenta".to_string()),
                 stroke_color: Some("Color/Black".to_string()),
                 stroke_weight_pt: Some(1.0),

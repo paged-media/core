@@ -27,13 +27,12 @@
 
 use std::collections::HashMap;
 
-use paged_export_pdf::{
-    BleedOptions, ExportColorPolicy, ExportInkSettings, ExportInput, ExportOptions,
-    ExportProfiles, ExportSession, FontByteSource, ImageOptions, MarkOptions, PdfStandard,
-    RestrictedFontPolicy,
-};
 use crate::channel::ExportPdfWireOptions;
 use crate::model::CanvasModel;
+use paged_export_pdf::{
+    BleedOptions, ExportColorPolicy, ExportInkSettings, ExportInput, ExportOptions, ExportProfiles,
+    ExportSession, FontByteSource, ImageOptions, MarkOptions, PdfStandard, RestrictedFontPolicy,
+};
 
 /// Result of [`CanvasExportSession::finish`]: the serialised PDF plus
 /// both the human-readable summary lines and the structured preflight
@@ -219,7 +218,9 @@ impl CanvasExportSession {
             doc_bleed: self.doc_bleed,
             doc_slug: self.doc_slug,
         };
-        self.session.export_next_page(&input).map_err(|e| e.to_string())?;
+        self.session
+            .export_next_page(&input)
+            .map_err(|e| e.to_string())?;
         Ok((self.session.pages_done(), self.session.page_count()))
     }
 
@@ -256,11 +257,7 @@ impl CanvasExportSession {
         };
         let result = self.session.finish(&input).map_err(|e| e.to_string())?;
         // Human-readable summary lines (the dialog's status line).
-        let diagnostics = result
-            .findings
-            .iter()
-            .map(|f| f.message.clone())
-            .collect();
+        let diagnostics = result.findings.iter().map(|f| f.message.clone()).collect();
         // panels.md gap 20 — structured findings for the grouped list.
         let findings = result
             .findings

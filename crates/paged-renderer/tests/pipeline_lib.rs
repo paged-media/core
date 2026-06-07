@@ -1134,9 +1134,8 @@ fn text_frame_triangle_path_fills_real_outline_not_aabb() {
             // anchor 0 appears twice (start + closing endpoint); dedup
             // by rounding so we compare the three unique vertices.
             endpoints.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            let near = |a: (f32, f32), b: (f32, f32)| {
-                (a.0 - b.0).abs() < 0.5 && (a.1 - b.1).abs() < 0.5
-            };
+            let near =
+                |a: (f32, f32), b: (f32, f32)| (a.0 - b.0).abs() < 0.5 && (a.1 - b.1).abs() < 0.5;
             let verts = [(20.0, 20.0), (100.0, 120.0), (180.0, 20.0)];
             verts.iter().all(|v| endpoints.iter().any(|e| near(*e, *v)))
         })
@@ -1157,12 +1156,8 @@ fn text_frame_triangle_path_fills_real_outline_not_aabb() {
 
     // Plain axis-aligned rectangle: four corners, must NOT lift to a
     // curved polygon path. No triangle-shaped outline appears.
-    let rect_bytes = idml_with_text_frame_path(&[
-        (20.0, 20.0),
-        (180.0, 20.0),
-        (180.0, 120.0),
-        (20.0, 120.0),
-    ]);
+    let rect_bytes =
+        idml_with_text_frame_path(&[(20.0, 20.0), (180.0, 20.0), (180.0, 120.0), (20.0, 120.0)]);
     let rect_doc = Document::open(&rect_bytes).unwrap();
     let rect_built = pipeline::build_document(&rect_doc, &PipelineOptions::default()).unwrap();
     let rect_page = &rect_built.pages[0];
