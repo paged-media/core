@@ -74,6 +74,7 @@ fn build_sample(name: &str) -> Vec<u8> {
         "markers" => paged_gen::samples::markers::build(),
         "masters" => paged_gen::samples::masters::build(),
         "corners" => paged_gen::samples::corners::build(),
+        "footnotes" => paged_gen::samples::footnotes::build(),
         other => panic!("unknown sample {other}"),
     };
     paged_gen::write_idml(&sample).expect("emit fixture")
@@ -1619,4 +1620,87 @@ fn inserted_page_does_not_break_existing_entries() {
         before_spreads,
         "inserted page not yet in the written package (deferred lane 5)"
     );
+}
+
+// ---------------------------------------------------------------------
+// W4.14 — footnote round-trip. A `<Footnote>` is a self-contained
+// paragraph stream anchored mid-run; the parser keeps its body on
+// `paragraph.footnotes[]`, NOT on the host story's `paragraphs`. The
+// story rewriter must skip the footnote subtree so its inner ranges
+// don't misalign the host story's positional cursors. Before the fix
+// the rewrite dropped the host run's `<Content>` + the `<Footnote>`
+// open tag and left a mismatched `</Footnote>`, so the written package
+// re-parsed to ZERO pages.
+// ---------------------------------------------------------------------
+
+/// An unmutated `footnotes.idml` round-trips: the written package
+/// re-parses with its page (and spread / story / frame) counts intact,
+/// and — since nothing diverged from the model — every entry is
+/// byte-identical to the source (the footnote subtree replays verbatim).
+#[test]
+fn footnote_story_round_trips_without_losing_pages() {
+    let original = build_sample("footnotes");
+    let doc = Document::open(&original).expect("open footnotes");
+
+    // Sanity: the fixture has a page and a footnote-bearing host story.
+    let pages_before: usize = doc.spreads.iter().map(|s| s.spread.pages.len()).sum();
+    assert_eq!(pages_before, 1, "fixture has one page");
+    let footnotes_before: usize = doc
+        .stories
+        .iter()
+        .flat_map(|s| s.story.paragraphs.iter())
+        .map(|p| p.footnotes.len())
+        .sum();
+    assert_eq!(
+        footnotes_before, 3,
+        "fixture host paragraph anchors 3 footnotes"
+    );
+
+    let out = write_idml(&doc, &original).expect("write must not crash");
+
+    // The pages survive the round-trip (the regression: page_count → 0).
+    let re = Document::open(&out).expect("written package re-parses");
+    let pages_after: usize = re.spreads.iter().map(|s| s.spread.pages.len()).sum();
+    assert_eq!(
+        pages_after, pages_before,
+        "pages preserved across round-trip"
+    );
+    assert_eq!(
+        re.spreads.len(),
+        doc.spreads.len(),
+        "spread count preserved"
+    );
+    assert_eq!(re.stories.len(), doc.stories.len(), "story count preserved");
+    let frames =
+        |d: &Document| -> usize { d.spreads.iter().map(|s| s.spread.text_frames.len()).sum() };
+    assert_eq!(frames(&re), frames(&doc), "frame count preserved");
+
+    // The footnote bodies survive too — same count, same body text.
+    let footnotes_after: usize = re
+        .stories
+        .iter()
+        .flat_map(|s| s.story.paragraphs.iter())
+        .map(|p| p.footnotes.len())
+        .sum();
+    assert_eq!(
+        footnotes_after, footnotes_before,
+        "footnote count preserved"
+    );
+
+    // Byte-identity on every untouched entry — an unmutated round-trip
+    // is a pure pass-through (the footnote subtree replays verbatim).
+    let src = entries(&original);
+    let dst = entries(&out);
+    assert_eq!(
+        src.keys().collect::<Vec<_>>(),
+        dst.keys().collect::<Vec<_>>(),
+        "entry set unchanged"
+    );
+    for (path, src_bytes) in &src {
+        let dst_bytes = dst.get(path).expect("entry present");
+        assert_eq!(
+            src_bytes, dst_bytes,
+            "entry {path} not byte-identical on unmutated footnotes round-trip"
+        );
+    }
 }

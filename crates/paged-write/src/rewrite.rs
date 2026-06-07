@@ -1959,6 +1959,23 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
     // NOT advance inside a table.
     let mut table_depth: usize = 0;
 
+    // W1.8 — depth of open `<Footnote>` elements. A footnote is a
+    // self-contained paragraph stream anchored mid-run; the parser keeps
+    // its body on `paragraph.footnotes[].paragraphs`, NOT on the story's
+    // top-level `paragraphs` (see `paged_parse::story`'s footnote stack).
+    // So the story-level positional cursors must NOT advance inside a
+    // footnote, and the footnote's own `<ParagraphStyleRange>` /
+    // `<CharacterStyleRange>` / `<Content>` must NOT patch against the
+    // host story. While `footnote_depth > 0` the entire subtree is
+    // treated as opaque inline markup of the *host* run: it buffers into
+    // the open `RunBody` as foreign (so the host run replays verbatim and
+    // never rewrites over the anchor) and the matching `</Footnote>`
+    // restores normal flow. Without this guard the footnote's inner
+    // ranges escaped the buffer, advanced the cursors, and left the host
+    // run's `<Content>` + `<Footnote>` open tag dropped — yielding a
+    // mismatched `</Footnote>` and a re-parse failure (zero pages).
+    let mut footnote_depth: usize = 0;
+
     // W1.15 lane 3 — table-cell text write-back. Inside a `<Cell
     // Self="...">` the `<ParagraphStyleRange>` / `<CharacterStyleRange>`
     // patch against the matched model `TableCell.paragraphs[]` with
@@ -1980,6 +1997,24 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                 // against the cell's paragraphs with cell-local cursors.
                 let in_cell = table_depth > 0 && current_cell.is_some();
                 match e.name().as_ref() {
+                    b"Footnote" => {
+                        // Enter a footnote: its body is a separate stream
+                        // the host story doesn't model. Buffer the whole
+                        // subtree into the open host run as foreign inline
+                        // markup so it replays verbatim and the host run's
+                        // text is never rewritten over the anchor. Activate
+                        // the body if the footnote leads the run (no prior
+                        // `<Content>`), so the buffer captures it.
+                        footnote_depth += 1;
+                        body.active = true;
+                        body.foreign = true;
+                        body.events.push(Event::Start(e.into_owned()));
+                    }
+                    // Inside a footnote, every element is opaque host-run
+                    // markup — buffer it, don't patch it against the story.
+                    _ if footnote_depth > 0 => {
+                        body.events.push(Event::Start(e.into_owned()));
+                    }
                     b"Table" => {
                         table_depth += 1;
                         writer.write_event(Event::Start(e.into_owned()))?;
@@ -2056,6 +2091,16 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
             }
             Event::Empty(e) => {
                 let in_cell = table_depth > 0 && current_cell.is_some();
+                // Inside a footnote every empty element is opaque host-run
+                // markup (a footnote anchor's own `<Br/>` etc.) — buffer it
+                // so it replays verbatim and never advances the story
+                // cursors. A self-closing `<Footnote/>` (no body) opens and
+                // closes in one event, so it never changes `footnote_depth`.
+                if footnote_depth > 0 {
+                    body.events.push(Event::Empty(e.into_owned()));
+                    buf.clear();
+                    continue;
+                }
                 // A self-closing CharacterStyleRange / ParagraphStyleRange
                 // still advances the positional cursor + patches attrs.
                 match e.name().as_ref() {
@@ -2166,6 +2211,23 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                 }
             }
             Event::End(e) => {
+                // Inside a footnote every End buffers into the host run
+                // (foreign) so the subtree replays verbatim; the matching
+                // `</Footnote>` (when depth returns to 0) restores normal
+                // flow. The inner `</CharacterStyleRange>` must NOT trigger
+                // a host-run flush, and the inner `</ParagraphStyleRange>`
+                // must NOT touch the story cursors.
+                if e.name().as_ref() == b"Footnote" {
+                    footnote_depth = footnote_depth.saturating_sub(1);
+                    body.events.push(Event::End(e.into_owned()));
+                    buf.clear();
+                    continue;
+                }
+                if footnote_depth > 0 {
+                    body.events.push(Event::End(e.into_owned()));
+                    buf.clear();
+                    continue;
+                }
                 match e.name().as_ref() {
                     b"Table" => table_depth = table_depth.saturating_sub(1),
                     b"Cell" if cell_depth != 0 && table_depth == cell_depth => {
