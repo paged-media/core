@@ -2963,9 +2963,13 @@ impl<'a> StoryEmitter<'a> {
     /// would need to be transformed *with* the frame at emit time —
     /// out of scope today).
     fn apply_polygon_clip(&mut self, pages: &mut [BuiltPage]) {
-        // Collect (frame_idx, start, end, verts) clip records grouped by
-        // page so we can splice in reverse start-order.
-        type ClipRecord = (usize, usize, usize, Vec<(f32, f32)>);
+        // Collect (frame_idx, start, end, shape) clip records grouped by
+        // page so we can splice in reverse start-order. The `FrameShape`
+        // carries one flattened, transformed contour per
+        // `<GeometryPathType>` — so an oval clips to its curve and a
+        // compound path keeps its hole (W1.10), rather than the old
+        // anchors-only single-contour diamond.
+        type ClipRecord = (usize, usize, usize, paged_text::FrameShape);
         let mut per_page: HashMap<usize, Vec<ClipRecord>> = HashMap::new();
         for (i, frame) in self.chain.iter().enumerate() {
             let Some((start, end)) = self.frame_cmd_ranges[i] else {
@@ -2974,27 +2978,33 @@ impl<'a> StoryEmitter<'a> {
             if start == end {
                 continue;
             }
-            let Some(verts) = frame_polygon_spread(frame) else {
+            let Some(shape) = frame_shape_spread(frame) else {
                 continue;
             };
             let page_idx = self.chain_pages[i];
             per_page
                 .entry(page_idx)
                 .or_default()
-                .push((i, start, end, verts));
+                .push((i, start, end, shape));
         }
         for (page_idx, mut entries) in per_page {
             entries.sort_by(|a, b| b.1.cmp(&a.1));
-            for (frame_idx, start, end, verts) in entries {
+            for (frame_idx, start, end, shape) in entries {
                 let page = &mut pages[page_idx];
-                // Build a closed polygon path from the polyline
-                // through the anchors. Coordinates are in spread
-                // coords; the clip transform below maps to page
-                // coords.
+                // Build a closed clip path: one MoveTo/LineTo*/Close
+                // sub-path per contour. Coordinates are in spread
+                // coords; the clip transform below maps to page coords.
+                // The rasterizer fills with NonZero, so a hole contour
+                // authored with opposite winding (IDML's convention)
+                // carves the interior — its flattened ring preserves
+                // that winding.
                 let mut path = PathData::default();
-                if let Some(&(x, y)) = verts.first() {
+                for contour in shape.contours() {
+                    let Some(&(x, y)) = contour.first() else {
+                        continue;
+                    };
                     path.segments.push(PathSegment::MoveTo { x, y });
-                    for &(x, y) in &verts[1..] {
+                    for &(x, y) in &contour[1..] {
                         path.segments.push(PathSegment::LineTo { x, y });
                     }
                     path.segments.push(PathSegment::Close);
@@ -6650,76 +6660,108 @@ fn frame_polygon_spread(frame: &TextFrame) -> Option<Vec<(f32, f32)>> {
     )
 }
 
-/// Scanline x-intersections of a closed polygon at horizontal line
-/// `y`. Edges connect consecutive `verts` plus the wrap-around closing
-/// segment. Edges parallel to `y` are skipped (their endpoints are
-/// already covered by the neighbouring edges). Returned x values are
-/// sorted ascending; pairing them up `[(x0,x1), (x2,x3), …]` yields
-/// the inside intervals at this y by the even-odd rule.
-fn polygon_x_at_y(verts: &[(f32, f32)], y: f32) -> Vec<f32> {
-    let n = verts.len();
-    let mut xs: Vec<f32> = Vec::new();
-    for i in 0..n {
-        let (x0, y0) = verts[i];
-        let (x1, y1) = verts[(i + 1) % n];
-        // Half-open at the upper endpoint to avoid double-counting
-        // shared anchor y values.
-        let (lo_y, hi_y, lo_x, hi_x) = if y0 <= y1 {
-            (y0, y1, x0, x1)
-        } else {
-            (y1, y0, x1, x0)
-        };
-        if (lo_y - hi_y).abs() < 1e-6 {
-            continue; // horizontal edge
+/// W1.10 — build the frame's outline as a [`paged_text::FrameShape`]
+/// (one flattened, closed contour per `<GeometryPathType>`, in spread
+/// coords) for wrap-INSIDE line layout. Unlike [`frame_polygon_spread`]
+/// (which walks anchors only, collapsing ovals to diamonds and ignoring
+/// holes), this:
+///   * flattens each cubic Bezier edge so ovals / rounded corners
+///     conform to the true curve (InDesign stores ovals as four
+///     cardinal anchors with 0.5523·r handles — anchors-only would be a
+///     diamond);
+///   * honours `subpath_starts` so a compound path (donut: outer ring +
+///     inner hole) keeps its contours separate — the even-odd scanline
+///     in `FrameShape::segments_in_band` then carves the hole.
+///
+/// Returns `None` (⇒ AABB fallback) for the same cases as
+/// `frame_polygon_spread`: fewer than 3 anchors, an axis-aligned rect,
+/// or a rotated/sheared frame.
+fn frame_shape_spread(frame: &TextFrame) -> Option<paged_text::FrameShape> {
+    // Gate on the same rectangularity / upright tests as the clip path
+    // so the layout carve and the clip stay in lockstep.
+    frame_polygon_spread(frame)?;
+    let m = frame
+        .item_transform
+        .unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let anchors = &frame.anchors;
+    // Materialise subpath ranges — same rules as
+    // `polygon_path_from_anchors_with_open`: an empty / single-entry
+    // `subpath_starts` is one contour over all anchors; otherwise each
+    // start opens a contour ending where the next begins.
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    if frame.subpath_starts.len() <= 1 {
+        ranges.push((0, anchors.len()));
+    } else {
+        let mut starts: Vec<usize> = frame
+            .subpath_starts
+            .iter()
+            .copied()
+            .filter(|&s| s < anchors.len())
+            .collect();
+        starts.sort_unstable();
+        starts.dedup();
+        if starts.first() != Some(&0) {
+            starts.insert(0, 0);
         }
-        if y < lo_y || y >= hi_y {
+        for i in 0..starts.len() {
+            let lo = starts[i];
+            let hi = starts.get(i + 1).copied().unwrap_or(anchors.len());
+            if hi > lo {
+                ranges.push((lo, hi));
+            }
+        }
+    }
+    // Flattening tolerance: 0.5pt deviation from the true curve keeps
+    // an oval's chord widths accurate to well under one glyph advance
+    // while collapsing straight corner segments to a single edge.
+    const FLATTEN_TOL_PT: f32 = 0.5;
+    let mut contours: Vec<paged_text::Contour> = Vec::with_capacity(ranges.len());
+    for (range_idx, (lo, hi)) in ranges.iter().copied().enumerate() {
+        // Open contours describe lassoed strokes / text-on-path hosts,
+        // not fillable regions — skip them for the inside test.
+        if frame.subpath_open.get(range_idx).copied().unwrap_or(false) {
             continue;
         }
-        let t = (y - lo_y) / (hi_y - lo_y);
-        xs.push(lo_x + t * (hi_x - lo_x));
-    }
-    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    xs
-}
-
-/// Pair the sorted x intersections into inside intervals `[(x0,x1),
-/// (x2,x3), …]`. Odd counts (numerical edge-grazing) drop the last x.
-fn pairs_from_xs(xs: &[f32]) -> Vec<(f32, f32)> {
-    let mut out: Vec<(f32, f32)> = Vec::with_capacity(xs.len() / 2);
-    let mut i = 0;
-    while i + 1 < xs.len() {
-        out.push((xs[i], xs[i + 1]));
-        i += 2;
-    }
-    out
-}
-
-/// Subtract the union of `holes` from each `(left, right)` segment.
-/// Both inputs are in spread-coord pt; output preserves left-to-right
-/// order. Mirrors the wrap-rect carve loop in
-/// `build_perline_wrap_widths` but expressed as a free fn so the
-/// polygon path can reuse it.
-// Staged helper for the polygon-path wrap rework; not yet wired in.
-#[allow(dead_code)]
-fn carve_holes(mut segments: Vec<(f32, f32)>, holes: &[(f32, f32)]) -> Vec<(f32, f32)> {
-    for (hl, hr) in holes {
-        let mut next: Vec<(f32, f32)> = Vec::with_capacity(segments.len() + 1);
-        for (a, b) in &segments {
-            if *hr <= *a || *hl >= *b {
-                next.push((*a, *b));
-                continue;
-            }
-            if hl > a {
-                next.push((*a, *hl));
-            }
-            if hr < b {
-                next.push((*hr, *b));
-            }
+        let sub = &anchors[lo..hi];
+        if sub.len() < 2 {
+            continue;
         }
-        segments = next;
+        let mut pts: Vec<(f32, f32)> = Vec::new();
+        let p0 = apply_matrix(&m, sub[0].anchor.0, sub[0].anchor.1);
+        pts.push(p0);
+        // Edge between each adjacent anchor + the closing edge back to
+        // the first anchor (IDML polygons are closed).
+        for k in 0..sub.len() {
+            let from = &sub[k];
+            let to = &sub[(k + 1) % sub.len()];
+            let a = apply_matrix(&m, from.anchor.0, from.anchor.1);
+            let c1 = apply_matrix(&m, from.right.0, from.right.1);
+            let c2 = apply_matrix(&m, to.left.0, to.left.1);
+            let b = apply_matrix(&m, to.anchor.0, to.anchor.1);
+            let steps = paged_text::cubic_steps_for_tolerance(a, c1, c2, b, FLATTEN_TOL_PT);
+            paged_text::flatten_cubic(a, c1, c2, b, steps, &mut pts);
+        }
+        // The closing edge re-appended the first anchor; drop the
+        // duplicate so the contour is a clean closed ring.
+        if pts.len() >= 2 && pts.first() == pts.last() {
+            pts.pop();
+        }
+        contours.push(pts);
     }
-    segments
+    let shape = paged_text::FrameShape::from_contours(contours);
+    if shape.is_empty() {
+        None
+    } else {
+        Some(shape)
+    }
 }
+
+// The polygon scanline / hole-carve geometry that used to live here
+// (polygon_x_at_y / pairs_from_xs / carve_holes) moved into
+// `paged_text::frame_shape::FrameShape` (W1.10), which adds Bezier
+// flattening + whole-band intersection so ovals and compound paths lay
+// out correctly. `build_perline_wrap_widths` calls
+// `FrameShape::segments_in_band` directly.
 
 fn build_perline_wrap_widths(
     em: &StoryEmitter,
@@ -6733,8 +6775,15 @@ fn build_perline_wrap_widths(
     // Polygon clip per chain frame — enabled when the frame's
     // <PathGeometry> is non-rectangular (e.g. triangle, pentagon).
     // Indexed by frame_idx; `None` means treat the frame as its AABB.
+    // The `FrameShape` carries the *flattened, contour-separated*
+    // outline (ovals conform to the curve; compound paths keep their
+    // hole) used to carve each line's available x-segments (W1.10);
+    // the parallel `chain_polygons` AABB-diamond stays as the cheap
+    // gate / legacy fallback for frames whose shape build declines.
     let chain_polygons: Vec<Option<Vec<(f32, f32)>>> =
         em.chain.iter().map(|f| frame_polygon_spread(f)).collect();
+    let chain_shapes: Vec<Option<paged_text::FrameShape>> =
+        em.chain.iter().map(|f| frame_shape_spread(f)).collect();
     let any_polygon_clip = chain_polygons.iter().any(|p| p.is_some());
     if em.frame_idx != 0 && !any_polygon_clip {
         // After the head frame fills, the existing emit loop
@@ -6804,8 +6853,8 @@ fn build_perline_wrap_widths(
             continue;
         }
         let wraps = &em.chain_wrap_rects[frame_idx];
-        let poly = chain_polygons[frame_idx].as_deref();
-        // Frames without polygon clip and without any wrap overlap
+        let shape = chain_shapes[frame_idx].as_ref();
+        // Frames without a shaped outline and without any wrap overlap
         // emit scalar-width entries — preserves the legacy "no
         // per-line carve" behaviour for plain rectangle frames in a
         // chain whose polygon-clipped frame appears later. Without
@@ -6819,7 +6868,7 @@ fn build_perline_wrap_widths(
                 && w.right > frame_bounds.left
                 && w.left < frame_bounds.right
         });
-        let frame_legacy = poly.is_none() && !frame_has_wraps;
+        let frame_legacy = shape.is_none() && !frame_has_wraps;
         for i in 0..n_lines {
             if frame_legacy {
                 widths_64.push(scalar_width_64);
@@ -6829,21 +6878,28 @@ fn build_perline_wrap_widths(
             }
             let baseline_pt = (frame_first_baseline_64 + (i as i32) * leading_64) as f32
                 / paged_text::shape::ADVANCE_PRECISION;
-            // Line's vertical band in spread coords.
+            // Line's vertical band in spread coords. The band spans the
+            // ascent above and descent below the baseline so a glyph's
+            // full box — not just its baseline — must fit inside the
+            // shape.
             let line_top = frame_bounds.top + baseline_pt - leading_pt * 0.8;
             let line_bottom = frame_bounds.top + baseline_pt + leading_pt * 0.2;
 
             let frame_inner_left = frame_left_pt + insets[1];
             let frame_inner_right = frame_right_pt - insets[3];
-            // Build the *gap list* of open horizontal segments on
-            // this line. For polygon-shaped frames (triangles,
-            // pentagons), seed segments from the polygon's interior
-            // x-intervals at the baseline so glyph advance never
-            // crosses the actual outline. Plain rectangle frames
-            // start from the AABB inner range.
-            let mut segments: Vec<(f32, f32)> = if let Some(verts) = poly {
-                let baseline_y = frame_bounds.top + baseline_pt;
-                pairs_from_xs(&polygon_x_at_y(verts, baseline_y))
+            // Build the *gap list* of open horizontal segments on this
+            // line. For shaped frames (ovals, triangles, pentagons,
+            // compound paths with holes), seed segments from the
+            // outline's interior x-intervals across the line's whole
+            // vertical band — so a glyph's box never crosses the actual
+            // curve and a circle's top line comes out shorter than its
+            // middle line. Plain rectangle frames start from the AABB
+            // inner range. The band intersection (vs. a baseline-only
+            // sample) and the bezier flattening behind `FrameShape` are
+            // the W1.10 upgrade over the prior anchors-only diamond.
+            let mut segments: Vec<(f32, f32)> = if let Some(shape) = shape {
+                shape
+                    .segments_in_band(line_top, line_bottom)
                     .into_iter()
                     .map(|(a, b)| {
                         (
@@ -6888,8 +6944,18 @@ fn build_perline_wrap_widths(
                 }
                 segments = next;
             }
-            // Drop segments narrower than the per-line floor.
+            // Drop segments narrower than the per-line floor (a band too
+            // thin to hold even one word). The widest sub-floor segment
+            // is kept aside as a shape-conforming fallback for narrow
+            // tips (a circle's poles, a triangle's apex), so glyphs
+            // there hug the outline instead of escaping to the full AABB
+            // width.
             const MIN_USABLE_64: i32 = 1536; // 24 pt × 64
+            let widest_raw = segments.iter().copied().max_by(|x, y| {
+                (x.1 - x.0)
+                    .partial_cmp(&(y.1 - y.0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             let usable: Vec<(f32, f32)> = segments
                 .into_iter()
                 .filter(|(a, b)| {
@@ -6898,27 +6964,49 @@ fn build_perline_wrap_widths(
                 })
                 .collect();
             if usable.is_empty() {
-                // No usable segment at this line. Previously the
-                // polygon-clipped branch emitted a 1pt sentinel
-                // intending to mark the line as "infeasible — break
-                // here", but `paragraph_breaker::total_fit` reads
-                // that as "every line at this index has ratio < -1",
-                // pruning every active node that crosses the
-                // sentinel slot. For paragraphs whose content needs
-                // more rows than fit *before* the apex (the common
-                // case for table-cell-style threaded polygons), the
-                // breaker can no longer reach the end-of-paragraph
-                // penalty and returns zero breaks — leaving the
-                // entire story unrendered. Falling back to
-                // `scalar_width_64` at apex rows lets the breaker
-                // proceed; any glyph laid out at those y positions
-                // falls outside the polygon path and is invisible
-                // once `apply_polygon_clip` wraps the frame's
-                // commands in a clipping path. The cost is a few
-                // extra glyph commands the rasteriser discards.
-                widths_64.push(scalar_width_64);
-                shifts_64.push(0);
-                twin_after.push(false);
+                // No segment meets the per-line floor at this band.
+                //
+                // For a SHAPED (wrap-inside) frame, a narrow band still
+                // lies inside the outline near a tip — fall back to the
+                // widest sub-floor segment (positioned at its real x and
+                // floored to MIN_USABLE so the breaker can still seat a
+                // word) so the line tracks the shape's centre-line
+                // rather than spilling to the AABB. Glyphs that overrun
+                // the thin segment are clipped by `apply_polygon_clip`,
+                // but they stay centred on the outline's axis.
+                //
+                // For a wrap-AROUND-objects frame with no shape (and for
+                // the degenerate "no segment at all" case), keep the
+                // legacy `scalar_width_64` fallback: emitting a 1pt
+                // sentinel would make `paragraph_breaker::total_fit`
+                // read the slot as "ratio < -1" and prune every active
+                // node crossing it, so a paragraph needing more rows
+                // than fit before the apex would return zero breaks and
+                // the whole story would vanish.
+                match (shape.is_some(), widest_raw) {
+                    (true, Some((a, b))) if b > a => {
+                        // Use the thin segment's ACTUAL width, seated at
+                        // its real x. A line here stays as narrow as the
+                        // outline allows (so a circle's pole line is
+                        // short, not full-width) and centred on the
+                        // chord; any glyph that overruns the thin slot is
+                        // trimmed by `apply_polygon_clip`. Width is
+                        // floored to 1 unit so the breaker still sees a
+                        // positive slot.
+                        let w64 = (((b - a) * paged_text::shape::ADVANCE_PRECISION).round() as i32)
+                            .max(1);
+                        let shift_pt = (a - frame_inner_left).max(0.0);
+                        widths_64.push(w64);
+                        shifts_64
+                            .push((shift_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32);
+                        twin_after.push(false);
+                    }
+                    _ => {
+                        widths_64.push(scalar_width_64);
+                        shifts_64.push(0);
+                        twin_after.push(false);
+                    }
+                }
                 continue;
             }
             // Emit one composer line per usable segment. The first
