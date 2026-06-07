@@ -44,6 +44,79 @@ pub struct AnchoredImageEmit {
 /// frame); 4 leaves headroom while still bounding pathological docs.
 pub(super) const MAX_ANCHORED_STORY_RECURSION: u32 = 4;
 
+/// Per-line vertical metrics of the *anchoring* line, in page-local pt,
+/// expressed as the y of each named reference relative to the line's
+/// baseline. The composer hands these in so the `VerticalReferencePoint`
+/// resolver can place an anchored frame against the anchor line's
+/// x-height / cap-height / leading-top instead of degenerating every
+/// such reference to the baseline. Y grows downward, so each "above the
+/// baseline" reference is the baseline minus a positive distance.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct LineRefMetrics {
+    /// `LineXHeight` — top of the lowercase x, `baseline - x_height·pt`.
+    pub x_height_y: f32,
+    /// `LineCapHeight` — top of the capitals, `baseline - cap_height·pt`.
+    pub cap_height_y: f32,
+    /// `TopOfLeading` — top of the line's leading slug,
+    /// `baseline - leading_above`, where `leading_above` splits the
+    /// line's leading in the font's ascent:descent proportion.
+    pub top_of_leading_y: f32,
+}
+
+impl LineRefMetrics {
+    /// Resolve the three reference y's from the anchor line's baseline,
+    /// the head run's point size, its leading (pt), and the head font's
+    /// metrics. When a metric isn't surfaced by the font (legacy faces
+    /// with no OS/2 cap-height / x-height) the same em-fraction
+    /// fallbacks `first_baseline_for_frame` uses keep the placement
+    /// sane: cap-height 0.70 em, x-height 0.50 em. The leading split
+    /// uses the font's hhea ascent:descent ratio, falling back to a
+    /// 0.8/0.2 split (≈ a typical Latin face) when the descender is
+    /// absent or degenerate.
+    pub(super) fn resolve(
+        baseline_y_pt: f32,
+        point_size: f32,
+        leading_pt: f32,
+        metrics: Option<&FontMetrics>,
+    ) -> Self {
+        const CAP_HEIGHT_FALLBACK: f32 = 0.70;
+        const X_HEIGHT_FALLBACK: f32 = 0.50;
+        let cap = metrics
+            .and_then(|m| m.cap_height)
+            .unwrap_or(CAP_HEIGHT_FALLBACK);
+        let xh = metrics
+            .and_then(|m| m.x_height)
+            .unwrap_or(X_HEIGHT_FALLBACK);
+        let ascender = metrics.map(|m| m.ascender).unwrap_or(0.8);
+        let descender = metrics.map(|m| m.descender).unwrap_or(0.2);
+        // Split the leading in the font's ascent:descent proportion —
+        // InDesign's leading model. `leading_above` is the slice of the
+        // leading slug that sits above the baseline. Degenerate metrics
+        // (ascender+descender ≤ 0) fall back to an 80/20 split.
+        let sum = ascender + descender;
+        let above_fraction = if sum > 0.0 { ascender / sum } else { 0.8 };
+        let leading_above = leading_pt * above_fraction;
+        Self {
+            x_height_y: baseline_y_pt - xh * point_size,
+            cap_height_y: baseline_y_pt - cap * point_size,
+            top_of_leading_y: baseline_y_pt - leading_above,
+        }
+    }
+}
+
+/// The host page's margin box, projected into page-local pt. Resolved
+/// from the W0.6 `<MarginPreference>` side map (`Spread::page_margins`,
+/// keyed by the page's `Self` id). `None` when the page declared no
+/// margins — the `PageMargins` reference then degenerates to the page
+/// edge, the pre-W1.16 behaviour.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PageMarginBox {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
 /// Best-effort emission of the paragraph's anchored frames. Supports
 /// `InlinePosition` (default) by placing the frame at the
 /// paragraph's first-baseline anchor offset by `anchor_x_offset` /
@@ -60,6 +133,8 @@ pub(super) fn emit_anchored_frames_for_paragraph(
     em: &mut StoryEmitter,
     paragraph: &paged_parse::Paragraph,
     pages: &mut [BuiltPage],
+    line_metrics: LineRefMetrics,
+    margin_box: Option<PageMarginBox>,
     _total_stats: &mut PipelineStats,
 ) {
     let target_page = em.chain_pages[em.frame_idx];
@@ -164,6 +239,7 @@ pub(super) fn emit_anchored_frames_for_paragraph(
                     frame,
                     &pages[target_page],
                     em.column_x_shift_pt,
+                    margin_box,
                 );
                 let ref_y = vertical_reference_y(
                     setting,
@@ -171,6 +247,8 @@ pub(super) fn emit_anchored_frames_for_paragraph(
                     frame,
                     &pages[target_page],
                     para_origin_y,
+                    line_metrics,
+                    margin_box,
                 );
                 // Custom positioning resolves a real reference span, so
                 // both corner components are meaningful: a `RightAlign`
@@ -217,9 +295,10 @@ pub(super) fn emit_anchored_frames_for_paragraph(
 /// - `ColumnEdge`: the paragraph's column left edge.
 /// - `TextFrame`: the host text frame's spread-projected left edge,
 ///   page-local.
-/// - `PageMargins` / `PageEdge`: the page bounds (margins not yet
-///   surfaced through the geometry pipeline; both resolve to the page
-///   edge for now).
+/// - `PageMargins`: the page's margin box left/right, from the W0.6
+///   `<MarginPreference>` side map. Falls back to the page edge when the
+///   host page declared no margins.
+/// - `PageEdge`: the page bounds.
 ///
 /// `HorizontalAlignment` shifts the resolved x by the reference
 /// rectangle's width: `LeftAlign` keeps the left, `CenterAlign`
@@ -230,6 +309,7 @@ fn horizontal_reference_x(
     frame: &paged_parse::TextFrame,
     page: &BuiltPage,
     column_x_shift_pt: f32,
+    margin_box: Option<PageMarginBox>,
 ) -> f32 {
     let _ = column_x_shift_pt;
     let reference = setting
@@ -257,12 +337,32 @@ fn horizontal_reference_x(
             let right = frame_spread_bounds.right - page.spread_origin.0;
             (left, right)
         }
-        // PageMargins falls through to PageEdge until margins are
-        // surfaced through the geometry pipeline.
-        "PageMargins" | "PageEdge" => (0.0, page.width_pt),
+        // PageMargins resolves against the parsed margin box; absent
+        // margins degenerate to the page edge.
+        "PageMargins" => page_margin_span_h(margin_box, page.width_pt),
+        "PageEdge" => (0.0, page.width_pt),
         _ => (para_origin_x, para_origin_x),
     };
     align_in_span(ref_left, ref_right, alignment)
+}
+
+/// Horizontal `[near, far]` span for the `PageMargins` reference: the
+/// margin box's left/right when the page declared margins, else the page
+/// edge `[0, page_width]`. Pure so the margins-vs-page-edge divergence is
+/// unit-testable without a `BuiltPage`.
+fn page_margin_span_h(margin_box: Option<PageMarginBox>, page_width: f32) -> (f32, f32) {
+    match margin_box {
+        Some(m) => (m.left, m.right),
+        None => (0.0, page_width),
+    }
+}
+
+/// Vertical analogue of [`page_margin_span_h`].
+fn page_margin_span_v(margin_box: Option<PageMarginBox>, page_height: f32) -> (f32, f32) {
+    match margin_box {
+        Some(m) => (m.top, m.bottom),
+        None => (0.0, page_height),
+    }
 }
 
 /// Pure alignment selection within a `[near, far]` reference span,
@@ -291,17 +391,26 @@ fn align_in_span(near: f32, far: f32, alignment: &str) -> f32 {
 ///
 /// Supported references:
 /// - `LineBaseline` (default): the anchor line's baseline.
-/// - `LineXHeight` / `LineCapHeight` / `TopOfLeading`: degenerate to
-///   the baseline today; the per-line metric isn't surfaced.
+/// - `LineXHeight`: the anchor line's x-height (top of the lowercase x).
+/// - `LineCapHeight`: the anchor line's cap-height (top of the capitals).
+/// - `TopOfLeading`: the top of the anchor line's leading slug.
+///   All three come from the head font's metrics threaded in as
+///   [`LineRefMetrics`]; each is a zero-width span at its y (anchoring
+///   against a horizontal text line, not a rectangle).
 /// - `Column`: the host text frame's top (≈ column top).
 /// - `TextFrame`: the host text frame's top.
-/// - `PageMargins` / `PageEdge`: page bounds.
+/// - `PageMargins`: the page's margin box top/bottom, from the W0.6
+///   `<MarginPreference>` side map; falls back to the page edge when the
+///   host page declared no margins.
+/// - `PageEdge`: page bounds.
 fn vertical_reference_y(
     setting: Option<&paged_parse::AnchoredObjectSetting>,
     baseline_y_pt: f32,
     frame: &paged_parse::TextFrame,
     page: &BuiltPage,
     para_origin_y: f32,
+    line_metrics: LineRefMetrics,
+    margin_box: Option<PageMarginBox>,
 ) -> f32 {
     let _ = para_origin_y;
     let reference = setting
@@ -312,15 +421,22 @@ fn vertical_reference_y(
         .unwrap_or("TopAlign");
     let frame_spread_bounds = transform_bounds(frame.bounds, frame.item_transform);
     let (ref_top, ref_bottom) = match reference {
-        "LineBaseline" | "LineXHeight" | "LineCapHeight" | "TopOfLeading" => {
-            (baseline_y_pt, baseline_y_pt)
-        }
+        "LineBaseline" => (baseline_y_pt, baseline_y_pt),
+        // The three line-relative references resolve against the anchor
+        // line's real metrics now (degenerate spans — a text line has no
+        // height to align within, so near == far).
+        "LineXHeight" => (line_metrics.x_height_y, line_metrics.x_height_y),
+        "LineCapHeight" => (line_metrics.cap_height_y, line_metrics.cap_height_y),
+        "TopOfLeading" => (line_metrics.top_of_leading_y, line_metrics.top_of_leading_y),
         "Column" | "TextFrame" => {
             let top = frame_spread_bounds.top - page.spread_origin.1;
             let bottom = frame_spread_bounds.bottom - page.spread_origin.1;
             (top, bottom)
         }
-        "PageMargins" | "PageEdge" => (0.0, page.height_pt),
+        // PageMargins resolves against the parsed margin box; absent
+        // margins degenerate to the page edge.
+        "PageMargins" => page_margin_span_v(margin_box, page.height_pt),
+        "PageEdge" => (0.0, page.height_pt),
         _ => (baseline_y_pt, baseline_y_pt),
     };
     align_in_span(ref_top, ref_bottom, alignment)
@@ -1004,5 +1120,190 @@ mod tests {
         let (x, y) =
             resolve_custom_anchor_pos(rx, ry, "TopCenterAnchor", FRAME_W, FRAME_H, 0.0, 0.0);
         assert!(close(x, 110.0) && close(y, 200.0), "got ({x}, {y})");
+    }
+
+    // --- LineRefMetrics: x-height / cap-height / top-of-leading -------
+    //
+    // A known test face: cap-height 0.700, x-height 0.520, ascender
+    // 0.800, descender 0.200 (em-fractions). These are the kind of
+    // values an OS/2 v2 + hhea table exposes. Point size 20 pt, leading
+    // 24 pt (120% auto), baseline at page-local y = 500.
+
+    fn test_face() -> FontMetrics {
+        FontMetrics {
+            cap_height: Some(0.700),
+            x_height: Some(0.520),
+            ascender: 0.800,
+            descender: 0.200,
+        }
+    }
+
+    const BASELINE_Y: f32 = 500.0;
+    const PT: f32 = 20.0;
+    const LEADING: f32 = 24.0;
+
+    #[test]
+    fn line_x_height_is_baseline_minus_xheight_times_pt() {
+        let m = test_face();
+        let lm = LineRefMetrics::resolve(BASELINE_Y, PT, LEADING, Some(&m));
+        // x-height top sits 0.520 × 20 = 10.4 pt above the baseline.
+        assert!(close(lm.x_height_y, 500.0 - 10.4), "got {}", lm.x_height_y);
+    }
+
+    #[test]
+    fn line_cap_height_is_baseline_minus_capheight_times_pt() {
+        let m = test_face();
+        let lm = LineRefMetrics::resolve(BASELINE_Y, PT, LEADING, Some(&m));
+        // cap-height top sits 0.700 × 20 = 14.0 pt above the baseline.
+        assert!(
+            close(lm.cap_height_y, 500.0 - 14.0),
+            "got {}",
+            lm.cap_height_y
+        );
+    }
+
+    #[test]
+    fn top_of_leading_splits_leading_by_ascent_descent_ratio() {
+        let m = test_face();
+        let lm = LineRefMetrics::resolve(BASELINE_Y, PT, LEADING, Some(&m));
+        // above-fraction = 0.800 / (0.800 + 0.200) = 0.8; leading_above
+        // = 24 × 0.8 = 19.2 pt above the baseline.
+        assert!(
+            close(lm.top_of_leading_y, 500.0 - 19.2),
+            "got {}",
+            lm.top_of_leading_y
+        );
+        // The three references are strictly ordered above the baseline:
+        // top-of-leading is highest, then cap-height, then x-height.
+        assert!(lm.top_of_leading_y < lm.cap_height_y);
+        assert!(lm.cap_height_y < lm.x_height_y);
+        assert!(lm.x_height_y < BASELINE_Y);
+    }
+
+    #[test]
+    fn line_metrics_fall_back_when_face_lacks_os2_cap_xheight() {
+        // A legacy face that exposes no OS/2 cap-height / x-height: the
+        // resolver falls back to 0.70 em cap, 0.50 em x (the same
+        // fallbacks `first_baseline_for_frame` uses). Descender present
+        // so the leading split still uses the real ratio.
+        let m = FontMetrics {
+            cap_height: None,
+            x_height: None,
+            ascender: 0.750,
+            descender: 0.250,
+        };
+        let lm = LineRefMetrics::resolve(BASELINE_Y, PT, LEADING, Some(&m));
+        assert!(
+            close(lm.cap_height_y, 500.0 - 0.70 * PT),
+            "got {}",
+            lm.cap_height_y
+        );
+        assert!(
+            close(lm.x_height_y, 500.0 - 0.50 * PT),
+            "got {}",
+            lm.x_height_y
+        );
+        // above-fraction = 0.75 / 1.0 = 0.75; leading_above = 24 × 0.75 = 18.
+        assert!(
+            close(lm.top_of_leading_y, 500.0 - 18.0),
+            "got {}",
+            lm.top_of_leading_y
+        );
+    }
+
+    #[test]
+    fn line_metrics_no_face_uses_full_fallback() {
+        // No metrics at all (font_id missed in the metrics map): cap
+        // 0.70, x 0.50, leading split 0.8/0.2.
+        let lm = LineRefMetrics::resolve(BASELINE_Y, PT, LEADING, None);
+        assert!(close(lm.cap_height_y, 500.0 - 0.70 * PT));
+        assert!(close(lm.x_height_y, 500.0 - 0.50 * PT));
+        assert!(close(lm.top_of_leading_y, 500.0 - 0.8 * LEADING));
+    }
+
+    #[test]
+    fn top_of_leading_handles_degenerate_metrics() {
+        // ascender + descender == 0 ⇒ fall back to the 0.8 split rather
+        // than dividing by zero.
+        let m = FontMetrics {
+            cap_height: Some(0.7),
+            x_height: Some(0.5),
+            ascender: 0.0,
+            descender: 0.0,
+        };
+        let lm = LineRefMetrics::resolve(BASELINE_Y, PT, LEADING, Some(&m));
+        assert!(lm.top_of_leading_y.is_finite());
+        assert!(close(lm.top_of_leading_y, 500.0 - 0.8 * LEADING));
+    }
+
+    // --- PageMargins vs PageEdge span divergence ----------------------
+
+    const PAGE_W: f32 = 595.276;
+    const PAGE_H: f32 = 841.890;
+
+    fn margin_box() -> PageMarginBox {
+        // 36 pt top, 48 bottom, 54 left, 54 right → page-local box.
+        PageMarginBox {
+            left: 54.0,
+            top: 36.0,
+            right: PAGE_W - 54.0,
+            bottom: PAGE_H - 48.0,
+        }
+    }
+
+    #[test]
+    fn page_margins_h_span_uses_margin_box_when_present() {
+        let (near, far) = page_margin_span_h(Some(margin_box()), PAGE_W);
+        assert!(
+            close(near, 54.0) && close(far, PAGE_W - 54.0),
+            "got ({near}, {far})"
+        );
+        // RightAlign snaps to the margin's right edge, NOT the page edge.
+        assert!(close(align_in_span(near, far, "RightAlign"), PAGE_W - 54.0));
+    }
+
+    #[test]
+    fn page_margins_h_span_degenerates_to_page_edge_when_absent() {
+        let (near, far) = page_margin_span_h(None, PAGE_W);
+        assert!(
+            close(near, 0.0) && close(far, PAGE_W),
+            "got ({near}, {far})"
+        );
+    }
+
+    #[test]
+    fn page_margins_v_span_uses_margin_box_when_present() {
+        let (near, far) = page_margin_span_v(Some(margin_box()), PAGE_H);
+        assert!(
+            close(near, 36.0) && close(far, PAGE_H - 48.0),
+            "got ({near}, {far})"
+        );
+        assert!(close(
+            align_in_span(near, far, "BottomAlign"),
+            PAGE_H - 48.0
+        ));
+    }
+
+    #[test]
+    fn page_margins_v_span_degenerates_to_page_edge_when_absent() {
+        let (near, far) = page_margin_span_v(None, PAGE_H);
+        assert!(
+            close(near, 0.0) && close(far, PAGE_H),
+            "got ({near}, {far})"
+        );
+    }
+
+    #[test]
+    fn page_margins_diverge_from_page_edge() {
+        // The whole point of W1.16's margin wire-up: with margins parsed,
+        // a `PageMargins` LeftAlign lands at the margin's left (54), NOT
+        // at the page edge (0) that `PageEdge` would give.
+        let (m_near, _) = page_margin_span_h(Some(margin_box()), PAGE_W);
+        let (e_near, _) = page_margin_span_h(None, PAGE_W);
+        assert!(
+            !close(m_near, e_near),
+            "margins must diverge from page edge"
+        );
+        assert!(close(m_near, 54.0) && close(e_near, 0.0));
     }
 }

@@ -303,6 +303,7 @@ pub fn build() -> Sample {
         page_height_pt: PAGE_H_PT,
         page_items: items,
         override_list: Vec::new(),
+        margins: None,
     });
 
     let designmap = write_designmap(&DesignMap {

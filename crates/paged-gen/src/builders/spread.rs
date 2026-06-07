@@ -40,6 +40,21 @@ pub struct Spread {
     /// id appears here, so the body's replacement frame isn't double-
     /// painted under the master placeholder. Empty ⇒ no attribute.
     pub override_list: Vec<String>,
+    /// Optional `<MarginPreference>` child of the `<Page>` element
+    /// (top, bottom, left, right in pt). `None` ⇒ no margins emitted
+    /// (the page's content area is the full page rectangle). Parsed
+    /// into `Spread::page_margins` keyed by the page's `Self` id.
+    pub margins: Option<MarginPreference>,
+}
+
+/// `<MarginPreference>` payload: per-page margins in points. Defaults to
+/// a single column with no gutter (the common case for the fixtures).
+#[derive(Clone, Copy)]
+pub struct MarginPreference {
+    pub top: f32,
+    pub bottom: f32,
+    pub left: f32,
+    pub right: f32,
 }
 
 pub fn write_spread(s: &Spread) -> Vec<u8> {
@@ -89,7 +104,32 @@ pub fn write_spread(s: &Spread) -> Vec<u8> {
     if !override_list.is_empty() {
         page_attrs.push(("OverrideList", override_list.as_str()));
     }
-    b.empty("Page", &page_attrs);
+    // `<MarginPreference>` is a child of `<Page>` when present; the
+    // parser keys it to the most-recently-pushed page, so emit it inside
+    // the `<Page>` element (or, equivalently, right after — we nest it).
+    if let Some(m) = s.margins {
+        b.start("Page", &page_attrs);
+        let (top, bottom, left, right) = (
+            format_f32(m.top),
+            format_f32(m.bottom),
+            format_f32(m.left),
+            format_f32(m.right),
+        );
+        b.empty(
+            "MarginPreference",
+            &[
+                ("ColumnCount", "1"),
+                ("ColumnGutter", "0"),
+                ("Top", &top),
+                ("Bottom", &bottom),
+                ("Left", &left),
+                ("Right", &right),
+            ],
+        );
+        b.end("Page");
+    } else {
+        b.empty("Page", &page_attrs);
+    }
     for item in &s.page_items {
         item.write(&mut b);
     }

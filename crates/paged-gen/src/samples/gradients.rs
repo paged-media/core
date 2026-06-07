@@ -302,6 +302,7 @@ pub fn build() -> Sample {
                 page_height_pt: PAGE_H_PT,
                 page_items: vec![label.into(), demo.into()],
                 override_list: Vec::new(),
+                margins: None,
             }),
         ));
         spread_refs.push(spread_id);
