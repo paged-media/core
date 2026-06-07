@@ -151,3 +151,82 @@ fn click_outside_any_frame_returns_no_offset() {
     assert!(hit.frame_id.is_none());
     assert!(hit.offset_within_story.is_none());
 }
+
+/// Two overlapping rectangles on two layers, declared bottom-first in
+/// designmap (cycle-8 convention: `designmap[0]` = backmost). The
+/// renderer paints ascending layer-z, so the front-layer rect is on
+/// top. A click in the overlap must select the FRONT-layer rect — the
+/// same item the user sees on top — to keep selection and rendering in
+/// agreement. Before the cycle-8 hit-tester fix the sort picked the
+/// lowest layer-z (the bottom rect), inverting selection on every
+/// multi-layer document (the company-profile-template Bg/Image/Text
+/// stack being the corpus exemplar).
+fn build_layered_rects_idml() -> Vec<u8> {
+    use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+
+    // Back layer declared first, front layer second — matches the
+    // real-world IDML convention (designmap[0] = bottom of z-stack).
+    zip.start_file("designmap.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Layer Self="layerBack" Name="Back" Visible="true" Locked="false" Printable="true"/>
+  <Layer Self="layerFront" Name="Front" Visible="true" Locked="false" Printable="true"/>
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+</Document>"#,
+    )
+    .unwrap();
+
+    zip.start_file("Resources/Graphic.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic/>
+</idPkg:Graphic>"#,
+    )
+    .unwrap();
+
+    // Both rects cover the same area. The front-layer rect (rFront) is
+    // declared FIRST in spread XML and the back-layer rect (rBack)
+    // second — so XML order alone would pick rBack; only honouring the
+    // layer-z (front on top) yields the correct rFront hit.
+    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 200"/>
+    <Rectangle Self="rFront" ItemLayer="layerFront" GeometricBounds="0 0 200 200" StrokeWeight="0"/>
+    <Rectangle Self="rBack" ItemLayer="layerBack" GeometricBounds="0 0 200 200" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#,
+    )
+    .unwrap();
+
+    zip.finish().unwrap().into_inner()
+}
+
+#[test]
+fn click_in_overlap_selects_front_layer_rect() {
+    let bytes = build_layered_rects_idml();
+    let opts = CanvasOptions::default();
+    let model = CanvasModel::load("doc", &bytes, opts).expect("load + build");
+    let page_id = PageId("p1".into());
+    // Click in the shared overlap. The front layer is declared last in
+    // designmap (highest layer-z), so it paints on top → it must win.
+    let hit = model.hit_test(&page_id, (100.0, 100.0));
+    assert_eq!(
+        hit.frame_id.as_deref(),
+        Some("rFront"),
+        "front-layer rect (topmost) must win the hit, got {:?}",
+        hit.frame_id
+    );
+}

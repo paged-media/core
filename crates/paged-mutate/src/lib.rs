@@ -2431,7 +2431,8 @@ mod tests {
                 });
             p
         };
-        // Move "ub" to index 0 (becomes the topmost layer).
+        // Move "ub" to index 0 (becomes the backmost layer — cycle-8
+        // convention: designmap[0] paints first / sits furthest back).
         let applied = project
             .apply(Operation::MoveLayer {
                 layer_id: "ub".to_string(),

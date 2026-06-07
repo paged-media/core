@@ -1226,10 +1226,11 @@ pub fn build_document(
     // it brackets with `BeginBlendGroup` / `EndBlendGroup`.
     let mut spread_frame_spans: Vec<crate::module::SpreadFrameSpans> =
         Vec::with_capacity(document.spreads.len());
-    // Q-10: IDML lists layers top-first (layers[0] = topmost). Shared
-    // helper so the canvas hit-tester walks items in the same paint
-    // order — divergence here would break selection on multi-layer
-    // documents.
+    // Q-10: IDML lists layers bottom-first (designmap[0] = backmost,
+    // paints first); see the cycle-8 sort below and the convention
+    // note in `paged_scene::layer`. Shared helper so the canvas
+    // hit-tester walks items in the same paint order — divergence here
+    // would break selection on multi-layer documents.
     let layer_z_index = paged_scene::layer_z_index(&document.container.designmap);
     for (spread_idx, parsed) in document.spreads.iter().enumerate() {
         let spread = &parsed.spread;
