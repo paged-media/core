@@ -124,6 +124,61 @@ fn w03_frame_paths_route_through_paged_set() {
     assert_eq!(vj, "CenterAlign");
 }
 
+/// W2.5 — the new element-visibility / text-wrap-contour paths route
+/// through `paged.set` (bool paths as `Value::Bool`, the contour-type
+/// enum string as `Value::Text`) and read back off
+/// `element_properties` — proving the script-bridge maps + the
+/// descriptor entries are wired together.
+#[test]
+fn w25_element_and_contour_paths_route_through_paged_set() {
+    let mut model = load();
+    let result = execute_script(
+        &mut model,
+        r#"
+            paged.set("textFrame:ua365e1", "elementVisible", false);
+            paged.set("textFrame:ua365e1", "elementLocked", true);
+            paged.set("textFrame:ua365e1", "frameTextWrapMode", "ContourTextWrap");
+            paged.set("textFrame:ua365e1", "frameTextWrapContourType", "DetectEdges");
+            paged.set("textFrame:ua365e1", "frameTextWrapContourIncludeInside", true);
+        "#,
+    );
+    assert!(result.error.is_none(), "script error: {:?}", result.error);
+    let id = ElementId::TextFrame(TEXT_FRAME_ID.to_string());
+    let props = model.element_properties(&id).expect("props");
+    let bool_of = |path: paged_mutate::PropertyPath| -> Option<bool> {
+        props
+            .entries
+            .iter()
+            .find(|e| e.path == path)
+            .and_then(|e| match &e.value {
+                Some(paged_mutate::Value::Bool(b)) => Some(*b),
+                _ => None,
+            })
+    };
+    assert_eq!(
+        bool_of(paged_mutate::PropertyPath::ElementVisible),
+        Some(false)
+    );
+    assert_eq!(
+        bool_of(paged_mutate::PropertyPath::ElementLocked),
+        Some(true)
+    );
+    assert_eq!(
+        bool_of(paged_mutate::PropertyPath::FrameTextWrapContourIncludeInside),
+        Some(true)
+    );
+    let contour = props
+        .entries
+        .iter()
+        .find(|e| e.path == paged_mutate::PropertyPath::FrameTextWrapContourType)
+        .and_then(|e| match &e.value {
+            Some(paged_mutate::Value::Text(s)) => Some(s.clone()),
+            _ => None,
+        })
+        .expect("contour type entry");
+    assert_eq!(contour, "DetectEdges");
+}
+
 #[test]
 fn console_log_captured_into_output() {
     let mut model = load();

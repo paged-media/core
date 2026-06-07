@@ -524,6 +524,8 @@ mod tests {
             overprint_fill: false,
             overprint_stroke: false,
             nonprinting: false,
+            visible: true,
+            locked: false,
             anchors,
             subpath_starts: Vec::new(),
             subpath_open: Vec::new(),
@@ -590,6 +592,8 @@ mod tests {
             overprint_fill: false,
             overprint_stroke: false,
             nonprinting: false,
+            visible: true,
+            locked: false,
         }
     }
 
@@ -748,6 +752,8 @@ mod tests {
             overprint_fill: false,
             overprint_stroke: false,
             nonprinting: false,
+            visible: true,
+            locked: false,
         };
         let frame = ResolvedFrame::from_oval(&oval);
         assert_eq!(frame.stroke_type, Some("StrokeStyle/$ID/Dashed"));
@@ -797,6 +803,8 @@ mod tests {
             overprint_fill: false,
             overprint_stroke: false,
             nonprinting: false,
+            visible: true,
+            locked: false,
         };
         let frame = ResolvedFrame::from_polygon(&poly);
         assert_eq!(frame.stroke_type, Some("StrokeStyle/$ID/Dotted"));
@@ -830,6 +838,8 @@ mod tests {
             effects: None,
             overprint_stroke: false,
             nonprinting: false,
+            visible: true,
+            locked: false,
             start_arrow: paged_parse::ArrowheadType::None,
             end_arrow: paged_parse::ArrowheadType::None,
             start_arrow_scale: 100.0,

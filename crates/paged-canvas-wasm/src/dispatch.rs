@@ -615,6 +615,11 @@ impl WorkerCore {
                         proof_profile_name: None,
                         proof_simulate_paper_white: None,
                         use_standard_lab_for_spots: None,
+                        baseline_grid_start: None,
+                        baseline_grid_division: None,
+                        baseline_grid_shown: None,
+                        baseline_grid_relative_to: None,
+                        baseline_grid_color: None,
                     },
                 );
                 WorkerToMainKind::DocumentMetaReply { meta }

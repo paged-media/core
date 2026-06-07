@@ -517,6 +517,13 @@ pub struct TextFrame {
     /// SDK Phase 5 (v1 sweep) — `Nonprinting="true"`. Excludes
     /// this item from print/export passes; canvas still shows it.
     pub nonprinting: bool,
+    /// W2.5 — element-level `Visible` (default `true`). The renderer
+    /// skips items whose `Visible="false"`. See [`CommonAttrs::visible`].
+    pub visible: bool,
+    /// W2.5 — element-level `Locked` (default `false`). The renderer
+    /// paints locked items; the canvas hit-tester blocks their
+    /// selection. See [`CommonAttrs::locked`].
+    pub locked: bool,
 }
 
 /// IDML `<TextFramePreference VerticalJustification="...">` values.
@@ -1009,6 +1016,12 @@ pub struct Rectangle {
     /// SDK Phase 5 (v1 sweep) — `Nonprinting`. See
     /// [`TextFrame::nonprinting`].
     pub nonprinting: bool,
+    /// W2.5 — element-level `Visible` (default `true`). See
+    /// [`TextFrame::visible`].
+    pub visible: bool,
+    /// W2.5 — element-level `Locked` (default `false`). See
+    /// [`TextFrame::locked`].
+    pub locked: bool,
     /// Q-11: Bezier path anchors captured from `<PathGeometry>` when
     /// the rectangle's outline is non-rectangular (torn-paper /
     /// asymmetric / multi-anchor stylised shapes that Envato saves as
@@ -1292,6 +1305,12 @@ pub struct Oval {
     /// SDK Phase 5 (v1 sweep) — `Nonprinting`. See
     /// [`TextFrame::nonprinting`].
     pub nonprinting: bool,
+    /// W2.5 — element-level `Visible` (default `true`). See
+    /// [`TextFrame::visible`].
+    pub visible: bool,
+    /// W2.5 — element-level `Locked` (default `false`). See
+    /// [`TextFrame::locked`].
+    pub locked: bool,
 }
 
 /// Straight line — `<GraphicLine>` in IDML. The endpoints are the
@@ -1342,6 +1361,12 @@ pub struct GraphicLine {
     /// SDK Phase 5 (v1 sweep) — `Nonprinting`. See
     /// [`TextFrame::nonprinting`].
     pub nonprinting: bool,
+    /// W2.5 — element-level `Visible` (default `true`). See
+    /// [`TextFrame::visible`].
+    pub visible: bool,
+    /// W2.5 — element-level `Locked` (default `false`). See
+    /// [`TextFrame::locked`].
+    pub locked: bool,
     /// `LeftLineEnd` — arrowhead at the line's start anchor. Defaults
     /// to `None`.
     pub start_arrow: ArrowheadType,
@@ -1378,10 +1403,19 @@ pub struct TextWrap {
     /// `Inverse`/`Inverted` flag — `true` flows text *inside* the wrap
     /// shape rather than around it. `None` ⇒ false (the IDML default).
     /// Kept `Copy`-compatible (a plain `Option<bool>`) so `TextWrap`
-    /// stays the small value type the renderer copies by value;
-    /// string-valued contour/side knobs are deferred for that reason
-    /// (see W0.3 notes).
+    /// stays the small value type the renderer copies by value.
     pub invert: Option<bool>,
+    /// W2.5 — `<ContourOption ContourType="...">`, the contour source
+    /// for `ContourTextWrap` mode. Modelled as a small `Copy` enum (not
+    /// a `String`) so `TextWrap` stays `Copy` — the W0.3 note's reason
+    /// to defer string-valued contour knobs is sidestepped. `None` ⇒ no
+    /// `<ContourOption>` (InDesign defaults to the graphic's frame /
+    /// clip path). Only meaningful when `mode == ContourTextWrap`.
+    pub contour_type: Option<ContourOptionType>,
+    /// W2.5 — `<ContourOption IncludeInsideEdges="true|false">`. `true`
+    /// lets text flow into interior holes of a contour. `None` ⇒ the
+    /// IDML default (`false`). `Option<bool>` keeps `TextWrap` `Copy`.
+    pub include_inside_edges: Option<bool>,
 }
 
 impl TextWrap {
@@ -1389,7 +1423,58 @@ impl TextWrap {
         mode: TextWrapMode::None,
         offsets: [0.0; 4],
         invert: None,
+        contour_type: None,
+        include_inside_edges: None,
     };
+}
+
+/// W2.5 — `<ContourOption ContourType="...">` source for a contour
+/// text-wrap. A small `Copy` enum so `TextWrap` stays a by-value type.
+/// Unknown / unsupported types map to `Other` (the renderer treats the
+/// whole wrap as a bounding-box exclusion regardless, so the exact
+/// contour source is authoring metadata for v1 — see the renderer's
+/// `wrap_exclusion` note).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ContourOptionType {
+    /// `SameAsClipping` — use the placed graphic's clip path.
+    SameAsClipping,
+    /// `GraphicFrame` — use the holding frame's geometry.
+    GraphicFrame,
+    /// `DetectEdges` — auto-detect the graphic's edges.
+    DetectEdges,
+    /// `AlphaChannel` — use the image's alpha channel.
+    AlphaChannel,
+    /// `PhotoshopPath` — use a named Photoshop path.
+    PhotoshopPath,
+    /// Any other / unrecognised value.
+    Other,
+}
+
+impl ContourOptionType {
+    /// Map an IDML `ContourType` attribute string.
+    pub fn from_idml(s: &str) -> Self {
+        match s {
+            "SameAsClipping" => Self::SameAsClipping,
+            "GraphicFrame" => Self::GraphicFrame,
+            "DetectEdges" => Self::DetectEdges,
+            "AlphaChannel" => Self::AlphaChannel,
+            "PhotoshopPath" => Self::PhotoshopPath,
+            _ => Self::Other,
+        }
+    }
+    /// Render back to the canonical IDML attribute string. `Other`
+    /// falls back to `"SameAsClipping"` (the InDesign default contour
+    /// source) since the original string was lost on `from_idml`.
+    pub fn as_idml(self) -> &'static str {
+        match self {
+            Self::SameAsClipping => "SameAsClipping",
+            Self::GraphicFrame => "GraphicFrame",
+            Self::DetectEdges => "DetectEdges",
+            Self::AlphaChannel => "AlphaChannel",
+            Self::PhotoshopPath => "PhotoshopPath",
+            Self::Other => "SameAsClipping",
+        }
+    }
 }
 
 /// `TextWrapMode` enum value. Values not in the IDML spec collapse
@@ -1570,6 +1655,12 @@ pub struct Polygon {
     /// SDK Phase 5 (v1 sweep) — `Nonprinting`. See
     /// [`TextFrame::nonprinting`].
     pub nonprinting: bool,
+    /// W2.5 — element-level `Visible` (default `true`). See
+    /// [`TextFrame::visible`].
+    pub visible: bool,
+    /// W2.5 — element-level `Locked` (default `false`). See
+    /// [`TextFrame::locked`].
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -1697,6 +1788,25 @@ fn current_text_wrap_offsets(out: &Spread, kind: CurrentFrameKind) -> [f32; 4] {
     cur.map(|w| w.offsets).unwrap_or([0.0; 4])
 }
 
+/// W2.5 — read the current contour type + include-inside-edges off the
+/// in-progress shape's `TextWrap` (so re-applying the wrap on the
+/// `<TextWrapPreference>` open tag doesn't drop a `<ContourOption>`
+/// that was folded in earlier).
+fn current_text_wrap_contour(
+    out: &Spread,
+    kind: CurrentFrameKind,
+) -> (Option<ContourOptionType>, Option<bool>) {
+    let cur = match kind {
+        CurrentFrameKind::Text(i) => out.text_frames.get(i).and_then(|s| s.text_wrap),
+        CurrentFrameKind::Rect(i) => out.rectangles.get(i).and_then(|s| s.text_wrap),
+        CurrentFrameKind::Oval(i) => out.ovals.get(i).and_then(|s| s.text_wrap),
+        CurrentFrameKind::Line(i) => out.graphic_lines.get(i).and_then(|s| s.text_wrap),
+        CurrentFrameKind::Polygon(i) => out.polygons.get(i).and_then(|s| s.text_wrap),
+    };
+    cur.map(|w| (w.contour_type, w.include_inside_edges))
+        .unwrap_or((None, None))
+}
+
 fn apply_text_wrap(out: &mut Spread, kind: CurrentFrameKind, wrap: Option<TextWrap>) {
     match kind {
         CurrentFrameKind::Text(i) => out.text_frames[i].text_wrap = wrap,
@@ -1716,6 +1826,41 @@ fn set_text_wrap_offsets(out: &mut Spread, kind: CurrentFrameKind, offsets: [f32
                 mode: TextWrapMode::None,
                 offsets,
                 invert: None,
+                contour_type: None,
+                include_inside_edges: None,
+            });
+        }
+    };
+    match kind {
+        CurrentFrameKind::Text(i) => take(&mut out.text_frames[i].text_wrap),
+        CurrentFrameKind::Rect(i) => take(&mut out.rectangles[i].text_wrap),
+        CurrentFrameKind::Oval(i) => take(&mut out.ovals[i].text_wrap),
+        CurrentFrameKind::Line(i) => take(&mut out.graphic_lines[i].text_wrap),
+        CurrentFrameKind::Polygon(i) => take(&mut out.polygons[i].text_wrap),
+    }
+}
+
+/// W2.5 — fold a `<ContourOption>` child's `ContourType` /
+/// `IncludeInsideEdges` into the enclosing shape's `TextWrap`,
+/// materialising a default wrap if the `<TextWrapPreference>` carried
+/// no recognised mode yet (mirrors `set_text_wrap_offsets`).
+fn set_text_wrap_contour(
+    out: &mut Spread,
+    kind: CurrentFrameKind,
+    contour_type: Option<ContourOptionType>,
+    include_inside_edges: Option<bool>,
+) {
+    let take = |w: &mut Option<TextWrap>| {
+        if let Some(existing) = w.as_mut() {
+            existing.contour_type = contour_type;
+            existing.include_inside_edges = include_inside_edges;
+        } else {
+            *w = Some(TextWrap {
+                mode: TextWrapMode::None,
+                offsets: [0.0; 4],
+                invert: None,
+                contour_type,
+                include_inside_edges,
             });
         }
     };
@@ -1779,6 +1924,18 @@ struct CommonAttrs {
     /// item from print/export. Renderer keeps it visible on canvas
     /// but suppresses it from output passes. Default: `false`.
     nonprinting: bool,
+    /// W2.5 — element-level `Visible="true|false"` (default `true`).
+    /// Distinct from layer visibility: a page item can be individually
+    /// hidden (InDesign's Layers-panel eye on the object row). Absent
+    /// attribute ⇒ visible. The renderer skips emitting items whose
+    /// `Visible="false"` (matches the layer-visibility skip).
+    visible: bool,
+    /// W2.5 — element-level `Locked="true|false"` (default `false`).
+    /// IDML stores it on page items; InDesign blocks selection of a
+    /// locked item. The renderer ignores it (locked items still paint);
+    /// the canvas hit-tester gates selection on it, matching the
+    /// `LayerLocked` precedent.
+    locked: bool,
 }
 
 fn read_common_attrs(e: &quick_xml::events::BytesStart) -> CommonAttrs {
@@ -1816,6 +1973,14 @@ fn read_common_attrs(e: &quick_xml::events::BytesStart) -> CommonAttrs {
             .and_then(|s| s.parse::<bool>().ok())
             .unwrap_or(false),
         nonprinting: attr(e, b"Nonprinting")
+            .and_then(|s| s.parse::<bool>().ok())
+            .unwrap_or(false),
+        // W2.5 — element-level Visible defaults true, Locked false
+        // (the IDML defaults when the attribute is absent).
+        visible: attr(e, b"Visible")
+            .and_then(|s| s.parse::<bool>().ok())
+            .unwrap_or(true),
+        locked: attr(e, b"Locked")
             .and_then(|s| s.parse::<bool>().ok())
             .unwrap_or(false),
     }
@@ -2187,6 +2352,8 @@ impl Spread {
                             overprint_fill: common.overprint_fill,
                             overprint_stroke: common.overprint_stroke,
                             nonprinting: common.nonprinting,
+                            visible: common.visible,
+                            locked: common.locked,
                         });
                         let idx = out.text_frames.len() - 1;
                         register_with_group(
@@ -2265,6 +2432,8 @@ impl Spread {
                             overprint_fill: common.overprint_fill,
                             overprint_stroke: common.overprint_stroke,
                             nonprinting: common.nonprinting,
+                            visible: common.visible,
+                            locked: common.locked,
                             anchors: Vec::new(),
                             subpath_starts: Vec::new(),
                             subpath_open: Vec::new(),
@@ -2335,6 +2504,8 @@ impl Spread {
                             overprint_fill: common.overprint_fill,
                             overprint_stroke: common.overprint_stroke,
                             nonprinting: common.nonprinting,
+                            visible: common.visible,
+                            locked: common.locked,
                         });
                         let idx = out.ovals.len() - 1;
                         register_with_group(&mut out, &mut group_builders, FrameRef::Oval(idx));
@@ -2893,6 +3064,12 @@ impl Spread {
                                 .and_then(|s| s.parse::<bool>().ok());
                             let kind = cf.kind;
                             let prior_offsets = current_text_wrap_offsets(&out, kind);
+                            // W2.5 — preserve any contour info already
+                            // folded in (a `<ContourOption>` child can be
+                            // emitted before OR after — InDesign emits it
+                            // after, but the read is order-robust).
+                            let (prior_contour, prior_inside) =
+                                current_text_wrap_contour(&out, kind);
                             apply_text_wrap(
                                 &mut out,
                                 kind,
@@ -2900,6 +3077,8 @@ impl Spread {
                                     mode,
                                     offsets: prior_offsets,
                                     invert,
+                                    contour_type: prior_contour,
+                                    include_inside_edges: prior_inside,
                                 }),
                             );
                             cf.in_text_wrap = true;
@@ -2921,6 +3100,26 @@ impl Spread {
                                         .unwrap_or(0.0),
                                 ];
                                 set_text_wrap_offsets(&mut out, cf.kind, offsets);
+                            }
+                        }
+                    }
+                    // W2.5 — `<ContourOption>` child of
+                    // `<TextWrapPreference>`: the contour source +
+                    // include-inside-edges for `ContourTextWrap`.
+                    b"ContourOption" => {
+                        if let Some(cf) = current_frame.as_ref() {
+                            if cf.in_text_wrap {
+                                let contour_type = attr(&e, b"ContourType")
+                                    .as_deref()
+                                    .map(ContourOptionType::from_idml);
+                                let include_inside = attr(&e, b"IncludeInsideEdges")
+                                    .and_then(|s| s.parse::<bool>().ok());
+                                set_text_wrap_contour(
+                                    &mut out,
+                                    cf.kind,
+                                    contour_type,
+                                    include_inside,
+                                );
                             }
                         }
                     }
@@ -3243,6 +3442,8 @@ impl Spread {
                             effects: None,
                             overprint_stroke: common.overprint_stroke,
                             nonprinting: common.nonprinting,
+                            visible: common.visible,
+                            locked: common.locked,
                             start_arrow: attr(&e, b"LeftLineEnd")
                                 .map(|s| ArrowheadType::from_idml(&s))
                                 .unwrap_or(ArrowheadType::None),
@@ -3322,6 +3523,8 @@ impl Spread {
                             overprint_fill: common.overprint_fill,
                             overprint_stroke: common.overprint_stroke,
                             nonprinting: common.nonprinting,
+                            visible: common.visible,
+                            locked: common.locked,
                         });
                         let idx = out.polygons.len() - 1;
                         register_with_group(&mut out, &mut group_builders, FrameRef::Polygon(idx));
@@ -5373,5 +5576,55 @@ mod tests {
             3,
             "image box must not be absorbed into the polygon outline"
         );
+    }
+
+    #[test]
+    fn parses_text_wrap_contour_option() {
+        // W2.5 — a `<ContourOption>` child of `<TextWrapPreference>`
+        // folds its ContourType + IncludeInsideEdges into the shape's
+        // TextWrap, preserving the mode.
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Rectangle Self="rect1" GeometricBounds="0 0 100 200">
+              <TextWrapPreference TextWrapMode="ContourTextWrap" Inverse="false">
+                <ContourOption ContourType="DetectEdges" IncludeInsideEdges="true"/>
+              </TextWrapPreference>
+            </Rectangle>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        let tw = s.rectangles[0].text_wrap.expect("text_wrap parsed");
+        assert_eq!(tw.mode, TextWrapMode::ContourTextWrap);
+        assert_eq!(tw.contour_type, Some(ContourOptionType::DetectEdges));
+        assert_eq!(tw.include_inside_edges, Some(true));
+    }
+
+    #[test]
+    fn parses_element_visible_locked() {
+        // W2.5 — element-level Visible / Locked attributes on a page
+        // item. Defaults: Visible=true, Locked=false.
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Rectangle Self="hidden" Visible="false" Locked="true"/>
+            <Rectangle Self="default"/>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        let hidden = s
+            .rectangles
+            .iter()
+            .find(|r| r.self_id.as_deref() == Some("hidden"))
+            .unwrap();
+        assert!(!hidden.visible);
+        assert!(hidden.locked);
+        let default = s
+            .rectangles
+            .iter()
+            .find(|r| r.self_id.as_deref() == Some("default"))
+            .unwrap();
+        assert!(default.visible, "absent Visible ⇒ visible");
+        assert!(!default.locked, "absent Locked ⇒ unlocked");
     }
 }

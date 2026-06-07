@@ -699,6 +699,8 @@ fn emit_anchored_rect_via_pipeline(
         overprint_fill: false,
         overprint_stroke: false,
         nonprinting: false,
+        visible: true,
+        locked: false,
         anchors: Vec::new(),
         subpath_starts: Vec::new(),
         subpath_open: Vec::new(),
@@ -789,6 +791,8 @@ pub(super) fn emit_anchored_rect_image(
         overprint_fill: false,
         overprint_stroke: false,
         nonprinting: false,
+        visible: true,
+        locked: false,
         anchors: Vec::new(),
         subpath_starts: Vec::new(),
         subpath_open: Vec::new(),
@@ -898,6 +902,8 @@ pub(super) fn emit_anchored_textframe_story<'a>(
         overprint_fill: false,
         overprint_stroke: false,
         nonprinting: false,
+        visible: true,
+        locked: false,
     };
     // Sub-emitter borrows from the parent's `'a` so the document /
     // palette / font_table refs share lifetimes with the body pass.

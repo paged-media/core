@@ -49,6 +49,14 @@ pub struct DesignMap {
     /// them for BleedBox/MediaBox geometry. Zeros when the element
     /// or attribute is absent.
     pub document_preference: DocumentPreference,
+    /// W2.5 — document-level `<GridPreference>` baseline-grid settings.
+    /// Default (all-`None`, `present=false`) when the element is absent.
+    /// The renderer does NOT draw the baseline grid (it's a non-print
+    /// authoring overlay, drawn editor-side); these values are surfaced
+    /// read-only so the editor's baseline-grid panel + the overlay show
+    /// the document's real numbers. Snapping text to this grid is a
+    /// layout-engine task deferred separately. See [`GridPreference`].
+    pub grid_preference: GridPreference,
     /// W1.8 — document-level `<FootnoteOption>` settings (separator
     /// rule + footnote spacing). Default (all-`None`, `present=false`)
     /// when the element is absent; the renderer then applies InDesign's
@@ -416,6 +424,44 @@ pub struct DocumentPreference {
     pub slug_right_or_outside: f32,
 }
 
+/// `<GridPreference>` — the document's baseline-grid + document-grid
+/// settings. InDesign serialises this once under `<Document>`. Only the
+/// baseline-grid subset (the part the editor's baseline-grid panel +
+/// overlay need) is modelled; the document-grid (horizontal/vertical
+/// gridline divisions for the layout grid) is carried too since it
+/// shares the element. All offsets / divisions are in points.
+///
+/// The renderer ignores this entirely (the baseline grid is a
+/// non-printing authoring aid). `present` distinguishes "no
+/// `<GridPreference>`" (InDesign defaults apply) from "explicitly
+/// configured", mirroring [`FootnoteOptions::present`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct GridPreference {
+    /// True when a `<GridPreference>` element was parsed.
+    pub present: bool,
+    /// `BaselineStart` — the offset (pt) of the first baseline-grid line
+    /// from the top of the page (or from the relative-to point below).
+    pub baseline_start: Option<f32>,
+    /// `BaselineDivision` — the spacing (pt) between baseline-grid lines.
+    pub baseline_division: Option<f32>,
+    /// `BaselineGridShown` — whether the grid is shown by default in the
+    /// authoring view. The editor's overlay toggle seeds from this.
+    pub baseline_grid_shown: Option<bool>,
+    /// `BaselineGridRelativeOption` — `"TopOfPage"` / `"TopMargin"`. The
+    /// reference the `baseline_start` offset is measured from.
+    pub baseline_grid_relative_option: Option<String>,
+    /// `BaselineColor` — the grid line colour. Usually a `"Color/…"`
+    /// swatch ref or a named UI colour (e.g. `"LightBlue"`). The overlay
+    /// resolves it to a stroke colour; an unknown name falls back to the
+    /// editor's default guide colour.
+    pub baseline_color: Option<String>,
+    /// `HorizontalGridlineDivision` — document-grid horizontal spacing
+    /// (pt). Carried for completeness; the baseline panel ignores it.
+    pub horizontal_gridline_division: Option<f32>,
+    /// `VerticalGridlineDivision` — document-grid vertical spacing (pt).
+    pub vertical_gridline_division: Option<f32>,
+}
+
 /// `<FootnoteOption>` — document-level footnote separator + spacing
 /// settings. In IDML this element is serialised inside the document's
 /// `<RootFootnoteStory>` (or directly under `<Document>`); its attribute
@@ -573,6 +619,26 @@ impl DesignMap {
                             separator_text: attr(&e, b"SeparatorText"),
                             spacer: f(b"Spacer"),
                             space_between: f(b"SpaceBetween"),
+                        };
+                    }
+                    // W2.5 — `<GridPreference>` baseline-grid + document-
+                    // grid settings (serialised once under `<Document>`).
+                    // Surfaced read-only for the editor's baseline panel +
+                    // overlay; the renderer never draws it.
+                    if e.name().as_ref() == b"GridPreference" {
+                        let f = |name: &[u8]| -> Option<f32> {
+                            attr(&e, name).and_then(|s| s.parse().ok())
+                        };
+                        out.grid_preference = GridPreference {
+                            present: true,
+                            baseline_start: f(b"BaselineStart"),
+                            baseline_division: f(b"BaselineDivision"),
+                            baseline_grid_shown: attr(&e, b"BaselineGridShown")
+                                .and_then(|s| s.parse().ok()),
+                            baseline_grid_relative_option: attr(&e, b"BaselineGridRelativeOption"),
+                            baseline_color: attr(&e, b"BaselineColor"),
+                            horizontal_gridline_division: f(b"HorizontalGridlineDivision"),
+                            vertical_gridline_division: f(b"VerticalGridlineDivision"),
                         };
                     }
                     if e.name().as_ref() == b"Layer" {
@@ -1039,5 +1105,41 @@ mod document_preference_tests {
         assert_eq!(dm.footnote_options.rule_on, None);
         // Absent ⇒ default to rule ON.
         assert!(dm.footnote_options.rule_on_effective());
+    }
+
+    #[test]
+    fn parses_grid_preference_baseline_grid() {
+        // W2.5 — `<GridPreference>` as InDesign serialises it. The
+        // parser lifts the baseline-grid subset (start / division /
+        // shown / relative-to / colour) for the editor's baseline panel.
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document DOMVersion="20.0">
+  <GridPreference BaselineStart="48" BaselineDivision="12"
+    BaselineGridShown="true" BaselineGridRelativeOption="TopMargin"
+    BaselineColor="Color/Grid"
+    HorizontalGridlineDivision="72" VerticalGridlineDivision="72"/>
+</Document>"#;
+        let dm = DesignMap::parse(xml).expect("parse");
+        let gp = &dm.grid_preference;
+        assert!(gp.present);
+        assert_eq!(gp.baseline_start, Some(48.0));
+        assert_eq!(gp.baseline_division, Some(12.0));
+        assert_eq!(gp.baseline_grid_shown, Some(true));
+        assert_eq!(
+            gp.baseline_grid_relative_option.as_deref(),
+            Some("TopMargin")
+        );
+        assert_eq!(gp.baseline_color.as_deref(), Some("Color/Grid"));
+        assert_eq!(gp.horizontal_gridline_division, Some(72.0));
+        assert_eq!(gp.vertical_gridline_division, Some(72.0));
+    }
+
+    #[test]
+    fn grid_preference_absent_is_default() {
+        let absent = br#"<?xml version="1.0"?><Document/>"#;
+        let dm = DesignMap::parse(absent).expect("parse");
+        assert!(!dm.grid_preference.present);
+        assert_eq!(dm.grid_preference, GridPreference::default());
+        assert_eq!(dm.grid_preference.baseline_division, None);
     }
 }

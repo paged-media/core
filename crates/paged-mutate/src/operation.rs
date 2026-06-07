@@ -427,6 +427,22 @@ pub enum PropertyPath {
     /// preserves `mode` when set on a prior-None state by defaulting
     /// to `TextWrapMode::None`.
     FrameTextWrapOffsets,
+    /// W2.5 — `<ContourOption ContourType="…">` for `ContourTextWrap`.
+    /// Wire value is `Value::Text` carrying the IDML attribute string
+    /// (`"SameAsClipping"`, `"GraphicFrame"`, `"DetectEdges"`,
+    /// `"AlphaChannel"`, `"PhotoshopPath"`); empty string clears the
+    /// contour source (`contour_type = None`). Same `Option<TextWrap>`
+    /// materialise-on-None handling as `FrameTextWrapMode` (preserves
+    /// `mode`/`offsets`/`invert`). Carried on every page-item kind with
+    /// a `text_wrap` field. Other-frame reflow → structural rebuild.
+    FrameTextWrapContourType,
+    /// W2.5 — `<ContourOption IncludeInsideEdges="…">`. `Value::Bool`.
+    /// `true` lets text flow into a contour's interior holes. Same
+    /// `Option<TextWrap>` handling as `FrameTextWrapContourType`.
+    /// `None`→default undo note like `CharacterUnderline` (the field is
+    /// `Option<bool>`; undo of a write whose prior was `None` restores
+    /// `Some(false)`).
+    FrameTextWrapContourIncludeInside,
     /// SDK Phase 5 (v1 sweep) — paragraph alignment / justification.
     /// Wire value is `Value::Text` carrying the IDML attribute string
     /// (`"LeftAlign"`, `"CenterAlign"`, `"RightAlign"`,
@@ -1129,6 +1145,23 @@ pub enum PropertyPath {
     /// current page position). `Value::Bool`. Plain `bool` parse
     /// field (default `false`); round-trips bytewise.
     AnchoredLockPosition,
+
+    // ---- W2.5 — element-level visibility / lock -----------------
+    /// W2.5 — element-level `Visible="true|false"` on any page item.
+    /// `Value::Bool`. Distinct from `LayerVisible` (which gates a whole
+    /// layer): this hides one item. Carried on every page-item kind
+    /// (`CommonAttrs::visible`, default `true`). The renderer skips
+    /// emitting items whose `Visible="false"` on the next rebuild, so
+    /// the InvalidationHint is a structural rebuild. The parse field is
+    /// a plain `bool`, so it round-trips bytewise.
+    ElementVisible,
+    /// W2.5 — element-level `Locked="true|false"` on any page item.
+    /// `Value::Bool`. The renderer ignores it (locked items still
+    /// paint); the canvas hit-tester blocks selection of a locked item
+    /// — the `LayerLocked` precedent. Paint-neutral, so the
+    /// InvalidationHint is empty (no scene change). Plain `bool` parse
+    /// field (default `false`); round-trips bytewise.
+    ElementLocked,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -1194,6 +1227,8 @@ impl PropertyPath {
             PropertyPath::FrameStrokeEndCap => "frame.strokeEndCap",
             PropertyPath::FrameTextWrapMode => "frame.textWrapMode",
             PropertyPath::FrameTextWrapOffsets => "frame.textWrapOffsets",
+            PropertyPath::FrameTextWrapContourType => "frame.textWrapContourType",
+            PropertyPath::FrameTextWrapContourIncludeInside => "frame.textWrapContourIncludeInside",
             PropertyPath::FrameFittingCrops => "frame.fittingCrops",
             PropertyPath::FrameFittingType => "frame.fittingType",
             PropertyPath::FrameDropShadow => "frame.dropShadow",
@@ -1382,6 +1417,9 @@ impl PropertyPath {
             PropertyPath::AnchoredVerticalAlignment => "anchored.verticalAlignment",
             PropertyPath::AnchoredSpineRelative => "anchored.spineRelative",
             PropertyPath::AnchoredLockPosition => "anchored.lockPosition",
+            // W2.5 — element-level visibility / lock.
+            PropertyPath::ElementVisible => "element.visible",
+            PropertyPath::ElementLocked => "element.locked",
         }
     }
 }

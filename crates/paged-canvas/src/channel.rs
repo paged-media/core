@@ -1415,6 +1415,27 @@ pub struct DocumentMeta {
     /// for Spots" toggle.
     #[serde(default)]
     pub use_standard_lab_for_spots: Option<bool>,
+    /// W2.5 — document baseline-grid settings (read-only), parsed from
+    /// `<GridPreference>`. `None` when the document carried no
+    /// `<GridPreference>` element. The editor's baseline-grid panel
+    /// shows these real values and the canvas overlay seats its grid
+    /// lines on them. Snapping text to the grid is deferred (a
+    /// layout-engine task — see the parse note). `baseline_division`
+    /// drives the grid pitch; `baseline_start` its top offset; both in
+    /// points.
+    #[serde(default)]
+    pub baseline_grid_start: Option<f32>,
+    #[serde(default)]
+    pub baseline_grid_division: Option<f32>,
+    /// Default-shown flag for the baseline grid (`BaselineGridShown`).
+    #[serde(default)]
+    pub baseline_grid_shown: Option<bool>,
+    /// `BaselineGridRelativeOption` — `"TopOfPage"` / `"TopMargin"`.
+    #[serde(default)]
+    pub baseline_grid_relative_to: Option<String>,
+    /// `BaselineColor` — grid-line colour ref / named colour.
+    #[serde(default)]
+    pub baseline_grid_color: Option<String>,
 }
 
 /// SDK Phase 3 — one swatch's identity + display name + kind.

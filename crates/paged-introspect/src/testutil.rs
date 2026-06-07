@@ -67,6 +67,8 @@ pub fn empty_text_frame(self_id: &str, bounds: Bounds) -> TextFrame {
         overprint_fill: false,
         overprint_stroke: false,
         nonprinting: false,
+        visible: true,
+        locked: false,
     }
 }
 

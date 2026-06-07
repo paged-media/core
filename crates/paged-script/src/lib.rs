@@ -909,6 +909,8 @@ fn parse_property_path(s: &str) -> Option<paged_mutate::PropertyPath> {
         "frameStrokeEndCap" => FrameStrokeEndCap,
         "frameTextWrapMode" => FrameTextWrapMode,
         "frameTextWrapOffsets" => FrameTextWrapOffsets,
+        "frameTextWrapContourType" => FrameTextWrapContourType,
+        "frameTextWrapContourIncludeInside" => FrameTextWrapContourIncludeInside,
         "frameFittingCrops" => FrameFittingCrops,
         "frameFittingType" => FrameFittingType,
         "frameDropShadow" => FrameDropShadow,
@@ -1054,6 +1056,9 @@ fn parse_property_path(s: &str) -> Option<paged_mutate::PropertyPath> {
         "anchoredVerticalAlignment" => AnchoredVerticalAlignment,
         "anchoredSpineRelative" => AnchoredSpineRelative,
         "anchoredLockPosition" => AnchoredLockPosition,
+        // W2.5 — element-level visibility / lock.
+        "elementVisible" => ElementVisible,
+        "elementLocked" => ElementLocked,
         _ => return None,
     })
 }
@@ -1096,6 +1101,8 @@ fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
         FrameStrokeEndCap => "frameStrokeEndCap",
         FrameTextWrapMode => "frameTextWrapMode",
         FrameTextWrapOffsets => "frameTextWrapOffsets",
+        FrameTextWrapContourType => "frameTextWrapContourType",
+        FrameTextWrapContourIncludeInside => "frameTextWrapContourIncludeInside",
         FrameFittingCrops => "frameFittingCrops",
         FrameFittingType => "frameFittingType",
         FrameDropShadow => "frameDropShadow",
@@ -1275,6 +1282,9 @@ fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
         AnchoredVerticalAlignment => "anchoredVerticalAlignment",
         AnchoredSpineRelative => "anchoredSpineRelative",
         AnchoredLockPosition => "anchoredLockPosition",
+        // W2.5 — element-level visibility / lock.
+        ElementVisible => "elementVisible",
+        ElementLocked => "elementLocked",
     }
 }
 
@@ -1316,6 +1326,7 @@ fn js_value_to_wire(
             | P::ParagraphJustification
             | P::FrameStrokeEndCap
             | P::FrameTextWrapMode
+            | P::FrameTextWrapContourType
             | P::FrameFittingType
             | P::FrameDropShadowMode
             // W0.1 — character text / enum-string paths.

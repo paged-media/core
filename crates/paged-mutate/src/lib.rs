@@ -222,6 +222,8 @@ mod tests {
             overprint_fill: false,
             overprint_stroke: false,
             nonprinting: false,
+            visible: true,
+            locked: false,
         }
     }
 
@@ -1989,6 +1991,8 @@ mod tests {
             overprint_fill: false,
             overprint_stroke: false,
             nonprinting: false,
+            visible: true,
+            locked: false,
         }
     }
 
@@ -3610,6 +3614,123 @@ mod tests {
                 .is_none(),
             "text_wrap should clear back to None after undo of mode-set"
         );
+    }
+
+    /// W2.5 — text-wrap contour options (`ContourType` /
+    /// `IncludeInsideEdges`) apply + undo. Both write one field of the
+    /// `TextWrap`, preserving the others; undo restores the prior value
+    /// bytewise.
+    #[test]
+    fn frame_text_wrap_contour_round_trips() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        // Seed a contour wrap mode first so the TextWrap exists.
+        project
+            .apply(Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FrameTextWrapMode,
+                value: Value::Text("ContourTextWrap".to_string()),
+            })
+            .expect("apply mode");
+
+        // Set the contour type → materialises on the existing wrap.
+        let applied_ct = project
+            .apply(Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FrameTextWrapContourType,
+                value: Value::Text("DetectEdges".to_string()),
+            })
+            .expect("apply contour type");
+        let tw = project.document().spreads[0].spread.text_frames[0]
+            .text_wrap
+            .expect("text_wrap present");
+        assert_eq!(
+            tw.contour_type,
+            Some(paged_parse::ContourOptionType::DetectEdges)
+        );
+        // Mode preserved through the contour-type write.
+        assert_eq!(tw.mode, paged_parse::TextWrapMode::ContourTextWrap);
+
+        // Set include-inside-edges → preserves contour type + mode.
+        let applied_ie = project
+            .apply(Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FrameTextWrapContourIncludeInside,
+                value: Value::Bool(true),
+            })
+            .expect("apply include-inside");
+        let tw = project.document().spreads[0].spread.text_frames[0]
+            .text_wrap
+            .expect("text_wrap present");
+        assert_eq!(tw.include_inside_edges, Some(true));
+        assert_eq!(
+            tw.contour_type,
+            Some(paged_parse::ContourOptionType::DetectEdges)
+        );
+
+        // Undo include-inside → restores Some(false) (prior was None,
+        // the lossy-default precedent — see the path doc).
+        crate::apply(project.document_mut(), &applied_ie.inverse).expect("undo include");
+        assert_eq!(
+            project.document().spreads[0].spread.text_frames[0]
+                .text_wrap
+                .and_then(|t| t.include_inside_edges),
+            Some(false)
+        );
+
+        // Undo contour-type → restores None (prior was None → empty
+        // string clears).
+        crate::apply(project.document_mut(), &applied_ct.inverse).expect("undo contour");
+        assert_eq!(
+            project.document().spreads[0].spread.text_frames[0]
+                .text_wrap
+                .and_then(|t| t.contour_type),
+            None
+        );
+    }
+
+    /// W2.5 — element-level Visible / Locked apply + undo on a
+    /// page item. Both are kind-agnostic `bool` fields; undo restores
+    /// the prior value bytewise (plain `bool`, no `None` collapse).
+    #[test]
+    fn element_visible_locked_round_trips() {
+        let mut project = Project::new(document_with_one_rectangle("Rectangle/u1"));
+        // Defaults: visible = true, locked = false.
+        assert!(project.document().spreads[0].spread.rectangles[0].visible);
+        assert!(!project.document().spreads[0].spread.rectangles[0].locked);
+
+        // Hide the element.
+        let applied_vis = project
+            .apply(Operation::SetProperty {
+                node: NodeId::Rectangle("Rectangle/u1".to_string()),
+                path: PropertyPath::ElementVisible,
+                value: Value::Bool(false),
+            })
+            .expect("apply visible=false");
+        assert!(!project.document().spreads[0].spread.rectangles[0].visible);
+        // The inverse carries the prior `true`.
+        assert!(matches!(
+            &applied_vis.inverse,
+            Operation::SetProperty {
+                value: Value::Bool(true),
+                ..
+            }
+        ));
+
+        // Lock the element.
+        let applied_lock = project
+            .apply(Operation::SetProperty {
+                node: NodeId::Rectangle("Rectangle/u1".to_string()),
+                path: PropertyPath::ElementLocked,
+                value: Value::Bool(true),
+            })
+            .expect("apply locked=true");
+        assert!(project.document().spreads[0].spread.rectangles[0].locked);
+
+        // Undo both → restore defaults bytewise.
+        crate::apply(project.document_mut(), &applied_lock.inverse).expect("undo lock");
+        crate::apply(project.document_mut(), &applied_vis.inverse).expect("undo vis");
+        assert!(project.document().spreads[0].spread.rectangles[0].visible);
+        assert!(!project.document().spreads[0].spread.rectangles[0].locked);
     }
 
     /// SDK Phase 5 (v1 sweep) — paragraph justification apply +

@@ -1019,6 +1019,9 @@ fn apply_set_property(
             let prev_mode = tw.map(|t| t.mode.as_idml().to_string()).unwrap_or_default();
             let prev_offsets = tw.map(|t| t.offsets).unwrap_or([0.0; 4]);
             let prev_invert = tw.and_then(|t| t.invert);
+            // W2.5 — preserve any contour-option knobs through a mode set.
+            let prev_contour = tw.and_then(|t| t.contour_type);
+            let prev_inside = tw.and_then(|t| t.include_inside_edges);
             if new_val.is_empty() {
                 *tw = None;
             } else {
@@ -1026,6 +1029,8 @@ fn apply_set_property(
                     mode: paged_parse::TextWrapMode::from_idml(&new_val),
                     offsets: prev_offsets,
                     invert: prev_invert,
+                    contour_type: prev_contour,
+                    include_inside_edges: prev_inside,
                 });
             }
             let _ = prev_offsets;
@@ -1053,15 +1058,101 @@ fn apply_set_property(
                 .unwrap_or(paged_parse::TextWrapMode::None);
             let prev_offsets = tw.map(|t| t.offsets).unwrap_or([0.0; 4]);
             let prev_invert = tw.and_then(|t| t.invert);
+            // W2.5 — preserve contour-option knobs through an offset set.
+            let prev_contour = tw.and_then(|t| t.contour_type);
+            let prev_inside = tw.and_then(|t| t.include_inside_edges);
             *tw = Some(paged_parse::TextWrap {
                 mode: prev_mode,
                 offsets: new_offsets,
                 invert: prev_invert,
+                contour_type: prev_contour,
+                include_inside_edges: prev_inside,
             });
             (
                 Value::Bounds(prev_offsets),
                 InvalidationHint {
                     text_reflow: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        // ---- W2.5 — text-wrap contour options -------------------
+        // `<ContourOption ContourType / IncludeInsideEdges>` for
+        // `ContourTextWrap`. Each writes one field of the TextWrap,
+        // preserving the rest; a prior-None `text_wrap` materialises a
+        // default wrap (mode None, zero offsets) so partial writes don't
+        // drop information. The wrap exclusion can change other frames'
+        // layout, so both carry a structural rebuild.
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameTextWrapContourType,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let tw = find_text_wrap_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = tw
+                .and_then(|t| t.contour_type)
+                .map(|c| c.as_idml().to_string())
+                .unwrap_or_default();
+            let prev_mode = tw
+                .map(|t| t.mode)
+                .unwrap_or(paged_parse::TextWrapMode::None);
+            let prev_offsets = tw.map(|t| t.offsets).unwrap_or([0.0; 4]);
+            let prev_invert = tw.and_then(|t| t.invert);
+            let prev_inside = tw.and_then(|t| t.include_inside_edges);
+            let new_contour = if new_val.is_empty() {
+                None
+            } else {
+                Some(paged_parse::ContourOptionType::from_idml(&new_val))
+            };
+            *tw = Some(paged_parse::TextWrap {
+                mode: prev_mode,
+                offsets: prev_offsets,
+                invert: prev_invert,
+                contour_type: new_contour,
+                include_inside_edges: prev_inside,
+            });
+            (
+                Value::Text(prev),
+                InvalidationHint {
+                    structural: true,
+                    ..Default::default()
+                },
+            )
+        }
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameTextWrapContourIncludeInside,
+        ) => {
+            let new_val = expect_bool(path, value)?;
+            let tw = find_text_wrap_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = tw.and_then(|t| t.include_inside_edges).unwrap_or(false);
+            let prev_mode = tw
+                .map(|t| t.mode)
+                .unwrap_or(paged_parse::TextWrapMode::None);
+            let prev_offsets = tw.map(|t| t.offsets).unwrap_or([0.0; 4]);
+            let prev_invert = tw.and_then(|t| t.invert);
+            let prev_contour = tw.and_then(|t| t.contour_type);
+            *tw = Some(paged_parse::TextWrap {
+                mode: prev_mode,
+                offsets: prev_offsets,
+                invert: prev_invert,
+                contour_type: prev_contour,
+                include_inside_edges: Some(new_val),
+            });
+            (
+                Value::Bool(prev),
+                InvalidationHint {
+                    structural: true,
                     ..Default::default()
                 },
             )
@@ -1145,6 +1236,50 @@ fn apply_set_property(
                     ..Default::default()
                 },
             )
+        }
+        // ---- W2.5 — element-level visible / locked --------------
+        // Kind-agnostic over the five page-item variants that carry
+        // `CommonAttrs` (TextFrame / Rectangle / Oval / GraphicLine /
+        // Polygon). `ElementVisible="false"` hides the item from the
+        // render (structural rebuild); `ElementLocked` is paint-neutral
+        // (the renderer ignores it — the canvas hit-tester gates
+        // selection on it), so it carries an empty hint. Both round-trip
+        // bytewise (plain `bool` parse fields).
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::GraphicLine(_)
+            | NodeId::Polygon(_),
+            PropertyPath::ElementVisible,
+        ) => {
+            let new_val = expect_bool(path, value)?;
+            let slot = find_element_bool_mut(doc, node, ElementBoolField::Visible)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = *slot;
+            *slot = new_val;
+            (
+                Value::Bool(prev),
+                InvalidationHint {
+                    structural: true,
+                    ..Default::default()
+                },
+            )
+        }
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::GraphicLine(_)
+            | NodeId::Polygon(_),
+            PropertyPath::ElementLocked,
+        ) => {
+            let new_val = expect_bool(path, value)?;
+            let slot = find_element_bool_mut(doc, node, ElementBoolField::Locked)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = *slot;
+            *slot = new_val;
+            (Value::Bool(prev), InvalidationHint::default())
         }
         // ---- SDK Phase 5 (v1 sweep) — frame fill tint percent --
         // Per-frame override on TextFrame + Rectangle. `None`
@@ -2267,10 +2402,15 @@ fn apply_set_property(
                 .map(|t| t.mode)
                 .unwrap_or(paged_parse::TextWrapMode::None);
             let prev_offsets = tw.map(|t| t.offsets).unwrap_or([0.0; 4]);
+            // W2.5 — preserve contour-option knobs through an invert set.
+            let prev_contour = tw.and_then(|t| t.contour_type);
+            let prev_inside = tw.and_then(|t| t.include_inside_edges);
             *tw = Some(paged_parse::TextWrap {
                 mode: prev_mode,
                 offsets: prev_offsets,
                 invert: Some(new_val),
+                contour_type: prev_contour,
+                include_inside_edges: prev_inside,
             });
             (
                 Value::Bool(prev),
@@ -7278,6 +7418,85 @@ fn find_text_wrap_mut<'a>(
     None
 }
 
+/// W2.5 — which element-level `bool` field a lookup targets.
+#[derive(Clone, Copy)]
+enum ElementBoolField {
+    Visible,
+    Locked,
+}
+
+/// W2.5 — locate an element-level `bool` field (`visible` / `locked`)
+/// on any of the five page-item kinds that carry `CommonAttrs`. The
+/// `field` selector keeps the `ElementVisible` / `ElementLocked` apply
+/// arms one line each without a closure capturing the borrow.
+fn find_element_bool_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+    field: ElementBoolField,
+) -> Option<&'a mut bool> {
+    let raw = node.self_id();
+    let pick = |visible: &'a mut bool, locked: &'a mut bool| match field {
+        ElementBoolField::Visible => visible,
+        ElementBoolField::Locked => locked,
+    };
+    for parsed in &mut doc.spreads {
+        match node {
+            NodeId::TextFrame(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .text_frames
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(pick(&mut p.visible, &mut p.locked));
+                }
+            }
+            NodeId::Rectangle(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .rectangles
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(pick(&mut p.visible, &mut p.locked));
+                }
+            }
+            NodeId::Oval(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .ovals
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(pick(&mut p.visible, &mut p.locked));
+                }
+            }
+            NodeId::GraphicLine(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .graphic_lines
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(pick(&mut p.visible, &mut p.locked));
+                }
+            }
+            NodeId::Polygon(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .polygons
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(pick(&mut p.visible, &mut p.locked));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// SDK Phase 5 (D3 completion) — locate the `applied_object_style:
 /// Option<String>` field on any page-item kind. All six page-item
 /// variants carry the same field with identical semantics; this
@@ -8559,6 +8778,8 @@ pub(crate) fn new_text_frame(
         overprint_fill: false,
         overprint_stroke: false,
         nonprinting: false,
+        visible: true,
+        locked: false,
     }
 }
 
@@ -8591,6 +8812,8 @@ fn new_graphic_line(
         effects: None,
         overprint_stroke: false,
         nonprinting: false,
+        visible: true,
+        locked: false,
         start_arrow: paged_parse::ArrowheadType::None,
         end_arrow: paged_parse::ArrowheadType::None,
         start_arrow_scale: 100.0,
@@ -8645,6 +8868,8 @@ fn new_polygon(
         overprint_fill: false,
         overprint_stroke: false,
         nonprinting: false,
+        visible: true,
+        locked: false,
     }
 }
 
@@ -8683,6 +8908,8 @@ pub(crate) fn new_oval(self_id: String, bounds: Bounds, fill_color: Option<Strin
         overprint_fill: false,
         overprint_stroke: false,
         nonprinting: false,
+        visible: true,
+        locked: false,
     }
 }
 
@@ -8734,6 +8961,8 @@ pub(crate) fn new_rectangle(
         overprint_fill: false,
         overprint_stroke: false,
         nonprinting: false,
+        visible: true,
+        locked: false,
         anchors: Vec::new(),
         subpath_starts: Vec::new(),
         subpath_open: Vec::new(),

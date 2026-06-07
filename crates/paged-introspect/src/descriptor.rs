@@ -82,6 +82,8 @@ pub enum PropertyPathJson {
     FrameFittingType,
     FrameTextWrapMode,
     FrameTextWrapOffsets,
+    FrameTextWrapContourType,
+    FrameTextWrapContourIncludeInside,
     ParagraphJustification,
     ParagraphStyleNextStyle,
     ParagraphAppliedNumberingList,
@@ -258,6 +260,9 @@ pub enum PropertyPathJson {
     AnchoredVerticalAlignment,
     AnchoredSpineRelative,
     AnchoredLockPosition,
+    // W2.5 — element-level visibility / lock.
+    ElementVisible,
+    ElementLocked,
 }
 
 impl From<PropertyPath> for PropertyPathJson {
@@ -304,6 +309,10 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::FrameFittingType => PropertyPathJson::FrameFittingType,
             PropertyPath::FrameTextWrapMode => PropertyPathJson::FrameTextWrapMode,
             PropertyPath::FrameTextWrapOffsets => PropertyPathJson::FrameTextWrapOffsets,
+            PropertyPath::FrameTextWrapContourType => PropertyPathJson::FrameTextWrapContourType,
+            PropertyPath::FrameTextWrapContourIncludeInside => {
+                PropertyPathJson::FrameTextWrapContourIncludeInside
+            }
             PropertyPath::ParagraphJustification => PropertyPathJson::ParagraphJustification,
             PropertyPath::ParagraphStyleNextStyle => PropertyPathJson::ParagraphStyleNextStyle,
             PropertyPath::ParagraphAppliedNumberingList => {
@@ -518,6 +527,9 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::AnchoredVerticalAlignment => PropertyPathJson::AnchoredVerticalAlignment,
             PropertyPath::AnchoredSpineRelative => PropertyPathJson::AnchoredSpineRelative,
             PropertyPath::AnchoredLockPosition => PropertyPathJson::AnchoredLockPosition,
+            // W2.5 — element-level visibility / lock.
+            PropertyPath::ElementVisible => PropertyPathJson::ElementVisible,
+            PropertyPath::ElementLocked => PropertyPathJson::ElementLocked,
         }
     }
 }
@@ -566,6 +578,10 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::FrameFittingType => PropertyPath::FrameFittingType,
             PropertyPathJson::FrameTextWrapMode => PropertyPath::FrameTextWrapMode,
             PropertyPathJson::FrameTextWrapOffsets => PropertyPath::FrameTextWrapOffsets,
+            PropertyPathJson::FrameTextWrapContourType => PropertyPath::FrameTextWrapContourType,
+            PropertyPathJson::FrameTextWrapContourIncludeInside => {
+                PropertyPath::FrameTextWrapContourIncludeInside
+            }
             PropertyPathJson::ParagraphJustification => PropertyPath::ParagraphJustification,
             PropertyPathJson::ParagraphStyleNextStyle => PropertyPath::ParagraphStyleNextStyle,
             PropertyPathJson::ParagraphAppliedNumberingList => {
@@ -780,6 +796,9 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::AnchoredVerticalAlignment => PropertyPath::AnchoredVerticalAlignment,
             PropertyPathJson::AnchoredSpineRelative => PropertyPath::AnchoredSpineRelative,
             PropertyPathJson::AnchoredLockPosition => PropertyPath::AnchoredLockPosition,
+            // W2.5 — element-level visibility / lock.
+            PropertyPathJson::ElementVisible => PropertyPath::ElementVisible,
+            PropertyPathJson::ElementLocked => PropertyPath::ElementLocked,
         }
     }
 }

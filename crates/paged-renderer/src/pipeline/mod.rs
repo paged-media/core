@@ -1743,7 +1743,11 @@ fn build_document_inner(
                     let Some(frame) = spread.text_frames.get(idx) else {
                         return;
                     };
-                    if !is_layer_visible(document, frame.item_layer.as_deref()) {
+                    // W2.5 — element-level Visible="false" hides the item
+                    // (same skip as a hidden layer). Locked is NOT a render
+                    // gate (locked items still paint); selection-gating
+                    // lives in the canvas hit-tester.
+                    if !is_layer_visible(document, frame.item_layer.as_deref()) || !frame.visible {
                         return;
                     }
                     total_stats.frames += 1;
@@ -1795,7 +1799,8 @@ fn build_document_inner(
                     let Some(rect) = spread.rectangles.get(idx) else {
                         return;
                     };
-                    if !is_layer_visible(document, rect.item_layer.as_deref()) {
+                    // W2.5 — element-level Visible="false" hides the item.
+                    if !is_layer_visible(document, rect.item_layer.as_deref()) || !rect.visible {
                         return;
                     }
                     total_stats.frames += 1;
@@ -1856,7 +1861,8 @@ fn build_document_inner(
                     let Some(oval) = spread.ovals.get(idx) else {
                         return;
                     };
-                    if !is_layer_visible(document, oval.item_layer.as_deref()) {
+                    // W2.5 — element-level Visible="false" hides the item.
+                    if !is_layer_visible(document, oval.item_layer.as_deref()) || !oval.visible {
                         return;
                     }
                     total_stats.frames += 1;
@@ -1899,7 +1905,8 @@ fn build_document_inner(
                     let Some(line) = spread.graphic_lines.get(idx) else {
                         return;
                     };
-                    if !is_layer_visible(document, line.item_layer.as_deref()) {
+                    // W2.5 — element-level Visible="false" hides the item.
+                    if !is_layer_visible(document, line.item_layer.as_deref()) || !line.visible {
                         return;
                     }
                     total_stats.frames += 1;
@@ -1928,7 +1935,8 @@ fn build_document_inner(
                     let Some(poly) = spread.polygons.get(idx) else {
                         return;
                     };
-                    if !is_layer_visible(document, poly.item_layer.as_deref()) {
+                    // W2.5 — element-level Visible="false" hides the item.
+                    if !is_layer_visible(document, poly.item_layer.as_deref()) || !poly.visible {
                         return;
                     }
                     total_stats.frames += 1;
@@ -2207,7 +2215,9 @@ fn build_document_inner(
             if poly.text_paths.is_empty() {
                 continue;
             }
-            if !layer_visible(poly.item_layer.as_deref()) {
+            // W2.5 — element-level Visible="false" hides the shape and
+            // its text-on-path.
+            if !layer_visible(poly.item_layer.as_deref()) || !poly.visible {
                 continue;
             }
             let spread_bounds = transform_bounds(poly.bounds, poly.item_transform);
@@ -2231,7 +2241,9 @@ fn build_document_inner(
             if rect.text_paths.is_empty() {
                 continue;
             }
-            if !layer_visible(rect.item_layer.as_deref()) {
+            // W2.5 — element-level Visible="false" hides the shape and
+            // its text-on-path.
+            if !layer_visible(rect.item_layer.as_deref()) || !rect.visible {
                 continue;
             }
             let spread_bounds = transform_bounds(rect.bounds, rect.item_transform);
@@ -2286,7 +2298,9 @@ fn build_document_inner(
             if line.text_paths.is_empty() {
                 continue;
             }
-            if !layer_visible(line.item_layer.as_deref()) {
+            // W2.5 — element-level Visible="false" hides the shape and
+            // its text-on-path.
+            if !layer_visible(line.item_layer.as_deref()) || !line.visible {
                 continue;
             }
             let spread_bounds = transform_bounds(line.bounds, line.item_transform);

@@ -3240,6 +3240,33 @@ impl CanvasModel {
                                         .unwrap_or([0.0; 4]),
                                 )),
                             },
+                            // W2.5 — text-wrap contour options.
+                            PropertyEntry {
+                                path: PropertyPath::FrameTextWrapContourType,
+                                value: Some(Value::Text(
+                                    f.text_wrap
+                                        .and_then(|t| t.contour_type)
+                                        .map(|c| c.as_idml().to_string())
+                                        .unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameTextWrapContourIncludeInside,
+                                value: Some(Value::Bool(
+                                    f.text_wrap
+                                        .and_then(|t| t.include_inside_edges)
+                                        .unwrap_or(false),
+                                )),
+                            },
+                            // W2.5 — element-level visibility / lock.
+                            PropertyEntry {
+                                path: PropertyPath::ElementVisible,
+                                value: Some(Value::Bool(f.visible)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::ElementLocked,
+                                value: Some(Value::Bool(f.locked)),
+                            },
                             PropertyEntry {
                                 path: PropertyPath::FrameDropShadow,
                                 value: Some(Value::Bool(
@@ -3536,6 +3563,33 @@ impl CanvasModel {
                                         .map(|t| t.offsets)
                                         .unwrap_or([0.0; 4]),
                                 )),
+                            },
+                            // W2.5 — text-wrap contour options.
+                            PropertyEntry {
+                                path: PropertyPath::FrameTextWrapContourType,
+                                value: Some(Value::Text(
+                                    f.text_wrap
+                                        .and_then(|t| t.contour_type)
+                                        .map(|c| c.as_idml().to_string())
+                                        .unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameTextWrapContourIncludeInside,
+                                value: Some(Value::Bool(
+                                    f.text_wrap
+                                        .and_then(|t| t.include_inside_edges)
+                                        .unwrap_or(false),
+                                )),
+                            },
+                            // W2.5 — element-level visibility / lock.
+                            PropertyEntry {
+                                path: PropertyPath::ElementVisible,
+                                value: Some(Value::Bool(f.visible)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::ElementLocked,
+                                value: Some(Value::Bool(f.locked)),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameDropShadow,
@@ -5338,6 +5392,8 @@ impl CanvasModel {
     /// state (vs. selection state). Scalar reads; the six fields
     /// cover v1 panel needs.
     pub fn document_meta(&self) -> crate::channel::DocumentMeta {
+        // W2.5 — baseline-grid settings live on the parsed designmap.
+        let gp = &self.scene.container.designmap.grid_preference;
         crate::channel::DocumentMeta {
             page_count: self.built.pages.len() as u32,
             // `active_page` is application state (canvas-side camera
@@ -5372,6 +5428,14 @@ impl CanvasModel {
             proof_profile_name: self.proof_state.as_ref().map(|p| p.name.clone()),
             proof_simulate_paper_white: self.proof_state.as_ref().map(|p| p.simulate_paper_white),
             use_standard_lab_for_spots: Some(self.use_standard_lab_for_spots),
+            // W2.5 — read-only baseline-grid settings from
+            // `<GridPreference>`. All `None` when the document carried no
+            // such element (the editor then shows InDesign's defaults).
+            baseline_grid_start: gp.baseline_start,
+            baseline_grid_division: gp.baseline_division,
+            baseline_grid_shown: gp.baseline_grid_shown,
+            baseline_grid_relative_to: gp.baseline_grid_relative_option.clone(),
+            baseline_grid_color: gp.baseline_color.clone(),
         }
     }
 
