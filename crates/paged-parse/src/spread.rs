@@ -948,9 +948,12 @@ pub struct InnerGlowParams {
     pub noise_pct: Option<f32>,
 }
 
-/// `<BevelAndEmbossSetting>` parameters. `style` and `direction` steer
-/// between bevel / emboss / pillow variants; the rasterizer uses the
-/// Lambertian light at `(angle_deg, altitude_deg)` regardless.
+/// `<BevelAndEmbossSetting>` parameters. `style` (Inner/Outer/Emboss/
+/// Pillow), `direction` (Up/Down), `technique` (Smooth/Chisel*) and
+/// `soften` steer the rasterizer's height-field shading (W1.4): the
+/// CPU path reshapes the height field per style, flips the light's
+/// elevation sign for `Down`, narrows the smoothing band for the
+/// chisel techniques, and blurs the shaded layer by `soften`.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct BevelEmbossParams {
     pub depth_pct: Option<f32>,
@@ -993,9 +996,10 @@ pub struct FeatherParams {
 
 /// `<DirectionalFeatherSetting>` parameters. Each edge carries an
 /// independent feather width in pt; `angle_deg` rotates the per-edge
-/// directions. The renderer currently approximates this with a
-/// uniform feather using the max of the four widths — angle is
-/// captured but unused.
+/// directions. The CPU rasterizer honours all four widths
+/// independently and rotates each pixel into the rect's intrinsic
+/// frame by `angle_deg` before computing per-side fades (W1.4); the
+/// Vello preview still approximates with a uniform max-width feather.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct DirectionalFeatherParams {
     pub left_width: Option<f32>,

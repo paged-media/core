@@ -27,7 +27,7 @@
 use crate::builders::{
     designmap::{write_designmap, DesignMap},
     master::{write_master, Master},
-    page_item::{Blending, DropShadow, Rect},
+    page_item::{Blending, DropShadow, EffectSetting, Rect},
     resources::{
         container_xml, fonts_xml, graphic_xml_with_extras, preferences_xml, styles_xml, ExtraColor,
     },
@@ -56,6 +56,19 @@ struct Variant {
     /// blend-mode variants have something coloured to blend onto.
     /// Stored as `(fill_color, dx_pt, dy_pt)`.
     underlay: Option<(&'static str, f32, f32)>,
+    /// Frame-effects family (`<InnerShadowSetting>` etc.) declared on
+    /// the demo rect. Appended (W1.3 reconcile / W1.4 parity) so the
+    /// renderer's parse → compose → rasterize chain is exercised by a
+    /// real IDML fixture, not just inline-XML unit tests.
+    frame_effects: Vec<EffectSetting>,
+}
+
+/// Shorthand for a single `<*Setting>` with formatted attributes.
+fn fx(element: &'static str, attrs: &[(&'static str, &str)]) -> EffectSetting {
+    EffectSetting::new(
+        element,
+        attrs.iter().map(|(k, v)| (*k, (*v).to_string())).collect(),
+    )
 }
 
 fn variants() -> Vec<Variant> {
@@ -72,6 +85,7 @@ fn variants() -> Vec<Variant> {
             }),
             drop_shadow: None,
             underlay: None,
+            frame_effects: Vec::new(),
         },
         Variant {
             name: "effects · opacity · 75",
@@ -82,6 +96,7 @@ fn variants() -> Vec<Variant> {
             }),
             drop_shadow: None,
             underlay: cyan_underlay,
+            frame_effects: Vec::new(),
         },
         Variant {
             name: "effects · opacity · 50",
@@ -92,6 +107,7 @@ fn variants() -> Vec<Variant> {
             }),
             drop_shadow: None,
             underlay: cyan_underlay,
+            frame_effects: Vec::new(),
         },
         Variant {
             name: "effects · opacity · 25",
@@ -102,6 +118,7 @@ fn variants() -> Vec<Variant> {
             }),
             drop_shadow: None,
             underlay: cyan_underlay,
+            frame_effects: Vec::new(),
         },
         // Blend modes — each over a cyan underlay so the blend is
         // visible. Opacity stays 100% to isolate the mode itself.
@@ -114,6 +131,7 @@ fn variants() -> Vec<Variant> {
             }),
             drop_shadow: None,
             underlay: cyan_underlay,
+            frame_effects: Vec::new(),
         },
         Variant {
             name: "effects · blend · screen",
@@ -124,6 +142,7 @@ fn variants() -> Vec<Variant> {
             }),
             drop_shadow: None,
             underlay: cyan_underlay,
+            frame_effects: Vec::new(),
         },
         Variant {
             name: "effects · blend · overlay",
@@ -134,6 +153,7 @@ fn variants() -> Vec<Variant> {
             }),
             drop_shadow: None,
             underlay: cyan_underlay,
+            frame_effects: Vec::new(),
         },
         Variant {
             name: "effects · blend · darken",
@@ -144,6 +164,7 @@ fn variants() -> Vec<Variant> {
             }),
             drop_shadow: None,
             underlay: cyan_underlay,
+            frame_effects: Vec::new(),
         },
         Variant {
             name: "effects · blend · lighten",
@@ -154,6 +175,7 @@ fn variants() -> Vec<Variant> {
             }),
             drop_shadow: None,
             underlay: cyan_underlay,
+            frame_effects: Vec::new(),
         },
         // Drop shadows — vary offset and blur to verify the renderer
         // honours each independently.
@@ -170,6 +192,7 @@ fn variants() -> Vec<Variant> {
                 effect_color: Some("Color/Black".to_string()),
             }),
             underlay: None,
+            frame_effects: Vec::new(),
         },
         Variant {
             name: "effects · drop-shadow · large-offset",
@@ -184,6 +207,7 @@ fn variants() -> Vec<Variant> {
                 effect_color: Some("Color/Black".to_string()),
             }),
             underlay: None,
+            frame_effects: Vec::new(),
         },
         Variant {
             name: "effects · drop-shadow · large-blur",
@@ -198,8 +222,153 @@ fn variants() -> Vec<Variant> {
                 effect_color: Some("Color/Black".to_string()),
             }),
             underlay: None,
+            frame_effects: Vec::new(),
         },
+        // ── W1.3 reconcile + W1.4 parity pages (APPENDED after the
+        // existing 13 so the InDesign reference PDFs for those pages
+        // keep their indices — fidelity caps). Each declares a frame
+        // effect on the demo rect so the parse → compose → rasterize
+        // chain runs against a real IDML fixture. All paper-fill so the
+        // tint/halo is visible against the demo, no underlay. ──
+        //
+        // W1.3 — glow / inner-shadow / feather were flagged as RENDER
+        // gaps; these prove they emit + rasterize from IDML.
+        effect_variant(
+            "effects · inner-shadow",
+            vec![fx(
+                "InnerShadowSetting",
+                &[
+                    ("Size", "6"),
+                    ("Opacity", "80"),
+                    ("XOffset", "5"),
+                    ("YOffset", "5"),
+                    ("EffectColor", "Color/Black"),
+                ],
+            )],
+        ),
+        effect_variant(
+            "effects · outer-glow",
+            vec![fx(
+                "OuterGlowSetting",
+                &[("Size", "8"), ("Opacity", "80"), ("Spread", "10")],
+            )],
+        ),
+        effect_variant(
+            "effects · inner-glow",
+            vec![fx("InnerGlowSetting", &[("Size", "8"), ("Opacity", "80")])],
+        ),
+        effect_variant(
+            "effects · feather",
+            vec![fx(
+                "FeatherSetting",
+                &[("Width", "10"), ("CornerType", "Rounded")],
+            )],
+        ),
+        effect_variant(
+            "effects · directional-feather",
+            vec![fx(
+                "DirectionalFeatherSetting",
+                &[
+                    ("LeftWidth", "4"),
+                    ("RightWidth", "16"),
+                    ("TopWidth", "8"),
+                    ("BottomWidth", "0"),
+                    ("Angle", "0"),
+                ],
+            )],
+        ),
+        // W1.4 parity — bevel style/direction/technique/soften + satin
+        // invert. The Up/Down pair and invert pair are deterministic
+        // variant pairs whose pixel difference the harness can attribute.
+        effect_variant(
+            "effects · bevel · up",
+            vec![fx(
+                "BevelAndEmbossSetting",
+                &[
+                    ("Size", "8"),
+                    ("Depth", "100"),
+                    ("Style", "InnerBevel"),
+                    ("Direction", "Up"),
+                    ("Technique", "Smooth"),
+                    ("Angle", "135"),
+                    ("Altitude", "30"),
+                ],
+            )],
+        ),
+        effect_variant(
+            "effects · bevel · down",
+            vec![fx(
+                "BevelAndEmbossSetting",
+                &[
+                    ("Size", "8"),
+                    ("Depth", "100"),
+                    ("Style", "InnerBevel"),
+                    ("Direction", "Down"),
+                    ("Technique", "Smooth"),
+                    ("Angle", "135"),
+                    ("Altitude", "30"),
+                ],
+            )],
+        ),
+        effect_variant(
+            "effects · bevel · outer-chisel",
+            vec![fx(
+                "BevelAndEmbossSetting",
+                &[
+                    ("Size", "8"),
+                    ("Depth", "100"),
+                    ("Style", "OuterBevel"),
+                    ("Direction", "Up"),
+                    ("Technique", "ChiselHard"),
+                    ("Soften", "2"),
+                    ("Angle", "135"),
+                    ("Altitude", "30"),
+                ],
+            )],
+        ),
+        effect_variant(
+            "effects · satin · plain",
+            vec![fx(
+                "SatinSetting",
+                &[
+                    ("Size", "6"),
+                    ("Distance", "12"),
+                    ("Angle", "45"),
+                    ("Opacity", "80"),
+                    ("Invert", "false"),
+                    ("EffectColor", "Color/Black"),
+                ],
+            )],
+        ),
+        effect_variant(
+            "effects · satin · invert",
+            vec![fx(
+                "SatinSetting",
+                &[
+                    ("Size", "6"),
+                    ("Distance", "12"),
+                    ("Angle", "45"),
+                    ("Opacity", "80"),
+                    ("Invert", "true"),
+                    ("EffectColor", "Color/Black"),
+                ],
+            )],
+        ),
     ]
+}
+
+/// Build a `Variant` carrying a frame-effects payload on a paper-fill
+/// demo rect (no blending / drop-shadow / underlay). The paper fill
+/// keeps the effect tint visible against the white page.
+fn effect_variant(name: &'static str, frame_effects: Vec<EffectSetting>) -> Variant {
+    Variant {
+        name,
+        fill_color: "Color/Paper",
+        blending: None,
+        drop_shadow: None,
+        underlay: None,
+        frame_effects,
+    }
 }
 
 fn extra_colors() -> Vec<ExtraColor> {
@@ -281,6 +450,7 @@ pub fn build() -> Sample {
             placed_image: None,
             text_wrap: None,
             anchored_setting: None,
+            frame_effects: Vec::new(),
         };
 
         let demo_x = (PAGE_W_PT - DEMO_W_PT) * 0.5;
@@ -302,6 +472,7 @@ pub fn build() -> Sample {
             placed_image: None,
             text_wrap: None,
             anchored_setting: None,
+            frame_effects: variant.frame_effects.clone(),
         };
 
         let mut page_items = Vec::with_capacity(3);
@@ -326,6 +497,7 @@ pub fn build() -> Sample {
                     placed_image: None,
                     text_wrap: None,
                     anchored_setting: None,
+                    frame_effects: Vec::new(),
                 }
                 .into(),
             );

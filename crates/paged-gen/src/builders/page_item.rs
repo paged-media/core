@@ -202,6 +202,11 @@ pub struct Rect {
     pub blending: Option<Blending>,
     /// `<DropShadowSetting>` emitted alongside `BlendingSetting`.
     pub drop_shadow: Option<DropShadow>,
+    /// Frame-effects family (`<InnerShadowSetting>` etc.) emitted inside
+    /// the same `<TransparencySetting>` block. Each is written
+    /// `Applied="true"`. Empty ⇒ none. Used by the effects sample's
+    /// W1.3/W1.4 variant pages.
+    pub frame_effects: Vec<EffectSetting>,
     /// Optional placed-image payload. When set, the rectangle becomes
     /// a graphic frame: a nested `<Image>` element carries the
     /// `LinkResourceURI`, and a sibling `<FrameFittingOption>` element
@@ -401,6 +406,37 @@ impl DropShadow {
     }
 }
 
+/// One serialised `<*Setting>` element for the frame-effects family
+/// (InnerShadow / OuterGlow / InnerGlow / BevelAndEmboss / Satin /
+/// Feather / DirectionalFeather). The sample builder splices these,
+/// `Applied="true"`, into the `<TransparencySetting>` so the renderer's
+/// parse → compose → rasterize chain is exercised end to end (W1.3
+/// reconcile / W1.4 parity). `element` is the bare tag name (e.g.
+/// `"BevelAndEmbossSetting"`); `attrs` are the per-effect attributes
+/// (`Style`, `Direction`, `LeftWidth`, …) appended verbatim.
+#[derive(Clone)]
+pub struct EffectSetting {
+    pub element: &'static str,
+    pub attrs: Vec<(&'static str, String)>,
+}
+
+impl EffectSetting {
+    /// Construct from a static attribute list (numbers pre-formatted by
+    /// the caller). Always emits `Applied="true"`.
+    pub fn new(element: &'static str, attrs: Vec<(&'static str, String)>) -> Self {
+        Self { element, attrs }
+    }
+
+    fn write(&self, b: &mut XmlBuilder) {
+        let mut a: Vec<(&str, &str)> = Vec::with_capacity(self.attrs.len() + 1);
+        a.push(("Applied", "true"));
+        for (k, v) in &self.attrs {
+            a.push((k, v.as_str()));
+        }
+        b.empty(self.element, &a);
+    }
+}
+
 impl Rect {
     /// Convenience constructor for the common "filled rectangle, no
     /// stroke, no parent story" shape.
@@ -422,6 +458,7 @@ impl Rect {
             placed_image: None,
             text_wrap: None,
             anchored_setting: None,
+            frame_effects: Vec::new(),
         }
     }
 
@@ -518,7 +555,7 @@ impl Rect {
         // earlier nested it inside Properties, InDesign silently
         // dropped the BlendingSetting and the blend reverted to
         // Normal in the exported PDF.
-        if self.blending.is_some() || self.drop_shadow.is_some() {
+        if self.blending.is_some() || self.drop_shadow.is_some() || !self.frame_effects.is_empty() {
             b.start("TransparencySetting", &[]);
             if let Some(bl) = &self.blending {
                 let opacity_str: String;
@@ -560,6 +597,12 @@ impl Rect {
                     a.push(("EffectColor", ec.as_str()));
                 }
                 b.empty("DropShadowSetting", &a);
+            }
+            // Frame-effects family — InnerShadow / OuterGlow /
+            // InnerGlow / BevelAndEmboss / Satin / Feather /
+            // DirectionalFeather, each `Applied="true"`.
+            for fx in &self.frame_effects {
+                fx.write(b);
             }
             b.end("TransparencySetting");
         }

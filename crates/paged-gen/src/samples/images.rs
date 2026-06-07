@@ -398,6 +398,7 @@ pub fn build() -> Sample {
             placed_image: None,
             text_wrap: None,
             anchored_setting: None,
+            frame_effects: Vec::new(),
         };
 
         // Centre the 200×200 frame on the page, then apply the
@@ -469,6 +470,7 @@ pub fn build() -> Sample {
             }),
             text_wrap: None,
             anchored_setting: None,
+            frame_effects: Vec::new(),
         };
 
         spreads.push((

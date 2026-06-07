@@ -29,10 +29,10 @@
 
 use image::{Rgba, RgbaImage};
 use paged_compose::{
-    BevelEmboss, BlendMode, Color as CComposeColor, DirectionalFeather, DisplayCommand,
-    DisplayList, Feather, FeatherCornerType, GradientFeather, GradientFeatherKind, InnerGlow,
-    InnerShadow, LayerEffect, LineCap, LineJoin, OuterGlow, Paint, PathData, PathSegment, Satin,
-    SpotInkId, Transform as CTransform,
+    BevelDirection, BevelEmboss, BevelStyle, BevelTechnique, BlendMode, Color as CComposeColor,
+    DirectionalFeather, DisplayCommand, DisplayList, Feather, FeatherCornerType, GradientFeather,
+    GradientFeatherKind, InnerGlow, InnerShadow, LayerEffect, LineCap, LineJoin, OuterGlow, Paint,
+    PathData, PathSegment, Satin, SpotInkId, Transform as CTransform,
 };
 use tiny_skia::{
     BlendMode as TsBlendMode, FillRule, GradientStop as TsGradientStop, LineCap as TsLineCap,
@@ -3202,8 +3202,19 @@ fn render_bevel_emboss(
     let interior_mask = alpha_to_mask(interior_pix.data());
     let mut height: Vec<f32> = interior_mask.iter().map(|&v| v as f32 / 255.0).collect();
 
+    // W1.4 parity — `technique` controls how hard the ramp is. Smooth
+    // uses the baseline 0.5× sigma; the chisel variants narrow the
+    // smoothing band so the normal turns over fewer pixels (a crisper
+    // facet). ChiselHard is the sharpest (near-linear ramp), ChiselSoft
+    // sits between hard and smooth.
+    let technique_sigma_scale = match params.technique {
+        BevelTechnique::Smooth => 0.5,
+        BevelTechnique::ChiselSoft => 0.25,
+        BevelTechnique::ChiselHard => 0.1,
+    };
+
     // Smooth the height field. Larger `size` → softer bevel.
-    let sigma_px = params.size.max(0.0) * scale * 0.5;
+    let sigma_px = params.size.max(0.0) * scale * technique_sigma_scale;
     if sigma_px > 0.5 {
         // Convert to u8, blur, convert back.
         let mut h8: Vec<u8> = height.iter().map(|&v| (v * 255.0).round() as u8).collect();
@@ -3211,6 +3222,41 @@ fn render_bevel_emboss(
         gaussian_blur_mask(&mut h8, w_px, h_px, &kernel);
         for (slot, src) in height.iter_mut().zip(h8.iter()) {
             *slot = *src as f32 / 255.0;
+        }
+    }
+
+    // W1.4 parity — reshape the height field per `style`. The baseline
+    // (InnerBevel) is a ramp that rises from the edge into the
+    // interior. The other styles transform that ramp so the lit/shaded
+    // sides land where InDesign puts them:
+    //
+    //   * OuterBevel — invert the height (`1 - h`). The interior
+    //     becomes the valley and the surround the plateau, so the
+    //     surface tilts the opposite way and highlight/shadow swap
+    //     sides versus the inner bevel.
+    //   * Emboss — fold the ramp into a ridge centred on the edge
+    //     (`1 - |2h - 1|`): both the inner and outer slopes light up,
+    //     the stamped-into-the-page look.
+    //   * PillowEmboss — invert that ridge (`|2h - 1|`) so the interior
+    //     dips while the edge bulges (a pillow).
+    //   * StrokeEmboss — no separate stroke band here; treat like the
+    //     inner bevel (closest visual). Noted for renderer-gaps.
+    match params.style {
+        BevelStyle::InnerBevel | BevelStyle::StrokeEmboss => {}
+        BevelStyle::OuterBevel => {
+            for v in height.iter_mut() {
+                *v = 1.0 - *v;
+            }
+        }
+        BevelStyle::Emboss => {
+            for v in height.iter_mut() {
+                *v = 1.0 - (2.0 * *v - 1.0).abs();
+            }
+        }
+        BevelStyle::PillowEmboss => {
+            for v in height.iter_mut() {
+                *v = (2.0 * *v - 1.0).abs();
+            }
         }
     }
 
@@ -3224,6 +3270,19 @@ fn render_bevel_emboss(
     let lx = az.cos() * cos_alt;
     let ly = -az.sin() * cos_alt; // page-down y → negate sin
     let lz = alt.sin().max(0.0);
+
+    // W1.4 parity — `direction == Down` presses the surface away from
+    // the viewer (carved-in rather than raised). That inverts the
+    // surface normal's *lateral* tilt, so the edge that was a
+    // highlight becomes a shadow and vice-versa. We apply it as a sign
+    // on the height gradient (`dx`/`dy`) below: flipping the gradient
+    // flips `nx`/`ny`, swapping highlight and shadow sides — which is
+    // what flipping `lz` alone fails to do (the lateral `nx*lx + ny*ly`
+    // term dominates at the bevel edge).
+    let dir_sign = match params.direction {
+        BevelDirection::Up => 1.0,
+        BevelDirection::Down => -1.0,
+    };
 
     let depth = params.depth.clamp(0.0, 4.0);
     let hi_op = params.highlight_opacity.clamp(0.0, 1.0);
@@ -3246,8 +3305,8 @@ fn render_bevel_emboss(
             let xp = if x + 1 >= w { x } else { x + 1 };
             let ym = if y == 0 { y } else { y - 1 };
             let yp = if y + 1 >= h { y } else { y + 1 };
-            let dx = (height[y * w + xp] - height[y * w + xm]) * depth * 4.0;
-            let dy = (height[yp * w + x] - height[ym * w + x]) * depth * 4.0;
+            let dx = (height[y * w + xp] - height[y * w + xm]) * depth * 4.0 * dir_sign;
+            let dy = (height[yp * w + x] - height[ym * w + x]) * depth * 4.0 * dir_sign;
             // Normal: (-dx, -dy, 1) before normalise.
             let nx = -dx;
             let ny = -dy;
@@ -3281,6 +3340,16 @@ fn render_bevel_emboss(
             data[q + 2] = (cb * a * 255.0).round().clamp(0.0, 255.0) as u8;
             data[q + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
         }
+    }
+
+    // W1.4 parity — `Soften` (pt) blurs the shaded bevel layer so the
+    // highlight/shadow ramp reads less crisp. Applied after shading so
+    // it softens the final tint, matching InDesign's Soften slider
+    // (distinct from the height-field smoothing driven by `size`).
+    let soften_sigma_px = params.soften.max(0.0) * scale;
+    if soften_sigma_px > 0.5 {
+        let kernel = gaussian_kernel(soften_sigma_px);
+        gaussian_blur_premul(scratch.data_mut(), w_px, h_px, &kernel);
     }
 
     let composite = PixmapPaint::default();
@@ -3352,9 +3421,13 @@ fn render_satin(
         let bm = b_mask[i] as f32 / 255.0;
         // Wave intensity: `|am - bm|` peaks at the path edges where
         // the two stamps disagree. Multiply by interior mask so the
-        // satin highlight only paints inside the path.
+        // satin highlight only paints inside the path. `invert` flips
+        // the band — `1 - |am - bm|` is bright where the stamps agree
+        // (the interior plateaus) and dark along the contour, matching
+        // InDesign's "Invert" checkbox.
         let inside = interior_mask[i] as f32 / 255.0;
-        let wave = (am - bm).abs();
+        let diff = (am - bm).abs();
+        let wave = if params.invert { 1.0 - diff } else { diff };
         let a = (wave * inside * opacity * ca).clamp(0.0, 1.0);
         let q = i * 4;
         data[q] = (cr * a * 255.0).round().clamp(0.0, 255.0) as u8;
@@ -4567,6 +4640,7 @@ mod tests {
             shadow_color: paged_compose::Color::rgba(0.0, 0.0, 0.0, 1.0),
             highlight_opacity: 1.0,
             shadow_opacity: 1.0,
+            ..BE::default_soft()
         };
         list.commands.push(Cmd::BevelEmboss {
             path_id,
@@ -4615,6 +4689,7 @@ mod tests {
             color: paged_compose::Color::rgba(0.0, 0.0, 0.0, 1.0),
             opacity: 0.9,
             blend_mode: paged_compose::BlendMode::Normal,
+            invert: false,
         };
         list.commands.push(Cmd::Satin {
             path_id,
@@ -4886,6 +4961,249 @@ mod tests {
         assert!(
             far[0] > 240 && far[3] > 240,
             "outside gradient feather should be opaque white; got {far:?}"
+        );
+    }
+
+    /// Sum the shaded-bevel darkness in a small window around a
+    /// corner: a larger return means more shadow tint landed there.
+    /// Used by the Up/Down and Inner/Outer bevel parity tests to
+    /// compare which corner carries the shadow.
+    fn bevel_darkness(img: &RgbaImage, cx: u32, cy: u32) -> i64 {
+        let mut acc = 0i64;
+        for dy in 0..4 {
+            for dx in 0..4 {
+                let p = at(img, cx + dx, cy + dy);
+                // White page = 255; darker = the shadow tint. Sum the
+                // "missing brightness" so a darker corner scores higher.
+                acc += (255 - p[0] as i64) + (255 - p[1] as i64) + (255 - p[2] as i64);
+            }
+        }
+        acc
+    }
+
+    fn bevel_img(style: BevelStyle, direction: BevelDirection) -> RgbaImage {
+        use paged_compose::{BevelEmboss as BE, DisplayCommand as Cmd, DisplayList};
+        let mut list = DisplayList::new();
+        let (path_id, xform) = unit_rect_at(&mut list, 10.0, 10.0, 30.0, 30.0);
+        let params = BE {
+            depth: 1.0,
+            size: 4.0,
+            angle_deg: 135.0,
+            altitude_deg: 30.0,
+            highlight_color: paged_compose::Color::rgba(1.0, 1.0, 1.0, 1.0),
+            shadow_color: paged_compose::Color::rgba(0.0, 0.0, 0.0, 1.0),
+            highlight_opacity: 1.0,
+            shadow_opacity: 1.0,
+            style,
+            direction,
+            technique: BevelTechnique::Smooth,
+            soften: 0.0,
+        };
+        list.commands.push(Cmd::BevelEmboss {
+            path_id,
+            transform: xform,
+            params,
+        });
+        let mut opts = RasterOptions::new(50.0, 50.0);
+        opts.dpi = 72.0;
+        rasterize(&list, &opts)
+    }
+
+    #[test]
+    fn bevel_direction_down_flips_highlight_side() {
+        // W1.4 parity — `Direction="Down"` flips the light's elevation
+        // sign, so the shadow that landed on the bottom-right corner
+        // for the (Up) raised bevel moves to the top-left corner for
+        // the (Down) carved-in bevel. We compare shadow darkness at
+        // the two corners across the two directions.
+        let up = bevel_img(BevelStyle::InnerBevel, BevelDirection::Up);
+        let down = bevel_img(BevelStyle::InnerBevel, BevelDirection::Down);
+        // Top-left corner interior ≈ (12,12); bottom-right ≈ (35,35).
+        let up_tl = bevel_darkness(&up, 12, 12);
+        let up_br = bevel_darkness(&up, 35, 35);
+        let down_tl = bevel_darkness(&down, 12, 12);
+        let down_br = bevel_darkness(&down, 35, 35);
+        // Up: shadow on bottom-right (br darker than tl).
+        assert!(
+            up_br > up_tl,
+            "Up bevel shadow should sit bottom-right: tl={up_tl}, br={up_br}"
+        );
+        // Down: shadow flips to top-left (tl darker than br).
+        assert!(
+            down_tl > down_br,
+            "Down bevel shadow should sit top-left: tl={down_tl}, br={down_br}"
+        );
+    }
+
+    #[test]
+    fn bevel_outer_style_swaps_shadow_side_vs_inner() {
+        // W1.4 parity — OuterBevel inverts the height field, so the
+        // surface tilts the opposite way and the shadow corner swaps
+        // relative to the InnerBevel (same light, same direction).
+        let inner = bevel_img(BevelStyle::InnerBevel, BevelDirection::Up);
+        let outer = bevel_img(BevelStyle::OuterBevel, BevelDirection::Up);
+        let inner_br = bevel_darkness(&inner, 35, 35);
+        let inner_tl = bevel_darkness(&inner, 12, 12);
+        let outer_br = bevel_darkness(&outer, 35, 35);
+        let outer_tl = bevel_darkness(&outer, 12, 12);
+        // Inner: shadow bottom-right.
+        assert!(
+            inner_br > inner_tl,
+            "inner bevel shadow bottom-right: tl={inner_tl}, br={inner_br}"
+        );
+        // Outer: the inverted height swaps the shadow to top-left.
+        assert!(
+            outer_tl > outer_br,
+            "outer bevel shadow should swap to top-left: tl={outer_tl}, br={outer_br}"
+        );
+    }
+
+    #[test]
+    fn bevel_chisel_technique_sharpens_bevel_band() {
+        // W1.4 parity — `ChiselHard` narrows the height-field smoothing
+        // band, concentrating the shaded ramp into a thinner strip near
+        // the edge. Deep in the interior (far from any edge) a chisel
+        // bevel should be essentially untouched (white) while the
+        // smooth bevel still bleeds a faint tint there.
+        use paged_compose::{BevelEmboss as BE, DisplayCommand as Cmd, DisplayList};
+        let make = |technique| {
+            let mut list = DisplayList::new();
+            let (path_id, xform) = unit_rect_at(&mut list, 10.0, 10.0, 30.0, 30.0);
+            let params = BE {
+                depth: 1.0,
+                size: 8.0,
+                angle_deg: 135.0,
+                altitude_deg: 30.0,
+                highlight_color: paged_compose::Color::rgba(1.0, 1.0, 1.0, 1.0),
+                shadow_color: paged_compose::Color::rgba(0.0, 0.0, 0.0, 1.0),
+                highlight_opacity: 1.0,
+                shadow_opacity: 1.0,
+                style: BevelStyle::InnerBevel,
+                direction: BevelDirection::Up,
+                technique,
+                soften: 0.0,
+            };
+            list.commands.push(Cmd::BevelEmboss {
+                path_id,
+                transform: xform,
+                params,
+            });
+            let mut opts = RasterOptions::new(50.0, 50.0);
+            opts.dpi = 72.0;
+            rasterize(&list, &opts)
+        };
+        let smooth = make(BevelTechnique::Smooth);
+        let chisel = make(BevelTechnique::ChiselHard);
+        // Centre of the rect (25, 25) — far from every edge. Tint here
+        // is the bevel "bleed". Chisel's narrower band should bleed
+        // less (centre stays brighter / closer to white).
+        let smooth_centre = bevel_darkness(&smooth, 23, 23);
+        let chisel_centre = bevel_darkness(&chisel, 23, 23);
+        assert!(
+            chisel_centre <= smooth_centre,
+            "chisel should bleed no more into the interior than smooth: chisel={chisel_centre}, smooth={smooth_centre}"
+        );
+    }
+
+    #[test]
+    fn satin_invert_flips_wave_band() {
+        // W1.4 parity — `invert` flips the satin wave mask from
+        // `|am - bm|` (bright contour band) to `1 - |am - bm|` (dark
+        // interior plateau). At a pixel where the two stamps agree
+        // (deep interior), the non-inverted satin paints ~nothing
+        // (wave ≈ 0) while the inverted satin paints heavily
+        // (wave ≈ 1). So a deep-interior sample is darker under invert.
+        use paged_compose::{DisplayCommand as Cmd, DisplayList, Satin as ST};
+        let make = |invert| {
+            let mut list = DisplayList::new();
+            let (path_id, xform) = unit_rect_at(&mut list, 10.0, 10.0, 40.0, 40.0);
+            let params = ST {
+                blur_radius: 3.0,
+                angle_deg: 45.0,
+                distance: 6.0,
+                color: paged_compose::Color::rgba(0.0, 0.0, 0.0, 1.0),
+                opacity: 1.0,
+                blend_mode: paged_compose::BlendMode::Normal,
+                invert,
+            };
+            list.commands.push(Cmd::Satin {
+                path_id,
+                transform: xform,
+                params,
+            });
+            let mut opts = RasterOptions::new(60.0, 60.0);
+            opts.dpi = 72.0;
+            rasterize(&list, &opts)
+        };
+        let plain = make(false);
+        let inverted = make(true);
+        // Deep interior (30, 30): the two offset stamps fully overlap,
+        // so |am - bm| ≈ 0. Plain satin leaves it ~white; inverted
+        // satin paints it dark.
+        let plain_c = at(&plain, 30, 30);
+        let inv_c = at(&inverted, 30, 30);
+        assert!(
+            plain_c[0] > 200,
+            "plain satin should leave the deep interior near-white; got {plain_c:?}"
+        );
+        assert!(
+            inv_c[0] < plain_c[0].saturating_sub(60),
+            "inverted satin should darken the deep interior vs plain; plain={plain_c:?}, inv={inv_c:?}"
+        );
+        // Both leave the outside untouched white.
+        assert!(at(&plain, 2, 2)[0] > 240 && at(&inverted, 2, 2)[0] > 240);
+    }
+
+    #[test]
+    fn directional_feather_angle_rotates_fade_edge() {
+        // W1.4 parity — the directional feather rotates each pixel into
+        // the rect's intrinsic frame by `angle_deg` before computing
+        // per-side fades. With a left-only feather and angle = 90°, the
+        // "left" edge points where the *top* edge was, so the fade
+        // moves from the left edge to the top edge.
+        use paged_compose::{DirectionalFeather, DisplayCommand as Cmd, FeatherCornerType};
+        let make = |angle: f32| {
+            let mut list = DisplayList::new();
+            let (path_id, xform) = unit_rect_at(&mut list, 10.0, 10.0, 24.0, 24.0);
+            let params = DirectionalFeather {
+                left_width: 10.0,
+                right_width: 0.0,
+                top_width: 0.0,
+                bottom_width: 0.0,
+                angle_deg: angle,
+                noise: 0.0,
+                choke: 0.0,
+                corner_type: FeatherCornerType::Sharp,
+            };
+            list.commands.push(Cmd::DirectionalFeather {
+                path_id,
+                transform: xform,
+                params,
+            });
+            let mut opts = RasterOptions::new(44.0, 44.0);
+            opts.dpi = 72.0;
+            rasterize(&list, &opts)
+        };
+        // Tint = how dark the 50%-black feather mask is. The feathered
+        // edge fades toward white (less tint); the opaque edge stays
+        // 50% grey (more tint).
+        let tint = |img: &RgbaImage, x: u32, y: u32| 255i32 - at(img, x, y)[0] as i32;
+        let a0 = make(0.0);
+        let a90 = make(90.0);
+        // angle=0: left edge feathered (light), top edge opaque (dark).
+        let left0 = tint(&a0, 12, 22);
+        let top0 = tint(&a0, 22, 12);
+        assert!(
+            left0 < top0,
+            "angle=0: left edge should fade more than top; left={left0}, top={top0}"
+        );
+        // angle=90: the fade rotates onto the top edge (light), left
+        // edge becomes opaque (dark).
+        let left90 = tint(&a90, 12, 22);
+        let top90 = tint(&a90, 22, 12);
+        assert!(
+            top90 < left90,
+            "angle=90: fade should rotate onto the top edge; left={left90}, top={top90}"
         );
     }
 

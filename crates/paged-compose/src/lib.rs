@@ -26,12 +26,13 @@ pub mod primitives;
 pub mod text;
 
 pub use display_list::{
-    BevelEmboss, BlendMode, Color, DashPattern, DecodedImage, DirectionalFeather, DisplayCommand,
-    DisplayList, DropShadow, Feather, FeatherCornerType, GlyphCacheKey, GlyphRunEntry,
-    GlyphRunTable, GradientFeather, GradientFeatherKind, GradientFeatherStop, GradientId,
-    GradientStop, ImageId, InnerGlow, InnerShadow, LayerEffect, LineCap, LineJoin, LinearGradient,
-    LinkRegion, LinkRegionTable, LinkTarget, OuterGlow, Paint, PathBuffer, PathData, PathId,
-    PathSegment, RadialGradient, Rect, Satin, SpotInk, SpotInkId, Stroke, Transform,
+    BevelDirection, BevelEmboss, BevelStyle, BevelTechnique, BlendMode, Color, DashPattern,
+    DecodedImage, DirectionalFeather, DisplayCommand, DisplayList, DropShadow, Feather,
+    FeatherCornerType, GlyphCacheKey, GlyphRunEntry, GlyphRunTable, GradientFeather,
+    GradientFeatherKind, GradientFeatherStop, GradientId, GradientStop, ImageId, InnerGlow,
+    InnerShadow, LayerEffect, LineCap, LineJoin, LinearGradient, LinkRegion, LinkRegionTable,
+    LinkTarget, OuterGlow, Paint, PathBuffer, PathData, PathId, PathSegment, RadialGradient, Rect,
+    Satin, SpotInk, SpotInkId, Stroke, Transform,
 };
 pub use glyph::{GlyphOutliner, TtfOutliner, UnitSquareOutliner};
 pub use primitives::{

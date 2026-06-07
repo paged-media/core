@@ -369,6 +369,7 @@ pub fn build() -> Sample {
                 None
             },
             anchored_setting: Some((variant.setting_factory)()),
+            frame_effects: Vec::new(),
         };
 
         // Host body story — flows around the anchor inline.
@@ -398,6 +399,7 @@ pub fn build() -> Sample {
             placed_image: None,
             text_wrap: None,
             anchored_setting: None,
+            frame_effects: Vec::new(),
         };
 
         let body = Rect {
@@ -417,6 +419,7 @@ pub fn build() -> Sample {
             placed_image: None,
             text_wrap: None,
             anchored_setting: None,
+            frame_effects: Vec::new(),
         };
 
         spreads.push((

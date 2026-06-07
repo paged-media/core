@@ -34,18 +34,18 @@
 //! `DisplayCommand::DirectionalFeather` / `GradientFeather` variants
 //! after the fill, alongside the plain `Feather` arm.
 //!
-//! Today only Rectangle's parser arm captures the effects bag; the
-//! pipeline calls this module from `emit_rectangle_into`. TextFrame /
-//! Oval / Polygon need their parser arms extended before the renderer
-//! can wire them up.
+//! All four shape kinds (Rectangle / Oval / Polygon / TextFrame)
+//! capture the effects bag (parser Q-04) and the pipeline wires this
+//! module from each one's emit path, so an IDML `<*Setting>` declared
+//! on any of them reaches the rasterizer.
 
 use paged_compose::{
-    BevelEmboss as ComposeBevelEmboss, BlendMode, Color,
-    DirectionalFeather as ComposeDirectionalFeather, DisplayCommand, Feather as ComposeFeather,
-    FeatherCornerType, GradientFeather as ComposeGradientFeather, GradientFeatherKind,
-    GradientFeatherStop as ComposeGradientFeatherStop, InnerGlow as ComposeInnerGlow,
-    InnerShadow as ComposeInnerShadow, OuterGlow as ComposeOuterGlow, Paint, PathId, Rect,
-    Satin as ComposeSatin, Transform,
+    BevelDirection, BevelEmboss as ComposeBevelEmboss, BevelStyle, BevelTechnique, BlendMode,
+    Color, DirectionalFeather as ComposeDirectionalFeather, DisplayCommand,
+    Feather as ComposeFeather, FeatherCornerType, GradientFeather as ComposeGradientFeather,
+    GradientFeatherKind, GradientFeatherStop as ComposeGradientFeatherStop,
+    InnerGlow as ComposeInnerGlow, InnerShadow as ComposeInnerShadow,
+    OuterGlow as ComposeOuterGlow, Paint, PathId, Rect, Satin as ComposeSatin, Transform,
 };
 use paged_parse::{
     spread::{
@@ -318,6 +318,26 @@ fn bevel_emboss_from_parser(
         .as_deref()
         .map(|id| resolve_effect_color(Some(id), palette, cmyk_xform, list))
         .unwrap_or(Color::BLACK);
+    // W1.4 parity — map the IDML enum strings onto the compose
+    // style/direction/technique knobs the rasterizer now honours.
+    let style = match p.style.as_deref() {
+        Some("OuterBevel") => BevelStyle::OuterBevel,
+        Some("Emboss") => BevelStyle::Emboss,
+        Some("PillowEmboss") => BevelStyle::PillowEmboss,
+        Some("StrokeEmboss") => BevelStyle::StrokeEmboss,
+        // "InnerBevel" and any unrecognised value fall through to the
+        // inner bevel (InDesign's default).
+        _ => BevelStyle::InnerBevel,
+    };
+    let direction = match p.direction.as_deref() {
+        Some("Down") => BevelDirection::Down,
+        _ => BevelDirection::Up,
+    };
+    let technique = match p.technique.as_deref() {
+        Some("ChiselHard") => BevelTechnique::ChiselHard,
+        Some("ChiselSoft") => BevelTechnique::ChiselSoft,
+        _ => BevelTechnique::Smooth,
+    };
     ComposeBevelEmboss {
         // Depth is a 0..=100 IDML percentage; the rasterizer's bump
         // strength is a 0..=1 multiplier (1.0 = "100% depth").
@@ -329,13 +349,12 @@ fn bevel_emboss_from_parser(
         shadow_color,
         highlight_opacity: pct_to_unit(p.highlight_opacity_pct, DEFAULT_OPACITY),
         shadow_opacity: pct_to_unit(p.shadow_opacity_pct, DEFAULT_OPACITY),
-        // `style` (OuterBevel / InnerBevel / Emboss / PillowEmboss /
-        // StrokeEmboss), `direction` (Up / Down), `technique`
-        // (Smooth / ChiselHard / ChiselSoft) and `soften` are not
-        // consumed by the rasterizer's Lambertian today — Down vs Up
-        // would flip the light's altitude sign, but the harness's
-        // current Lambertian samples the highlight + shadow tints
-        // symmetrically, so the inversion lands in a follow-up.
+        style,
+        direction,
+        technique,
+        // `Soften` is an IDML pt value; the rasterizer adds it as an
+        // extra Gaussian over the shaded layer.
+        soften: p.soften.unwrap_or(0.0),
     }
 }
 
@@ -354,9 +373,10 @@ fn satin_from_parser(
         opacity: pct_to_unit(p.opacity_pct, 0.5),
         blend_mode: blend_mode_from_idml(p.blend_mode.as_deref())
             .or_default_to(BlendMode::Multiply),
+        // W1.4 parity — `Invert` flips the satin wave band (dark
+        // centre instead of bright). Absent ⇒ false (InDesign default).
+        invert: p.invert.unwrap_or(false),
     }
-    // `invert` is captured by the parser but unconsumed — flipping the
-    // wave mask is a rasterizer follow-up.
 }
 
 fn feather_from_parser(p: &FeatherParams) -> ComposeFeather {

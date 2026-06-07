@@ -139,6 +139,7 @@ pub fn build() -> Sample {
             placed_image: None,
             text_wrap: None,
             anchored_setting: None,
+            frame_effects: Vec::new(),
         };
 
         let mut page_items: Vec<PageItem> = vec![label.into()];
@@ -287,6 +288,7 @@ fn build_variant(seq: u32, idx: usize) -> Vec<PageItem> {
                 placed_image: None,
                 text_wrap: None,
                 anchored_setting: None,
+                frame_effects: Vec::new(),
             };
             let inner_group = Group {
                 self_id: inner_group_id,
@@ -329,6 +331,7 @@ fn build_variant(seq: u32, idx: usize) -> Vec<PageItem> {
                 placed_image: None,
                 text_wrap: None,
                 anchored_setting: None,
+                frame_effects: Vec::new(),
             };
             // Reference rect outside the group: same fill, no
             // counter-rotation, sitting alongside so the eye can
@@ -351,6 +354,7 @@ fn build_variant(seq: u32, idx: usize) -> Vec<PageItem> {
                 placed_image: None,
                 text_wrap: None,
                 anchored_setting: None,
+                frame_effects: Vec::new(),
             };
             let group = Group {
                 self_id: group_id,
@@ -424,6 +428,7 @@ fn two_rect_pair(a_id: &str, b_id: &str) -> Vec<PageItem> {
         placed_image: None,
         text_wrap: None,
         anchored_setting: None,
+        frame_effects: Vec::new(),
     };
     let b = Rect {
         self_id: b_id.to_string(),
@@ -442,6 +447,7 @@ fn two_rect_pair(a_id: &str, b_id: &str) -> Vec<PageItem> {
         placed_image: None,
         text_wrap: None,
         anchored_setting: None,
+        frame_effects: Vec::new(),
     };
     vec![a.into(), b.into()]
 }
