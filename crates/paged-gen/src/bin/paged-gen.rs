@@ -71,6 +71,8 @@ fn emit_sample(name: &str, out_dir: &std::path::Path) -> Result<()> {
         "masters" => paged_gen::samples::masters::build(),
         "corners" => paged_gen::samples::corners::build(),
         "links-broken" => paged_gen::samples::links_broken::build(),
+        "links-ok" => paged_gen::samples::links_ok::build(),
+        "preflight" => paged_gen::samples::preflight::build(),
         "numbering" => paged_gen::samples::numbering::build(),
         "variables" => paged_gen::samples::variables::build(),
         "conditions" => paged_gen::samples::conditions::build(),
@@ -81,7 +83,7 @@ fn emit_sample(name: &str, out_dir: &std::path::Path) -> Result<()> {
         "nested-groups" => paged_gen::samples::nested_groups::build(),
         other => {
             anyhow::bail!(
-                "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, text-autosize, text-letterspacing, text-on-path, text-overset, text-in-shape, text-wrap, effects, footnotes, gradients, tables, images, image-clipping, anchored, transparency, markers, masters, corners, links-broken, numbering, variables, conditions, swatches, navigation, styles-cascade, layout, nested-groups"
+                "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, text-autosize, text-letterspacing, text-on-path, text-overset, text-in-shape, text-wrap, effects, footnotes, gradients, tables, images, image-clipping, anchored, transparency, markers, masters, corners, links-broken, links-ok, preflight, numbering, variables, conditions, swatches, navigation, styles-cascade, layout, nested-groups"
             )
         }
     };

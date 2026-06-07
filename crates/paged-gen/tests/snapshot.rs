@@ -1413,6 +1413,166 @@ fn nested_groups_round_trips_group_of_groups() {
     }
 }
 
+// ── W2.1 — text typography additions (kern/superscript/styles) ───────
+
+#[test]
+fn text_carries_emphasis_style_and_typography_pages() {
+    // W2.1 — the text sample gained a contrasting named paragraph style
+    // ("Emphasis Display") plus six typography host pages. Parse it back
+    // and assert (a) the named style resolves with its distinct visuals
+    // (28pt, cyan, centred) so `applyStyle` is render-provable, and (b)
+    // the kern-pair + superscript-digit content reached their stories.
+    use paged_gen::samples::text::EMPHASIS_STYLE_ID;
+    let sample = paged_gen::samples::text::build();
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    // 13 original + 6 W2.1 pages.
+    assert_eq!(doc.spreads.len(), 19, "13 original + 6 typography pages");
+
+    let emphasis = doc
+        .styles
+        .paragraph_styles
+        .get(EMPHASIS_STYLE_ID)
+        .expect("Emphasis Display paragraph style must round-trip");
+    assert_eq!(
+        emphasis.point_size,
+        Some(28.0),
+        "the contrasting style is 28pt (vs the 12pt default)"
+    );
+    assert_eq!(
+        emphasis.fill_color.as_deref(),
+        Some("Color/RGBCyan"),
+        "the contrasting style is cyan (vs the black default)"
+    );
+
+    // The kern-pair + superscript content reached the body stories.
+    let all_text: String = doc
+        .stories
+        .iter()
+        .flat_map(|s| s.story.paragraphs.iter())
+        .flat_map(|p| p.runs.iter())
+        .map(|r| r.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        all_text.contains("AVATAR"),
+        "the kern-pair page content must round-trip"
+    );
+    assert!(
+        all_text.contains("E = mc2"),
+        "the superscript-digit page content must round-trip"
+    );
+}
+
+// ── W2.2 — preflight + links-ok panel fixtures ───────────────────────
+
+#[test]
+fn preflight_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::preflight::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::preflight::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+#[test]
+fn preflight_round_trips_overset_and_missing_font() {
+    // W2.2 — the preflight sample stacks an overset story + a run pinned
+    // to a by-design missing family. Build it and assert (a) the short
+    // frame oversets its long story, and (b) the missing family reaches a
+    // run's AppliedFont so the Fonts panel can flag it.
+    use paged_gen::samples::preflight::MISSING_FAMILY;
+    let bytes = paged_gen::write_idml(&paged_gen::samples::preflight::build()).unwrap();
+    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    assert_eq!(doc.container.designmap.spreads.len(), 1, "single page");
+
+    // The missing family is referenced by a run's AppliedFont.
+    let fonts_referenced: Vec<&str> = doc
+        .stories
+        .iter()
+        .flat_map(|s| s.story.paragraphs.iter())
+        .flat_map(|p| p.runs.iter())
+        .filter_map(|r| r.font.as_deref())
+        .collect();
+    assert!(
+        fonts_referenced.contains(&MISSING_FAMILY),
+        "the missing family {MISSING_FAMILY:?} must be referenced; got {fonts_referenced:?}"
+    );
+
+    // The overset story drops lines under a font (it's layout-time).
+    if let Some(font) = inter_font() {
+        let opts = paged_renderer::pipeline::PipelineOptions {
+            font: Some(&font),
+            ..Default::default()
+        };
+        let built = paged_renderer::pipeline::build_document(&doc, &opts).expect("build_document");
+        assert!(
+            !built.diagnostics.overset_story_ids().is_empty(),
+            "the short frame must overset its long story"
+        );
+    } else {
+        eprintln!("skip overset assertion: Inter.ttf not present");
+    }
+}
+
+#[test]
+fn links_ok_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::links_ok::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::links_ok::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+#[test]
+fn links_ok_all_images_resolve_with_healthy_ppi() {
+    // W2.2 — the all-healthy links control: every placed image is
+    // inline-embedded (resolves "ok", not missing) and declares an
+    // effective PPI at/above the 150-ppi preflight floor (no lo-res
+    // badge). Parse + build to assert both.
+    let bytes = paged_gen::write_idml(&paged_gen::samples::links_ok::build()).unwrap();
+    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    assert_eq!(doc.container.designmap.spreads.len(), 1, "single page");
+
+    let spread_path = doc
+        .container
+        .entries
+        .keys()
+        .find(|k| k.starts_with("Spreads/"))
+        .expect("a spread entry")
+        .clone();
+    let spread =
+        paged_parse::Spread::parse(&doc.container.entries[&spread_path]).expect("Spread::parse");
+
+    // Two image rectangles, both inline-embedded (resolve "ok").
+    let with_inline = spread
+        .rectangles
+        .iter()
+        .filter(|r| r.image_bytes.is_some())
+        .count();
+    assert_eq!(with_inline, 2, "two inline-embedded healthy images");
+
+    // Every declared effective PPI is at/above the 150-ppi floor.
+    let ppis: Vec<f32> = spread
+        .image_metadata
+        .values()
+        .filter_map(|m| m.effective_ppi)
+        .collect();
+    assert_eq!(ppis.len(), 2, "both images declare an effective PPI");
+    assert!(
+        ppis.iter().all(|p| *p >= 150.0),
+        "all effective PPIs must be >= 150 (no lo-res), got {ppis:?}"
+    );
+
+    // No broken links: with no asset resolver, the inline bytes still
+    // resolve, so zero missing-image diagnostics fire.
+    let built = paged_renderer::pipeline::build_document(
+        &doc,
+        &paged_renderer::pipeline::PipelineOptions::default(),
+    )
+    .expect("build_document");
+    assert!(
+        built.diagnostics.missing_image_frame_ids().is_empty(),
+        "no image may be missing in the all-healthy control"
+    );
+}
+
 // ── W4.14 — duplicate-attribute guard (whole class) ──────────────────
 
 /// Every sample the generator can emit, by name → built package bytes.
@@ -1437,11 +1597,13 @@ fn all_emitted_packages() -> Vec<(String, Vec<u8>)> {
         ("images", images::build),
         ("layout", layout::build),
         ("links_broken", links_broken::build),
+        ("links_ok", links_ok::build),
         ("markers", markers::build),
         ("masters", masters::build),
         ("navigation", navigation::build),
         ("nested_groups", nested_groups::build),
         ("numbering", numbering::build),
+        ("preflight", preflight::build),
         ("strokes_fills", strokes_fills::build),
         ("styles_cascade", styles_cascade::build),
         ("styles_cascade_otf_off", styles_cascade::build_otf_off),
