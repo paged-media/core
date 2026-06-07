@@ -880,9 +880,25 @@ pub(super) fn emit_table_into_chain(
             // Lay out the cell paragraphs into a working buffer first
             // so we know their total height; then apply vertical
             // justification by shifting all of them by a uniform dy.
+            //
+            // W1.13 — only ADDRESSABLE tables (those with a `<Table
+            // Self>`) get a cell qualifier for caret/text editing; this
+            // matches the `cell_rects` hit-test surface exactly (built
+            // above under the same `table.self_id` guard). `r` is the
+            // template row, so a caret in a replayed header row maps to
+            // the source cell's text — same convention as `CellRect`.
+            // The cell-local paragraph index is the enumeration index
+            // over `cell.paragraphs` (including any nested-table /
+            // empty paragraphs) so it lines up byte-for-byte with the
+            // wire-side `locate` walk over `cell.paragraphs`.
+            let cell_addr_base: Option<CellAddr> = table.self_id.as_deref().map(|tid| CellAddr {
+                table_id: tid.to_string(),
+                row: r as u32,
+                col: c as u32,
+            });
             let mut paragraph_y = 0.0f32;
             let mut emitted_extents: Vec<(usize, usize)> = Vec::new();
-            for paragraph in &cell.paragraphs {
+            for (cell_para_idx, paragraph) in cell.paragraphs.iter().enumerate() {
                 if paragraph.runs.is_empty() {
                     // Phase 5 — nested table inside a cell paragraph.
                     // Lay it out at the current cell-paragraph cursor
@@ -922,6 +938,9 @@ pub(super) fn emit_table_into_chain(
                     paragraph_y,
                     pages,
                     total_stats,
+                    cell_addr_base
+                        .as_ref()
+                        .map(|addr| (addr, cell_para_idx as u32)),
                 );
                 let cmd_end = pages[target_page].list.commands.len();
                 if cmd_end > cmd_start {
@@ -1754,6 +1773,12 @@ fn emit_nested_table_inline(
                 }
                 continue;
             }
+            // W1.13 defer — nested-table cells pass `None`: text inside
+            // a table that is itself nested in a cell is laid out and
+            // rendered, but not separately caret-addressable. The wire
+            // address only reaches top-level tables (`cell_rects` are
+            // likewise only built for the outer table). Dated defer:
+            // 2026-06-07 — nested-cell text editing.
             let consumed = emit_cell_paragraph(
                 em,
                 paragraph,
@@ -1763,6 +1788,7 @@ fn emit_nested_table_inline(
                 paragraph_y,
                 pages,
                 total_stats,
+                None,
             );
             paragraph_y += consumed;
             if paragraph_y >= inner_h {
@@ -2009,6 +2035,13 @@ pub(super) fn emit_cell_paragraph(
     paragraph_y: f32,
     pages: &mut [BuiltPage],
     total_stats: &mut PipelineStats,
+    // W1.13 — disjoint StoryLayout address for this cell paragraph.
+    // `Some((addr, para_idx))` stamps emitted lines with a cell
+    // qualifier + cell-local paragraph index so the canvas can address
+    // (and edit) cell text without colliding with body paragraphs.
+    // `None` for paths that don't participate in caret addressing
+    // (nested-table cells — see defer note at the call site).
+    cell_addr: Option<(&CellAddr, u32)>,
 ) -> f32 {
     if column_width_pt <= 0.0 || paragraph.runs.is_empty() {
         return 0.0;
@@ -2226,18 +2259,24 @@ pub(super) fn emit_cell_paragraph(
         }
     }
 
-    // Phase 3 Item A (table-cell path) — capture StoryLayout for
-    // table-cell paragraphs so the canvas's caret + selection can
-    // address text inside tables. Cell text shares the host story
-    // id; for paragraph_idx we use the emitter's current value
-    // (matches BreakRecord semantics for cells above). Phase 3 v1
-    // limit: nested table-cell selection isn't separately
-    // addressable from cell text on the same paragraph_idx —
-    // multiple cells on the same table row would collide on
-    // line_idx. Acceptable until we add a cell-coordinate axis to
-    // LineLayout (Phase 3 v2).
+    // W1.13 (was Phase 3 Item A) — capture StoryLayout for table-cell
+    // paragraphs so the canvas's caret + selection can address text
+    // inside tables. Cell text shares the host story id; the disjoint
+    // address axis is `LineLayout.cell` (the `(table_id, row, col)`
+    // qualifier passed in via `cell_addr`) PLUS a cell-local
+    // `paragraph_idx`. That pairing is what makes body paragraph N and
+    // a cell's paragraph N distinct addresses — the long-standing
+    // collision the W3.A1 deferral noted. `cell_addr == None` (nested-
+    // table cells) keeps the legacy behaviour: lines are emitted with
+    // no cell qualifier and the host paragraph_idx, so they remain
+    // visible/selectable as before but aren't separately editable
+    // (documented defer — nested-cell editing).
     {
         let host_page_id = pages[target_page].id.clone();
+        let (line_cell, line_para_idx) = match cell_addr {
+            Some((addr, para_idx)) => (Some(addr.clone()), para_idx),
+            None => (None, em.paragraph_idx),
+        };
         for (line_idx, line) in laid_out.lines.iter().enumerate() {
             let baseline_pt_local = line.baseline_y as f32 / paged_text::shape::ADVANCE_PRECISION;
             let line_h_pt = leading_pt; // cell paragraphs use 1.2 × point size
@@ -2262,7 +2301,8 @@ pub(super) fn emit_cell_paragraph(
             pages[target_page].story_layout.push(LineLayout {
                 story_id: em.current_story_id.clone(),
                 page_id: host_page_id.clone(),
-                paragraph_idx: em.paragraph_idx,
+                cell: line_cell.clone(),
+                paragraph_idx: line_para_idx,
                 line_idx: line_idx as u32,
                 frame_id: em.chain.get(em.frame_idx).and_then(|f| f.self_id.clone()),
                 baseline_y_pt: cell_origin.1 + baseline_pt_local,

@@ -544,3 +544,165 @@ fn cell_no_span_is_single_cell() {
         "1×1 cell"
     );
 }
+
+// ---- W1.13 — cell text addressing in StoryLayout (renderer) ---------
+
+/// Build a 2×1 table (2 rows, 1 col) whose cells carry Inter-shaped
+/// text so cell `LineLayout`s are captured with cluster positions.
+fn build_cell_text_table_idml() -> Vec<u8> {
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    let put = |zip: &mut ZipWriter<_>, name: &str, body: &[u8]| {
+        zip.start_file(name, deflated).unwrap();
+        zip.write_all(body).unwrap();
+    };
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    put(
+        &mut zip,
+        "designmap.xml",
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_u10.xml"/>
+</Document>"#,
+    );
+    put(
+        &mut zip,
+        "Resources/Graphic.xml",
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Graphic/></idPkg:Graphic>"#,
+    );
+    put(
+        &mut zip,
+        "Spreads/Spread_sp1.xml",
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 400 400"/>
+    <TextFrame Self="frameA" ParentStory="u10" GeometricBounds="0 0 400 400" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#,
+    );
+    let cell = |name: &str, text: &str| {
+        let self_id = name.replace(':', "");
+        format!(
+            r#"<Cell Self="c{self_id}" Name="{name}" TextTopInset="0" TextBottomInset="0"><ParagraphStyleRange><CharacterStyleRange><Properties><AppliedFont type="string">Inter</AppliedFont></Properties><Content>{text}</Content></CharacterStyleRange></ParagraphStyleRange></Cell>"#,
+        )
+    };
+    let story = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">
+    <ParagraphStyleRange>
+      <CharacterStyleRange>
+        <Table Self="tbl1" BodyRowCount="2" ColumnCount="1">
+          <Row Self="r0" Name="0" SingleRowHeight="40"/>
+          <Row Self="r1" Name="1" SingleRowHeight="40"/>
+          <Column Self="col0" Name="0" SingleColumnWidth="200"/>
+          {top}
+          {bot}
+        </Table>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+        top = cell("0:0", "top"),
+        bot = cell("0:1", "bottom"),
+    );
+    put(&mut zip, "Stories/Story_u10.xml", story.as_bytes());
+    zip.finish().unwrap().into_inner()
+}
+
+fn build_cell_doc() -> Document {
+    Document::open(&build_cell_text_table_idml()).unwrap()
+}
+
+fn build_with_fonts(document: &Document) -> paged_renderer::BuiltDocument {
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+    pipeline::build_document(document, &opts).unwrap()
+}
+
+#[test]
+fn cell_lines_carry_disjoint_cell_qualifier() {
+    let document = build_cell_doc();
+    let built = build_with_fonts(&document);
+    let lines = built.story_layout("u10");
+    // Every captured line is a cell line (the body holds only the
+    // contentless table host), each tagged with its (table,row,col).
+    let cell_lines: Vec<_> = lines.iter().filter(|l| l.cell.is_some()).collect();
+    assert!(
+        cell_lines.len() >= 2,
+        "expected ≥2 cell lines (one per row), got {}",
+        cell_lines.len()
+    );
+    let addr = |row, col| paged_renderer::CellAddr {
+        table_id: "tbl1".into(),
+        row,
+        col,
+    };
+    let top = built.cell_layout("u10", &addr(0, 0));
+    let bot = built.cell_layout("u10", &addr(1, 0));
+    assert_eq!(top.len(), 1, "top cell is one line");
+    assert_eq!(bot.len(), 1, "bottom cell is one line");
+    // Cell-local paragraph index is 0 for each single-paragraph cell —
+    // the collision the disjoint `cell` axis resolves.
+    assert_eq!(top[0].paragraph_idx, 0);
+    assert_eq!(bot[0].paragraph_idx, 0);
+    // The two cells occupy distinct vertical bands.
+    assert!(
+        bot[0].baseline_y_pt > top[0].baseline_y_pt,
+        "bottom cell sits below top cell"
+    );
+}
+
+#[test]
+fn edited_cell_paragraphs_relayout_into_more_lines() {
+    // Baseline: top cell is one line. Inject a second paragraph into the
+    // top cell's content (the kind of edit InsertText produces) and
+    // rebuild — the cell must re-lay out into two lines.
+    let mut document = build_cell_doc();
+    let addr = paged_renderer::CellAddr {
+        table_id: "tbl1".into(),
+        row: 0,
+        col: 0,
+    };
+    let before = build_with_fonts(&document).cell_layout("u10", &addr).len();
+    assert_eq!(before, 1, "top cell starts as one line");
+
+    // Mutate the parsed cell content: append a second paragraph.
+    {
+        let table = document.stories[0]
+            .story
+            .paragraphs
+            .iter_mut()
+            .find_map(|p| p.table.as_mut())
+            .unwrap();
+        let c = table
+            .cells
+            .iter_mut()
+            .find(|c| c.coords() == Some((0, 0)))
+            .unwrap();
+        c.paragraphs.push(paged_parse::Paragraph {
+            runs: vec![paged_parse::CharacterRun {
+                text: "second".into(),
+                font: Some("Inter".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+    }
+    let after = build_with_fonts(&document).cell_layout("u10", &addr).len();
+    assert!(
+        after > before,
+        "edited cell must re-lay out into more lines ({before} -> {after})"
+    );
+}

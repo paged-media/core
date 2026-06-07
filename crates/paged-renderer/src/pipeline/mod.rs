@@ -499,6 +499,47 @@ pub struct EmittedFootnote {
     pub host_frame_rect_pt: Rect,
 }
 
+/// Disjoint paragraph-address qualifier for a laid-out line that
+/// lives inside a table cell rather than in the story's main
+/// paragraph flow (W1.13).
+///
+/// ## Why this exists — the paragraph_idx collision
+///
+/// Table-cell text is stored OUT OF BAND: a cell's paragraphs hang off
+/// `Table.cells[].paragraphs`, not off `Story.paragraphs`. The host
+/// paragraph that physically carries the `<Table>` has its own
+/// `paragraph_idx` in the body flow, and every cell paragraph the table
+/// pass emits used to be stamped with that SAME host `paragraph_idx`
+/// (see `tables.rs::emit_cell_paragraph`). Result: body paragraph N and
+/// a cell paragraph both reported `paragraph_idx == N`, so
+/// `story_layout` / `paragraph_byte_offset` / hit-test could not tell
+/// a body caret from a cell caret — the long-standing W3.A1 deferral.
+///
+/// The fix is a disjoint address axis. `LineLayout.cell` is `None` for
+/// body lines and `Some(CellAddr)` for cell lines; `paragraph_idx` is
+/// then re-based to be local to its own stream (the cell's own
+/// paragraph list, or the body flow). Two lines are the "same
+/// paragraph" only when BOTH `(cell, paragraph_idx)` match. This
+/// mirrors the wire-side `TextCellAddr` qualifier on `ContentSelection`
+/// / `TextOp` (`paged-canvas`), which selects `cell.paragraphs` instead
+/// of `story.paragraphs` for the identical `locate`/`splice` machinery.
+///
+/// `table_id` / `row` / `col` reuse the exact identifiers the
+/// `cell_rects` hit-test surface already carries (`CellRect`), so a
+/// `HitTest` that lands in a cell and the `LineLayout` it should map to
+/// share one coordinate.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CellAddr {
+    /// `<Table Self="...">` id of the owning table.
+    pub table_id: String,
+    /// Template row (0-based). Header / footer replays report their
+    /// SOURCE row so a caret in a replayed header maps to the original
+    /// cell's text — matching `CellRect`'s convention.
+    pub row: u32,
+    /// Column (0-based). Span-origin column for spanned cells.
+    pub col: u32,
+}
+
 /// One laid-out line of a story, in page-local pt coordinates.
 ///
 /// Captured at emit time and stored on the hosting `BuiltPage`. The
@@ -516,7 +557,18 @@ pub struct LineLayout {
     /// Page hosting this visible line. Threaded text spans pages, so
     /// every line records its host independently.
     pub page_id: PageId,
-    /// Paragraph index within the story.
+    /// W1.13 — disjoint paragraph-address qualifier. `None` for lines
+    /// in the story's main paragraph flow; `Some` for lines inside a
+    /// table cell, where `paragraph_idx` is then local to that cell's
+    /// own paragraph stream. Two lines belong to the same paragraph
+    /// only when BOTH `(cell, paragraph_idx)` are equal — this is what
+    /// disambiguates body paragraph N from cell paragraph N. See
+    /// [`CellAddr`].
+    pub cell: Option<CellAddr>,
+    /// Paragraph index within its own stream: within the story's body
+    /// flow when `cell` is `None`, or within `cell.paragraphs` when
+    /// `cell` is `Some`. NOT globally unique on its own — pair it with
+    /// `cell` for an unambiguous address.
     pub paragraph_idx: u32,
     /// Line index within the paragraph.
     pub line_idx: u32,
@@ -614,8 +666,45 @@ impl BuiltDocument {
                 }
             }
         }
+        // W1.13 — sort within each disjoint stream. Body lines
+        // (`cell == None`) sort ahead of any cell stream; cell streams
+        // sort by their `(table_id, row, col)` qualifier so callers can
+        // walk one cell's lines contiguously. Within a stream, the
+        // `(paragraph_idx, line_idx)` order is document order. Pairing
+        // `cell` into the key is what keeps body paragraph N and cell
+        // paragraph N from interleaving.
+        out.sort_by(|a, b| {
+            cell_sort_key(&a.cell)
+                .cmp(&cell_sort_key(&b.cell))
+                .then((a.paragraph_idx, a.line_idx).cmp(&(b.paragraph_idx, b.line_idx)))
+        });
+        out
+    }
+
+    /// W1.13 — all lines of `story_id` that belong to the given cell
+    /// stream (`cell == Some(addr)`), in document order. Body lines are
+    /// excluded. Used by the cell-aware caret / hit-test / byte-offset
+    /// machinery to walk a single cell's paragraph flow.
+    pub fn cell_layout<'a>(&'a self, story_id: &str, addr: &CellAddr) -> Vec<&'a LineLayout> {
+        let mut out: Vec<&LineLayout> = Vec::new();
+        for page in &self.pages {
+            for line in &page.story_layout {
+                if line.story_id == story_id && line.cell.as_ref() == Some(addr) {
+                    out.push(line);
+                }
+            }
+        }
         out.sort_by(|a, b| (a.paragraph_idx, a.line_idx).cmp(&(b.paragraph_idx, b.line_idx)));
         out
+    }
+}
+
+/// Total ordering key for the cell qualifier: body (`None`) first,
+/// then cell streams ordered by `(table_id, row, col)`.
+fn cell_sort_key(cell: &Option<CellAddr>) -> (u8, &str, u32, u32) {
+    match cell {
+        None => (0, "", 0, 0),
+        Some(c) => (1, c.table_id.as_str(), c.row, c.col),
     }
 }
 
@@ -4820,6 +4909,7 @@ fn emit_paragraph_into_chain(
             pages[target_page].story_layout.push(LineLayout {
                 story_id: em.current_story_id.clone(),
                 page_id: host_page_id,
+                cell: None,
                 paragraph_idx: em.paragraph_idx,
                 line_idx: current_line_idx as u32,
                 frame_id: frame.self_id.clone(),
