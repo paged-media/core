@@ -125,6 +125,7 @@ pub fn build() -> Sample {
                 page_items: vec![demo.into()],
                 override_list: Vec::new(),
                 margins: None,
+                item_transform: None,
             }),
         ));
         spread_refs.push(spread_id);

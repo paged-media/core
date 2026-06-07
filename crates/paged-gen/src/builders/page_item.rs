@@ -494,6 +494,12 @@ pub struct TextFramePref {
     /// `"LeadingOffset"`, `"EmboxHeight"`, `"FixedHeight"`. `None` ⇒
     /// omit (renderer heuristic).
     pub first_baseline_offset: Option<&'static str>,
+    /// `TextColumnCount` — number of text columns the frame splits its
+    /// inner box into (W1-layout). `None` ⇒ omit (single column).
+    pub text_column_count: Option<u32>,
+    /// `TextColumnGutter` — gutter (pt) between adjacent text columns.
+    /// `None` ⇒ omit (InDesign's default gutter).
+    pub text_column_gutter: Option<f32>,
 }
 
 /// `<TextWrapPreference>` payload emitted as a child of a page item.
@@ -1003,6 +1009,16 @@ impl Rect {
             }
             if let Some(fbo) = tfp.first_baseline_offset {
                 tfa.push(("FirstBaselineOffset", fbo));
+            }
+            let col_count: String;
+            if let Some(tc) = tfp.text_column_count {
+                col_count = tc.to_string();
+                tfa.push(("TextColumnCount", col_count.as_str()));
+            }
+            let col_gutter: String;
+            if let Some(tg) = tfp.text_column_gutter {
+                col_gutter = format_f32(tg);
+                tfa.push(("TextColumnGutter", col_gutter.as_str()));
             }
             b.empty("TextFramePreference", &tfa);
         }

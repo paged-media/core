@@ -406,6 +406,7 @@ pub fn build() -> Sample {
                 page_items: vec![label.into(), demo.into()],
                 override_list: Vec::new(),
                 margins: None,
+                item_transform: None,
             }),
         ));
         spread_refs.push(spread_id);
@@ -527,6 +528,7 @@ fn w15_alignment_pages(base_seq: u32) -> Vec<(String, Vec<u8>, String, Vec<u8>, 
             page_items: vec![label_item.into(), shape_item],
             override_list: Vec::new(),
             margins: None,
+            item_transform: None,
         });
         out.push((
             master_id, master_xml, story_id, story_xml, spread_id, spread_xml,

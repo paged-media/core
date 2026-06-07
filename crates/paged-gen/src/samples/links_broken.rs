@@ -312,6 +312,7 @@ pub fn build() -> Sample {
         page_items: items,
         override_list: Vec::new(),
         margins: None,
+        item_transform: None,
     });
 
     let designmap = write_designmap(&DesignMap {

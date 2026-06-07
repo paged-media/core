@@ -395,6 +395,7 @@ fn build_with(move_destination: bool) -> Sample {
         page_items: vec![body0_rect.into()],
         override_list: Vec::new(),
         margins: None,
+        item_transform: None,
     });
     let spread1 = write_spread(&Spread {
         self_id: spread1_id.clone(),
@@ -406,6 +407,7 @@ fn build_with(move_destination: bool) -> Sample {
         page_items: vec![body1_rect.into()],
         override_list: Vec::new(),
         margins: None,
+        item_transform: None,
     });
 
     // W1.19 — the "moved destination" variant inserts a BLANK spread
@@ -424,6 +426,7 @@ fn build_with(move_destination: bool) -> Sample {
             page_items: Vec::new(),
             override_list: Vec::new(),
             margins: None,
+            item_transform: None,
         })
     });
 

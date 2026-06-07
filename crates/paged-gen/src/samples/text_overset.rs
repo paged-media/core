@@ -231,6 +231,7 @@ pub fn build() -> Sample {
                 page_items: items,
                 override_list: Vec::new(),
                 margins: None,
+                item_transform: None,
             }),
         ));
         spread_refs.push(spread_id);
@@ -322,6 +323,7 @@ pub fn build() -> Sample {
                 page_items: items,
                 override_list: Vec::new(),
                 margins: None,
+                item_transform: None,
             }),
         ));
         spread_refs.push(spread_id);

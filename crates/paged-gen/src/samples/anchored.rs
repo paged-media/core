@@ -583,15 +583,16 @@ pub fn build() -> Sample {
                 page_items: vec![label.into(), body.into()],
                 override_list: Vec::new(),
                 margins: if variant.with_margins {
-                    Some(MarginPreference {
-                        top: MARGIN_TOP_PT,
-                        bottom: MARGIN_BOTTOM_PT,
-                        left: MARGIN_LEFT_PT,
-                        right: MARGIN_RIGHT_PT,
-                    })
+                    Some(MarginPreference::symmetric(
+                        MARGIN_TOP_PT,
+                        MARGIN_BOTTOM_PT,
+                        MARGIN_LEFT_PT,
+                        MARGIN_RIGHT_PT,
+                    ))
                 } else {
                     None
                 },
+                item_transform: None,
             }),
         ));
         spread_refs.push(spread_id);
