@@ -40,6 +40,28 @@ pub struct MarkerResources {
     pub text_variables: Vec<TextVariableDef>,
     pub hyperlinks: Vec<HyperlinkDef>,
     pub hyperlink_destinations: Vec<HyperlinkDestinationDef>,
+    /// W1.8 — optional document-level `<FootnoteOption>` carrying the
+    /// separator rule and footnote spacing. `None` emits nothing, keeping
+    /// every other sample's designmap byte-identical.
+    pub footnote_option: Option<FootnoteOptionDef>,
+}
+
+/// W1.8 — a document-level `<FootnoteOption>` to emit. Attribute names
+/// mirror InDesign's DOM `FootnoteOption` object. Only the subset the
+/// renderer consumes is exposed; all fields are optional and omitted
+/// from the XML when `None`.
+#[derive(Default)]
+pub struct FootnoteOptionDef {
+    pub rule_on: Option<bool>,
+    pub rule_color: Option<String>,
+    pub rule_tint: Option<f32>,
+    pub rule_line_weight: Option<f32>,
+    pub rule_width: Option<f32>,
+    pub rule_left_indent: Option<f32>,
+    pub rule_offset: Option<f32>,
+    pub separator_text: Option<String>,
+    pub spacer: Option<f32>,
+    pub space_between: Option<f32>,
 }
 
 /// W1.4 — a `<TextVariable>` to emit. `contents` populates the
@@ -173,6 +195,46 @@ pub fn write_designmap_with_markers(dm: &DesignMap, markers: &MarkerResources) -
                 ("Hidden", "false"),
             ],
         );
+    }
+    // W1.8 — document-level footnote separator/spacing settings. InDesign
+    // wraps the `<FootnoteOption>` in a `<RootFootnoteStory>`; we mirror
+    // that. Each attribute is omitted when its field is `None`.
+    if let Some(fo) = markers.footnote_option.as_ref() {
+        let mut attrs: Vec<(&str, String)> = Vec::new();
+        if let Some(v) = fo.rule_on {
+            attrs.push(("RuleOn", v.to_string()));
+        }
+        if let Some(v) = fo.rule_color.as_deref() {
+            attrs.push(("RuleColor", v.to_string()));
+        }
+        if let Some(v) = fo.rule_tint {
+            attrs.push(("RuleTint", crate::xml::format_f32(v)));
+        }
+        if let Some(v) = fo.rule_line_weight {
+            attrs.push(("RuleLineWeight", crate::xml::format_f32(v)));
+        }
+        if let Some(v) = fo.rule_width {
+            attrs.push(("RuleWidth", crate::xml::format_f32(v)));
+        }
+        if let Some(v) = fo.rule_left_indent {
+            attrs.push(("RuleLeftIndent", crate::xml::format_f32(v)));
+        }
+        if let Some(v) = fo.rule_offset {
+            attrs.push(("RuleOffset", crate::xml::format_f32(v)));
+        }
+        if let Some(v) = fo.separator_text.as_deref() {
+            attrs.push(("SeparatorText", v.to_string()));
+        }
+        if let Some(v) = fo.spacer {
+            attrs.push(("Spacer", crate::xml::format_f32(v)));
+        }
+        if let Some(v) = fo.space_between {
+            attrs.push(("SpaceBetween", crate::xml::format_f32(v)));
+        }
+        let attr_refs: Vec<(&str, &str)> = attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        b.start("RootFootnoteStory", &[]);
+        b.empty("FootnoteOption", &attr_refs);
+        b.end("RootFootnoteStory");
     }
     b.empty("idPkg:Graphic", &[("src", "Resources/Graphic.xml")]);
     b.empty("idPkg:Fonts", &[("src", "Resources/Fonts.xml")]);

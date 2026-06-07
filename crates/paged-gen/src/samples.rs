@@ -18,6 +18,7 @@
 pub mod anchored;
 pub mod corners;
 pub mod effects;
+pub mod footnotes;
 pub mod geometry;
 pub mod geometry_groups;
 pub mod gradients;
