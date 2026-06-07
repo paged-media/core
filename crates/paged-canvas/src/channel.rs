@@ -2876,6 +2876,57 @@ mod tests {
         }
     }
 
+    /// W1.2 — `MoveFrame` survives the mutate envelope with its fields
+    /// intact (frame id + the 6-element `ItemTransform`). The variant
+    /// already shipped at v34; W1.2 only un-stubs its semantics, so no
+    /// bump — this test pins the wire shape.
+    #[test]
+    fn w12_move_frame_round_trips_through_the_mutate_envelope() {
+        let m = Mutation::MoveFrame {
+            frame_id: "Rectangle/r1".into(),
+            transform: [1.0, 0.0, 0.0, 1.0, 12.5, -7.0],
+        };
+        let env = MainToWorker {
+            seq: 1,
+            protocol: PROTOCOL_VERSION,
+            kind: MainToWorkerKind::Mutate(m),
+        };
+        let json = serde_json::to_string(&env).unwrap();
+        let back: MainToWorker = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            MainToWorkerKind::Mutate(Mutation::MoveFrame {
+                frame_id,
+                transform,
+            }) => {
+                assert_eq!(frame_id, "Rectangle/r1");
+                assert_eq!(transform, [1.0, 0.0, 0.0, 1.0, 12.5, -7.0]);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    /// W1.1 — `Value::Lengths` serialises as the additive
+    /// `{ type: "lengths", value: [...] }` wire shape and round-trips
+    /// (incl. the empty-clear list). Rides the current protocol — an
+    /// additive `Value` variant does not bump (the `TabStops` /
+    /// `ParagraphRule` precedent).
+    #[test]
+    fn w11_value_lengths_wire_shape_round_trips() {
+        let v = paged_mutate::Value::Lengths(vec![6.0, 3.0]);
+        let json = serde_json::to_string(&v).unwrap();
+        assert_eq!(json, r#"{"type":"lengths","value":[6.0,3.0]}"#);
+        let back: paged_mutate::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, v);
+        // Empty-clear list also round-trips.
+        let empty = paged_mutate::Value::Lengths(Vec::new());
+        let json = serde_json::to_string(&empty).unwrap();
+        assert_eq!(json, r#"{"type":"lengths","value":[]}"#);
+        assert_eq!(
+            serde_json::from_str::<paged_mutate::Value>(&json).unwrap(),
+            empty
+        );
+    }
+
     #[test]
     fn protocol_version_is_v34() {
         assert_eq!(PROTOCOL_VERSION.0, 34);

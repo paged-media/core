@@ -722,6 +722,16 @@ pub enum PropertyPath {
     /// W0.3 — `GapTint` percent (0..=100) for the gap colour.
     /// `Value::Length`; `None` clears. Stroked kinds. Paint-only.
     FrameStrokeGapTint,
+    /// W1.1 — per-frame `StrokeDashAndGap` override: the alternating
+    /// on/off dash lengths in pt. `Value::Lengths(vec)`; the empty vec
+    /// CLEARS the per-frame override so the stroke falls back to its
+    /// `StrokeType` (`StrokeStyleDef` pattern or built-in name).
+    /// Carried on every stroked page-item kind (parsed onto
+    /// `CommonAttrs::stroke_dash`). Takes PRECEDENCE over the
+    /// `StrokeStyleDef` pattern at paint time — the same instance-wins
+    /// precedent as `FrameStrokeGapColor` (FINDING #7.5). Paint-only
+    /// (`frame_style`); a dash change repaints but does not reflow.
+    FrameStrokeDashArray,
 
     // ---- W0.3 — corners (Rectangle) -----------------------------
     /// W0.3 — per-corner `CornerOption` enum (`"None"`,
@@ -1158,6 +1168,7 @@ impl PropertyPath {
             PropertyPath::FrameStrokeAlignment => "frame.strokeAlignment",
             PropertyPath::FrameStrokeGapColor => "frame.strokeGapColor",
             PropertyPath::FrameStrokeGapTint => "frame.strokeGapTint",
+            PropertyPath::FrameStrokeDashArray => "frame.strokeDashArray",
             // W0.3 — corners.
             PropertyPath::FrameCornerOptionTopLeft => "frame.cornerOptionTopLeft",
             PropertyPath::FrameCornerOptionTopRight => "frame.cornerOptionTopRight",
@@ -1767,6 +1778,16 @@ pub enum Value {
     /// stops. The inverse carries the prior stop list so undo
     /// round-trips bytewise.
     TabStops(Vec<TabStopSpec>),
+    /// W1.1 — a list of pt lengths. Serialises as
+    /// `{ type: "lengths", value: [...] }`. The `FrameStrokeDashArray`
+    /// path carries the per-frame `StrokeDashAndGap` override here: the
+    /// alternating on/off dash lengths in pt. The empty vec clears the
+    /// per-frame override (the stroke falls back to its
+    /// `StrokeStyleDef` pattern / built-in name). The whole-list,
+    /// `Value`-has-no-per-element-edit-form precedent of `TabStops`;
+    /// additive new variant (rides the current protocol, no bump — the
+    /// W0.2 `TabStops` / `ParagraphRule` precedent).
+    Lengths(Vec<f32>),
 }
 
 /// Description of a node about to be inserted. Carries the minimal

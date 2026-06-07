@@ -2339,6 +2339,35 @@ fn apply_set_property(
                 },
             )
         }
+        // W1.1 — per-frame `StrokeDashAndGap` dash override. Whole-list
+        // replacement (the `TabStops` precedent): the empty vec CLEARS
+        // the per-frame override. The inverse carries the prior list so
+        // undo (incl. clear-then-restore) round-trips bytewise.
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameStrokeDashArray,
+        ) => {
+            let Value::Lengths(new_dash) = value else {
+                return Err(OperationError::TypeMismatch {
+                    path,
+                    expected: "Lengths".to_string(),
+                });
+            };
+            let slot = find_stroke_dash_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = std::mem::replace(slot, new_dash.clone());
+            (
+                Value::Lengths(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         // Stroke join / miter / alignment are Rectangle-only parse
         // fields.
         (NodeId::Rectangle(id), PropertyPath::FrameStrokeJoin) => {
@@ -6279,6 +6308,19 @@ fn find_stroke_gap_tint_mut<'a>(
     }
 }
 
+/// W1.1 — locate the `stroke_dash: Vec<f32>` field (per-frame
+/// `StrokeDashAndGap` override) on any stroked page-item kind.
+fn find_stroke_dash_mut<'a>(doc: &'a mut Document, node: &NodeId) -> Option<&'a mut Vec<f32>> {
+    match node {
+        NodeId::TextFrame(id) => find_text_frame_mut(doc, id).map(|f| &mut f.stroke_dash),
+        NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.stroke_dash),
+        NodeId::Oval(id) => find_oval_mut(doc, id).map(|o| &mut o.stroke_dash),
+        NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.stroke_dash),
+        NodeId::GraphicLine(id) => find_graphic_line_mut(doc, id).map(|l| &mut l.stroke_dash),
+        _ => None,
+    }
+}
+
 /// W0.3 — locate the `item_transform: Option<[f32; 6]>` field on any
 /// page-item kind (including Group, whose own transform decomposes).
 fn find_item_transform_mut<'a>(
@@ -7813,6 +7855,7 @@ pub(crate) fn new_text_frame(
         stroke_type: None,
         stroke_gap_color: None,
         stroke_gap_tint: None,
+        stroke_dash: Vec::new(),
         drop_shadow: None,
         stroke_drop_shadow: None,
         next_text_frame: None,
@@ -7867,6 +7910,7 @@ fn new_graphic_line(
         stroke_type: None,
         stroke_gap_color: None,
         stroke_gap_tint: None,
+        stroke_dash: Vec::new(),
         applied_object_style: None,
         text_wrap: None,
         item_layer: None,
@@ -7906,6 +7950,7 @@ fn new_polygon(
         stroke_type: None,
         stroke_gap_color: None,
         stroke_gap_tint: None,
+        stroke_dash: Vec::new(),
         applied_object_style: None,
         anchors,
         subpath_starts,
@@ -7943,6 +7988,7 @@ pub(crate) fn new_oval(self_id: String, bounds: Bounds, fill_color: Option<Strin
         stroke_type: None,
         stroke_gap_color: None,
         stroke_gap_tint: None,
+        stroke_dash: Vec::new(),
         drop_shadow: None,
         stroke_drop_shadow: None,
         applied_object_style: None,
@@ -7992,6 +8038,7 @@ pub(crate) fn new_rectangle(
         stroke_type: None,
         stroke_gap_color: None,
         stroke_gap_tint: None,
+        stroke_dash: Vec::new(),
         stroke_alignment: None,
         end_cap: None,
         end_join: None,

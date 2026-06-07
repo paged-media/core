@@ -187,6 +187,7 @@ mod tests {
             stroke_type: None,
             stroke_gap_color: None,
             stroke_gap_tint: None,
+            stroke_dash: Vec::new(),
             drop_shadow: None,
             stroke_drop_shadow: None,
             next_text_frame: None,
@@ -1819,6 +1820,7 @@ mod tests {
             stroke_type: None,
             stroke_gap_color: None,
             stroke_gap_tint: None,
+            stroke_dash: Vec::new(),
             applied_object_style: None,
             anchors,
             subpath_starts,
@@ -4929,6 +4931,79 @@ mod tests {
                     Some(60.0)
                 )
             },
+        );
+    }
+
+    /// W1.1 — `frameStrokeDashArray` whole-list replacement. A
+    /// non-empty dash list sets the per-frame override and round-trips;
+    /// an empty list CLEARS a prior override (the
+    /// `frameStrokeDashArray: []` clear path), and that clear-then-
+    /// restore also round-trips bytewise via the captured prior list.
+    #[test]
+    fn w11_stroke_dash_array_round_trips_including_empty_clear() {
+        let mut p = Project::new(document_with_one_rectangle("Rectangle/r1"));
+        let node = NodeId::Rectangle("Rectangle/r1".to_string());
+
+        // Set a dash pattern; paint-only invalidation, no reflow.
+        let applied = p
+            .apply(set_op(
+                node.clone(),
+                PropertyPath::FrameStrokeDashArray,
+                Value::Lengths(vec![6.0, 3.0, 2.0, 3.0]),
+            ))
+            .unwrap();
+        assert_eq!(applied.invalidation.frame_style.len(), 1);
+        assert!(applied.invalidation.text_reflow.is_empty());
+        assert_eq!(
+            p.document().spreads[0].spread.rectangles[0].stroke_dash,
+            vec![6.0, 3.0, 2.0, 3.0]
+        );
+        // Forward inverse carries the prior (empty) list → undo clears.
+        crate::apply(p.document_mut(), &applied.inverse).unwrap();
+        assert!(p.document().spreads[0].spread.rectangles[0]
+            .stroke_dash
+            .is_empty());
+
+        // Whole round-trip helper over a fresh override.
+        assert_round_trips(
+            &mut p,
+            set_op(
+                node.clone(),
+                PropertyPath::FrameStrokeDashArray,
+                Value::Lengths(vec![10.0, 4.0]),
+            ),
+            |d| {
+                assert_eq!(
+                    d.spreads[0].spread.rectangles[0].stroke_dash,
+                    vec![10.0, 4.0]
+                )
+            },
+        );
+
+        // Empty-clears: seed a dash, then clear it with the empty vec,
+        // and prove apply→invert restores the seeded list bytewise.
+        p.apply(set_op(
+            node.clone(),
+            PropertyPath::FrameStrokeDashArray,
+            Value::Lengths(vec![5.0, 5.0]),
+        ))
+        .unwrap();
+        let cleared = p
+            .apply(set_op(
+                node.clone(),
+                PropertyPath::FrameStrokeDashArray,
+                Value::Lengths(Vec::new()),
+            ))
+            .unwrap();
+        assert!(p.document().spreads[0].spread.rectangles[0]
+            .stroke_dash
+            .is_empty());
+        // The clear's inverse must carry the prior `[5,5]` so undo
+        // restores it.
+        crate::apply(p.document_mut(), &cleared.inverse).unwrap();
+        assert_eq!(
+            p.document().spreads[0].spread.rectangles[0].stroke_dash,
+            vec![5.0, 5.0]
         );
     }
 

@@ -221,6 +221,7 @@ pub(super) fn emit_polygon_into(
             resolved.end_join,
             resolved.miter_limit,
             Some(&document.styles.stroke_styles),
+            resolved.stroke_dash,
         ),
     );
     if needs_group {

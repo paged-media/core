@@ -118,6 +118,7 @@ pub(super) fn emit_oval_into(
             frame.end_join,
             frame.miter_limit,
             Some(&document.styles.stroke_styles),
+            frame.stroke_dash,
         ),
     );
     if needs_group {
@@ -327,6 +328,7 @@ pub(super) fn emit_line_into(
         resolved.end_join,
         resolved.miter_limit,
         Some(&document.styles.stroke_styles),
+        resolved.stroke_dash,
     );
     // A multi-segment / curved / open line carries real path anchors;
     // stroke the actual outline (mirrors `emit_polygon_into`) instead
@@ -489,6 +491,7 @@ fn emit_rectangle_polygon_path(
         resolved.end_join,
         resolved.miter_limit,
         Some(&document.styles.stroke_styles),
+        resolved.stroke_dash,
     );
     // W1.2: striped / wavy / gap-colour styled stroke on the polygon
     // outline. Polygon stroke alignment stays centred (open contours
@@ -682,6 +685,7 @@ pub(super) fn emit_rectangle_into(
         resolved.end_join,
         resolved.miter_limit,
         Some(&document.styles.stroke_styles),
+        resolved.stroke_dash,
     );
     if corner.stroke.is_some() {
         crate::module::stroke_paint_module(

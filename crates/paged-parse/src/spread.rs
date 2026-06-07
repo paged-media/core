@@ -371,6 +371,8 @@ pub struct TextFrame {
     /// [`Rectangle::stroke_gap_color`].
     pub stroke_gap_color: Option<String>,
     pub stroke_gap_tint: Option<f32>,
+    /// W1.1 — per-frame dash override; see [`Rectangle::stroke_dash`].
+    pub stroke_dash: Vec<f32>,
     /// `<DropShadowSetting>` parsed from `<Properties><TransparencySetting>`.
     /// `None` when absent or `Mode="None"`.
     pub drop_shadow: Option<DropShadowSetting>,
@@ -791,6 +793,15 @@ pub struct Rectangle {
     pub stroke_gap_color: Option<String>,
     /// `GapTint` percentage (0..=100) for `stroke_gap_color`.
     pub stroke_gap_tint: Option<f32>,
+    /// W1.1 — per-frame `StrokeDashAndGap` override: the alternating
+    /// on/off dash lengths in pt parsed off this page item's
+    /// attribute. Empty ⇒ no per-frame override (the stroke uses its
+    /// `StrokeType`'s `StrokeStyleDef` pattern / built-in name). When
+    /// present, the renderer honours it in PREFERENCE to the
+    /// stroke-style pattern (the per-instance-wins precedent the
+    /// `stroke_gap_color` field already follows). Lives on every
+    /// stroked page-item kind via [`CommonAttrs`].
+    pub stroke_dash: Vec<f32>,
     /// `ItemLayer` reference (`<self_id>` of a `<Layer>` in
     /// designmap.xml). The renderer skips this rectangle when its
     /// layer is hidden or non-printable.
@@ -1084,6 +1095,8 @@ pub struct Oval {
     /// `GapColor` / `GapTint`; see [`Rectangle::stroke_gap_color`].
     pub stroke_gap_color: Option<String>,
     pub stroke_gap_tint: Option<f32>,
+    /// W1.1 — per-frame dash override; see [`Rectangle::stroke_dash`].
+    pub stroke_dash: Vec<f32>,
     pub drop_shadow: Option<DropShadowSetting>,
     /// See [`TextFrame::stroke_drop_shadow`].
     pub stroke_drop_shadow: Option<DropShadowSetting>,
@@ -1145,6 +1158,8 @@ pub struct GraphicLine {
     /// `GapColor` / `GapTint`; see [`Rectangle::stroke_gap_color`].
     pub stroke_gap_color: Option<String>,
     pub stroke_gap_tint: Option<f32>,
+    /// W1.1 — per-frame dash override; see [`Rectangle::stroke_dash`].
+    pub stroke_dash: Vec<f32>,
     /// `AppliedObjectStyle` reference; see `TextFrame`.
     pub applied_object_style: Option<String>,
     /// `<TextWrapPreference>` parsed off the line.
@@ -1324,6 +1339,8 @@ pub struct Polygon {
     /// `GapColor` / `GapTint`; see [`Rectangle::stroke_gap_color`].
     pub stroke_gap_color: Option<String>,
     pub stroke_gap_tint: Option<f32>,
+    /// W1.1 — per-frame dash override; see [`Rectangle::stroke_dash`].
+    pub stroke_dash: Vec<f32>,
     pub applied_object_style: Option<String>,
     /// Path-point anchors with their Bezier control points, in the
     /// polygon's inner coords. Empty for synthetic IDMLs that
@@ -1561,6 +1578,13 @@ struct CommonAttrs {
     /// `GapTint` percentage (0..=100) for the gap colour. `None` ⇒ use
     /// the swatch at full strength.
     stroke_gap_tint: Option<f32>,
+    /// W1.1 — `StrokeDashAndGap` per-frame override: alternating on/off
+    /// dash lengths in pt. IDML serialises it as a space-separated list
+    /// (sometimes wrapped in a `<StrokeDashAndGap>` list element); an
+    /// absent attribute yields the empty vec (no per-frame override).
+    /// Lives on `CommonAttrs` like `stroke_type` so every stroked
+    /// page-item kind picks it up.
+    stroke_dash: Vec<f32>,
     applied_object_style: Option<String>,
     item_layer: Option<String>,
     /// `OverprintFill="true"` on the IDML element. Absent attribute
@@ -1589,6 +1613,17 @@ fn read_common_attrs(e: &quick_xml::events::BytesStart) -> CommonAttrs {
         stroke_type: attr(e, b"StrokeType"),
         stroke_gap_color: attr(e, b"GapColor"),
         stroke_gap_tint: parse_tint_attr(e, b"GapTint"),
+        // W1.1 — per-frame `StrokeDashAndGap` override parsed as a
+        // space-separated list of pt lengths (the same encoding the
+        // custom `<DashedStrokeStyle Pattern="…">` uses). Absent ⇒
+        // empty vec (no override).
+        stroke_dash: attr(e, b"StrokeDashAndGap")
+            .map(|s| {
+                s.split_ascii_whitespace()
+                    .filter_map(|tok| tok.parse::<f32>().ok())
+                    .collect()
+            })
+            .unwrap_or_default(),
         applied_object_style: attr(e, b"AppliedObjectStyle"),
         item_layer: attr(e, b"ItemLayer"),
         overprint_fill: attr(e, b"OverprintFill")
@@ -1928,6 +1963,7 @@ impl Spread {
                             stroke_type: common.stroke_type,
                             stroke_gap_color: common.stroke_gap_color,
                             stroke_gap_tint: common.stroke_gap_tint,
+                            stroke_dash: common.stroke_dash,
                             drop_shadow: None,
                             stroke_drop_shadow: None,
                             next_text_frame: attr(&e, b"NextTextFrame"),
@@ -2018,6 +2054,7 @@ impl Spread {
                             miter_limit: stroke.miter_limit,
                             stroke_gap_color: common.stroke_gap_color,
                             stroke_gap_tint: common.stroke_gap_tint,
+                            stroke_dash: common.stroke_dash,
                             item_layer: common.item_layer,
                             corner_radius: corner.corner_radius,
                             corner_option: corner.corner_option,
@@ -2078,6 +2115,7 @@ impl Spread {
                             stroke_type: common.stroke_type,
                             stroke_gap_color: common.stroke_gap_color,
                             stroke_gap_tint: common.stroke_gap_tint,
+                            stroke_dash: common.stroke_dash,
                             drop_shadow: None,
                             stroke_drop_shadow: None,
                             applied_object_style: common.applied_object_style,
@@ -2898,6 +2936,7 @@ impl Spread {
                             stroke_type: common.stroke_type,
                             stroke_gap_color: common.stroke_gap_color,
                             stroke_gap_tint: common.stroke_gap_tint,
+                            stroke_dash: common.stroke_dash,
                             applied_object_style: common.applied_object_style,
                             text_wrap: None,
                             item_layer: common.item_layer,
@@ -2959,6 +2998,7 @@ impl Spread {
                             stroke_type: common.stroke_type,
                             stroke_gap_color: common.stroke_gap_color,
                             stroke_gap_tint: common.stroke_gap_tint,
+                            stroke_dash: common.stroke_dash,
                             applied_object_style: common.applied_object_style,
                             text_wrap: None,
                             anchors: Vec::new(),

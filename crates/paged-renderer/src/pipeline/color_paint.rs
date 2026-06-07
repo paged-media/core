@@ -713,6 +713,7 @@ pub(super) fn build_run_paint_picker_resolved(
 /// looks proportionally heavier — that mirrors InDesign's behaviour
 /// where the named built-ins describe a multiple of the line weight,
 /// not absolute pt distances.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn stroke_for(
     stroke_type: Option<&str>,
     width: f32,
@@ -720,6 +721,7 @@ pub(crate) fn stroke_for(
     end_join: Option<&str>,
     miter_limit: Option<f32>,
     stroke_styles: Option<&std::collections::BTreeMap<String, paged_parse::StrokeStyleDef>>,
+    dash_override: &[f32],
 ) -> Stroke {
     let mut s = Stroke::new(width);
     if let Some(cap) = end_cap_from(end_cap) {
@@ -730,6 +732,15 @@ pub(crate) fn stroke_for(
     }
     if let Some(ml) = miter_limit {
         s.miter_limit = ml;
+    }
+    // W1.1 — a per-frame `StrokeDashAndGap` override wins over BOTH the
+    // custom `<StrokeStyle>` definition and the built-in name table.
+    // IDML serialises the per-instance dash in absolute pt, so it feeds
+    // the dash slot directly (no `* width` scaling). An empty override
+    // ⇒ fall through to the stroke-style resolution below.
+    if !dash_override.is_empty() {
+        s.dash = paged_compose::DashPattern::from_slice(dash_override);
+        return s;
     }
     let Some(name) = stroke_type else {
         return s;

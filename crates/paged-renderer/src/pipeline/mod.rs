@@ -6911,6 +6911,7 @@ fn emit_text_frame_into(
             resolved.end_join,
             resolved.miter_limit,
             Some(&document.styles.stroke_styles),
+            resolved.stroke_dash,
         ),
     );
     if needs_group {
@@ -8787,7 +8788,7 @@ mod tests {
         };
         let go = |kind, pat: &[f32]| {
             let m = mk(kind, pat);
-            stroke_for(Some("S"), 2.0, None, None, None, Some(&m))
+            stroke_for(Some("S"), 2.0, None, None, None, Some(&m), &[])
         };
         // Custom Dashed + Dotted patterns are consumed (a real dash).
         assert!(!go(K::Dashed, &[3.0, 2.0]).dash.is_solid(), "dashed");
@@ -8799,6 +8800,47 @@ mod tests {
         // (W1.2), not here.
         assert!(go(K::Striped, &[]).dash.is_solid(), "striped base → solid");
         assert!(go(K::Wavy, &[]).dash.is_solid(), "wavy base → solid");
+    }
+
+    /// W1.1 — a per-frame `StrokeDashAndGap` override takes PRECEDENCE
+    /// over the `StrokeStyleDef` pattern (and over the built-in name
+    /// table): the override feeds the dash slot verbatim regardless of
+    /// the named style. An empty override falls back to the style.
+    #[test]
+    fn stroke_for_instance_dash_override_wins_over_style_pattern() {
+        use paged_parse::{StrokeStyleDef, StrokeStyleKind as K};
+        let mut styles = std::collections::BTreeMap::new();
+        styles.insert(
+            "S".to_string(),
+            StrokeStyleDef {
+                self_id: "S".to_string(),
+                name: None,
+                kind: K::Dashed,
+                pattern: vec![3.0, 2.0],
+                stripes: Vec::new(),
+                wave_width: None,
+                wave_length: None,
+                gap_color: None,
+                gap_tint: None,
+            },
+        );
+        // Instance override [9, 4] beats the style's [3, 2].
+        let overridden = stroke_for(Some("S"), 2.0, None, None, None, Some(&styles), &[9.0, 4.0]);
+        assert_eq!(overridden.dash.as_slice(), &[9.0, 4.0]);
+        // Override wins even against a SOLID built-in name (no style def).
+        let on_solid = stroke_for(
+            Some("StrokeStyle/$ID/Solid"),
+            2.0,
+            None,
+            None,
+            None,
+            None,
+            &[7.0, 1.0],
+        );
+        assert_eq!(on_solid.dash.as_slice(), &[7.0, 1.0]);
+        // Empty override → fall back to the style's [3, 2] pattern.
+        let fallback = stroke_for(Some("S"), 2.0, None, None, None, Some(&styles), &[]);
+        assert_eq!(fallback.dash.as_slice(), &[3.0, 2.0]);
     }
 
     #[test]

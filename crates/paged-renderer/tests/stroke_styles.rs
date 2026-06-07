@@ -329,6 +329,59 @@ fn frame_gap_color_paints_when_style_def_has_none() {
 }
 
 #[test]
+fn frame_dash_array_override_paints_and_wins_over_style_pattern() {
+    // W1.1 — a per-FRAME `StrokeDashAndGap` override (the new mutation
+    // target) must paint, AND win over the `StrokeStyleDef` pattern the
+    // frame's `StrokeType` references. The style declares dashes of
+    // [3 2]; the frame overrides with [11 4]. The emitted StrokePath
+    // must carry the FRAME's [11 4], proving the instance dash paints
+    // with precedence (the gap-colour FINDING #7.5 precedent).
+    let style = r#"<DashedStrokeStyle Self="StrokeStyle/StyleDash" Name="StyleDash"
+        Pattern="3 2"/>"#;
+    let bytes = build_idml(
+        r#"StrokeColor="Color/Black" StrokeWeight="6" StrokeType="StrokeStyle/StyleDash"
+           StrokeDashAndGap="11 4""#,
+        style,
+    );
+    let cmds = built_commands(&bytes);
+    let strokes = stroke_paths(&cmds);
+    assert_eq!(strokes.len(), 1, "one dashed StrokePath; got {cmds:?}");
+    let dash = match strokes[0] {
+        DisplayCommand::StrokePath { stroke, .. } => stroke.dash,
+        _ => unreachable!(),
+    };
+    assert!(!dash.is_solid(), "instance dash must paint");
+    assert_eq!(
+        dash.as_slice(),
+        &[11.0, 4.0],
+        "frame StrokeDashAndGap must win over the style def's [3 2]"
+    );
+}
+
+#[test]
+fn empty_frame_dash_array_falls_back_to_style_pattern() {
+    // W1.1 — clearing the per-frame override (no `StrokeDashAndGap`
+    // attribute) falls back to the `StrokeType`'s style pattern, so the
+    // dash is still the style's [3 2] (the empty-clears contract on the
+    // paint side).
+    let style = r#"<DashedStrokeStyle Self="StrokeStyle/StyleDash" Name="StyleDash"
+        Pattern="3 2"/>"#;
+    let bytes = build_idml(
+        r#"StrokeColor="Color/Black" StrokeWeight="6" StrokeType="StrokeStyle/StyleDash""#,
+        style,
+    );
+    let cmds = built_commands(&bytes);
+    let dash = stroke_paths(&cmds)
+        .iter()
+        .find_map(|c| match c {
+            DisplayCommand::StrokePath { stroke, .. } => Some(stroke.dash),
+            _ => None,
+        })
+        .expect("a dashed StrokePath");
+    assert_eq!(dash.as_slice(), &[3.0, 2.0], "falls back to style [3 2]");
+}
+
+#[test]
 fn solid_stroke_without_style_is_a_single_strokepath() {
     // Sanity floor: a plain solid stroke with no custom style still
     // emits exactly one StrokePath (no gap pass, no stripes).

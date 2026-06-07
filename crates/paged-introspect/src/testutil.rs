@@ -33,6 +33,7 @@ pub fn empty_text_frame(self_id: &str, bounds: Bounds) -> TextFrame {
         stroke_type: None,
         stroke_gap_color: None,
         stroke_gap_tint: None,
+        stroke_dash: Vec::new(),
         drop_shadow: None,
         stroke_drop_shadow: None,
         next_text_frame: None,

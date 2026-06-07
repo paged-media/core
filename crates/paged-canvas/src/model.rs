@@ -1614,6 +1614,25 @@ impl CanvasModel {
                     value: Value::Bounds([bounds.0, bounds.1, bounds.2, bounds.3]),
                 })
             }
+            // W1.2 — un-stub `MoveFrame`. The stub deferred to "use the
+            // translate gesture"; the translate gesture commits its move
+            // by SETTING the frame's `ItemTransform` (the Phase D
+            // `FrameTransform` path), so `moveFrame` is semantically a
+            // whole-`ItemTransform` write to the same matrix the gesture
+            // would land. The Phase D apply arm captures the prior
+            // transform as the inverse, so apply→invert→reapply
+            // round-trips without any new inverse machinery.
+            Mutation::MoveFrame {
+                frame_id,
+                transform,
+            } => {
+                let node = self.resolve_frame_node_id(frame_id)?;
+                Some(Operation::SetProperty {
+                    node,
+                    path: PropertyPath::FrameTransform,
+                    value: Value::Transform(Some(*transform)),
+                })
+            }
             Mutation::InsertFrame { page_id, bounds } => {
                 let (spread_id, (ox, oy), idx) = self.page_insert_context(page_id)?;
                 // Append to the kind vec = top of the z-order.
@@ -3003,6 +3022,12 @@ impl CanvasModel {
                                 path: PropertyPath::FrameStrokeGapTint,
                                 value: Some(Value::Length(f.stroke_gap_tint)),
                             },
+                            // W1.1 — per-frame dash override (empty vec =
+                            // no override; stroke uses its StrokeType).
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeDashArray,
+                                value: Some(Value::Lengths(f.stroke_dash.clone())),
+                            },
                             PropertyEntry {
                                 path: PropertyPath::TextWrapInvert,
                                 value: Some(Value::Bool(
@@ -3311,6 +3336,12 @@ impl CanvasModel {
                             PropertyEntry {
                                 path: PropertyPath::FrameStrokeGapTint,
                                 value: Some(Value::Length(f.stroke_gap_tint)),
+                            },
+                            // W1.1 — per-frame dash override (empty vec =
+                            // no override; stroke uses its StrokeType).
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeDashArray,
+                                value: Some(Value::Lengths(f.stroke_dash.clone())),
                             },
                             // W0.3 — per-corner option + radius. Order
                             // matches IDML `corners[4]`:

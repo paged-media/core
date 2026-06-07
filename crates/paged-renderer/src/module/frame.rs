@@ -71,6 +71,13 @@ pub(crate) struct ResolvedFrame<'a> {
     /// gaps. `None` ⇒ fall back to the style def's gap colour.
     pub stroke_gap_color: Option<&'a str>,
     pub stroke_gap_tint: Option<f32>,
+    /// W1.1 — the frame's INSTANCE `StrokeDashAndGap` override (the
+    /// per-frame dash mutation target). When non-empty it takes
+    /// PRECEDENCE over the `StrokeStyleDef` pattern / built-in name at
+    /// paint time — the same instance-wins precedent as
+    /// `stroke_gap_color` (FINDING #7.5). Empty slice ⇒ fall back to
+    /// the stroke style.
+    pub stroke_dash: &'a [f32],
     pub corner_radius: Option<f32>,
     pub corner_option: Option<&'a str>,
     /// Q-16: per-corner `(option, radius)` overrides. When any corner
@@ -275,6 +282,7 @@ impl<'a> ResolvedFrame<'a> {
             miter_limit: None,
             stroke_gap_color: frame.stroke_gap_color.as_deref(),
             stroke_gap_tint: frame.stroke_gap_tint,
+            stroke_dash: &frame.stroke_dash,
             corner_radius: None,
             corner_option: None,
             corners: Default::default(),
@@ -323,6 +331,7 @@ impl<'a> ResolvedFrame<'a> {
             miter_limit: rect.miter_limit,
             stroke_gap_color: rect.stroke_gap_color.as_deref(),
             stroke_gap_tint: rect.stroke_gap_tint,
+            stroke_dash: &rect.stroke_dash,
             corner_radius: rect.corner_radius,
             corner_option: rect.corner_option.as_deref(),
             corners: rect.corners,
@@ -355,6 +364,7 @@ impl<'a> ResolvedFrame<'a> {
             miter_limit: None,
             stroke_gap_color: oval.stroke_gap_color.as_deref(),
             stroke_gap_tint: oval.stroke_gap_tint,
+            stroke_dash: &oval.stroke_dash,
             corner_radius: None,
             corner_option: None,
             corners: Default::default(),
@@ -402,6 +412,7 @@ impl<'a> ResolvedFrame<'a> {
             miter_limit: None,
             stroke_gap_color: poly.stroke_gap_color.as_deref(),
             stroke_gap_tint: poly.stroke_gap_tint,
+            stroke_dash: &poly.stroke_dash,
             corner_radius: None,
             corner_option: None,
             corners: Default::default(),
@@ -444,6 +455,7 @@ impl<'a> ResolvedFrame<'a> {
             miter_limit: None,
             stroke_gap_color: line.stroke_gap_color.as_deref(),
             stroke_gap_tint: line.stroke_gap_tint,
+            stroke_dash: &line.stroke_dash,
             corner_radius: None,
             corner_option: None,
             corners: Default::default(),
@@ -490,6 +502,7 @@ mod tests {
             stroke_type: None,
             stroke_gap_color: None,
             stroke_gap_tint: None,
+            stroke_dash: Vec::new(),
             stroke_alignment: None,
             end_cap: None,
             end_join: None,
@@ -542,6 +555,7 @@ mod tests {
             stroke_type: None,
             stroke_gap_color: None,
             stroke_gap_tint: None,
+            stroke_dash: Vec::new(),
             drop_shadow: None,
             stroke_drop_shadow: None,
             next_text_frame: None,
@@ -710,6 +724,7 @@ mod tests {
             stroke_type: Some("StrokeStyle/$ID/Dashed".to_string()),
             stroke_gap_color: None,
             stroke_gap_tint: None,
+            stroke_dash: Vec::new(),
             drop_shadow: None,
             stroke_drop_shadow: None,
             applied_object_style: None,
@@ -754,6 +769,7 @@ mod tests {
             stroke_type: Some("StrokeStyle/$ID/Dotted".to_string()),
             stroke_gap_color: None,
             stroke_gap_tint: None,
+            stroke_dash: Vec::new(),
             applied_object_style: None,
             anchors: Vec::new(),
             subpath_starts: Vec::new(),
@@ -798,6 +814,7 @@ mod tests {
             stroke_type: Some("CustomDashStyle".to_string()),
             stroke_gap_color: None,
             stroke_gap_tint: None,
+            stroke_dash: Vec::new(),
             applied_object_style: None,
             text_wrap: None,
             item_layer: None,

@@ -140,6 +140,7 @@ pub enum PropertyPathJson {
     FrameStrokeAlignment,
     FrameStrokeGapColor,
     FrameStrokeGapTint,
+    FrameStrokeDashArray,
     FrameCornerOptionTopLeft,
     FrameCornerOptionTopRight,
     FrameCornerOptionBottomLeft,
@@ -342,6 +343,7 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::FrameStrokeAlignment => PropertyPathJson::FrameStrokeAlignment,
             PropertyPath::FrameStrokeGapColor => PropertyPathJson::FrameStrokeGapColor,
             PropertyPath::FrameStrokeGapTint => PropertyPathJson::FrameStrokeGapTint,
+            PropertyPath::FrameStrokeDashArray => PropertyPathJson::FrameStrokeDashArray,
             PropertyPath::FrameCornerOptionTopLeft => PropertyPathJson::FrameCornerOptionTopLeft,
             PropertyPath::FrameCornerOptionTopRight => PropertyPathJson::FrameCornerOptionTopRight,
             PropertyPath::FrameCornerOptionBottomLeft => {
@@ -570,6 +572,7 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::FrameStrokeAlignment => PropertyPath::FrameStrokeAlignment,
             PropertyPathJson::FrameStrokeGapColor => PropertyPath::FrameStrokeGapColor,
             PropertyPathJson::FrameStrokeGapTint => PropertyPath::FrameStrokeGapTint,
+            PropertyPathJson::FrameStrokeDashArray => PropertyPath::FrameStrokeDashArray,
             PropertyPathJson::FrameCornerOptionTopLeft => PropertyPath::FrameCornerOptionTopLeft,
             PropertyPathJson::FrameCornerOptionTopRight => PropertyPath::FrameCornerOptionTopRight,
             PropertyPathJson::FrameCornerOptionBottomLeft => {
@@ -758,7 +761,11 @@ impl From<Value> for AuthoredValue {
             // authored-value widget renders them, so they collapse
             // to `None` for this exhaustive conversion.
             | Value::ParagraphRule(_)
-            | Value::TabStops(_) => AuthoredValue::None,
+            | Value::TabStops(_)
+            // W1.1 — the per-frame dash-array list (`FrameStrokeDashArray`).
+            // Like `TabStops`, no scalar authored-value widget renders a
+            // length list, so it collapses to `None` here.
+            | Value::Lengths(_) => AuthoredValue::None,
         }
     }
 }

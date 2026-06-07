@@ -188,6 +188,62 @@ fn unified_undo_alternates_text_and_frame_entries() {
     assert_eq!(model.applied_log_len(), 0);
 }
 
+/// W1.2 — `Mutation::MoveFrame` un-stubbed: routes through the
+/// `paged_mutate` bridge as a `SetProperty(FrameTransform)`, lands the
+/// new `ItemTransform`, logs the canonical AppliedOperation, and
+/// apply→invert→reapply (undo/redo) round-trips the transform.
+#[test]
+fn move_frame_routes_through_idml_mutate_and_round_trips() {
+    let bytes = small_idml();
+    let mut model = CanvasModel::load("doc1", &bytes, CanvasOptions::default()).expect("load");
+
+    // A pure translation of (+30, -20) on the rectangle's ItemTransform.
+    let xform = [1.0_f32, 0.0, 0.0, 1.0, 30.0, -20.0];
+    let outcome = model
+        .apply_mutation(&Mutation::MoveFrame {
+            frame_id: "r1".into(),
+            transform: xform,
+        })
+        .expect("move apply");
+    assert!(outcome.applied_seq > 0);
+
+    let read_transform = |m: &CanvasModel| -> Option<[f32; 6]> {
+        m.scene()
+            .spreads
+            .iter()
+            .flat_map(|s| s.spread.rectangles.iter())
+            .find(|r| r.self_id.as_deref() == Some("r1"))
+            .expect("rect found")
+            .item_transform
+    };
+
+    // Forward: the new transform landed.
+    assert_eq!(read_transform(&model), Some(xform));
+
+    // It logged as the canonical Frame AppliedOperation (SetProperty),
+    // not a stray TextOp.
+    match model.applied_log_back().expect("log entry").kind.clone() {
+        LoggedMutation::Frame(applied) => {
+            assert!(matches!(
+                applied.op,
+                paged_mutate::Operation::SetProperty {
+                    path: paged_mutate::PropertyPath::FrameTransform,
+                    ..
+                }
+            ));
+        }
+        LoggedMutation::Text { .. } => panic!("expected Frame entry, got Text"),
+    }
+
+    // invert (undo) restores the identity transform.
+    model.undo().expect("undo");
+    assert_eq!(read_transform(&model), Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
+
+    // reapply (redo) lands the moved transform again.
+    model.redo().expect("redo");
+    assert_eq!(read_transform(&model), Some(xform));
+}
+
 #[test]
 fn rectangle_resize_also_bridges() {
     let bytes = small_idml();
