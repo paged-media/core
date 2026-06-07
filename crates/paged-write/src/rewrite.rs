@@ -49,9 +49,13 @@
 //!   - `StrokeWeight`      (FrameStrokeWeight)
 //!   - `NextTextFrame`     (LinkFrames / UnlinkFrames; TextFrame only)
 //!   - `Nonprinting`       (FrameNonprinting)
-//!   - `GeometricBounds`   (FrameBounds) — only patched when the source
-//!     element already carries the attribute; bounds that live solely in
-//!     `<PathGeometry>` are not reconstructed here (see Known losses).
+//!   - `GeometricBounds`   (FrameBounds) — patched when the source
+//!     element carries the attribute. When the frame's geometry instead
+//!     lives in `<PathGeometry>`/`<PathPointArray>` (the real-export +
+//!     generator shape), the path anchors are rewritten directly: a
+//!     `FrameBounds` resize regenerates a rectangle's corners, and
+//!     `FramePathPoint` / `FramePath` edits write the moved anchors. See
+//!     [`ModelGeometry`].
 //!
 //! Story ranges:
 //!   - `<ParagraphStyleRange AppliedParagraphStyle>` (AppliedParagraphStyle)
@@ -64,26 +68,35 @@
 //!   - `<CharacterStyleRange AppliedFont / FontStyle / Capitalization /
 //!     Position / KerningMethod / AppliedLanguage / StrokeColor /
 //!     Underline / StrikeThru / Ligatures>` (the matching Character* paths)
-//!   - `<Content>` text — replaced when the run maps to a single Content
-//!     child (the common case + every generated fixture).
+//!   - run text — replaced across the run's `<Content>` / `<Br/>` /
+//!     `<Tab/>` structure. The parser collapses
+//!     `<Content>A</Content><Br/><Content>B</Content>` into one run
+//!     string `"A\nB"`; the rewrite splits the model text back the same
+//!     way (`\n` → `<Br/>`, `\t` → `<Tab/>`). A run carrying foreign
+//!     inline markup (an `<?ACE?>` page-number PI, a
+//!     `<TextVariableInstance>`, an anchored frame, an unknown entity)
+//!     passes through verbatim — never clobbered (see Known losses).
 //!
 //! # Known losses (documented, not silent)
 //!
-//! * **Bounds in `<PathGeometry>`.** Real InDesign exports store frame
-//!   geometry as a `<PathPointArray>`, not a `GeometricBounds` attribute.
-//!   A `FrameBounds` mutation updates the model's `bounds` but this
-//!   rewrite only rewrites the `GeometricBounds` *attribute* when it is
-//!   present; the path points are passed through untouched. Patching the
-//!   path array (and the `FramePathPoint` / `FramePath` mutations that
-//!   ride it) is a follow-up. Until then, bounds/path edits on
-//!   path-geometry frames do not save.
-//! * **Multi-`<Content>` / `<Br>` runs.** A run whose text spans several
-//!   `<Content>` children or contains a paragraph break is left
-//!   untouched (its attributes still patch). Text edits only save for
-//!   single-Content runs.
+//! * **Table-cell text + styles.** `<ParagraphStyleRange>` /
+//!   `<CharacterStyleRange>` *inside* a `<Table>` belong to cell
+//!   paragraphs the parser stores on `paragraph.table.cells[]`, not on
+//!   the story's top-level `paragraphs`; patching them positionally
+//!   would misalign, so table-cell content passes through verbatim.
+//! * **Group-member transforms / paths.** Inside a `<Group>` the parser
+//!   composes the group transform into each member's `item_transform`
+//!   (and into its path anchors), so the model value isn't the on-disk
+//!   member geometry — patching it would corrupt the composition. Group
+//!   members keep their `ItemTransform` and `<PathPointArray>` verbatim.
+//! * **Runs with foreign inline markup.** A run whose text body carries
+//!   an `<?ACE?>` page-number marker, a `<TextVariableInstance>`, an
+//!   anchored frame, or an unknown entity passes through verbatim (its
+//!   attributes still patch). The structured text rewrite only fires on
+//!   pure `<Content>` / `<Br/>` / `<Tab/>` runs.
 //! * **Structural edits** (InsertNode / RemoveNode / MoveNode, new
 //!   swatches / styles / sections) are not reflected: this milestone is
-//!   the property-patch foundation. Adding / removing elements is W3.B2.
+//!   the property-patch foundation. Adding / removing elements is W1.15.
 //! * Anything the parser never modeled (preferences, fonts, tags, the
 //!   XML backing store, master-spread item internals beyond the patched
 //!   attributes) is carried through verbatim and so is always faithful.
@@ -94,7 +107,7 @@ use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 
-use paged_parse::{CharacterRun, Spread, Story, TextFrame};
+use paged_parse::{Bounds, CharacterRun, PathAnchor, Spread, Story, TextFrame};
 
 /// Mirror of `paged_gen::xml::format_f32`: round to 4 decimals, drop
 /// trailing zeros + a dangling `.`, normalise `-0` to `0`. Kept as a
@@ -230,6 +243,281 @@ fn escape_attr(s: &str) -> std::borrow::Cow<'_, str> {
 }
 
 // ---------------------------------------------------------------------
+// Path geometry
+// ---------------------------------------------------------------------
+
+/// Parse a `"x y"` IDML coordinate pair. Local copy of the parser's
+/// helper (it is private to `paged-parse`).
+fn parse_xy_pair(s: &str) -> Option<(f32, f32)> {
+    let mut it = s.split_whitespace();
+    let x: f32 = it.next()?.parse().ok()?;
+    let y: f32 = it.next()?.parse().ok()?;
+    Some((x, y))
+}
+
+/// Format one `(x, y)` pair the IDML way (`"x y"`, fixed precision) for a
+/// `PathPointType` `Anchor` / `LeftDirection` / `RightDirection` value.
+fn format_xy(p: (f32, f32)) -> String {
+    format!("{} {}", format_f32(p.0), format_f32(p.1))
+}
+
+/// Stable string key for one anchor, formatted exactly the way the
+/// generator / a faithful export serialises it. Comparing keys (rather
+/// than raw `f32`s) gives the float-format care the round-trip needs: an
+/// unchanged anchor re-formats to the same bytes, so it compares equal
+/// and passes through verbatim.
+fn anchor_key(a: &PathAnchor) -> (String, String, String) {
+    (format_xy(a.anchor), format_xy(a.left), format_xy(a.right))
+}
+
+/// AABB of an anchor set, mirroring the parser's `bounds_from_anchors`
+/// (anchors only — control handles are ignored). Empty ⇒ a zero box.
+fn bounds_of(anchors: &[PathAnchor]) -> Bounds {
+    let mut it = anchors.iter();
+    let Some(first) = it.next() else {
+        return Bounds {
+            top: 0.0,
+            left: 0.0,
+            bottom: 0.0,
+            right: 0.0,
+        };
+    };
+    let (mut min_x, mut max_x) = (first.anchor.0, first.anchor.0);
+    let (mut min_y, mut max_y) = (first.anchor.1, first.anchor.1);
+    for a in it {
+        let (x, y) = a.anchor;
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+        min_y = min_y.min(y);
+        max_y = max_y.max(y);
+    }
+    Bounds {
+        top: min_y,
+        left: min_x,
+        bottom: max_y,
+        right: max_x,
+    }
+}
+
+/// Two bounds equal under `format_f32` (the on-disk precision).
+fn bounds_eq_formatted(a: Bounds, b: Bounds) -> bool {
+    format_f32(a.top) == format_f32(b.top)
+        && format_f32(a.left) == format_f32(b.left)
+        && format_f32(a.bottom) == format_f32(b.bottom)
+        && format_f32(a.right) == format_f32(b.right)
+}
+
+/// Degenerate-handle corner anchor (handles coincide with the anchor —
+/// what the generator emits for a plain rectangle corner).
+fn corner(x: f32, y: f32) -> PathAnchor {
+    PathAnchor {
+        anchor: (x, y),
+        left: (x, y),
+        right: (x, y),
+    }
+}
+
+/// The four corner anchors of `bounds`, walked in the generator's order
+/// (`top-left, bottom-left, bottom-right, top-right`) so a rectangle
+/// resized via `FrameBounds` re-emits the same corner sequence InDesign
+/// and `paged-gen` use.
+fn rect_corners(b: Bounds) -> Vec<PathAnchor> {
+    vec![
+        corner(b.left, b.top),
+        corner(b.left, b.bottom),
+        corner(b.right, b.bottom),
+        corner(b.right, b.top),
+    ]
+}
+
+/// The model's path geometry for one spread page item, plus a hint at
+/// how to reconcile a divergence.
+struct ModelGeometry {
+    /// Flat anchor list across all contours (model order).
+    anchors: Vec<PathAnchor>,
+    /// Per-contour start offsets into `anchors` (see
+    /// [`paged_parse::Polygon::subpath_starts`]). Empty ⇒ one contour.
+    subpath_starts: Vec<usize>,
+    /// Model AABB. For a `FrameBounds` edit the anchors stay stale while
+    /// this moves, so a divergence here (with unchanged anchors) means
+    /// "rectangle resized" — regenerate the corners from these bounds.
+    bounds: Bounds,
+}
+
+impl ModelGeometry {
+    /// The target anchors for the contour starting at `parsed`'s
+    /// position. `contour` indexes into `subpath_starts`. `parsed` is
+    /// the on-disk anchor set for this `<PathPointArray>`. Returns
+    /// `Some(target)` when the contour must be rewritten, or `None` to
+    /// pass it through verbatim.
+    fn target_for_contour(&self, contour: usize, parsed: &[PathAnchor]) -> Option<Vec<PathAnchor>> {
+        // Bounds-only model (a plain rectangle): the parser keeps no
+        // anchors for a 4-corner AABB Rectangle — its geometry lives in
+        // `bounds` alone. A `FrameBounds` resize moves `bounds` while the
+        // on-disk path stays, so reconcile by regenerating the corners
+        // from the model bounds when they diverged (and the on-disk path
+        // really is that single 4-corner rectangle).
+        if self.anchors.is_empty() {
+            if contour == 0
+                && is_axis_aligned_rect(parsed)
+                && !bounds_eq_formatted(self.bounds, bounds_of(parsed))
+            {
+                return Some(rect_corners(self.bounds));
+            }
+            return None;
+        }
+        let model = self.contour_slice(contour);
+        // Anchor-edit path (FramePathPoint / FramePath): the model's
+        // anchors for this contour diverged from disk → write them.
+        if !anchors_eq_formatted(model, parsed) {
+            return Some(model.to_vec());
+        }
+        // Bounds-only edit (FrameBounds): the anchors match disk but the
+        // model AABB moved. Only safe to reconstruct for the rectangle
+        // case — a single contour of 4 corners that *was* the old AABB.
+        // (Non-rectangular bounds-only edits are ambiguous and stay a
+        // documented loss.)
+        if self.subpath_starts.len() <= 1
+            && is_axis_aligned_rect(parsed)
+            && !bounds_eq_formatted(self.bounds, bounds_of(parsed))
+        {
+            return Some(rect_corners(self.bounds));
+        }
+        None
+    }
+
+    fn contour_slice(&self, contour: usize) -> &[PathAnchor] {
+        if self.subpath_starts.is_empty() {
+            return &self.anchors;
+        }
+        let start = self.subpath_starts[contour];
+        let end = self
+            .subpath_starts
+            .get(contour + 1)
+            .copied()
+            .unwrap_or(self.anchors.len());
+        self.anchors.get(start..end).unwrap_or(&[])
+    }
+}
+
+/// True when a 4-anchor contour is an axis-aligned rectangle: each
+/// anchor sits on an AABB corner (degenerate handles) and all four
+/// corners are present. This is the only shape a `FrameBounds` resize
+/// can faithfully reconstruct from bounds alone — a non-rectangular
+/// path needs an explicit `FramePathPoint` / `FramePath` edit, so a
+/// bounds-only change there stays a documented loss.
+fn is_axis_aligned_rect(anchors: &[PathAnchor]) -> bool {
+    if anchors.len() != 4 {
+        return false;
+    }
+    let b = bounds_of(anchors);
+    // Each anchor must be one of the four corners (handles degenerate to
+    // the anchor), and every corner must be covered exactly once.
+    let corners = [
+        (b.left, b.top),
+        (b.left, b.bottom),
+        (b.right, b.bottom),
+        (b.right, b.top),
+    ];
+    let mut covered = [false; 4];
+    for a in anchors {
+        if format_xy(a.left) != format_xy(a.anchor) || format_xy(a.right) != format_xy(a.anchor) {
+            return false; // a real Bezier handle — not a plain corner
+        }
+        let key = format_xy(a.anchor);
+        match corners.iter().position(|c| format_xy(*c) == key) {
+            Some(i) if !covered[i] => covered[i] = true,
+            _ => return false,
+        }
+    }
+    covered.iter().all(|&c| c)
+}
+
+/// Two anchor sets equal under `format_f32` (on-disk precision).
+fn anchors_eq_formatted(a: &[PathAnchor], b: &[PathAnchor]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| anchor_key(x) == anchor_key(y))
+}
+
+/// The model path geometry for the page item `name`/`self_id` carries,
+/// if that kind tracks anchors (TextFrame / Rectangle / Polygon /
+/// GraphicLine). Oval geometry is bounds-only in the model (no anchors),
+/// so its `<PathPointArray>` always passes through verbatim.
+fn model_geometry(
+    name: &[u8],
+    self_id: &str,
+    frames: &std::collections::HashMap<&str, &TextFrame>,
+    rectangles: &[paged_parse::Rectangle],
+    polygons: &[paged_parse::Polygon],
+    graphic_lines: &[paged_parse::GraphicLine],
+) -> Option<ModelGeometry> {
+    match name {
+        b"TextFrame" => frames.get(self_id).map(|f| ModelGeometry {
+            anchors: f.anchors.clone(),
+            subpath_starts: f.subpath_starts.clone(),
+            bounds: f.bounds,
+        }),
+        b"Rectangle" => rectangles
+            .iter()
+            .find(|r| r.self_id.as_deref() == Some(self_id))
+            .map(|r| ModelGeometry {
+                anchors: r.anchors.clone(),
+                subpath_starts: r.subpath_starts.clone(),
+                bounds: r.bounds,
+            }),
+        b"Polygon" => polygons
+            .iter()
+            .find(|r| r.self_id.as_deref() == Some(self_id))
+            .map(|r| ModelGeometry {
+                anchors: r.anchors.clone(),
+                subpath_starts: r.subpath_starts.clone(),
+                bounds: r.bounds,
+            }),
+        b"GraphicLine" => graphic_lines
+            .iter()
+            .find(|r| r.self_id.as_deref() == Some(self_id))
+            .map(|r| ModelGeometry {
+                anchors: r.anchors.clone(),
+                subpath_starts: r.subpath_starts.clone(),
+                bounds: r.bounds,
+            }),
+        _ => None,
+    }
+}
+
+/// Read one `<PathPointType>` element into a [`PathAnchor`], mirroring
+/// the parser: a missing `LeftDirection` / `RightDirection` defaults to
+/// the anchor (degenerate handle).
+fn path_point_anchor(e: &BytesStart) -> Option<PathAnchor> {
+    let a = attr_value(e, b"Anchor").and_then(|s| parse_xy_pair(&s))?;
+    let left = attr_value(e, b"LeftDirection")
+        .and_then(|s| parse_xy_pair(&s))
+        .unwrap_or(a);
+    let right = attr_value(e, b"RightDirection")
+        .and_then(|s| parse_xy_pair(&s))
+        .unwrap_or(a);
+    Some(PathAnchor {
+        anchor: a,
+        left,
+        right,
+    })
+}
+
+/// Emit one `<PathPointType Anchor="x y" LeftDirection="x y"
+/// RightDirection="x y"/>` self-closing element, matching the
+/// generator's attribute order + `format_f32` precision.
+fn write_path_point(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    a: &PathAnchor,
+) -> Result<(), quick_xml::Error> {
+    let mut e = BytesStart::new("PathPointType");
+    e.push_attribute(("Anchor", format_xy(a.anchor).as_str()));
+    e.push_attribute(("LeftDirection", format_xy(a.left).as_str()));
+    e.push_attribute(("RightDirection", format_xy(a.right).as_str()));
+    writer.write_event(Event::Empty(e))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
 // Spread rewrite
 // ---------------------------------------------------------------------
 
@@ -306,12 +594,64 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
         Ok(())
     }
 
+    // ---- PathPointArray rewrite state ----
+    // The innermost open page item that tracks anchors (TextFrame /
+    // Rectangle / Polygon / GraphicLine). Real InDesign exports (and
+    // every generated fixture) carry frame geometry as a
+    // `<PathPointArray>` of `<PathPointType>` anchors rather than a
+    // `GeometricBounds` attribute, so a `FramePathPoint` / `FramePath`
+    // edit — or a `FrameBounds` resize of a rectangular frame — has to
+    // rewrite those anchors to save. We buffer each `<PathPointArray>`
+    // and, at its close, either re-emit the model anchors (when the
+    // contour diverged) or replay the original points verbatim (so an
+    // unmutated path stays byte-identical).
+    struct PathCtx {
+        /// Depth of the page-item element.
+        item_depth: usize,
+        /// Model geometry, or `None` for a kind that doesn't track
+        /// anchors (Oval) / an item with no model match.
+        geom: Option<ModelGeometry>,
+        /// Index of the next `<GeometryPathType>` contour / its
+        /// `<PathPointArray>`.
+        contour: usize,
+        /// Depth of the open `<PathPointArray>`, or 0 when not in one.
+        array_depth: usize,
+        /// Buffered events inside the open `<PathPointArray>` (point
+        /// elements + any whitespace between them).
+        buffered: Vec<Event<'static>>,
+        /// On-disk anchors parsed from the buffered points.
+        parsed: Vec<PathAnchor>,
+    }
+    let mut path_ctx: Vec<PathCtx> = Vec::new();
+
     loop {
         match reader.read_event_into(&mut buf)? {
             Event::Eof => break,
             Event::Start(e) => {
                 depth += 1;
                 let name_owned = e.name().as_ref().to_vec();
+                // Buffer a `<PathPointArray>` for the innermost path
+                // item so its points can be rewritten at close.
+                if name_owned == b"PathPointArray" {
+                    if let Some(ctx) = path_ctx.last_mut() {
+                        if ctx.array_depth == 0 {
+                            ctx.array_depth = depth;
+                            ctx.buffered.clear();
+                            ctx.parsed.clear();
+                            writer.write_event(Event::Start(e.into_owned()))?;
+                            buf.clear();
+                            continue;
+                        }
+                    }
+                }
+                if let Some(ctx) = path_ctx.last_mut() {
+                    if ctx.array_depth != 0 {
+                        // Nested element inside the array — buffer it.
+                        ctx.buffered.push(Event::Start(e.into_owned()));
+                        buf.clear();
+                        continue;
+                    }
+                }
                 // Label handling for the innermost labelled item.
                 if let Some(ctx) = label_ctx.last_mut() {
                     if name_owned == b"Properties" && depth == ctx.item_depth + 1 {
@@ -353,8 +693,10 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                     group_depth += 1;
                 }
                 if ITEM_KINDS.contains(&name_owned.as_slice()) {
-                    let entries = attr_value(&e, b"Self")
-                        .and_then(|id| spread.labels.get(&id).cloned())
+                    let self_id = attr_value(&e, b"Self");
+                    let entries = self_id
+                        .as_deref()
+                        .and_then(|id| spread.labels.get(id).cloned())
                         .filter(|v| !v.is_empty());
                     label_ctx.push(LabelCtx {
                         item_depth: depth,
@@ -363,9 +705,50 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                         in_label: false,
                         handled: false,
                     });
+                    // Group-member geometry is composed into the model's
+                    // anchors the same way the transform is (see the
+                    // group note in `rewrite_spread`), so we don't rewrite
+                    // a member's path either — leave `geom: None` inside a
+                    // group so its points pass through verbatim.
+                    let geom = if group_depth > 0 {
+                        None
+                    } else {
+                        self_id.as_deref().and_then(|id| {
+                            model_geometry(
+                                &name_owned,
+                                id,
+                                &frames,
+                                &spread.rectangles,
+                                &spread.polygons,
+                                &spread.graphic_lines,
+                            )
+                        })
+                    };
+                    path_ctx.push(PathCtx {
+                        item_depth: depth,
+                        geom,
+                        contour: 0,
+                        array_depth: 0,
+                        buffered: Vec::new(),
+                        parsed: Vec::new(),
+                    });
                 }
             }
             Event::Empty(e) => {
+                // Buffer a `<PathPointType>` (or any empty element)
+                // inside an open `<PathPointArray>`.
+                if let Some(ctx) = path_ctx.last_mut() {
+                    if ctx.array_depth != 0 {
+                        if e.name().as_ref() == b"PathPointType" {
+                            if let Some(a) = path_point_anchor(&e) {
+                                ctx.parsed.push(a);
+                            }
+                        }
+                        ctx.buffered.push(Event::Empty(e.into_owned()));
+                        buf.clear();
+                        continue;
+                    }
+                }
                 // KeyValuePairs inside a replaced Label drop (the
                 // model entries were already written).
                 if let Some(ctx) = label_ctx.last() {
@@ -416,6 +799,48 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
             }
             Event::End(e) => {
                 let name_owned = e.name().as_ref().to_vec();
+                // Close of the buffered `<PathPointArray>`: decide whether
+                // this contour diverged and emit the model anchors, or
+                // replay the original points verbatim.
+                if let Some(ctx) = path_ctx.last_mut() {
+                    if ctx.array_depth != 0 {
+                        if name_owned == b"PathPointArray" && depth == ctx.array_depth {
+                            let contour = ctx.contour;
+                            ctx.contour += 1;
+                            let target = ctx
+                                .geom
+                                .as_ref()
+                                .and_then(|g| g.target_for_contour(contour, &ctx.parsed));
+                            match target {
+                                Some(anchors) => {
+                                    for a in &anchors {
+                                        write_path_point(&mut writer, a)?;
+                                    }
+                                }
+                                None => {
+                                    for ev in ctx.buffered.drain(..) {
+                                        writer.write_event(ev)?;
+                                    }
+                                }
+                            }
+                            ctx.buffered.clear();
+                            ctx.parsed.clear();
+                            ctx.array_depth = 0;
+                            depth = depth.saturating_sub(1);
+                            writer.write_event(Event::End(e))?;
+                            buf.clear();
+                            continue;
+                        }
+                        // A nested End inside the array — buffer it.
+                        ctx.buffered.push(Event::End(e.into_owned()));
+                        depth = depth.saturating_sub(1);
+                        buf.clear();
+                        continue;
+                    }
+                    if depth == ctx.item_depth && ITEM_KINDS.contains(&name_owned.as_slice()) {
+                        path_ctx.pop();
+                    }
+                }
                 if let Some(ctx) = label_ctx.last_mut() {
                     if ctx.in_label && name_owned == b"Label" && depth == ctx.item_depth + 2 {
                         // Closing the replaced Label — the new entries
@@ -464,6 +889,16 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                 writer.write_event(Event::End(e))?;
             }
             Event::Text(t) => {
+                // Whitespace/indentation inside a buffered
+                // `<PathPointArray>` rides with the buffered points so a
+                // verbatim replay stays byte-exact.
+                if let Some(ctx) = path_ctx.last_mut() {
+                    if ctx.array_depth != 0 {
+                        ctx.buffered.push(Event::Text(t.into_owned()));
+                        buf.clear();
+                        continue;
+                    }
+                }
                 // Indentation between KVPs of a replaced Label drops
                 // with the rest of the original Label body.
                 if label_ctx.last().is_some_and(|c| c.in_label) {
@@ -472,7 +907,24 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                 }
                 writer.write_event(Event::Text(t))?;
             }
-            other => writer.write_event(other)?,
+            other => {
+                // Any other event inside a buffered array is foreign —
+                // keep the original points (drop the rewrite) by leaving
+                // the buffer intact and replaying it at array close.
+                if let Some(ctx) = path_ctx.last_mut() {
+                    if ctx.array_depth != 0 {
+                        ctx.buffered.push(other.into_owned());
+                        // Mark the parsed set as "do not rewrite" by
+                        // poisoning it: a length mismatch vs the model
+                        // contour forces verbatim. Simpler: clear geom so
+                        // every contour of this item passes through.
+                        ctx.geom = None;
+                        buf.clear();
+                        continue;
+                    }
+                }
+                writer.write_event(other)?;
+            }
         }
         buf.clear();
     }
@@ -716,9 +1168,10 @@ fn frame_attr_patch(
 /// Extras to append when a model attribute is set but the source element
 /// didn't carry the key. Only emitted for genuinely-set values (so an
 /// unmutated frame appends nothing and round-trips byte-identically).
-/// `GeometricBounds` is intentionally NOT an extra — see the bounds
-/// known-loss note; we never invent the attribute on a path-geometry
-/// frame.
+/// `GeometricBounds` is intentionally NOT an extra: a path-geometry
+/// frame's bounds are saved by rewriting its `<PathPointArray>` anchors
+/// (see [`ModelGeometry`]), not by inventing a `GeometricBounds`
+/// attribute the source never had.
 fn frame_attr_extras(
     patch_tx: bool,
     item_transform: Option<[f32; 6]>,
@@ -788,27 +1241,18 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
     let mut run_idx: isize = -1;
     // The run currently open (for Content text + attribute patching).
     let mut current_run: Option<&CharacterRun> = None;
-    // Number of `<Content>` children seen inside the open CSR — text is
-    // only replaced for the FIRST when the run is single-Content.
-    let mut content_seen_in_run: usize = 0;
-    // True while inside a `<Content>` element.
-    let mut in_content = false;
-    // True when the open run has exactly one Content child in the source
-    // (decided lazily: we only patch the first Content's text and, if a
-    // second appears, we've already passed it through — so the guard is
-    // "first content only").
-    let mut patch_this_content = false;
-    // Buffered children of a patch-armed `<Content>`. Entities split
-    // the text into multiple events (`Text("It") GeneralRef(apos)
-    // Text("s")`), so the replace-or-passthrough decision can only be
-    // made at `</Content>` once the WHOLE span is known — deciding on
-    // the first chunk dropped apostrophes and duplicated the tail
-    // (found by the conformance round-trips level, text-letterspacing).
-    let mut content_events: Vec<Event<'static>> = Vec::new();
-    let mut content_text = String::new();
-    // A PI/element inside the span (e.g. InDesign's `<?ACE 18?>`
-    // page-number marker) — never rewrite over those; pass through.
-    let mut content_has_foreign = false;
+    // Buffered inline body of the open `<CharacterStyleRange>`. The
+    // parser collapses a run's `<Content>A</Content><Br/><Content>B
+    // </Content>` (and `<Tab/>` between segments) into one run string
+    // with `\n` / `\t` separators, so a faithful save has to split the
+    // model text back across that Content/Br/Tab structure — not just
+    // patch a single Content. We buffer the whole contiguous inline
+    // region (it is always the LAST thing in a run; `<Properties>` and
+    // anchored frames come first and stream out immediately) so the
+    // replace-or-passthrough decision can be made once at the run's
+    // close, when the full reconstructed text is known. See
+    // [`RunBody`].
+    let mut body = RunBody::default();
     // Depth of open `<Table>` elements. Inside a table the
     // `<ParagraphStyleRange>` / `<CharacterStyleRange>` belong to CELL
     // paragraphs, which the parser stores on `paragraph.table.cells[]`,
@@ -837,42 +1281,36 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                     }
                     b"CharacterStyleRange" if table_depth == 0 => {
                         run_idx += 1;
-                        content_seen_in_run = 0;
                         current_run = story
                             .paragraphs
                             .get(para_idx as usize)
                             .and_then(|p| p.runs.get(run_idx as usize));
+                        body = RunBody::default();
                         let start = patch_character_range(&e, current_run)?;
                         writer.write_event(Event::Start(start))?;
                     }
                     b"Content" if table_depth == 0 => {
-                        in_content = true;
-                        content_seen_in_run += 1;
-                        // Patch the first Content's text only, and only
-                        // when the run is a SINGLE-Content run: its text
-                        // carries no `<Tab/>` (→ tab char), `<Br/>` /
-                        // paragraph break (→ newline), or carriage
-                        // return. A run with any of those has multiple
-                        // inline children the parser collapsed into one
-                        // string; reconstructing that split is out of
-                        // scope (documented loss), so we pass its text
-                        // through untouched.
-                        patch_this_content = content_seen_in_run == 1
-                            && current_run
-                                .map(|r| {
-                                    !r.text.contains('\t')
-                                        && !r.text.contains('\n')
-                                        && !r.text.contains('\r')
-                                })
-                                .unwrap_or(false);
-                        if patch_this_content {
-                            content_events.clear();
-                            content_text.clear();
-                            content_has_foreign = false;
-                        }
-                        writer.write_event(Event::Start(e.into_owned()))?;
+                        // A `<Content>` opens the inline body region (or
+                        // continues it). Buffer the start; the text /
+                        // entities inside accumulate into the body, and
+                        // the matching End is buffered too. Once any
+                        // inline leaf appears, every later event in the
+                        // run buffers (foreign markup flips the guard).
+                        body.active = true;
+                        body.in_content = true;
+                        body.events.push(Event::Start(e.into_owned()));
                     }
-                    _ => writer.write_event(Event::Start(e.into_owned()))?,
+                    _ => {
+                        if body.active {
+                            // A non-inline element opened inside the
+                            // buffered region (e.g. an unexpected child
+                            // of `<Content>`). Never rewrite over it.
+                            body.foreign = true;
+                            body.events.push(Event::Start(e.into_owned()));
+                        } else {
+                            writer.write_event(Event::Start(e.into_owned()))?;
+                        }
+                    }
                 }
             }
             Event::Empty(e) => {
@@ -888,6 +1326,8 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                     }
                     b"CharacterStyleRange" if table_depth == 0 => {
                         run_idx += 1;
+                        current_run = None;
+                        body = RunBody::default();
                         let run = story
                             .paragraphs
                             .get(para_idx as usize)
@@ -895,12 +1335,30 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                         let start = patch_character_range(&e, run)?;
                         writer.write_event(Event::Empty(start))?;
                     }
+                    b"Br" if table_depth == 0 && !body.in_content => {
+                        // `<Br/>` is an inline leaf → `\n` in the parser's
+                        // run text. It opens (or continues) the body
+                        // region — a run can start with `\n` (a leading
+                        // `<Br/>` before the first `<Content>`). Mirror
+                        // the newline so the split survives a rewrite.
+                        body.active = true;
+                        body.text.push('\n');
+                        body.events.push(Event::Empty(e.into_owned()));
+                    }
+                    b"Tab" if table_depth == 0 && !body.in_content => {
+                        // `<Tab/>` is an inline leaf → `\t`. Opens or
+                        // continues the body region (see `<Br/>`).
+                        body.active = true;
+                        body.text.push('\t');
+                        body.events.push(Event::Empty(e.into_owned()));
+                    }
                     _ => {
-                        if in_content && patch_this_content {
-                            // e.g. an empty element inside the span —
-                            // never rewrite over it.
-                            content_has_foreign = true;
-                            content_events.push(Event::Empty(e.into_owned()));
+                        if body.active {
+                            // An empty element inside the span (PI-like
+                            // marker, anchored frame, unknown) — never
+                            // rewrite over it.
+                            body.foreign = true;
+                            body.events.push(Event::Empty(e.into_owned()));
                         } else {
                             writer.write_event(Event::Empty(e.into_owned()))?;
                         }
@@ -908,22 +1366,26 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                 }
             }
             Event::Text(t) => {
-                if in_content && patch_this_content {
-                    // Buffer — the patch decision happens at </Content>
-                    // once the whole (possibly entity-split) span is
-                    // known.
+                if body.active && body.in_content {
+                    // Buffer — the replace decision happens at the run
+                    // close once the whole (possibly entity-split) span
+                    // is known.
                     let decoded = t.decode().unwrap_or_default();
                     let orig = quick_xml::escape::unescape(&decoded)
                         .map(|c| c.into_owned())
                         .unwrap_or_else(|_| decoded.into_owned());
-                    content_text.push_str(&orig);
-                    content_events.push(Event::Text(t.into_owned()));
+                    body.text.push_str(&orig);
+                    body.events.push(Event::Text(t.into_owned()));
+                } else if body.active {
+                    // Indentation/whitespace between inline leaves —
+                    // buffer it so a verbatim replay stays byte-exact.
+                    body.events.push(Event::Text(t.into_owned()));
                 } else {
                     writer.write_event(Event::Text(t))?;
                 }
             }
             Event::GeneralRef(r) => {
-                if in_content && patch_this_content {
+                if body.active && body.in_content {
                     // Resolve the reference (predefined five + numeric)
                     // so the comparison sees the parsed run's chars.
                     let name = String::from_utf8_lossy(r.as_ref()).into_owned();
@@ -932,10 +1394,13 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                         .unwrap_or_default();
                     if resolved.is_empty() {
                         // Unknown entity — never rewrite over it.
-                        content_has_foreign = true;
+                        body.foreign = true;
                     }
-                    content_text.push_str(&resolved);
-                    content_events.push(Event::GeneralRef(r.into_owned()));
+                    body.text.push_str(&resolved);
+                    body.events.push(Event::GeneralRef(r.into_owned()));
+                } else if body.active {
+                    body.foreign = true;
+                    body.events.push(Event::GeneralRef(r.into_owned()));
                 } else {
                     writer.write_event(Event::GeneralRef(r))?;
                 }
@@ -943,42 +1408,26 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
             Event::End(e) => {
                 match e.name().as_ref() {
                     b"Table" => table_depth = table_depth.saturating_sub(1),
-                    b"Content" => {
-                        if in_content && patch_this_content {
-                            let replace = match current_run {
-                                // Rewrite only when the model text
-                                // diverged AND the span is pure text
-                                // (no PI/element to clobber); otherwise
-                                // replay the source bytes verbatim so
-                                // entity choices survive byte-identical.
-                                Some(run) => content_text != run.text && !content_has_foreign,
-                                None => false,
-                            };
-                            if replace {
-                                let run = current_run.expect("checked above");
-                                writer.write_event(Event::Text(BytesText::new(&run.text)))?;
-                            } else {
-                                for ev in content_events.drain(..) {
-                                    writer.write_event(ev)?;
-                                }
-                            }
-                            content_events.clear();
-                        }
-                        in_content = false;
-                        patch_this_content = false;
+                    b"Content" if body.active => {
+                        body.in_content = false;
+                        body.events.push(Event::End(e.into_owned()));
+                        continue; // already buffered + advanced
                     }
-                    b"CharacterStyleRange" => current_run = None,
+                    b"CharacterStyleRange" => {
+                        flush_run_body(&mut writer, &mut body, current_run)?;
+                        current_run = None;
+                    }
                     _ => {}
                 }
                 writer.write_event(Event::End(e))?;
             }
             other => {
-                if in_content && patch_this_content {
+                if body.active {
                     // PI (e.g. InDesign's <?ACE 18?> marker) or other
                     // markup inside the span — buffer in order and
                     // never rewrite over it.
-                    content_has_foreign = true;
-                    content_events.push(other.into_owned());
+                    body.foreign = true;
+                    body.events.push(other.into_owned());
                 } else {
                     writer.write_event(other)?;
                 }
@@ -988,6 +1437,108 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
     }
 
     Ok(writer.into_inner().into_inner())
+}
+
+/// Buffered inline body (`<Content>` / `<Br/>` / `<Tab/>` leaves) of one
+/// open `<CharacterStyleRange>`. The decision to rewrite the run's text
+/// — possibly across several `<Content>` segments — can only be made at
+/// the run's close, once the whole reconstructed string is known. Until
+/// then every inline event is buffered here in document order so an
+/// unchanged run (or one with foreign markup) can be replayed
+/// byte-for-byte.
+#[derive(Default)]
+struct RunBody {
+    /// True once the first inline leaf has been seen — from that point
+    /// every event in the run buffers rather than streaming out.
+    active: bool,
+    /// True while inside a `<Content>` element (its text accumulates).
+    in_content: bool,
+    /// Reconstructed run text: Content text verbatim, `\n` per `<Br/>`,
+    /// `\t` per `<Tab/>` — exactly how the parser collapses the run.
+    text: String,
+    /// Any markup the rewrite must not clobber appeared in the body (a
+    /// PI / ACE page-number marker, an anchored frame, a TextVariable
+    /// instance, an unknown entity, …). When set, the body replays
+    /// verbatim regardless of the model text.
+    foreign: bool,
+    /// Buffered events, in document order.
+    events: Vec<Event<'static>>,
+}
+
+/// Emit the buffered inline body of a closing run. When the model text
+/// diverged from the reconstructed source AND the body is pure
+/// Content/Br/Tab (no foreign markup to preserve), re-serialise the
+/// model text across the Content/Br/Tab structure (mirroring
+/// `paged_gen`'s `write_run_content`: `\n` → `<Br/>`, `\t` → `<Tab/>`,
+/// runs of plain text → `<Content>…</Content>`). Otherwise replay the
+/// original events so an unchanged run — or one carrying markers — stays
+/// byte-identical.
+fn flush_run_body(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    body: &mut RunBody,
+    run: Option<&CharacterRun>,
+) -> Result<(), quick_xml::Error> {
+    if !body.active {
+        return Ok(());
+    }
+    let replace = match run {
+        Some(r) => r.text != body.text && !body.foreign,
+        None => false,
+    };
+    if replace {
+        write_run_content(writer, &run.expect("checked above").text)?;
+    } else {
+        for ev in body.events.drain(..) {
+            writer.write_event(ev)?;
+        }
+    }
+    body.active = false;
+    body.in_content = false;
+    body.events.clear();
+    Ok(())
+}
+
+/// Serialise a run's text body back into IDML `<Content>` / `<Br/>` /
+/// `<Tab/>` structure, byte-for-byte matching `paged_gen`'s emitter so
+/// a saved edit re-parses to the same model. Empty text emits an empty
+/// `<Content></Content>` (the IDML form for a zero-length run).
+fn write_run_content(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    text: &str,
+) -> Result<(), quick_xml::Error> {
+    fn flush(
+        writer: &mut Writer<Cursor<Vec<u8>>>,
+        buf: &mut String,
+    ) -> Result<(), quick_xml::Error> {
+        if !buf.is_empty() {
+            writer.write_event(Event::Start(BytesStart::new("Content")))?;
+            writer.write_event(Event::Text(BytesText::new(buf)))?;
+            writer.write_event(Event::End(quick_xml::events::BytesEnd::new("Content")))?;
+            buf.clear();
+        }
+        Ok(())
+    }
+    if text.is_empty() {
+        writer.write_event(Event::Start(BytesStart::new("Content")))?;
+        writer.write_event(Event::End(quick_xml::events::BytesEnd::new("Content")))?;
+        return Ok(());
+    }
+    let mut buf = String::new();
+    for ch in text.chars() {
+        match ch {
+            '\t' => {
+                flush(writer, &mut buf)?;
+                writer.write_event(Event::Empty(BytesStart::new("Tab")))?;
+            }
+            '\n' => {
+                flush(writer, &mut buf)?;
+                writer.write_event(Event::Empty(BytesStart::new("Br")))?;
+            }
+            _ => buf.push(ch),
+        }
+    }
+    flush(writer, &mut buf)?;
+    Ok(())
 }
 
 fn patch_paragraph_range(

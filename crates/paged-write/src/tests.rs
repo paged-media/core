@@ -517,3 +517,310 @@ fn plugin_metadata_write_gates_reject_cleanly() {
     let out = write_idml(project.document(), &original).expect("write");
     assert_eq!(original, out, "rejected ops must not dirty the document");
 }
+
+// ---------------------------------------------------------------------
+// 3. W3.B2a — multi-`<Content>` / `<Br>` / `<Tab>` text edits.
+// ---------------------------------------------------------------------
+
+/// Locate `(story_idx, para_idx, run_idx)` of the first run whose text
+/// spans multiple `<Content>` segments (carries a `\t` / `\n`), so a
+/// text edit on it exercises the Content/Br/Tab split rewrite. The
+/// `text-advanced` tables sample carries tabbed columnar runs
+/// (`"Apples\t1.20\t10\t12.00"`).
+fn first_multi_content_run(doc: &Document) -> Option<(usize, usize, usize)> {
+    for (si, s) in doc.stories.iter().enumerate() {
+        for (pi, p) in s.story.paragraphs.iter().enumerate() {
+            for (ri, r) in p.runs.iter().enumerate() {
+                if r.text.contains('\t') || r.text.contains('\n') {
+                    return Some((si, pi, ri));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A text edit on a multi-`<Content>` run (tab-separated columns) saves
+/// and re-parses with the Content/Tab structure intact — closing the
+/// "text edits only save for single-Content runs" loss. The new text
+/// keeps tabs so the re-emitted run is still multi-Content.
+#[test]
+fn mutated_multi_content_text_saves_with_tab_structure() {
+    let original = build_sample("text-advanced");
+    let mut doc = Document::open(&original).unwrap();
+    let (si, pi, ri) = first_multi_content_run(&doc).expect("a multi-Content run");
+
+    // Sanity: the source run really is tab-split.
+    let old = doc.stories[si].story.paragraphs[pi].runs[ri].text.clone();
+    assert!(old.contains('\t'), "fixture run is tab-separated");
+
+    // Edit the model text directly (the run-text edit is what a higher
+    // story-editing op produces); keep tabs so the structure must split.
+    let new_text = "Pears\t9.99\t3\t29.97".to_string();
+    doc.stories[si].story.paragraphs[pi].runs[ri].text = new_text.clone();
+
+    let out = write_idml(&doc, &original).expect("write");
+    assert_ne!(original, out, "a multi-Content text edit must change bytes");
+    let re = Document::open(&out).expect("reparse");
+
+    // The edited run re-parses to the new text WITH the tabs preserved
+    // (proves the `<Content>…</Content><Tab/>…` structure was rebuilt,
+    // not flattened into one Content).
+    let got = &re.stories[si].story.paragraphs[pi].runs[ri].text;
+    assert_eq!(got, &new_text, "edited run text saved + re-parsed");
+    assert_eq!(got.matches('\t').count(), 3, "tab structure intact");
+
+    // Neighbours (the sibling paragraphs' runs) are untouched.
+    assert_eq!(
+        re.stories[si].story.paragraphs[1].runs[0].text,
+        doc.stories[si].story.paragraphs[1].runs[0].text,
+        "sibling run survived"
+    );
+}
+
+/// A `<Br/>`-bearing run (newline in the model) saves + re-parses with
+/// the `<Br/>` structure intact. Built by editing a tabbed run to carry
+/// a newline, proving `\n` → `<Br/>` on the rewrite side.
+#[test]
+fn mutated_run_with_newline_saves_br_structure() {
+    let original = build_sample("text-advanced");
+    let mut doc = Document::open(&original).unwrap();
+    let (si, pi, ri) = first_multi_content_run(&doc).expect("a multi-Content run");
+
+    doc.stories[si].story.paragraphs[pi].runs[ri].text = "line one\nline two".to_string();
+    let out = write_idml(&doc, &original).expect("write");
+    let re = Document::open(&out).expect("reparse");
+
+    let got = &re.stories[si].story.paragraphs[pi].runs[ri].text;
+    assert_eq!(
+        got, "line one\nline two",
+        "newline run round-trips as <Br/>"
+    );
+}
+
+/// Content + Br/Tab byte-identity when unchanged: a multi-Content story
+/// that isn't mutated must round-trip byte-for-byte (the structured
+/// pass-through, the analogue of the entity-fix buffered span). This is
+/// the per-entry guard for the tabbed `text-advanced` story.
+#[test]
+fn unmutated_multi_content_story_is_byte_identical() {
+    let original = build_sample("text-advanced");
+    let doc = Document::open(&original).unwrap();
+    let out = write_idml(&doc, &original).expect("write");
+
+    let src = entries(&original);
+    let dst = entries(&out);
+    // Every Stories/* entry — including the tab-columnar one — is
+    // byte-identical on the unmutated round-trip.
+    for (path, sb) in &src {
+        if path.starts_with("Stories/") {
+            assert_eq!(
+                sb,
+                dst.get(path).expect("entry present"),
+                "{path}: multi-Content story not byte-identical unmutated"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// 4. W3.B2a — PathGeometry frame bounds / path-point edits.
+// ---------------------------------------------------------------------
+
+/// A `FrameBounds` mutation on a frame whose geometry lives in a
+/// `<PathPointArray>` (a plain `<Rectangle>` from a real-shaped export —
+/// no `GeometricBounds` attribute) now saves: the writer regenerates the
+/// path corners from the model bounds. Re-parse shows the new bounds.
+#[test]
+fn mutated_frame_bounds_on_path_geometry_rect_saves() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+
+    // A geometry-sample rectangle carries its outline as a
+    // `<PathPointArray>` (anchors empty in the model = the 4-corner AABB
+    // case) and no `GeometricBounds` attribute — the exact loss case.
+    let (spread_idx, rect_id, old_bounds) = doc
+        .spreads
+        .iter()
+        .enumerate()
+        .find_map(|(si, s)| {
+            s.spread
+                .rectangles
+                .iter()
+                .find(|r| r.self_id.is_some() && r.anchors.is_empty())
+                .map(|r| (si, r.self_id.clone().unwrap(), r.bounds))
+        })
+        .expect("a path-geometry rectangle");
+
+    // New bounds: grow the box. FrameBounds value is [top, left, bottom,
+    // right].
+    let new = [
+        old_bounds.top,
+        old_bounds.left,
+        old_bounds.bottom + 40.0,
+        old_bounds.right + 25.0,
+    ];
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::SetProperty {
+            node: NodeId::Rectangle(rect_id.clone()),
+            path: PropertyPath::FrameBounds,
+            value: Value::Bounds(new),
+        })
+        .expect("apply bounds");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    assert_ne!(original, out, "a path-geometry bounds edit must save");
+    let re = Document::open(&out).expect("reparse");
+
+    let rect = re.spreads[spread_idx]
+        .spread
+        .rectangles
+        .iter()
+        .find(|r| r.self_id.as_deref() == Some(rect_id.as_str()))
+        .expect("rectangle present");
+
+    // Re-parse derives the bounds from the rewritten `<PathPointArray>`
+    // anchors — they reflect the new box.
+    assert!((rect.bounds.top - new[0]).abs() < 1e-3, "top");
+    assert!((rect.bounds.left - new[1]).abs() < 1e-3, "left");
+    assert!((rect.bounds.bottom - new[2]).abs() < 1e-3, "bottom");
+    assert!((rect.bounds.right - new[3]).abs() < 1e-3, "right");
+
+    // Render-equivalence: the geometry the renderer consumes off the
+    // re-parsed package (bounds + any anchors) is identical to the
+    // directly-mutated in-memory model — saving then re-loading draws
+    // the same frame. (The renderer derives a path-geometry rect from
+    // these bounds; matching them ⇒ identical rasterisation.)
+    let model_rect = project.document().spreads[spread_idx]
+        .spread
+        .rectangles
+        .iter()
+        .find(|r| r.self_id.as_deref() == Some(rect_id.as_str()))
+        .expect("model rect");
+    assert!((rect.bounds.top - model_rect.bounds.top).abs() < 1e-3);
+    assert!((rect.bounds.left - model_rect.bounds.left).abs() < 1e-3);
+    assert!((rect.bounds.bottom - model_rect.bounds.bottom).abs() < 1e-3);
+    assert!((rect.bounds.right - model_rect.bounds.right).abs() < 1e-3);
+    assert_eq!(
+        rect.item_transform, model_rect.item_transform,
+        "frame placement transform unchanged by a bounds edit"
+    );
+
+    // Only one spread entry changed.
+    let src = entries(&original);
+    let dst = entries(&out);
+    let changed: Vec<&String> = src
+        .iter()
+        .filter(|(k, v)| dst.get(*k).map(|d| d != *v).unwrap_or(true))
+        .map(|(k, _)| k)
+        .collect();
+    assert_eq!(changed.len(), 1, "only one entry changed: {changed:?}");
+    assert!(changed[0].starts_with("Spreads/"));
+}
+
+/// A `FramePathPoint` mutation (move one anchor of a path-geometry
+/// frame) round-trips through save: the writer rewrites the
+/// `<PathPointArray>`, and a re-parse shows the moved anchor.
+#[test]
+fn mutated_frame_path_point_round_trips_through_save() {
+    use paged_mutate::{PathPointAddress, PathPointRole};
+
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+
+    // A geometry text frame keeps its 4 corner anchors in the model.
+    let (spread_idx, frame_id, base) = doc
+        .spreads
+        .iter()
+        .enumerate()
+        .find_map(|(si, s)| {
+            s.spread
+                .text_frames
+                .iter()
+                .find(|f| f.self_id.is_some() && f.anchors.len() == 4)
+                .map(|f| (si, f.self_id.clone().unwrap(), f.anchors[2].anchor))
+        })
+        .expect("a 4-anchor text frame");
+
+    // Move anchor #2 by a clear delta.
+    let target = [base.0 + 17.0, base.1 - 9.0];
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::SetProperty {
+            node: NodeId::TextFrame(frame_id.clone()),
+            path: PropertyPath::FramePathPoint,
+            value: Value::PathPoint {
+                address: PathPointAddress {
+                    index: 2,
+                    role: PathPointRole::Anchor,
+                },
+                position: target,
+            },
+        })
+        .expect("apply path point");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    assert_ne!(original, out, "a path-point edit must save");
+    let re = Document::open(&out).expect("reparse");
+
+    let frame = re.spreads[spread_idx]
+        .spread
+        .text_frames
+        .iter()
+        .find(|f| f.self_id.as_deref() == Some(frame_id.as_str()))
+        .expect("frame present");
+    assert_eq!(frame.anchors.len(), 4, "anchor count preserved");
+    let moved = frame.anchors[2].anchor;
+    assert!(
+        (moved.0 - target[0]).abs() < 1e-3 && (moved.1 - target[1]).abs() < 1e-3,
+        "anchor moved to {target:?}, got {moved:?}"
+    );
+    // An untouched anchor survived.
+    let other = frame.anchors[0].anchor;
+    assert!(
+        (other.0 - 0.0).abs() < 1e-3 && (other.1 - 0.0).abs() < 1e-3,
+        "neighbour anchor unchanged: {other:?}"
+    );
+}
+
+/// A path-point mutate-then-undo writes byte-identically — proves the
+/// `<PathPointArray>` rewrite is value-driven (compares formatted
+/// anchors), not touch-driven.
+#[test]
+fn path_point_mutate_then_undo_round_trips_byte_identical() {
+    use paged_mutate::{PathPointAddress, PathPointRole};
+
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+    let frame_id = doc
+        .spreads
+        .iter()
+        .find_map(|s| {
+            s.spread
+                .text_frames
+                .iter()
+                .find(|f| f.self_id.is_some() && f.anchors.len() == 4)
+                .and_then(|f| f.self_id.clone())
+        })
+        .expect("a 4-anchor text frame");
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::SetProperty {
+            node: NodeId::TextFrame(frame_id),
+            path: PropertyPath::FramePathPoint,
+            value: Value::PathPoint {
+                address: PathPointAddress {
+                    index: 1,
+                    role: PathPointRole::Anchor,
+                },
+                position: [12.0, 34.0],
+            },
+        })
+        .unwrap();
+    project.undo().unwrap().expect("undo");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    assert_eq!(original, out, "path-point set→undo is a no-op write");
+}
