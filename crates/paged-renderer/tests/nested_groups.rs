@@ -106,7 +106,12 @@ fn rotated_inner_groups_rotate_their_leaves() {
             (col0 - LEAF_W_PT).abs() < 1.0 && (col1 - LEAF_H_PT).abs() < 1.0
         })
         .collect();
-    assert_eq!(leaf_fills.len(), 4, "four leaf fills, got {}", leaf_fills.len());
+    assert_eq!(
+        leaf_fills.len(),
+        4,
+        "four leaf fills, got {}",
+        leaf_fills.len()
+    );
     for m in &leaf_fills {
         assert!(
             m[1].abs() > 1.0 || m[2].abs() > 1.0,

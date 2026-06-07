@@ -27,11 +27,12 @@
 //!      The trailing glyphs drop and the renderer fires an
 //!      `OversetTextDropped` diagnostic (matching the body-text
 //!      overset contract).
-//!   4–6. `segment · {baseline,ascender,descender}` — three identical
-//!      straight horizontal segments carrying the same text under the
-//!      remaining `PathTypeAlignment` seats. On a flat path the seat
-//!      shift is purely vertical, so the conformance corpus can diff
-//!      Ascender / Descender against Baseline directly.
+//!   4. `segment · baseline`, 5. `segment · ascender`, 6. `segment ·
+//!      descender` — three identical straight horizontal segments
+//!      carrying the same text under the remaining `PathTypeAlignment`
+//!      seats. On a flat path the seat shift is purely vertical, so the
+//!      conformance corpus can diff Ascender / Descender against
+//!      Baseline directly.
 //!
 //! The host polygons carry no fill (`Swatch/None`) but a thin black
 //! stroke so the curve is visible in the exported PDF; the glyphs ride

@@ -1053,13 +1053,19 @@ fn layout_round_trips_margins_columns_guides_and_spread_xform() {
     );
 
     // Pages 4 & 5 — spread ItemTransform present (rotation / scale).
-    let rot = doc.spreads[4].spread.item_transform.expect("rotate spread xform");
+    let rot = doc.spreads[4]
+        .spread
+        .item_transform
+        .expect("rotate spread xform");
     // 15° rotation ⇒ off-diagonal terms non-zero.
     assert!(
         rot[1].abs() > 0.1 && rot[2].abs() > 0.1,
         "page 4 spread carries a rotation (b/c non-zero), got {rot:?}"
     );
-    let scl = doc.spreads[5].spread.item_transform.expect("scale spread xform");
+    let scl = doc.spreads[5]
+        .spread
+        .item_transform
+        .expect("scale spread xform");
     assert!(
         (scl[0] - 1.25).abs() < 0.01 && (scl[3] - 1.25).abs() < 0.01,
         "page 5 spread carries a 1.25x scale, got {scl:?}"
@@ -1095,8 +1101,7 @@ fn nested_groups_round_trips_group_of_groups() {
         let outer_count = groups
             .iter()
             .filter(|g| {
-                !g.members.is_empty()
-                    && g.members.iter().all(|m| matches!(m, FrameRef::Group(_)))
+                !g.members.is_empty() && g.members.iter().all(|m| matches!(m, FrameRef::Group(_)))
             })
             .count();
         assert_eq!(

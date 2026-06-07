@@ -103,8 +103,14 @@ fn spread_rotation_rotates_body_rect_fill() {
     // (rotation preserves length).
     let col0 = (m[0] * m[0] + m[1] * m[1]).sqrt();
     let col1 = (m[2] * m[2] + m[3] * m[3]).sqrt();
-    assert!((col0 - DEMO_W_PT).abs() < 1.0, "width preserved, got {col0}");
-    assert!((col1 - DEMO_H_PT).abs() < 1.0, "height preserved, got {col1}");
+    assert!(
+        (col0 - DEMO_W_PT).abs() < 1.0,
+        "width preserved, got {col0}"
+    );
+    assert!(
+        (col1 - DEMO_H_PT).abs() < 1.0,
+        "height preserved, got {col1}"
+    );
 }
 
 #[test]
