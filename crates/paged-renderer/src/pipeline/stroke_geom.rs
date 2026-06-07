@@ -25,9 +25,13 @@
 //!     indistinguishable from the true offset Bezier at print
 //!     resolution. Documented as a deliberate approximation.
 //!   * [`offset_polyline`] — shift every vertex of a polyline along its
-//!     local outward normal by a signed distance (perpendicular
-//!     offset). Used both for striped sub-rules and for stroke
-//!     alignment (inside/outside) on open paths.
+//!     local averaged-normal by a signed distance (perpendicular
+//!     offset). Used for the striped sub-rules.
+//!   * [`offset_closed_outline`] — W1.5 miter-correct inward / outward
+//!     offset of a CLOSED contour for stroke alignment (Inside /
+//!     Outside) on ovals, closed polygons, and closed compound paths.
+//!     Picks the inset / outset candidate by enclosed area so it is
+//!     winding-agnostic; open sub-contours stay centred.
 //!   * [`sine_polyline`] — resample a polyline by arc length, displacing
 //!     each sample along the local normal by `amplitude·sin(2π·s/period)`
 //!     to make the wavy-stroke centreline.
@@ -219,6 +223,214 @@ pub(crate) fn offset_polyline(line: &Polyline, distance: f32) -> Polyline {
     }
 }
 
+/// Drop vertices of a CLOSED polyline that are near-duplicates of their
+/// predecessor or that lie (within a tolerance) on the straight line
+/// between their neighbours. The result keeps only genuine corners +
+/// curve samples, which is what the miter offset needs. Tolerance is in
+/// the cross-product (≈ area) domain; `1e-2` keeps real curve detail
+/// while collapsing the cubic-sampled straight edges of a polygon.
+fn simplify_collinear(points: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    let m = points.len();
+    if m < 3 {
+        return points.to_vec();
+    }
+    // First pass: drop consecutive near-duplicate vertices.
+    let mut dedup: Vec<(f32, f32)> = Vec::with_capacity(m);
+    for &p in points {
+        // `map_or(true, …)` (not `is_none_or`, which is 1.82+; MSRV 1.80).
+        if dedup
+            .last()
+            .map_or(true, |&q: &(f32, f32)| (p.0 - q.0).hypot(p.1 - q.1) > 1e-4)
+        {
+            dedup.push(p);
+        }
+    }
+    if dedup.len() >= 2 && dedup.first() == dedup.last() {
+        dedup.pop();
+    }
+    let n = dedup.len();
+    if n < 3 {
+        return dedup;
+    }
+    // Second pass: drop collinear interior vertices (treating the loop
+    // as closed). A vertex is collinear when the triangle it forms with
+    // its kept neighbours has near-zero area, normalised by the longer
+    // adjacent edge so the test is scale-aware.
+    let mut out: Vec<(f32, f32)> = Vec::with_capacity(n);
+    for i in 0..n {
+        let prev = *out.last().unwrap_or(&dedup[(i + n - 1) % n]);
+        let cur = dedup[i];
+        let next = dedup[(i + 1) % n];
+        let v1 = (cur.0 - prev.0, cur.1 - prev.1);
+        let v2 = (next.0 - cur.0, next.1 - cur.1);
+        let cross = v1.0 * v2.1 - v1.1 * v2.0;
+        let scale = (v1.0.hypot(v1.1)).max(v2.0.hypot(v2.1)).max(1e-6);
+        if (cross / scale).abs() > 1e-2 {
+            out.push(cur);
+        }
+    }
+    if out.len() < 3 {
+        dedup
+    } else {
+        out
+    }
+}
+
+/// W1.5 — miter-correct parallel offset of a closed polyline. Each
+/// vertex moves along the **bisector** of its two adjacent edge
+/// normals, scaled by `1/(n_bisector · n_edge)` so that BOTH adjacent
+/// edges end up offset by exactly `distance` (a true parallel offset).
+/// A plain averaged-unit-normal offset (`offset_polyline`) under-shoots
+/// sharp corners — a 90° corner of a rect would inset by `distance/√2`
+/// instead of `distance` — which is wrong for an alignment offset.
+///
+/// The miter scale blows up as the corner angle → 0; we clamp it to
+/// `MITER_CLAMP` so an acute spike doesn't shoot the offset vertex off
+/// to infinity (matching a stroke miter limit). The acute-spike
+/// self-intersection that remains is the documented limitation on
+/// [`offset_closed_outline`].
+fn miter_offset_closed(points: &[(f32, f32)], distance: f32) -> Vec<(f32, f32)> {
+    const MITER_CLAMP: f32 = 8.0;
+    // Collapse near-duplicate and collinear runs first. A polygon's
+    // straight edges arrive here as a dense cubic flattening (8 samples
+    // per edge, clustered near corners by the control-point placement);
+    // those clustered samples give the miter bisector a spurious
+    // diagonal tilt that dents the offset outline inward. Reducing each
+    // straight run back to its corner makes the corner miter exact and
+    // leaves genuinely-curved outlines (ovals) almost untouched (their
+    // samples are never collinear).
+    let points = simplify_collinear(points);
+    let m = points.len();
+    if m < 3 {
+        return points;
+    }
+    let edge_normal = |a: (f32, f32), b: (f32, f32)| -> Option<(f32, f32)> {
+        let dx = b.0 - a.0;
+        let dy = b.1 - a.1;
+        let len = (dx * dx + dy * dy).sqrt();
+        if len < 1e-6 {
+            None
+        } else {
+            Some((-dy / len, dx / len))
+        }
+    };
+    let mut out = Vec::with_capacity(m);
+    for i in 0..m {
+        let prev_n = edge_normal(points[(i + m - 1) % m], points[i]);
+        let next_n = edge_normal(points[i], points[(i + 1) % m]);
+        let (bx, by, base) = match (prev_n, next_n) {
+            (Some(a), Some(b)) => {
+                let sx = a.0 + b.0;
+                let sy = a.1 + b.1;
+                let len = (sx * sx + sy * sy).sqrt();
+                if len < 1e-6 {
+                    // 180° reversal — keep the single edge normal.
+                    (a.0, a.1, a)
+                } else {
+                    (sx / len, sy / len, a)
+                }
+            }
+            (Some(a), None) | (None, Some(a)) => (a.0, a.1, a),
+            (None, None) => (0.0, 0.0, (0.0, 0.0)),
+        };
+        // cos(half-angle) = bisector · edge_normal. Miter factor =
+        // 1/cos, clamped so acute corners don't explode.
+        let cos_half = (bx * base.0 + by * base.1).abs().max(1.0 / MITER_CLAMP);
+        let scale = distance / cos_half;
+        out.push((points[i].0 + bx * scale, points[i].1 + by * scale));
+    }
+    out
+}
+
+/// Signed area of a (closed) polyline via the shoelace formula. In
+/// IDML / screen space (y grows downward) a clockwise contour yields a
+/// **positive** area and a counter-clockwise one a negative area; only
+/// the magnitude and the relative ordering of two candidates matter to
+/// [`offset_closed_outline`], so the absolute sign convention is
+/// irrelevant. The contour is treated as implicitly closed (the last
+/// vertex connects back to the first).
+fn polyline_signed_area(points: &[(f32, f32)]) -> f32 {
+    let m = points.len();
+    if m < 3 {
+        return 0.0;
+    }
+    let mut acc = 0.0f32;
+    for i in 0..m {
+        let (x0, y0) = points[i];
+        let (x1, y1) = points[(i + 1) % m];
+        acc += x0 * y1 - x1 * y0;
+    }
+    acc * 0.5
+}
+
+/// W1.5 — offset a CLOSED contour's outline inward or outward by
+/// `distance` for stroke alignment (Inside / Outside) on non-rect
+/// shapes (ovals, closed polygons, closed compound paths). `inward =
+/// true` shrinks the outline (InsideAlignment), `false` grows it
+/// (OutsideAlignment).
+///
+/// Strategy: flatten is already done by the caller; here we offset the
+/// vertices along their averaged normals by `±distance` and pick the
+/// sign by enclosed area — the inward result is the candidate with the
+/// **smaller** absolute area, the outward result the **larger** one.
+/// This is winding-agnostic (the IDML parser does not normalise contour
+/// winding, so we cannot assume a fixed handedness for the per-vertex
+/// normal) and mirrors `paged_mutate::kurbo_kernel::offset_closed_path`'s
+/// area-selection trick.
+///
+/// LIMITATION: this is a per-vertex parallel offset, not a true
+/// medial-axis offset. On a convex outline (oval, rounded polygon) it
+/// is exact at print resolution. On a contour with acute interior
+/// spikes a large inward offset can make the offset edges cross
+/// (self-intersection) near the spike; we do not trim those crossings.
+/// InDesign clamps such cases too, and the W1.* fixtures stay within
+/// the convex / gently-concave regime where the artefact does not
+/// appear. The proper offset (kurbo `offset_closed_path`, B-05) is NOT
+/// reusable here: it lives in `paged-mutate`, which depends on
+/// `paged-renderer` — wiring it back would form a dependency cycle.
+pub(crate) fn offset_closed_outline(line: &Polyline, distance: f32, inward: bool) -> Polyline {
+    if line.points.len() < 3 || distance.abs() < 1e-6 {
+        return line.clone();
+    }
+    // `flatten_path` snaps a closed contour back to its start, leaving a
+    // trailing vertex equal to the first. That duplicate gives the wrap
+    // vertex a zero-length adjacent edge → a degenerate (0,0) normal →
+    // it doesn't move under the offset, pinning one corner to the
+    // unoffset outline. Drop it so the closed loop has distinct vertices.
+    let line = if line.points.len() >= 2 && line.points.first() == line.points.last() {
+        Polyline {
+            points: line.points[..line.points.len() - 1].to_vec(),
+            closed: true,
+        }
+    } else {
+        line.clone()
+    };
+    if line.points.len() < 3 {
+        return line;
+    }
+    let plus = Polyline {
+        points: miter_offset_closed(&line.points, distance),
+        closed: true,
+    };
+    let minus = Polyline {
+        points: miter_offset_closed(&line.points, -distance),
+        closed: true,
+    };
+    let area_plus = polyline_signed_area(&plus.points).abs();
+    let area_minus = polyline_signed_area(&minus.points).abs();
+    // Inward ⇒ smaller enclosed area; outward ⇒ larger.
+    let pick_plus = if inward {
+        area_plus <= area_minus
+    } else {
+        area_plus >= area_minus
+    };
+    if pick_plus {
+        plus
+    } else {
+        minus
+    }
+}
+
 /// Resample `line` along its arc length and displace each sample along
 /// the local normal by `amplitude·sin(2π·s/period)`, producing a sine
 /// wave that rides the path centreline. `period` and `amplitude` are in
@@ -305,6 +517,27 @@ pub(crate) fn polyline_to_path(line: &Polyline) -> PathData {
         }
         if line.closed {
             segments.push(PathSegment::Close);
+        }
+    }
+    PathData { segments }
+}
+
+/// Wrap several polylines into one multi-contour [`PathData`]. Each
+/// polyline becomes its own `MoveTo … (Close)` run, so a compound
+/// outline (e.g. an offset polygon with a hole) round-trips through a
+/// single path. Empty contours are skipped.
+pub(crate) fn polylines_to_path(lines: &[Polyline]) -> PathData {
+    let mut segments = Vec::new();
+    for line in lines {
+        let mut it = line.points.iter();
+        if let Some(&(x, y)) = it.next() {
+            segments.push(PathSegment::MoveTo { x, y });
+            for &(x, y) in it {
+                segments.push(PathSegment::LineTo { x, y });
+            }
+            if line.closed {
+                segments.push(PathSegment::Close);
+            }
         }
     }
     PathData { segments }
@@ -477,5 +710,184 @@ mod tests {
         let line = poly(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)], true);
         let p = polyline_to_path(&line);
         assert!(matches!(p.segments.last(), Some(PathSegment::Close)));
+    }
+}
+
+#[cfg(test)]
+mod w15_offset_tests {
+    use super::*;
+
+    fn bounds(pts: &[(f32, f32)]) -> (f32, f32, f32, f32) {
+        let (mut minx, mut miny, mut maxx, mut maxy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for &(x, y) in pts {
+            minx = minx.min(x);
+            miny = miny.min(y);
+            maxx = maxx.max(x);
+            maxy = maxy.max(y);
+        }
+        (minx, miny, maxx, maxy)
+    }
+
+    /// A sharp-cornered rect insets by EXACTLY `distance` on every edge
+    /// (miter-correct: the 90° corners land at (10,10)/(190,90), not the
+    /// `10/√2` an averaged-unit-normal offset would give).
+    #[test]
+    fn offset_closed_rect_inward_is_exact_at_corners() {
+        let line = Polyline {
+            // Closed rect, with the flatten-style trailing snap-back vertex.
+            points: vec![
+                (0.0, 0.0),
+                (200.0, 0.0),
+                (200.0, 100.0),
+                (0.0, 100.0),
+                (0.0, 0.0),
+            ],
+            closed: true,
+        };
+        let inw = offset_closed_outline(&line, 10.0, true);
+        let (minx, miny, maxx, maxy) = bounds(&inw.points);
+        assert!((minx - 10.0).abs() < 1e-3, "minx={minx}");
+        assert!((miny - 10.0).abs() < 1e-3, "miny={miny}");
+        assert!((maxx - 190.0).abs() < 1e-3, "maxx={maxx}");
+        assert!((maxy - 90.0).abs() < 1e-3, "maxy={maxy}");
+        // The trailing duplicate vertex is dropped → 4 distinct corners.
+        assert_eq!(inw.points.len(), 4);
+    }
+
+    /// Outward offset grows the rect by exactly `distance` on every edge.
+    #[test]
+    fn offset_closed_rect_outward_is_exact_at_corners() {
+        let line = Polyline {
+            points: vec![(0.0, 0.0), (200.0, 0.0), (200.0, 100.0), (0.0, 100.0)],
+            closed: true,
+        };
+        let outw = offset_closed_outline(&line, 10.0, false);
+        let (minx, miny, maxx, maxy) = bounds(&outw.points);
+        assert!((minx + 10.0).abs() < 1e-3, "minx={minx}");
+        assert!((miny + 10.0).abs() < 1e-3, "miny={miny}");
+        assert!((maxx - 210.0).abs() < 1e-3, "maxx={maxx}");
+        assert!((maxy - 110.0).abs() < 1e-3, "maxy={maxy}");
+    }
+
+    /// Winding-agnostic: a counter-clockwise rect still insets (smaller
+    /// area) for `inward = true`.
+    #[test]
+    fn offset_closed_inward_is_winding_agnostic() {
+        // Counter-clockwise winding (reverse of the above).
+        let ccw = Polyline {
+            points: vec![(0.0, 0.0), (0.0, 100.0), (200.0, 100.0), (200.0, 0.0)],
+            closed: true,
+        };
+        let inw = offset_closed_outline(&ccw, 10.0, true);
+        let (minx, miny, maxx, maxy) = bounds(&inw.points);
+        assert!(minx > 9.0 && maxx < 191.0, "inset x=({minx},{maxx})");
+        assert!(miny > 9.0 && maxy < 91.0, "inset y=({miny},{maxy})");
+    }
+
+    /// A near-zero distance is a no-op (returns the input outline).
+    #[test]
+    fn offset_closed_zero_distance_is_noop() {
+        let line = Polyline {
+            points: vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)],
+            closed: true,
+        };
+        let off = offset_closed_outline(&line, 0.0, true);
+        assert_eq!(off.points, line.points);
+    }
+
+    /// `polylines_to_path` emits one `MoveTo … Close` run per closed
+    /// contour — a compound (donut) outline round-trips as one path.
+    #[test]
+    fn polylines_to_path_emits_per_contour_runs() {
+        let outer = Polyline {
+            points: vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)],
+            closed: true,
+        };
+        let inner = Polyline {
+            points: vec![(3.0, 3.0), (7.0, 3.0), (7.0, 7.0), (3.0, 7.0)],
+            closed: true,
+        };
+        let path = polylines_to_path(&[outer, inner]);
+        let moves = path
+            .segments
+            .iter()
+            .filter(|s| matches!(s, PathSegment::MoveTo { .. }))
+            .count();
+        let closes = path
+            .segments
+            .iter()
+            .filter(|s| matches!(s, PathSegment::Close))
+            .count();
+        assert_eq!(moves, 2, "two contours → two MoveTo");
+        assert_eq!(closes, 2, "two closed contours → two Close");
+    }
+}
+
+#[cfg(test)]
+mod w15_polygon_path_offset_tests {
+    use super::*;
+    use paged_compose::{PathData, PathSegment};
+
+    /// End-to-end on a polygon-style path: a rectangle encoded as cubic
+    /// segments whose control points sit on the anchors (exactly how
+    /// `polygon_path_from_anchors_with_open` serialises a straight-edged
+    /// polygon). Flattening clusters samples near the corners; the
+    /// collinear-simplify in `miter_offset_closed` must collapse those so
+    /// the inward offset insets every edge by exactly `distance`.
+    #[test]
+    fn cubic_encoded_rect_insets_exactly() {
+        let segs = vec![
+            PathSegment::MoveTo { x: 0.0, y: 0.0 },
+            PathSegment::CubicTo {
+                cx1: 0.0,
+                cy1: 0.0,
+                cx2: 200.0,
+                cy2: 0.0,
+                x: 200.0,
+                y: 0.0,
+            },
+            PathSegment::CubicTo {
+                cx1: 200.0,
+                cy1: 0.0,
+                cx2: 200.0,
+                cy2: 100.0,
+                x: 200.0,
+                y: 100.0,
+            },
+            PathSegment::CubicTo {
+                cx1: 200.0,
+                cy1: 100.0,
+                cx2: 0.0,
+                cy2: 100.0,
+                x: 0.0,
+                y: 100.0,
+            },
+            PathSegment::CubicTo {
+                cx1: 0.0,
+                cy1: 100.0,
+                cx2: 0.0,
+                cy2: 0.0,
+                x: 0.0,
+                y: 0.0,
+            },
+            PathSegment::Close,
+        ];
+        let lines = flatten_path(&PathData { segments: segs }, FLATTEN_STEPS);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].closed);
+        let inw = offset_closed_outline(&lines[0], 10.0, true);
+        let (mut a, mut b, mut c, mut d) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for &(x, y) in &inw.points {
+            a = a.min(x);
+            b = b.min(y);
+            c = c.max(x);
+            d = d.max(y);
+        }
+        assert!((a - 10.0).abs() < 1e-2, "min_x={a}");
+        assert!((b - 10.0).abs() < 1e-2, "min_y={b}");
+        assert!((c - 190.0).abs() < 1e-2, "max_x={c}");
+        assert!((d - 90.0).abs() < 1e-2, "max_y={d}");
+        // Collinear-collapsed back to four corners.
+        assert_eq!(inw.points.len(), 4, "rect collapses to 4 corners");
     }
 }

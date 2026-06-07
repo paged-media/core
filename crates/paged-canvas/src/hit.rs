@@ -108,12 +108,34 @@ impl CanvasModel {
         };
         let (page_origin_x, page_origin_y) = built_page.spread_origin;
         // page-local [top, left, bottom, right] → spread coords by
-        // adding the page origin to the x/y axes.
+        // adding the page origin to the x/y axes. W1.9 — when the spread
+        // carries a rotation/scale (`spread_transform`), first map the
+        // marquee's four corners back through its inverse (page-local →
+        // spread-inner) and take their AABB. For a rotated spread this is
+        // a conservative over-approximation of the rotated marquee rect
+        // (the marquee may select a few frames just outside the true
+        // rotated box); exact OBB-vs-OBB marquee under spread rotation is
+        // a follow-up. IDENTITY makes this the plain origin shift.
+        let [t, l, bm, r] = rect_in_page;
+        let corners = [(l, t), (r, t), (r, bm), (l, bm)];
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (
+            f32::INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+        );
+        for &(px, py) in &corners {
+            let (sx, sy) = invert_spread_transform(built_page.spread_transform, (px, py));
+            min_x = min_x.min(sx);
+            min_y = min_y.min(sy);
+            max_x = max_x.max(sx);
+            max_y = max_y.max(sy);
+        }
         let rect_spread = [
-            rect_in_page[0] + page_origin_y, // top
-            rect_in_page[1] + page_origin_x, // left
-            rect_in_page[2] + page_origin_y, // bottom
-            rect_in_page[3] + page_origin_x, // right
+            min_y + page_origin_y, // top
+            min_x + page_origin_x, // left
+            max_y + page_origin_y, // bottom
+            max_x + page_origin_x, // right
         ];
 
         let scene = self.scene();
@@ -174,7 +196,14 @@ impl CanvasModel {
             return HitTestResult::default();
         };
         let (page_origin_x, page_origin_y) = built_page.spread_origin;
-        let spread_point = (doc_point.0 + page_origin_x, doc_point.1 + page_origin_y);
+        // W1.9 — undo the spread-level rotation/scale the renderer applied
+        // about the page origin (`frame_outer_transform` =
+        // spread_transform ∘ translate(-origin) ∘ item_transform), so the
+        // page-local pointer lands back in spread-inner coords where the
+        // candidate frames' `item_transform`s live. IDENTITY (the common
+        // case) makes this the plain `doc_point + spread_origin` shift.
+        let local = invert_spread_transform(built_page.spread_transform, doc_point);
+        let spread_point = (local.0 + page_origin_x, local.1 + page_origin_y);
 
         let scene = self.scene();
         let designmap = &scene.container.designmap;
@@ -246,6 +275,25 @@ impl CanvasModel {
             }
         }
         HitTestResult::default()
+    }
+}
+
+/// W1.9 — map a page-local point back through the inverse of the page's
+/// spread-level rotation/scale (`spread_transform`, applied by the
+/// renderer about the page origin). For the common identity transform
+/// this returns the point unchanged, so the hit-test math is exactly the
+/// pre-W1.9 plain origin shift. A singular transform (never produced by a
+/// real IDML spread) also falls through unchanged.
+fn invert_spread_transform(
+    spread_transform: paged_compose::Transform,
+    point: (f32, f32),
+) -> (f32, f32) {
+    if spread_transform == paged_compose::Transform::IDENTITY {
+        return point;
+    }
+    match spread_transform.inverse() {
+        Some(inv) => inv.apply(point.0, point.1),
+        None => point,
     }
 }
 
@@ -851,6 +899,26 @@ mod tests {
         // det = a*d - b*c = 0
         assert!(invert_affine([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).is_none());
         assert!(invert_affine([1.0, 0.0, 1.0, 0.0, 0.0, 0.0]).is_none());
+    }
+
+    #[test]
+    fn invert_spread_transform_identity_is_noop() {
+        // W1.9 — the common (identity spread) case returns the point
+        // unchanged, so hit-test math stays the plain origin shift.
+        let p = (12.0, -7.0);
+        let got = invert_spread_transform(paged_compose::Transform::IDENTITY, p);
+        assert_eq!(got, p);
+    }
+
+    #[test]
+    fn invert_spread_transform_undoes_rotation() {
+        // 90° CW rotation (renderer applies x'=-y, y'=x). The inverse
+        // maps the rotated point back: a frame painted at (-125, 125)
+        // came from inner (125, 125).
+        let s = paged_compose::Transform([0.0, 1.0, -1.0, 0.0, 0.0, 0.0]);
+        let got = invert_spread_transform(s, (-125.0, 125.0));
+        assert!((got.0 - 125.0).abs() < 1e-3, "x={}", got.0);
+        assert!((got.1 - 125.0).abs() < 1e-3, "y={}", got.1);
     }
 
     fn b(top: f32, left: f32, bottom: f32, right: f32) -> Bounds {

@@ -207,16 +207,42 @@ pub(super) fn emit_polygon_into(
     if let (Some(pid), Some(effects)) = (path_id, poly.effects.as_ref()) {
         crate::module::emit_effects_post_fill(page, effects, pid, outer, palette, cmyk_xform, None);
     }
+    // W1.5 — Inside/Outside StrokeAlignment on the polygon outline:
+    // offset each closed contour inward / outward by weight/2 and
+    // stroke that offset path instead of the centred `path_id`. Centre
+    // alignment (or an open / anchorless polygon) keeps `path_id`.
+    let poly_weight = resolved.effective_stroke_weight();
+    let aligned_poly_id = if let Geometry::Polygon {
+        anchors,
+        subpath_starts,
+        subpath_open,
+        ..
+    } = &resolved.geometry
+    {
+        let base = polygon_path_from_anchors_with_open(anchors, subpath_starts, subpath_open);
+        super::shapes::aligned_outline_path(&base, resolved.stroke_alignment, poly_weight).map(
+            |p| {
+                let seed = resolved
+                    .self_id
+                    .map(|id| fnv_1a_u64(id.as_bytes()))
+                    .unwrap_or(0xC0DE)
+                    ^ 0xA11A_0000;
+                page.list.paths.intern(seed, p).0
+            },
+        )
+    } else {
+        None
+    };
     crate::module::stroke_paint_module(
         &resolved,
         page,
         palette,
         cmyk_xform,
         outer,
-        path_id,
+        aligned_poly_id.or(path_id),
         stroke_for(
             resolved.stroke_type,
-            resolved.effective_stroke_weight(),
+            poly_weight,
             resolved.end_cap,
             resolved.end_join,
             resolved.miter_limit,

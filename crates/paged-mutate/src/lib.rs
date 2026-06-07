@@ -1818,6 +1818,7 @@ mod tests {
             stroke_color: None,
             stroke_weight: None,
             stroke_type: None,
+            stroke_alignment: None,
             stroke_gap_color: None,
             stroke_gap_tint: None,
             stroke_dash: Vec::new(),

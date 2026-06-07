@@ -221,6 +221,28 @@ impl Transform {
             b1 * tx2 + d1 * ty2 + ty1,
         ])
     }
+
+    /// Inverse of this affine, or `None` when the 2×2 linear block is
+    /// singular (determinant ≈ 0). `m.inverse().unwrap().apply(m.apply(p))
+    /// == p`. Used by the canvas hit-tester to undo the spread-level
+    /// rotation/scale a page's `frame_outer_transform` applied (W1.9).
+    pub fn inverse(&self) -> Option<Transform> {
+        let [a, b, c, d, tx, ty] = self.0;
+        let det = a * d - b * c;
+        if det.abs() < 1e-12 {
+            return None;
+        }
+        let inv_det = 1.0 / det;
+        // Inverse linear block.
+        let ia = d * inv_det;
+        let ib = -b * inv_det;
+        let ic = -c * inv_det;
+        let id = a * inv_det;
+        // Inverse translation: -(Linv · t).
+        let itx = -(ia * tx + ic * ty);
+        let ity = -(ib * tx + id * ty);
+        Some(Transform([ia, ib, ic, id, itx, ity]))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

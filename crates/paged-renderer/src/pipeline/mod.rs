@@ -384,8 +384,25 @@ pub struct BuiltPage {
     /// Page origin in spread coordinates (top-left). The display list's
     /// commands are page-relative — the rasterizer treats (0, 0) as
     /// the page's top-left corner regardless of where the page sits in
-    /// its parent spread.
+    /// its parent spread. Stays in spread-INNER coords (pre-spread-
+    /// ItemTransform); the spread's rotation/scale rides
+    /// `spread_transform` and is applied *about* this origin.
     pub spread_origin: (f32, f32),
+    /// W1.9 — the LINEAR part (rotation / scale, translation dropped) of
+    /// the parent `<Spread>` / `<MasterSpread>`'s own `ItemTransform`.
+    /// InDesign restricts a spread transform to translation +
+    /// 0/90/180/270 rotation; the translation cancels against
+    /// `spread_origin` (both spread-inner) so only the linear part needs
+    /// to ride here. It is applied about the page origin:
+    /// `frame_outer_transform` builds
+    /// `spread_transform ∘ translate(-spread_origin) ∘ item_transform`,
+    /// rotating/scaling the whole page's content in place. The canvas
+    /// hit-tester reads the SAME field and inverts it, so painter and
+    /// hit-test agree by construction (cycle-8: a transform the painter
+    /// applies but the hit-tester ignores breaks selection silently).
+    /// `IDENTITY` (the common case) makes the composition byte-identical
+    /// to the pre-W1.9 `translate(-spread_origin) ∘ item_transform`.
+    pub spread_transform: Transform,
     pub list: DisplayList,
     /// Bumped whenever any frame on this page is re-laid-out. The
     /// canvas combines `(id, layout_generation, numbering_generation)`
@@ -784,6 +801,11 @@ pub fn build_document(
     for (spread_idx, parsed) in document.spreads.iter().enumerate() {
         total_stats.spreads += 1;
         let start = pages.len();
+        // W1.9 — the spread's own `<Spread ItemTransform>` rotation/scale
+        // (linear part; translation drops because it cancels against the
+        // spread-inner page origin). IDENTITY for the common case
+        // (absent / pure-translation transform).
+        let spread_transform = spread_linear_transform(parsed.spread.item_transform);
         for (local_idx, p) in parsed.spread.pages.iter().enumerate() {
             // Per spec §10.3.3: GeometricBounds is in the page's
             // *inner* coords; ItemTransform maps page-inner →
@@ -820,6 +842,7 @@ pub fn build_document(
                 width_pt: bounds_in_spread.width(),
                 height_pt: bounds_in_spread.height(),
                 spread_origin: (bounds_in_spread.left, bounds_in_spread.top),
+                spread_transform,
                 list: page_list,
                 layout_generation: 0,
                 numbering_generation: 0,
@@ -855,6 +878,7 @@ pub fn build_document(
             width_pt: 612.0,
             height_pt: 792.0,
             spread_origin: (0.0, 0.0),
+            spread_transform: Transform::IDENTITY,
             list: DisplayList::new(),
             layout_generation: 0,
             numbering_generation: 0,
@@ -975,8 +999,19 @@ pub fn build_document(
             .pages
             .get(geom.local_page_idx)
             .and_then(|p| p.master_page_transform);
+        // W1.9 — the MASTER spread's own `<MasterSpread ItemTransform>`
+        // rotation/scale (linear part). Inserted between the
+        // MasterPageTransform and the master-page-origin re-base so it
+        // rotates/scales the master overlay about the master page origin,
+        // mirroring how the body spread's `spread_transform` rotates the
+        // body page. IDENTITY for the common (untransformed master) case,
+        // collapsing the chain to the historical translation-only stamp.
+        // (The body spread's own transform separately rides the live
+        // page's `spread_transform` in `frame_outer_transform`.)
+        let master_spread_linear = spread_linear_transform(master.spread.item_transform);
         let mpt_outer = Transform::translate(target_origin.0, target_origin.1)
             .compose(&Transform(mpt.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])))
+            .compose(&master_spread_linear)
             .compose(&Transform::translate(
                 -master_page_origin.0,
                 -master_page_origin.1,
@@ -5224,6 +5259,31 @@ fn apply_matrix(m: &[f32; 6], x: f32, y: f32) -> (f32, f32) {
 /// preserves width/height; for the 90° page rotations the spec
 /// allows on whole spreads, the AABB swaps width/height — the right
 /// behaviour for routing + canvas sizing.
+/// W1.9 — the LINEAR part (rotation / scale) of a spread-level
+/// `<Spread ItemTransform>`, with the translation dropped (it cancels
+/// against the spread-inner page origin in `frame_outer_transform`).
+/// Returns `Transform::IDENTITY` when the transform is absent or is a
+/// pure translation (`[1 0 0 1 tx ty]`) — the overwhelmingly common
+/// case — so the per-page composition stays byte-identical to the
+/// pre-W1.9 path. Applied *about the page origin*, so only the 2×2
+/// linear block matters here.
+fn spread_linear_transform(m: Option<[f32; 6]>) -> Transform {
+    match m {
+        Some([a, b, c, d, _, _]) => {
+            let is_identity_linear = (a - 1.0).abs() < 1e-6
+                && b.abs() < 1e-6
+                && c.abs() < 1e-6
+                && (d - 1.0).abs() < 1e-6;
+            if is_identity_linear {
+                Transform::IDENTITY
+            } else {
+                Transform([a, b, c, d, 0.0, 0.0])
+            }
+        }
+        None => Transform::IDENTITY,
+    }
+}
+
 fn transform_bounds(b: paged_parse::Bounds, m: Option<[f32; 6]>) -> paged_parse::Bounds {
     let Some(m) = m else { return b };
     let corners = [
@@ -7096,17 +7156,23 @@ fn rotate_transform_around(xf: &mut Transform, linear: [f32; 4], pivot_x: f32, p
 fn frame_outer_transform(page: &BuiltPage, item_transform: Option<[f32; 6]>) -> Transform {
     let (ox, oy) = page.spread_origin;
     let page_origin = Transform::translate(-ox, -oy);
-    // NB the spread-level `<Spread ItemTransform>` is NOT composed here.
-    // InDesign only ever emits a translation (+ 0/90/180/270) on a
-    // spread; a translation cancels exactly against `spread_origin`
-    // (both live in spread-inner coords), so per-page output is already
-    // faithful for the real-world case. Composing a spread-level
-    // rotation/scale would require lowering pages in pasteboard space
-    // (page dimensions swap under 90°) and rerouting frames there — its
-    // own project, deferred. See `Spread::item_transform`.
-    match item_transform {
+    // W1.9 — the spread-level `<Spread ItemTransform>` rotation/scale
+    // (`spread_transform`, linear part only; translation already cancels
+    // against `spread_origin`) is applied ABOUT the page origin: first
+    // re-origin the frame into page-local space, then rotate/scale the
+    // whole page in place. When the spread carries no rotation/scale
+    // `spread_transform` is `IDENTITY` and this is exactly the historical
+    // `translate(-spread_origin) ∘ item_transform`. The canvas hit-tester
+    // inverts the same `spread_transform`, so selection can't disagree
+    // with paint.
+    let local = match item_transform {
         Some(m) => page_origin.compose(&Transform(m)),
         None => page_origin,
+    };
+    if page.spread_transform == Transform::IDENTITY {
+        local
+    } else {
+        page.spread_transform.compose(&local)
     }
 }
 
@@ -7404,6 +7470,7 @@ pub fn build(document: &Document, options: &PipelineOptions) -> anyhow::Result<B
         width_pt: page_w,
         height_pt: page_h,
         spread_origin: (0.0, 0.0),
+        spread_transform: Transform::IDENTITY,
         list,
         layout_generation: 0,
         numbering_generation: 0,
@@ -8877,6 +8944,98 @@ mod tests {
         );
         assert!((m[4] - 10.0).abs() < 1e-4, "tx={} (5×2)", m[4]);
         assert!((m[5] - 14.0).abs() < 1e-4, "ty={} (7×2)", m[5]);
+    }
+
+    // ---- W1.9 spread-level ItemTransform rotation/scale ----
+
+    #[test]
+    fn spread_linear_transform_identity_and_translation_collapse() {
+        // Absent → identity.
+        assert_eq!(spread_linear_transform(None), Transform::IDENTITY);
+        // Pure translation → identity (translation cancels against the
+        // spread origin, so only the linear part rides the field).
+        assert_eq!(
+            spread_linear_transform(Some([1.0, 0.0, 0.0, 1.0, 40.0, -12.0])),
+            Transform::IDENTITY
+        );
+    }
+
+    #[test]
+    fn spread_linear_transform_keeps_rotation_drops_translation() {
+        // 90° CW rotation (a=0,b=1,c=-1,d=0) with a translation → the
+        // linear block is kept, the translation dropped.
+        let lin = spread_linear_transform(Some([0.0, 1.0, -1.0, 0.0, 100.0, 200.0]));
+        assert_eq!(lin.0, [0.0, 1.0, -1.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn frame_outer_transform_identity_spread_is_unchanged() {
+        // With an identity spread_transform the outer is byte-identical
+        // to the historical translate(-origin) ∘ item_transform.
+        let page = BuiltPage {
+            id: PageId::synthetic(0, 0),
+            width_pt: 100.0,
+            height_pt: 100.0,
+            spread_origin: (10.0, 20.0),
+            spread_transform: Transform::IDENTITY,
+            list: DisplayList::new(),
+            layout_generation: 0,
+            numbering_generation: 0,
+            stats: PipelineStats::default(),
+            story_layout: Vec::new(),
+            footnotes: Vec::new(),
+            diagnostics: Vec::new(),
+            cell_rects: Vec::new(),
+        };
+        let outer = frame_outer_transform(&page, Some([1.0, 0.0, 0.0, 1.0, 5.0, 6.0]));
+        // translate(-10,-20) ∘ translate(5,6) = translate(-5,-14).
+        assert_eq!(outer.0, [1.0, 0.0, 0.0, 1.0, -5.0, -14.0]);
+    }
+
+    #[test]
+    fn frame_outer_transform_rotated_spread_rotates_about_page_origin() {
+        // 90° CW spread rotation. A point at the page origin (spread
+        // origin) stays put; a frame offset from the origin rotates
+        // about it. spread_origin=(0,0) keeps the math clean.
+        let page = BuiltPage {
+            id: PageId::synthetic(0, 0),
+            width_pt: 100.0,
+            height_pt: 100.0,
+            spread_origin: (0.0, 0.0),
+            spread_transform: Transform([0.0, 1.0, -1.0, 0.0, 0.0, 0.0]),
+            list: DisplayList::new(),
+            layout_generation: 0,
+            numbering_generation: 0,
+            stats: PipelineStats::default(),
+            story_layout: Vec::new(),
+            footnotes: Vec::new(),
+            diagnostics: Vec::new(),
+            cell_rects: Vec::new(),
+        };
+        // Frame at inner origin translated to (30, 0). Under 90° CW
+        // (x' = -y, y' = x), the frame's translation (30,0) maps to
+        // (0, 30). outer = spread ∘ translate(0,0) ∘ translate(30,0).
+        let outer = frame_outer_transform(&page, Some([1.0, 0.0, 0.0, 1.0, 30.0, 0.0]));
+        let (x, y) = outer.apply(0.0, 0.0);
+        assert!((x - 0.0).abs() < 1e-4, "x={x}");
+        assert!((y - 30.0).abs() < 1e-4, "y={y}");
+        // The linear block is the spread rotation composed with identity.
+        assert!((outer.0[0]).abs() < 1e-4 && (outer.0[1] - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn spread_transform_inverse_round_trips() {
+        // The hit-tester inverts the same spread_transform the renderer
+        // applied; a 90° rotation + 2× scale must round-trip.
+        let s = Transform([0.0, 2.0, -2.0, 0.0, 0.0, 0.0]);
+        let inv = s.inverse().expect("invertible");
+        let p = (12.0, -5.0);
+        let (fx, fy) = s.apply(p.0, p.1);
+        let (bx, by) = inv.apply(fx, fy);
+        assert!(
+            (bx - p.0).abs() < 1e-4 && (by - p.1).abs() < 1e-4,
+            "({bx},{by})"
+        );
     }
 
     fn attrs(

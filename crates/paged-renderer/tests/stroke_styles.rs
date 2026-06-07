@@ -439,3 +439,172 @@ fn stroke_alignment_center_keeps_bounds() {
         "max=({max_x},{max_y})"
     );
 }
+
+// ----------------------------------------------------------------------
+// W1.5 — stroke alignment on closed NON-rect shapes (oval + polygon).
+//
+// The renderer offsets the flattened closed outline inward (Inside) /
+// outward (Outside) by weight/2, then strokes the offset path. We assert
+// the page-space bounds of the emitted `StrokePath` shift the right way:
+// inside shrinks the outline, outside grows it, centre leaves it.
+// ----------------------------------------------------------------------
+
+/// Single-page IDML carrying one `<Oval>` with a 200×100 GeometricBounds
+/// at inner origin, plus the supplied stroke attributes.
+fn build_oval_idml(stroke_attrs: &str) -> Vec<u8> {
+    build_shape_idml("Oval", "", stroke_attrs)
+}
+
+/// Single-page IDML carrying one `<Polygon>` — a 200×100 axis-aligned
+/// quad declared via PathGeometry — plus the supplied stroke attributes.
+fn build_polygon_idml(stroke_attrs: &str) -> Vec<u8> {
+    let geom = r#"<Properties>
+          <PathGeometry>
+            <GeometryPathType PathOpen="false">
+              <PathPointArray>
+                <PathPointType Anchor="0 0" LeftDirection="0 0" RightDirection="0 0"/>
+                <PathPointType Anchor="200 0" LeftDirection="200 0" RightDirection="200 0"/>
+                <PathPointType Anchor="200 100" LeftDirection="200 100" RightDirection="200 100"/>
+                <PathPointType Anchor="0 100" LeftDirection="0 100" RightDirection="0 100"/>
+              </PathPointArray>
+            </GeometryPathType>
+          </PathGeometry>
+        </Properties>"#;
+    build_shape_idml("Polygon", geom, stroke_attrs)
+}
+
+/// Build a single-page IDML with one shape element of `tag` (Oval /
+/// Polygon) carrying `GeometricBounds="0 0 100 200"`, the supplied inner
+/// `body` (e.g. a `<Properties><PathGeometry>…`), and `stroke_attrs`.
+fn build_shape_idml(tag: &str, body: &str, stroke_attrs: &str) -> Vec<u8> {
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    zip.start_file("designmap.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Graphic src="Resources/Graphic.xml"/>
+</Document>"#,
+    )
+    .unwrap();
+    zip.start_file("Resources/Graphic.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic>
+    <Color Self="Color/Black" Name="Black" Space="CMYK" ColorValue="0 0 0 100"/>
+  </Graphic>
+</idPkg:Graphic>"#,
+    )
+    .unwrap();
+    let spread = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 400 300"/>
+    <{tag} Self="s1" GeometricBounds="0 0 100 200" {stroke_attrs}>
+      {body}
+    </{tag}>
+  </Spread>
+</idPkg:Spread>"#
+    );
+    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+    zip.write_all(spread.as_bytes()).unwrap();
+    zip.finish().unwrap().into_inner()
+}
+
+#[test]
+fn oval_stroke_alignment_inside_shifts_bounds_inward() {
+    // The oval outline spans x∈[0,200], y∈[0,100]; weight 20 ⇒ the
+    // Inside-aligned outline insets by 10 on every side. The emitted
+    // StrokePath's page-space bounds therefore shrink to ~[10,190]×[10,90].
+    let bytes = build_oval_idml(
+        r#"StrokeColor="Color/Black" StrokeWeight="20" StrokeAlignment="InsideAlignment""#,
+    );
+    let (min_x, min_y, max_x, max_y) = stroke_path_bounds(&bytes);
+    assert!(min_x > 8.0 && min_x < 12.0, "inset min_x={min_x}");
+    assert!(min_y > 8.0 && min_y < 12.0, "inset min_y={min_y}");
+    assert!(max_x > 188.0 && max_x < 192.0, "inset max_x={max_x}");
+    assert!(max_y > 88.0 && max_y < 92.0, "inset max_y={max_y}");
+}
+
+#[test]
+fn oval_stroke_alignment_outside_shifts_bounds_outward() {
+    let bytes = build_oval_idml(
+        r#"StrokeColor="Color/Black" StrokeWeight="20" StrokeAlignment="OutsideAlignment""#,
+    );
+    let (min_x, min_y, max_x, max_y) = stroke_path_bounds(&bytes);
+    assert!(min_x > -12.0 && min_x < -8.0, "outset min_x={min_x}");
+    assert!(min_y > -12.0 && min_y < -8.0, "outset min_y={min_y}");
+    assert!(max_x > 208.0 && max_x < 212.0, "outset max_x={max_x}");
+    assert!(max_y > 108.0 && max_y < 112.0, "outset max_y={max_y}");
+}
+
+#[test]
+fn oval_stroke_alignment_center_keeps_outline() {
+    // Centre alignment keeps the natural ellipse primitive — no offset
+    // StrokePath. The emitted command is the centred ellipse stroke
+    // (a StrokePath against the unit ellipse via the rect transform);
+    // its page-space bounds equal the GeometricBounds.
+    let bytes = build_oval_idml(
+        r#"StrokeColor="Color/Black" StrokeWeight="20" StrokeAlignment="CenterAlignment""#,
+    );
+    let (min_x, min_y, max_x, max_y) = stroke_path_bounds(&bytes);
+    assert!(
+        min_x.abs() < 1.0 && min_y.abs() < 1.0,
+        "min=({min_x},{min_y})"
+    );
+    assert!(
+        (max_x - 200.0).abs() < 1.0 && (max_y - 100.0).abs() < 1.0,
+        "max=({max_x},{max_y})"
+    );
+}
+
+#[test]
+fn polygon_stroke_alignment_inside_shifts_bounds_inward() {
+    let bytes = build_polygon_idml(
+        r#"StrokeColor="Color/Black" StrokeWeight="20" StrokeAlignment="InsideAlignment""#,
+    );
+    let (min_x, min_y, max_x, max_y) = stroke_path_bounds(&bytes);
+    // Inset by weight/2 = 10 on every side.
+    assert!((min_x - 10.0).abs() < 1e-2, "inset min_x={min_x}");
+    assert!((min_y - 10.0).abs() < 1e-2, "inset min_y={min_y}");
+    assert!((max_x - 190.0).abs() < 1e-2, "inset max_x={max_x}");
+    assert!((max_y - 90.0).abs() < 1e-2, "inset max_y={max_y}");
+}
+
+#[test]
+fn polygon_stroke_alignment_outside_shifts_bounds_outward() {
+    let bytes = build_polygon_idml(
+        r#"StrokeColor="Color/Black" StrokeWeight="20" StrokeAlignment="OutsideAlignment""#,
+    );
+    let (min_x, min_y, max_x, max_y) = stroke_path_bounds(&bytes);
+    // Outset by 10 on every side.
+    assert!((min_x + 10.0).abs() < 1e-2, "outset min_x={min_x}");
+    assert!((min_y + 10.0).abs() < 1e-2, "outset min_y={min_y}");
+    assert!((max_x - 210.0).abs() < 1e-2, "outset max_x={max_x}");
+    assert!((max_y - 110.0).abs() < 1e-2, "outset max_y={max_y}");
+}
+
+#[test]
+fn polygon_stroke_alignment_center_keeps_outline() {
+    let bytes = build_polygon_idml(
+        r#"StrokeColor="Color/Black" StrokeWeight="20" StrokeAlignment="CenterAlignment""#,
+    );
+    let (min_x, min_y, max_x, max_y) = stroke_path_bounds(&bytes);
+    assert!(
+        min_x.abs() < 1e-2 && min_y.abs() < 1e-2,
+        "min=({min_x},{min_y})"
+    );
+    assert!(
+        (max_x - 200.0).abs() < 1e-2 && (max_y - 100.0).abs() < 1e-2,
+        "max=({max_x},{max_y})"
+    );
+}

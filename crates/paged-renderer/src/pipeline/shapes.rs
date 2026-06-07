@@ -104,16 +104,38 @@ pub(super) fn emit_oval_into(
             effects_unit_normalize,
         );
     }
+    // W1.5 — Inside/Outside StrokeAlignment on the ellipse: offset the
+    // elliptical outline inward / outward by weight/2 and stroke that
+    // offset path. Centre alignment (or absent) keeps the natural
+    // `emit_stroke_ellipse_transformed` primitive via `stroke_path = None`.
+    let oval_weight = frame.effective_stroke_weight();
+    let aligned_oval_path = if let Geometry::Oval { rect } = &frame.geometry {
+        aligned_outline_path(
+            &ellipse_outline_path(*rect),
+            frame.stroke_alignment,
+            oval_weight,
+        )
+    } else {
+        None
+    };
+    let aligned_oval_id = aligned_oval_path.map(|p| {
+        let seed = frame
+            .self_id
+            .map(|id| fnv_1a_u64(id.as_bytes()))
+            .unwrap_or(0xE7A1)
+            ^ 0xA11A_0000;
+        page.list.paths.intern(seed, p).0
+    });
     crate::module::stroke_paint_module(
         &frame,
         page,
         palette,
         cmyk_xform,
         outer,
-        None,
+        aligned_oval_id,
         stroke_for(
             frame.stroke_type,
-            frame.effective_stroke_weight(),
+            oval_weight,
             frame.end_cap,
             frame.end_join,
             frame.miter_limit,
@@ -494,8 +516,9 @@ fn emit_rectangle_polygon_path(
         resolved.stroke_dash,
     );
     // W1.2: striped / wavy / gap-colour styled stroke on the polygon
-    // outline. Polygon stroke alignment stays centred (open contours
-    // can't be safely inset/outset; documented in `stroke_geom`).
+    // outline. W1.5: Inside/Outside StrokeAlignment offsets each closed
+    // contour ±weight/2 (the styled-stroke branch keeps the centred
+    // outline — striped/wavy sub-rules already carry their own offsets).
     let class = classify_stroke_style(
         resolved.stroke_type,
         stroke_width,
@@ -542,8 +565,20 @@ fn emit_rectangle_polygon_path(
         false
     };
     if !handled {
+        // W1.5 — Inside/Outside alignment on the lifted-rectangle
+        // polygon outline: offset the closed contour ±weight/2.
+        let aligned_id = base_path
+            .as_ref()
+            .and_then(|base| aligned_outline_path(base, resolved.stroke_alignment, stroke_width))
+            .map(|p| page.list.paths.intern(cache_key ^ 0xA11A_0000, p).0);
         crate::module::stroke_paint_module(
-            resolved, page, palette, cmyk_xform, outer, path_id, stroke,
+            resolved,
+            page,
+            palette,
+            cmyk_xform,
+            outer,
+            aligned_id.or(path_id),
+            stroke,
         );
     }
     if needs_group {
@@ -800,6 +835,67 @@ pub(crate) fn stroke_alignment_offset(alignment: Option<&str>, stroke_width: f32
         Some("InsideAlignment") => stroke_width * 0.5,
         Some("OutsideAlignment") => -stroke_width * 0.5,
         _ => 0.0,
+    }
+}
+
+/// W1.5 — which side a `StrokeAlignment` value offsets the outline
+/// toward, for the closed non-rect shapes (oval / polygon / closed
+/// path). `Some(true)` = inset (Inside), `Some(false)` = outset
+/// (Outside), `None` = centred (no offset — emit the natural outline).
+pub(crate) fn stroke_alignment_inward(alignment: Option<&str>) -> Option<bool> {
+    match alignment {
+        Some("InsideAlignment") => Some(true),
+        Some("OutsideAlignment") => Some(false),
+        _ => None,
+    }
+}
+
+/// W1.5 — build the alignment-offset outline for a CLOSED non-rect
+/// shape (oval / polygon / closed compound path) whose centred outline
+/// is `base_path` in inner-frame coords. Returns `None` when the
+/// alignment is Center / absent (caller emits the shape's natural
+/// centred stroke) or the weight is non-positive. The returned
+/// [`PathData`] is the inward (Inside) / outward (Outside) offset of
+/// every contour by `weight/2`, ready to intern and stroke via
+/// `StrokePath`.
+///
+/// Open contours pass through UNOFFSET: InDesign keeps a stroke on an
+/// open path centred regardless of `StrokeAlignment` (Inside/Outside
+/// are meaningless without an enclosed interior), so an open
+/// sub-contour of a compound shape keeps its centreline. Closed
+/// contours are offset by [`stroke_geom::offset_closed_outline`].
+pub(crate) fn aligned_outline_path(
+    base_path: &paged_compose::PathData,
+    alignment: Option<&str>,
+    weight: f32,
+) -> Option<paged_compose::PathData> {
+    use crate::pipeline::stroke_geom;
+    let inward = stroke_alignment_inward(alignment)?;
+    if weight <= 0.0 {
+        return None;
+    }
+    let lines = stroke_geom::flatten_path(base_path, stroke_geom::FLATTEN_STEPS);
+    if lines.is_empty() {
+        return None;
+    }
+    let mut offset_lines: Vec<stroke_geom::Polyline> = Vec::with_capacity(lines.len());
+    for line in &lines {
+        if line.closed && line.points.len() >= 3 {
+            offset_lines.push(stroke_geom::offset_closed_outline(
+                line,
+                weight * 0.5,
+                inward,
+            ));
+        } else {
+            // Open sub-contour: stays centred (InDesign behaviour).
+            offset_lines.push(line.clone());
+        }
+    }
+    let path = stroke_geom::polylines_to_path(&offset_lines);
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
     }
 }
 
@@ -1544,6 +1640,62 @@ pub(super) fn unit_ellipse_path() -> paged_compose::PathData {
     let cy = 0.5;
     let rx = 0.5;
     let ry = 0.5;
+    let kx = rx * K;
+    let ky = ry * K;
+    paged_compose::PathData {
+        segments: vec![
+            PathSegment::MoveTo { x: cx + rx, y: cy },
+            PathSegment::CubicTo {
+                cx1: cx + rx,
+                cy1: cy + ky,
+                cx2: cx + kx,
+                cy2: cy + ry,
+                x: cx,
+                y: cy + ry,
+            },
+            PathSegment::CubicTo {
+                cx1: cx - kx,
+                cy1: cy + ry,
+                cx2: cx - rx,
+                cy2: cy + ky,
+                x: cx - rx,
+                y: cy,
+            },
+            PathSegment::CubicTo {
+                cx1: cx - rx,
+                cy1: cy - ky,
+                cx2: cx - kx,
+                cy2: cy - ry,
+                x: cx,
+                y: cy - ry,
+            },
+            PathSegment::CubicTo {
+                cx1: cx + kx,
+                cy1: cy - ry,
+                cx2: cx + rx,
+                cy2: cy - ky,
+                x: cx + rx,
+                y: cy,
+            },
+            PathSegment::Close,
+        ],
+    }
+}
+
+/// W1.5 — the oval's elliptical outline as a [`PathData`] in the
+/// frame's *inner* coords (same space as `rect.x` / `rect.y`), four
+/// cubic quadrants. Unlike [`unit_ellipse_path`] (which lives in
+/// [0,1]² and is scaled to the rect by `Transform::for_rect_in`), this
+/// carries the real pt geometry so a stroke-alignment offset measured
+/// in pt (`weight/2`) lands at the right distance. Stroked through the
+/// frame's `outer` transform directly (no unit→rect rescale).
+pub(crate) fn ellipse_outline_path(rect: Rect) -> paged_compose::PathData {
+    use paged_compose::PathSegment;
+    const K: f32 = 0.552_284_8;
+    let cx = rect.x + rect.w * 0.5;
+    let cy = rect.y + rect.h * 0.5;
+    let rx = rect.w * 0.5;
+    let ry = rect.h * 0.5;
     let kx = rx * K;
     let ky = ry * K;
     paged_compose::PathData {
