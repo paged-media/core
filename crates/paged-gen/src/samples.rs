@@ -32,6 +32,7 @@ pub mod text;
 pub mod text_advanced;
 pub mod text_autosize;
 pub mod text_letterspacing;
+pub mod text_on_path;
 pub mod text_overset;
 pub mod text_wrap;
 pub mod transparency;

@@ -340,6 +340,35 @@ fn sample_path_at(samples: &[PathSample], s: f32) -> Option<(f32, f32, f32)> {
     Some((x, y, angle))
 }
 
+/// Map a `PathTypeAlignment` value to the glyph baseline offset, in
+/// *font units*, that seats the glyph on the path correctly. The
+/// renderer flips font space (y-up) to page space (y-down) via the
+/// `-scale` term, so a *positive* return here lifts the glyph above
+/// the path in page space.
+///
+///   - `BaselinePathType` (IDML default) — baseline on the path ⇒ 0.
+///   - `CenterPathType` — em-box centre on the path. `descender` is
+///     negative, so `(ascender + descender) / 2` is the signed centre
+///     of the box above the baseline; we lift the baseline by that.
+///   - `AscenderPathType` — glyph top on the path ⇒ lift by `ascender`.
+///   - `DescenderPathType` — glyph bottom on the path ⇒ lift by the
+///     (negative) `descender`.
+///
+/// Ascender / Descender land but are exercised less than Baseline /
+/// Center (the two the v1 acceptance asserts).
+fn path_type_baseline_offset_units(alignment: Option<&str>, ascender: i16, descender: i16) -> f32 {
+    let asc = ascender as f32;
+    let desc = descender as f32;
+    match alignment {
+        Some("CenterPathType") => (asc + desc) * 0.5,
+        Some("AscenderPathType") => asc,
+        Some("DescenderPathType") => desc,
+        // BaselinePathType (default) and any unknown value seat the
+        // baseline on the path.
+        _ => 0.0,
+    }
+}
+
 /// Emit the glyphs for a `<TextPath>` along the host shape's
 /// tessellated curve. Approximates IDML's text-on-path:
 ///
@@ -351,15 +380,25 @@ fn sample_path_at(samples: &[PathSample], s: f32) -> Option<(f32, f32, f32)> {
 ///   - Walks the shape's polyline by cumulative arc length: for
 ///     each glyph the cursor advances by the glyph's `x_advance` and
 ///     we look up `(x, y, angle)` at the cursor's midpoint. The
-///     glyph is then emitted with a per-glyph rotated transform.
+///     glyph is then emitted with a per-glyph rotated transform
+///     (Rainbow path effect — the IDML default).
+///   - Honours `PathTypeAlignment` (the glyph's vertical seat on the
+///     path): Baseline / Center / Ascender / Descender via
+///     `path_type_baseline_offset_units`.
 ///   - Honours the `flip_path_effect` attribute: `Flipped` reverses
 ///     the path direction so text reads from end-to-start.
+///   - Honours `StartBracket` / `EndBracket`: text flows only within
+///     that arc-length window; glyphs whose advance carries them past
+///     `EndBracket` are dropped and an `OversetTextDropped` diagnostic
+///     fires once (matching the body-text overset contract).
 ///
-/// Path-effect modes (`RainbowPathEffect` / `SkewPathEffect` /
-/// `Path3DRibbonEffect` / `StairStepPathEffect` / `GravityPathEffect`)
-/// are all rendered as plain rainbow today. The first three look the
-/// same on a gentle arch like manual-sample's polygon; the latter
-/// two need a per-glyph projection that lands later.
+/// DEFERRED (parsed, not yet rendered): path-effect modes beyond
+/// Rainbow — `SkewPathEffect` / `Path3DRibbonEffect` /
+/// `StairStepPathEffect` / `GravityPathEffect` all render as Rainbow
+/// today. Skew/3D-Ribbon look the same as Rainbow on a gentle arch;
+/// Stair-Step and Gravity need a per-glyph projection that lands
+/// later. Horizontal distribution (`Flush`/`Spacing`) beyond centred,
+/// and side/flip options beyond `Flipped`, are also future work.
 pub(super) fn emit_text_path_into(
     page: &mut BuiltPage,
     text_path: &TextPath,
@@ -546,10 +585,10 @@ pub(super) fn emit_text_path_into(
         .clamp(start_b, total_len);
     let usable_len = (end_b - start_b).max(0.0);
 
-    // Center the text along the path: matches IDML's default
-    // `CenterPathAlignment`. Other alignments fall back to centered
-    // for now. Overflowing text (advance > usable_len) starts at
-    // `start_b` and runs off the end.
+    // Center the text within the bracket window when it fits — this
+    // is the centred-flush default. Overflowing text (advance >
+    // usable_len) starts at `start_b` and runs off `end_b`; those
+    // trailing glyphs are dropped and reported as overset below.
     let start_offset_pt = if total_advance_pt < usable_len {
         start_b + ((usable_len - total_advance_pt) * 0.5)
     } else {
@@ -561,7 +600,16 @@ pub(super) fn emit_text_path_into(
     // shape's coordinate system without re-implementing the math.
     let outer = frame_outer_transform(page, item_transform);
 
+    // `PathTypeAlignment` seats the glyph vertically on the path; it's
+    // a single value for the whole TextPath. `Flipped` already mirrors
+    // the path direction; we keep the seat as authored.
+    let path_type = text_path.path_type_alignment.as_deref();
+
     let mut cursor_pt = start_offset_pt;
+    // Count glyphs whose advance carries their baseline-origin past
+    // `end_b` (the overset tail). Reported once after the loop, like
+    // the body-text overset contract.
+    let mut overset_dropped = 0usize;
     for g in &glyphs {
         let advance_pt = g.x_advance_64 as f32 / paged_text::shape::ADVANCE_PRECISION;
         let x_off_pt = g.x_offset_64 as f32 / paged_text::shape::ADVANCE_PRECISION;
@@ -572,6 +620,15 @@ pub(super) fn emit_text_path_into(
         // advances the cursor by its own advance.
         let s = cursor_pt + x_off_pt;
         cursor_pt += advance_pt;
+        // Overset: once a glyph's origin lands past `end_b` it (and
+        // every glyph after it, since the cursor only grows) is beyond
+        // the path and dropped. `sample_path_at` would clamp it to the
+        // end and pile glyphs up; instead we skip + count so the
+        // diagnostic matches InDesign's overset behaviour.
+        if s > end_b + 1e-3 {
+            overset_dropped += 1;
+            continue;
+        }
         let Some((px, py, angle)) = sample_path_at(&samples, s) else {
             continue;
         };
@@ -581,6 +638,10 @@ pub(super) fn emit_text_path_into(
         let outliner = TtfOutliner::new(outline);
         let upem = outliner.units_per_em();
         let scale = g.point_size / upem;
+        // Vertical seat offset (font units → pt). 0 for Baseline.
+        let seat_units =
+            path_type_baseline_offset_units(path_type, outline.ascender(), outline.descender());
+        let seat_pt = seat_units * scale;
         let Some(path_id) = list_get_or_intern_glyph_outline(
             face_font_ids[g.face_idx],
             g.glyph_id,
@@ -604,10 +665,13 @@ pub(super) fn emit_text_path_into(
         let r = [cos_a, sin_a, -sin_a, cos_a];
         let s_diag = [scale, 0.0, 0.0, -scale];
         // After R · T_local: matrix [r0 r2 r0*tx+r2*ty; r1 r3 r1*tx+r3*ty].
-        // local_tx/ty: x_offset already baked into `s` so only y_off
-        // applies here.
+        // local_tx/ty operate in page-oriented pt space (S applies
+        // first). x_offset is already baked into `s`; the per-glyph
+        // shaping y_offset plus the path-type vertical seat apply here.
+        // `seat_pt > 0` (Center/Ascender) shifts the glyph down in page
+        // space so its centre/top — not its baseline — rides the path.
         let local_tx = 0.0;
-        let local_ty = y_off_pt;
+        let local_ty = y_off_pt + seat_pt;
         let rtl_tx = r[0] * local_tx + r[2] * local_ty;
         let rtl_ty = r[1] * local_tx + r[3] * local_ty;
         // (R · T_local) · S(scale, -scale): scales the columns.
@@ -637,5 +701,93 @@ pub(super) fn emit_text_path_into(
             transform: final_xf,
         });
         page.stats.glyphs += 1;
+    }
+
+    // Overset on a path: text that didn't fit the bracket window was
+    // dropped. Report it once with the host story id; `page_index` is
+    // backfilled by the build aggregator. Same severity / contract as
+    // the body-text `OversetTextDropped` so the editor Preflight and
+    // paged-inspect surface text-on-path overflow the same way.
+    if overset_dropped > 0 {
+        page.diagnostics.push(
+            crate::diagnostics::Diagnostic::new(
+                crate::diagnostics::DiagnosticCode::OversetTextDropped,
+                format!(
+                    "text-on-path overset: {overset_dropped} glyph(s) past the path length were dropped"
+                ),
+            )
+            .with_story(text_path.parent_story.clone()),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Open Sans-ish metrics: ascender ≈ 2189, descender ≈ -600 in a
+    // 2048-upem face. Exact values don't matter — the relations do.
+    const ASC: i16 = 2189;
+    const DESC: i16 = -600;
+
+    #[test]
+    fn path_type_alignment_offsets() {
+        // Baseline (default) seats the baseline on the path ⇒ 0.
+        assert_eq!(path_type_baseline_offset_units(None, ASC, DESC), 0.0);
+        assert_eq!(
+            path_type_baseline_offset_units(Some("BaselinePathType"), ASC, DESC),
+            0.0
+        );
+        // Unknown values fall back to Baseline (no panic, no offset).
+        assert_eq!(
+            path_type_baseline_offset_units(Some("WatPathType"), ASC, DESC),
+            0.0
+        );
+        // Center = signed midpoint of the em box above the baseline.
+        let center = path_type_baseline_offset_units(Some("CenterPathType"), ASC, DESC);
+        assert!((center - (ASC as f32 + DESC as f32) * 0.5).abs() < 1e-3);
+        // Center lifts the glyph (positive ⇒ shifts down in page space
+        // so the box centre, not the baseline, rides the path) and is
+        // strictly between Descender (bottom on path) and Ascender
+        // (top on path).
+        let asc_off = path_type_baseline_offset_units(Some("AscenderPathType"), ASC, DESC);
+        let desc_off = path_type_baseline_offset_units(Some("DescenderPathType"), ASC, DESC);
+        assert_eq!(asc_off, ASC as f32);
+        assert_eq!(desc_off, DESC as f32);
+        assert!(desc_off < center && center < asc_off);
+    }
+
+    #[test]
+    fn arc_length_sampler_is_monotonic_and_tangent_correct() {
+        // A straight horizontal segment from (0,0) to (10,0): every
+        // sample's cumulative length equals its x, the tangent angle is
+        // 0, and out-of-range `s` clamps to the endpoints.
+        let anchors = vec![
+            PathAnchor {
+                anchor: (0.0, 0.0),
+                left: (0.0, 0.0),
+                right: (0.0, 0.0),
+            },
+            PathAnchor {
+                anchor: (10.0, 0.0),
+                left: (10.0, 0.0),
+                right: (10.0, 0.0),
+            },
+        ];
+        let samples = tessellate_anchors(&anchors, 8);
+        assert!(samples.len() >= 2);
+        for w in samples.windows(2) {
+            assert!(w[1].cum >= w[0].cum, "cum must be non-decreasing");
+        }
+        let total = samples.last().unwrap().cum;
+        assert!((total - 10.0).abs() < 1e-3, "straight length is the chord");
+
+        let (x, y, angle) = sample_path_at(&samples, 5.0).unwrap();
+        assert!((x - 5.0).abs() < 1e-3 && y.abs() < 1e-3);
+        assert!(angle.abs() < 1e-3, "horizontal tangent ≈ 0 rad");
+
+        // Clamp past the end.
+        let (xe, _, _) = sample_path_at(&samples, 1000.0).unwrap();
+        assert!((xe - 10.0).abs() < 1e-3, "overshoot clamps to the end");
     }
 }
