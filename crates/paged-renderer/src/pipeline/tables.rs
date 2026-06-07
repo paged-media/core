@@ -932,21 +932,57 @@ pub(super) fn emit_table_into_chain(
                     break;
                 }
             }
-            // Apply CellStyle vertical justification by shifting every
-            // glyph command we emitted in this cell by dy = slack/factor.
-            // CenterAlign → centre vertically; BottomAlign → push to the
-            // bottom inset. Top is the default (no shift).
+            // W1.11a — apply cell vertical justification by shifting the
+            // glyph commands we emitted in this cell. Precedence mirrors
+            // every other per-cell knob (fill / edge strokes): an INLINE
+            // `<Cell VerticalJustification="…">` wins over the cascaded
+            // CellStyle value. Mirrors the frame-level
+            // `apply_vertical_justification` pass:
+            //   * CenterAlign → centre the content block in the slack,
+            //   * BottomAlign → push it to the bottom inset,
+            //   * JustifyAlign → distribute the slack as extra space
+            //     BETWEEN cell paragraphs (not inside a paragraph — that
+            //     would distort leading), exactly like the frame's
+            //     inter-paragraph distribute. With < 2 emitted paragraphs
+            //     there is nothing to distribute, so it falls back to Top.
+            //   * TopAlign / absent → no shift.
             let used_h = paragraph_y;
+            let cell_vjust = cell
+                .vertical_justification
+                .as_deref()
+                .or(resolved_cell.vertical_justification.as_deref());
             if used_h > 0.0 && used_h < inner_h {
-                let dy = match resolved_cell.vertical_justification.as_deref() {
-                    Some("CenterAlign") => Some((inner_h - used_h) * 0.5),
-                    Some("BottomAlign") => Some(inner_h - used_h),
-                    _ => None,
-                };
-                if let Some(dy) = dy {
-                    for (s, e) in &emitted_extents {
-                        for cmd in &mut pages[target_page].list.commands[*s..*e] {
-                            cmd.transform_mut().0[5] += dy;
+                let slack = inner_h - used_h;
+                match cell_vjust {
+                    Some("JustifyAlign") if emitted_extents.len() >= 2 => {
+                        let gaps = (emitted_extents.len() - 1) as f32;
+                        let gap = slack / gaps;
+                        if gap > 0.0 {
+                            for (idx, (s, e)) in emitted_extents.iter().enumerate() {
+                                let dy = gap * idx as f32;
+                                if dy == 0.0 {
+                                    continue;
+                                }
+                                for cmd in &mut pages[target_page].list.commands[*s..*e] {
+                                    cmd.transform_mut().0[5] += dy;
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        let dy = match cell_vjust {
+                            Some("CenterAlign") => Some(slack * 0.5),
+                            Some("BottomAlign") => Some(slack),
+                            // JustifyAlign with a single paragraph has no
+                            // inter-paragraph gap to grow → behaves as Top.
+                            _ => None,
+                        };
+                        if let Some(dy) = dy {
+                            for (s, e) in &emitted_extents {
+                                for cmd in &mut pages[target_page].list.commands[*s..*e] {
+                                    cmd.transform_mut().0[5] += dy;
+                                }
+                            }
                         }
                     }
                 }

@@ -21,10 +21,19 @@
 //! the count assertions deterministic.
 
 use std::io::Write;
+use std::path::PathBuf;
 
 use paged_compose::DisplayCommand;
-use paged_renderer::{pipeline, Document, PipelineOptions};
+use paged_renderer::{pipeline, BytesResolver, Document, PipelineOptions};
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+fn font_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts")
+}
+
+fn read_font(name: &str) -> Vec<u8> {
+    std::fs::read(font_dir().join(name)).unwrap_or_else(|e| panic!("read font fixture {name}: {e}"))
+}
 
 /// Build a 2-column × 3-row table IDML. `table_attrs` is spliced onto
 /// the `<Table>` element (e.g. `AppliedTableStyle="TableStyle/Alt"`)
@@ -242,5 +251,170 @@ fn diagonal_in_front_paints_after_cell_fill() {
     assert!(
         stroke > first_fill,
         "in-front diagonal must paint after the cell fill (fill at {first_fill}, stroke at {stroke})"
+    );
+}
+
+// ── W1.11a — cell vertical justification rendering ──────────────────
+
+/// Build a 1×1 table whose single cell is 200pt tall (lots of vertical
+/// slack for a single 24pt text line) carrying the supplied
+/// `VerticalJustification` inline on the `<Cell>`. The cell text uses
+/// the Inter fixture so glyphs actually shape and the y-shift is
+/// observable. `cell_paragraphs` lets a JustifyAlign test pass two
+/// paragraphs (the distribute path needs ≥ 2).
+fn build_vjust_table_idml(vjust: Option<&str>, cell_paragraphs: &str) -> Vec<u8> {
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    let put = |zip: &mut ZipWriter<_>, name: &str, body: &[u8]| {
+        zip.start_file(name, deflated).unwrap();
+        zip.write_all(body).unwrap();
+    };
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    put(
+        &mut zip,
+        "designmap.xml",
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_u10.xml"/>
+</Document>"#,
+    );
+    put(
+        &mut zip,
+        "Resources/Graphic.xml",
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Graphic/></idPkg:Graphic>"#,
+    );
+    put(
+        &mut zip,
+        "Spreads/Spread_sp1.xml",
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 400 400"/>
+    <TextFrame Self="frameA" ParentStory="u10" GeometricBounds="0 0 400 400" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#,
+    );
+    let vj_attr = vjust
+        .map(|v| format!(" VerticalJustification=\"{v}\""))
+        .unwrap_or_default();
+    let story = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">
+    <ParagraphStyleRange>
+      <CharacterStyleRange>
+        <Table Self="t1" BodyRowCount="1" ColumnCount="1">
+          <Row Self="r0" Name="0" SingleRowHeight="200"/>
+          <Column Self="c0" Name="0" SingleColumnWidth="200"/>
+          <Cell Self="c00" Name="0:0" TextTopInset="0" TextBottomInset="0"{vj_attr}>{cell_paragraphs}</Cell>
+        </Table>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#
+    );
+    put(&mut zip, "Stories/Story_u10.xml", story.as_bytes());
+    zip.finish().unwrap().into_inner()
+}
+
+const VJUST_PARAGRAPH: &str = r#"<ParagraphStyleRange><CharacterStyleRange><Properties><AppliedFont type="string">Inter</AppliedFont></Properties><Content>Hi</Content></CharacterStyleRange></ParagraphStyleRange>"#;
+
+/// Minimum glyph baseline (`ty`) across all FillPath commands — the top
+/// of the rendered text block. Smaller = higher on the page.
+fn min_glyph_ty(cmds: &[DisplayCommand]) -> f32 {
+    cmds.iter()
+        .filter_map(|c| match c {
+            DisplayCommand::FillPath { transform, .. } => Some(transform.0[5]),
+            _ => None,
+        })
+        .fold(f32::INFINITY, f32::min)
+}
+
+fn build_vjust_commands(vjust: Option<&str>, paragraphs: &str) -> Vec<DisplayCommand> {
+    let bytes = build_vjust_table_idml(vjust, paragraphs);
+    let document = Document::open(&bytes).unwrap();
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+    let built = pipeline::build_document(&document, &opts).unwrap();
+    built.pages[0].list.commands.clone()
+}
+
+#[test]
+fn cell_vjust_bottom_pushes_glyphs_below_top_align() {
+    // A single 24pt line in a 200pt-tall cell: TopAlign keeps it at the
+    // top; BottomAlign shifts it down by the full slack. The minimum
+    // glyph baseline must be strictly larger (lower on the page) under
+    // BottomAlign.
+    let top = build_vjust_commands(Some("TopAlign"), VJUST_PARAGRAPH);
+    let bottom = build_vjust_commands(Some("BottomAlign"), VJUST_PARAGRAPH);
+    let top_y = min_glyph_ty(&top);
+    let bottom_y = min_glyph_ty(&bottom);
+    assert!(top_y.is_finite() && bottom_y.is_finite(), "glyphs emitted");
+    assert!(
+        bottom_y > top_y + 50.0,
+        "BottomAlign must drop the text well below TopAlign (top {top_y}, bottom {bottom_y})"
+    );
+}
+
+#[test]
+fn cell_vjust_center_lands_between_top_and_bottom() {
+    let top = min_glyph_ty(&build_vjust_commands(Some("TopAlign"), VJUST_PARAGRAPH));
+    let center = min_glyph_ty(&build_vjust_commands(Some("CenterAlign"), VJUST_PARAGRAPH));
+    let bottom = min_glyph_ty(&build_vjust_commands(Some("BottomAlign"), VJUST_PARAGRAPH));
+    assert!(
+        center > top + 10.0 && center < bottom - 10.0,
+        "CenterAlign sits between Top and Bottom (top {top}, center {center}, bottom {bottom})"
+    );
+}
+
+#[test]
+fn cell_vjust_absent_matches_top_align() {
+    // No inline VerticalJustification + no cell style ⇒ default Top.
+    let none = min_glyph_ty(&build_vjust_commands(None, VJUST_PARAGRAPH));
+    let top = min_glyph_ty(&build_vjust_commands(Some("TopAlign"), VJUST_PARAGRAPH));
+    assert!(
+        (none - top).abs() < 0.01,
+        "absent vjust must equal TopAlign (none {none}, top {top})"
+    );
+}
+
+#[test]
+fn cell_vjust_justify_distributes_between_paragraphs() {
+    // Two paragraphs in a tall cell: JustifyAlign keeps the first at the
+    // top (matching TopAlign's first line) but pushes the SECOND down to
+    // the bottom, so the overall span grows. The max glyph baseline must
+    // exceed the TopAlign max by most of the slack.
+    let two = format!("{VJUST_PARAGRAPH}{VJUST_PARAGRAPH}");
+    let top = build_vjust_commands(Some("TopAlign"), &two);
+    let justify = build_vjust_commands(Some("JustifyAlign"), &two);
+    let max_ty = |cmds: &[DisplayCommand]| {
+        cmds.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::FillPath { transform, .. } => Some(transform.0[5]),
+                _ => None,
+            })
+            .fold(f32::NEG_INFINITY, f32::max)
+    };
+    // First-line top must match (Justify doesn't move the first paragraph).
+    assert!(
+        (min_glyph_ty(&top) - min_glyph_ty(&justify)).abs() < 0.01,
+        "JustifyAlign keeps the first paragraph at the top"
+    );
+    // Last-line bottom must drop well past the TopAlign stacked position.
+    assert!(
+        max_ty(&justify) > max_ty(&top) + 50.0,
+        "JustifyAlign must push the last paragraph toward the bottom (top max {}, justify max {})",
+        max_ty(&top),
+        max_ty(&justify)
     );
 }
