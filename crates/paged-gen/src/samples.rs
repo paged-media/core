@@ -16,6 +16,7 @@
 //! function returning a fully-populated `Sample`.
 
 pub mod anchored;
+pub mod conditions;
 pub mod corners;
 pub mod effects;
 pub mod footnotes;

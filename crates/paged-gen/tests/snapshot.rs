@@ -920,3 +920,64 @@ fn footnotes_round_trips_through_parser() {
         .sum();
     assert_eq!(footnote_count, 3, "three footnotes must round-trip");
 }
+
+#[test]
+fn conditions_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::conditions::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::conditions::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+#[test]
+fn conditions_round_trips_through_parser() {
+    // W4.3 — the conditions sample is the first generated fixture to
+    // carry `<Condition>` defs. Parse it back and assert both defs
+    // survive with their `Visible` flags, AND that the three body runs
+    // carry the expected `AppliedConditions` (one absent, one →Visible,
+    // one →Hidden) — the inputs the renderer's drop rule consumes.
+    use paged_gen::samples::conditions;
+    let sample = conditions::build();
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+
+    let cond = &doc.styles.conditions;
+    assert_eq!(
+        cond.get(conditions::CONDITION_VISIBLE)
+            .and_then(|c| c.visible),
+        Some(true),
+        "the Visible condition must round-trip Visible=true",
+    );
+    assert_eq!(
+        cond.get(conditions::CONDITION_HIDDEN)
+            .and_then(|c| c.visible),
+        Some(false),
+        "the Hidden condition must round-trip Visible=false",
+    );
+
+    // Collect every run's (text, applied_conditions) across the story.
+    let runs: Vec<(String, Vec<String>)> = doc
+        .stories
+        .iter()
+        .flat_map(|s| s.story.paragraphs.iter())
+        .flat_map(|p| p.runs.iter())
+        .map(|r| (r.text.clone(), r.applied_conditions.clone()))
+        .collect();
+    let find = |needle: &str| -> Vec<String> {
+        runs.iter()
+            .find(|(t, _)| t.contains(needle))
+            .map(|(_, c)| c.clone())
+            .unwrap_or_else(|| panic!("run {needle:?} not found in {runs:?}"))
+    };
+    assert!(
+        find(conditions::UNGATED_TEXT).is_empty(),
+        "the ungated run must carry no AppliedConditions",
+    );
+    assert_eq!(
+        find(conditions::VISIBLE_TEXT),
+        vec![conditions::CONDITION_VISIBLE.to_string()],
+    );
+    assert_eq!(
+        find(conditions::HIDDEN_TEXT),
+        vec![conditions::CONDITION_HIDDEN.to_string()],
+    );
+}
