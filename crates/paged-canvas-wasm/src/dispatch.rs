@@ -42,6 +42,23 @@ use paged_canvas::{
 /// the dispatch arms is unchanged.
 pub type Clock<'a> = dyn Fn() -> f64 + 'a;
 
+/// Map the script crate's typed budget-exhaustion kind onto the wire
+/// enum (B-09 / W-08). The two enums are deliberately mirrored — the
+/// wire type lives in `paged-canvas` so the channel carries no
+/// dependency on `paged-script` (which depends on `paged-canvas`).
+fn map_budget_kind(
+    kind: paged_script::ScriptBudgetKind,
+) -> paged_canvas::channel::ScriptBudgetKind {
+    use paged_canvas::channel::ScriptBudgetKind as Wire;
+    use paged_script::ScriptBudgetKind as Src;
+    match kind {
+        Src::Iterations => Wire::Iterations,
+        Src::Recursion => Wire::Recursion,
+        Src::StackSize => Wire::StackSize,
+        Src::WallClock => Wire::WallClock,
+    }
+}
+
 /// What the GPU scene cache must do as a result of a dispatch. The
 /// scene cache is `#[cfg(feature = "gpu")]`-gated and lives in the wasm
 /// shell, so the cfg-agnostic dispatch can't touch it directly. Instead
@@ -718,12 +735,26 @@ impl WorkerCore {
                     reply!(WorkerToMainKind::ScriptResult {
                         output: Vec::new(),
                         error: Some("no document loaded".to_string()),
+                        budget_kind: None,
                     });
                 };
-                let result = paged_script::execute_script(model, &source);
+                // B-09 / W-08 — run with the default per-execution budget
+                // and the worker's injected wall-clock (`js_sys::Date::now`
+                // on wasm). Passing the host clock is what gives the
+                // wall-clock deadline teeth without `paged-script` ever
+                // touching `std::time`; the budget defaults are preserved
+                // (hosts wanting to tighten/loosen call
+                // `execute_script_with` with a custom `ScriptBudget`).
+                let result = paged_script::execute_script_with(
+                    model,
+                    &source,
+                    paged_script::ScriptBudget::default(),
+                    clock,
+                );
                 WorkerToMainKind::ScriptResult {
                     output: result.output,
                     error: result.error,
+                    budget_kind: result.budget_kind.map(map_budget_kind),
                 }
             }
             MainToWorkerKind::BeginGesture {

@@ -586,6 +586,30 @@ pub enum MainToWorkerKind {
     },
 }
 
+/// Which runtime budget a script exhausted (B-09 / W-08). The typed
+/// half of a `ScriptResult`: lets the host distinguish a budget abort
+/// from an ordinary script exception (e.g. show a "script hit its
+/// time/iteration limit" banner). Mirrors `paged_script::
+/// ScriptBudgetKind` — kept in this crate so the wire types carry no
+/// dependency on `paged-script` (which depends on us). Additive on the
+/// wire: rides protocol v35 as an optional field on `ScriptResult`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub enum ScriptBudgetKind {
+    /// Loop-iteration limit tripped (runaway / pathological pure-JS
+    /// loop). Enforced natively by Boa's bytecode loop opcode.
+    Iterations,
+    /// Recursion-depth limit tripped (unbounded / too-deep recursion).
+    Recursion,
+    /// VM value-stack overflow guard tripped.
+    StackSize,
+    /// Wall-clock deadline elapsed during a host call. The single-
+    /// threaded wasm worker cannot preempt a host-call-free pure-JS
+    /// loop, so this fires at the next `paged.*`/`console.*` boundary.
+    WallClock,
+}
+
 /// Coarse LOD tiers requested by the navigator + canvas (per spec §4.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -947,10 +971,16 @@ pub enum WorkerToMainKind {
     SceneTree { roots: Vec<SceneTreeNode> },
     /// Scripting Stage 2 — `ExecuteScript` reply. `output` is the
     /// concatenated console.* lines; `error` is non-null when the
-    /// script threw an unhandled exception.
+    /// script threw an unhandled exception. `budget_kind` is set (with
+    /// `error` also set) when the abort was a runtime-budget exhaustion
+    /// (B-09 / W-08 typed-exhaustion contract). Additive on the wire —
+    /// rides protocol v35; omitted from the JSON for ordinary results,
+    /// so pre-existing consumers are unaffected.
     ScriptResult {
         output: Vec<String>,
         error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        budget_kind: Option<ScriptBudgetKind>,
     },
     /// Phase B — `BeginGesture` succeeded.
     GestureBegun {
@@ -3495,6 +3525,79 @@ mod tests {
         match back.kind {
             WorkerToMainKind::ExportIdmlFailed { error } => {
                 assert_eq!(error, "no document loaded");
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    /// B-09 / W-08 — the typed budget-exhaustion field rides the
+    /// `ScriptResult` reply over the wire. A wall-clock abort serialises
+    /// its `budgetKind` as the camelCase tag the host matches on, and
+    /// round-trips back to the typed enum. Additive on protocol v35.
+    #[test]
+    fn script_result_budget_kind_round_trips() {
+        let env = WorkerToMain {
+            seq: Some(7),
+            protocol: PROTOCOL_VERSION,
+            kind: WorkerToMainKind::ScriptResult {
+                output: vec!["[log] hi".into()],
+                error: Some("runtime budget exceeded: …".into()),
+                budget_kind: Some(ScriptBudgetKind::WallClock),
+            },
+        };
+        let json = serde_json::to_string(&env).unwrap();
+        assert!(
+            json.contains("\"kind\":\"scriptResult\""),
+            "tag drift: {json}"
+        );
+        assert!(
+            json.contains("\"budgetKind\":\"wallClock\""),
+            "typed budget kind missing / mis-tagged: {json}"
+        );
+        let back: WorkerToMain = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            WorkerToMainKind::ScriptResult {
+                error, budget_kind, ..
+            } => {
+                assert!(error.is_some());
+                assert_eq!(budget_kind, Some(ScriptBudgetKind::WallClock));
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    /// Additive-on-the-wire proof: a `ScriptResult` for an ordinary
+    /// (non-budget) outcome omits `budgetKind` from the JSON, and a
+    /// PRE-EXISTING reply that never had the field still decodes — so
+    /// older producers/consumers ride v35 unchanged.
+    #[test]
+    fn script_result_omits_budget_kind_and_decodes_legacy() {
+        // Producing: ordinary result → no budgetKind key.
+        let env = WorkerToMain {
+            seq: Some(7),
+            protocol: PROTOCOL_VERSION,
+            kind: WorkerToMainKind::ScriptResult {
+                output: vec![],
+                error: None,
+                budget_kind: None,
+            },
+        };
+        let json = serde_json::to_string(&env).unwrap();
+        assert!(
+            !json.contains("budgetKind"),
+            "ordinary result must omit budgetKind: {json}"
+        );
+
+        // Consuming: a legacy reply with no budgetKind field decodes
+        // with budget_kind defaulting to None. The envelope is
+        // adjacently tagged (`tag = "kind", content = "payload"`), so
+        // the variant fields live under `payload`.
+        let legacy =
+            r#"{"seq":7,"protocol":35,"kind":"scriptResult","payload":{"output":[],"error":null}}"#;
+        let back: WorkerToMain = serde_json::from_str(legacy).unwrap();
+        match back.kind {
+            WorkerToMainKind::ScriptResult { budget_kind, .. } => {
+                assert_eq!(budget_kind, None);
             }
             other => panic!("wrong variant: {other:?}"),
         }
