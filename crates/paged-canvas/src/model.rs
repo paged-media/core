@@ -2803,8 +2803,8 @@ impl CanvasModel {
         id: &crate::element_selection::ElementId,
     ) -> Option<crate::channel::ElementProperties> {
         use crate::channel::{ElementProperties, PropertyEntry};
-        use paged_parse::{AnchoredFrame, AnchoredObjectSetting};
         use paged_mutate::{PropertyPath, Value};
+        use paged_parse::{AnchoredFrame, AnchoredObjectSetting};
 
         let raw = id.raw_id();
 

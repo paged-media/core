@@ -449,7 +449,10 @@ fn multi_para_core() -> WorkerCore {
             "payload": { "bytes": bytes }
         }),
     );
-    assert_eq!(reply["kind"], "documentLoaded", "fixture must load: {reply}");
+    assert_eq!(
+        reply["kind"], "documentLoaded",
+        "fixture must load: {reply}"
+    );
     core
 }
 

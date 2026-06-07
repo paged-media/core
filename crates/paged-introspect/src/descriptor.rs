@@ -483,15 +483,11 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::AnchoredHorizontalReference => {
                 PropertyPathJson::AnchoredHorizontalReference
             }
-            PropertyPath::AnchoredVerticalReference => {
-                PropertyPathJson::AnchoredVerticalReference
-            }
+            PropertyPath::AnchoredVerticalReference => PropertyPathJson::AnchoredVerticalReference,
             PropertyPath::AnchoredHorizontalAlignment => {
                 PropertyPathJson::AnchoredHorizontalAlignment
             }
-            PropertyPath::AnchoredVerticalAlignment => {
-                PropertyPathJson::AnchoredVerticalAlignment
-            }
+            PropertyPath::AnchoredVerticalAlignment => PropertyPathJson::AnchoredVerticalAlignment,
             PropertyPath::AnchoredSpineRelative => PropertyPathJson::AnchoredSpineRelative,
             PropertyPath::AnchoredLockPosition => PropertyPathJson::AnchoredLockPosition,
         }
@@ -734,15 +730,11 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::AnchoredHorizontalReference => {
                 PropertyPath::AnchoredHorizontalReference
             }
-            PropertyPathJson::AnchoredVerticalReference => {
-                PropertyPath::AnchoredVerticalReference
-            }
+            PropertyPathJson::AnchoredVerticalReference => PropertyPath::AnchoredVerticalReference,
             PropertyPathJson::AnchoredHorizontalAlignment => {
                 PropertyPath::AnchoredHorizontalAlignment
             }
-            PropertyPathJson::AnchoredVerticalAlignment => {
-                PropertyPath::AnchoredVerticalAlignment
-            }
+            PropertyPathJson::AnchoredVerticalAlignment => PropertyPath::AnchoredVerticalAlignment,
             PropertyPathJson::AnchoredSpineRelative => PropertyPath::AnchoredSpineRelative,
             PropertyPathJson::AnchoredLockPosition => PropertyPath::AnchoredLockPosition,
         }

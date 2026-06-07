@@ -10,7 +10,7 @@
 #   make fmt            # cargo fmt --all --check
 #   make test           # cargo test --workspace
 #   make check-wasm     # wasm32 build of the four wasm-target crates
-#   make test-wasm      # headless wasm test lane (STUB until W0.8)
+#   make test-wasm      # headless wasm test lane (scripts/test-wasm.sh)
 #   make fidelity       # the hard fidelity gate (delegates to diff.sh),
 #                        # or SKIP with a reason when its deps are absent
 #   make fidelity-deps  # the local-runnability doctor for the gate
@@ -20,10 +20,9 @@
 # (table + exit code). `verify` runs each lane with `-` so one red lane
 # never aborts the table; the final exit code comes from the scoreboard.
 #
-# HONEST-BY-DESIGN: `cargo fmt --all --check` is NOT clean across this
-# workspace yet (the one-time reformat is a separate task), so the `fmt`
-# lane will FAIL until that lands. That is correct — `make verify` reports
-# reality; it does not paper over it.
+# `cargo fmt --all --check` IS kept clean since the one-time reformat
+# (see .git-blame-ignore-revs). A red `fmt` lane means new drift — run
+# `cargo fmt --all` before committing.
 
 SHELL := bash
 .SHELLFLAGS := -eu -o pipefail -c
