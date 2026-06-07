@@ -41,6 +41,7 @@ use crate::AssetResolver;
 
 mod anchored;
 mod color_paint;
+mod datefmt;
 mod image_convert;
 mod image_decode;
 mod images;
@@ -53,6 +54,7 @@ mod text_path;
 
 pub use anchored::AnchoredImageEmit;
 use anchored::{emit_anchored_frames_for_paragraph, emit_anchored_rect_image};
+pub use datefmt::DateParts;
 // Doc-link-only imports: referenced from `///` comments in this file.
 #[cfg(doc)]
 use anchored::{emit_anchored_textframe_story, MAX_ANCHORED_STORY_RECURSION};
@@ -116,6 +118,67 @@ pub struct FontMetricsOverride {
     pub ascender: f32,
     pub cap_height: Option<f32>,
     pub x_height: Option<f32>,
+}
+
+/// W1.18a — the document's date clock for `CreationDate` /
+/// `ModificationDate` / `OutputDate` text variables.
+///
+/// **Determinism.** Date variables must NEVER read the wall clock —
+/// two renders of the same model on different days would otherwise
+/// differ. Every field is an explicit [`DateParts`] supplied by the
+/// caller (or defaulted to [`DocumentClock::EPOCH`], a documented
+/// constant). `OutputDate` — the moment of *this* render — is the
+/// `output` field, defaulting to `modification` so an un-set clock
+/// still produces a stable, sensible value rather than "today".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DocumentClock {
+    /// `CreationDateType` — when the document was first authored.
+    pub creation: DateParts,
+    /// `ModificationDateType` — when the document was last edited.
+    pub modification: DateParts,
+    /// `OutputDateType` — the instant of this render/export. Injected
+    /// (never `now()`) so output is reproducible; defaults to
+    /// `modification`.
+    pub output: DateParts,
+}
+
+impl DocumentClock {
+    /// A documented, deterministic fallback when the package carries no
+    /// metadata and the caller supplies no clock: the Unix epoch
+    /// midnight, 1970-01-01 00:00:00. Stable across machines and runs.
+    pub const EPOCH: DateParts = DateParts {
+        year: 1970,
+        month: 1,
+        day: 1,
+        hour: 0,
+        minute: 0,
+        second: 0,
+    };
+
+    /// Build a clock from optional package-derived creation /
+    /// modification dates. `output` defaults to `modification` (the
+    /// task's documented default) so OutputDate is deterministic even
+    /// when the caller doesn't pin a render instant. Absent dates fall
+    /// back to [`Self::EPOCH`].
+    pub fn from_metadata(creation: Option<DateParts>, modification: Option<DateParts>) -> Self {
+        let creation = creation.unwrap_or(Self::EPOCH);
+        let modification = modification.unwrap_or(creation);
+        Self {
+            creation,
+            modification,
+            output: modification,
+        }
+    }
+}
+
+impl Default for DocumentClock {
+    fn default() -> Self {
+        Self {
+            creation: Self::EPOCH,
+            modification: Self::EPOCH,
+            output: Self::EPOCH,
+        }
+    }
 }
 
 /// Knobs the caller tunes when driving the full pipeline.
@@ -239,6 +302,13 @@ pub struct PipelineOptions<'a> {
     /// any given gesture, so the win ratio is high.
     pub body_story_emit_cache:
         Option<&'a std::cell::RefCell<HashMap<(String, u64), BodyStoryEmissionDelta>>>,
+    /// W1.18a — the date clock for `CreationDate` / `ModificationDate` /
+    /// `OutputDate` text variables. Explicit + injectable so date
+    /// variables resolve deterministically (never the wall clock). The
+    /// caller pins package-derived dates here; the default
+    /// ([`DocumentClock::EPOCH`]) renders a stable constant rather than
+    /// "today".
+    pub document_clock: DocumentClock,
 }
 
 /// Perf-BodyStory — captured multi-page emission delta from one
@@ -327,6 +397,7 @@ impl Default for PipelineOptions<'_> {
             pre_built_font_table: None,
             master_text_emit_cache: None,
             body_story_emit_cache: None,
+            document_clock: DocumentClock::default(),
         }
     }
 }
@@ -738,6 +809,23 @@ impl<'a> SectionWalk<'a> {
     }
 }
 
+/// W1.18c / W1.19 — the post-layout resolution context handed to the
+/// SECOND build pass. Built from the first pass's seated layout: the
+/// per-page running-header pickup index, and a story / text-anchor →
+/// flat page-index map (cross-reference + text-anchor hyperlink
+/// destinations resolve to the page their target story landed on).
+///
+/// Threaded internally only — `build_document` builds it after the
+/// first pass and re-invokes the inner builder with it. Keeping it
+/// internal lets `RunningHeaderIndex` stay private to the pipeline
+/// module rather than leaking onto the public `PipelineOptions`.
+struct PostLayoutCtx {
+    running_headers: links::RunningHeaderIndex,
+    /// Story `<Self>` id (and any text-anchor id that maps to a story)
+    /// → flat 0-based page index of that story's first laid-out line.
+    story_page: HashMap<String, u32>,
+}
+
 /// Build one `BuiltPage` per `<Page>` in the document. Each page's
 /// display list contains only frames whose centres fall inside the
 /// page's `GeometricBounds`. Frames placed entirely on the pasteboard
@@ -745,9 +833,130 @@ impl<'a> SectionWalk<'a> {
 ///
 /// Returns a `BuiltDocument` with aggregated stats. Use `build` for
 /// the historical single-page (union of all bounds) shape.
+///
+/// W1.18c / W1.19 — when the document contains running-header variables
+/// or cross-reference (text-anchor) destinations, this runs the inner
+/// builder TWICE: the first pass seats the text, then we index where
+/// each style / story landed and re-run so running headers + page-number
+/// cross-references resolve against the CURRENT layout. The re-run is
+/// gated; documents without those features build in a single pass.
 pub fn build_document(
     document: &Document,
     options: &PipelineOptions,
+) -> anyhow::Result<BuiltDocument> {
+    let first = build_document_inner(document, options, None)?;
+
+    // Does the document need the post-layout pass? (Same predicate the
+    // inner builder uses; cheap to recompute and avoids plumbing a flag
+    // back out.)
+    let dm = &document.container.designmap;
+    let has_running_header = dm.text_variables.iter().any(|v| {
+        matches!(
+            v.variable_type.as_deref(),
+            Some("RunningHeaderType") | Some("RunningHeaderVariableType")
+        )
+    });
+    let has_text_anchor_dest = options.collect_link_regions
+        && dm.hyperlink_destinations.iter().any(|d| {
+            matches!(
+                &d.kind,
+                paged_parse::HyperlinkDestinationKind::TextAnchor(_)
+            )
+        });
+    if !has_running_header && !has_text_anchor_dest {
+        return Ok(first);
+    }
+
+    // Build the resolution context from the first pass's seated layout,
+    // then re-run with it in hand. Only one re-run ever happens (the
+    // inner builder, given a `post`, never asks for another).
+    let post = build_post_layout_ctx(document, &first);
+    build_document_inner(document, options, Some(&post))
+}
+
+/// W1.18c / W1.19 — derive the running-header pickup index + the
+/// story→page map from a first-pass [`BuiltDocument`]. Walks every
+/// page's `story_layout`, attributing each line's source paragraph to
+/// its applied paragraph style, and records the first / last matching
+/// text per (page, style). `fallback` carries forward the most-recent
+/// match so a page with no own occurrence inherits the prior page's.
+fn build_post_layout_ctx(document: &Document, first: &BuiltDocument) -> PostLayoutCtx {
+    let mut running_headers = links::RunningHeaderIndex::default();
+    let mut story_page: HashMap<String, u32> = HashMap::new();
+
+    // Pre-index each story's paragraphs by index → (applied style,
+    // concatenated text) so we can attribute a laid-out line to its
+    // source paragraph's style + read its full text.
+    let mut para_style: HashMap<(&str, u32), &str> = HashMap::new();
+    let mut para_text: HashMap<(&str, u32), String> = HashMap::new();
+    for parsed in &document.stories {
+        for (p_idx, para) in parsed.story.paragraphs.iter().enumerate() {
+            let key = (parsed.self_id.as_str(), p_idx as u32);
+            if let Some(style) = para.paragraph_style.as_deref() {
+                para_style.insert(key, style);
+            }
+            let text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
+            para_text.insert(key, text);
+        }
+    }
+
+    // Walk pages in order; for each line, record where its story landed
+    // (first occurrence wins) and, when its paragraph carries a style,
+    // the first / last matching text on that page.
+    //
+    // `seen_on_page` tracks which (page, style) firsts are already set so
+    // a later line on the same page only updates `last`. `carry` holds
+    // the most-recent matched text per style for the fallback walk.
+    let mut carry: HashMap<String, String> = HashMap::new();
+    for (page_idx, page) in first.pages.iter().enumerate() {
+        // Seed every style's fallback for this page from the carry-over
+        // BEFORE processing the page's own lines, so a page with no own
+        // match inherits the prior page's value.
+        for (style, text) in &carry {
+            running_headers
+                .fallback
+                .insert((page_idx, style.clone()), text.clone());
+        }
+        for line in &page.story_layout {
+            // Story → first page it appears on.
+            story_page
+                .entry(line.story_id.clone())
+                .or_insert(page_idx as u32);
+            let key = (line.story_id.as_str(), line.paragraph_idx);
+            let Some(style) = para_style.get(&key).copied() else {
+                continue;
+            };
+            let text = para_text.get(&key).cloned().unwrap_or_default();
+            let trimmed = text.trim().to_string();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let idx_key = (page_idx, style.to_string());
+            running_headers
+                .first
+                .entry(idx_key.clone())
+                .or_insert_with(|| trimmed.clone());
+            running_headers.last.insert(idx_key, trimmed.clone());
+            // Update both the carry-forward AND this page's fallback so
+            // a LATER page with no match (and this page, were it queried
+            // for fallback) sees the freshest value.
+            carry.insert(style.to_string(), trimmed.clone());
+            running_headers
+                .fallback
+                .insert((page_idx, style.to_string()), trimmed);
+        }
+    }
+
+    PostLayoutCtx {
+        running_headers,
+        story_page,
+    }
+}
+
+fn build_document_inner(
+    document: &Document,
+    options: &PipelineOptions,
+    post: Option<&PostLayoutCtx>,
 ) -> anyhow::Result<BuiltDocument> {
     let palette = &document.palette;
     // Build the CMYK ICC transform once per render. Failures are
@@ -784,6 +993,23 @@ pub fn build_document(
     // (overset) and from page-label computation (section fallback).
     // Per-page image diagnostics are aggregated separately at the end.
     let mut emit_diagnostics: Vec<Diagnostic> = Vec::new();
+
+    // W1.18c — the master-text / body-story emit caches are bypassed on
+    // the post-layout (second) pass: their deltas were captured during
+    // the first pass with the PRE-running-header variable text, so a
+    // splice would re-introduce the stale value. The first pass still
+    // populates + reads them as before (the shared RefCell survives), so
+    // gesture-rebuild callers keep their cache hit on the next build.
+    let master_text_emit_cache = if post.is_some() {
+        None
+    } else {
+        options.master_text_emit_cache
+    };
+    let body_story_emit_cache = if post.is_some() {
+        None
+    } else {
+        options.body_story_emit_cache
+    };
 
     // W1.7 Phase B: precompute each AutoSizing text frame's GROWN
     // inner-coord bounds, keyed by `Self` id. Computed once up front so
@@ -926,7 +1152,7 @@ pub fn build_document(
     // collection is on (the live render never pays for it). A page's
     // `PageId(self_id)` is its `<Page Self>`; synthetic ids (no baked
     // Self) won't be hyperlink targets, so they harmlessly miss.
-    let page_index_map: HashMap<String, u32> = if options.collect_link_regions {
+    let mut page_index_map: HashMap<String, u32> = if options.collect_link_regions {
         pages
             .iter()
             .enumerate()
@@ -935,6 +1161,35 @@ pub fn build_document(
     } else {
         HashMap::new()
     };
+    // W1.19 — on the post-layout pass, fold in story / text-anchor →
+    // page entries so a cross-reference (or text-anchor hyperlink) whose
+    // destination is a story resolves to the page that story landed on.
+    // `<Page Self>` entries stay authoritative (a real page id never
+    // collides with a story id).
+    if let Some(post) = post {
+        for (id, idx) in &post.story_page {
+            page_index_map.entry(id.clone()).or_insert(*idx);
+        }
+    }
+
+    // W1.18b — chapter number per flat body-page index, computed once
+    // from `<Section>` settings. `<Page Self>` → flat index lets us find
+    // which section owns each page. Empty Strings (and an all-empty
+    // table) when the document declares no sections, in which case
+    // `ChapterNumberType` variables fall back to their baked text.
+    let page_starts: HashMap<String, usize> = pages
+        .iter()
+        .enumerate()
+        .map(|(idx, p)| (p.id.0.clone(), idx))
+        .collect();
+    let sections = &document.container.designmap.sections;
+    let chapter_numbers: Vec<String> = (0..pages.len())
+        .map(|idx| links::chapter_number_for_page(sections, &page_starts, idx).unwrap_or_default())
+        .collect();
+    // W1.18c — the post-layout running-header pickup index, threaded into
+    // the emit passes only on the second (post-layout) build. `None` on
+    // the first pass — running headers then keep their baked value.
+    let running_header_index: Option<&links::RunningHeaderIndex> = post.map(|p| &p.running_headers);
 
     // Master-spread pass — runs first so master items end up at the
     // bottom of each page's display list (page-level frames overlay on
@@ -1758,7 +2013,7 @@ pub fn build_document(
             .self_id
             .as_deref()
             .map(|id| (id.to_string(), *page_idx));
-        if let (Some(ref key), Some(rc)) = (&cache_key, options.master_text_emit_cache) {
+        if let (Some(ref key), Some(rc)) = (&cache_key, master_text_emit_cache) {
             if let Some(delta) = rc.borrow().get(key) {
                 splice_master_text_delta(&mut pages[*page_idx].list, delta);
                 continue;
@@ -1796,7 +2051,11 @@ pub fn build_document(
         )
         .with_story_id(&parsed.self_id)
         .with_page_count(total_page_count)
-        .with_page_index_map(&page_index_map);
+        .with_page_index_map(&page_index_map)
+        .with_chapter_numbers(&chapter_numbers);
+        if let Some(index) = running_header_index {
+            emitter = emitter.with_running_headers(index);
+        }
         for paragraph in &parsed.story.paragraphs {
             emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
         }
@@ -1823,8 +2082,7 @@ pub fn build_document(
             || !anchored_q.is_empty()
             || !new_breaks.is_empty()
             || !new_diags.is_empty();
-        if let (Some(ref key), Some(rc), false) =
-            (&cache_key, options.master_text_emit_cache, uncacheable)
+        if let (Some(ref key), Some(rc), false) = (&cache_key, master_text_emit_cache, uncacheable)
         {
             let new_paths: Vec<paged_compose::PathData> =
                 list.paths.slice(path_base, list.paths.len()).to_vec();
@@ -2034,7 +2292,7 @@ pub fn build_document(
         // when such a list exists (conservative, like the
         // gradient/image-pool rule below).
         let cache_key: Option<(String, u64)> =
-            if options.body_story_emit_cache.is_some() && cross_story_numbering.is_none() {
+            if body_story_emit_cache.is_some() && cross_story_numbering.is_none() {
                 Some((
                     parsed.self_id.clone(),
                     body_story_signature(&chain, &chain_pages_pre, &wrap_rects_per_page),
@@ -2042,7 +2300,7 @@ pub fn build_document(
             } else {
                 None
             };
-        if let (Some(ref key), Some(rc)) = (&cache_key, options.body_story_emit_cache) {
+        if let (Some(ref key), Some(rc)) = (&cache_key, body_story_emit_cache) {
             if let Some(delta) = rc.borrow().get(key) {
                 // Defense in depth — the signature includes the chain's
                 // page indices, so a stale-index hit should be
@@ -2205,7 +2463,12 @@ pub fn build_document(
             .with_story_id(&parsed.self_id)
             .with_page_count(total_page_count)
             .with_page_index_map(&page_index_map)
+            .with_chapter_numbers(&chapter_numbers)
             .with_footnote_reservation(&reserved_64);
+            // W1.18c — running-header pickup index on the post-layout pass.
+            if let Some(index) = running_header_index {
+                emitter = emitter.with_running_headers(index);
+            }
             // W1.22 — thread the cross-story numbering ledger when one
             // exists (only built for documents with a continue-across-
             // stories list).
@@ -2286,7 +2549,7 @@ pub fn build_document(
         // policy as master_text: skip caching when gradient or
         // image entries were added, since the cached splice path
         // only renumbers path-ids.
-        if let (Some(ref key), Some(rc)) = (&cache_key, options.body_story_emit_cache) {
+        if let (Some(ref key), Some(rc)) = (&cache_key, body_story_emit_cache) {
             // Diagnostics (overset) ride the emit channel, not the
             // cached delta — a story that produced any is left
             // uncacheable so a future hit re-emits and re-reports.
@@ -2589,6 +2852,16 @@ struct StoryEmitter<'a> {
     /// collection is off (the map isn't built). Owned by the build, not
     /// the emitter.
     page_index_map: Option<&'a HashMap<String, u32>>,
+    /// W1.18b — chapter number per flat body-page index, pre-computed
+    /// once per build from `<Section>` settings. Empty (every
+    /// `ChapterNumberType` falls back to baked text) when the document
+    /// declares no sections. Owned by the build.
+    chapter_numbers: &'a [String],
+    /// W1.18c — post-layout running-header pickup index. `None` on the
+    /// first (pre-layout) pass — running headers then keep their baked
+    /// value; populated for the re-emit so they resolve to the matching
+    /// on-page paragraph. Owned by the build.
+    running_headers: Option<&'a links::RunningHeaderIndex>,
 }
 
 impl<'a> StoryEmitter<'a> {
@@ -2747,6 +3020,8 @@ impl<'a> StoryEmitter<'a> {
             page_count: 0,
             collect_link_regions: options.collect_link_regions,
             page_index_map: None,
+            chapter_numbers: &[],
+            running_headers: None,
         }
     }
 
@@ -2755,6 +3030,20 @@ impl<'a> StoryEmitter<'a> {
     /// link-region collection is on.
     fn with_page_index_map(mut self, map: &'a HashMap<String, u32>) -> Self {
         self.page_index_map = Some(map);
+        self
+    }
+
+    /// W1.18b — wire the per-page chapter-number table used by
+    /// `ChapterNumberType` variables. Empty slice ⇒ no sections.
+    fn with_chapter_numbers(mut self, numbers: &'a [String]) -> Self {
+        self.chapter_numbers = numbers;
+        self
+    }
+
+    /// W1.18c — wire the post-layout running-header pickup index used by
+    /// `RunningHeaderType` variables. Set only on the re-emit pass.
+    fn with_running_headers(mut self, index: &'a links::RunningHeaderIndex) -> Self {
+        self.running_headers = Some(index);
         self
     }
 
@@ -3738,18 +4027,27 @@ fn emit_paragraph_into_chain(
     let total_pages = em.page_count;
     let needs_var_subst = paragraph.runs.iter().any(|r| r.text_variable.is_some());
     let variable_resolved: Vec<Option<String>> = if needs_var_subst {
+        // W1.18 — the frame currently filling resolves variables FOR its
+        // host page: date variables read the deterministic clock, the
+        // chapter number is the section owning this page, and (on the
+        // re-emit) running headers pick up the matching paragraph on this
+        // very page.
+        let host_page = em.chain_pages.get(em.frame_idx).copied().unwrap_or(0);
+        let ctx = links::VarResolveCtx {
+            designmap: &em.document.container.designmap,
+            total_pages,
+            clock: &em.options.document_clock,
+            chapter_number: em.chapter_numbers.get(host_page).map(String::as_str),
+            page_index: host_page,
+            running_headers: em.running_headers,
+        };
         paragraph
             .runs
             .iter()
             .map(|r| {
-                r.text_variable.as_deref().and_then(|var_id| {
-                    links::resolve_variable(
-                        &em.document.container.designmap,
-                        var_id,
-                        &r.text,
-                        total_pages,
-                    )
-                })
+                r.text_variable
+                    .as_deref()
+                    .and_then(|var_id| links::resolve_variable(&ctx, var_id, &r.text))
             })
             .collect()
     } else {
