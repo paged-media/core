@@ -62,6 +62,7 @@ fn emit_sample(name: &str, out_dir: &std::path::Path) -> Result<()> {
         "gradients" => paged_gen::samples::gradients::build(),
         "tables" => paged_gen::samples::tables::build(),
         "images" => paged_gen::samples::images::build(),
+        "image-clipping" => paged_gen::samples::image_clipping::build(),
         "anchored" => paged_gen::samples::anchored::build(),
         "transparency" => paged_gen::samples::transparency::build(),
         "markers" => paged_gen::samples::markers::build(),

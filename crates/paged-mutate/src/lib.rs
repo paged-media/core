@@ -1982,6 +1982,7 @@ mod tests {
             text_paths: Vec::new(),
             image_link: None,
             image_bytes: None,
+            image_clip: None,
             has_image_element: false,
             has_inline_pdf: false,
             image_item_transform: None,

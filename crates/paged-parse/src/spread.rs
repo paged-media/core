@@ -701,6 +701,138 @@ pub struct ImageMetadata {
     pub effective_ppi: Option<f32>,
 }
 
+/// IDML `<ClippingPathSettings ClippingType="...">` value. InDesign
+/// clips a placed image to a path *in addition to* the frame outline.
+/// The type drives where the path comes from:
+///
+/// * `None` — no clip; the frame outline is the only crop.
+/// * `UserModifiedPath` — a hand-edited path whose *resolved geometry
+///   is serialised in the IDML* (a `<PathGeometry>` child of
+///   `<ClippingPathSettings>`). This is the variant the renderer can
+///   honour from the XML alone.
+/// * `PhotoshopPath` — a named path stored in the linked image's 8BIM
+///   resources. The IDML records only `AppliedPathName`; the geometry
+///   lives in the image binary, so without 8BIM extraction the renderer
+///   defers (renders unclipped + a diagnostic).
+/// * `AlphaChannel` — clip from a named alpha channel; needs raster
+///   analysis of the image, deferred.
+/// * `DetectEdges` — clip auto-traced from luminance; needs raster
+///   analysis, deferred.
+///
+/// Unknown strings collapse to `Other` (deferred, like the raster
+/// types) so a future InDesign value never silently mis-clips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClippingType {
+    None,
+    PhotoshopPath,
+    AlphaChannel,
+    DetectEdges,
+    UserModifiedPath,
+    Other,
+}
+
+impl ClippingType {
+    pub fn from_idml(s: &str) -> Self {
+        // InDesign serialises these bare (no `$ID/` prefix) on
+        // `ClippingPathSettings/@ClippingType`.
+        match s {
+            "None" => Self::None,
+            "PhotoshopPath" => Self::PhotoshopPath,
+            "AlphaChannel" => Self::AlphaChannel,
+            "DetectEdges" => Self::DetectEdges,
+            "UserModifiedPath" => Self::UserModifiedPath,
+            _ => Self::Other,
+        }
+    }
+
+    /// Whether this type can ever carry resolvable geometry inside the
+    /// IDML XML. Only `UserModifiedPath` does in practice; the others
+    /// reference a resource in the image binary (8BIM path / alpha
+    /// channel) or need raster edge-detection, all out of XML scope.
+    pub fn geometry_may_be_inline(self) -> bool {
+        matches!(self, Self::UserModifiedPath)
+    }
+}
+
+/// Parsed `<ClippingPathSettings>` for a placed image. Carries the
+/// clip type, the boolean knobs the renderer honours (`InvertPath`,
+/// `IncludeInsideEdges`), the `AppliedPathName` (for diagnostics when
+/// the geometry lives in the image binary), and — when the IDML
+/// serialised it (UserModifiedPath) — the resolved clip-path geometry
+/// in the *image's pixel coordinate space* (the same space the
+/// `<Image>`'s own `<PathGeometry>` uses, mapped to spread coords by
+/// the image's `ItemTransform`).
+///
+/// `clip_anchors` / `clip_subpath_starts` / `clip_subpath_open` mirror
+/// the frame-geometry convention exactly (one subpath-start per
+/// `<GeometryPathType>`, `subpath_open` parallel) so the renderer can
+/// reuse `polygon_path_from_anchors_with_open`. Holes (a compound clip
+/// path — e.g. a star with a punched centre) survive via the same
+/// `subpath_starts` boundaries as compound frame paths.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ClippingPathSettings {
+    /// The `ClippingType`. `None` when the attribute was absent (the
+    /// IDML default — `ClippingType="None"`).
+    pub clipping_type: Option<ClippingType>,
+    /// `InvertPath` — `true` keeps the area *outside* the path (the
+    /// path becomes a hole punched out of the frame).
+    pub invert_path: bool,
+    /// `IncludeInsideEdges` — `true` keeps interior contours as holes
+    /// (a doughnut clip). The renderer already honours compound
+    /// subpaths, so this flag selects the even-odd-style hole fill.
+    pub include_inside_edges: bool,
+    /// `AppliedPathName` — the named 8BIM path / alpha channel the clip
+    /// references. Surfaced in the defer diagnostic so a user can see
+    /// *which* embedded path we couldn't reach.
+    pub applied_path_name: Option<String>,
+    /// `Threshold` (DetectEdges luminance cutoff). Parsed for
+    /// completeness; the renderer defers DetectEdges so it is unused
+    /// today.
+    pub threshold: Option<f32>,
+    /// `Tolerance` (path-simplification tolerance). Parsed for
+    /// completeness; unused until DetectEdges/AlphaChannel land.
+    pub tolerance: Option<f32>,
+    /// Resolved clip-path anchors in image-pixel space, captured from a
+    /// `<PathGeometry>` nested under `<ClippingPathSettings>`. Empty
+    /// when the geometry lives in the image binary (the defer case).
+    pub clip_anchors: Vec<PathAnchor>,
+    /// Subpath start offsets into `clip_anchors`; see
+    /// [`Rectangle::subpath_starts`]. One entry per `<GeometryPathType>`.
+    pub clip_subpath_starts: Vec<usize>,
+    /// Parallel to `clip_subpath_starts`; see [`Rectangle::subpath_open`].
+    pub clip_subpath_open: Vec<bool>,
+}
+
+impl ClippingPathSettings {
+    /// True when this clip should actually crop the image: a known
+    /// non-`None` type AND resolvable geometry present in the XML. The
+    /// renderer uses this to decide between clipping and deferring.
+    pub fn has_renderable_geometry(&self) -> bool {
+        !self.clip_anchors.is_empty()
+            && matches!(
+                self.clipping_type,
+                Some(ClippingType::UserModifiedPath) | None
+            )
+    }
+
+    /// True when the IDML asks for a clip we can't satisfy from the XML
+    /// (a Photoshop-path / alpha-channel / detect-edges type, or a
+    /// named path with no inline geometry). Drives the defer
+    /// diagnostic + render-unclipped fallback.
+    pub fn is_deferred_clip(&self) -> bool {
+        match self.clipping_type {
+            None | Some(ClippingType::None) => false,
+            Some(ClippingType::UserModifiedPath) => self.clip_anchors.is_empty(),
+            Some(
+                ClippingType::PhotoshopPath
+                | ClippingType::AlphaChannel
+                | ClippingType::DetectEdges
+                | ClippingType::Other,
+            ) => true,
+        }
+    }
+}
+
 /// Vector-only frame (no story). Mirrors `TextFrame` minus the
 /// `parent_story` field; shares the same paint / stroke handling
 /// downstream.
@@ -756,6 +888,12 @@ pub struct Rectangle {
     /// majority of placed images. `None` for swatch-only Rectangles or
     /// link-only Image elements.
     pub image_bytes: Option<Vec<u8>>,
+    /// W1.21: `<ClippingPathSettings>` parsed from the nested `<Image>`.
+    /// `None` ⇒ no clip (the frame outline is the only crop). When
+    /// present with renderable geometry the image is additionally
+    /// clipped to the path (frame ∩ clip); otherwise a per-image
+    /// diagnostic records the defer and the image renders unclipped.
+    pub image_clip: Option<ClippingPathSettings>,
     /// `AppliedObjectStyle` reference; see `TextFrame`.
     pub applied_object_style: Option<String>,
     /// `<TextWrapPreference>` parsed off the rectangle.
@@ -1145,6 +1283,8 @@ pub struct Oval {
     pub image_item_transform: Option<[f32; 6]>,
     /// Q-03: see [`Rectangle::image_bytes`].
     pub image_bytes: Option<Vec<u8>>,
+    /// W1.21: see [`Rectangle::image_clip`].
+    pub image_clip: Option<ClippingPathSettings>,
     /// `OverprintFill="true"`. See [`TextFrame::overprint_fill`].
     pub overprint_fill: bool,
     /// `OverprintStroke="true"`. See [`TextFrame::overprint_stroke`].
@@ -1421,6 +1561,8 @@ pub struct Polygon {
     pub image_item_transform: Option<[f32; 6]>,
     /// Q-03: see [`Rectangle::image_bytes`].
     pub image_bytes: Option<Vec<u8>>,
+    /// W1.21: see [`Rectangle::image_clip`].
+    pub image_clip: Option<ClippingPathSettings>,
     /// `OverprintFill="true"`. See [`TextFrame::overprint_fill`].
     pub overprint_fill: bool,
     /// `OverprintStroke="true"`. See [`TextFrame::overprint_stroke`].
@@ -1524,6 +1666,22 @@ struct CurrentFrame {
     /// describe content-only shadows that don't map onto our
     /// single-shadow-per-frame model and are skipped.
     content_transparency_depth: u32,
+    /// W1.21: depth inside a nested `<Image>` (and `<EPSImage>` etc.).
+    /// While > 0 the image's own `<PathGeometry>` is NOT the frame's
+    /// outline, so geometry events must not pollute `anchors`
+    /// (otherwise a Polygon host would absorb the image's 4-corner box
+    /// as part of its silhouette). Clip-path geometry is routed by the
+    /// `clip` builder instead.
+    in_image_depth: u32,
+    /// W1.21: the in-progress `<ClippingPathSettings>` of the nested
+    /// image, if one was opened. Geometry events route into its
+    /// `clip_anchors` while `in_clipping_path` holds; the whole record
+    /// is written onto the host shape's `image_clip` at frame close.
+    clip: Option<ClippingPathSettings>,
+    /// W1.21: true between `<ClippingPathSettings>` and its end tag, so
+    /// `<GeometryPathType>` / `<PathPointType>` children feed the clip
+    /// path rather than the frame outline.
+    in_clipping_path: bool,
 }
 
 /// Read whatever `text_wrap.offsets` has already been recorded on the
@@ -1879,7 +2037,14 @@ impl Spread {
         }
 
         loop {
-            match reader.read_event_into(&mut buf)? {
+            let raw_event = reader.read_event_into(&mut buf)?;
+            // W1.21: a `<Image>` container fires `Start` (it has child
+            // <Properties>/<Link>/<ClippingPathSettings>); a self-closed
+            // image fires `Empty`. We need that distinction to balance
+            // `in_image_depth` against the matching `</Image>` End — a
+            // self-closed image has no End, so it must not increment.
+            let event_is_start = matches!(raw_event, Event::Start(_));
+            match raw_event {
                 Event::Start(e) | Event::Empty(e) => match e.name().as_ref() {
                     b"Spread" | b"MasterSpread" => {
                         if out.self_id.is_none() {
@@ -2044,6 +2209,9 @@ impl Spread {
                             in_text_wrap: false,
                             stroke_transparency_depth: 0,
                             content_transparency_depth: 0,
+                            in_image_depth: 0,
+                            clip: None,
+                            in_clipping_path: false,
                         });
                     }
                     b"Rectangle" => {
@@ -2066,6 +2234,7 @@ impl Spread {
                             stroke_drop_shadow: None,
                             image_link: None,
                             image_bytes: None,
+                            image_clip: None,
                             has_image_element: false,
                             has_inline_pdf: false,
                             image_item_transform: None,
@@ -2121,6 +2290,9 @@ impl Spread {
                             in_text_wrap: false,
                             stroke_transparency_depth: 0,
                             content_transparency_depth: 0,
+                            in_image_depth: 0,
+                            clip: None,
+                            in_clipping_path: false,
                         });
                     }
                     b"Oval" => {
@@ -2155,6 +2327,7 @@ impl Spread {
                             blend_mode: None,
                             image_link: None,
                             image_bytes: None,
+                            image_clip: None,
                             has_image_element: false,
                             has_inline_pdf: false,
                             image_item_transform: None,
@@ -2175,6 +2348,9 @@ impl Spread {
                             in_text_wrap: false,
                             stroke_transparency_depth: 0,
                             content_transparency_depth: 0,
+                            in_image_depth: 0,
+                            clip: None,
+                            in_clipping_path: false,
                         });
                     }
                     b"StrokeTransparencySetting" => {
@@ -2584,7 +2760,26 @@ impl Spread {
                         // here too so the renderer can skip auto-close
                         // on open paths (P-15).
                         if let Some(cf) = current_frame.as_mut() {
-                            if cf.keep_anchors {
+                            if cf.in_clipping_path {
+                                // W1.21: a `<GeometryPathType>` under
+                                // `<ClippingPathSettings>` begins a clip
+                                // subpath. Compound clips (a star with a
+                                // punched centre) keep their holes via
+                                // these boundaries, exactly like frame
+                                // compound paths.
+                                if let Some(clip) = cf.clip.as_mut() {
+                                    clip.clip_subpath_starts.push(clip.clip_anchors.len());
+                                    let open = attr(&e, b"PathOpen")
+                                        .and_then(|s| s.parse::<bool>().ok())
+                                        .unwrap_or(false);
+                                    clip.clip_subpath_open.push(open);
+                                }
+                            } else if cf.in_image_depth == 0 && cf.keep_anchors {
+                                // The image's own `<PathGeometry>` (when
+                                // `in_image_depth > 0`) describes the
+                                // placed picture's native box, not the
+                                // frame's silhouette — skip it so a
+                                // Polygon host's outline isn't polluted.
                                 cf.subpath_starts.push(cf.anchors.len());
                                 let open = attr(&e, b"PathOpen")
                                     .and_then(|s| s.parse::<bool>().ok())
@@ -2640,7 +2835,30 @@ impl Spread {
                         // world InDesign exports always serialise
                         // geometry this way.
                         if let Some(cf) = current_frame.as_mut() {
-                            if cf.needs_bounds || cf.keep_anchors {
+                            if cf.in_clipping_path {
+                                // W1.21: route clip-path anchors into the
+                                // pending `ClippingPathSettings`. Same
+                                // anchor/handle shape as frame geometry,
+                                // but in the image's pixel space.
+                                if let Some(clip) = cf.clip.as_mut() {
+                                    if let Some(a) =
+                                        attr(&e, b"Anchor").and_then(|s| parse_xy_pair(&s))
+                                    {
+                                        let left = attr(&e, b"LeftDirection")
+                                            .and_then(|s| parse_xy_pair(&s))
+                                            .unwrap_or(a);
+                                        let right = attr(&e, b"RightDirection")
+                                            .and_then(|s| parse_xy_pair(&s))
+                                            .unwrap_or(a);
+                                        clip.clip_anchors.push(PathAnchor {
+                                            anchor: a,
+                                            left,
+                                            right,
+                                        });
+                                    }
+                                }
+                            } else if cf.in_image_depth == 0 && (cf.needs_bounds || cf.keep_anchors)
+                            {
                                 let anchor = attr(&e, b"Anchor").and_then(|s| parse_xy_pair(&s));
                                 if let Some(a) = anchor {
                                     let left = attr(&e, b"LeftDirection")
@@ -2795,6 +3013,17 @@ impl Spread {
                         // instead of falling back to raw fill.
                         let is_image_element = !matches!(e.name().as_ref(), b"Link");
                         let is_pdf_element = matches!(e.name().as_ref(), b"PDF");
+                        // W1.21: entering an image container — its own
+                        // `<PathGeometry>` is the picture box, not the
+                        // frame outline, so suppress frame-anchor
+                        // accumulation until the matching `</Image>`.
+                        // Only `Start` (a container) bumps the depth;
+                        // a self-closed `<Link/>` / `<Image/>` does not.
+                        if is_image_element && event_is_start {
+                            if let Some(cf) = current_frame.as_mut() {
+                                cf.in_image_depth += 1;
+                            }
+                        }
                         let element_uri =
                             attr(&e, b"LinkResourceURI").or_else(|| attr(&e, b"href"));
                         // Q-06: a `<PDF>` element with no link URI carries
@@ -2879,6 +3108,46 @@ impl Spread {
                                 }
                             }
                             _ => {}
+                        }
+                    }
+                    b"ClippingPathSettings" => {
+                        // W1.21: `<ClippingPathSettings>` nests inside the
+                        // open `<Image>`. Parse the type + knobs onto the
+                        // current frame's pending clip; any
+                        // `<PathGeometry>` child (UserModifiedPath) then
+                        // feeds `clip_anchors` while `in_clipping_path`
+                        // holds. A self-closed element (ClippingType="None"
+                        // with no geometry) still records the type so the
+                        // renderer knows there's no clip.
+                        if let Some(cf) = current_frame.as_mut() {
+                            let clipping_type =
+                                attr(&e, b"ClippingType").map(|s| ClippingType::from_idml(&s));
+                            let invert_path = attr(&e, b"InvertPath")
+                                .and_then(|s| s.parse::<bool>().ok())
+                                .unwrap_or(false);
+                            let include_inside_edges = attr(&e, b"IncludeInsideEdges")
+                                .and_then(|s| s.parse::<bool>().ok())
+                                .unwrap_or(false);
+                            let applied_path_name = attr(&e, b"AppliedPathName")
+                                .filter(|s| !s.is_empty() && s != "$ID/");
+                            let threshold =
+                                attr(&e, b"Threshold").and_then(|s| s.parse::<f32>().ok());
+                            let tolerance =
+                                attr(&e, b"Tolerance").and_then(|s| s.parse::<f32>().ok());
+                            cf.clip = Some(ClippingPathSettings {
+                                clipping_type,
+                                invert_path,
+                                include_inside_edges,
+                                applied_path_name,
+                                threshold,
+                                tolerance,
+                                clip_anchors: Vec::new(),
+                                clip_subpath_starts: Vec::new(),
+                                clip_subpath_open: Vec::new(),
+                            });
+                            // Only a container (Start) hosts geometry; a
+                            // self-closed settings element has none.
+                            cf.in_clipping_path = event_is_start;
                         }
                     }
                     b"Contents" => {
@@ -3006,6 +3275,9 @@ impl Spread {
                             in_text_wrap: false,
                             stroke_transparency_depth: 0,
                             content_transparency_depth: 0,
+                            in_image_depth: 0,
+                            clip: None,
+                            in_clipping_path: false,
                         });
                     }
                     b"Polygon" => {
@@ -3042,6 +3314,7 @@ impl Spread {
                             text_paths: Vec::new(),
                             image_link: None,
                             image_bytes: None,
+                            image_clip: None,
                             has_image_element: false,
                             has_inline_pdf: false,
                             image_item_transform: None,
@@ -3065,6 +3338,9 @@ impl Spread {
                             in_text_wrap: false,
                             stroke_transparency_depth: 0,
                             content_transparency_depth: 0,
+                            in_image_depth: 0,
+                            clip: None,
+                            in_clipping_path: false,
                         });
                     }
                     _ => {}
@@ -3105,6 +3381,26 @@ impl Spread {
                         // ghost (matches the previous behaviour of
                         // skipping bounds-less shapes).
                         if let Some(cf) = current_frame.take() {
+                            // W1.21: flush the placed image's clipping
+                            // path onto the host shape. Written before the
+                            // bounds/drop logic — if the frame is dropped
+                            // (bounds-less ghost) the clip rides along into
+                            // the pop. Only Rectangle / Oval / Polygon host
+                            // images, so the other kinds carry no field.
+                            if let Some(clip) = cf.clip.clone() {
+                                match cf.kind {
+                                    CurrentFrameKind::Rect(i) if i < out.rectangles.len() => {
+                                        out.rectangles[i].image_clip = Some(clip);
+                                    }
+                                    CurrentFrameKind::Oval(i) if i < out.ovals.len() => {
+                                        out.ovals[i].image_clip = Some(clip);
+                                    }
+                                    CurrentFrameKind::Polygon(i) if i < out.polygons.len() => {
+                                        out.polygons[i].image_clip = Some(clip);
+                                    }
+                                    _ => {}
+                                }
+                            }
                             if cf.needs_bounds {
                                 if cf.anchors.is_empty() {
                                     drop_pending(&mut out, cf.kind);
@@ -3229,6 +3525,22 @@ impl Spread {
                     b"TextWrapPreference" => {
                         if let Some(cf) = current_frame.as_mut() {
                             cf.in_text_wrap = false;
+                        }
+                    }
+                    b"ClippingPathSettings" => {
+                        // W1.21: clip geometry capture ends here; the
+                        // pending `clip` is flushed onto the host shape at
+                        // frame close.
+                        if let Some(cf) = current_frame.as_mut() {
+                            cf.in_clipping_path = false;
+                        }
+                    }
+                    b"Image" | b"EPSImage" | b"ImportedPage" | b"PDF" => {
+                        // W1.21: leaving the image container restores
+                        // frame-anchor accumulation. Saturating so a
+                        // malformed/mismatched stream can't underflow.
+                        if let Some(cf) = current_frame.as_mut() {
+                            cf.in_image_depth = cf.in_image_depth.saturating_sub(1);
                         }
                     }
                     b"StrokeTransparencySetting" => {
@@ -4846,5 +5158,220 @@ mod tests {
         assert!((m.column_gutter - 12.0).abs() < 1e-3);
         // p2 declared no MarginPreference.
         assert!(!s.page_margins.contains_key("p2"));
+    }
+
+    // ── W1.21: image clipping paths ──────────────────────────────────
+
+    /// `UserModifiedPath` with inline `<PathGeometry>` ⇒ clip anchors
+    /// captured into `image_clip.clip_anchors`, NOT into the host
+    /// rectangle's outline anchors (the clip lives in image space).
+    #[test]
+    fn parses_user_modified_clipping_path_geometry() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Rectangle Self="r1" GeometricBounds="0 0 100 100">
+              <Image Self="img1" ItemTransform="1 0 0 1 0 0" LinkResourceURI="file:p.png">
+                <Properties>
+                  <PathGeometry><GeometryPathType PathOpen="false"><PathPointArray>
+                    <PathPointType Anchor="0 0"/>
+                    <PathPointType Anchor="100 0"/>
+                    <PathPointType Anchor="100 100"/>
+                    <PathPointType Anchor="0 100"/>
+                  </PathPointArray></GeometryPathType></PathGeometry>
+                </Properties>
+                <ClippingPathSettings ClippingType="UserModifiedPath" InvertPath="false"
+                                      IncludeInsideEdges="false">
+                  <PathGeometry><GeometryPathType PathOpen="false"><PathPointArray>
+                    <PathPointType Anchor="10 10"/>
+                    <PathPointType Anchor="90 10"/>
+                    <PathPointType Anchor="50 90"/>
+                  </PathPointArray></GeometryPathType></PathGeometry>
+                </ClippingPathSettings>
+                <Link LinkResourceURI="file:p.png"/>
+              </Image>
+            </Rectangle>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        let clip = s.rectangles[0]
+            .image_clip
+            .as_ref()
+            .expect("clipping path settings parsed");
+        assert_eq!(clip.clipping_type, Some(ClippingType::UserModifiedPath));
+        assert!(!clip.invert_path);
+        assert!(!clip.include_inside_edges);
+        // Three triangle anchors captured into the clip, in image space.
+        assert_eq!(clip.clip_anchors.len(), 3);
+        assert_eq!(clip.clip_anchors[0].anchor, (10.0, 10.0));
+        assert_eq!(clip.clip_anchors[2].anchor, (50.0, 90.0));
+        assert!(clip.has_renderable_geometry());
+        assert!(!clip.is_deferred_clip());
+        // The image's own PathGeometry (the picture box) must NOT have
+        // leaked into the rectangle's outline anchors.
+        assert!(
+            s.rectangles[0].anchors.is_empty(),
+            "image PathGeometry must not pollute the frame outline"
+        );
+    }
+
+    /// Compound clip (two `<GeometryPathType>` contours) with
+    /// `IncludeInsideEdges="true"` records `clip_subpath_starts` so the
+    /// hole survives downstream.
+    #[test]
+    fn parses_compound_clipping_path_subpath_starts() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Rectangle Self="r1" GeometricBounds="0 0 100 100">
+              <Image Self="img1" ItemTransform="1 0 0 1 0 0" LinkResourceURI="file:p.png">
+                <ClippingPathSettings ClippingType="UserModifiedPath" InvertPath="false"
+                                      IncludeInsideEdges="true">
+                  <PathGeometry>
+                    <GeometryPathType PathOpen="false"><PathPointArray>
+                      <PathPointType Anchor="0 0"/>
+                      <PathPointType Anchor="100 0"/>
+                      <PathPointType Anchor="100 100"/>
+                      <PathPointType Anchor="0 100"/>
+                    </PathPointArray></GeometryPathType>
+                    <GeometryPathType PathOpen="false"><PathPointArray>
+                      <PathPointType Anchor="40 40"/>
+                      <PathPointType Anchor="60 40"/>
+                      <PathPointType Anchor="60 60"/>
+                      <PathPointType Anchor="40 60"/>
+                    </PathPointArray></GeometryPathType>
+                  </PathGeometry>
+                </ClippingPathSettings>
+                <Link LinkResourceURI="file:p.png"/>
+              </Image>
+            </Rectangle>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        let clip = s.rectangles[0].image_clip.as_ref().expect("clip parsed");
+        assert!(clip.include_inside_edges);
+        assert_eq!(clip.clip_anchors.len(), 8);
+        // One subpath-start per <GeometryPathType>: 0 and 4.
+        assert_eq!(clip.clip_subpath_starts, vec![0, 4]);
+        assert_eq!(clip.clip_subpath_open, vec![false, false]);
+        assert!(clip.has_renderable_geometry());
+    }
+
+    /// `InvertPath="true"` lifts onto the parsed settings.
+    #[test]
+    fn parses_invert_clipping_path_flag() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Rectangle Self="r1" GeometricBounds="0 0 100 100">
+              <Image Self="img1" ItemTransform="1 0 0 1 0 0" LinkResourceURI="file:p.png">
+                <ClippingPathSettings ClippingType="UserModifiedPath" InvertPath="true"
+                                      IncludeInsideEdges="false">
+                  <PathGeometry><GeometryPathType PathOpen="false"><PathPointArray>
+                    <PathPointType Anchor="20 20"/>
+                    <PathPointType Anchor="80 20"/>
+                    <PathPointType Anchor="80 80"/>
+                    <PathPointType Anchor="20 80"/>
+                  </PathPointArray></GeometryPathType></PathGeometry>
+                </ClippingPathSettings>
+              </Image>
+            </Rectangle>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        let clip = s.rectangles[0].image_clip.as_ref().expect("clip parsed");
+        assert!(clip.invert_path);
+        assert!(clip.has_renderable_geometry());
+    }
+
+    /// `ClippingType="PhotoshopPath"` with a named path but NO inline
+    /// geometry ⇒ the defer case: no clip anchors, `is_deferred_clip()`
+    /// true, `AppliedPathName` captured for the diagnostic.
+    #[test]
+    fn parses_photoshop_clipping_path_as_deferred() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Rectangle Self="r1" GeometricBounds="0 0 100 100">
+              <Image Self="img1" ItemTransform="1 0 0 1 0 0" LinkResourceURI="file:p.png">
+                <ClippingPathSettings ClippingType="PhotoshopPath" InvertPath="false"
+                                      IncludeInsideEdges="false" AppliedPathName="Path 1"
+                                      Threshold="25" Tolerance="2"/>
+                <Link LinkResourceURI="file:p.png"/>
+              </Image>
+            </Rectangle>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        let clip = s.rectangles[0].image_clip.as_ref().expect("clip parsed");
+        assert_eq!(clip.clipping_type, Some(ClippingType::PhotoshopPath));
+        assert!(clip.clip_anchors.is_empty());
+        assert!(clip.is_deferred_clip());
+        assert!(!clip.has_renderable_geometry());
+        assert_eq!(clip.applied_path_name.as_deref(), Some("Path 1"));
+        assert_eq!(clip.threshold, Some(25.0));
+        assert_eq!(clip.tolerance, Some(2.0));
+    }
+
+    /// `ClippingType="None"` (or absent settings) is not a deferred
+    /// clip and carries no geometry.
+    #[test]
+    fn clipping_type_none_is_not_deferred() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Rectangle Self="r1" GeometricBounds="0 0 100 100">
+              <Image Self="img1" ItemTransform="1 0 0 1 0 0" LinkResourceURI="file:p.png">
+                <ClippingPathSettings ClippingType="None" InvertPath="false"
+                                      IncludeInsideEdges="false"/>
+                <Link LinkResourceURI="file:p.png"/>
+              </Image>
+            </Rectangle>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        let clip = s.rectangles[0].image_clip.as_ref().expect("clip parsed");
+        assert_eq!(clip.clipping_type, Some(ClippingType::None));
+        assert!(!clip.is_deferred_clip());
+        assert!(!clip.has_renderable_geometry());
+    }
+
+    /// A polygon-hosted image's own `<PathGeometry>` must not pollute
+    /// the polygon's outline anchors (the `in_image_depth` guard).
+    #[test]
+    fn image_path_geometry_does_not_pollute_polygon_outline() {
+        let xml =
+            br#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+          <Spread Self="s">
+            <Polygon Self="poly1">
+              <Properties>
+                <PathGeometry><GeometryPathType PathOpen="false"><PathPointArray>
+                  <PathPointType Anchor="0 0"/>
+                  <PathPointType Anchor="50 0"/>
+                  <PathPointType Anchor="25 50"/>
+                </PathPointArray></GeometryPathType></PathGeometry>
+              </Properties>
+              <Image Self="img1" ItemTransform="1 0 0 1 0 0" LinkResourceURI="file:p.png">
+                <Properties>
+                  <PathGeometry><GeometryPathType PathOpen="false"><PathPointArray>
+                    <PathPointType Anchor="0 0"/>
+                    <PathPointType Anchor="100 0"/>
+                    <PathPointType Anchor="100 100"/>
+                    <PathPointType Anchor="0 100"/>
+                  </PathPointArray></GeometryPathType></PathGeometry>
+                </Properties>
+                <Link LinkResourceURI="file:p.png"/>
+              </Image>
+            </Polygon>
+          </Spread>
+        </idPkg:Spread>"#;
+        let s = Spread::parse(xml).unwrap();
+        // The polygon keeps its own triangle (3 anchors), not the
+        // image's 4-corner box appended after it.
+        assert_eq!(
+            s.polygons[0].anchors.len(),
+            3,
+            "image box must not be absorbed into the polygon outline"
+        );
     }
 }

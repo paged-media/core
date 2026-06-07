@@ -666,6 +666,7 @@ fn emit_anchored_rect_via_pipeline(
         // image-bearing anchored Rectangles.
         image_link: None,
         image_bytes: None,
+        image_clip: None,
         has_image_element: false,
         has_inline_pdf: false,
         image_item_transform: None,
@@ -758,6 +759,7 @@ pub(super) fn emit_anchored_rect_image(
         has_inline_pdf: false,
         image_item_transform: af.image_item_transform,
         image_bytes: None,
+        image_clip: None,
         applied_object_style: af.applied_object_style.clone(),
         text_wrap: None,
         frame_fitting: None,

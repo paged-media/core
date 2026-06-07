@@ -468,6 +468,7 @@ pub fn build() -> Sample {
                 actual_ppi: None,
                 color_space: None,
                 inline_bytes: None,
+                clipping_path: None,
             }),
             text_wrap: None,
             anchored_setting: None,

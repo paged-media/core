@@ -49,6 +49,13 @@ pub enum DiagnosticCode {
     ImageLinkMissing,
     /// Image bytes were resolved but could not be decoded.
     ImageDecodeFailed,
+    /// A placed image declared a `<ClippingPathSettings>` clip the
+    /// renderer could not apply from the IDML XML alone — a Photoshop
+    /// 8BIM path / alpha channel / detect-edges type (needs the image
+    /// binary or raster analysis), or a named path with no inline
+    /// geometry. The image is rendered clipped to the frame outline
+    /// only (unclipped by the detached path).
+    ImageClippingPathDeferred,
     /// A footnote body did not fit the space reserved at the bottom of
     /// its host frame and was clipped.
     FootnoteOverflow,
@@ -65,6 +72,7 @@ impl DiagnosticCode {
             DiagnosticCode::OversetTextDropped => Severity::Warning,
             DiagnosticCode::ImageLinkMissing => Severity::Warning,
             DiagnosticCode::ImageDecodeFailed => Severity::Warning,
+            DiagnosticCode::ImageClippingPathDeferred => Severity::Info,
             DiagnosticCode::FootnoteOverflow => Severity::Warning,
             DiagnosticCode::SectionNumberingFallback => Severity::Info,
         }

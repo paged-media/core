@@ -12699,4 +12699,259 @@ mod tests {
         assert_eq!(decoded.width, 128);
         assert_eq!(decoded.height, 96);
     }
+
+    // ── W1.21: image clipping-path display-list tests ────────────────
+
+    /// 100×100 RGBA PNG, base64-encoded for inline `<Contents>` so the
+    /// image resolves with no asset resolver. Same fixture the
+    /// `image-clipping` gen sample embeds.
+    const CLIP_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAYAAABw4pVUAAAA0klEQVR42u3RMREAMAgEMBQhEEHoqpPi4y9DFKR69yd40xFKiBAhQoQIESJEiBAhQoQIESJEiBAhQoQIESJEiBAhQoQIESJEiBAhQoQIESJEiBAhQoQIESJEiBAhQoQIESJEiBAhQoQIESJEiBAhQoQIESJEiBAhQoQIESJEiBAhQoQIESJEiBAhQoQIESJEiBAhQoQIESJEiBAhQoQIESJEiBAhQoQIESJEiBAhQoQIESJEiBAhQoQIESJEiBAhQoQIESJEiBAhQoQIESJESHrIAUVvrbCxtZyKAAAAAElFTkSuQmCC";
+
+    /// Build a single-page IDML (in-memory zip) hosting a 100×100 inline
+    /// image in a 100 pt rectangle with an identity inner ItemTransform,
+    /// carrying the supplied `<ClippingPathSettings>` XML fragment.
+    fn build_clip_idml(clipping_path_xml: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+        let buf = std::io::Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+        zip.start_file("mimetype", stored).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+        zip.start_file("designmap.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+</Document>"#,
+        )
+        .unwrap();
+        let spread = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 200"/>
+    <Rectangle Self="r1" GeometricBounds="0 0 100 100">
+      <Image Self="img1" ItemTransform="1 0 0 1 0 0" LinkResourceURI="file:clip.png">
+        <Properties>
+          <PathGeometry><GeometryPathType PathOpen="false"><PathPointArray>
+            <PathPointType Anchor="0 0"/>
+            <PathPointType Anchor="100 0"/>
+            <PathPointType Anchor="100 100"/>
+            <PathPointType Anchor="0 100"/>
+          </PathPointArray></GeometryPathType></PathGeometry>
+          <Contents><![CDATA[{CLIP_PNG_B64}]]></Contents>
+        </Properties>
+        {clipping_path_xml}
+        <Link LinkResourceURI="file:clip.png"/>
+      </Image>
+    </Rectangle>
+  </Spread>
+</idPkg:Spread>"#
+        );
+        zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+        zip.write_all(spread.as_bytes()).unwrap();
+        zip.finish().unwrap().into_inner()
+    }
+
+    /// Count the PushClip / Image commands and capture the clip-path
+    /// `PathData`s in document order on page 0.
+    fn clip_command_summary(built: &BuiltDocument) -> (usize, usize, Vec<paged_compose::PathData>) {
+        let page = &built.pages[0];
+        let mut push_clips = 0usize;
+        let mut images = 0usize;
+        let mut clip_paths = Vec::new();
+        for cmd in &page.list.commands {
+            match cmd {
+                paged_compose::DisplayCommand::PushClip { path_id, .. } => {
+                    push_clips += 1;
+                    if let Some(p) = page.list.paths.get(*path_id) {
+                        clip_paths.push(p.clone());
+                    }
+                }
+                paged_compose::DisplayCommand::Image { .. } => images += 1,
+                _ => {}
+            }
+        }
+        (push_clips, images, clip_paths)
+    }
+
+    #[test]
+    fn user_modified_clip_emits_extra_pushclip_around_image() {
+        // A star clip (UserModifiedPath) ⇒ the image is wrapped in TWO
+        // clips: the frame box AND the star path. Without the clip there
+        // would be exactly one PushClip (the frame).
+        let clip = r#"<ClippingPathSettings ClippingType="UserModifiedPath" InvertPath="false"
+              IncludeInsideEdges="false">
+          <PathGeometry><GeometryPathType PathOpen="false"><PathPointArray>
+            <PathPointType Anchor="50 2"/>
+            <PathPointType Anchor="62 38"/>
+            <PathPointType Anchor="98 38"/>
+            <PathPointType Anchor="68 60"/>
+            <PathPointType Anchor="80 96"/>
+            <PathPointType Anchor="50 74"/>
+            <PathPointType Anchor="20 96"/>
+            <PathPointType Anchor="32 60"/>
+            <PathPointType Anchor="2 38"/>
+            <PathPointType Anchor="38 38"/>
+          </PathPointArray></GeometryPathType></PathGeometry>
+        </ClippingPathSettings>"#;
+        let bytes = build_clip_idml(clip);
+        let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+        let built = build_document(&doc, &PipelineOptions::default()).expect("build");
+
+        let (push_clips, images, clip_paths) = clip_command_summary(&built);
+        assert_eq!(images, 1, "exactly one placed image");
+        assert_eq!(
+            push_clips, 2,
+            "frame clip + image clipping path = two PushClips, got {push_clips}"
+        );
+        // No defer diagnostic for an inline UserModifiedPath.
+        assert!(
+            !built
+                .diagnostics
+                .items
+                .iter()
+                .any(|d| d.code == DiagnosticCode::ImageClippingPathDeferred),
+            "inline geometry must not defer"
+        );
+        // The second clip path (the star) is a single closed contour:
+        // one MoveTo + 10 CubicTo (9 between points + 1 closing) + Close.
+        let star = clip_paths.last().expect("clip path present");
+        let move_tos = star
+            .segments
+            .iter()
+            .filter(|s| matches!(s, paged_compose::PathSegment::MoveTo { .. }))
+            .count();
+        let cubics = star
+            .segments
+            .iter()
+            .filter(|s| matches!(s, paged_compose::PathSegment::CubicTo { .. }))
+            .count();
+        assert_eq!(move_tos, 1, "star is a single contour");
+        assert_eq!(cubics, 10, "10 anchors ⇒ 10 cubic segments");
+    }
+
+    #[test]
+    fn invert_clip_path_punches_bbox_with_two_contours() {
+        // InvertPath ⇒ the clip path is (image bbox) − (rectangle), so
+        // the emitted clip path has TWO MoveTo contours: the bounding
+        // box and the punched rectangle.
+        let clip = r#"<ClippingPathSettings ClippingType="UserModifiedPath" InvertPath="true"
+              IncludeInsideEdges="false">
+          <PathGeometry><GeometryPathType PathOpen="false"><PathPointArray>
+            <PathPointType Anchor="30 30"/>
+            <PathPointType Anchor="70 30"/>
+            <PathPointType Anchor="70 70"/>
+            <PathPointType Anchor="30 70"/>
+          </PathPointArray></GeometryPathType></PathGeometry>
+        </ClippingPathSettings>"#;
+        let bytes = build_clip_idml(clip);
+        let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+        let built = build_document(&doc, &PipelineOptions::default()).expect("build");
+
+        let (push_clips, images, clip_paths) = clip_command_summary(&built);
+        assert_eq!(images, 1);
+        assert_eq!(push_clips, 2, "frame + invert clip");
+        let invert = clip_paths.last().expect("clip path present");
+        let move_tos = invert
+            .segments
+            .iter()
+            .filter(|s| matches!(s, paged_compose::PathSegment::MoveTo { .. }))
+            .count();
+        assert_eq!(
+            move_tos, 2,
+            "invert clip = bbox + punched rectangle (two contours)"
+        );
+    }
+
+    #[test]
+    fn compound_clip_path_keeps_hole_contour() {
+        // A star with a punched diamond (IncludeInsideEdges) ⇒ the clip
+        // path keeps both contours so the hole survives.
+        let clip = r#"<ClippingPathSettings ClippingType="UserModifiedPath" InvertPath="false"
+              IncludeInsideEdges="true">
+          <PathGeometry>
+            <GeometryPathType PathOpen="false"><PathPointArray>
+              <PathPointType Anchor="10 10"/>
+              <PathPointType Anchor="90 10"/>
+              <PathPointType Anchor="90 90"/>
+              <PathPointType Anchor="10 90"/>
+            </PathPointArray></GeometryPathType>
+            <GeometryPathType PathOpen="false"><PathPointArray>
+              <PathPointType Anchor="40 40"/>
+              <PathPointType Anchor="60 40"/>
+              <PathPointType Anchor="60 60"/>
+              <PathPointType Anchor="40 60"/>
+            </PathPointArray></GeometryPathType>
+          </PathGeometry>
+        </ClippingPathSettings>"#;
+        let bytes = build_clip_idml(clip);
+        let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+        let built = build_document(&doc, &PipelineOptions::default()).expect("build");
+
+        let (_, images, clip_paths) = clip_command_summary(&built);
+        assert_eq!(images, 1);
+        let compound = clip_paths.last().expect("clip path present");
+        let move_tos = compound
+            .segments
+            .iter()
+            .filter(|s| matches!(s, paged_compose::PathSegment::MoveTo { .. }))
+            .count();
+        assert_eq!(move_tos, 2, "outer square + inner diamond hole");
+    }
+
+    #[test]
+    fn photoshop_clip_path_defers_with_diagnostic() {
+        // PhotoshopPath references a named 8BIM path with no inline
+        // geometry ⇒ the image is clipped to the frame only (ONE
+        // PushClip) and exactly one ImageClippingPathDeferred diagnostic
+        // is recorded, carrying the path name + frame id.
+        let clip = r#"<ClippingPathSettings ClippingType="PhotoshopPath" InvertPath="false"
+              IncludeInsideEdges="false" AppliedPathName="Path 1"/>"#;
+        let bytes = build_clip_idml(clip);
+        let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+        let built = build_document(&doc, &PipelineOptions::default()).expect("build");
+
+        let (push_clips, images, _) = clip_command_summary(&built);
+        assert_eq!(images, 1, "the image still renders (frame-clipped)");
+        assert_eq!(push_clips, 1, "frame clip only — no detached clip path");
+
+        let deferred: Vec<_> = built
+            .diagnostics
+            .items
+            .iter()
+            .filter(|d| d.code == DiagnosticCode::ImageClippingPathDeferred)
+            .collect();
+        assert_eq!(deferred.len(), 1, "one defer diagnostic");
+        assert_eq!(deferred[0].frame_id.as_deref(), Some("r1"));
+        assert!(
+            deferred[0].message.contains("Path 1"),
+            "diagnostic names the applied path: {}",
+            deferred[0].message
+        );
+    }
+
+    #[test]
+    fn no_clipping_path_keeps_single_frame_clip() {
+        // Control: an image with no <ClippingPathSettings> keeps exactly
+        // one PushClip (the frame) and emits no defer diagnostic — the
+        // clipping path is purely additive.
+        let bytes = build_clip_idml("");
+        let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+        let built = build_document(&doc, &PipelineOptions::default()).expect("build");
+
+        let (push_clips, images, _) = clip_command_summary(&built);
+        assert_eq!(images, 1);
+        assert_eq!(push_clips, 1, "frame clip only when no clipping path");
+        assert!(!built
+            .diagnostics
+            .items
+            .iter()
+            .any(|d| d.code == DiagnosticCode::ImageClippingPathDeferred));
+    }
 }
