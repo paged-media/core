@@ -139,6 +139,94 @@ fn format_matrix(m: &[f32; 6]) -> String {
     parts.join(" ")
 }
 
+/// Parse a `"a b c d tx ty"` IDML matrix. Local copy of the parser's
+/// helper (private to `paged-parse`).
+fn parse_matrix(s: &str) -> Option<[f32; 6]> {
+    let mut it = s.split_whitespace();
+    let mut m = [0.0f32; 6];
+    for slot in &mut m {
+        *slot = it.next()?.parse().ok()?;
+    }
+    Some(m)
+}
+
+/// `a ∘ b` — compose two affine matrices, byte-for-byte matching
+/// `paged_parse`'s `compose_matrix` (apply `b` first, then `a`). Used to
+/// rebuild the group-transform accumulation the parser composes into a
+/// group member's `item_transform`, so the writer can invert it back to
+/// the on-disk member transform (W1.15 lane 4).
+fn compose_matrix(a: &[f32; 6], b: &[f32; 6]) -> [f32; 6] {
+    let [a1, b1, c1, d1, tx1, ty1] = *a;
+    let [a2, b2, c2, d2, tx2, ty2] = *b;
+    [
+        a1 * a2 + c1 * b2,
+        b1 * a2 + d1 * b2,
+        a1 * c2 + c1 * d2,
+        b1 * c2 + d1 * d2,
+        a1 * tx2 + c1 * ty2 + tx1,
+        b1 * tx2 + d1 * ty2 + ty1,
+    ]
+}
+
+/// Accumulate a group-transform stack the way the parser does (outer
+/// groups apply first). `None` ⇒ no group carries a transform (identity).
+fn accumulate_group_xforms(stack: &[Option<[f32; 6]>]) -> Option<[f32; 6]> {
+    let mut acc: Option<[f32; 6]> = None;
+    for g in stack {
+        match (acc, g) {
+            (None, Some(m)) => acc = Some(*m),
+            (Some(a), Some(m)) => acc = Some(compose_matrix(&a, m)),
+            (acc_, None) => acc = acc_,
+        }
+    }
+    acc
+}
+
+/// Recover a group member's ON-DISK `ItemTransform` from its composed
+/// model `item_transform` and the accumulated group transform `accum`:
+/// `member_on_disk = inverse(accum) ∘ composed`. `None` when the group
+/// transform is singular (the member then keeps its on-disk transform
+/// verbatim — a documented loss for that degenerate case).
+fn recover_member_transform(
+    accum: Option<[f32; 6]>,
+    composed: Option<[f32; 6]>,
+) -> Option<Option<[f32; 6]>> {
+    match accum {
+        // No group transform ⇒ the model value IS the on-disk transform.
+        None => Some(composed),
+        Some(g) => {
+            let inv = invert_matrix(&g)?;
+            match composed {
+                // A member with no composed transform under a non-identity
+                // group is unusual; fall back to verbatim (return None →
+                // caller suppresses the patch).
+                None => None,
+                Some(c) => Some(Some(compose_matrix(&inv, &c))),
+            }
+        }
+    }
+}
+
+/// Invert an affine `[a b c d tx ty]`. `None` when the linear part is
+/// singular (a degenerate group transform — the member then can't be
+/// de-composed and keeps its on-disk transform verbatim).
+fn invert_matrix(m: &[f32; 6]) -> Option<[f32; 6]> {
+    let [a, b, c, d, tx, ty] = *m;
+    let det = a * d - b * c;
+    if det.abs() < 1e-9 {
+        return None;
+    }
+    let inv_det = 1.0 / det;
+    let ia = d * inv_det;
+    let ib = -b * inv_det;
+    let ic = -c * inv_det;
+    let id = a * inv_det;
+    // Inverse translation: -(inv_linear · t).
+    let itx = -(ia * tx + ic * ty);
+    let ity = -(ib * tx + id * ty);
+    Some([ia, ib, ic, id, itx, ity])
+}
+
 /// One attribute patch: the value to write for `key`, or `Remove` to
 /// drop the attribute entirely (model value went to `None` on an
 /// attribute that was present).
@@ -986,12 +1074,18 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
 
     // Depth of open `<Group>` elements. Inside a group the parser
     // COMPOSES the group transform into each member's `item_transform`
-    // (see `effective_item_transform`), so the model value is not the
-    // on-disk member transform — patching it would corrupt the geometry.
-    // We therefore suppress the ItemTransform patch for group members
-    // (a documented known loss); fills / strokes / colours are not
-    // composed and patch safely at any depth.
+    // (see `effective_item_transform`), so the model value is the
+    // group∘member matrix, NOT the on-disk member transform. W1.15 lane
+    // 4 recovers the on-disk transform by inverting the accumulated
+    // group stack (`group_xforms`): `member_on_disk = inverse(accum) ∘
+    // model.item_transform`. The stack mirrors the parser's: each open
+    // `<Group ItemTransform>` pushes its RAW transform (parsed straight
+    // off the XML, same source the parser composed from). Fills /
+    // strokes / colours are not composed and patch safely at any depth.
     let mut group_depth: usize = 0;
+    // RAW `<Group ItemTransform>` per open group, outermost first. `None`
+    // for a group with no ItemTransform (identity).
+    let mut group_xforms: Vec<Option<[f32; 6]>> = Vec::new();
 
     // ---- plugin-metadata Label patching state ----
     // Element-name stack (depth tracking) + the innermost open page
@@ -1135,7 +1229,11 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                         continue;
                     }
                 }
-                let in_group = group_depth > 0;
+                let group_accum = if group_depth > 0 {
+                    Some(accumulate_group_xforms(&group_xforms))
+                } else {
+                    None
+                };
                 let patched = patch_spread_item(
                     &e,
                     &frames,
@@ -1143,7 +1241,7 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                     &spread.ovals,
                     &spread.polygons,
                     &spread.graphic_lines,
-                    in_group,
+                    group_accum,
                 )?;
                 match patched {
                     Some(start) => writer.write_event(Event::Start(start))?,
@@ -1151,6 +1249,8 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                 }
                 if name_owned == b"Group" {
                     group_depth += 1;
+                    group_xforms
+                        .push(attr_value(&e, b"ItemTransform").and_then(|s| parse_matrix(&s)));
                 }
                 if ITEM_KINDS.contains(&name_owned.as_slice()) {
                     let self_id = attr_value(&e, b"Self");
@@ -1234,7 +1334,11 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                     }
                 }
                 let name_is_item = ITEM_KINDS.contains(&e.name().as_ref());
-                let in_group = group_depth > 0;
+                let group_accum = if group_depth > 0 {
+                    Some(accumulate_group_xforms(&group_xforms))
+                } else {
+                    None
+                };
                 let patched = patch_spread_item(
                     &e,
                     &frames,
@@ -1242,7 +1346,7 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                     &spread.ovals,
                     &spread.polygons,
                     &spread.graphic_lines,
-                    in_group,
+                    group_accum,
                 )?;
                 // A labelled item serialised as an EMPTY tag must grow
                 // children — expand to Start + Properties/Label + End.
@@ -1381,6 +1485,7 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                 }
                 if name_owned == b"Group" {
                     group_depth = group_depth.saturating_sub(1);
+                    group_xforms.pop();
                 }
                 depth = depth.saturating_sub(1);
                 writer.write_event(Event::End(e))?;
@@ -1440,10 +1545,31 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
     Ok(writer.into_inner().into_inner())
 }
 
+/// Decide whether to patch a page item's `ItemTransform`, and with what
+/// value. `group_accum` is `None` for a top-level item (the model
+/// transform IS the on-disk transform → patch it). For a group member it
+/// is `Some(accumulated_group_transform)`; the on-disk transform is
+/// recovered by inverting the group accumulation (W1.15 lane 4). When the
+/// group transform is singular the recovery fails and the patch is
+/// suppressed (the attribute passes through verbatim — a documented loss
+/// for that degenerate case).
+fn resolve_item_transform(
+    group_accum: Option<Option<[f32; 6]>>,
+    model_transform: Option<[f32; 6]>,
+) -> (bool, Option<[f32; 6]>) {
+    match group_accum {
+        None => (true, model_transform),
+        Some(accum) => match recover_member_transform(accum, model_transform) {
+            Some(on_disk) => (true, on_disk),
+            None => (false, model_transform),
+        },
+    }
+}
+
 /// If `e` is a page-item start tag whose `Self` matches a model item,
 /// return the patched start tag. `None` ⇒ not a page item we patch
-/// (caller emits the original verbatim). `in_group` suppresses the
-/// composed-ItemTransform patch (see [`rewrite_spread`]).
+/// (caller emits the original verbatim). `group_accum` carries the
+/// accumulated group transform for a member (see [`resolve_item_transform`]).
 #[allow(clippy::too_many_arguments)]
 fn patch_spread_item(
     e: &BytesStart,
@@ -1452,7 +1578,7 @@ fn patch_spread_item(
     ovals: &[paged_parse::Oval],
     polygons: &[paged_parse::Polygon],
     graphic_lines: &[paged_parse::GraphicLine],
-    in_group: bool,
+    group_accum: Option<Option<[f32; 6]>>,
 ) -> Result<Option<BytesStart<'static>>, quick_xml::Error> {
     let name = e.name();
     let self_id = attr_value(e, b"Self");
@@ -1460,18 +1586,13 @@ fn patch_spread_item(
         return Ok(None);
     };
 
-    // Inside a group, the model's `item_transform` is the composed
-    // (group ∘ member) matrix — not the on-disk member transform — so
-    // we must NOT patch it (that would corrupt the geometry). `patch_tx`
-    // false ⇒ the ItemTransform attribute passes through verbatim.
-    let patch_tx = !in_group;
-
     match name.as_ref() {
         b"TextFrame" => {
             let Some(frame) = frames.get(self_id.as_str()) else {
                 return Ok(None);
             };
-            let item_transform = frame.item_transform;
+            let (patch_tx, item_transform) =
+                resolve_item_transform(group_accum, frame.item_transform);
             let fill = frame.fill_color.clone();
             let fill_tint = frame.fill_tint;
             let stroke = frame.stroke_color.clone();
@@ -1507,14 +1628,17 @@ fn patch_spread_item(
             )?;
             Ok(Some(start.into_owned()))
         }
-        b"Rectangle" => patch_vector_item(
-            e,
-            patch_tx,
-            rectangles
+        b"Rectangle" => {
+            let item = rectangles
                 .iter()
-                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()))
-                .map(|r| VectorItem {
-                    item_transform: r.item_transform,
+                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()));
+            let (patch_tx, tx) =
+                resolve_item_transform(group_accum, item.and_then(|r| r.item_transform));
+            patch_vector_item(
+                e,
+                patch_tx,
+                item.map(|r| VectorItem {
+                    item_transform: tx,
                     fill_color: r.fill_color.clone(),
                     fill_tint: r.fill_tint,
                     stroke_color: r.stroke_color.clone(),
@@ -1522,15 +1646,19 @@ fn patch_spread_item(
                     nonprinting: r.nonprinting,
                     bounds: r.bounds,
                 }),
-        ),
-        b"Oval" => patch_vector_item(
-            e,
-            patch_tx,
-            ovals
+            )
+        }
+        b"Oval" => {
+            let item = ovals
                 .iter()
-                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()))
-                .map(|r| VectorItem {
-                    item_transform: r.item_transform,
+                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()));
+            let (patch_tx, tx) =
+                resolve_item_transform(group_accum, item.and_then(|r| r.item_transform));
+            patch_vector_item(
+                e,
+                patch_tx,
+                item.map(|r| VectorItem {
+                    item_transform: tx,
                     fill_color: r.fill_color.clone(),
                     fill_tint: r.fill_tint,
                     stroke_color: r.stroke_color.clone(),
@@ -1538,15 +1666,19 @@ fn patch_spread_item(
                     nonprinting: r.nonprinting,
                     bounds: r.bounds,
                 }),
-        ),
-        b"Polygon" => patch_vector_item(
-            e,
-            patch_tx,
-            polygons
+            )
+        }
+        b"Polygon" => {
+            let item = polygons
                 .iter()
-                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()))
-                .map(|r| VectorItem {
-                    item_transform: r.item_transform,
+                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()));
+            let (patch_tx, tx) =
+                resolve_item_transform(group_accum, item.and_then(|r| r.item_transform));
+            patch_vector_item(
+                e,
+                patch_tx,
+                item.map(|r| VectorItem {
+                    item_transform: tx,
                     fill_color: r.fill_color.clone(),
                     fill_tint: r.fill_tint,
                     stroke_color: r.stroke_color.clone(),
@@ -1554,15 +1686,19 @@ fn patch_spread_item(
                     nonprinting: r.nonprinting,
                     bounds: r.bounds,
                 }),
-        ),
-        b"GraphicLine" => patch_vector_item(
-            e,
-            patch_tx,
-            graphic_lines
+            )
+        }
+        b"GraphicLine" => {
+            let item = graphic_lines
                 .iter()
-                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()))
-                .map(|r| VectorItem {
-                    item_transform: r.item_transform,
+                .find(|r| r.self_id.as_deref() == Some(self_id.as_str()));
+            let (patch_tx, tx) =
+                resolve_item_transform(group_accum, item.and_then(|r| r.item_transform));
+            patch_vector_item(
+                e,
+                patch_tx,
+                item.map(|r| VectorItem {
+                    item_transform: tx,
                     fill_color: None,
                     fill_tint: None,
                     stroke_color: r.stroke_color.clone(),
@@ -1570,7 +1706,8 @@ fn patch_spread_item(
                     nonprinting: r.nonprinting,
                     bounds: r.bounds,
                 }),
-        ),
+            )
+        }
         _ => Ok(None),
     }
 }

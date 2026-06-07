@@ -1445,3 +1445,120 @@ fn table_cell_unchanged_round_trips_byte_identical() {
         }
     }
 }
+
+// ---------------------------------------------------------------------
+// 8. W1.15 — group-member transforms.
+// ---------------------------------------------------------------------
+
+/// Find a group member rectangle: returns `(spread_idx, rect_id,
+/// composed_item_transform)` for a rectangle that is a member of a group
+/// (the `geometry-groups` sample's spread 0 wraps two rects in a group).
+fn first_group_member_rect(doc: &Document) -> Option<(usize, String, [f32; 6])> {
+    use paged_parse::FrameRef;
+    for (si, s) in doc.spreads.iter().enumerate() {
+        for g in &s.spread.groups {
+            for m in &g.members {
+                if let FrameRef::Rectangle(ri) = *m {
+                    if let Some(r) = s.spread.rectangles.get(ri) {
+                        if let (Some(id), Some(tx)) = (r.self_id.clone(), r.item_transform) {
+                            return Some((si, id, tx));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A transform change on an item INSIDE a group writes back to the right
+/// nested element: the writer recovers the on-disk member transform by
+/// inverting the group accumulation, and a re-parse re-composes it to the
+/// mutated (composed) model value. Closes loss (b).
+#[test]
+fn group_member_transform_writes_back() {
+    let original = build_sample("geometry-groups");
+    let mut doc = Document::open(&original).unwrap();
+    let (spread_idx, rect_id, base) =
+        first_group_member_rect(&doc).expect("a group-member rectangle");
+
+    // The model `item_transform` is the COMPOSED group∘member matrix.
+    // Translate the member by (50, -30) in composed (spread) space —
+    // what a FrameTransform edit on a grouped item produces.
+    let mut new_composed = base;
+    new_composed[4] += 50.0;
+    new_composed[5] -= 30.0;
+    {
+        let rect = doc.spreads[spread_idx]
+            .spread
+            .rectangles
+            .iter_mut()
+            .find(|r| r.self_id.as_deref() == Some(rect_id.as_str()))
+            .unwrap();
+        rect.item_transform = Some(new_composed);
+    }
+
+    let out = write_idml(&doc, &original).expect("write");
+    assert_ne!(original, out, "a group-member transform edit must save");
+    let re = Document::open(&out).expect("reparse");
+
+    let rect = re.spreads[spread_idx]
+        .spread
+        .rectangles
+        .iter()
+        .find(|r| r.self_id.as_deref() == Some(rect_id.as_str()))
+        .expect("group member present");
+    let got = rect.item_transform.expect("transform present");
+    // The re-parsed composed transform matches the mutated model value
+    // (the writer's recovery + the parser's re-composition cancel).
+    for (a, b) in got.iter().zip(new_composed.iter()) {
+        assert!(
+            (a - b).abs() < 1e-2,
+            "re-composed member transform {got:?} != mutated {new_composed:?}"
+        );
+    }
+
+    // A sibling group member is unchanged.
+    let model_other = doc.spreads[spread_idx]
+        .spread
+        .rectangles
+        .iter()
+        .find(|r| r.self_id.as_deref() != Some(rect_id.as_str()) && r.item_transform.is_some());
+    if let Some(other) = model_other {
+        let re_other = re.spreads[spread_idx]
+            .spread
+            .rectangles
+            .iter()
+            .find(|r| r.self_id == other.self_id)
+            .unwrap();
+        let a = other.item_transform.unwrap();
+        let b = re_other.item_transform.unwrap();
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert!((x - y).abs() < 1e-2, "sibling member transform survived");
+        }
+    }
+}
+
+/// A group-member transform mutate-then-restore writes byte-identically:
+/// the recovery is exact (recovered on-disk transform re-formats to the
+/// source bytes), so an unchanged grouped item round-trips bit-for-bit.
+#[test]
+fn group_member_transform_unchanged_round_trips_byte_identical() {
+    // The geometry-groups sample's spreads carry grouped items; an
+    // unmutated write must leave every Spreads/* entry byte-identical
+    // even though the group-member transform recovery is now active.
+    let original = build_sample("geometry-groups");
+    let doc = Document::open(&original).unwrap();
+    let out = write_idml(&doc, &original).expect("write");
+    let src = entries(&original);
+    let dst = entries(&out);
+    for (path, sb) in &src {
+        if path.starts_with("Spreads/") {
+            assert_eq!(
+                sb,
+                dst.get(path).expect("entry present"),
+                "{path}: grouped spread not byte-identical unmutated"
+            );
+        }
+    }
+}
