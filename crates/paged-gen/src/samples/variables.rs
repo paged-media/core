@@ -312,6 +312,8 @@ fn build_with(move_destination: bool) -> Sample {
             ..Default::default()
         }],
         footnote_option: None,
+        bookmarks: Vec::new(),
+        index_topics: Vec::new(),
     };
 
     // Page-1 body: heading + a body paragraph with the date, chapter,

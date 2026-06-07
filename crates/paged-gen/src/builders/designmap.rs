@@ -47,6 +47,29 @@ pub struct MarkerResources {
     /// W1.18b — `<Section>` definitions for chapter numbering / page
     /// labels. Empty for samples that don't exercise sections.
     pub sections: Vec<SectionDef>,
+    /// W4.8 — `<Bookmark>` definitions (named anchors → destination).
+    /// Empty for samples that don't exercise navigation bookmarks.
+    pub bookmarks: Vec<BookmarkDef>,
+    /// W4.8 — `<Topic>` definitions for the document index. Empty for
+    /// samples without an index.
+    pub index_topics: Vec<IndexTopicDef>,
+}
+
+/// W4.8 — a document-level `<Bookmark>` (a named anchor pointing at a
+/// hyperlink destination). Mirrors `paged_parse::designmap::Bookmark`.
+pub struct BookmarkDef {
+    pub self_id: String,
+    pub name: String,
+    /// Destination ref (`HyperlinkTextDestination/<id>` /
+    /// `HyperlinkPageDestination/<id>`).
+    pub destination: String,
+}
+
+/// W4.8 — a document-level `<Topic>` for the index. Mirrors
+/// `paged_parse::designmap::IndexTopic`.
+pub struct IndexTopicDef {
+    pub self_id: String,
+    pub name: String,
 }
 
 /// W1.8 — a document-level `<FootnoteOption>` to emit. Attribute names
@@ -268,6 +291,26 @@ pub fn write_designmap_with_markers(dm: &DesignMap, markers: &MarkerResources) -
                 ("Visible", "true"),
                 ("Hidden", "false"),
             ],
+        );
+    }
+    // W4.8 — document-level `<Bookmark>` anchors. InDesign nests these
+    // in a `<RootBookmark>` tree; the parser keys each `<Bookmark>` by
+    // `Self` regardless of wrapper, so a flat emission round-trips.
+    for bm in &markers.bookmarks {
+        b.empty(
+            "Bookmark",
+            &[
+                ("Self", bm.self_id.as_str()),
+                ("Name", bm.name.as_str()),
+                ("Destination", bm.destination.as_str()),
+            ],
+        );
+    }
+    // W4.8 — document-level `<Topic>` definitions for the index.
+    for t in &markers.index_topics {
+        b.empty(
+            "Topic",
+            &[("Self", t.self_id.as_str()), ("Name", t.name.as_str())],
         );
     }
     // W1.8 — document-level footnote separator/spacing settings. InDesign

@@ -514,6 +514,51 @@ IndicatorMethod=\"UseHighlight\"/>",
     spliced.into_bytes()
 }
 
+/// W4.8 — a `<ConditionSet>` definition: a named grouping of
+/// `Condition` self_ids the document organises into one toggleable
+/// set. The renderer doesn't branch on sets (visibility resolution
+/// walks individual conditions), but the data round-trips for the
+/// editor's Conditions panel.
+pub struct ConditionSetSpec {
+    pub self_id: &'static str,
+    pub name: &'static str,
+    /// Member `Condition/<id>` refs.
+    pub conditions: &'static [&'static str],
+}
+
+/// W4.8 — like [`styles_xml_with_conditions`] but also emits
+/// `<ConditionSet>` groupings inside the `<RootConditionalTextGroup>`.
+/// Lets the conditions fixture exercise the condition-SET round-trip
+/// alongside the individual-condition drop rule.
+pub fn styles_xml_with_conditions_and_sets(
+    conditions: &[ConditionSpec],
+    sets: &[ConditionSetSpec],
+) -> Vec<u8> {
+    let mut group = String::from("<RootConditionalTextGroup>");
+    for c in conditions {
+        group.push_str(&format!(
+            "<Condition Self=\"{}\" Name=\"{}\" Visible=\"{}\" \
+IndicatorMethod=\"UseHighlight\"/>",
+            c.self_id, c.name, c.visible
+        ));
+    }
+    for s in sets {
+        let members = s.conditions.join(" ");
+        group.push_str(&format!(
+            "<ConditionSet Self=\"{}\" Name=\"{}\" Conditions=\"{members}\"/>",
+            s.self_id, s.name
+        ));
+    }
+    group.push_str("</RootConditionalTextGroup>");
+    let text = String::from_utf8(styles_xml()).expect("styles_xml is valid utf-8");
+    let closing = "</idPkg:Styles>";
+    let spliced = match text.rfind(closing) {
+        Some(idx) => format!("{}{}{}", &text[..idx], group, &text[idx..]),
+        None => format!("{text}{group}"),
+    };
+    spliced.into_bytes()
+}
+
 /// Combined builder behind the [`styles_xml`] family — table styles
 /// and custom stroke styles in one `Resources/Styles.xml`.
 pub fn styles_xml_full(

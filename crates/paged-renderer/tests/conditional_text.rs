@@ -87,4 +87,13 @@ fn hidden_condition_drops_run_while_visible_and_ungated_render() {
         "Hidden-gated run {:?} must be dropped pre-layout; leaked into {text:?}",
         conditions::HIDDEN_TEXT,
     );
+    // W4.8 — the multi-gated run ("BOTHME") carries BOTH conditions;
+    // the renderer keeps a run only when EVERY applied condition is
+    // visible, so it is dropped (Hidden is invisible). This is the
+    // end-to-end exercise of the multiple-conditions-per-run AND rule.
+    assert!(
+        !text.contains(conditions::MULTI_TEXT),
+        "multi-gated run {:?} must be dropped (one condition is hidden); leaked into {text:?}",
+        conditions::MULTI_TEXT,
+    );
 }

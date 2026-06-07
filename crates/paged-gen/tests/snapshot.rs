@@ -954,6 +954,22 @@ fn conditions_round_trips_through_parser() {
         "the Hidden condition must round-trip Visible=false",
     );
 
+    // W4.8 — the `<ConditionSet>` grouping both conditions round-trips.
+    let set = doc
+        .styles
+        .condition_sets
+        .get(conditions::CONDITION_SET)
+        .expect("condition set must round-trip");
+    assert_eq!(set.conditions.len(), 2, "the set lists both conditions");
+    assert!(set
+        .conditions
+        .iter()
+        .any(|c| c == conditions::CONDITION_VISIBLE));
+    assert!(set
+        .conditions
+        .iter()
+        .any(|c| c == conditions::CONDITION_HIDDEN));
+
     // Collect every run's (text, applied_conditions) across the story.
     let runs: Vec<(String, Vec<String>)> = doc
         .stories
@@ -979,6 +995,14 @@ fn conditions_round_trips_through_parser() {
     assert_eq!(
         find(conditions::HIDDEN_TEXT),
         vec![conditions::CONDITION_HIDDEN.to_string()],
+    );
+    // W4.8 — the multi-gated run carries BOTH conditions, in order.
+    assert_eq!(
+        find(conditions::MULTI_TEXT),
+        vec![
+            conditions::CONDITION_VISIBLE.to_string(),
+            conditions::CONDITION_HIDDEN.to_string(),
+        ],
     );
 }
 
@@ -1061,4 +1085,92 @@ fn swatches_round_trips_colors_groups_tint_and_swatch() {
         .get(swatches::STYLE_DERIVED)
         .expect("derived object style");
     assert_eq!(derived.based_on.as_deref(), Some(swatches::STYLE_BASE));
+}
+
+// ── W4.8: navigation.idml (TOC / index / bookmarks / xrefs) ──────
+
+#[test]
+fn navigation_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::navigation::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::navigation::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+#[test]
+fn navigation_round_trips_toc_index_bookmarks_and_xref() {
+    // W4.8 — parse the navigation sample back and assert the
+    // navigation sub-system survives: the TOC style + its entry, the
+    // two index markers + the topic table, the two bookmarks, and the
+    // cross-reference source.
+    use paged_gen::samples::navigation;
+    let sample = navigation::build();
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+
+    // TOC style + its single heading-pickup entry.
+    let toc = doc
+        .styles
+        .toc_styles
+        .get(navigation::TOC_STYLE)
+        .expect("TOC style must round-trip");
+    assert_eq!(toc.entries.len(), 1, "one TOC entry (Heading pickup)");
+    assert_eq!(
+        toc.entries[0].include_style.as_deref(),
+        Some("ParagraphStyle/Heading"),
+    );
+
+    // Two `<PageReference>` index markers on the body paragraph.
+    let markers: Vec<&paged_parse::story::IndexMarker> = doc
+        .stories
+        .iter()
+        .flat_map(|s| s.story.paragraphs.iter())
+        .flat_map(|p| p.index_markers.iter())
+        .collect();
+    assert_eq!(markers.len(), 2, "two index markers");
+    assert!(markers
+        .iter()
+        .any(|m| m.topic_name == navigation::TOPIC_APPLE));
+    assert!(markers
+        .iter()
+        .any(|m| m.topic_name == navigation::TOPIC_PEAR));
+
+    // The `<Topic>` table + two `<Bookmark>` anchors.
+    let dm = &doc.container.designmap;
+    assert!(
+        dm.index_topics
+            .iter()
+            .any(|t| t.self_id == navigation::TOPIC_PEAR_ID),
+        "the pear topic must round-trip",
+    );
+    assert_eq!(dm.bookmarks.len(), 2, "two bookmarks");
+    assert!(dm
+        .bookmarks
+        .iter()
+        .any(|b| b.self_id == navigation::BOOKMARK_ONE));
+    assert!(dm
+        .bookmarks
+        .iter()
+        .any(|b| b.self_id == navigation::BOOKMARK_TWO));
+
+    // The in-story `<CrossReferenceSource>` span tags its enclosed run
+    // with the source id (the parser inherits the source onto each run,
+    // exactly like a hyperlink source span). The fixture has no other
+    // link sources, so exactly one run carries one.
+    let xref_runs: Vec<&str> = doc
+        .stories
+        .iter()
+        .flat_map(|s| s.story.paragraphs.iter())
+        .flat_map(|p| p.runs.iter())
+        .filter_map(|r| r.hyperlink_source.as_deref())
+        .collect();
+    assert_eq!(
+        xref_runs.len(),
+        1,
+        "the cross-reference source must tag its run"
+    );
+    assert!(
+        xref_runs[0].starts_with("CrossReferenceSource/"),
+        "the tagged run carries the xref source id, got {:?}",
+        xref_runs[0],
+    );
 }

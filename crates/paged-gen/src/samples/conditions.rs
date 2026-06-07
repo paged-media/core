@@ -19,7 +19,7 @@
 //! conditions, and there is no condition-CREATE op, so the renderer's
 //! pre-layout conditional-text DROP path had only a logic-mirror unit
 //! test — never an end-to-end fixture). One A4 page, one body frame whose
-//! story holds three runs, each in its own paragraph so the glyph stream
+//! story holds four runs, each in its own paragraph so the glyph stream
 //! is unambiguous:
 //!
 //!   * an **ungated** run (`AppliedConditions` absent) — always renders.
@@ -27,17 +27,26 @@
 //!     defined `Visible="true"`) — renders.
 //!   * a **hidden-gated** run (`AppliedConditions="Condition/Hidden"`,
 //!     defined `Visible="false"`) — DROPPED before layout.
+//!   * a **multi-gated** run (W4.8) carrying BOTH conditions
+//!     (`AppliedConditions="Condition/Visible Condition/Hidden"`) —
+//!     DROPPED, because the renderer's rule keeps a run only when EVERY
+//!     applied condition is visible (AND semantics). This is the first
+//!     end-to-end exercise of the multiple-conditions-per-run path; the
+//!     inline `conditions_multiple_all_must_be_visible` unit test only
+//!     mirrors the rule against a hand-built run list.
 //!
-//! `Resources/Styles.xml` carries both `<Condition>` defs via
-//! [`styles_xml_with_conditions`]. The renderer test asserts the hidden
-//! run's glyphs are absent while the other two render.
+//! `Resources/Styles.xml` carries both `<Condition>` defs plus a
+//! `<ConditionSet>` grouping them (W4.8) via
+//! [`styles_xml_with_conditions_and_sets`]. The renderer test asserts
+//! the hidden + multi-gated runs' glyphs are absent while the ungated
+//! and visible-gated runs render.
 
 use crate::builders::designmap::{write_designmap, DesignMap};
 use crate::builders::master::{write_master, Master};
 use crate::builders::page_item::Rect;
 use crate::builders::resources::{
-    container_xml, fonts_xml, graphic_xml, preferences_xml, styles_xml_with_conditions,
-    ConditionSpec,
+    container_xml, fonts_xml, graphic_xml, preferences_xml, styles_xml_with_conditions_and_sets,
+    ConditionSetSpec, ConditionSpec,
 };
 use crate::builders::spread::{write_spread, Spread};
 use crate::builders::xml_folder::{backing_story_xml, mapping_xml, tags_xml};
@@ -66,11 +75,16 @@ const NO_CHAR_STYLE: &str = "CharacterStyle/$ID/[No character style]";
 pub const CONDITION_VISIBLE: &str = "Condition/Visible";
 pub const CONDITION_HIDDEN: &str = "Condition/Hidden";
 
+/// W4.8 — the `<ConditionSet>` grouping both conditions.
+pub const CONDITION_SET: &str = "ConditionSet/PrintPreview";
+
 /// Text bodies — distinct ASCII glyphs so a substring assert over the
 /// rendered glyph stream can tell which runs survived the filter.
 pub const UNGATED_TEXT: &str = "ALWAYS";
 pub const VISIBLE_TEXT: &str = "SHOWME";
 pub const HIDDEN_TEXT: &str = "DROPME";
+/// W4.8 — gated by BOTH conditions; dropped because Hidden is invisible.
+pub const MULTI_TEXT: &str = "BOTHME";
 
 /// One body paragraph carrying a single run. `applied_conditions` is the
 /// space-separated `AppliedConditions` value (empty ⇒ omit the attribute,
@@ -100,6 +114,15 @@ fn body_story_xml(story_id: &str) -> Vec<u8> {
     write_gated_paragraph(&mut b, UNGATED_TEXT, "");
     write_gated_paragraph(&mut b, VISIBLE_TEXT, CONDITION_VISIBLE);
     write_gated_paragraph(&mut b, HIDDEN_TEXT, CONDITION_HIDDEN);
+    // W4.8 — a run gated by BOTH conditions. `AppliedConditions` is a
+    // space-separated list; the renderer keeps the run only when EVERY
+    // referenced condition is visible, so this one is dropped (Hidden
+    // is invisible).
+    write_gated_paragraph(
+        &mut b,
+        MULTI_TEXT,
+        &format!("{CONDITION_VISIBLE} {CONDITION_HIDDEN}"),
+    );
     b.end("Story");
     b.end("idPkg:Story");
     b.into_bytes()
@@ -179,13 +202,20 @@ pub fn build() -> Sample {
             visible: false,
         },
     ];
+    // W4.8 — one set grouping both conditions (round-trip only; the
+    // renderer's visibility resolution walks individual conditions).
+    let condition_sets = [ConditionSetSpec {
+        self_id: CONDITION_SET,
+        name: "Print preview",
+        conditions: &[CONDITION_VISIBLE, CONDITION_HIDDEN],
+    }];
 
     Sample {
         container_xml: container_xml(),
         designmap_xml: designmap,
         graphic_xml: graphic_xml(),
         fonts_xml: fonts_xml(),
-        styles_xml: styles_xml_with_conditions(&conditions),
+        styles_xml: styles_xml_with_conditions_and_sets(&conditions, &condition_sets),
         preferences_xml: preferences_xml(),
         backing_story_xml: backing_story_xml(),
         tags_xml: tags_xml(),

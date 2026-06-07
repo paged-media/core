@@ -75,6 +75,7 @@ fn emit_sample(name: &str, out_dir: &std::path::Path) -> Result<()> {
         "variables" => paged_gen::samples::variables::build(),
         "conditions" => paged_gen::samples::conditions::build(),
         "swatches" => paged_gen::samples::swatches::build(),
+        "navigation" => paged_gen::samples::navigation::build(),
         other => {
             anyhow::bail!(
                 "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, text-autosize, text-letterspacing, text-on-path, text-overset, text-in-shape, text-wrap, effects, footnotes, gradients, tables, images, image-clipping, anchored, transparency, markers, masters, corners, links-broken, numbering, variables, conditions, swatches, navigation, styles-cascade"

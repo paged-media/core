@@ -28,6 +28,7 @@ pub mod images;
 pub mod links_broken;
 pub mod markers;
 pub mod masters;
+pub mod navigation;
 pub mod numbering;
 pub mod strokes_fills;
 pub mod swatches;
