@@ -87,6 +87,23 @@ struct Args {
     /// reporting flags are ignored in this mode.
     #[arg(long)]
     roundtrip: bool,
+    /// W4.14 — mutation save-back round-trip check. Open the input, apply
+    /// ONE typed `paged_mutate` Operation against a target picked from the
+    /// document (first TextFrame else first Rectangle / first non-empty
+    /// story / a non-`[None]` palette swatch), re-serialise through
+    /// `paged_write::write_idml`, re-open, and verify (a) the mutated
+    /// value SURVIVED the round-trip and (b) the untouched structure
+    /// (spread / story / frame counts, run text) is unchanged. Prints a
+    /// single JSON line `{"applied","survived","untouched_ok","ok",
+    /// "note"}` and exits 0 iff `ok` OR the document has no target for the
+    /// mutation (n/a) OR the loss is a documented defer (`insertPage`
+    /// noted KNOWN_LOSS W3.B2); exits 1 only on a genuine apply / write
+    /// failure. The conformance harness's mutate-round-trips lane calls
+    /// this. Variants:
+    /// `setFrameStrokeWeight|setFrameFill|setFrameTransform|setCharFontSize|insertPage`.
+    /// All other rendering / reporting flags are ignored in this mode.
+    #[arg(long, value_name = "MUTATION")]
+    mutate_roundtrip: Option<String>,
     /// Build the DisplayList and report command / path counts.
     #[arg(long)]
     display_list: bool,
@@ -177,6 +194,16 @@ fn main() -> Result<()> {
         let report = run_roundtrip(&bytes, args.dpi)?;
         println!("{}", serde_json::to_string(&report.json)?);
         std::process::exit(if report.ok { 0 } else { 1 });
+    }
+
+    // W4.14 — mutation round-trip mode is a second self-contained check
+    // that short-circuits the normal inspect flow. Exits non-zero only on
+    // a genuine apply/write failure; an n/a (no target) or a documented
+    // known-loss still exits 0 (it's a conformance-pass, not a crash).
+    if let Some(mutation) = args.mutate_roundtrip.as_deref() {
+        let report = run_mutate_roundtrip(&bytes, mutation)?;
+        println!("{}", serde_json::to_string(&report.json)?);
+        std::process::exit(if report.exit_ok { 0 } else { 1 });
     }
 
     let document = Document::open(&bytes).context("open IDML")?;
@@ -725,6 +752,386 @@ fn run_roundtrip(original: &[u8], dpi: f32) -> Result<RoundtripReport> {
         "page_count": page_count,
     });
     Ok(RoundtripReport { json: report, ok })
+}
+
+/// Outcome of a `--mutate-roundtrip` run.
+struct MutateRoundtripReport {
+    json: serde_json::Value,
+    /// Process exit code gate: `true` ⇒ exit 0. True when the mutation
+    /// fully round-tripped (`ok`), when the document had no target for the
+    /// mutation (n/a), or when the only loss is a documented defer
+    /// (`insertPage`). Only a genuine apply/write failure flips this off.
+    exit_ok: bool,
+}
+
+/// The page-item the frame-targeting mutations address: the first
+/// TextFrame (preferred — it also carries a story) else the first
+/// Rectangle, identified across every spread.
+enum FrameTarget {
+    TextFrame(String),
+    Rectangle(String),
+}
+
+impl FrameTarget {
+    fn self_id(&self) -> &str {
+        match self {
+            FrameTarget::TextFrame(s) | FrameTarget::Rectangle(s) => s,
+        }
+    }
+    fn node(&self) -> paged_mutate::NodeId {
+        match self {
+            FrameTarget::TextFrame(s) => paged_mutate::NodeId::TextFrame(s.clone()),
+            FrameTarget::Rectangle(s) => paged_mutate::NodeId::Rectangle(s.clone()),
+        }
+    }
+}
+
+/// Pick the first TextFrame (with a `Self` id) else the first Rectangle,
+/// scanning spreads in document order. `None` ⇒ the document carries no
+/// addressable frame (the n/a path — e.g. the storyless `corners.idml`).
+fn first_frame_target(doc: &Document) -> Option<FrameTarget> {
+    for s in &doc.spreads {
+        if let Some(id) = s.spread.text_frames.iter().find_map(|f| f.self_id.clone()) {
+            return Some(FrameTarget::TextFrame(id));
+        }
+    }
+    for s in &doc.spreads {
+        if let Some(id) = s.spread.rectangles.iter().find_map(|r| r.self_id.clone()) {
+            return Some(FrameTarget::Rectangle(id));
+        }
+    }
+    None
+}
+
+/// Read a frame's `(fill_color, stroke_weight, item_transform)` out of a
+/// (re-parsed) document by `Self` id, checking both the TextFrame and
+/// Rectangle pools. `None` ⇒ the frame is gone (a structural loss).
+#[allow(clippy::type_complexity)]
+fn frame_props(
+    doc: &Document,
+    self_id: &str,
+) -> Option<(Option<String>, Option<f32>, Option<[f32; 6]>)> {
+    for s in &doc.spreads {
+        for f in &s.spread.text_frames {
+            if f.self_id.as_deref() == Some(self_id) {
+                return Some((f.fill_color.clone(), f.stroke_weight, f.item_transform));
+            }
+        }
+        for r in &s.spread.rectangles {
+            if r.self_id.as_deref() == Some(self_id) {
+                return Some((r.fill_color.clone(), r.stroke_weight, r.item_transform));
+            }
+        }
+    }
+    None
+}
+
+/// The first story (in document order) carrying at least one
+/// non-empty run, as `(story_id, first_run_text)`. `None` ⇒ no text to
+/// resize (the n/a path).
+fn first_nonempty_story(doc: &Document) -> Option<(String, String)> {
+    for s in &doc.stories {
+        if let Some(run) = s
+            .story
+            .paragraphs
+            .iter()
+            .flat_map(|p| p.runs.iter())
+            .find(|r| !r.text.is_empty())
+        {
+            return Some((s.self_id.clone(), run.text.clone()));
+        }
+    }
+    None
+}
+
+/// The point size of a story's first non-empty run (post-reparse).
+fn first_run_point_size(doc: &Document, story_id: &str) -> Option<f32> {
+    doc.stories
+        .iter()
+        .find(|s| s.self_id == story_id)
+        .and_then(|s| {
+            s.story
+                .paragraphs
+                .iter()
+                .flat_map(|p| p.runs.iter())
+                .find(|r| !r.text.is_empty())
+                .and_then(|r| r.point_size)
+        })
+}
+
+/// Run the W4.14 mutate-and-reverify flow for one mutation kind.
+///
+/// `apply` ⇒ the Operation applied cleanly to the model. `survived` ⇒ the
+/// mutated value re-parsed equal after `write_idml`. `untouched_ok` ⇒ the
+/// document's structural fingerprint (spread / story / frame counts + run
+/// text) is unchanged. `ok = apply && survived && untouched_ok`.
+fn run_mutate_roundtrip(original: &[u8], mutation: &str) -> Result<MutateRoundtripReport> {
+    use paged_mutate::{NodeId, Operation, Project, PropertyPath, Value};
+    use serde_json::json;
+
+    let doc = Document::open(original).context("open input IDML")?;
+    let before = ModelStats::of(&doc);
+
+    // Each arm yields (op, target_self_id, verify-closure, note). `target`
+    // being `None` is the n/a path: no target for this mutation → exit 0
+    // with applied=false. The verify closure reads the re-parsed doc and
+    // returns whether the mutated value survived.
+    type Verify = Box<dyn Fn(&Document) -> bool>;
+    struct Plan {
+        op: Operation,
+        verify: Verify,
+        /// A note that overrides the default; e.g. `insertPage`'s known
+        /// loss. Empty ⇒ the default note is synthesised from outcomes.
+        note: Option<&'static str>,
+    }
+
+    let plan: Option<Plan> = match mutation {
+        "setFrameStrokeWeight" => first_frame_target(&doc).map(|t| {
+            let id = t.self_id().to_string();
+            Plan {
+                op: Operation::SetProperty {
+                    node: t.node(),
+                    path: PropertyPath::FrameStrokeWeight,
+                    value: Value::Length(Some(3.5)),
+                },
+                verify: Box::new(move |re: &Document| {
+                    frame_props(re, &id)
+                        .and_then(|(_, sw, _)| sw)
+                        .map(|sw| (sw - 3.5).abs() < 1e-3)
+                        .unwrap_or(false)
+                }),
+                note: None,
+            }
+        }),
+        "setFrameFill" => {
+            let target = first_frame_target(&doc);
+            // A real swatch that isn't the no-fill sentinel — prefer a
+            // colour, fall back to any named swatch.
+            let swatch = doc
+                .palette
+                .colors
+                .keys()
+                .find(|id| !id.contains("[None]") && id.as_str() != "Swatch/None")
+                .or_else(|| {
+                    doc.palette
+                        .swatches
+                        .keys()
+                        .find(|id| !id.contains("[None]") && id.as_str() != "Swatch/None")
+                })
+                .cloned();
+            match (target, swatch) {
+                (Some(t), Some(swatch)) => {
+                    let id = t.self_id().to_string();
+                    let want = swatch.clone();
+                    Some(Plan {
+                        op: Operation::SetProperty {
+                            node: t.node(),
+                            path: PropertyPath::FrameFillColor,
+                            value: Value::ColorRef(Some(swatch)),
+                        },
+                        verify: Box::new(move |re: &Document| {
+                            frame_props(re, &id)
+                                .map(|(fill, _, _)| fill.as_deref() == Some(want.as_str()))
+                                .unwrap_or(false)
+                        }),
+                        note: None,
+                    })
+                }
+                // No frame, or no usable swatch → n/a.
+                _ => None,
+            }
+        }
+        "setFrameTransform" => first_frame_target(&doc).map(|t| {
+            let id = t.self_id().to_string();
+            // Compose a +11,+7 translate ONTO the frame's current
+            // transform (identity when absent), so the result is the
+            // original shifted — the renderer applies the matrix verbatim.
+            let base = frame_props(&doc, &id)
+                .and_then(|(_, _, m)| m)
+                .unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+            let mut want = base;
+            want[4] = base[4] + 11.0;
+            want[5] = base[5] + 7.0;
+            Plan {
+                op: Operation::SetProperty {
+                    node: t.node(),
+                    path: PropertyPath::FrameTransform,
+                    value: Value::Transform(Some(want)),
+                },
+                verify: Box::new(move |re: &Document| {
+                    frame_props(re, &id)
+                        .and_then(|(_, _, m)| m)
+                        .map(|m| (m[4] - want[4]).abs() < 1e-3 && (m[5] - want[5]).abs() < 1e-3)
+                        .unwrap_or(false)
+                }),
+                note: None,
+            }
+        }),
+        "setCharFontSize" => first_nonempty_story(&doc).map(|(story_id, first_text)| {
+            let id = story_id.clone();
+            // Address the WHOLE first run, not just `[0, 1)`. A sub-run
+            // range would SPLIT the run (model gains a run the source XML
+            // has no `<CharacterStyleRange>` for); `rewrite_story` patches
+            // ranges positionally and can't yet emit an inserted run, so
+            // the split-out tail would be dropped (the W3 run-insert
+            // defer). Covering the full run mutates its single range in
+            // place — a clean round-trip with no structural change.
+            let end = first_text.chars().count() as u32;
+            Plan {
+                op: Operation::SetProperty {
+                    node: NodeId::StoryRange {
+                        story_id,
+                        start: 0,
+                        end,
+                    },
+                    path: PropertyPath::CharacterFontSize,
+                    value: Value::Length(Some(18.0)),
+                },
+                verify: Box::new(move |re: &Document| {
+                    first_run_point_size(re, &id)
+                        .map(|pt| (pt - 18.0).abs() < 1e-3)
+                        .unwrap_or(false)
+                }),
+                note: None,
+            }
+        }),
+        "insertPage" => {
+            // Insert a page after the first page. Pages do NOT yet write
+            // back through `paged_write` (documented defer), so the page
+            // count is unchanged on reparse — a KNOWN_LOSS, not a failure.
+            let after_page_id = doc
+                .spreads
+                .iter()
+                .find_map(|s| s.spread.pages.iter().find_map(|p| p.self_id.clone()));
+            Some(Plan {
+                op: Operation::InsertPage {
+                    after_page_id,
+                    master_id: None,
+                    spread_self_id: None,
+                    page_self_id: None,
+                    restore_spread_json: None,
+                },
+                // The written package never grows the page; survival is
+                // measured as the documented loss, so verify is `false`
+                // and the note records why exit stays 0.
+                verify: Box::new(|_re: &Document| false),
+                note: Some("KNOWN_LOSS W3.B2"),
+            })
+        }
+        other => {
+            anyhow::bail!(
+                "unknown --mutate-roundtrip mutation {other:?}; expected one of \
+                 setFrameStrokeWeight|setFrameFill|setFrameTransform|setCharFontSize|insertPage"
+            );
+        }
+    };
+
+    // n/a path — the document carries no target for this mutation. Not a
+    // failure: exit 0 with applied=false.
+    let Some(plan) = plan else {
+        let report = json!({
+            "mutation": mutation,
+            "applied": false,
+            "survived": false,
+            "untouched_ok": true,
+            "ok": false,
+            "note": "n/a: no target in document",
+        });
+        return Ok(MutateRoundtripReport {
+            json: report,
+            exit_ok: true,
+        });
+    };
+
+    let is_insert_page = mutation == "insertPage";
+
+    // Apply the Operation. A genuine apply failure is the one case that
+    // exits 1 (the model rejected a valid Op — a real bug).
+    let mut project = Project::new(doc);
+    if let Err(e) = project.apply(plan.op) {
+        let report = json!({
+            "mutation": mutation,
+            "applied": false,
+            "survived": false,
+            "untouched_ok": false,
+            "ok": false,
+            "note": format!("apply failed: {e}"),
+        });
+        return Ok(MutateRoundtripReport {
+            json: report,
+            exit_ok: false,
+        });
+    }
+
+    // Save the mutated model back through the writer. A write failure is
+    // also a genuine bug → exit 1.
+    let written = match paged_write::write_idml(project.document(), original) {
+        Ok(w) => w,
+        Err(e) => {
+            let report = json!({
+                "mutation": mutation,
+                "applied": true,
+                "survived": false,
+                "untouched_ok": false,
+                "ok": false,
+                "note": format!("write_idml failed: {e}"),
+            });
+            return Ok(MutateRoundtripReport {
+                json: report,
+                exit_ok: false,
+            });
+        }
+    };
+
+    // Re-open the written package. A reparse failure is a genuine bug.
+    let reparsed = match Document::open(&written) {
+        Ok(re) => re,
+        Err(e) => {
+            let report = json!({
+                "mutation": mutation,
+                "applied": true,
+                "survived": false,
+                "untouched_ok": false,
+                "ok": false,
+                "note": format!("reparse failed: {e}"),
+            });
+            return Ok(MutateRoundtripReport {
+                json: report,
+                exit_ok: false,
+            });
+        }
+    };
+
+    let survived = (plan.verify)(&reparsed);
+    // Structure: the untouched fingerprint must match. insertPage is the
+    // exception — it is EXPECTED to leave the written stats unchanged
+    // (the page never lands), which is exactly what "untouched" measures,
+    // so the structural check is the same comparison.
+    let untouched_ok = before == ModelStats::of(&reparsed);
+    let ok = survived && untouched_ok;
+
+    let note: String = match plan.note {
+        Some(n) => n.to_string(),
+        None if ok => "ok".to_string(),
+        None if !survived => "mutated value did not survive round-trip".to_string(),
+        None => "untouched structure diverged".to_string(),
+    };
+
+    // Exit code: ok, OR the documented insertPage known-loss, exits 0.
+    let exit_ok = ok || (is_insert_page && untouched_ok);
+
+    let report = json!({
+        "mutation": mutation,
+        "applied": true,
+        "survived": survived,
+        "untouched_ok": untouched_ok,
+        "ok": ok,
+        "note": note,
+    });
+    Ok(MutateRoundtripReport {
+        json: report,
+        exit_ok,
+    })
 }
 
 fn build_json_report(

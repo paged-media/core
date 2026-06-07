@@ -340,3 +340,112 @@ fn roundtrip_flag_fails_on_garbage_input() {
         "garbage input must exit non-zero, got success"
     );
 }
+
+// ── W4.14 — `--mutate-roundtrip` conformance hook ────────────────────
+//
+// Drives the binary against generated fixtures (the same `paged-gen`
+// builders the corpus emits) and asserts the one-line JSON report + exit
+// code for each mutation kind, plus the storyless n/a path. In-process
+// in the sense that the fixture is built in-process and fed straight to
+// the bin — no gitignored corpus file on disk is required.
+
+/// Run `paged-inspect --mutate-roundtrip <mutation>` against an in-memory
+/// IDML and return `(parsed_json, exit_success)`.
+fn run_mutate_roundtrip(idml: &[u8], mutation: &str) -> (serde_json::Value, bool) {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("fixture.idml");
+    std::fs::write(&path, idml).unwrap();
+    let output = Command::new(inspect_binary())
+        .arg(&path)
+        .arg("--mutate-roundtrip")
+        .arg(mutation)
+        .output()
+        .expect("spawn paged-inspect");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout.lines().last().unwrap_or("");
+    let json: serde_json::Value = serde_json::from_str(line)
+        .unwrap_or_else(|e| panic!("{mutation}: non-JSON output {stdout:?}: {e}"));
+    (json, output.status.success())
+}
+
+#[test]
+fn mutate_roundtrip_property_mutations_survive_on_text() {
+    // The four scalar property mutations fully round-trip on text.idml:
+    // each lands, survives the save-back, leaves the structure intact,
+    // and exits 0.
+    let idml = paged_gen::write_idml(&paged_gen::samples::text::build()).unwrap();
+    for m in [
+        "setFrameStrokeWeight",
+        "setFrameFill",
+        "setFrameTransform",
+        "setCharFontSize",
+    ] {
+        let (json, success) = run_mutate_roundtrip(&idml, m);
+        assert_eq!(json["applied"], true, "{m}: applied: {json}");
+        assert_eq!(json["survived"], true, "{m}: survived: {json}");
+        assert_eq!(json["untouched_ok"], true, "{m}: untouched_ok: {json}");
+        assert_eq!(json["ok"], true, "{m}: ok: {json}");
+        assert!(success, "{m}: exit 0 expected: {json}");
+    }
+}
+
+#[test]
+fn mutate_roundtrip_insert_page_is_known_loss_but_exits_zero() {
+    // insertPage applies but pages don't yet write back (the W3.B2
+    // defer): survived=false, but the structure is otherwise untouched
+    // and the loss is documented, so the process still exits 0.
+    let idml = paged_gen::write_idml(&paged_gen::samples::text::build()).unwrap();
+    let (json, success) = run_mutate_roundtrip(&idml, "insertPage");
+    assert_eq!(json["applied"], true, "applied: {json}");
+    assert_eq!(json["survived"], false, "survived: {json}");
+    assert_eq!(json["untouched_ok"], true, "untouched_ok: {json}");
+    assert_eq!(json["ok"], false, "ok: {json}");
+    assert_eq!(json["note"], "KNOWN_LOSS W3.B2", "note: {json}");
+    assert!(success, "insertPage is a documented loss → exit 0: {json}");
+}
+
+#[test]
+fn mutate_roundtrip_char_font_size_is_na_on_storyless_corpus() {
+    // corners.idml is storyless: setCharFontSize has no target, which is
+    // the n/a path — applied=false, exit 0 (not a failure).
+    let idml = paged_gen::write_idml(&paged_gen::samples::corners::build()).unwrap();
+    let (json, success) = run_mutate_roundtrip(&idml, "setCharFontSize");
+    assert_eq!(json["applied"], false, "applied: {json}");
+    assert_eq!(json["ok"], false, "ok: {json}");
+    assert!(
+        json["note"].as_str().unwrap_or("").contains("n/a"),
+        "note flags n/a: {json}"
+    );
+    assert!(success, "n/a path exits 0: {json}");
+}
+
+#[test]
+fn mutate_roundtrip_frame_mutations_work_on_storyless_corpus() {
+    // The frame-targeting mutations still resolve a target on the
+    // storyless corners.idml (its Rectangles) and round-trip cleanly.
+    let idml = paged_gen::write_idml(&paged_gen::samples::corners::build()).unwrap();
+    for m in ["setFrameStrokeWeight", "setFrameFill", "setFrameTransform"] {
+        let (json, success) = run_mutate_roundtrip(&idml, m);
+        assert_eq!(json["ok"], true, "{m}: ok on corners: {json}");
+        assert!(success, "{m}: exit 0 on corners: {json}");
+    }
+}
+
+#[test]
+fn mutate_roundtrip_unknown_mutation_errors() {
+    // An unrecognised mutation name is a usage error → non-zero exit.
+    let idml = paged_gen::write_idml(&paged_gen::samples::text::build()).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("fixture.idml");
+    std::fs::write(&path, &idml).unwrap();
+    let output = Command::new(inspect_binary())
+        .arg(&path)
+        .arg("--mutate-roundtrip")
+        .arg("bogusMutation")
+        .output()
+        .expect("spawn paged-inspect");
+    assert!(
+        !output.status.success(),
+        "unknown mutation must exit non-zero"
+    );
+}

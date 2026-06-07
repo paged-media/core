@@ -2572,6 +2572,7 @@ dependencies = [
  "paged-fidelity",
  "paged-gen",
  "paged-gpu",
+ "paged-mutate",
  "paged-parse",
  "paged-scene",
  "paged-text",

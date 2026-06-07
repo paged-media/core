@@ -34,6 +34,12 @@ paged-gpu = { path = "../paged-gpu", default-features = false }
 # conformance hook. Lightweight (paged-parse + paged-scene + zip +
 # quick-xml, all already in the dep graph), no native-only deps.
 paged-write = { path = "../paged-write" }
+# W4.14 — the operation surface, used by the `paged-inspect
+# --mutate-roundtrip` conformance hook (the bin applies one typed
+# Operation, saves, and re-verifies it survived). paged-mutate carries
+# paged-renderer only as a DEV-dependency, so this regular edge plus its
+# dev edge form a dev-only cycle Cargo tolerates.
+paged-mutate = { path = "../paged-mutate" }
 # Used by the `paged-inspect --roundtrip` per-entry byte-identity tally
 # to walk the re-zipped package. Same wasm-clean config the rest of the
 # tree reads zips with.
