@@ -38,24 +38,149 @@
 //!                          through paged.set
 //!   console.log(...) -> captured into the output log
 
+use std::cell::Cell;
 use std::cell::RefCell;
 
 use boa_engine::{
-    js_string, object::ObjectInitializer, property::Attribute, Context, JsArgs, JsResult, JsValue,
-    NativeFunction, Source,
+    js_string, object::ObjectInitializer, property::Attribute, Context, JsArgs, JsNativeError,
+    JsResult, JsValue, NativeFunction, Source,
 };
 use paged_canvas::channel::Mutation;
 use paged_canvas::CanvasModel;
 use serde::{Deserialize, Serialize};
 
+/// Which runtime budget a script exhausted. Surfaced as the typed
+/// half of a `ScriptResult` so the host (editor REPL, plugin runner,
+/// headless conformance) can distinguish a *budget* abort from an
+/// ordinary script exception and react accordingly (e.g. show a
+/// "script hit its time/iteration limit" banner instead of a generic
+/// error). B-09 / W-08: this is the typed-exhaustion contract the
+/// plugin repos asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ScriptBudgetKind {
+    /// `loop_iteration_limit` tripped — a runaway / pathologically
+    /// long pure-JS loop. Enforced natively by Boa's bytecode loop
+    /// opcode.
+    Iterations,
+    /// `recursion_limit` tripped — unbounded / too-deep recursion.
+    Recursion,
+    /// `stack_size_limit` tripped — VM value-stack overflow guard.
+    StackSize,
+    /// The wall-clock deadline elapsed while the script was inside a
+    /// host call (`paged.*` / `console.*`). The single-threaded
+    /// wasm worker cannot preempt a pure-JS loop, so this fires at
+    /// the next host-function boundary — see the `ScriptBudget`
+    /// wall-clock note.
+    WallClock,
+}
+
+impl ScriptBudgetKind {
+    /// Stable lower-case tag for log lines and message matching.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ScriptBudgetKind::Iterations => "iterations",
+            ScriptBudgetKind::Recursion => "recursion",
+            ScriptBudgetKind::StackSize => "stackSize",
+            ScriptBudgetKind::WallClock => "wallClock",
+        }
+    }
+}
+
+/// Per-execution runtime budget. Hosts tighten or loosen this through
+/// `execute_script_with`; `execute_script` uses `Default`. Every field
+/// maps onto a concrete Boa guard or the bridge's wall-clock deadline:
+///
+/// - `loop_iterations` → `RuntimeLimits::set_loop_iteration_limit`
+///   (kills `while (true) {}` and friends; generous enough that a
+///   script touching every element of a large document never trips
+///   it, tight enough that an infinite loop dies promptly).
+/// - `recursion_depth` → `RuntimeLimits::set_recursion_limit`.
+/// - `stack_size`      → `RuntimeLimits::set_stack_size_limit`.
+/// - `wall_clock_ms`   → the bridge-level deadline (this crate; Boa
+///   has no native instruction-level wall-clock interrupt in its
+///   synchronous run loop — see the wall-clock note below).
+///
+/// ## Wall-clock guarantee (and the wasm limitation, stated precisely)
+///
+/// Boa 0.21 runs scripts to completion **synchronously** inside
+/// `Context::eval`. Its bytecode loop consults no clock and exposes no
+/// host interrupt hook on the synchronous path (the only instruction
+/// counter, `instructions_remaining`, is `#[cfg(feature = "fuzz")]`
+/// only). The canvas worker is single-threaded wasm, so there is no
+/// second thread that could set an interrupt flag mid-loop. We
+/// therefore CANNOT preempt an arbitrary pure-JS busy loop on the wall
+/// clock — that class is bounded only by `loop_iterations`.
+///
+/// What `wall_clock_ms` *does* guarantee: the deadline is checked at
+/// the entry of **every** `paged.*` / `console.*` host function (the
+/// only way a script reaches the document, the only way it can block
+/// on a slow native, and the cadence at which any host-call-driven
+/// loop ticks). So a script blocked in a long native call CHAIN, a
+/// pathological per-iteration host call, or a loop that does any work
+/// through the bridge terminates within one host call of the deadline,
+/// with a typed `WallClock` exhaustion. A breach raises Boa's
+/// **non-catchable** `RuntimeLimit` error, so user `try/catch` cannot
+/// swallow it and the engine unwinds cleanly back to the embedder.
+///
+/// True preemption of a host-call-free CPU loop would require
+/// terminating the whole Web Worker from the main thread (an editor-
+/// side concern, outside this crate). `loop_iterations` is the
+/// in-crate backstop for that class.
+#[derive(Debug, Clone, Copy)]
+pub struct ScriptBudget {
+    pub loop_iterations: u64,
+    pub recursion_depth: usize,
+    pub stack_size: usize,
+    /// Wall-clock ceiling in milliseconds, enforced at host-call
+    /// boundaries. `None` disables the deadline (loop/recursion/stack
+    /// guards still apply).
+    pub wall_clock_ms: Option<u64>,
+}
+
+/// Default budget. Preserves the values that shipped with the PARTIAL
+/// B-09 landing (10M loop iterations, Boa's default 512 recursion) and
+/// adds the previously-absent wall-clock ceiling + an explicit stack
+/// guard.
+impl Default for ScriptBudget {
+    fn default() -> Self {
+        Self {
+            loop_iterations: 10_000_000,
+            recursion_depth: 512,
+            // Boa's own default stack size limit; made explicit so the
+            // guard classifies as a typed `StackSize` exhaustion.
+            stack_size: boa_engine::vm::RuntimeLimits::default().stack_size_limit(),
+            // 2 s: long enough for a heavy document sweep that calls
+            // through the bridge, short enough that a stuck native
+            // chain in the editor REPL doesn't feel like a hang.
+            wall_clock_ms: Some(2_000),
+        }
+    }
+}
+
+/// Wall-clock source, in milliseconds (same unit + shape as the canvas
+/// worker's `Clock`: `js_sys::Date::now` on wasm, a monotonic-ish
+/// native clock in tests). Injected by the host so this crate stays
+/// wasm-clean — it never touches `std::time` on its own.
+pub type Clock<'a> = dyn Fn() -> f64 + 'a;
+
 /// Result of one `execute_script` call. Output is the accumulated
 /// `console.log` / `console.warn` / etc. lines (in emission order).
 /// `error` is set when the script threw an unhandled exception.
+/// `budget_kind` is set (and `error` is also set) when the abort was a
+/// runtime-budget exhaustion rather than an ordinary script error —
+/// the typed half of the B-09 / W-08 contract.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScriptResult {
     pub output: Vec<String>,
     pub error: Option<String>,
+    /// `Some(kind)` iff the script aborted on a runtime budget. Always
+    /// accompanied by a human-readable `error`. Additive: absent in
+    /// the JSON for ordinary results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_kind: Option<ScriptBudgetKind>,
 }
 
 // SAFETY pattern: Boa runs host functions synchronously inside the
@@ -67,6 +192,69 @@ pub struct ScriptResult {
 thread_local! {
     static MODEL_PTR: RefCell<Option<*mut CanvasModel>> = const { RefCell::new(None) };
     static OUTPUT: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Wall-clock deadline state for the in-flight `execute_script`
+    /// call. `clock` returns "now" in ms; `deadline_ms` is the absolute
+    /// ms value past which any host-function entry aborts. Both are
+    /// cleared on exit so a deadline can never leak across calls. The
+    /// clock is a boxed closure (the host injects it) — single-threaded
+    /// by construction, like `MODEL_PTR`.
+    static DEADLINE: RefCell<Option<DeadlineState>> = const { RefCell::new(None) };
+    /// Set once when the deadline first trips, so every subsequent host
+    /// call in the same execution short-circuits to the same typed
+    /// abort (and so the classifier can recover the kind even though
+    /// Boa's `RuntimeLimit` message is opaque).
+    static DEADLINE_TRIPPED: Cell<bool> = const { Cell::new(false) };
+}
+
+struct DeadlineState {
+    /// Borrowed clock reference, lifetime-erased to `'static`. SAFETY
+    /// contract (same as `MODEL_PTR`): only dereferenced inside
+    /// `check_deadline`, which only runs while this `execute_script_with`
+    /// call is on the stack; the slot is cleared before the call
+    /// returns, so the reference is never read after the real clock is
+    /// gone. Single-threaded by construction.
+    clock: &'static Clock<'static>,
+    deadline_ms: f64,
+}
+
+/// Sentinel embedded in the wall-clock abort message so `classify_*`
+/// can tell a deadline breach apart from Boa's own loop/recursion
+/// `RuntimeLimit` messages (both arrive as opaque native errors).
+const WALL_CLOCK_SENTINEL: &str = "paged:wall-clock-deadline";
+
+/// Returns `Err(non-catchable RuntimeLimit)` when the wall-clock
+/// deadline has passed; `Ok(())` otherwise (or when no deadline is
+/// set). Called at the top of every host function — the only place a
+/// single-threaded synchronous engine can observe the clock without a
+/// native VM interrupt hook (which Boa 0.21 does not expose). Once
+/// tripped it stays tripped for the rest of the execution.
+fn check_deadline() -> JsResult<()> {
+    if DEADLINE_TRIPPED.with(Cell::get) {
+        return Err(deadline_error());
+    }
+    let over = DEADLINE.with(|d| {
+        d.borrow()
+            .as_ref()
+            .is_some_and(|s| (s.clock)() >= s.deadline_ms)
+    });
+    if over {
+        DEADLINE_TRIPPED.with(|c| c.set(true));
+        return Err(deadline_error());
+    }
+    Ok(())
+}
+
+fn deadline_error() -> boa_engine::JsError {
+    // `RuntimeLimit` is NON-catchable in Boa (see `JsNativeErrorKind::
+    // is_catchable`), so a user `try { ... } catch {}` cannot swallow
+    // the abort — it unwinds straight back to the embedder, exactly
+    // like the native loop/recursion limits. The sentinel lets the
+    // classifier recover the `WallClock` kind.
+    JsNativeError::runtime_limit()
+        .with_message(format!(
+            "{WALL_CLOCK_SENTINEL}: script exceeded its time budget"
+        ))
+        .into()
 }
 
 fn with_model<R>(f: impl FnOnce(&mut CanvasModel) -> R) -> R {
@@ -84,50 +272,147 @@ fn push_output(line: String) {
     OUTPUT.with(|o| o.borrow_mut().push(line));
 }
 
-/// B-09 (plugin platform, decision 2026-06-06) — runtime budgets.
-///
-/// Boa runs synchronously inside the worker, so a runaway script
-/// hangs the editor unless the engine itself bails. Boa 0.21's
-/// `RuntimeLimits` cover the dominant runaway classes:
-///   - `LOOP_ITERATION_LIMIT` kills `while(true) {}` and friends —
-///     generous enough that a script touching every element of a
-///     large document never trips it (10M iterations ≈ tens of ms),
-///     tight enough that an infinite loop dies promptly.
-///   - `RECURSION_LIMIT` keeps Boa's default (512) explicit.
-///
-/// What stock Boa CANNOT give yet (recorded, not faked): instruction
-/// metering / wall-clock interruption (a long-running but FINITE
-/// loop still blocks until done) and per-context memory caps. The
-/// full per-plugin frame-budget story (§10) needs upstream fuel or
-/// worker-level isolation — tracked as the open half of B-09.
-const LOOP_ITERATION_LIMIT: u64 = 10_000_000;
-const RECURSION_LIMIT: usize = 512;
-
-fn budgeted_context() -> Context {
+/// B-09 (plugin platform) / W-08 (plugin-web transforms) — runtime
+/// budgets. Boa runs synchronously inside the worker, so a runaway
+/// script hangs the editor unless the engine itself bails. The budget
+/// combines Boa's native `RuntimeLimits` (loop / recursion / stack)
+/// with a bridge-level wall-clock deadline checked at host-call
+/// boundaries. See `ScriptBudget` for the full mechanism + the precise
+/// wasm wall-clock guarantee.
+fn budgeted_context(budget: &ScriptBudget) -> Context {
     let mut ctx = Context::default();
     let mut limits = boa_engine::vm::RuntimeLimits::default();
-    limits.set_loop_iteration_limit(LOOP_ITERATION_LIMIT);
-    limits.set_recursion_limit(RECURSION_LIMIT);
+    limits.set_loop_iteration_limit(budget.loop_iterations);
+    limits.set_recursion_limit(budget.recursion_depth);
+    limits.set_stack_size_limit(budget.stack_size);
     ctx.set_runtime_limits(limits);
     ctx
 }
 
-/// Run `source` against the given `CanvasModel`. Every write the
-/// script issues lands as an `Operation` via `apply_mutation`, so
-/// undo/redo work identically to any UI-driven change.
+/// Run `source` against the given `CanvasModel` with the default
+/// budget and a native wall-clock. Every write the script issues lands
+/// as an `Operation` via `apply_mutation`, so undo/redo work
+/// identically to any UI-driven change.
+///
+/// Convenience wrapper over [`execute_script_with`]; hosts that need to
+/// tighten or loosen the budget (the editor REPL, the plugin runner,
+/// headless conformance) — or that must inject a wasm-safe clock —
+/// call `execute_script_with` directly.
 pub fn execute_script(model: &mut CanvasModel, source: &str) -> ScriptResult {
+    execute_script_with(model, source, ScriptBudget::default(), &native_clock)
+}
+
+/// Native millisecond clock used by `execute_script`. Monotonic enough
+/// for a deadline: `Instant` since a process-lifetime anchor. Kept
+/// behind a `cfg` so the crate never references `std::time` on wasm32,
+/// where the host injects `js_sys::Date::now` instead.
+#[cfg(not(target_arch = "wasm32"))]
+fn native_clock() -> f64 {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+    static ANCHOR: OnceLock<Instant> = OnceLock::new();
+    let anchor = ANCHOR.get_or_init(Instant::now);
+    anchor.elapsed().as_secs_f64() * 1000.0
+}
+
+/// On wasm32 the host MUST supply a clock via `execute_script_with`;
+/// the default `execute_script` falls back to a zero clock, which
+/// disables only the wall-clock deadline (loop / recursion / stack
+/// guards still apply). The wasm worker always uses
+/// `execute_script_with(js_sys::Date::now)`, so this fallback is never
+/// the live path — it exists so the crate compiles wasm-clean without
+/// `std::time`.
+#[cfg(target_arch = "wasm32")]
+fn native_clock() -> f64 {
+    0.0
+}
+
+/// Run `source` with an explicit `budget` and host-injected `clock`.
+/// The per-execution entry point for embedders. The clock returns "now"
+/// in milliseconds (`js_sys::Date::now` on wasm); the wall-clock
+/// deadline, if any, is `clock() + budget.wall_clock_ms` captured at
+/// entry and enforced at every host-function boundary.
+pub fn execute_script_with(
+    model: &mut CanvasModel,
+    source: &str,
+    budget: ScriptBudget,
+    clock: &Clock<'_>,
+) -> ScriptResult {
     let ptr = model as *mut CanvasModel;
     MODEL_PTR.with(|p| *p.borrow_mut() = Some(ptr));
     OUTPUT.with(|o| o.borrow_mut().clear());
+    DEADLINE_TRIPPED.with(|c| c.set(false));
+    // Clear any stale deadline up front too, so a `wall_clock_ms: None`
+    // run never inherits a previous call's clock reference (defensive:
+    // the end-of-call cleanup already clears it on the normal path).
+    DEADLINE.with(|d| *d.borrow_mut() = None);
 
-    let mut ctx = budgeted_context();
+    // Capture the deadline up front; the stored clock reference re-reads
+    // "now" on each host call (see `check_deadline`). The borrow of
+    // `clock` does not outlive this call — the DEADLINE slot is cleared
+    // before we return.
+    if let Some(ms) = budget.wall_clock_ms {
+        let deadline_ms = clock() + ms as f64;
+        // Lifetime-erase the borrowed clock to `'static` so it can live
+        // in the thread-local for the duration of this call. SAFETY:
+        // the DEADLINE slot is cleared before this function returns
+        // (below), and `check_deadline` — the only reader — only runs
+        // synchronously inside `run` on this same stack. So the erased
+        // reference is never dereferenced after `clock` goes out of
+        // scope. Single-threaded, same contract as `MODEL_PTR`.
+        let clock_static: &'static Clock<'static> =
+            unsafe { std::mem::transmute::<&Clock<'_>, &'static Clock<'static>>(clock) };
+        DEADLINE.with(|d| {
+            *d.borrow_mut() = Some(DeadlineState {
+                clock: clock_static,
+                deadline_ms,
+            });
+        });
+    }
+
+    let mut ctx = budgeted_context(&budget);
 
     let error = run(&mut ctx, source);
+    let budget_kind = error.as_deref().and_then(classify_budget_message);
 
     let output = OUTPUT.with(|o| std::mem::take(&mut *o.borrow_mut()));
     MODEL_PTR.with(|p| *p.borrow_mut() = None);
+    DEADLINE.with(|d| *d.borrow_mut() = None);
+    DEADLINE_TRIPPED.with(|c| c.set(false));
 
-    ScriptResult { output, error }
+    ScriptResult {
+        output,
+        error,
+        budget_kind,
+    }
+}
+
+/// Recover the typed `ScriptBudgetKind` from a budget-abort message.
+/// Boa surfaces every `RuntimeLimit` as an opaque string, so we match
+/// on the (stable) message text + our own wall-clock sentinel. Returns
+/// `None` for ordinary script errors.
+fn classify_budget_message(msg: &str) -> Option<ScriptBudgetKind> {
+    // Only "runtime budget exceeded: ..." lines are budget aborts;
+    // `format_error` prefixes exactly that for native RuntimeLimits.
+    if !msg.contains("runtime budget exceeded") {
+        return None;
+    }
+    // NB: match on the sentinel only — the generic prefix
+    // "runtime budget exceeded" itself contains the substring
+    // "time budget", so we must not key WallClock off that.
+    if msg.contains(WALL_CLOCK_SENTINEL) {
+        Some(ScriptBudgetKind::WallClock)
+    } else if msg.contains("loop iteration") {
+        Some(ScriptBudgetKind::Iterations)
+    } else if msg.contains("recursive calls") {
+        Some(ScriptBudgetKind::Recursion)
+    } else if msg.contains("call stack") {
+        Some(ScriptBudgetKind::StackSize)
+    } else {
+        // Unknown RuntimeLimit message — still a budget abort; default
+        // to Iterations rather than mislabel it as an ordinary error.
+        Some(ScriptBudgetKind::Iterations)
+    }
 }
 
 fn run(ctx: &mut Context, source: &str) -> Option<String> {
@@ -168,102 +453,56 @@ fn run(ctx: &mut Context, source: &str) -> Option<String> {
     }
 }
 
+/// Wrap a host function pointer so the wall-clock deadline is checked
+/// before it runs. This is the single point where the synchronous
+/// engine observes the clock (Boa 0.21 has no native per-instruction
+/// interrupt on its sync run loop): every `paged.*` / `console.*` call
+/// — the only way a script reaches the document or blocks on a slow
+/// native — passes through here. A fn pointer is `Copy`, so the `move`
+/// closure satisfies `from_copy_closure`'s `Copy` bound.
+fn guarded(f: fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>) -> NativeFunction {
+    NativeFunction::from_copy_closure(move |this, args, ctx| {
+        check_deadline()?;
+        f(this, args, ctx)
+    })
+}
+
 fn install_bridge(ctx: &mut Context) -> JsResult<()> {
     let paged = ObjectInitializer::new(ctx)
-        .function(NativeFunction::from_fn_ptr(paged_set), js_string!("set"), 3)
-        .function(NativeFunction::from_fn_ptr(paged_get), js_string!("get"), 2)
+        .function(guarded(paged_set), js_string!("set"), 3)
+        .function(guarded(paged_get), js_string!("get"), 2)
+        .function(guarded(paged_undo), js_string!("undo"), 0)
+        .function(guarded(paged_redo), js_string!("redo"), 0)
+        .function(guarded(paged_inspect), js_string!("inspect"), 1)
+        .function(guarded(paged_layers), js_string!("layers"), 0)
+        .function(guarded(paged_tree), js_string!("tree"), 0)
+        .function(guarded(paged_stories), js_string!("stories"), 0)
+        .function(guarded(paged_swatches), js_string!("swatches"), 0)
         .function(
-            NativeFunction::from_fn_ptr(paged_undo),
-            js_string!("undo"),
-            0,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(paged_redo),
-            js_string!("redo"),
-            0,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(paged_inspect),
-            js_string!("inspect"),
-            1,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(paged_layers),
-            js_string!("layers"),
-            0,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(paged_tree),
-            js_string!("tree"),
-            0,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(paged_stories),
-            js_string!("stories"),
-            0,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(paged_swatches),
-            js_string!("swatches"),
-            0,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(paged_paragraph_styles),
+            guarded(paged_paragraph_styles),
             js_string!("paragraphStyles"),
             0,
         )
         .function(
-            NativeFunction::from_fn_ptr(paged_character_styles),
+            guarded(paged_character_styles),
             js_string!("characterStyles"),
             0,
         )
+        .function(guarded(paged_object_styles), js_string!("objectStyles"), 0)
+        .function(guarded(paged_links), js_string!("links"), 0)
+        .function(guarded(paged_conditions), js_string!("conditions"), 0)
         .function(
-            NativeFunction::from_fn_ptr(paged_object_styles),
-            js_string!("objectStyles"),
-            0,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(paged_links),
-            js_string!("links"),
-            0,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(paged_conditions),
-            js_string!("conditions"),
-            0,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(paged_condition_sets),
+            guarded(paged_condition_sets),
             js_string!("conditionSets"),
             0,
         )
+        .function(guarded(paged_color_groups), js_string!("colorGroups"), 0)
+        .function(guarded(paged_gradients), js_string!("gradients"), 0)
+        .function(guarded(paged_collection), js_string!("collection"), 1)
+        .function(guarded(paged_document_meta), js_string!("documentMeta"), 0)
+        .function(guarded(paged_selection), js_string!("selection"), 0)
         .function(
-            NativeFunction::from_fn_ptr(paged_color_groups),
-            js_string!("colorGroups"),
-            0,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(paged_gradients),
-            js_string!("gradients"),
-            0,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(paged_collection),
-            js_string!("collection"),
-            1,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(paged_document_meta),
-            js_string!("documentMeta"),
-            0,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(paged_selection),
-            js_string!("selection"),
-            0,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(paged_content_selection),
+            guarded(paged_content_selection),
             js_string!("contentSelection"),
             0,
         )
@@ -271,26 +510,10 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
     ctx.register_global_property(js_string!("paged"), paged, Attribute::all())?;
 
     let console = ObjectInitializer::new(ctx)
-        .function(
-            NativeFunction::from_fn_ptr(console_log),
-            js_string!("log"),
-            0,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(console_warn),
-            js_string!("warn"),
-            0,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(console_error),
-            js_string!("error"),
-            0,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(console_info),
-            js_string!("info"),
-            0,
-        )
+        .function(guarded(console_log), js_string!("log"), 0)
+        .function(guarded(console_warn), js_string!("warn"), 0)
+        .function(guarded(console_error), js_string!("error"), 0)
+        .function(guarded(console_info), js_string!("info"), 0)
         .build();
     ctx.register_global_property(js_string!("console"), console, Attribute::all())?;
 

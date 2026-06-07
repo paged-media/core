@@ -2517,6 +2517,7 @@ dependencies = [
  "paged-mutate",
  "serde",
  "serde_json",
+ "zip",
 ]
 
 [[package]]

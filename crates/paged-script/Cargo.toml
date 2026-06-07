@@ -17,5 +17,10 @@ paged-mutate = { path = "../paged-mutate" }
 serde = { workspace = true }
 serde_json = "1"
 
+[dev-dependencies]
+# Budget tests build a minimal in-memory IDML package so they don't
+# depend on the gitignored fidelity corpus (the worktree has none).
+zip = { workspace = true }
+
 [lints]
 workspace = true
