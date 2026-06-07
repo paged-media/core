@@ -1412,3 +1412,129 @@ fn nested_groups_round_trips_group_of_groups() {
         );
     }
 }
+
+// ── W4.14 — duplicate-attribute guard (whole class) ──────────────────
+
+/// Every sample the generator can emit, by name → built package bytes.
+/// Includes the multi-variant builders (`*_moved` / `*_otf_off`) so the
+/// guard covers the alternate emissions too.
+fn all_emitted_packages() -> Vec<(String, Vec<u8>)> {
+    use paged_gen::samples::*;
+    // One thunk per distinct emission. A `Vec<(name, fn)>` keeps the list
+    // a single source of truth — add a sample's `build` here and the
+    // duplicate-attribute guard automatically covers it.
+    type Builder = fn() -> paged_gen::package::Sample;
+    let builders: Vec<(&str, Builder)> = vec![
+        ("anchored", anchored::build),
+        ("conditions", conditions::build),
+        ("corners", corners::build),
+        ("effects", effects::build),
+        ("footnotes", footnotes::build),
+        ("geometry", geometry::build),
+        ("geometry_groups", geometry_groups::build),
+        ("gradients", gradients::build),
+        ("image_clipping", image_clipping::build),
+        ("images", images::build),
+        ("layout", layout::build),
+        ("links_broken", links_broken::build),
+        ("markers", markers::build),
+        ("masters", masters::build),
+        ("navigation", navigation::build),
+        ("nested_groups", nested_groups::build),
+        ("numbering", numbering::build),
+        ("strokes_fills", strokes_fills::build),
+        ("styles_cascade", styles_cascade::build),
+        ("styles_cascade_otf_off", styles_cascade::build_otf_off),
+        ("swatches", swatches::build),
+        ("tables", tables::build),
+        ("text", text::build),
+        ("text_advanced", text_advanced::build),
+        ("text_autosize", text_autosize::build),
+        ("text_in_shape", text_in_shape::build),
+        ("text_letterspacing", text_letterspacing::build),
+        ("text_on_path", text_on_path::build),
+        ("text_overset", text_overset::build),
+        ("text_wrap", text_wrap::build),
+        ("transparency", transparency::build),
+        ("variables", variables::build),
+        ("variables_moved", variables::build_moved),
+    ];
+    builders
+        .into_iter()
+        .map(|(name, f)| {
+            let bytes =
+                paged_gen::write_idml(&f()).unwrap_or_else(|e| panic!("{name}: emit: {e:?}"));
+            (name.to_string(), bytes)
+        })
+        .collect()
+}
+
+/// Scan one XML document for any element carrying the same attribute name
+/// twice. Returns `Err(message)` describing the first offender. Uses
+/// quick-xml in the same lenient mode the parser runs in, but flags the
+/// duplicate our lenient reader silently swallows — the exact class
+/// `paged-write`'s strict rewrite rejects with "duplicated attribute".
+fn find_duplicate_attribute(xml: &[u8]) -> Result<(), String> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+    use std::collections::HashSet;
+
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+    loop {
+        let event = reader
+            .read_event_into(&mut buf)
+            .map_err(|e| format!("xml read error: {e}"))?;
+        let start = match &event {
+            Event::Start(e) | Event::Empty(e) => Some(e),
+            Event::Eof => break,
+            _ => None,
+        };
+        if let Some(e) = start {
+            let element = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+            let mut seen: HashSet<Vec<u8>> = HashSet::new();
+            for attr in e.attributes().with_checks(false) {
+                let attr = attr.map_err(|err| format!("<{element}>: bad attribute: {err}"))?;
+                let key = attr.key.as_ref().to_vec();
+                if !seen.insert(key.clone()) {
+                    let key_str = String::from_utf8_lossy(&key);
+                    return Err(format!(
+                        "<{element}> carries the attribute {key_str:?} more than once"
+                    ));
+                }
+            }
+        }
+        buf.clear();
+    }
+    Ok(())
+}
+
+/// No emitted sample may carry a duplicate attribute on any element of
+/// any XML part. Our lenient parser swallows duplicates (last wins), but
+/// `paged-write`'s strict reader-→writer rewrite rejects them outright
+/// ("duplicated attribute"), so a duplicate silently breaks
+/// `--roundtrip` for that fixture. This guard catches the whole class at
+/// emit time — e.g. the W4.14 swatches regression where the page-item
+/// emitter pushed a default `AppliedObjectStyle` AND the sample passed an
+/// explicit one via `extra_attrs`.
+#[test]
+fn no_emitted_sample_has_a_duplicate_attribute() {
+    for (name, bytes) in all_emitted_packages() {
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
+            .unwrap_or_else(|e| panic!("{name}: open emitted zip: {e:?}"));
+        for i in 0..zip.len() {
+            use std::io::Read as _;
+            let mut entry = zip.by_index(i).expect("zip entry");
+            let entry_name = entry.name().to_string();
+            if entry.is_dir() || !entry_name.ends_with(".xml") {
+                continue;
+            }
+            let mut xml = Vec::new();
+            entry.read_to_end(&mut xml).expect("read entry");
+            if let Err(msg) = find_duplicate_attribute(&xml) {
+                panic!("{name}: {entry_name}: {msg}");
+            }
+        }
+    }
+}

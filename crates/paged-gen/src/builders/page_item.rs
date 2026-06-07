@@ -87,27 +87,36 @@ pub struct Oval {
 
 impl Oval {
     pub fn write(&self, b: &mut XmlBuilder) {
-        let mut attrs: Vec<(&str, String)> = vec![
-            ("Self", self.self_id.clone()),
-            ("AppliedObjectStyle", "ObjectStyle/$ID/[None]".to_string()),
-            ("ItemTransform", format_matrix(&self.item_transform)),
-            (
-                "FillColor",
-                self.fill_color
-                    .clone()
-                    .unwrap_or_else(|| "Swatch/None".to_string()),
-            ),
-            (
-                "StrokeColor",
-                self.stroke_color
-                    .clone()
-                    .unwrap_or_else(|| "Swatch/None".to_string()),
-            ),
-            (
-                "StrokeWeight",
-                format_f32(self.stroke_weight_pt.unwrap_or(0.0)),
-            ),
-        ];
+        let mut attrs: Vec<(&str, String)> = vec![("Self", self.self_id.clone())];
+        // Emit the `[None]` object-style default only when the caller
+        // hasn't supplied an explicit `AppliedObjectStyle` via
+        // `extra_attrs` — emitting both would duplicate the attribute
+        // (rejected by paged-write's strict rewrite). The explicit
+        // override wins (mirrors `Rect::write`).
+        if !self
+            .extra_attrs
+            .iter()
+            .any(|(k, _)| k == "AppliedObjectStyle")
+        {
+            attrs.push(("AppliedObjectStyle", "ObjectStyle/$ID/[None]".to_string()));
+        }
+        attrs.push(("ItemTransform", format_matrix(&self.item_transform)));
+        attrs.push((
+            "FillColor",
+            self.fill_color
+                .clone()
+                .unwrap_or_else(|| "Swatch/None".to_string()),
+        ));
+        attrs.push((
+            "StrokeColor",
+            self.stroke_color
+                .clone()
+                .unwrap_or_else(|| "Swatch/None".to_string()),
+        ));
+        attrs.push((
+            "StrokeWeight",
+            format_f32(self.stroke_weight_pt.unwrap_or(0.0)),
+        ));
         for (k, v) in &self.extra_attrs {
             attrs.push((k.as_str(), v.clone()));
         }
@@ -808,7 +817,21 @@ impl Rect {
         // overrides our per-rectangle BlendingSetting back to Normal,
         // and StrokeColor="Swatch/None" gets shadowed by the default
         // 1pt stroke.
-        attrs.push(("AppliedObjectStyle", "ObjectStyle/$ID/[None]".to_string()));
+        //
+        // A sample that wants an EXPLICIT object style (e.g. swatches'
+        // BasedOn cascade) passes `AppliedObjectStyle` via `extra_attrs`.
+        // Emit the `[None]` default ONLY when no such override is present
+        // — otherwise the element would carry the attribute twice, which
+        // our lenient parser swallows but paged-write's strict XML rewrite
+        // rejects ("duplicated attribute"), breaking `--roundtrip`. The
+        // explicit style wins.
+        if !self
+            .extra_attrs
+            .iter()
+            .any(|(k, _)| k == "AppliedObjectStyle")
+        {
+            attrs.push(("AppliedObjectStyle", "ObjectStyle/$ID/[None]".to_string()));
+        }
         attrs.push(("Visible", "true".to_string()));
         attrs.push(("Name", "$ID/".to_string()));
         attrs.push(("ItemTransform", format_matrix(&self.item_transform)));
