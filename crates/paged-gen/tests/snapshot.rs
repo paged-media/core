@@ -981,3 +981,84 @@ fn conditions_round_trips_through_parser() {
         vec![conditions::CONDITION_HIDDEN.to_string()],
     );
 }
+
+// ── W4.7: swatches.idml (colour / swatch sub-system) ─────────────
+
+#[test]
+fn swatches_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::swatches::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::swatches::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+#[test]
+fn swatches_round_trips_colors_groups_tint_and_swatch() {
+    // W4.7 — parse the swatches sample back and assert the colour
+    // sub-system survives: the spot full/half-tint inks (with their
+    // CMYK alternates), the standalone `TintValue="50"` on the half
+    // swatch, the mixed-ink swatch's fallback alternate, the colour
+    // group membership, and the swatch alias's wrapped colour.
+    use paged_gen::samples::swatches;
+    use paged_parse::graphic::ColorModel;
+
+    let sample = swatches::build();
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    let g = &doc.palette;
+
+    // Both spot inks resolve to a CMYK alternate (the renderer previews
+    // spot inks through it). The full ink is at 100%, the half at 50%.
+    let full = g.colors.get(swatches::INK_FULL).expect("full ink swatch");
+    let half = g.colors.get(swatches::INK_HALF).expect("half-tint swatch");
+    assert_eq!(full.model, ColorModel::Spot);
+    assert_eq!(half.model, ColorModel::Spot);
+    assert_eq!(full.tint, None, "full ink has no swatch-level tint");
+    assert_eq!(
+        half.tint,
+        Some(50.0),
+        "half swatch round-trips TintValue=50"
+    );
+    // The half-tint's effective CMYK is the full ink's, scaled by 0.5.
+    let full_cmyk = full.effective_cmyk().expect("full ink resolves to CMYK");
+    let half_cmyk = half.effective_cmyk().expect("half ink resolves to CMYK");
+    for ch in 0..4 {
+        assert!(
+            (half_cmyk[ch] - full_cmyk[ch] * 0.5).abs() < 0.01,
+            "channel {ch}: half should be 50% of full: full={full_cmyk:?}, half={half_cmyk:?}",
+        );
+    }
+
+    // The mixed-ink swatch is recognised as MixedInk but resolves
+    // through its CMYK alternate fallback (the renderer ships no
+    // spectral model). The fallback being present is the assertion.
+    let mixed = g.colors.get(swatches::INK_MIXED).expect("mixed-ink swatch");
+    assert_eq!(mixed.model, ColorModel::MixedInk);
+    assert!(
+        mixed.effective_cmyk().is_some(),
+        "mixed-ink swatch must carry a renderable CMYK fallback",
+    );
+
+    // The colour group lists all three brand inks.
+    let group = g
+        .color_groups
+        .get(swatches::COLOR_GROUP)
+        .expect("brand colour group");
+    assert_eq!(group.members.len(), 3, "group has three members");
+    assert!(group.members.iter().any(|m| m == swatches::INK_FULL));
+
+    // The swatch alias wraps the full ink colour.
+    let alias = g
+        .swatches
+        .get(swatches::SWATCH_ALIAS)
+        .expect("brand swatch alias");
+    assert_eq!(alias.color_ref.as_deref(), Some(swatches::INK_FULL));
+
+    // The ObjectStyle BasedOn cascade resolves: the derived style
+    // inherits the base style's fill swatch.
+    let derived = doc
+        .styles
+        .object_styles
+        .get(swatches::STYLE_DERIVED)
+        .expect("derived object style");
+    assert_eq!(derived.based_on.as_deref(), Some(swatches::STYLE_BASE));
+}

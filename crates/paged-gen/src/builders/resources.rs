@@ -113,6 +113,154 @@ pub fn graphic_xml_with_extras_and_gradients(
     write_graphic(extras, gradients)
 }
 
+/// W4.7 — a fully-specified `<Color>` swatch for [`graphic_xml_rich`].
+/// Covers the spot-ink / mixed-ink / standalone-tint variants the
+/// minimal [`ExtraColor`] can't express: a `Model` (`Process` / `Spot`
+/// / `MixedInk`), an optional CMYK/RGB *alternate* (the fallback the
+/// renderer previews spot + mixed inks through), and an optional
+/// swatch-level `TintValue` (a standalone "base ink at N%" tint
+/// swatch).
+pub struct RichColor {
+    pub self_id: String,
+    pub name: String,
+    /// `Model` — `"Process"`, `"Spot"`, `"MixedInk"`.
+    pub model: &'static str,
+    /// `Space` of the primary `ColorValue` — `"CMYK"`, `"RGB"`,
+    /// `"LAB"`.
+    pub space: &'static str,
+    /// Whitespace-separated primary channel values.
+    pub value: String,
+    /// `AlternateSpace` (e.g. `"CMYK"`) for the spot/mixed-ink
+    /// preview fallback. `None` ⇒ omit.
+    pub alternate_space: Option<&'static str>,
+    /// `AlternateColorValue` channels matching `alternate_space`.
+    pub alternate_value: Option<String>,
+    /// `TintValue` (0..=100) — a standalone tint swatch's swatch-level
+    /// tint. `None` ⇒ omit (full strength).
+    pub tint: Option<f32>,
+}
+
+/// W4.7 — a `<ColorGroup>` named grouping of swatch self-ids.
+pub struct ColorGroupSpec {
+    pub self_id: String,
+    pub name: String,
+    /// `ColorGroupSwatches` — the member `Color/<id>` refs.
+    pub members: Vec<String>,
+}
+
+/// W4.7 — a `<Swatch>` that wraps (aliases) a `<Color>` by `Self`
+/// reference. IDML uses these for the named-swatch-over-color layer
+/// the editor's Swatches panel surfaces.
+pub struct SwatchSpec {
+    pub self_id: String,
+    pub name: String,
+    /// The wrapped `Color/<id>` reference.
+    pub color_ref: String,
+}
+
+/// W4.7 — `Resources/Graphic.xml` carrying rich `<Color>` swatches
+/// (spot / mixed-ink / standalone-tint), `<ColorGroup>` groupings, and
+/// `<Swatch>` aliases alongside the built-in Black + Paper. Kept
+/// separate from [`write_graphic`] so the existing `ExtraColor` call
+/// sites stay byte-identical.
+pub fn graphic_xml_rich(
+    colors: &[RichColor],
+    groups: &[ColorGroupSpec],
+    swatches: &[SwatchSpec],
+) -> Vec<u8> {
+    let mut b = XmlBuilder::new();
+    b.write_decl();
+    b.start(
+        "idPkg:Graphic",
+        &[
+            (
+                "xmlns:idPkg",
+                "http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging",
+            ),
+            ("DOMVersion", "20.0"),
+        ],
+    );
+    // The two reserved swatches every IDML carries.
+    b.empty(
+        "Color",
+        &[
+            ("Self", "Color/Black"),
+            ("Model", "Process"),
+            ("Space", "CMYK"),
+            ("ColorValue", "0 0 0 100"),
+            ("ColorOverride", "Specialblack"),
+            ("Name", "Black"),
+            ("ColorEditable", "false"),
+            ("ColorRemovable", "false"),
+            ("Visible", "true"),
+        ],
+    );
+    b.empty(
+        "Color",
+        &[
+            ("Self", "Color/Paper"),
+            ("Model", "Process"),
+            ("Space", "CMYK"),
+            ("ColorValue", "0 0 0 0"),
+            ("ColorOverride", "Specialpaper"),
+            ("Name", "Paper"),
+            ("ColorEditable", "true"),
+            ("ColorRemovable", "false"),
+            ("Visible", "true"),
+        ],
+    );
+    for c in colors {
+        let tint_str;
+        let mut attrs: Vec<(&str, &str)> = vec![
+            ("Self", c.self_id.as_str()),
+            ("Model", c.model),
+            ("Space", c.space),
+            ("ColorValue", c.value.as_str()),
+            ("Name", c.name.as_str()),
+        ];
+        if let Some(s) = c.alternate_space {
+            attrs.push(("AlternateSpace", s));
+        }
+        if let Some(v) = c.alternate_value.as_deref() {
+            attrs.push(("AlternateColorValue", v));
+        }
+        if let Some(t) = c.tint {
+            tint_str = crate::xml::format_f32(t);
+            attrs.push(("TintValue", tint_str.as_str()));
+        }
+        b.empty("Color", &attrs);
+    }
+    for s in swatches {
+        b.empty(
+            "Swatch",
+            &[
+                ("Self", s.self_id.as_str()),
+                ("Name", s.name.as_str()),
+                ("ColorEditable", "true"),
+                ("ColorRemovable", "true"),
+                ("Visible", "true"),
+                // The parser reads the wrapped colour from `Color`
+                // (or `ColorEditorHotGraphic`); emit the canonical
+                // `Color` attribute.
+                ("Color", s.color_ref.as_str()),
+            ],
+        );
+    }
+    for g in groups {
+        let members = g.members.join(" ");
+        b.empty(
+            "ColorGroup",
+            &[
+                ("Self", g.self_id.as_str()),
+                ("Name", g.name.as_str()),
+                ("ColorGroupSwatches", members.as_str()),
+            ],
+        );
+    }
+    b.end("idPkg:Graphic");
+    b.into_bytes()
+}
+
 /// `Resources/Graphic.xml` — registers `Color/Black` and `Color/Paper`,
 /// the two swatches every IDML carries by default.
 pub fn graphic_xml() -> Vec<u8> {
@@ -300,6 +448,26 @@ ContinueNumbersAcrossDocuments=\"false\"/>\
     let spliced = match text.rfind(closing) {
         Some(idx) => format!("{}{}{}", &text[..idx], group, &text[idx..]),
         None => format!("{text}{group}"),
+    };
+    spliced.into_bytes()
+}
+
+/// W4.9 — splice an arbitrary raw style-XML `fragment` in just before
+/// the closing `</idPkg:Styles>` tag of the default [`styles_xml`]
+/// output. The same post-processing trick
+/// [`styles_xml_with_numbering_list`] uses, but generic: lets a sample
+/// emit richer style cascades (next-style chains, `<CellStyle>` /
+/// `<TableStyle>` BasedOn, named-list definitions, OTF-bearing
+/// `<CharacterStyle>`s) without growing the typed builder family.
+/// The parser keys every style element by `Self` regardless of which
+/// `Root…Group` wrapper holds it, so the caller may inline whatever
+/// well-formed fragment it needs.
+pub fn styles_xml_with_raw(fragment: &str) -> Vec<u8> {
+    let text = String::from_utf8(styles_xml()).expect("styles_xml is valid utf-8");
+    let closing = "</idPkg:Styles>";
+    let spliced = match text.rfind(closing) {
+        Some(idx) => format!("{}{}{}", &text[..idx], fragment, &text[idx..]),
+        None => format!("{text}{fragment}"),
     };
     spliced.into_bytes()
 }
