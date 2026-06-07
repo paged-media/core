@@ -31,6 +31,7 @@ pub mod masters;
 pub mod navigation;
 pub mod numbering;
 pub mod strokes_fills;
+pub mod styles_cascade;
 pub mod swatches;
 pub mod tables;
 pub mod text;

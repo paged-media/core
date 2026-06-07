@@ -1174,3 +1174,98 @@ fn navigation_round_trips_toc_index_bookmarks_and_xref() {
         xref_runs[0],
     );
 }
+
+// ── W4.9: styles-cascade.idml (advanced styles + OTF typography) ──
+
+#[test]
+fn styles_cascade_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::styles_cascade::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::styles_cascade::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+    // The OTF-off control is independently deterministic and differs.
+    let off1 = paged_gen::write_idml(&paged_gen::samples::styles_cascade::build_otf_off()).unwrap();
+    let off2 = paged_gen::write_idml(&paged_gen::samples::styles_cascade::build_otf_off()).unwrap();
+    assert_eq!(sha256(&off1), sha256(&off2));
+    assert_ne!(sha256(&a), sha256(&off1));
+}
+
+#[test]
+fn styles_cascade_round_trips_next_style_list_cells_tables_otf_hyphenation() {
+    // W4.9 — parse the styles-cascade sample and assert each advanced
+    // construct survives + resolves through its BasedOn chain.
+    use paged_gen::samples::styles_cascade as sc;
+    let sample = sc::build();
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    let styles = &doc.styles;
+
+    // (1) next-style chain: Title → Subtitle → Body.
+    let title = styles
+        .paragraph_styles
+        .get(sc::STYLE_TITLE)
+        .expect("Title style");
+    assert_eq!(title.next_style.as_deref(), Some(sc::STYLE_SUBTITLE));
+    let subtitle = styles
+        .paragraph_styles
+        .get(sc::STYLE_SUBTITLE)
+        .expect("Subtitle style");
+    assert_eq!(subtitle.next_style.as_deref(), Some(sc::STYLE_BODY));
+
+    // (2) named-list cascade: the derived list style inherits the
+    // AppliedNumberingList from the base via BasedOn.
+    assert!(
+        styles.numbering_lists.contains_key(sc::NUMBERING_LIST),
+        "the named numbering list must round-trip",
+    );
+    let derived_list = styles.resolve_paragraph(sc::STYLE_LIST_DERIVED);
+    assert_eq!(
+        derived_list.applied_numbering_list.as_deref(),
+        Some(sc::NUMBERING_LIST),
+        "derived list style inherits the AppliedNumberingList via BasedOn",
+    );
+
+    // (3) cell + table cascade (BasedOn): the derived cell style
+    // inherits the base cell style's fill; the derived table style
+    // inherits the base's body-region cell-style assignment.
+    let derived_cell = styles.resolve_cell(sc::CELL_DERIVED);
+    assert_eq!(
+        derived_cell.fill_color.as_deref(),
+        Some(sc::CELL_FILL),
+        "derived cell style inherits the base fill via BasedOn",
+    );
+    let derived_table = styles.resolve_table(sc::TABLE_DERIVED);
+    assert_eq!(
+        derived_table.body_region_cell_style.as_deref(),
+        Some(sc::CELL_DERIVED),
+        "derived table style inherits the body-region cell style via BasedOn",
+    );
+
+    // (4) OTF features: the three runs carry the discrete feature flags.
+    let otf: Vec<&paged_parse::story::OtfFeatures> = doc
+        .stories
+        .iter()
+        .flat_map(|s| s.story.paragraphs.iter())
+        .flat_map(|p| p.runs.iter())
+        .map(|r| &r.otf)
+        .collect();
+    assert!(
+        otf.iter().any(|f| f.fraction == Some(true)),
+        "a run must carry OTFFraction",
+    );
+    assert!(
+        otf.iter().any(|f| f.ordinal == Some(true)),
+        "a run must carry OTFOrdinal",
+    );
+    assert!(
+        otf.iter().any(|f| f.contextual_alternates == Some(true)),
+        "a run must carry OTFContextualAlternate",
+    );
+
+    // (5) hyphenation-zone justified style.
+    let justified = styles
+        .paragraph_styles
+        .get(sc::STYLE_JUSTIFIED)
+        .expect("justified style");
+    assert_eq!(justified.hyphenation_zone, Some(36.0));
+    assert_eq!(justified.hyphenation, Some(true));
+}
