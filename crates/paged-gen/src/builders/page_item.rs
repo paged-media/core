@@ -389,6 +389,14 @@ pub struct Rect {
     /// AutoSizing fixtures author an undersized frame the renderer grows
     /// to fit its story.
     pub text_frame_pref: Option<TextFramePref>,
+    /// W1.10 — optional fully custom `<PathGeometry>` contours. When
+    /// `Some`, the builder emits these sub-paths verbatim (one
+    /// `<GeometryPathType>` each) instead of the four-corner bounding
+    /// rect, so a text frame can carry an oval / triangle / compound
+    /// (donut) outline that the renderer lays text out *inside* of.
+    /// `width_pt`/`height_pt` are ignored for geometry but still seed
+    /// the frame's `GeometricBounds`. `None` ⇒ the legacy rect path.
+    pub custom_subpaths: Option<Vec<PolygonSubPath>>,
 }
 
 /// `<TextFramePreference>` payload — currently the AutoSizing knobs the
@@ -403,6 +411,17 @@ pub struct TextFramePref {
     /// `"BottomRightPoint"`, etc. The corner/edge pinned as the frame
     /// grows.
     pub auto_sizing_reference_point: Option<&'static str>,
+    /// `InsetSpacing` — `[top, left, bottom, right]` in pt. W1.10 uses
+    /// this to verify shaped-frame segments are inset like any column.
+    /// `None` ⇒ omit (no inset).
+    pub inset_spacing: Option<[f32; 4]>,
+    /// `VerticalJustification` — `"TopAlign"`, `"CenterAlign"`,
+    /// `"BottomAlign"`, `"JustifyAlign"`. `None` ⇒ omit (Top default).
+    pub vertical_justification: Option<&'static str>,
+    /// `FirstBaselineOffset` — `"AscentOffset"`, `"CapHeight"`,
+    /// `"LeadingOffset"`, `"EmboxHeight"`, `"FixedHeight"`. `None` ⇒
+    /// omit (renderer heuristic).
+    pub first_baseline_offset: Option<&'static str>,
 }
 
 /// `<TextWrapPreference>` payload emitted as a child of a page item.
@@ -640,6 +659,7 @@ impl Rect {
             anchored_setting: None,
             frame_effects: Vec::new(),
             text_frame_pref: None,
+            custom_subpaths: None,
         }
     }
 
@@ -734,7 +754,14 @@ impl Rect {
         let attr_refs: Vec<(&str, &str)> = attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
         b.start(kind, &attr_refs);
         b.start("Properties", &[]);
-        write_path_geometry(b, self.width_pt, self.height_pt);
+        if let Some(subpaths) = &self.custom_subpaths {
+            // W1.10 — emit the caller's contours verbatim so a text
+            // frame can carry a non-rectangular outline (oval /
+            // triangle / compound donut).
+            write_custom_path_geometry(b, subpaths);
+        } else {
+            write_path_geometry(b, self.width_pt, self.height_pt);
+        }
         b.end("Properties");
         // TransparencySetting is a SIBLING of Properties under the
         // page item, not a child (spec §IDML File Reference: Spreads
@@ -877,6 +904,25 @@ impl Rect {
             if let Some(rp) = tfp.auto_sizing_reference_point {
                 tfa.push(("AutoSizingReferencePoint", rp));
             }
+            // InsetSpacing is a space-separated list of four numbers in
+            // IDML order `top left bottom right`.
+            let inset_str: String;
+            if let Some(ins) = tfp.inset_spacing {
+                inset_str = format!(
+                    "{} {} {} {}",
+                    format_f32(ins[0]),
+                    format_f32(ins[1]),
+                    format_f32(ins[2]),
+                    format_f32(ins[3])
+                );
+                tfa.push(("InsetSpacing", inset_str.as_str()));
+            }
+            if let Some(vj) = tfp.vertical_justification {
+                tfa.push(("VerticalJustification", vj));
+            }
+            if let Some(fbo) = tfp.first_baseline_offset {
+                tfa.push(("FirstBaselineOffset", fbo));
+            }
             b.empty("TextFramePreference", &tfa);
         }
         // `<TextWrapPreference>` — sibling of Properties / Image. The
@@ -981,6 +1027,36 @@ fn write_path_geometry(b: &mut XmlBuilder, w: f32, h: f32) {
     }
     b.end("PathPointArray");
     b.end("GeometryPathType");
+    b.end("PathGeometry");
+}
+
+/// W1.10 — emit a fully custom `<PathGeometry>`: one `<GeometryPathType>`
+/// per sub-path, each carrying its anchors with explicit Bezier handles.
+/// Shares the IDML shape with [`Polygon::write`]'s geometry block so the
+/// parser reads anchors, `subpath_starts`, and `subpath_open` the same
+/// way regardless of host element (here a `<TextFrame>`).
+fn write_custom_path_geometry(b: &mut XmlBuilder, subpaths: &[PolygonSubPath]) {
+    b.start("PathGeometry", &[]);
+    for sub in subpaths {
+        let open = if sub.closed { "false" } else { "true" };
+        b.start("GeometryPathType", &[("PathOpen", open)]);
+        b.start("PathPointArray", &[]);
+        for p in &sub.points {
+            let anchor = format!("{} {}", format_f32(p.anchor.0), format_f32(p.anchor.1));
+            let left = format!("{} {}", format_f32(p.left.0), format_f32(p.left.1));
+            let right = format!("{} {}", format_f32(p.right.0), format_f32(p.right.1));
+            b.empty(
+                "PathPointType",
+                &[
+                    ("Anchor", &anchor),
+                    ("LeftDirection", &left),
+                    ("RightDirection", &right),
+                ],
+            );
+        }
+        b.end("PathPointArray");
+        b.end("GeometryPathType");
+    }
     b.end("PathGeometry");
 }
 

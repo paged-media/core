@@ -213,6 +213,7 @@ pub fn build() -> Sample {
             anchored_setting: None,
             frame_effects: Vec::new(),
             text_frame_pref: None,
+            custom_subpaths: None,
         };
         let demo_rect = Rect {
             self_id: rect_id,
@@ -242,6 +243,7 @@ pub fn build() -> Sample {
             anchored_setting: None,
             frame_effects: Vec::new(),
             text_frame_pref: None,
+            custom_subpaths: None,
         };
 
         spreads.push((

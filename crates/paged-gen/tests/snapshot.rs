@@ -306,6 +306,54 @@ fn text_wrap_round_trips_through_parser() {
 }
 
 #[test]
+fn text_in_shape_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::text_in_shape::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::text_in_shape::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+#[test]
+fn text_in_shape_text_frames_carry_non_rectangular_path_geometry() {
+    let sample = paged_gen::samples::text_in_shape::build();
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let container = paged_parse::Container::open(&bytes).expect("Container::open");
+    let mut shaped_frames = 0;
+    let mut compound_frames = 0;
+    for entry_path in container.entries.keys() {
+        if !entry_path.starts_with("Spreads/") {
+            continue;
+        }
+        let xml = &container.entries[entry_path];
+        let spread = paged_parse::Spread::parse(xml).expect("Spread::parse");
+        for tf in &spread.text_frames {
+            // A non-rectangular outline has more than the 4 plain-rect
+            // corner anchors OR carries explicit Bezier handles.
+            if tf.anchors.len() != 4
+                || tf
+                    .anchors
+                    .iter()
+                    .any(|a| a.left != a.anchor || a.right != a.anchor)
+            {
+                shaped_frames += 1;
+            }
+            // The donut frame records two subpath contours.
+            if tf.subpath_starts.len() >= 2 {
+                compound_frames += 1;
+            }
+        }
+    }
+    assert_eq!(
+        shaped_frames,
+        sample.spreads.len(),
+        "every page's text frame should carry a non-rectangular outline, got {shaped_frames}"
+    );
+    assert!(
+        compound_frames >= 1,
+        "the donut page's frame should record a compound (multi-subpath) path"
+    );
+}
+
+#[test]
 fn anchored_emit_is_byte_deterministic() {
     let a = paged_gen::write_idml(&paged_gen::samples::anchored::build()).unwrap();
     let b = paged_gen::write_idml(&paged_gen::samples::anchored::build()).unwrap();

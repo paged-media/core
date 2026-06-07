@@ -361,6 +361,7 @@ pub fn build() -> Sample {
             anchored_setting: None,
             frame_effects: Vec::new(),
             text_frame_pref: None,
+            custom_subpaths: None,
         };
 
         // Demo rectangle centred on the page. Baseline: black 6pt
@@ -390,6 +391,7 @@ pub fn build() -> Sample {
             anchored_setting: None,
             frame_effects: Vec::new(),
             text_frame_pref: None,
+            custom_subpaths: None,
         };
 
         spreads.push((
@@ -508,6 +510,7 @@ fn w15_alignment_pages(base_seq: u32) -> Vec<(String, Vec<u8>, String, Vec<u8>, 
             anchored_setting: None,
             frame_effects: Vec::new(),
             text_frame_pref: None,
+            custom_subpaths: None,
         };
 
         // Heavy 18pt stroke so the ±9pt alignment offset is obvious.
