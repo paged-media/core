@@ -868,6 +868,10 @@ impl ResolvedParagraphAttrs {
             numbering_expression: None,
             numbering_start_at: None,
             numbering_continue: None,
+            // W1.22 — instance override wins over the cascade.
+            applied_numbering_list: paragraph.applied_numbering_list.clone(),
+            // styles.next-style is style-level only (no inline form).
+            next_style: None,
             hyphenation: None,
             hyphenation_zone: None,
             applied_language: None,
@@ -943,6 +947,12 @@ impl ResolvedParagraphAttrs {
         }
         self.numbering_start_at = self.numbering_start_at.or(p.numbering_start_at);
         self.numbering_continue = self.numbering_continue.or(p.numbering_continue);
+        if self.applied_numbering_list.is_none() {
+            self.applied_numbering_list = p.applied_numbering_list.clone();
+        }
+        if self.next_style.is_none() {
+            self.next_style = p.next_style.clone();
+        }
         self.hyphenation = self.hyphenation.or(p.hyphenation);
         self.hyphenation_zone = self.hyphenation_zone.or(p.hyphenation_zone);
         if self.applied_language.is_none() {
@@ -1230,6 +1240,14 @@ pub struct ResolvedParagraphAttrs {
     /// across paragraphs; `Some(false)` forces a reset on entry.
     /// `None` ⇒ renderer default (continue).
     pub numbering_continue: Option<bool>,
+    /// W1.22 — resolved `AppliedNumberingList` ref (instance override
+    /// over the style cascade). `None` ⇒ no named list. The renderer
+    /// reads the list def's `continue_across_stories` flag off this to
+    /// decide cross-story numbering continuity.
+    pub applied_numbering_list: Option<String>,
+    /// styles.next-style — resolved `NextStyle` ref. Carried for the
+    /// editor's typing-time flow; the renderer does not act on it.
+    pub next_style: Option<String>,
     /// `Hyphenation` boolean from the cascaded paragraph style.
     /// Drives whether the composer wires up a hyphenator.
     pub hyphenation: Option<bool>,

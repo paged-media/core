@@ -437,6 +437,25 @@ pub enum PropertyPath {
     /// arm rounds the range to whole paragraphs (paragraphs are
     /// atomic in IDML). Unknown strings raise `InvalidValue`.
     ParagraphJustification,
+    /// styles.next-style (W1.22) — a paragraph style's `NextStyle`
+    /// reference. Wire value is `Value::Text(String)` carrying the
+    /// next style's `self_id` (empty string clears the chain).
+    /// STYLE-DEFINITION path only: addressed via `SetStyleProperty`
+    /// against `StyleCollection::Paragraph`, NOT against a story-range
+    /// node (NextStyle lives on the `<ParagraphStyle>` definition, not
+    /// on a paragraph instance). The editor reads this off
+    /// `ParagraphStyleSummary.next_style` and applies the chain at
+    /// typing time (Enter at paragraph end). The renderer never acts
+    /// on it. Additive — no consumer breakage, no bump on its own.
+    ParagraphStyleNextStyle,
+    /// W1.22 (engine gap 22) — a paragraph's `AppliedNumberingList`
+    /// reference. Wire value is `Value::Text(String)` carrying the
+    /// `NumberingList/<id>` self id (empty string clears it).
+    /// Addressed against a `NodeId::StoryRange`; the apply arm rounds
+    /// the range to whole paragraphs (atomic) and rewrites each
+    /// paragraph's `applied_numbering_list`. The renderer resolves it
+    /// to find the list's cross-story continuity flag. Additive.
+    ParagraphAppliedNumberingList,
     /// SDK Phase 5 (v1 sweep) — frame stroke end-cap. Wire value is
     /// `Value::Text` carrying the IDML enum string
     /// (`"ButtEndCap"`, `"RoundEndCap"`, `"ProjectingEndCap"`).
@@ -1146,6 +1165,8 @@ impl PropertyPath {
             PropertyPath::AppliedConditions => "story.appliedConditions",
             PropertyPath::FrameInsetSpacing => "textFrame.insetSpacing",
             PropertyPath::ParagraphJustification => "paragraph.justification",
+            PropertyPath::ParagraphStyleNextStyle => "paragraphStyle.nextStyle",
+            PropertyPath::ParagraphAppliedNumberingList => "paragraph.appliedNumberingList",
             PropertyPath::FrameStrokeEndCap => "frame.strokeEndCap",
             PropertyPath::FrameTextWrapMode => "frame.textWrapMode",
             PropertyPath::FrameTextWrapOffsets => "frame.textWrapOffsets",
@@ -2090,6 +2111,29 @@ pub struct GradientSpec {
     pub stops: Vec<GradientStopSpec>,
 }
 
+/// W1.22 (engine gap 22) — wire description of a `<NumberingList>`
+/// resource, mirroring `paged_parse::styles::NumberingListDef`. The
+/// CRUD ops (`CreateNumberingList` / `EditNumberingList` /
+/// `DeleteNumberingList`) carry this. `self_id` is minted
+/// (`NumberingList/u<n>`) when absent on create; echoed resolved in
+/// the applied op. `continue_across_stories` is the field the renderer
+/// reads for cross-story numbering continuity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct NumberingListSpec {
+    #[serde(default)]
+    pub self_id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `ContinueNumbersAcrossStories`. `None` ⇒ false (default).
+    #[serde(default)]
+    pub continue_across_stories: Option<bool>,
+    /// `ContinueNumbersAcrossDocuments` (round-trip only). `None` ⇒ false.
+    #[serde(default)]
+    pub continue_across_documents: Option<bool>,
+}
+
 /// Wire description of a colour group, mirroring `ColorGroupEntry`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -2376,6 +2420,25 @@ pub enum Operation {
     /// Delete a colour group; inverse `CreateColorGroup` restores it.
     DeleteColorGroup {
         group_id: String,
+    },
+    /// W1.22 (engine gap 22) — create a `<NumberingList>` resource.
+    /// Inverse: `DeleteNumberingList`. // rides v35 (added before first
+    /// consumer sync — v35 bumped in W1.23 but is not yet tagged /
+    /// published; highest tag is v0.34.0).
+    CreateNumberingList {
+        spec: NumberingListSpec,
+    },
+    /// W1.22 — replace a numbering list's name / continuity flags in
+    /// place. Inverse: `EditNumberingList` carrying the prior spec.
+    /// // rides v35.
+    EditNumberingList {
+        list_id: String,
+        spec: NumberingListSpec,
+    },
+    /// W1.22 — delete a numbering list; inverse `CreateNumberingList`
+    /// restores it. // rides v35.
+    DeleteNumberingList {
+        list_id: String,
     },
     /// Style-options editing — set one property on a *style definition*
     /// (not the selection). Reuses the `PropertyPath` + `Value`

@@ -32,10 +32,24 @@
 /// `^t` substitutions are snapped to the next tab stop by the
 /// existing `apply_tab_stops` pass; the default 36 pt grid gives a
 /// reasonable hanging indent without explicit `<TabList>`.
+///
+/// W1.22 — `cross_story_seed` carries cross-story numbering continuity
+/// (engine gap 22). When `Some(prior)`, the paragraph is bound to a
+/// `<NumberingList>` with `ContinueNumbersAcrossStories="true"` and
+/// `prior` is that list's last counter value from the document-level
+/// ledger. In that mode the implicit per-story reset is suppressed:
+/// the counter is seeded from `prior` so the first numbered paragraph
+/// of the list in a later story continues the sequence rather than
+/// restarting at 1. `None` ⇒ the legacy per-story scope (no named
+/// continue-across-stories list applies). `NumberingStartAt` still
+/// wins over the seed — an explicit restart is honoured even for a
+/// continued list (matches InDesign, where "Start At" overrides
+/// "Continue from Previous Number").
 pub(super) fn list_prefix(
     p: &paged_scene::ResolvedParagraphAttrs,
     counter: &mut u32,
     prev_was_numbered: &mut bool,
+    cross_story_seed: Option<u32>,
 ) -> Option<String> {
     match p.bullets_list_type.as_deref() {
         Some("BulletList") => {
@@ -74,6 +88,16 @@ pub(super) fn list_prefix(
                 // InDesign's UI which disallows entries < 1 but the
                 // schema permits them).
                 *counter = (start - 1).max(0) as u32;
+            } else if let Some(prior) = cross_story_seed {
+                // W1.22 — a ContinueNumbersAcrossStories list. Seed
+                // from the document-level ledger and DON'T apply the
+                // per-story implicit reset: the first numbered
+                // paragraph of this list in a later story must
+                // continue, not restart. `prev_was_numbered` is local
+                // to this story's emitter, so at story start it is
+                // false (no neighbour) — exactly the case the legacy
+                // branch would have reset; the ledger seed overrides it.
+                *counter = prior;
             } else if !*prev_was_numbered && p.numbering_continue != Some(true) {
                 *counter = 0;
             }

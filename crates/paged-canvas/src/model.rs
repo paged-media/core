@@ -2168,6 +2168,18 @@ impl CanvasModel {
             Mutation::DeleteColorGroup { group_id } => Some(Operation::DeleteColorGroup {
                 group_id: group_id.clone(),
             }),
+            // W1.22 (engine gap 22) — numbering-list CRUD, 1:1 with the
+            // matching Operation (collection-by-id, no NodeId resolve).
+            Mutation::CreateNumberingList { spec } => {
+                Some(Operation::CreateNumberingList { spec: spec.clone() })
+            }
+            Mutation::EditNumberingList { list_id, spec } => Some(Operation::EditNumberingList {
+                list_id: list_id.clone(),
+                spec: spec.clone(),
+            }),
+            Mutation::DeleteNumberingList { list_id } => Some(Operation::DeleteNumberingList {
+                list_id: list_id.clone(),
+            }),
             Mutation::CreateParagraphStyle {
                 self_id,
                 name,
@@ -4135,6 +4147,7 @@ impl CanvasModel {
                 self_id: self_id.clone(),
                 name: style.name.clone().unwrap_or_else(|| self_id.clone()),
                 based_on: style.based_on.clone(),
+                next_style: style.next_style.clone(),
             })
             .collect()
     }
@@ -4661,6 +4674,26 @@ impl CanvasModel {
             .collect()
     }
 
+    /// W1.22 (engine gap 22) — list every `<NumberingList>` resource
+    /// in the document. Backs `documentCollection:numberingLists`.
+    /// The editor's list-definitions surface renders this;
+    /// `continue_across_stories` drives cross-story numbering
+    /// continuity in the renderer.
+    pub fn numbering_lists(&self) -> Vec<crate::channel::NumberingListSummary> {
+        use crate::channel::NumberingListSummary;
+        self.scene
+            .styles
+            .numbering_lists
+            .iter()
+            .map(|(self_id, list)| NumberingListSummary {
+                self_id: self_id.clone(),
+                name: list.name.clone().unwrap_or_else(|| self_id.clone()),
+                continue_across_stories: list.continue_across_stories.unwrap_or(false),
+                continue_across_documents: list.continue_across_documents.unwrap_or(false),
+            })
+            .collect()
+    }
+
     /// SDK Phase 5 (v1 sweep) — list every placed-image link in the
     /// document. Walks every page-item kind that can host an image
     /// (Rectangle / Oval / Polygon) and collects `image_link`
@@ -4962,6 +4995,7 @@ impl CanvasModel {
             Inks => serde_json::to_value(self.inks()).unwrap_or_default(),
             Sections => serde_json::to_value(self.sections()).unwrap_or_default(),
             Stories => serde_json::to_value(self.stories()).unwrap_or_default(),
+            NumberingLists => serde_json::to_value(self.numbering_lists()).unwrap_or_default(),
         }
     }
 
@@ -6350,5 +6384,96 @@ mod tests {
         // No font registered → missing, but styles still populate from
         // the document content (the honest "styles in use" source).
         assert!(open_sans.is_missing);
+    }
+
+    // ── W1.22 (engine gap 22) — numbering-list read surface + next-style ──
+
+    /// Minimal IDML carrying a `<NumberingList>` resource and a
+    /// paragraph style with `NextStyle`, so the canvas read surfaces
+    /// can be exercised.
+    fn numbering_list_idml_bytes() -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file("mimetype", opts).unwrap();
+            zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+                .unwrap();
+            zip.start_file("designmap.xml", opts).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document DOMVersion="13.1" Self="d1">
+<idPkg:Styles src="Resources/Styles.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/>
+<idPkg:Spread src="Spreads/Spread_s1.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/>
+</Document>"#,
+            )
+            .unwrap();
+            zip.start_file("Resources/Styles.xml", opts).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+<RootNumberingListGroup>
+<NumberingList Self="NumberingList/Shared" Name="Shared" ContinueNumbersAcrossStories="true"/>
+</RootNumberingListGroup>
+<RootParagraphStyleGroup>
+<ParagraphStyle Self="ParagraphStyle/Head" Name="Head" NextStyle="ParagraphStyle/Body"/>
+<ParagraphStyle Self="ParagraphStyle/Body" Name="Body"/>
+</RootParagraphStyleGroup>
+</idPkg:Styles>"#,
+            )
+            .unwrap();
+            zip.start_file("Spreads/Spread_s1.xml", opts).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="13.1">
+<Spread Self="s1" PageCount="1">
+<Page Self="p1" Name="1" GeometricBounds="0 0 792 612" ItemTransform="1 0 0 1 0 0"/>
+</Spread></idPkg:Spread>"#,
+            )
+            .unwrap();
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn numbering_lists_collection_reports_continuity_flags() {
+        use crate::channel::CollectionName;
+        let bytes = numbering_list_idml_bytes();
+        let model = CanvasModel::load("doc-1", &bytes, CanvasOptions::default()).unwrap();
+        let lists = model.numbering_lists();
+        assert_eq!(lists.len(), 1);
+        assert_eq!(lists[0].self_id, "NumberingList/Shared");
+        assert_eq!(lists[0].name, "Shared");
+        assert!(lists[0].continue_across_stories);
+        assert!(!lists[0].continue_across_documents);
+        // The generic dispatcher routes "numberingLists" to the same shape.
+        let via_named = serde_json::to_value(model.numbering_lists()).unwrap();
+        let via_dispatch = model.collection(CollectionName::NumberingLists);
+        assert_eq!(via_named, via_dispatch);
+        // Round-trips through the CollectionName string form too.
+        assert_eq!(
+            CollectionName::from_str("numberingLists"),
+            Some(CollectionName::NumberingLists)
+        );
+    }
+
+    #[test]
+    fn paragraph_style_summary_exposes_next_style() {
+        let bytes = numbering_list_idml_bytes();
+        let model = CanvasModel::load("doc-1", &bytes, CanvasOptions::default()).unwrap();
+        let styles = model.paragraph_styles();
+        let head = styles
+            .iter()
+            .find(|s| s.self_id == "ParagraphStyle/Head")
+            .expect("Head style present");
+        assert_eq!(head.next_style.as_deref(), Some("ParagraphStyle/Body"));
+        let body = styles
+            .iter()
+            .find(|s| s.self_id == "ParagraphStyle/Body")
+            .expect("Body style present");
+        assert_eq!(body.next_style, None, "Body declares no NextStyle");
     }
 }

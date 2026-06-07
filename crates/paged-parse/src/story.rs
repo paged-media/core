@@ -233,6 +233,13 @@ pub struct Paragraph {
     /// this per-paragraph override is parser+mutate only until the
     /// composer reads it off the instance.
     pub numbering_format: Option<String>,
+    /// W1.22 — `AppliedNumberingList="NumberingList/<id>"` local
+    /// override on the `<ParagraphStyleRange>`. `None` ⇒ inherit the
+    /// named list from the applied paragraph style cascade. The
+    /// `ParagraphAppliedNumberingList` mutate path writes this; the
+    /// renderer resolves it (instance-over-cascade) to find the
+    /// list's cross-story continuity flag.
+    pub applied_numbering_list: Option<String>,
     /// `DropCapCharacters` count from `<ParagraphStyleRange>`. 0 ⇒ no
     /// drop cap (the IDML default). Local override of the cascaded
     /// paragraph style's drop-cap settings.
@@ -1240,6 +1247,13 @@ impl Story {
                                 bullets_list_type: attr(&e, b"BulletsAndNumberingListType"),
                                 bullet_character: None,
                                 numbering_format: attr(&e, b"NumberingFormat"),
+                                applied_numbering_list: match attr(&e, b"AppliedNumberingList")
+                                    .as_deref()
+                                {
+                                    Some("n") | Some("NumberingList/n") | Some("") => None,
+                                    Some(s) if s.ends_with("[No numbering list]") => None,
+                                    _ => attr(&e, b"AppliedNumberingList"),
+                                },
                                 drop_cap_characters: attr(&e, b"DropCapCharacters")
                                     .and_then(|s| s.parse().ok())
                                     .unwrap_or(0),

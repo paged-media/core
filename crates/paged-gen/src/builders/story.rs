@@ -64,6 +64,12 @@ pub struct Paragraph {
     /// `<ParagraphStyleRange>` — `"BulletList"`, `"NumberedList"`,
     /// or `"NoList"`. None ⇒ no bullet/number marker.
     pub bullets_list_type: Option<&'static str>,
+    /// W1.22 (engine gap 22) — `AppliedNumberingList` reference on the
+    /// `<ParagraphStyleRange>` (e.g. `"NumberingList/Shared"`). Binds
+    /// the paragraph to a named `<NumberingList>` resource so the
+    /// renderer can resolve its cross-story continuity flag. `None` ⇒
+    /// omit the attribute.
+    pub applied_numbering_list: Option<&'static str>,
     /// Inline bullet glyph override emitted as
     /// `<Properties><BulletChar BulletCharacterType="UnicodeWithFont"
     /// BulletCharacterValue="…"/></Properties>`. Useful for non-default
@@ -260,6 +266,7 @@ impl Paragraph {
             drop_cap_lines: None,
             tab_list: Vec::new(),
             bullets_list_type: None,
+            applied_numbering_list: None,
             bullet_character: None,
             runs: vec![Run {
                 text: text.into(),
@@ -333,6 +340,9 @@ pub fn write_story(s: &Story) -> Vec<u8> {
         }
         if let Some(blt) = paragraph.bullets_list_type {
             p_attrs.push(("BulletsAndNumberingListType", blt));
+        }
+        if let Some(anl) = paragraph.applied_numbering_list {
+            p_attrs.push(("AppliedNumberingList", anl));
         }
         if let Some(v) = paragraph.minimum_letter_spacing {
             min_ls_str = crate::xml::format_f32(v);

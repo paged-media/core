@@ -83,6 +83,8 @@ pub enum PropertyPathJson {
     FrameTextWrapMode,
     FrameTextWrapOffsets,
     ParagraphJustification,
+    ParagraphStyleNextStyle,
+    ParagraphAppliedNumberingList,
     FrameStrokeEndCap,
     FrameInsetSpacing,
     AppliedConditions,
@@ -290,6 +292,10 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::FrameTextWrapMode => PropertyPathJson::FrameTextWrapMode,
             PropertyPath::FrameTextWrapOffsets => PropertyPathJson::FrameTextWrapOffsets,
             PropertyPath::ParagraphJustification => PropertyPathJson::ParagraphJustification,
+            PropertyPath::ParagraphStyleNextStyle => PropertyPathJson::ParagraphStyleNextStyle,
+            PropertyPath::ParagraphAppliedNumberingList => {
+                PropertyPathJson::ParagraphAppliedNumberingList
+            }
             PropertyPath::FrameStrokeEndCap => PropertyPathJson::FrameStrokeEndCap,
             PropertyPath::FrameInsetSpacing => PropertyPathJson::FrameInsetSpacing,
             PropertyPath::AppliedConditions => PropertyPathJson::AppliedConditions,
@@ -537,6 +543,10 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::FrameTextWrapMode => PropertyPath::FrameTextWrapMode,
             PropertyPathJson::FrameTextWrapOffsets => PropertyPath::FrameTextWrapOffsets,
             PropertyPathJson::ParagraphJustification => PropertyPath::ParagraphJustification,
+            PropertyPathJson::ParagraphStyleNextStyle => PropertyPath::ParagraphStyleNextStyle,
+            PropertyPathJson::ParagraphAppliedNumberingList => {
+                PropertyPath::ParagraphAppliedNumberingList
+            }
             PropertyPathJson::FrameStrokeEndCap => PropertyPath::FrameStrokeEndCap,
             PropertyPathJson::FrameInsetSpacing => PropertyPath::FrameInsetSpacing,
             PropertyPathJson::AppliedConditions => PropertyPath::AppliedConditions,

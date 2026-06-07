@@ -277,6 +277,33 @@ pub fn styles_xml_with_stroke_styles(stroke_styles: &[StrokeStyleSpec]) -> Vec<u
     styles_xml_full(&[], stroke_styles)
 }
 
+/// W1.22 (engine gap 22) — `Resources/Styles.xml` carrying a single
+/// `<NumberingList Self="NumberingList/Shared">` resource (plus the
+/// default `[No ...]` styles). `continue_across_stories` toggles the
+/// list's `ContinueNumbersAcrossStories` flag — the numbering sample
+/// emits two variants (true / false) to exercise the renderer's
+/// cross-story continuity decision. Built by post-processing the
+/// default `styles_xml()` output: splice the `<RootNumberingListGroup>`
+/// in just before the closing `</idPkg:Styles>` tag so the existing
+/// builder family stays the single source of the default structure.
+pub fn styles_xml_with_numbering_list(continue_across_stories: bool) -> Vec<u8> {
+    let base = styles_xml();
+    let group = format!(
+        "<RootNumberingListGroup>\
+<NumberingList Self=\"NumberingList/Shared\" Name=\"Shared\" \
+ContinueNumbersAcrossStories=\"{continue_across_stories}\" \
+ContinueNumbersAcrossDocuments=\"false\"/>\
+</RootNumberingListGroup>"
+    );
+    let text = String::from_utf8(base).expect("styles_xml is valid utf-8");
+    let closing = "</idPkg:Styles>";
+    let spliced = match text.rfind(closing) {
+        Some(idx) => format!("{}{}{}", &text[..idx], group, &text[idx..]),
+        None => format!("{text}{group}"),
+    };
+    spliced.into_bytes()
+}
+
 /// Combined builder behind the [`styles_xml`] family — table styles
 /// and custom stroke styles in one `Resources/Styles.xml`.
 pub fn styles_xml_full(

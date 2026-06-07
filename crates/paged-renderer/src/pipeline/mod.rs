@@ -1914,6 +1914,30 @@ pub fn build_document(
         }
     }
 
+    // W1.22 (engine gap 22) — cross-story numbering ledger. When the
+    // document declares at least one `<NumberingList>` with
+    // `ContinueNumbersAcrossStories="true"`, paragraphs sharing that
+    // list keep counting across stories. The ledger (list id → last
+    // counter) lives here, outside the per-story loop, and is threaded
+    // into each story's emitter. Built lazily — `None`/empty when no
+    // such list exists, so the overwhelming-common case pays nothing
+    // and the per-story counter owns everything as before.
+    //
+    // Determinism: stories emit in `document.stories` order (designmap
+    // story order); the ledger is updated in that single forward walk.
+    // The footnote-reservation re-emit loop snapshots + restores the
+    // ledger around its passes (below) so a re-emit doesn't double the
+    // count, and the body-story emit cache is disabled for stories that
+    // touch a continue-across-stories list (a cache replay wouldn't
+    // re-run the ledger update). Same source bytes ⇒ same numbers.
+    let has_continue_across_stories = document
+        .styles
+        .numbering_lists
+        .values()
+        .any(|d| d.continue_across_stories == Some(true));
+    let cross_story_numbering: Option<std::cell::RefCell<HashMap<String, u32>>> =
+        has_continue_across_stories.then(|| std::cell::RefCell::new(HashMap::new()));
+
     for parsed in &document.stories {
         total_stats.stories += 1;
         let chain = document.frame_chain(&parsed.self_id);
@@ -1937,14 +1961,21 @@ pub fn build_document(
                     .unwrap_or(0)
             })
             .collect();
-        let cache_key: Option<(String, u64)> = if options.body_story_emit_cache.is_some() {
-            Some((
-                parsed.self_id.clone(),
-                body_story_signature(&chain, &chain_pages_pre, &wrap_rects_per_page),
-            ))
-        } else {
-            None
-        };
+        // W1.22 — a continue-across-stories list makes a story's
+        // numbering depend on the documents-order prefix of stories,
+        // not just its own frames/wrap; a cached splice replay wouldn't
+        // re-run the ledger update, so disable the cache document-wide
+        // when such a list exists (conservative, like the
+        // gradient/image-pool rule below).
+        let cache_key: Option<(String, u64)> =
+            if options.body_story_emit_cache.is_some() && cross_story_numbering.is_none() {
+                Some((
+                    parsed.self_id.clone(),
+                    body_story_signature(&chain, &chain_pages_pre, &wrap_rects_per_page),
+                ))
+            } else {
+                None
+            };
         if let (Some(ref key), Some(rc)) = (&cache_key, options.body_story_emit_cache) {
             if let Some(delta) = rc.borrow().get(key) {
                 // Defense in depth — the signature includes the chain's
@@ -2069,12 +2100,24 @@ pub fn build_document(
         let mut new_breaks: Vec<BreakRecord> = Vec::new();
         let mut new_diags: Vec<Diagnostic> = Vec::new();
 
+        // W1.22 — snapshot the cross-story numbering ledger so a
+        // footnote-reservation re-emit (pass > 0) restarts this story's
+        // numbering from the same pre-story state instead of counting
+        // on top of the previous pass's writes.
+        let cross_story_pre: Option<HashMap<String, u32>> =
+            cross_story_numbering.as_ref().map(|c| c.borrow().clone());
+
         for pass in 0..MAX_FOOTNOTE_RESERVE_PASSES {
             // Re-emit passes start from the pre-story snapshot so the
             // page accumulates exactly one story's worth of commands.
             if pass > 0 {
                 rollback_body_story(&mut pages, &pre_reset);
                 total_stats = pre_total_stats;
+                if let (Some(c), Some(pre)) =
+                    (cross_story_numbering.as_ref(), cross_story_pre.as_ref())
+                {
+                    *c.borrow_mut() = pre.clone();
+                }
             }
             let mut emitter = StoryEmitter::new(
                 document,
@@ -2097,6 +2140,12 @@ pub fn build_document(
             .with_page_count(total_page_count)
             .with_page_index_map(&page_index_map)
             .with_footnote_reservation(&reserved_64);
+            // W1.22 — thread the cross-story numbering ledger when one
+            // exists (only built for documents with a continue-across-
+            // stories list).
+            if let Some(ref ledger) = cross_story_numbering {
+                emitter = emitter.with_cross_story_numbering(ledger);
+            }
             // Phase 7 — capture each page's command count BEFORE this
             // story's emit so a post-pass can rotate the story's commands
             // when StoryDirection="VerticalWritingDirection".
@@ -2400,6 +2449,22 @@ struct StoryEmitter<'a> {
     /// unless the paragraph carries `NumberingContinue="true"` or
     /// `NumberingStartAt`.
     prev_was_numbered: bool,
+    /// W1.22 (engine gap 22) — document-level numbering ledger keyed
+    /// by `<NumberingList>` self id, shared across every story's
+    /// emitter so a list with `ContinueNumbersAcrossStories="true"`
+    /// keeps its counter as the body-story loop walks stories in
+    /// document order. `None` when the document declares no
+    /// continue-across-stories list (the common case) — the per-story
+    /// `numbered_counter` then owns everything as before. See
+    /// `numbering::list_prefix` and `build_document`'s ledger.
+    ///
+    /// Determinism: the ledger is updated in the FROM-SCRATCH emit
+    /// order, which is the `for parsed in &document.stories` walk =
+    /// designmap story order. Footnote-reservation re-emit passes and
+    /// the body-story cache are made ledger-safe by `build_document`
+    /// (snapshot/restore around re-emits; cross-story lists disable
+    /// the cache), so a given source always yields the same numbers.
+    cross_story_numbering: Option<&'a std::cell::RefCell<HashMap<String, u32>>>,
     /// `<StoryPreference OpticalMarginAlignment>` flag. When true,
     /// the per-line emit pass nudges the leftmost / rightmost glyph
     /// of each line outward per `paged_text::optical_margin_offset`.
@@ -2603,6 +2668,7 @@ impl<'a> StoryEmitter<'a> {
             paragraph_cmd_ranges: vec![Vec::new(); len],
             numbered_counter: 0,
             prev_was_numbered: false,
+            cross_story_numbering: None,
             optical_margin_alignment: false,
             optical_margin_size_pt: 0.0,
             anchored_recursion_depth: 0,
@@ -2636,6 +2702,18 @@ impl<'a> StoryEmitter<'a> {
 
     fn with_story_id(mut self, story_id: &str) -> Self {
         self.current_story_id = story_id.to_string();
+        self
+    }
+
+    /// W1.22 — wire the document-level numbering ledger so
+    /// `list_prefix` can carry a `ContinueNumbersAcrossStories` list's
+    /// counter across story boundaries. Only set by `build_document`'s
+    /// body-story pass when the document declares such a list.
+    fn with_cross_story_numbering(
+        mut self,
+        ledger: &'a std::cell::RefCell<HashMap<String, u32>>,
+    ) -> Self {
+        self.cross_story_numbering = Some(ledger);
         self
     }
 
@@ -3493,10 +3571,31 @@ fn emit_paragraph_into_chain(
     // follow-up — the parser fields are in place. IDML serialises
     // tabs in BulletsTextAfter as the literal `^t` two-byte
     // sequence — expand to a real `\t` so apply_tab_stops snaps it.
+    // W1.22 — resolve whether this paragraph's named NumberingList
+    // wants cross-story continuity. When it does, seed the counter
+    // from the document-level ledger (so a list spanning stories keeps
+    // counting) and write the post-increment value back afterwards.
+    // `None` keeps the legacy per-story scope.
+    let cross_story_list_id: Option<&str> = resolved_paragraph
+        .applied_numbering_list
+        .as_deref()
+        .filter(|id| {
+            em.document
+                .styles
+                .numbering_lists
+                .get(*id)
+                .and_then(|def| def.continue_across_stories)
+                .unwrap_or(false)
+        });
+    let cross_story_seed: Option<u32> = match (cross_story_list_id, em.cross_story_numbering) {
+        (Some(id), Some(ledger)) => Some(ledger.borrow().get(id).copied().unwrap_or(0)),
+        _ => None,
+    };
     let list_first_text: Option<String> = list_prefix(
         &resolved_paragraph,
         &mut em.numbered_counter,
         &mut em.prev_was_numbered,
+        cross_story_seed,
     )
     .and_then(|prefix| {
         paragraph
@@ -3504,6 +3603,22 @@ fn emit_paragraph_into_chain(
             .first()
             .map(|r| format!("{prefix}{}", r.text))
     });
+    // Save the post-increment counter back to the ledger so the next
+    // story sharing this list continues from here. Only writes for a
+    // numbered paragraph that actually advanced the counter (the
+    // prefix was emitted); a bullet / NoList paragraph in the same
+    // list leaves the ledger untouched.
+    let advanced_numbered = list_first_text.is_some()
+        && resolved_paragraph.bullets_list_type.as_deref() == Some("NumberedList");
+    if let (Some(id), Some(ledger), true) = (
+        cross_story_list_id,
+        em.cross_story_numbering,
+        advanced_numbered,
+    ) {
+        ledger
+            .borrow_mut()
+            .insert(id.to_string(), em.numbered_counter);
+    }
 
     // Substitute IDML auto-page-number markers with the current
     // page number. The parser leaves a private-use sentinel in
@@ -5690,6 +5805,7 @@ fn split_paragraph_at_breaks(paragraph: &paged_parse::Paragraph) -> Vec<paged_pa
         bullets_list_type: paragraph.bullets_list_type.clone(),
         bullet_character: paragraph.bullet_character,
         numbering_format: paragraph.numbering_format.clone(),
+        applied_numbering_list: paragraph.applied_numbering_list.clone(),
         // Drop-cap + anchored frames carry on the FIRST sub-paragraph
         // only; the splits below clone from the source paragraph and
         // overwrite these to defaults so the cap doesn't repeat.
@@ -5763,6 +5879,7 @@ fn split_paragraph_at_breaks(paragraph: &paged_parse::Paragraph) -> Vec<paged_pa
                     bullets_list_type: paragraph.bullets_list_type.clone(),
                     bullet_character: paragraph.bullet_character,
                     numbering_format: paragraph.numbering_format.clone(),
+                    applied_numbering_list: paragraph.applied_numbering_list.clone(),
                     // Drop cap + anchored frames are first-paragraph-only;
                     // sub-paragraphs after a `\n` reset to defaults.
                     drop_cap_characters: 0,
@@ -5850,6 +5967,7 @@ fn split_paragraph_at_breaks(paragraph: &paged_parse::Paragraph) -> Vec<paged_pa
             bullets_list_type: paragraph.bullets_list_type.clone(),
             bullet_character: paragraph.bullet_character,
             numbering_format: paragraph.numbering_format.clone(),
+            applied_numbering_list: paragraph.applied_numbering_list.clone(),
             // All-`\n` source paragraph: defensive placeholder.
             // Drop cap + anchored frames don't apply to a glyph-less
             // paragraph; default them.
@@ -8991,6 +9109,7 @@ mod tests {
             &attrs(Some("BulletList"), Some(0x2022), Some(" ")),
             &mut counter,
             &mut prev_numbered,
+            None,
         )
         .unwrap();
         assert_eq!(p, "\u{2022} ");
@@ -9005,6 +9124,7 @@ mod tests {
             &attrs(Some("BulletList"), Some(0x2022), Some("^t")),
             &mut counter,
             &mut prev_numbered,
+            None,
         )
         .unwrap();
         assert_eq!(p, "\u{2022}\t");
@@ -9017,7 +9137,8 @@ mod tests {
         assert!(list_prefix(
             &attrs(Some("NoList"), None, None),
             &mut counter,
-            &mut prev_numbered
+            &mut prev_numbered,
+            None
         )
         .is_none());
         // NoList shouldn't damage a sticky counter — a follow-on
@@ -9033,15 +9154,15 @@ mod tests {
         let attrs = attrs(Some("NumberedList"), None, None);
         // Default expression `^#.^t` ⇒ "<n>.\t".
         assert_eq!(
-            list_prefix(&attrs, &mut counter, &mut prev_numbered).as_deref(),
+            list_prefix(&attrs, &mut counter, &mut prev_numbered, None).as_deref(),
             Some("1.\t")
         );
         assert_eq!(
-            list_prefix(&attrs, &mut counter, &mut prev_numbered).as_deref(),
+            list_prefix(&attrs, &mut counter, &mut prev_numbered, None).as_deref(),
             Some("2.\t")
         );
         assert_eq!(
-            list_prefix(&attrs, &mut counter, &mut prev_numbered).as_deref(),
+            list_prefix(&attrs, &mut counter, &mut prev_numbered, None).as_deref(),
             Some("3.\t")
         );
         assert_eq!(counter, 3);
@@ -9054,12 +9175,12 @@ mod tests {
         let mut prev_numbered = false;
         let n = attrs(Some("NumberedList"), None, None);
         let none = attrs(None, None, None);
-        list_prefix(&n, &mut counter, &mut prev_numbered); // 1.
-        list_prefix(&n, &mut counter, &mut prev_numbered); // 2.
-        list_prefix(&none, &mut counter, &mut prev_numbered); // clears prev_numbered, counter sticky
+        list_prefix(&n, &mut counter, &mut prev_numbered, None); // 1.
+        list_prefix(&n, &mut counter, &mut prev_numbered, None); // 2.
+        list_prefix(&none, &mut counter, &mut prev_numbered, None); // clears prev_numbered, counter sticky
         assert!(!prev_numbered);
         assert_eq!(
-            list_prefix(&n, &mut counter, &mut prev_numbered).as_deref(),
+            list_prefix(&n, &mut counter, &mut prev_numbered, None).as_deref(),
             Some("1.\t"),
             "default behaviour: counter resets when prev wasn't numbered"
         );
@@ -9076,11 +9197,12 @@ mod tests {
             &attrs(Some("BulletList"), Some(0x2022), Some(" ")),
             &mut counter,
             &mut prev_numbered,
+            None,
         );
         assert!(!prev_numbered);
         let n = attrs(Some("NumberedList"), None, None);
         assert_eq!(
-            list_prefix(&n, &mut counter, &mut prev_numbered).as_deref(),
+            list_prefix(&n, &mut counter, &mut prev_numbered, None).as_deref(),
             Some("1.\t")
         );
     }
@@ -9096,6 +9218,7 @@ mod tests {
             &attrs(Some("BulletList"), None, Some(" ")),
             &mut counter,
             &mut prev_numbered,
+            None,
         );
         assert_eq!(prefix.as_deref(), Some("\u{2022} "));
     }
@@ -9108,18 +9231,18 @@ mod tests {
         let mut a = attrs(Some("NumberedList"), None, None);
         a.numbering_start_at = Some(5);
         assert_eq!(
-            list_prefix(&a, &mut counter, &mut prev_numbered).as_deref(),
+            list_prefix(&a, &mut counter, &mut prev_numbered, None).as_deref(),
             Some("5.\t")
         );
         // StartAt only fires on paragraph entry; once it's been
         // applied, drop it for the next paragraph.
         a.numbering_start_at = None;
         assert_eq!(
-            list_prefix(&a, &mut counter, &mut prev_numbered).as_deref(),
+            list_prefix(&a, &mut counter, &mut prev_numbered, None).as_deref(),
             Some("6.\t")
         );
         assert_eq!(
-            list_prefix(&a, &mut counter, &mut prev_numbered).as_deref(),
+            list_prefix(&a, &mut counter, &mut prev_numbered, None).as_deref(),
             Some("7.\t")
         );
     }
@@ -9131,17 +9254,17 @@ mod tests {
         let mut counter = 0;
         let mut prev_numbered = false;
         let plain = attrs(Some("NumberedList"), None, None);
-        list_prefix(&plain, &mut counter, &mut prev_numbered); // 1.
-        list_prefix(&plain, &mut counter, &mut prev_numbered); // 2.
+        list_prefix(&plain, &mut counter, &mut prev_numbered, None); // 1.
+        list_prefix(&plain, &mut counter, &mut prev_numbered, None); // 2.
         let mut jumped = attrs(Some("NumberedList"), None, None);
         jumped.numbering_start_at = Some(10);
         assert_eq!(
-            list_prefix(&jumped, &mut counter, &mut prev_numbered).as_deref(),
+            list_prefix(&jumped, &mut counter, &mut prev_numbered, None).as_deref(),
             Some("10.\t")
         );
         // Subsequent plain paragraphs continue off the jump.
         assert_eq!(
-            list_prefix(&plain, &mut counter, &mut prev_numbered).as_deref(),
+            list_prefix(&plain, &mut counter, &mut prev_numbered, None).as_deref(),
             Some("11.\t")
         );
     }
@@ -9154,17 +9277,18 @@ mod tests {
         let mut counter = 0;
         let mut prev_numbered = false;
         let plain = attrs(Some("NumberedList"), None, None);
-        list_prefix(&plain, &mut counter, &mut prev_numbered); // 1.
-        list_prefix(&plain, &mut counter, &mut prev_numbered); // 2.
+        list_prefix(&plain, &mut counter, &mut prev_numbered, None); // 1.
+        list_prefix(&plain, &mut counter, &mut prev_numbered, None); // 2.
         list_prefix(
             &attrs(Some("BulletList"), Some(0x2022), Some(" ")),
             &mut counter,
             &mut prev_numbered,
+            None,
         );
         let mut cont = attrs(Some("NumberedList"), None, None);
         cont.numbering_continue = Some(true);
         assert_eq!(
-            list_prefix(&cont, &mut counter, &mut prev_numbered).as_deref(),
+            list_prefix(&cont, &mut counter, &mut prev_numbered, None).as_deref(),
             Some("3.\t"),
             "NumberingContinue suppresses the implicit reset"
         );
@@ -9172,15 +9296,16 @@ mod tests {
         // the same scenario would have restarted at 1.
         let mut counter2 = 0;
         let mut prev2 = false;
-        list_prefix(&plain, &mut counter2, &mut prev2); // 1.
-        list_prefix(&plain, &mut counter2, &mut prev2); // 2.
+        list_prefix(&plain, &mut counter2, &mut prev2, None); // 1.
+        list_prefix(&plain, &mut counter2, &mut prev2, None); // 2.
         list_prefix(
             &attrs(Some("BulletList"), Some(0x2022), Some(" ")),
             &mut counter2,
             &mut prev2,
+            None,
         );
         assert_eq!(
-            list_prefix(&plain, &mut counter2, &mut prev2).as_deref(),
+            list_prefix(&plain, &mut counter2, &mut prev2, None).as_deref(),
             Some("1.\t"),
             "without NumberingContinue the count resets"
         );
@@ -9194,12 +9319,40 @@ mod tests {
         let mut a = attrs(Some("NumberedList"), None, None);
         a.numbering_expression = Some("Step ^# of 5^t".to_string());
         assert_eq!(
-            list_prefix(&a, &mut counter, &mut prev_numbered).as_deref(),
+            list_prefix(&a, &mut counter, &mut prev_numbered, None).as_deref(),
             Some("Step 1 of 5\t")
         );
         assert_eq!(
-            list_prefix(&a, &mut counter, &mut prev_numbered).as_deref(),
+            list_prefix(&a, &mut counter, &mut prev_numbered, None).as_deref(),
             Some("Step 2 of 5\t")
+        );
+    }
+
+    #[test]
+    fn list_prefix_cross_story_seed_continues_and_suppresses_reset() {
+        // W1.22 — a ContinueNumbersAcrossStories list. The first
+        // numbered paragraph of a fresh story emitter has
+        // prev_was_numbered=false (no neighbour), which WITHOUT the
+        // seed would reset to "1". With `cross_story_seed = Some(2)`
+        // (the ledger's last value) it must continue at "3".
+        let n = attrs(Some("NumberedList"), None, None);
+        let mut counter = 0; // fresh per-story emitter
+        let mut prev_numbered = false; // story start
+        assert_eq!(
+            list_prefix(&n, &mut counter, &mut prev_numbered, Some(2)).as_deref(),
+            Some("3.\t"),
+            "cross-story seed of 2 must continue at 3, not reset to 1",
+        );
+        assert_eq!(counter, 3, "counter advances off the seed");
+        // NumberingStartAt still wins over the seed (explicit restart).
+        let mut started = attrs(Some("NumberedList"), None, None);
+        started.numbering_start_at = Some(10);
+        let mut counter2 = 0;
+        let mut prev2 = false;
+        assert_eq!(
+            list_prefix(&started, &mut counter2, &mut prev2, Some(5)).as_deref(),
+            Some("10.\t"),
+            "explicit NumberingStartAt overrides the cross-story seed",
         );
     }
 
@@ -9298,15 +9451,15 @@ mod tests {
         let mut a = attrs(Some("NumberedList"), None, None);
         a.numbering_format = Some("I, II, III, IV...".to_string());
         assert_eq!(
-            list_prefix(&a, &mut counter, &mut prev_numbered).as_deref(),
+            list_prefix(&a, &mut counter, &mut prev_numbered, None).as_deref(),
             Some("I.\t")
         );
         assert_eq!(
-            list_prefix(&a, &mut counter, &mut prev_numbered).as_deref(),
+            list_prefix(&a, &mut counter, &mut prev_numbered, None).as_deref(),
             Some("II.\t")
         );
         assert_eq!(
-            list_prefix(&a, &mut counter, &mut prev_numbered).as_deref(),
+            list_prefix(&a, &mut counter, &mut prev_numbered, None).as_deref(),
             Some("III.\t")
         );
     }

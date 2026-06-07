@@ -98,6 +98,16 @@ pub struct StyleSheet {
     /// preview", "Online preview"). Empty when the IDML declares
     /// no condition sets.
     pub condition_sets: BTreeMap<String, ConditionSetDef>,
+    /// W1.22 (engine gap 22) — `<NumberingList>` resources. A named
+    /// list definition paragraphs bind to via `AppliedNumberingList`;
+    /// its `continue_across_stories` / `continue_across_documents`
+    /// flags control whether the renderer's numbering counter carries
+    /// forward when the same list spans multiple stories. Empty when
+    /// the IDML declares no numbered lists. Lives in `Resources/
+    /// Styles.xml` alongside `<Condition>` (and inside the optional
+    /// `<RootNumberingListGroup>` wrapper InDesign sometimes emits) —
+    /// mirrors the `conditions` table's home.
+    pub numbering_lists: BTreeMap<String, NumberingListDef>,
 }
 
 /// IDML `<Condition>` — a named visibility toggle that can be applied
@@ -131,6 +141,32 @@ pub struct ConditionSetDef {
     /// IDs in the special namespace). Stored as-parsed; the
     /// editor de-dupes for display.
     pub conditions: Vec<String>,
+}
+
+/// W1.22 (engine gap 22) — IDML `<NumberingList>` resource. A named
+/// list definition. Paragraphs reference one via
+/// `AppliedNumberingList="NumberingList/<self_id>"`; the numbering
+/// counter for that list is scoped per the continuity flags below.
+///
+/// `ContinueNumbersAcrossStories` is the field that matters to the
+/// renderer: when `true`, paragraphs sharing this list keep counting
+/// across story boundaries (in document story order) instead of
+/// restarting at 1 in each story. `ContinueNumbersAcrossDocuments`
+/// is captured for round-trip only — a single rendered document has
+/// no neighbouring document to continue from, so the renderer treats
+/// it as a no-op (documented in `numbering.rs`).
+#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+pub struct NumberingListDef {
+    pub self_id: String,
+    pub name: Option<String>,
+    /// `ContinueNumbersAcrossStories="true|false"`. Default: false
+    /// (`None` ⇒ each story restarts — InDesign's default for a new
+    /// list). When true, the renderer carries the counter forward
+    /// across stories that share this list.
+    pub continue_across_stories: Option<bool>,
+    /// `ContinueNumbersAcrossDocuments="true|false"`. Round-trip only;
+    /// see the struct doc. Default: false.
+    pub continue_across_documents: Option<bool>,
 }
 
 /// Custom stroke-style definition. The renderer consumes the
@@ -757,6 +793,26 @@ pub struct ParagraphStyleDef {
     /// `false`, the counter resets at the start of this paragraph.
     /// `None` ⇒ inherit; the renderer's default is "continue".
     pub numbering_continue: Option<bool>,
+    /// W1.22 — `AppliedNumberingList="NumberingList/<id>"`. Binds the
+    /// paragraph (via the style cascade) to a named `<NumberingList>`
+    /// resource. The renderer reads the list's
+    /// `ContinueNumbersAcrossStories` flag off this reference to
+    /// decide cross-story numbering continuity. `None` ⇒ no named
+    /// list (the paragraph still numbers, but the counter is scoped
+    /// per story as before). IDML's literal "no list" sentinel
+    /// `n` / `NumberingList/$ID/[No numbering list]` normalises to
+    /// `None`.
+    pub applied_numbering_list: Option<String>,
+    /// styles.next-style — `NextStyle="ParagraphStyle/<id>"`. The
+    /// style InDesign applies to the FOLLOWING paragraph when the
+    /// user presses Enter at this paragraph's end (the "Next Style"
+    /// field in the paragraph-style options dialog). The renderer
+    /// does not act on this — it is a typing-time editor behaviour —
+    /// but the data is surfaced so the editor can implement the flow.
+    /// `None` ⇒ no chaining (InDesign defaults this to "[Same style]"
+    /// which serialises as the style's own self id; that self-loop is
+    /// preserved verbatim, the editor reads it as "stay").
+    pub next_style: Option<String>,
     /// `Hyphenation` boolean. IDML default is true; the resolver
     /// only flips a paragraph off when an explicit `Hyphenation="false"`
     /// lands on the cascade. Drives whether the composer registers a
@@ -1002,6 +1058,12 @@ pub struct ResolvedParagraph {
     /// `NumberingContinue` flag. See
     /// `ParagraphStyleDef::numbering_continue`.
     pub numbering_continue: Option<bool>,
+    /// W1.22 — cascaded `AppliedNumberingList` ref. See
+    /// [`ParagraphStyleDef::applied_numbering_list`].
+    pub applied_numbering_list: Option<String>,
+    /// styles.next-style — cascaded `NextStyle` ref. See
+    /// [`ParagraphStyleDef::next_style`].
+    pub next_style: Option<String>,
     pub hyphenation: Option<bool>,
     /// Cascaded `HyphenationZone` in pt. See
     /// [`ParagraphStyleDef::hyphenation_zone`].
@@ -1170,6 +1232,11 @@ impl StyleSheet {
                     b"ConditionSet" => {
                         if let Some(def) = parse_condition_set(&e) {
                             out.condition_sets.insert(def.self_id.clone(), def);
+                        }
+                    }
+                    b"NumberingList" => {
+                        if let Some(def) = parse_numbering_list(&e) {
+                            out.numbering_lists.insert(def.self_id.clone(), def);
                         }
                     }
                     b"TOCStyleEntry" => {
@@ -1380,6 +1447,11 @@ impl StyleSheet {
                     b"ConditionSet" => {
                         if let Some(def) = parse_condition_set(&e) {
                             out.condition_sets.insert(def.self_id.clone(), def);
+                        }
+                    }
+                    b"NumberingList" => {
+                        if let Some(def) = parse_numbering_list(&e) {
+                            out.numbering_lists.insert(def.self_id.clone(), def);
                         }
                     }
                     b"BulletChar" => {
@@ -1760,6 +1832,12 @@ impl ResolvedParagraph {
         }
         self.numbering_start_at = self.numbering_start_at.or(def.numbering_start_at);
         self.numbering_continue = self.numbering_continue.or(def.numbering_continue);
+        if self.applied_numbering_list.is_none() {
+            self.applied_numbering_list = def.applied_numbering_list.clone();
+        }
+        if self.next_style.is_none() {
+            self.next_style = def.next_style.clone();
+        }
         self.hyphenation = self.hyphenation.or(def.hyphenation);
         self.hyphenation_zone = self.hyphenation_zone.or(def.hyphenation_zone);
         if self.applied_language.is_none() {
@@ -1989,6 +2067,19 @@ fn parse_condition_set(e: &quick_xml::events::BytesStart) -> Option<ConditionSet
     })
 }
 
+/// W1.22 — parse one `<NumberingList>` resource. Returns `None` when
+/// `Self` is missing (unaddressable). Mirrors `parse_condition`.
+fn parse_numbering_list(e: &quick_xml::events::BytesStart) -> Option<NumberingListDef> {
+    Some(NumberingListDef {
+        self_id: attr(e, b"Self")?,
+        name: attr(e, b"Name"),
+        continue_across_stories: attr(e, b"ContinueNumbersAcrossStories")
+            .and_then(|s| s.parse().ok()),
+        continue_across_documents: attr(e, b"ContinueNumbersAcrossDocuments")
+            .and_then(|s| s.parse().ok()),
+    })
+}
+
 fn parse_table_style(e: &quick_xml::events::BytesStart) -> Option<TableStyleDef> {
     let self_id = attr(e, b"Self")?;
     let normalize = |c: Option<String>| match c.as_deref() {
@@ -2210,6 +2301,15 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         numbering_expression: attr(e, b"NumberingExpression"),
         numbering_start_at: attr(e, b"NumberingStartAt").and_then(|s| s.parse().ok()),
         numbering_continue: attr(e, b"NumberingContinue").and_then(|s| s.parse().ok()),
+        // W1.22 — `n` and the `[No numbering list]` default both mean
+        // "no named list"; normalise so a `BasedOn` cascade doesn't
+        // pin a paragraph to the sentinel.
+        applied_numbering_list: match attr(e, b"AppliedNumberingList").as_deref() {
+            Some("n") | Some("NumberingList/n") | Some("") => None,
+            Some(s) if s.ends_with("[No numbering list]") => None,
+            _ => attr(e, b"AppliedNumberingList"),
+        },
+        next_style: attr(e, b"NextStyle"),
         hyphenation: attr(e, b"Hyphenation").and_then(|s| s.parse().ok()),
         hyphenation_zone: attr(e, b"HyphenationZone").and_then(|s| s.parse().ok()),
         applied_language: attr(e, b"AppliedLanguage"),
@@ -3071,5 +3171,82 @@ mod tests {
         assert_eq!(wavy.wave_width, Some(0.5));
         assert_eq!(wavy.wave_length, Some(1.5));
         assert!(wavy.stripes.is_empty());
+    }
+
+    // ── W1.22 (engine gap 22) — NumberingList resources + NextStyle ──
+
+    #[test]
+    fn parses_numbering_list_resources() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <RootNumberingListGroup>
+    <NumberingList Self="NumberingList/Steps"
+                   Name="Steps"
+                   ContinueNumbersAcrossStories="true"
+                   ContinueNumbersAcrossDocuments="false"/>
+  </RootNumberingListGroup>
+  <NumberingList Self="NumberingList/Local"
+                 Name="Local"
+                 ContinueNumbersAcrossStories="false"/>
+</idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        assert_eq!(s.numbering_lists.len(), 2);
+        let steps = s.numbering_lists.get("NumberingList/Steps").unwrap();
+        assert_eq!(steps.name.as_deref(), Some("Steps"));
+        assert_eq!(steps.continue_across_stories, Some(true));
+        assert_eq!(steps.continue_across_documents, Some(false));
+        let local = s.numbering_lists.get("NumberingList/Local").unwrap();
+        assert_eq!(local.continue_across_stories, Some(false));
+    }
+
+    #[test]
+    fn parses_applied_numbering_list_and_next_style_on_paragraph_style() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <RootParagraphStyleGroup>
+    <ParagraphStyle Self="ParagraphStyle/Step"
+                    Name="Step"
+                    AppliedNumberingList="NumberingList/Steps"
+                    NextStyle="ParagraphStyle/Body"/>
+    <ParagraphStyle Self="ParagraphStyle/NoneList"
+                    Name="NoneList"
+                    AppliedNumberingList="NumberingList/$ID/[No numbering list]"/>
+    <ParagraphStyle Self="ParagraphStyle/Body" Name="Body"/>
+  </RootParagraphStyleGroup>
+</idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let step = s.paragraph_styles.get("ParagraphStyle/Step").unwrap();
+        assert_eq!(
+            step.applied_numbering_list.as_deref(),
+            Some("NumberingList/Steps")
+        );
+        assert_eq!(step.next_style.as_deref(), Some("ParagraphStyle/Body"));
+        // The "[No numbering list]" sentinel normalises to None so the
+        // cascade can fall through.
+        let none = s.paragraph_styles.get("ParagraphStyle/NoneList").unwrap();
+        assert_eq!(none.applied_numbering_list, None);
+    }
+
+    #[test]
+    fn next_style_and_applied_numbering_list_cascade_through_based_on() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <RootParagraphStyleGroup>
+    <ParagraphStyle Self="ParagraphStyle/Base"
+                    Name="Base"
+                    AppliedNumberingList="NumberingList/Steps"
+                    NextStyle="ParagraphStyle/Base"/>
+    <ParagraphStyle Self="ParagraphStyle/Child"
+                    Name="Child"
+                    BasedOn="ParagraphStyle/Base"/>
+  </RootParagraphStyleGroup>
+</idPkg:Styles>"#;
+        let s = StyleSheet::parse(xml).unwrap();
+        let r = s.resolve_paragraph("ParagraphStyle/Child");
+        assert_eq!(
+            r.applied_numbering_list.as_deref(),
+            Some("NumberingList/Steps")
+        );
+        assert_eq!(r.next_style.as_deref(), Some("ParagraphStyle/Base"));
     }
 }

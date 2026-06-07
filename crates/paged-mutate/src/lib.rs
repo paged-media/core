@@ -61,8 +61,9 @@ pub use history::{History, DEFAULT_HISTORY_CAPACITY};
 pub use notify::Notifier;
 pub use operation::{
     AppliedOperation, ColorGroupSpec, FieldKind, GradientSpec, GradientStopSpec, GroupSpec,
-    GuideOrientationSpec, InvalidationHint, NodeId, NodeSpec, Operation, PathPointAddress,
-    PathPointRole, PathfinderKind, PropertyPath, StyleCollection, StyleScope, SwatchSpec, Value,
+    GuideOrientationSpec, InvalidationHint, NodeId, NodeSpec, NumberingListSpec, Operation,
+    PathPointAddress, PathPointRole, PathfinderKind, PropertyPath, StyleCollection, StyleScope,
+    SwatchSpec, Value,
 };
 pub use path_math::fit_polyline_to_anchors;
 
@@ -988,6 +989,149 @@ mod tests {
         assert_eq!(
             project.document().palette.color_groups["ColorGroup/Brand"].members,
             vec!["Color/Red".to_string(), "Color/Blue".to_string()]
+        );
+    }
+
+    // ── W1.22 (engine gap 22) — numbering-list CRUD + next-style ──────
+
+    #[test]
+    fn numbering_list_crud_round_trips() {
+        use crate::operation::NumberingListSpec;
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        // Create with an explicit id + continue-across-stories on.
+        project
+            .apply(Operation::CreateNumberingList {
+                spec: NumberingListSpec {
+                    self_id: Some("NumberingList/Steps".to_string()),
+                    name: Some("Steps".to_string()),
+                    continue_across_stories: Some(true),
+                    continue_across_documents: None,
+                },
+            })
+            .unwrap();
+        assert_eq!(
+            project.document().styles.numbering_lists["NumberingList/Steps"]
+                .continue_across_stories,
+            Some(true)
+        );
+        // Edit: flip the flag off + rename.
+        project
+            .apply(Operation::EditNumberingList {
+                list_id: "NumberingList/Steps".to_string(),
+                spec: NumberingListSpec {
+                    self_id: Some("NumberingList/Steps".to_string()),
+                    name: Some("Steps (local)".to_string()),
+                    continue_across_stories: Some(false),
+                    continue_across_documents: None,
+                },
+            })
+            .unwrap();
+        assert_eq!(
+            project.document().styles.numbering_lists["NumberingList/Steps"]
+                .continue_across_stories,
+            Some(false)
+        );
+        // Undo the edit → flag back on, name back.
+        project.undo().unwrap().expect("undo edit");
+        let after = &project.document().styles.numbering_lists["NumberingList/Steps"];
+        assert_eq!(after.continue_across_stories, Some(true));
+        assert_eq!(after.name.as_deref(), Some("Steps"));
+        // Delete, then undo restores the full def.
+        project
+            .apply(Operation::DeleteNumberingList {
+                list_id: "NumberingList/Steps".to_string(),
+            })
+            .unwrap();
+        assert!(!project
+            .document()
+            .styles
+            .numbering_lists
+            .contains_key("NumberingList/Steps"));
+        project.undo().unwrap().expect("undo delete");
+        assert_eq!(
+            project.document().styles.numbering_lists["NumberingList/Steps"]
+                .continue_across_stories,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn set_style_property_next_style_round_trips() {
+        use crate::operation::StyleCollection;
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        project
+            .apply(Operation::CreateParagraphStyle {
+                self_id: Some("ParagraphStyle/Head".to_string()),
+                name: Some("Head".to_string()),
+                based_on: None,
+                restore_json: None,
+            })
+            .unwrap();
+        // Set NextStyle.
+        project
+            .apply(Operation::SetStyleProperty {
+                collection: StyleCollection::Paragraph,
+                style_id: "ParagraphStyle/Head".to_string(),
+                path: PropertyPath::ParagraphStyleNextStyle,
+                value: Value::Text("ParagraphStyle/Body".to_string()),
+            })
+            .unwrap();
+        assert_eq!(
+            project.document().styles.paragraph_styles["ParagraphStyle/Head"]
+                .next_style
+                .as_deref(),
+            Some("ParagraphStyle/Body")
+        );
+        // Empty string clears it.
+        project
+            .apply(Operation::SetStyleProperty {
+                collection: StyleCollection::Paragraph,
+                style_id: "ParagraphStyle/Head".to_string(),
+                path: PropertyPath::ParagraphStyleNextStyle,
+                value: Value::Text(String::new()),
+            })
+            .unwrap();
+        assert_eq!(
+            project.document().styles.paragraph_styles["ParagraphStyle/Head"].next_style,
+            None
+        );
+        // Undo the clear → back to Body.
+        project.undo().unwrap().expect("undo clear");
+        assert_eq!(
+            project.document().styles.paragraph_styles["ParagraphStyle/Head"]
+                .next_style
+                .as_deref(),
+            Some("ParagraphStyle/Body")
+        );
+    }
+
+    #[test]
+    fn paragraph_applied_numbering_list_round_trips_on_story_range() {
+        // ParagraphAppliedNumberingList writes the per-paragraph
+        // override; the range rounds to whole paragraphs. Undo restores
+        // the prior (absent) value.
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let applied = project
+            .apply(Operation::SetProperty {
+                node: NodeId::StoryRange {
+                    story_id: "Story/u1".to_string(),
+                    start: 0,
+                    end: 6,
+                },
+                path: PropertyPath::ParagraphAppliedNumberingList,
+                value: Value::Text("NumberingList/Steps".to_string()),
+            })
+            .expect("apply must succeed");
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0]
+                .applied_numbering_list
+                .as_deref(),
+            Some("NumberingList/Steps")
+        );
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].applied_numbering_list,
+            None
         );
     }
 

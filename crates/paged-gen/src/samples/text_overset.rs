@@ -99,6 +99,7 @@ fn inter_paragraph(text: &str) -> Paragraph {
         drop_cap_lines: None,
         tab_list: Vec::new(),
         bullets_list_type: None,
+        applied_numbering_list: None,
         bullet_character: None,
         table: None,
         minimum_letter_spacing: None,

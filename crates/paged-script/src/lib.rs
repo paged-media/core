@@ -651,6 +651,8 @@ fn parse_property_path(s: &str) -> Option<paged_mutate::PropertyPath> {
         "appliedConditions" => AppliedConditions,
         "frameInsetSpacing" => FrameInsetSpacing,
         "paragraphJustification" => ParagraphJustification,
+        "paragraphStyleNextStyle" => ParagraphStyleNextStyle,
+        "paragraphAppliedNumberingList" => ParagraphAppliedNumberingList,
         "frameStrokeEndCap" => FrameStrokeEndCap,
         "frameTextWrapMode" => FrameTextWrapMode,
         "frameTextWrapOffsets" => FrameTextWrapOffsets,
@@ -823,6 +825,8 @@ fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
         AppliedConditions => "appliedConditions",
         FrameInsetSpacing => "frameInsetSpacing",
         ParagraphJustification => "paragraphJustification",
+        ParagraphStyleNextStyle => "paragraphStyleNextStyle",
+        ParagraphAppliedNumberingList => "paragraphAppliedNumberingList",
         FrameStrokeEndCap => "frameStrokeEndCap",
         FrameTextWrapMode => "frameTextWrapMode",
         FrameTextWrapOffsets => "frameTextWrapOffsets",
@@ -1051,6 +1055,9 @@ fn js_value_to_wire(
             | P::ParagraphListType
             | P::ParagraphBulletCharacter
             | P::ParagraphNumberingFormat
+            // W1.22 — applied numbering-list ref + next-style ref.
+            | P::ParagraphAppliedNumberingList
+            | P::ParagraphStyleNextStyle
             // W0.3 — enum-string / text frame-scope paths.
             | P::TextFrameVerticalJustification
             | P::TextFrameAutoSizing

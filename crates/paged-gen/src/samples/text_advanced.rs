@@ -77,6 +77,7 @@ fn variants() -> Vec<Variant> {
                 drop_cap_lines: Some(3),
                 tab_list: Vec::new(),
                 bullets_list_type: None,
+                applied_numbering_list: None,
                 bullet_character: None,
                 runs: vec![Run {
                     text: drop_cap_body.to_string(),
@@ -110,6 +111,7 @@ fn variants() -> Vec<Variant> {
                 drop_cap_lines: None,
                 tab_list: Vec::new(),
                 bullets_list_type: None,
+                applied_numbering_list: None,
                 bullet_character: None,
                 runs: vec![Run {
                     text: lorem_long.to_string(),
@@ -145,6 +147,7 @@ fn variants() -> Vec<Variant> {
                 drop_cap_lines: None,
                 tab_list: Vec::new(),
                 bullets_list_type: None,
+                applied_numbering_list: None,
                 bullet_character: None,
                 runs: vec![Run {
                     text: lorem_long.to_string(),
@@ -178,6 +181,7 @@ fn variants() -> Vec<Variant> {
                 drop_cap_lines: None,
                 tab_list: Vec::new(),
                 bullets_list_type: None,
+                applied_numbering_list: None,
                 bullet_character: None,
                 runs: vec![Run {
                     text: lorem_long.to_string(),
@@ -231,6 +235,7 @@ fn variants() -> Vec<Variant> {
                         },
                     ],
                     bullets_list_type: None,
+                    applied_numbering_list: None,
                     bullet_character: None,
                     runs: vec![Run {
                         text: "Apples\t1.20\t10\t12.00".to_string(),
@@ -276,6 +281,7 @@ fn variants() -> Vec<Variant> {
                         },
                     ],
                     bullets_list_type: None,
+                    applied_numbering_list: None,
                     bullet_character: None,
                     runs: vec![Run {
                         text: "Bread\t3.50\t2\t7.00".to_string(),
@@ -321,6 +327,7 @@ fn variants() -> Vec<Variant> {
                         },
                     ],
                     bullets_list_type: None,
+                    applied_numbering_list: None,
                     bullet_character: None,
                     runs: vec![Run {
                         text: "Cheese\t8.99\t1\t8.99".to_string(),
@@ -358,6 +365,7 @@ fn variants() -> Vec<Variant> {
                     drop_cap_lines: None,
                     tab_list: Vec::new(),
                     bullets_list_type: Some("BulletList"),
+                    applied_numbering_list: None,
                     bullet_character: None,
                     runs: vec![Run {
                         text: format!("Bulleted item {}", i + 1),
@@ -393,6 +401,7 @@ fn variants() -> Vec<Variant> {
                     drop_cap_lines: None,
                     tab_list: Vec::new(),
                     bullets_list_type: Some("BulletList"),
+                    applied_numbering_list: None,
                     bullet_character: Some(0x00BB),
                     runs: vec![Run {
                         text: format!("Arrow-bullet item {}", i + 1),
@@ -428,6 +437,7 @@ fn variants() -> Vec<Variant> {
                     drop_cap_lines: None,
                     tab_list: Vec::new(),
                     bullets_list_type: Some("NumberedList"),
+                    applied_numbering_list: None,
                     bullet_character: None,
                     runs: vec![Run {
                         text: format!("Numbered item {}", i + 1),
@@ -464,6 +474,7 @@ fn variants() -> Vec<Variant> {
                 drop_cap_lines: None,
                 tab_list: Vec::new(),
                 bullets_list_type: None,
+                applied_numbering_list: None,
                 bullet_character: None,
                 runs: vec![Run {
                     text: lorem_long.to_string(),
@@ -554,6 +565,7 @@ pub fn build() -> Sample {
                     })
                     .collect(),
                 bullets_list_type: p.bullets_list_type,
+                applied_numbering_list: p.applied_numbering_list,
                 bullet_character: p.bullet_character,
                 runs: p
                     .runs

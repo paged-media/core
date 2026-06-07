@@ -50,8 +50,8 @@ use crate::invert::{
 use crate::operation::{
     AppliedOperation, ColorGroupSpec, FieldKind, GradientFeatherSpec, GradientSpec,
     GradientStopSpec, GroupSpec, GuideOrientationSpec, InvalidationHint, NodeId, NodeSpec,
-    Operation, PathAnchorSpec, PathfinderKind, PropertyPath, StyleCollection, StyleScope,
-    SwatchSpec, Value,
+    NumberingListSpec, Operation, PathAnchorSpec, PathfinderKind, PropertyPath, StyleCollection,
+    StyleScope, SwatchSpec, Value,
 };
 use crate::pathfinder::{pathfinder_boolean, PathfinderKind as InternalPathfinderKind};
 
@@ -195,6 +195,11 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
         Operation::CreateColorGroup { spec } => apply_create_color_group(doc, spec),
         Operation::EditColorGroup { group_id, spec } => apply_edit_color_group(doc, group_id, spec),
         Operation::DeleteColorGroup { group_id } => apply_delete_color_group(doc, group_id),
+        Operation::CreateNumberingList { spec } => apply_create_numbering_list(doc, spec),
+        Operation::EditNumberingList { list_id, spec } => {
+            apply_edit_numbering_list(doc, list_id, spec)
+        }
+        Operation::DeleteNumberingList { list_id } => apply_delete_numbering_list(doc, list_id),
         Operation::SetStyleProperty {
             collection,
             style_id,
@@ -2091,7 +2096,8 @@ fn apply_set_property(
             | PropertyPath::ParagraphTabStops
             | PropertyPath::ParagraphListType
             | PropertyPath::ParagraphBulletCharacter
-            | PropertyPath::ParagraphNumberingFormat,
+            | PropertyPath::ParagraphNumberingFormat
+            | PropertyPath::ParagraphAppliedNumberingList,
         ) => {
             return apply_paragraph_property(doc, story_id, *start, *end, node, path, value);
         }
@@ -3392,6 +3398,13 @@ fn apply_paragraph_field(
         // clears the override.
         PropertyPath::ParagraphNumberingFormat => {
             set_para_text_field(path, value, &mut para.numbering_format)
+        }
+        // W1.22 (engine gap 22) — applied numbering list ref. Stored
+        // verbatim; empty clears the override (inherit from the style
+        // cascade). The renderer resolves it to find the list's
+        // cross-story continuity flag.
+        PropertyPath::ParagraphAppliedNumberingList => {
+            set_para_text_field(path, value, &mut para.applied_numbering_list)
         }
         _ => Err(OperationError::UnsupportedProperty {
             node: NodeId::StoryRange {
@@ -5748,6 +5761,131 @@ fn apply_delete_color_group(
     })
 }
 
+// ── Numbering-list collection mutations (W1.22, engine gap 22) ─────
+//
+// `<NumberingList>` resources live in `doc.styles.numbering_lists`
+// (BTreeMap keyed by `Self` id). CRUD mirrors the colour-group ops
+// exactly. A list's `continue_across_stories` flag drives cross-story
+// numbering continuity in the renderer, so the invalidation is the
+// conservative `structural` (a change can reflow numbering across the
+// whole document).
+
+fn numbering_list_def_from_spec(
+    self_id: String,
+    spec: &NumberingListSpec,
+) -> paged_parse::styles::NumberingListDef {
+    paged_parse::styles::NumberingListDef {
+        self_id,
+        name: spec.name.clone(),
+        continue_across_stories: spec.continue_across_stories,
+        continue_across_documents: spec.continue_across_documents,
+    }
+}
+
+fn numbering_list_spec_from_def(def: &paged_parse::styles::NumberingListDef) -> NumberingListSpec {
+    NumberingListSpec {
+        self_id: Some(def.self_id.clone()),
+        name: def.name.clone(),
+        continue_across_stories: def.continue_across_stories,
+        continue_across_documents: def.continue_across_documents,
+    }
+}
+
+fn apply_create_numbering_list(
+    doc: &mut Document,
+    spec: &NumberingListSpec,
+) -> Result<AppliedOperation, OperationError> {
+    let lists = &mut doc.styles.numbering_lists;
+    let self_id = match &spec.self_id {
+        Some(s) => {
+            if lists.contains_key(s) {
+                return Err(OperationError::DuplicateNodeId { id: s.clone() });
+            }
+            s.clone()
+        }
+        None => {
+            let mut n = lists.len();
+            let mut id = format!("NumberingList/u{n}");
+            while lists.contains_key(&id) {
+                n += 1;
+                id = format!("NumberingList/u{n}");
+            }
+            id
+        }
+    };
+    lists.insert(
+        self_id.clone(),
+        numbering_list_def_from_spec(self_id.clone(), spec),
+    );
+    let mut resolved = spec.clone();
+    resolved.self_id = Some(self_id.clone());
+    Ok(AppliedOperation {
+        op: Operation::CreateNumberingList { spec: resolved },
+        inverse: Operation::DeleteNumberingList { list_id: self_id },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+fn apply_edit_numbering_list(
+    doc: &mut Document,
+    list_id: &str,
+    spec: &NumberingListSpec,
+) -> Result<AppliedOperation, OperationError> {
+    let lists = &mut doc.styles.numbering_lists;
+    let existing = lists
+        .get(list_id)
+        .ok_or_else(|| OperationError::CollectionEntryNotFound {
+            collection: "numbering list".to_string(),
+            id: list_id.to_string(),
+        })?;
+    let prior = numbering_list_spec_from_def(existing);
+    lists.insert(
+        list_id.to_string(),
+        numbering_list_def_from_spec(list_id.to_string(), spec),
+    );
+    Ok(AppliedOperation {
+        op: Operation::EditNumberingList {
+            list_id: list_id.to_string(),
+            spec: spec.clone(),
+        },
+        inverse: Operation::EditNumberingList {
+            list_id: list_id.to_string(),
+            spec: prior,
+        },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+fn apply_delete_numbering_list(
+    doc: &mut Document,
+    list_id: &str,
+) -> Result<AppliedOperation, OperationError> {
+    let captured = doc.styles.numbering_lists.remove(list_id).ok_or_else(|| {
+        OperationError::CollectionEntryNotFound {
+            collection: "numbering list".to_string(),
+            id: list_id.to_string(),
+        }
+    })?;
+    Ok(AppliedOperation {
+        op: Operation::DeleteNumberingList {
+            list_id: list_id.to_string(),
+        },
+        inverse: Operation::CreateNumberingList {
+            spec: numbering_list_spec_from_def(&captured),
+        },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
 // ── Style collection mutations ────────────────────────────────────
 //
 // Paragraph + character styles live in `doc.styles.{paragraph,character}_styles`
@@ -6060,6 +6198,18 @@ fn set_paragraph_style_field(
                     .unwrap_or_default(),
             );
             def.justification = paged_parse::story::Justification::from_idml(s);
+            Ok(prior)
+        }
+        // styles.next-style (W1.22) — set the paragraph style's
+        // `NextStyle` chain. Value is the next style's self id; the
+        // empty string clears it (`None`). Prior is captured as the
+        // current ref (or empty) so the inverse round-trips.
+        PropertyPath::ParagraphStyleNextStyle => {
+            let Value::Text(s) = value else {
+                return Err(type_err());
+            };
+            let prior = Value::Text(def.next_style.clone().unwrap_or_default());
+            def.next_style = if s.is_empty() { None } else { Some(s.clone()) };
             Ok(prior)
         }
         _ => Err(OperationError::UnsupportedProperty {

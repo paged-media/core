@@ -1260,6 +1260,142 @@ fn numbering_continue_resumes_count_across_non_numbered_paragraph() {
     );
 }
 
+// ── W1.22 (engine gap 22) — cross-story numbering continuity ──────
+//
+// Two stories in two frames on the same page, both bound (via the
+// applied paragraph style) to one `<NumberingList>`. Story A emits
+// items "1" and "2"; story B emits one item. When the list declares
+// `ContinueNumbersAcrossStories="true"`, story B's marker continues
+// the sequence ("3", a different glyph than "1"); when it doesn't,
+// story B restarts at "1" (the SAME glyph story A led with). Both
+// frames render to the same page, so the page-interned glyph path_ids
+// are directly comparable across the two stories.
+
+/// Build an IDML with two stories (u10 → frameA, u20 → frameB, stacked
+/// vertically on one page), both using a `ParagraphStyle/Item` that
+/// applies `NumberingList/Shared`. `continue_across` toggles the
+/// list's `ContinueNumbersAcrossStories` flag. Story A has two
+/// numbered paragraphs ("1", "2"); story B has one.
+fn build_two_story_numbering_idml(continue_across: bool) -> Vec<u8> {
+    let styles = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <RootNumberingListGroup>
+    <NumberingList Self="NumberingList/Shared"
+                   Name="Shared"
+                   ContinueNumbersAcrossStories="{continue_across}"/>
+  </RootNumberingListGroup>
+  <RootParagraphStyleGroup>
+    <ParagraphStyle Self="ParagraphStyle/Item"
+                    Name="Item"
+                    BulletsAndNumberingListType="NumberedList"
+                    NumberingFormat="1, 2, 3, 4..."
+                    AppliedNumberingList="NumberingList/Shared"/>
+  </RootParagraphStyleGroup>
+</idPkg:Styles>"#
+    );
+    let spread = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 600 612"/>
+    <TextFrame Self="frameA" ParentStory="u10" GeometricBounds="40 40 280 572" StrokeWeight="0"/>
+    <TextFrame Self="frameB" ParentStory="u20" GeometricBounds="300 40 560 572" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#;
+    let item = |c: &str| {
+        format!(
+            r#"<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Item">
+                 <CharacterStyleRange AppliedFont="Inter" PointSize="24"><Content>{c}</Content></CharacterStyleRange>
+               </ParagraphStyleRange>"#
+        )
+    };
+    let story_a = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">{}{}</Story>
+</idPkg:Story>"#,
+        item("A"),
+        item("B"),
+    );
+    let story_b = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u20">{}</Story>
+</idPkg:Story>"#,
+        item("C"),
+    );
+    // Designmap declares both stories in document order (A then B) —
+    // the deterministic emit order the ledger follows.
+    let designmap = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Styles src="Resources/Styles.xml"/>
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_u10.xml"/>
+  <idPkg:Story src="Stories/Story_u20.xml"/>
+</Document>"#;
+    write_zip(|zip| {
+        put(zip, "designmap.xml", designmap);
+        put(zip, "Resources/Graphic.xml", GRAPHIC_XML);
+        put(zip, "Resources/Styles.xml", styles.as_bytes());
+        put(zip, "Spreads/Spread_sp1.xml", spread);
+        put(zip, "Stories/Story_u10.xml", story_a.as_bytes());
+        put(zip, "Stories/Story_u20.xml", story_b.as_bytes());
+    })
+}
+
+/// Render and return `(story_a_first_marker_glyph, story_b_marker_glyph)`
+/// path_ids. Story A's frame sits above story B's (lower `ty` =
+/// higher on the page = earlier baseline bucket); within each story
+/// the leading glyph of the first numbered paragraph is the marker.
+fn two_story_marker_glyphs(continue_across: bool) -> (u32, u32) {
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+    let doc = Document::open(&build_two_story_numbering_idml(continue_across)).unwrap();
+    let built = pipeline::build_document(&doc, &opts).unwrap();
+    let rows = glyphs_by_baseline(&built.pages[0].list.commands);
+    // Buckets are baseline-sorted top→bottom: rows[0] = story A item 1
+    // ("1" / "3"... marker + "A"), rows[1] = story A item 2, the last
+    // bucket = story B's single item (frameB starts at y=300, well
+    // below frameA). Story A's first marker is rows[0][0]; story B's
+    // marker is the leading glyph of the last bucket.
+    assert!(
+        rows.len() >= 3,
+        "expected ≥3 baselines (A.1, A.2, B.1), got {}",
+        rows.len()
+    );
+    let a_first = rows[0][0].1;
+    let b_marker = rows[rows.len() - 1][0].1;
+    (a_first, b_marker)
+}
+
+#[test]
+fn numbering_continues_across_stories_when_list_flag_set() {
+    // ContinueNumbersAcrossStories=true: story A emits 1, 2; story B
+    // continues at 3. "3" is a different digit glyph than story A's
+    // leading "1".
+    let (a_first, b_marker) = two_story_marker_glyphs(true);
+    assert_ne!(
+        a_first, b_marker,
+        "with ContinueNumbersAcrossStories, story B must lead with '3', \
+         not the '1' glyph story A led with",
+    );
+}
+
+#[test]
+fn numbering_restarts_per_story_without_continue_flag() {
+    // ContinueNumbersAcrossStories=false: story B restarts at 1 — the
+    // SAME "1" glyph story A led with.
+    let (a_first, b_marker) = two_story_marker_glyphs(false);
+    assert_eq!(
+        a_first, b_marker,
+        "without ContinueNumbersAcrossStories, story B must restart at the '1' glyph",
+    );
+}
+
 // ─────────────────────────── 12. tab-stop leader characters ─────────
 //
 // `<TabStop Leader=".">` tiles the leader string across the gap a

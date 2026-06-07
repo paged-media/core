@@ -141,6 +141,17 @@ export type WorkerToMain = WorkerToMainKind & {
 ///   styles-per-family for the glyphs panel) — a `#[serde(default)]`
 ///   field that wouldn't bump on its own, but it ships in the same
 ///   mergeable unit as the new kinds.
+///   - W1.22 (engine gap 22 — list definitions) also rides v35: the
+///     `Mutation::{Create,Edit,Delete}NumberingList` variants (→ the
+///     matching `paged_mutate::Operation` variants). New Mutation /
+///     Operation variants would normally bump per rule 2, but v35 is
+///     still unpublished (highest tag v0.34.0, no v0.35 tag), so per
+///     governance rule 4 they ride the open number with this comment.
+///     The additive read surface that ships with them does NOT bump on
+///     its own (rule 1): the `NumberingLists` CollectionName +
+///     `NumberingListSummary`, `ParagraphAppliedNumberingList` +
+///     `ParagraphStyleNextStyle` PropertyPaths, and the
+///     `ParagraphStyleSummary.next_style` `#[serde(default)]` field.
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(35);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
@@ -1180,6 +1191,11 @@ pub enum CollectionName {
     /// link-panel / preflight surfaces that bind against the collection
     /// rather than the bespoke `stories()` accessor.
     Stories,
+    /// W1.22 (engine gap 22) — the document's `<NumberingList>`
+    /// resources (one row per list, carrying its continuity flags).
+    /// Backs `documentCollection:numberingLists` — the editor's
+    /// list-definitions surface. Additive read-only collection.
+    NumberingLists,
 }
 
 impl CollectionName {
@@ -1212,6 +1228,7 @@ impl CollectionName {
             Self::Inks => "inks",
             Self::Sections => "sections",
             Self::Stories => "stories",
+            Self::NumberingLists => "numberingLists",
         }
     }
 
@@ -1244,6 +1261,7 @@ impl CollectionName {
             "inks" => Self::Inks,
             "sections" => Self::Sections,
             "stories" => Self::Stories,
+            "numberingLists" => Self::NumberingLists,
             _ => return None,
         })
     }
@@ -1354,6 +1372,14 @@ pub struct ParagraphStyleSummary {
     pub self_id: String,
     pub name: String,
     pub based_on: Option<String>,
+    /// styles.next-style (W1.22) — the style's `NextStyle` reference
+    /// (the style applied to the following paragraph when the user
+    /// presses Enter at this paragraph's end). `None` ⇒ no chain
+    /// declared. Additive `#[serde(default)]` field — the editor
+    /// reads it to implement the typing-time next-style flow; the
+    /// renderer never acts on it. No protocol bump on its own.
+    #[serde(default)]
+    pub next_style: Option<String>,
 }
 
 /// SDK Phase 3 — one character style's summary. Same shape as
@@ -1753,6 +1779,24 @@ pub struct ConditionSummary {
     pub visible: bool,
     /// `"Underline"` / `"Highlight"` / `"None"` (or empty).
     pub indicator_method: String,
+}
+
+/// W1.22 (engine gap 22) — one `<NumberingList>` resource. Backs
+/// `documentCollection:numberingLists`. The editor's list-definitions
+/// surface renders this; `continue_across_stories` is the flag that
+/// drives cross-story numbering continuity in the renderer.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct NumberingListSummary {
+    pub self_id: String,
+    pub name: String,
+    /// `ContinueNumbersAcrossStories`. Default `false` when the IDML
+    /// doesn't specify.
+    pub continue_across_stories: bool,
+    /// `ContinueNumbersAcrossDocuments` (round-trip only). Default
+    /// `false`.
+    pub continue_across_documents: bool,
 }
 
 /// SDK Phase 5 (v1 sweep) — one placed-image link summary. Backs
@@ -2345,6 +2389,20 @@ pub enum Mutation {
     DeleteColorGroup {
         group_id: String,
     },
+    // W1.22 (engine gap 22) — numbering-list CRUD. New Mutation
+    // variants → new Operation variants. // rides v35 (added before
+    // first consumer sync; v35 bumped in W1.23 is not yet tagged /
+    // published — highest tag is v0.34.0).
+    CreateNumberingList {
+        spec: paged_mutate::NumberingListSpec,
+    },
+    EditNumberingList {
+        list_id: String,
+        spec: paged_mutate::NumberingListSpec,
+    },
+    DeleteNumberingList {
+        list_id: String,
+    },
     CreateParagraphStyle {
         #[serde(default)]
         self_id: Option<String>,
@@ -2600,6 +2658,9 @@ impl Mutation {
             Self::CreateColorGroup { .. } => "CreateColorGroup",
             Self::EditColorGroup { .. } => "EditColorGroup",
             Self::DeleteColorGroup { .. } => "DeleteColorGroup",
+            Self::CreateNumberingList { .. } => "CreateNumberingList",
+            Self::EditNumberingList { .. } => "EditNumberingList",
+            Self::DeleteNumberingList { .. } => "DeleteNumberingList",
             Self::CreateParagraphStyle { .. } => "CreateParagraphStyle",
             Self::RenameParagraphStyle { .. } => "RenameParagraphStyle",
             Self::DeleteParagraphStyle { .. } => "DeleteParagraphStyle",
