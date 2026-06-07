@@ -559,11 +559,45 @@ IndicatorMethod=\"UseHighlight\"/>",
     spliced.into_bytes()
 }
 
+/// One extra named `<ParagraphStyle>` to emit inside the canonical
+/// `<RootParagraphStyleGroup>` alongside the implicit `[No paragraph
+/// style]`. Attributes are emitted in the SAME order `paged-write`'s
+/// reader→writer canonicaliser uses (`Self Name AppliedFont PointSize
+/// FillColor`), so the fixture survives the byte-identical round-trip
+/// gate. Only those round-trippable axes are exposed — a contrasting
+/// PointSize + FillColor is enough to make an `applyStyle` swap
+/// render-provable without relying on attributes `paged-write` drops
+/// (e.g. `Justification`).
+pub struct ParagraphStyleSpec {
+    pub self_id: &'static str,
+    pub name: &'static str,
+    pub applied_font: &'static str,
+    pub point_size: f32,
+    pub fill_color: &'static str,
+}
+
 /// Combined builder behind the [`styles_xml`] family — table styles
 /// and custom stroke styles in one `Resources/Styles.xml`.
 pub fn styles_xml_full(
     table_styles: &[TableStyleSpec],
     stroke_styles: &[StrokeStyleSpec],
+) -> Vec<u8> {
+    styles_xml_full_with(table_styles, stroke_styles, &[])
+}
+
+/// Like [`styles_xml`] but also emits the supplied named paragraph
+/// styles inside the canonical `<RootParagraphStyleGroup>`. Used by the
+/// text sample's contrasting "Emphasis Display" style (W2.1) so
+/// `applyStyle` is render-provable AND the fixture still round-trips
+/// byte-identically through `paged-write`.
+pub fn styles_xml_with_paragraph_styles(extra_paragraph_styles: &[ParagraphStyleSpec]) -> Vec<u8> {
+    styles_xml_full_with(&[], &[], extra_paragraph_styles)
+}
+
+fn styles_xml_full_with(
+    table_styles: &[TableStyleSpec],
+    stroke_styles: &[StrokeStyleSpec],
+    extra_paragraph_styles: &[ParagraphStyleSpec],
 ) -> Vec<u8> {
     let mut b = XmlBuilder::new();
     b.write_decl();
@@ -597,6 +631,21 @@ pub fn styles_xml_full(
             ("FillColor", "Color/Black"),
         ],
     );
+    // Extra named paragraph styles — emitted in paged-write's canonical
+    // attribute order so the byte round-trip gate stays green.
+    for ps in extra_paragraph_styles {
+        let point_size = crate::xml::format_f32(ps.point_size);
+        b.empty(
+            "ParagraphStyle",
+            &[
+                ("Self", ps.self_id),
+                ("Name", ps.name),
+                ("AppliedFont", ps.applied_font),
+                ("PointSize", point_size.as_str()),
+                ("FillColor", ps.fill_color),
+            ],
+        );
+    }
     b.end("RootParagraphStyleGroup");
     // ObjectStyle root — declares `[None]` with the no-stroke /
     // no-fill cascade. Without this, InDesign falls back to its

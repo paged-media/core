@@ -30,7 +30,8 @@ use crate::builders::{
     master::{write_master, Master},
     page_item::Rect,
     resources::{
-        container_xml, fonts_xml, graphic_xml_with_extras, preferences_xml, styles_xml, ExtraColor,
+        container_xml, fonts_xml, graphic_xml_with_extras, preferences_xml,
+        styles_xml_with_paragraph_styles, ExtraColor, ParagraphStyleSpec,
     },
     spread::{write_spread, Spread},
     story::{write_story, Paragraph, Run, Story},
@@ -46,10 +47,45 @@ const PAGE_H_PT: f32 = 841.890;
 const FRAME_W_PT: f32 = 480.0;
 const FRAME_H_PT: f32 = 400.0;
 
+/// W2.1 — a named, visually-distinct paragraph style emitted inside the
+/// canonical `<RootParagraphStyleGroup>`. The editor's `applyStyle`
+/// render-contrast fixme (AC-E2E-TEXT-3) attributes this style to a body
+/// range and proves the swap repaints: it contrasts the document default
+/// ([No paragraph style]: 12pt black) on TWO axes — 28pt (vs 12) and RGB
+/// cyan fill (vs black) — so any reasonable diff threshold trips. It is
+/// the LAST paragraph style in the collection (what
+/// `lastCollectionId("paragraphStyles")` resolves to). Only round-
+/// trippable axes are used (no `Justification`, which `paged-write`
+/// drops on its reader→writer rewrite — see `ParagraphStyleSpec`).
+pub const EMPHASIS_STYLE_ID: &str = "ParagraphStyle/EmphasisDisplay";
+const EMPHASIS_STYLE_NAME: &str = "Emphasis Display";
+
+fn emphasis_style() -> ParagraphStyleSpec {
+    ParagraphStyleSpec {
+        self_id: EMPHASIS_STYLE_ID,
+        name: EMPHASIS_STYLE_NAME,
+        applied_font: "Open Sans",
+        point_size: 28.0,
+        fill_color: "Color/RGBCyan",
+    }
+}
+
 struct Variant {
     name: &'static str,
     /// One or more paragraphs to lay into the body text frame.
     paragraphs: Vec<Paragraph>,
+}
+
+/// Body-frame width (pt) for a variant. Most use the default 480pt
+/// column; the hyphenation variant pins a narrow 130pt column so a
+/// long word can't fit on one line and the composer must hyphenate.
+/// Keyed off the page name so existing literals stay untouched.
+fn frame_width_for(name: &str) -> f32 {
+    if name.contains("hyphenation") {
+        130.0
+    } else {
+        FRAME_W_PT
+    }
 }
 
 fn variants() -> Vec<Variant> {
@@ -386,7 +422,108 @@ fn variants() -> Vec<Variant> {
                 }],
             }],
         },
+        // ── W2.1 typography hosts (editor op-suite content) ──────────
+        // These pages append AFTER the original 14 so the existing
+        // page-0-targeting specs (character/paragraph ops on the first
+        // story) stay byte-stable. Each carries content engineered so a
+        // single character/paragraph EDIT produces a render delta the
+        // minimal pangram couldn't.
+        //
+        // Kern pairs: AV / To / Wa / Ye carry large negative kern values
+        // in any kerned face (Inter included), so flipping
+        // `characterKerningMethod` to None shifts the glyphs → delta.
+        Variant {
+            name: "text · kern · pairs",
+            paragraphs: vec![one_run("AVATAR To Wave Yes Tom", 32.0, None, None)],
+        },
+        // Superscript digit: a footnote-style "E = mc2" where the editor
+        // raises the trailing digit. `characterPosition=Superscript`
+        // lifts + shrinks the selected glyphs → delta on any content,
+        // but a digit reads as a real superscript use.
+        Variant {
+            name: "text · superscript · digit",
+            paragraphs: vec![one_run("E = mc2 and 1st 2nd 3rd", 28.0, None, None)],
+        },
+        // Hyphenation: a single very long word in a NARROW column
+        // (130pt via `frame_width_for`) that cannot fit on one line, so
+        // enabling `paragraphHyphenation` forces a hyphen break →
+        // reflow delta. The word is a real dictionary-hyphenable term.
+        Variant {
+            name: "text · wrap · hyphenation",
+            paragraphs: vec![one_run(
+                "antidisestablishmentarianism incomprehensibilities",
+                18.0,
+                None,
+                None,
+            )],
+        },
+        // Multi-paragraph with a trailing-space last line: two stacked
+        // paragraphs so a `paragraphRuleBelow` on the first draws a rule
+        // in the gap above the second (the trailing-space case the
+        // single-paragraph fixmes lacked). SpaceAfter opens the gap.
+        Variant {
+            name: "text · para · multi-trailing",
+            paragraphs: vec![
+                Paragraph {
+                    space_after: Some(18.0),
+                    ..one_run("First paragraph with a rule below it. ", 16.0, None, None)
+                },
+                one_run("Second paragraph follows the rule.", 16.0, None, None),
+            ],
+        },
+        // Standard-ligature content: an "fi / ffi / fl" cluster. Inter
+        // ships no `liga` table, so the EDITOR spec loads this fixture
+        // with a liga-bearing fallback (Cormorant) to make the toggle
+        // visible; the content is the fixture's half.
+        Variant {
+            name: "text · liga · fi-ffi",
+            paragraphs: vec![one_run(
+                "office affix fluffier final firefly",
+                40.0,
+                None,
+                None,
+            )],
+        },
+        // A second font family mid-story: a run pinned to "Open Sans"
+        // beside the default family, so a family-aware edit (or the
+        // FONTS panel) sees two families. The harness registers Open
+        // Sans for this fixture.
+        Variant {
+            name: "text · family · second",
+            paragraphs: vec![Paragraph {
+                runs: vec![
+                    Run {
+                        text: "Default ".to_string(),
+                        point_size: Some(24.0),
+                        ..plain_run()
+                    },
+                    Run {
+                        text: "OpenSans".to_string(),
+                        point_size: Some(24.0),
+                        applied_font: Some("Open Sans"),
+                        ..plain_run()
+                    },
+                ],
+                ..one_run("", 24.0, None, None)
+            }],
+        },
     ]
+}
+
+/// A `Run` with every optional field cleared — the spread base for the
+/// W2.1 multi-run variants.
+fn plain_run() -> Run {
+    Run {
+        text: String::new(),
+        point_size: None,
+        fill_color: None,
+        font_style: None,
+        tracking: None,
+        baseline_shift: None,
+        underline: None,
+        applied_font: None,
+        anchored_frame: None,
+    }
 }
 
 /// One-paragraph, one-run convenience.
@@ -524,18 +661,18 @@ pub fn build() -> Sample {
 
         // One body text frame, large enough to fit the run. Centred
         // horizontally on the page; positioned ~1/3 down so the
-        // descriptor + body line up legibly.
-        let frame_transform: Matrix = translate(
-            (PAGE_W_PT - FRAME_W_PT) * 0.5,
-            (PAGE_H_PT - FRAME_H_PT) * 0.33,
-        );
+        // descriptor + body line up legibly. The hyphenation variant
+        // pins a narrow column (see `frame_width_for`).
+        let frame_w = frame_width_for(variant.name);
+        let frame_transform: Matrix =
+            translate((PAGE_W_PT - frame_w) * 0.5, (PAGE_H_PT - FRAME_H_PT) * 0.33);
         // `translate` returns a row-major identity with tx/ty filled,
         // matching the geometry sample's helper but explicit here so
         // future variant transforms have a hook.
         let _: Matrix = IDENTITY;
         let body_frame = Rect {
             self_id: frame_id,
-            width_pt: FRAME_W_PT,
+            width_pt: frame_w,
             height_pt: FRAME_H_PT,
             item_transform: frame_transform,
             fill_color: None,
@@ -585,7 +722,11 @@ pub fn build() -> Sample {
         designmap_xml: designmap,
         graphic_xml: graphic_xml_with_extras(&extra_colors()),
         fonts_xml: fonts_xml(),
-        styles_xml: styles_xml(),
+        // The contrasting "Emphasis Display" paragraph style (W2.1) so
+        // the editor's applyStyle render-contrast fixme has a visually-
+        // distinct named style to attribute. Emitted in the canonical
+        // group so the fixture round-trips byte-identically.
+        styles_xml: styles_xml_with_paragraph_styles(&[emphasis_style()]),
         preferences_xml: preferences_xml(),
         backing_story_xml: backing_story_xml(),
         tags_xml: tags_xml(),
