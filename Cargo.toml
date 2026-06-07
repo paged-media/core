@@ -55,3 +55,9 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 base64 = "0.22"
 tsify-next = { version = "0.5", default-features = false, features = ["js"] }
 wasm-bindgen = "0.2"
+# W1.24 (audit B17) — benchmark harness (dev-only). `html_reports` is
+# off: the bench lane is local + CI-smoke, not a report-publishing gate,
+# and the gnuplot/plotters report deps bloat the dev build for no value
+# in `make bench`. Declared at the workspace level so any crate that
+# grows a bench picks the same pin.
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }

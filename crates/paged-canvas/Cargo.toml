@@ -52,4 +52,16 @@ web-sys = { version = "0.3", features = ["console"] }
 
 [dev-dependencies]
 zip = { workspace = true }
+# W1.24 (audit B17) — perf bench lane. `paged-gen` regenerates the bench
+# fixtures in setup (same path the fidelity corpus uses), so no fixture
+# bytes are committed. criterion drives the measurements.
+criterion = { workspace = true }
+paged-gen = { path = "../paged-gen" }
+
+# W1.24 (audit B17) — `make bench` lane. `harness = false` hands the
+# bench main to criterion. Not wired into `verify` (benches are not a
+# gate); run via `make bench` or `cargo bench -p paged-canvas`.
+[[bench]]
+name = "pipeline"
+harness = false
 
