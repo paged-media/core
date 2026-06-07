@@ -11,7 +11,12 @@ description = "Top-level renderer coordinator. The public Rust API surface."
 workspace = true
 
 [features]
-default = ["cpu"]
+default = ["cpu", "mutate-roundtrip"]
+# The `--mutate-roundtrip` conformance hook on the paged-inspect bin.
+# OPTIONAL because paged-mutate is an editor crate: the paged-sdk wasm
+# (renderer-core only, default-features = false) must never link it —
+# the publish-wasm subset audit enforces that boundary.
+mutate-roundtrip = ["dep:paged-mutate"]
 # Pulls in the CPU rasterizer so `render()` is callable. Disabling this
 # leaves only `build()` — useful for WASM builds that rely on a
 # different backend. `image` is now a non-optional dep because
@@ -21,7 +26,11 @@ cpu = ["paged-gpu/cpu"]
 [[bin]]
 name = "paged-inspect"
 path = "src/bin/inspect.rs"
-required-features = ["cpu"]
+required-features = ["cpu", "mutate-roundtrip"]
+
+[[test]]
+name = "inspect_e2e"
+required-features = ["mutate-roundtrip"]
 
 [dependencies]
 paged-parse = { path = "../paged-parse" }
@@ -39,7 +48,7 @@ paged-write = { path = "../paged-write" }
 # Operation, saves, and re-verifies it survived). paged-mutate carries
 # paged-renderer only as a DEV-dependency, so this regular edge plus its
 # dev edge form a dev-only cycle Cargo tolerates.
-paged-mutate = { path = "../paged-mutate" }
+paged-mutate = { path = "../paged-mutate", optional = true }
 # Used by the `paged-inspect --roundtrip` per-entry byte-identity tally
 # to walk the re-zipped package. Same wasm-clean config the rest of the
 # tree reads zips with.
