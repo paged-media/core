@@ -157,7 +157,27 @@ pub(super) fn emit_rectangle_image(
             w: rect.bounds.width(),
             h: rect.bounds.height(),
         };
-        emit_clipped_image(&mut page.list, clip_rect, outer, img_rect, composed, id);
+        // W1.21: an optional detached clipping path, masked on top of
+        // the frame box. Its anchors are in image-pixel space, so it
+        // rides the same `composed` transform as the image itself.
+        let extra_clip = resolve_image_clip(
+            page,
+            rect.image_clip.as_ref(),
+            composed,
+            img_w,
+            img_h,
+            rect.image_link.as_deref(),
+            rect.self_id.as_deref(),
+        );
+        emit_clipped_image(
+            &mut page.list,
+            clip_rect,
+            outer,
+            img_rect,
+            composed,
+            id,
+            extra_clip,
+        );
     } else {
         // Path 2: legacy synthetic-IDML placement. No inner
         // transform ⇒ fit the image to the frame's bounds (minus
@@ -185,6 +205,16 @@ pub(super) fn emit_rectangle_image(
             w: (frame_w - left_crop - right_crop).max(0.0),
             h: (frame_h - top_crop - bottom_crop).max(0.0),
         };
+        // W1.21: a clip path on a no-inner-transform placement would
+        // need an image-pixel→frame mapping we don't synthesise here
+        // (real InDesign exports always carry the inner ItemTransform).
+        // Record the defer so the clip isn't silently dropped.
+        report_clip_for_untransformed_image(
+            page,
+            rect.image_clip.as_ref(),
+            rect.image_link.as_deref(),
+            rect.self_id.as_deref(),
+        );
         paged_compose::emit_image_at(r, outer, id, &mut page.list);
     }
 }
@@ -312,6 +342,17 @@ pub(super) fn emit_polygon_image(
     // double-scale. Branch: pass a unit rect so emit_image_under_clip
     // doesn't multiply by img_w/img_h again.
     if poly.image_item_transform.is_some() {
+        // W1.21: clip anchors are in image-pixel space → same
+        // `image_transform` (= outer ∘ image_t) as the image.
+        let extra_clip = resolve_image_clip(
+            page,
+            poly.image_clip.as_ref(),
+            image_transform,
+            img_w,
+            img_h,
+            poly.image_link.as_deref(),
+            poly.self_id.as_deref(),
+        );
         emit_image_under_clip(
             &mut page.list,
             clip_path_id,
@@ -319,8 +360,15 @@ pub(super) fn emit_polygon_image(
             img_rect,
             image_transform,
             id,
+            extra_clip,
         );
     } else {
+        report_clip_for_untransformed_image(
+            page,
+            poly.image_clip.as_ref(),
+            poly.image_link.as_deref(),
+            poly.self_id.as_deref(),
+        );
         let unit = Rect {
             x: 0.0,
             y: 0.0,
@@ -334,6 +382,7 @@ pub(super) fn emit_polygon_image(
             unit,
             image_transform,
             id,
+            None,
         );
     }
 }
@@ -413,6 +462,15 @@ pub(super) fn emit_oval_image(
         Transform::for_rect_in(clip_rect, outer)
     };
     if oval.image_item_transform.is_some() {
+        let extra_clip = resolve_image_clip(
+            page,
+            oval.image_clip.as_ref(),
+            image_transform,
+            img_w,
+            img_h,
+            oval.image_link.as_deref(),
+            oval.self_id.as_deref(),
+        );
         emit_image_under_clip(
             &mut page.list,
             clip_path_id,
@@ -420,8 +478,15 @@ pub(super) fn emit_oval_image(
             img_rect,
             image_transform,
             id,
+            extra_clip,
         );
     } else {
+        report_clip_for_untransformed_image(
+            page,
+            oval.image_clip.as_ref(),
+            oval.image_link.as_deref(),
+            oval.self_id.as_deref(),
+        );
         let unit = Rect {
             x: 0.0,
             y: 0.0,
@@ -435,6 +500,7 @@ pub(super) fn emit_oval_image(
             unit,
             image_transform,
             id,
+            None,
         );
     }
 }
@@ -454,6 +520,7 @@ fn emit_clipped_image(
     image_rect: paged_compose::Rect,
     image_transform: Transform,
     image_id: paged_compose::ImageId,
+    extra_clip: Option<(paged_compose::PathId, Transform)>,
 ) {
     use paged_compose::PathSegment;
     // Unit-rect path interned under a stable key so multiple clipped-
@@ -477,6 +544,7 @@ fn emit_clipped_image(
         image_rect,
         image_transform,
         image_id,
+        extra_clip,
     );
 }
 
@@ -484,6 +552,12 @@ fn emit_clipped_image(
 /// PushClip / Image / PopClip emission off `emit_clipped_image` so
 /// the polygon-hosted image variant (used when the host is a curved
 /// `<Polygon>` frame) can supply its own pre-interned path.
+///
+/// W1.21: `extra_clip` is an optional *second* clip (the image's
+/// detached clipping path) pushed inside the frame clip. The
+/// rasterizer intersects clips, so the image ends up masked to
+/// `frame ∩ clip-path`. Pushed after the frame clip and popped before
+/// it so the stack stays balanced.
 fn emit_image_under_clip(
     list: &mut paged_compose::DisplayList,
     clip_path_id: paged_compose::PathId,
@@ -491,17 +565,24 @@ fn emit_image_under_clip(
     image_rect: paged_compose::Rect,
     image_transform: Transform,
     image_id: paged_compose::ImageId,
+    extra_clip: Option<(paged_compose::PathId, Transform)>,
 ) {
     use paged_compose::DisplayCommand;
     list.push(DisplayCommand::PushClip {
         path_id: clip_path_id,
         transform: clip_transform,
     });
+    if let Some((path_id, transform)) = extra_clip {
+        list.push(DisplayCommand::PushClip { path_id, transform });
+    }
     let img_transform = Transform::for_rect_in(image_rect, image_transform);
     list.push(DisplayCommand::Image {
         image_id,
         transform: img_transform,
     });
+    if extra_clip.is_some() {
+        list.push(DisplayCommand::PopClip(Transform::IDENTITY));
+    }
     list.push(DisplayCommand::PopClip(Transform::IDENTITY));
 }
 
@@ -607,4 +688,433 @@ fn resolve_inline_image_bytes(
         return ImageResolution::DecodeFailed;
     }
     ImageResolution::Resolved(id, img_w, img_h)
+}
+
+// ── W1.21: image clipping paths ──────────────────────────────────────
+//
+// InDesign clips a placed image to a *detached* clipping path in
+// addition to the frame outline. The IDML serialises this under the
+// `<Image>` as `<ClippingPathSettings>`; for a `UserModifiedPath` the
+// resolved geometry rides along as a `<PathGeometry>` (anchors in the
+// image's pixel space — the same space the image's own PathGeometry and
+// `ItemTransform` use). PhotoshopPath / AlphaChannel / DetectEdges keep
+// the geometry in the image binary, so without 8BIM/raster analysis we
+// defer (render frame-clipped only + a diagnostic).
+//
+// Composition: the renderer already pushes the *frame* clip around the
+// image (PushClip frame → Image → PopClip). We push a *second* clip —
+// the clip path — inside that, so the rasterizer's clip-stack
+// intersection yields `frame ∩ clip-path` for free. The clip path's
+// transform is exactly the image's placement transform (`composed`),
+// since the anchors are in image-pixel coordinates.
+//
+// Holes & invert under NonZero: the clip mask is filled `NonZero`, so we
+// normalise winding ourselves (nested contours alternate orientation →
+// holes survive) and express `InvertPath` as a compound path —
+// (image-pixel bounding box) minus (path) — which, intersected with the
+// frame clip, keeps the area *outside* the path.
+
+/// Signed area (shoelace) of one closed contour, sampled at its anchor
+/// on-curve points. Sign distinguishes orientation; magnitude ranks
+/// outer-vs-inner contours. Bezier handles are ignored — for winding
+/// classification the polygon of on-curve points is sufficient (the
+/// clip paths InDesign writes are well-behaved nested loops).
+fn clip_contour_signed_area(anchors: &[PathAnchor]) -> f32 {
+    let n = anchors.len();
+    if n < 3 {
+        return 0.0;
+    }
+    let mut acc = 0.0f32;
+    for i in 0..n {
+        let (x0, y0) = anchors[i].anchor;
+        let (x1, y1) = anchors[(i + 1) % n].anchor;
+        acc += x0 * y1 - x1 * y0;
+    }
+    acc * 0.5
+}
+
+/// Split an anchor list into per-contour slices using `subpath_starts`
+/// (one entry per `<GeometryPathType>`; empty/single-entry ⇒ one
+/// contour). Mirrors `polygon_path_from_anchors_with_open`'s range
+/// logic so the two stay consistent.
+fn clip_contour_ranges(anchors: &[PathAnchor], subpath_starts: &[usize]) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    if subpath_starts.len() <= 1 {
+        if !anchors.is_empty() {
+            ranges.push((0, anchors.len()));
+        }
+        return ranges;
+    }
+    let mut starts: Vec<usize> = subpath_starts
+        .iter()
+        .copied()
+        .filter(|&s| s < anchors.len())
+        .collect();
+    starts.sort_unstable();
+    starts.dedup();
+    if starts.first() != Some(&0) {
+        starts.insert(0, 0);
+    }
+    for i in 0..starts.len() {
+        let lo = starts[i];
+        let hi = starts.get(i + 1).copied().unwrap_or(anchors.len());
+        if hi > lo {
+            ranges.push((lo, hi));
+        }
+    }
+    ranges
+}
+
+/// Reverse a contour's anchor list (anchor stays put, but the left/right
+/// Bezier handles swap) so its winding flips. Used to alternate nested-
+/// contour orientation for NonZero hole rendering and to punch the path
+/// out of the invert bounding box.
+fn reversed_contour(sub: &[PathAnchor]) -> Vec<PathAnchor> {
+    sub.iter()
+        .rev()
+        .map(|a| PathAnchor {
+            anchor: a.anchor,
+            // Swap handles: a point's outgoing tangent becomes its
+            // incoming one when the path direction reverses.
+            left: a.right,
+            right: a.left,
+        })
+        .collect()
+}
+
+/// Build the clip-path [`PathData`] (image-pixel space) for a placed
+/// image, ready to push as a NonZero clip mask. Returns `None` when the
+/// settings carry no renderable geometry.
+///
+/// * Holes: contours are classified by enclosed area. The largest is the
+///   outer boundary; every other contour is re-wound to the *opposite*
+///   orientation so NonZero leaves it as a hole (a doughnut / star-with-
+///   a-punched-centre clip). This is the standard even-odd→nonzero
+///   normalisation for non-self-intersecting nested loops.
+/// * Invert (`InvertPath="true"`): the result is `bbox − path` — an
+///   outer rectangle covering the image pixel box, with every path
+///   contour wound opposite so NonZero subtracts it. Intersected with
+///   the frame clip downstream, this keeps the area *outside* the path.
+///   `pixel_w` / `pixel_h` size that bounding rect; the path is assumed
+///   to live within `[0, pixel_w] × [0, pixel_h]` (the image's own
+///   PathGeometry extent).
+fn build_image_clip_path(
+    clip: &paged_parse::ClippingPathSettings,
+    pixel_w: f32,
+    pixel_h: f32,
+) -> Option<PathData> {
+    let anchors = &clip.clip_anchors;
+    if anchors.is_empty() {
+        return None;
+    }
+    let ranges = clip_contour_ranges(anchors, &clip.clip_subpath_starts);
+    if ranges.is_empty() {
+        return None;
+    }
+
+    // Rank contours by |area| to find the outer boundary. Nested loops
+    // become holes for a normal clip; with `InvertPath` every contour is
+    // subtracted from the bounding box instead.
+    let areas: Vec<f32> = ranges
+        .iter()
+        .map(|&(lo, hi)| clip_contour_signed_area(&anchors[lo..hi]))
+        .collect();
+    let outer_idx = areas
+        .iter()
+        .enumerate()
+        .max_by(|a, b| {
+            a.1.abs()
+                .partial_cmp(&b.1.abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    let outer_sign = areas.get(outer_idx).copied().unwrap_or(1.0).signum();
+
+    let mut out_anchors: Vec<PathAnchor> = Vec::with_capacity(anchors.len() + 4);
+    let mut starts: Vec<usize> = Vec::with_capacity(ranges.len() + 1);
+    let mut opens: Vec<bool> = Vec::with_capacity(ranges.len() + 1);
+
+    // Invert: prepend a bounding rectangle covering the image pixel box.
+    // Every real path contour is then forced to the OPPOSITE winding so
+    // NonZero subtracts it from the box.
+    let mut bbox_sign = 0.0f32;
+    if clip.invert_path {
+        let bbox = [
+            PathAnchor {
+                anchor: (0.0, 0.0),
+                left: (0.0, 0.0),
+                right: (0.0, 0.0),
+            },
+            PathAnchor {
+                anchor: (pixel_w, 0.0),
+                left: (pixel_w, 0.0),
+                right: (pixel_w, 0.0),
+            },
+            PathAnchor {
+                anchor: (pixel_w, pixel_h),
+                left: (pixel_w, pixel_h),
+                right: (pixel_w, pixel_h),
+            },
+            PathAnchor {
+                anchor: (0.0, pixel_h),
+                left: (0.0, pixel_h),
+                right: (0.0, pixel_h),
+            },
+        ];
+        bbox_sign = clip_contour_signed_area(&bbox).signum();
+        starts.push(out_anchors.len());
+        opens.push(false);
+        out_anchors.extend_from_slice(&bbox);
+    }
+
+    for (ci, &(lo, hi)) in ranges.iter().enumerate() {
+        let sub = &anchors[lo..hi];
+        let area_sign = areas[ci].signum();
+        let want_flip = if clip.invert_path {
+            // Force every path contour opposite the bbox so it punches a
+            // hole. (Degenerate/zero-area contours keep orientation —
+            // they contribute nothing either way.)
+            area_sign != 0.0 && area_sign == bbox_sign
+        } else {
+            // Inner contours (not the largest) flip to oppose the outer
+            // so NonZero leaves them as holes.
+            ci != outer_idx && area_sign != 0.0 && area_sign == outer_sign
+        };
+        let materialised = if want_flip {
+            reversed_contour(sub)
+        } else {
+            sub.to_vec()
+        };
+        starts.push(out_anchors.len());
+        opens.push(clip.clip_subpath_open.get(ci).copied().unwrap_or(false));
+        out_anchors.extend(materialised);
+    }
+
+    // Collapse to the canonical single-contour encoding when there's
+    // exactly one closed subpath (matches the frame convention).
+    let (starts, opens): (Vec<usize>, Vec<bool>) = if starts.len() <= 1 {
+        (Vec::new(), Vec::new())
+    } else {
+        (starts, opens)
+    };
+
+    let path = polygon_path_from_anchors_with_open(&out_anchors, &starts, &opens);
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
+    }
+}
+
+/// Record the defer diagnostic for a clipping path the renderer can't
+/// honour from the XML (Photoshop path / alpha / detect-edges / named-
+/// path-without-geometry). The image still renders, clipped to the frame
+/// outline only.
+fn report_clip_deferred(
+    page: &mut BuiltPage,
+    clip: &paged_parse::ClippingPathSettings,
+    uri: Option<&str>,
+    frame_id: Option<&str>,
+) {
+    use paged_parse::ClippingType;
+    let detail = match clip.clipping_type {
+        Some(ClippingType::PhotoshopPath) => "Photoshop 8BIM path",
+        Some(ClippingType::AlphaChannel) => "alpha channel",
+        Some(ClippingType::DetectEdges) => "detect-edges",
+        Some(ClippingType::UserModifiedPath) => "user-modified path with no inline geometry",
+        _ => "clipping path",
+    };
+    let msg = match &clip.applied_path_name {
+        Some(name) => format!(
+            "image clipping path ({detail}, \"{name}\") not resolvable from IDML; \
+             image clipped to frame outline only"
+        ),
+        None => format!(
+            "image clipping path ({detail}) not resolvable from IDML; \
+             image clipped to frame outline only"
+        ),
+    };
+    let mut d = Diagnostic::new(DiagnosticCode::ImageClippingPathDeferred, msg);
+    if let Some(u) = uri {
+        d = d.with_uri(u);
+    }
+    if let Some(f) = frame_id {
+        d = d.with_frame(f);
+    }
+    page.diagnostics.push(d);
+}
+
+/// Resolve a placed image's `<ClippingPathSettings>` into an optional
+/// extra clip `(PathId, Transform)` to push around the image, emitting a
+/// defer diagnostic when the clip can't be honoured from the XML.
+///
+/// `image_transform` is the image's placement transform (`composed` —
+/// the same affine the `Image` command rides), since clip anchors are in
+/// image-pixel space. `pixel_w/h` are the image's native pixel extents,
+/// used to size the invert bounding box. Returns `None` for "no clip"
+/// (either truly absent, or deferred — in which case a diagnostic is
+/// already recorded).
+fn resolve_image_clip(
+    page: &mut BuiltPage,
+    clip: Option<&paged_parse::ClippingPathSettings>,
+    image_transform: Transform,
+    pixel_w: f32,
+    pixel_h: f32,
+    uri: Option<&str>,
+    frame_id: Option<&str>,
+) -> Option<(paged_compose::PathId, Transform)> {
+    let clip = clip?;
+    if clip.is_deferred_clip() {
+        report_clip_deferred(page, clip, uri, frame_id);
+        return None;
+    }
+    if !clip.has_renderable_geometry() {
+        return None;
+    }
+    let path = build_image_clip_path(clip, pixel_w, pixel_h)?;
+    // Key on the clip anchors + invert flag so identical clips share one
+    // interned path; salt with invert so the same anchors used both ways
+    // don't collide.
+    let mut key = path_signature(&clip.clip_anchors);
+    if clip.invert_path {
+        key ^= 0x9e37_79b9_7f4a_7c15;
+    }
+    let (id, _) = page.list.paths.intern(key, path);
+    Some((id, image_transform))
+}
+
+/// Defer-diagnostic for a clip on an image placed *without* an inner
+/// `<Image ItemTransform>` (the legacy stretch-to-bounds path). We don't
+/// synthesise the image-pixel→frame mapping there, so any clip — inline
+/// geometry or a deferred type — is recorded as deferred and the image
+/// renders frame-clipped only. A no-op when there's no clip.
+fn report_clip_for_untransformed_image(
+    page: &mut BuiltPage,
+    clip: Option<&paged_parse::ClippingPathSettings>,
+    uri: Option<&str>,
+    frame_id: Option<&str>,
+) {
+    let Some(clip) = clip else { return };
+    if clip.is_deferred_clip() || clip.has_renderable_geometry() {
+        report_clip_deferred(page, clip, uri, frame_id);
+    }
+}
+
+#[cfg(test)]
+mod clip_geometry_tests {
+    use super::*;
+    use paged_parse::{ClippingPathSettings, ClippingType};
+
+    fn corner(x: f32, y: f32) -> PathAnchor {
+        PathAnchor {
+            anchor: (x, y),
+            left: (x, y),
+            right: (x, y),
+        }
+    }
+
+    /// A square clip (CW) with a smaller square hole authored in the
+    /// SAME winding gets the inner contour re-wound so NonZero keeps it
+    /// as a hole — verifiable by the inner contour's anchors appearing
+    /// in reversed order.
+    #[test]
+    fn build_clip_path_flips_inner_contour_for_hole() {
+        // Outer square 0..100 (CW in screen space), inner square 40..60
+        // authored CW too (so it would NOT be a hole without flipping).
+        let clip = ClippingPathSettings {
+            clipping_type: Some(ClippingType::UserModifiedPath),
+            invert_path: false,
+            include_inside_edges: true,
+            applied_path_name: None,
+            threshold: None,
+            tolerance: None,
+            clip_anchors: vec![
+                corner(0.0, 0.0),
+                corner(100.0, 0.0),
+                corner(100.0, 100.0),
+                corner(0.0, 100.0),
+                // inner
+                corner(40.0, 40.0),
+                corner(60.0, 40.0),
+                corner(60.0, 60.0),
+                corner(40.0, 60.0),
+            ],
+            clip_subpath_starts: vec![0, 4],
+            clip_subpath_open: vec![false, false],
+        };
+        let path = build_image_clip_path(&clip, 100.0, 100.0).expect("path built");
+        // Two MoveTo contours survive.
+        let move_tos: Vec<_> = path
+            .segments
+            .iter()
+            .filter_map(|s| match s {
+                PathSegment::MoveTo { x, y } => Some((*x, *y)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(move_tos.len(), 2, "outer + hole contour");
+        // The inner contour's first MoveTo is its first authored anchor
+        // when NOT flipped, or its last anchor when flipped. Since both
+        // squares are authored CW, the inner one is flipped, so its
+        // MoveTo is the LAST authored inner anchor (40,60).
+        assert_eq!(
+            move_tos[1],
+            (40.0, 60.0),
+            "inner contour re-wound (reversed) so it punches a hole"
+        );
+    }
+
+    /// Invert prepends a bounding-box contour and reverses the path so
+    /// NonZero subtracts it — yielding two MoveTo contours where the
+    /// FIRST is the bbox corner (0,0).
+    #[test]
+    fn build_clip_path_invert_prepends_bbox() {
+        let clip = ClippingPathSettings {
+            clipping_type: Some(ClippingType::UserModifiedPath),
+            invert_path: true,
+            include_inside_edges: false,
+            applied_path_name: None,
+            threshold: None,
+            tolerance: None,
+            clip_anchors: vec![
+                corner(30.0, 30.0),
+                corner(70.0, 30.0),
+                corner(70.0, 70.0),
+                corner(30.0, 70.0),
+            ],
+            clip_subpath_starts: Vec::new(),
+            clip_subpath_open: Vec::new(),
+        };
+        let path = build_image_clip_path(&clip, 100.0, 100.0).expect("path built");
+        let move_tos: Vec<_> = path
+            .segments
+            .iter()
+            .filter_map(|s| match s {
+                PathSegment::MoveTo { x, y } => Some((*x, *y)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(move_tos.len(), 2, "bbox + punched rectangle");
+        assert_eq!(move_tos[0], (0.0, 0.0), "bbox contour first");
+    }
+
+    /// No anchors ⇒ no path (the defer path handles the diagnostic).
+    #[test]
+    fn build_clip_path_none_without_anchors() {
+        let clip = ClippingPathSettings {
+            clipping_type: Some(ClippingType::PhotoshopPath),
+            invert_path: false,
+            include_inside_edges: false,
+            applied_path_name: Some("Path 1".to_string()),
+            threshold: None,
+            tolerance: None,
+            clip_anchors: Vec::new(),
+            clip_subpath_starts: Vec::new(),
+            clip_subpath_open: Vec::new(),
+        };
+        assert!(build_image_clip_path(&clip, 100.0, 100.0).is_none());
+        assert!(clip.is_deferred_clip());
+        assert!(!clip.has_renderable_geometry());
+    }
 }
