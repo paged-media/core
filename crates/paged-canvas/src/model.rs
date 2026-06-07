@@ -263,6 +263,12 @@ fn created_element_id(
     if let paged_mutate::Operation::CreateGroup { spec } = op {
         return spec.self_id.clone().map(ElementId::Group);
     }
+    // Protocol v34 — a batch reports its LAST creating child (the id
+    // the batch-created sentinel resolved to), so insert-with-
+    // metadata flows still get a `createdId` to select.
+    if let paged_mutate::Operation::Batch { ops } = op {
+        return ops.iter().rev().find_map(created_element_id);
+    }
     if let paged_mutate::Operation::InsertNode { node, .. } = op {
         return match node.node_id() {
             paged_mutate::NodeId::TextFrame(id) => Some(ElementId::TextFrame(id)),
@@ -1783,11 +1789,55 @@ impl CanvasModel {
                 // batch falls through to the non-frame handler so
                 // the worker can return a coherent error.
                 let mut translated = Vec::with_capacity(ops.len());
+                // Protocol v34 — the batch-created sentinel: a child
+                // whose element id is `$created` addresses the element
+                // minted by the most recent CREATING child of this
+                // same (flat) batch. This is what lets a plugin
+                // create an object and attach metadata/properties in
+                // ONE undo step (apply_batch is atomic + rolls back).
+                let mut last_created: Option<crate::element_selection::ElementId> = None;
                 for child in ops {
+                    let substituted;
+                    let child = match (child, last_created.as_ref()) {
+                        (
+                            Mutation::SetPluginMetadata {
+                                element_id,
+                                key,
+                                value,
+                            },
+                            Some(created),
+                        ) if element_id.raw_id() == "$created" => {
+                            substituted = Mutation::SetPluginMetadata {
+                                element_id: created.clone(),
+                                key: key.clone(),
+                                value: value.clone(),
+                            };
+                            &substituted
+                        }
+                        (
+                            Mutation::SetElementProperty {
+                                element_id,
+                                path,
+                                value,
+                            },
+                            Some(created),
+                        ) if element_id.raw_id() == "$created" => {
+                            substituted = Mutation::SetElementProperty {
+                                element_id: created.clone(),
+                                path: *path,
+                                value: value.clone(),
+                            };
+                            &substituted
+                        }
+                        _ => child,
+                    };
                     // FINDING #6 — thread the SAME mint counter so each
                     // child insert in the batch mints a distinct self_id.
                     let op = self
                         .try_translate_frame_mutation_to_operation(child, mint_offset)?;
+                    if let Some(id) = created_element_id(&op) {
+                        last_created = Some(id);
+                    }
                     translated.push(op);
                 }
                 Some(Operation::Batch { ops: translated })

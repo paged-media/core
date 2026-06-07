@@ -117,6 +117,12 @@ export type WorkerToMain = WorkerToMainKind & {
 ///   the minted group id as `createdId`. Undo restores the exact
 ///   pre-group z-order via inverse-side `restore_slots` (internal —
 ///   not a wire field).
+/// v34 (batch-created sentinel): inside a `Batch`, a child
+///   `SetPluginMetadata` / `SetElementProperty` whose element id is
+///   the literal `$created` addresses the element minted by the most
+///   recent CREATING child of the same (flat) batch — create + attach
+///   metadata/properties as ONE atomic, single-undo-step mutation.
+///   Nested batches don't propagate the sentinel outward.
 /// v33 (plugin-metadata carrier, decision 9 facility):
 ///   `SetPluginMetadata { element_id, key, value }` — set / replace /
 ///   delete (value: null) one `Properties/Label` `KeyValuePair` in the
@@ -124,7 +130,7 @@ export type WorkerToMain = WorkerToMainKind & {
 ///   cap, JSON envelope `{v, data, engine?}`). `element_properties` on
 ///   a leaf page item now also returns its `x-paged:*` entries as
 ///   `PropertyPath::PluginMetadata` / `Value::PluginMetadata` pairs.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(33);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(34);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -2861,8 +2867,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v33() {
-        assert_eq!(PROTOCOL_VERSION.0, 33);
+    fn protocol_version_is_v34() {
+        assert_eq!(PROTOCOL_VERSION.0, 34);
     }
 
     #[test]

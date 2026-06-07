@@ -374,3 +374,65 @@ fn insert_path_polyline_and_smooth_fit() {
         "smooth fit should produce Bezier handles"
     );
 }
+
+/// Protocol v34 — the batch-created sentinel: insertFrame +
+/// setPluginMetadata("$created") apply as ONE atomic mutation (one
+/// undo step removes both the metadata and the frame).
+#[test]
+fn batch_created_sentinel_attaches_metadata_in_one_undo_step() {
+    let mut model = load();
+    let envelope = r#"{"v":1,"data":{"html":"<p>x</p>","css":""}}"#;
+    let batch = Mutation::Batch {
+        ops: vec![
+            Mutation::InsertFrame {
+                page_id: PageId("p1".into()),
+                bounds: (10.0, 10.0, 80.0, 120.0),
+            },
+            Mutation::SetPluginMetadata {
+                element_id: paged_canvas::ElementId::Rectangle("$created".into()),
+                key: "x-paged:media.paged.web".into(),
+                value: Some(envelope.into()),
+            },
+        ],
+    };
+    let before_rects = model.scene().spreads[0].spread.rectangles.len();
+    let outcome = model.apply_mutation(&batch).expect("batch applies");
+    let created = match outcome.created_id.expect("created id") {
+        paged_canvas::ElementId::Rectangle(id) => id,
+        other => panic!("expected Rectangle, got {other:?}"),
+    };
+    assert_ne!(created, "$created", "sentinel must resolve to a real id");
+    // The metadata landed on the minted element.
+    let labels = model.scene().spreads[0]
+        .spread
+        .labels
+        .get(&created)
+        .expect("label written in the same batch");
+    assert_eq!(
+        labels,
+        &vec![("x-paged:media.paged.web".to_string(), envelope.to_string())]
+    );
+
+    // ONE undo removes the frame AND the metadata.
+    model.undo().expect("undo");
+    assert_eq!(
+        model.scene().spreads[0].spread.rectangles.len(),
+        before_rects
+    );
+    assert!(!model.scene().spreads[0].spread.labels.contains_key(&created));
+}
+
+/// The sentinel without a preceding create is a coherent error, not a
+/// silent write to a literal "$created" id.
+#[test]
+fn batch_sentinel_without_create_rejects() {
+    let mut model = load();
+    let result = model.apply_mutation(&Mutation::Batch {
+        ops: vec![Mutation::SetPluginMetadata {
+            element_id: paged_canvas::ElementId::Rectangle("$created".into()),
+            key: "x-paged:media.paged.web".into(),
+            value: Some(r#"{"v":1,"data":{}}"#.into()),
+        }],
+    });
+    assert!(result.is_err(), "got {result:?}");
+}
