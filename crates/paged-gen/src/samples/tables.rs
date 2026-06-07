@@ -406,13 +406,17 @@ fn variants() -> Vec<Variant> {
                 },
             }),
         },
-        // Tables v2 (W1.11 / W1.12) — one fixture exercising the full
-        // v2 surface: a header row, a footer row, a column-spanning
+        // Tables v2 (W1.11 / W1.12 / W1.13) — one fixture exercising the
+        // full v2 surface: a header row, a footer row, a column-spanning
         // header cell, a row-spanning body cell, per-cell edge strokes
-        // (colour + tint), and per-cell vertical justification
-        // (Center / Bottom). Header + footer fills tint the bands so the
-        // diff harness can attribute each band; the spanning cells widen
-        // / lengthen as the renderer's span path dictates.
+        // (colour + tint), and per-cell vertical justification across all
+        // three non-trivial seats — Center, Bottom AND JustifyAlign. The
+        // JustifyAlign cell carries MULTIPLE paragraphs (the W1.13
+        // cell-text addressing) so the renderer's inter-paragraph
+        // distribute path actually fires (it needs ≥ 2 emitted
+        // paragraphs). Header + footer fills tint the bands so the diff
+        // harness can attribute each band; the spanning cells widen /
+        // lengthen as the renderer's span path dictates.
         Variant {
             name: "tables · v2 · header-footer-spans-strokes-vjust",
             table: Box::new(|id| Table {
@@ -429,10 +433,11 @@ fn variants() -> Vec<Variant> {
                     // Column-major, with spans omitting covered slots.
                     // Header row 0: a single cell spanning all 3 columns.
                     // Body rows 1–2: col 0 has a cell spanning both body
-                    // rows (a row-span); cols 1–2 are plain, one
-                    // Center-justified, one Bottom-justified, with a
-                    // magenta-tinted edge stroke on the centre body cell.
-                    // Footer row 3: three plain cells.
+                    // rows (a row-span); cols 1–2 carry the justified
+                    // cells (Center, Bottom, and a multi-paragraph
+                    // JustifyAlign cell), with a magenta-tinted edge
+                    // stroke on the centre body cell. Footer row 3: three
+                    // plain cells.
                     let header = Cell {
                         fill_color: Some("Color/CMYKCyan20".to_string()),
                         ..Cell::plain("Header (spans 3 cols)")
@@ -453,6 +458,21 @@ fn variants() -> Vec<Variant> {
                     }
                     .with_vertical_justification("CenterAlign");
 
+                    // W1.13 — a multi-paragraph JustifyAlign cell. The
+                    // three paragraphs distribute the vertical slack
+                    // between them (the first pinned to the top, the last
+                    // to the bottom), which the renderer's table-cell
+                    // JustifyAlign arm only triggers with ≥ 2 paragraphs.
+                    let justified = Cell {
+                        paragraphs: vec![
+                            Paragraph::plain("Justify 1"),
+                            Paragraph::plain("Justify 2"),
+                            Paragraph::plain("Justify 3"),
+                        ],
+                        ..Cell::plain("")
+                    }
+                    .with_vertical_justification("JustifyAlign");
+
                     let bottomed = Cell::plain("Bottom").with_vertical_justification("BottomAlign");
 
                     vec![
@@ -464,9 +484,10 @@ fn variants() -> Vec<Variant> {
                         // (col 0 row 2 covered by the row-span)
                         Cell::plain("Foot 1"),
                         // col 1: row 0 covered by the header col-span;
-                        // body rows 1–2 are the justified cells; footer.
+                        // body row 1 is Center-justified, body row 2 is
+                        // the multi-paragraph JustifyAlign cell; footer.
                         centered,
-                        Cell::plain("R2C2"),
+                        justified,
                         Cell::plain("Foot 2"),
                         // col 2: row 0 covered; body rows; footer.
                         Cell::plain("R1C3"),

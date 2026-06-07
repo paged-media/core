@@ -706,3 +706,75 @@ fn edited_cell_paragraphs_relayout_into_more_lines() {
         "edited cell must re-lay out into more lines ({before} -> {after})"
     );
 }
+
+// ── W4.11 — generated tables fixture: v2 JustifyAlign multi-paragraph ──
+
+/// The `tables.idml` v2 variant carries a 3-paragraph JustifyAlign cell
+/// (W1.13). Build the GENERATED fixture (not a hand-construct) and assert
+/// the renderer distributes the cell's three paragraphs vertically: the
+/// span from the first paragraph's baseline to the third's must exceed
+/// the natural tightly-stacked span (≈ 2 line-heights), proving the
+/// inter-paragraph distribute path fired through the generated corpus.
+#[test]
+fn generated_tables_v2_justify_cell_distributes_paragraphs() {
+    let bytes = paged_gen::write_idml(&paged_gen::samples::tables::build()).expect("write_idml");
+    let document = Document::open(&bytes).expect("Document::open");
+    let built = build_with_fonts_doc(&document);
+
+    // The v2 variant is the 12th (0-based 11) page; its body story holds
+    // the table. Gather every cell line across all stories, grouped by
+    // (story_id, cell), and find the JustifyAlign cell: the only cell
+    // whose lines carry three distinct paragraph indices (0, 1, 2).
+    use std::collections::BTreeMap;
+    let mut by_cell: BTreeMap<(String, u32, u32), Vec<(u32, f32)>> = BTreeMap::new();
+    for page in &built.pages {
+        for line in &page.story_layout {
+            if let Some(cell) = &line.cell {
+                by_cell
+                    .entry((cell.table_id.clone(), cell.row, cell.col))
+                    .or_default()
+                    .push((line.paragraph_idx, line.baseline_y_pt));
+            }
+        }
+    }
+
+    // Find the cell with exactly three paragraphs (0,1,2) — the
+    // JustifyAlign multi-paragraph cell.
+    let justify_cell = by_cell.values().find(|lines| {
+        let mut paras: Vec<u32> = lines.iter().map(|(p, _)| *p).collect();
+        paras.sort_unstable();
+        paras.dedup();
+        paras == vec![0, 1, 2]
+    });
+    let lines = justify_cell.expect("a 3-paragraph cell (the JustifyAlign v2 cell)");
+
+    let baselines: Vec<f32> = {
+        let mut bs: Vec<(u32, f32)> = lines.clone();
+        bs.sort_by_key(|(p, _)| *p);
+        bs.into_iter().map(|(_, y)| y).collect()
+    };
+    let span = baselines.last().unwrap() - baselines.first().unwrap();
+    // A tight stack of three 9pt lines spans ≈ 2 × (9 × 1.2) ≈ 21.6pt.
+    // The cell row is ROW_H × 2 = 56pt tall; JustifyAlign distributes the
+    // slack, so the first→last span must clearly exceed the tight stack.
+    assert!(
+        span > 30.0,
+        "JustifyAlign must distribute the 3 paragraphs across the cell \
+         (baselines {baselines:?}, span {span})"
+    );
+}
+
+/// Build a parsed document with Inter as BOTH the named resolver font
+/// and the default fallback — the generated tables cells pin no
+/// `AppliedFont`, so they shape against the default.
+fn build_with_fonts_doc(document: &Document) -> paged_renderer::BuiltDocument {
+    let inter = read_font("Inter.ttf");
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, inter.clone());
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        font: Some(&inter),
+        ..PipelineOptions::default()
+    };
+    pipeline::build_document(document, &opts).unwrap()
+}

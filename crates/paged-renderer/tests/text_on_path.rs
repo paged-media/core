@@ -91,7 +91,7 @@ fn build() -> pipeline::BuiltDocument {
 #[test]
 fn arch_glyphs_ride_the_path_with_tangent_rotation() {
     let built = build();
-    assert_eq!(built.pages.len(), 3, "three single-page spreads");
+    assert_eq!(built.pages.len(), 6, "six single-page spreads");
 
     // Page 0 — the open arch. Glyphs centre along the arc and rotate
     // to the local tangent.
@@ -186,6 +186,44 @@ fn circle_center_alignment_emits_glyphs() {
     assert!(
         any_left && any_right,
         "ring glyphs should straddle the circle centre"
+    );
+}
+
+#[test]
+fn ascender_descender_seats_offset_the_glyphs_off_the_baseline() {
+    // Pages 3/4/5 ride the SAME straight horizontal segment with the
+    // SAME text — only PathTypeAlignment differs (Baseline / Ascender /
+    // Descender). On a flat segment the seat shift is purely vertical, so
+    // the first glyph's x matches across all three and only its y moves:
+    // AscenderPathType lifts the glyph so its TOP rides the path (origin
+    // drops, larger y); DescenderPathType drops it so its BOTTOM rides
+    // (origin rises, smaller y); Baseline sits between.
+    let built = build();
+    let first = |page: usize| -> (f32, f32) {
+        let g = glyph_placements(&built.pages[page].list.commands);
+        assert!(!g.is_empty(), "page {page} should emit glyphs");
+        (g[0].tx, g[0].ty)
+    };
+    let (bx, by) = first(3); // segment · baseline
+    let (ax, ay) = first(4); // segment · ascender
+    let (dx, dy) = first(5); // segment · descender
+
+    // Flat segment + identical text ⇒ identical x for the first glyph.
+    assert!(
+        (ax - bx).abs() < 0.5 && (dx - bx).abs() < 0.5,
+        "flat-segment seats share the path start x (baseline {bx}, asc {ax}, desc {dx})"
+    );
+    // The seats must land at distinct y, strictly bracketing the
+    // baseline (ascender above OR below — but on opposite sides of it).
+    assert!(
+        (ay - by).abs() > 1.0 && (dy - by).abs() > 1.0,
+        "ascender / descender seats must shift the glyph off the baseline \
+         (baseline y {by}, asc y {ay}, desc y {dy})"
+    );
+    assert!(
+        (ay - by).signum() != (dy - by).signum(),
+        "ascender and descender seats must shift to OPPOSITE sides of the \
+         baseline (baseline {by}, asc {ay}, desc {dy})"
     );
 }
 

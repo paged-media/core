@@ -59,6 +59,8 @@ const PAGE_LINE_BASELINE: usize = 7;
 const PAGE_LINE_CAP_HEIGHT: usize = 8;
 const PAGE_LINE_TOP_OF_LEADING: usize = 9;
 const PAGE_PAGE_MARGINS: usize = 10;
+// W1.16 LineXHeight seat — appended last in the sample's variant list.
+const PAGE_LINE_X_HEIGHT: usize = 11;
 
 fn read_font(name: &str) -> Vec<u8> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -252,6 +254,42 @@ fn line_vertical_reference_points_resolve_real_metrics() {
     assert!(
         leading_top < cap_top && cap_top < baseline_top,
         "ordering leading({leading_top}) < cap({cap_top}) < baseline({baseline_top})"
+    );
+}
+
+#[test]
+fn line_x_height_reference_seats_between_baseline_and_cap_height() {
+    // W1.16 LineXHeight seat: the frame's top lands x_height·pt above the
+    // anchor line's baseline — strictly between the baseline (0 above)
+    // and the cap-height (cap_height·pt above, cap > x-height for Latin
+    // fonts). Shares the deterministic horizontal snap with the other
+    // line variants, so X is identical and only the vertical reference
+    // moves.
+    let built = build_anchored();
+    let (xx, xheight_top) = anchored_fill_top_left(&built, PAGE_LINE_X_HEIGHT);
+    let (_, baseline_top) = anchored_fill_top_left(&built, PAGE_LINE_BASELINE);
+    let (_, cap_top) = anchored_fill_top_left(&built, PAGE_LINE_CAP_HEIGHT);
+
+    let expected_x = (PAGE_W_PT - BODY_W_PT) * 0.5 + BODY_W_PT - ANCHOR_W_PT;
+    assert!(
+        (xx - expected_x).abs() < 0.5,
+        "x-height variant x: expected {expected_x}, got {xx}"
+    );
+
+    const PT: f32 = 12.0;
+    let (_cap_em, xh_em, _asc, _desc) = open_sans_metrics();
+    // The x-height top sits x_height·pt above the baseline.
+    let xh_delta = baseline_top - xheight_top;
+    assert!(
+        (xh_delta - xh_em * PT).abs() < 0.2,
+        "x-height delta: expected {} (xh_em·pt), got {xh_delta}",
+        xh_em * PT
+    );
+    // Strict ordering above the baseline: cap-height higher than
+    // x-height, x-height higher than baseline.
+    assert!(
+        cap_top < xheight_top && xheight_top < baseline_top,
+        "ordering cap({cap_top}) < x-height({xheight_top}) < baseline({baseline_top})"
     );
 }
 

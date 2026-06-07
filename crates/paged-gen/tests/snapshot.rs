@@ -143,6 +143,11 @@ fn tables_round_trips_through_parser() {
     assert_eq!(container.designmap.spreads.len(), sample.spreads.len());
     // Every body story must parse a Table out of its host paragraph.
     let mut tables_found = 0;
+    // W1.13 — the v2 variant carries a JustifyAlign cell with MULTIPLE
+    // paragraphs (the inter-paragraph distribute input). Assert it
+    // round-trips: at least one cell pairs VerticalJustification
+    // ="JustifyAlign" with ≥ 2 paragraphs.
+    let mut justify_multipara_cells = 0;
     for entry_path in container.entries.keys() {
         if !entry_path.starts_with("Stories/") {
             continue;
@@ -150,12 +155,24 @@ fn tables_round_trips_through_parser() {
         let xml = &container.entries[entry_path];
         let story = paged_parse::Story::parse(xml).expect("Story::parse");
         for p in &story.paragraphs {
-            if p.table.is_some() {
+            if let Some(table) = &p.table {
                 tables_found += 1;
+                for cell in &table.cells {
+                    if cell.vertical_justification.as_deref() == Some("JustifyAlign")
+                        && cell.paragraphs.len() >= 2
+                    {
+                        justify_multipara_cells += 1;
+                    }
+                }
             }
         }
     }
     assert_eq!(tables_found, sample.spreads.len());
+    assert!(
+        justify_multipara_cells >= 1,
+        "the v2 variant must carry a multi-paragraph JustifyAlign cell (W1.13), \
+         found {justify_multipara_cells}"
+    );
 }
 
 #[test]
