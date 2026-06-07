@@ -239,8 +239,9 @@ pub struct DocumentDefaults {
 /// Editor-ops — the element a structural-insert Operation created,
 /// mapped to the channel's `ElementId` so the `MutationApplied` reply
 /// can carry it (the editor selects the fresh element).
-/// B-04 — leaf ElementId -> NodeId for group membership (groups and
-/// non-page-item ids map to None and reject wire-side).
+/// B-04 — leaf ElementId -> NodeId (groups and non-page-item ids map
+/// to None and reject wire-side). Used by the plugin-metadata carrier,
+/// which targets leaf page items only.
 fn element_to_leaf_node_id(
     id: &crate::element_selection::ElementId,
 ) -> Option<paged_mutate::NodeId> {
@@ -252,6 +253,20 @@ fn element_to_leaf_node_id(
         ElementId::GraphicLine(s) => paged_mutate::NodeId::GraphicLine(s.clone()),
         ElementId::Polygon(s) => paged_mutate::NodeId::Polygon(s.clone()),
         _ => return None,
+    })
+}
+
+/// B-04 / W1.20 — group-member ElementId -> NodeId. Leaf page items
+/// AND `Group`s (the v2 nested-create case) map through; non-page-item
+/// ids (StoryRange / Table / TableCell) map to None and reject
+/// wire-side.
+fn element_to_member_node_id(
+    id: &crate::element_selection::ElementId,
+) -> Option<paged_mutate::NodeId> {
+    use crate::element_selection::ElementId;
+    Some(match id {
+        ElementId::Group(s) => paged_mutate::NodeId::Group(s.clone()),
+        other => return element_to_leaf_node_id(other),
     })
 }
 
@@ -460,6 +475,64 @@ fn frame_to_tree_node(
             }
         }),
     }
+}
+
+/// W1.20 (groups v2) — the spread-space axis-aligned bounding box of
+/// every leaf reachable from `group_idx` (descending through nested
+/// groups), each leaf's `[bounds × effective item_transform]` oriented
+/// box folded in. `None` when the group is empty / unresolvable. Used
+/// by the Group read-side descriptor so the layers/tree panel can show
+/// a group's extent and the inspector can pivot scale/rotate gestures.
+fn group_union_aabb(spread: &paged_parse::Spread, group_idx: usize) -> Option<paged_parse::Bounds> {
+    use paged_parse::{Bounds, FrameRef};
+    fn leaf_box(spread: &paged_parse::Spread, r: FrameRef) -> Option<Bounds> {
+        let (bounds, it) = match r {
+            FrameRef::TextFrame(i) => spread
+                .text_frames
+                .get(i)
+                .map(|f| (f.bounds, f.item_transform)),
+            FrameRef::Rectangle(i) => spread
+                .rectangles
+                .get(i)
+                .map(|f| (f.bounds, f.item_transform)),
+            FrameRef::Oval(i) => spread.ovals.get(i).map(|f| (f.bounds, f.item_transform)),
+            FrameRef::GraphicLine(i) => spread
+                .graphic_lines
+                .get(i)
+                .map(|f| (f.bounds, f.item_transform)),
+            FrameRef::Polygon(i) => spread.polygons.get(i).map(|f| (f.bounds, f.item_transform)),
+            FrameRef::Group(_) => None,
+        }?;
+        // `transform_bbox` returns the axis-aligned bbox of the
+        // oriented (bounds × item_transform) box in spread space.
+        Some(crate::hit::transform_bbox(bounds, it))
+    }
+    fn walk(spread: &paged_parse::Spread, gi: usize, acc: &mut Option<Bounds>) {
+        let Some(group) = spread.groups.get(gi) else {
+            return;
+        };
+        for m in &group.members {
+            match *m {
+                FrameRef::Group(child) => walk(spread, child, acc),
+                leaf => {
+                    if let Some(b) = leaf_box(spread, leaf) {
+                        *acc = Some(match acc.take() {
+                            Some(a) => Bounds {
+                                left: a.left.min(b.left),
+                                top: a.top.min(b.top),
+                                right: a.right.max(b.right),
+                                bottom: a.bottom.max(b.bottom),
+                            },
+                            None => b,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    let mut acc: Option<Bounds> = None;
+    walk(spread, group_idx, &mut acc);
+    acc
 }
 
 /// SDK Phase 3 — uniform-collapse helper for the StoryRange
@@ -2008,14 +2081,28 @@ impl CanvasModel {
                     prev_subpath_open: None,
                 },
             }),
+            // W1.20 (groups v2) — members may include existing groups
+            // (group-of-groups); `element_to_member_node_id` resolves
+            // Group ids too. Fresh top-level create carries no parent /
+            // own-transform (those are inverse-only).
             Mutation::CreateGroup { member_ids } => Some(Operation::CreateGroup {
                 spec: paged_mutate::GroupSpec {
                     self_id: None,
                     members: member_ids
                         .iter()
-                        .map(element_to_leaf_node_id)
+                        .map(element_to_member_node_id)
                         .collect::<Option<Vec<_>>>()?,
+                    parent: None,
+                    item_transform: None,
                 },
+            }),
+            Mutation::SetGroupTransform {
+                group_id,
+                transform,
+            } => Some(Operation::SetGroupTransform {
+                group: group_id.clone(),
+                transform: *transform,
+                prev: None,
             }),
             Mutation::DissolveGroup { group_id } => Some(Operation::DissolveGroup {
                 group_id: group_id.clone(),
@@ -3748,10 +3835,44 @@ impl CanvasModel {
                         ));
                         entries
                     }),
-                // Oval / Polygon / GraphicLine / Group: v1 surfaces
-                // only the geometry common to all kinds (bounds +
-                // transform). Per-kind authored properties (fill,
-                // stroke) follow once the apply arms cover them.
+                // W1.20 (groups v2) — a Group surfaces its own
+                // `ItemTransform` (what `SetGroupTransform` writes) plus
+                // its content's union AABB in spread space (so the
+                // inspector/layers panel can show the group's extent and
+                // pivot transform gestures). Per-member properties are
+                // read by selecting the members themselves.
+                ElementId::Group(_) => spread
+                    .groups
+                    .iter()
+                    .position(|g| g.self_id.as_deref() == Some(raw))
+                    .map(|gi| {
+                        let g = &spread.groups[gi];
+                        let bounds = group_union_aabb(spread, gi).unwrap_or(paged_parse::Bounds {
+                            top: 0.0,
+                            left: 0.0,
+                            bottom: 0.0,
+                            right: 0.0,
+                        });
+                        vec![
+                            PropertyEntry {
+                                path: PropertyPath::FrameBounds,
+                                value: Some(Value::Bounds([
+                                    bounds.top,
+                                    bounds.left,
+                                    bounds.bottom,
+                                    bounds.right,
+                                ])),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameTransform,
+                                value: Some(Value::Transform(g.item_transform)),
+                            },
+                        ]
+                    }),
+                // Oval / Polygon / GraphicLine: v1 surfaces only the
+                // geometry common to all kinds (bounds + transform).
+                // Per-kind authored properties (fill, stroke) follow
+                // once the apply arms cover them.
                 _ => None,
             };
             if let Some(mut entries) = entries {

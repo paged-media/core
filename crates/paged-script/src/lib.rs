@@ -536,6 +536,36 @@ fn paged_set(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
     let Some(element_id) = parse_element_id(&id) else {
         return Ok(JsValue::from(false));
     };
+
+    // W1.20 (groups v2) — `paged.set("group:<id>", "groupTransform",
+    // [a,b,c,d,tx,ty])` moves/scales/rotates a group as a UNIT (members'
+    // effective transforms + the hit-test follow). This is distinct
+    // from `frameTransform` on a group, which writes only the group's
+    // own metadata transform (the v1 store-only arm). Routed to the
+    // dedicated `SetGroupTransform` mutation rather than
+    // `SetElementProperty`.
+    if path == "groupTransform" {
+        let paged_canvas::element_selection::ElementId::Group(group_id) = element_id else {
+            return Ok(JsValue::from(false));
+        };
+        // `null` clears to identity; a 6-element array sets the matrix.
+        let transform = if value_arg.is_null() {
+            None
+        } else {
+            match js_value_to_wire(&value_arg, paged_mutate::PropertyPath::FrameTransform, ctx) {
+                Some(paged_mutate::Value::Transform(t)) => t,
+                _ => return Ok(JsValue::from(false)),
+            }
+        };
+        let mutation = Mutation::SetGroupTransform {
+            group_id,
+            transform,
+        };
+        return Ok(JsValue::from(with_model(|m| {
+            m.apply_mutation(&mutation).is_ok()
+        })));
+    }
+
     let Some(wire_path) = parse_property_path(&path) else {
         return Ok(JsValue::from(false));
     };

@@ -164,6 +164,17 @@ export type WorkerToMain = WorkerToMainKind & {
 ///     - W1.12b: `Mutation::SetCellSpan` (→ `Operation::SetCellSpan`)
 ///       setting a cell's `RowSpan` / `ColumnSpan` (merge / split),
 ///       inverse restoring the prior spans.
+///   - W1.20 (groups v2) also rides v35 — same unpublished-protocol
+///     posture (rule 4). New / extended, additive: `CreateGroup`'s
+///     `member_ids` may now carry `Group` ids (nested create);
+///     `DissolveGroup` of a nested group splices into the parent;
+///     `Mutation::SetGroupTransform { group_id, transform }` (→
+///     `Operation::SetGroupTransform`) moves/scales/rotates a group as
+///     a unit (members' effective transforms + the hit-test follow).
+///     The read surface that ships with it does NOT bump on its own
+///     (rule 1): the Group `element_properties` now reports
+///     `FrameBounds` (the union AABB) + `FrameTransform` (own group
+///     transform); the scene-tree already nests group members.
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(35);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
@@ -2367,17 +2378,33 @@ pub enum Mutation {
         element_id: crate::element_selection::ElementId,
         tolerance: f32,
     },
-    /// B-04 (protocol v32) — group leaf page items on one spread.
+    /// B-04 (protocol v32) — group page items on one spread.
     /// Reference-based and z-order-neutral (the group takes the
     /// earliest member's paint slot). Reply carries the minted group
-    /// id as `createdId` so the editor can select it.
+    /// id as `createdId` so the editor can select it. W1.20 (groups
+    /// v2): `member_ids` may include existing `Group`s, producing a
+    /// nested group-of-groups.
     CreateGroup {
         member_ids: Vec<crate::element_selection::ElementId>,
     },
     /// B-04 (protocol v32) — dissolve a group; members return to the
-    /// group's paint slot in stored order.
+    /// group's paint slot in stored order. W1.20 (groups v2):
+    /// dissolving a NESTED group splices its members back into the
+    /// parent group at the right slot (geometry unchanged), rather
+    /// than rejecting.
     DissolveGroup {
         group_id: String,
+    },
+    /// W1.20 (groups v2, rides v35) — move/scale/rotate a group as a
+    /// unit. The engine sets the group's own `ItemTransform` and
+    /// rebases every descendant member's effective transform by the
+    /// delta so the members follow rigidly; the hit-tester sees them at
+    /// their transformed positions automatically. `transform: None` ⇒
+    /// identity.
+    SetGroupTransform {
+        group_id: String,
+        #[serde(default)]
+        transform: Option<[f32; 6]>,
     },
     /// Plugin-metadata carrier (protocol v33) — one Label
     /// `KeyValuePair` on a leaf page item. `value: None` deletes the
@@ -2801,6 +2828,7 @@ impl Mutation {
             Self::SimplifyPath { .. } => "SimplifyPath",
             Self::CreateGroup { .. } => "CreateGroup",
             Self::DissolveGroup { .. } => "DissolveGroup",
+            Self::SetGroupTransform { .. } => "SetGroupTransform",
             Self::SetPluginMetadata { .. } => "SetPluginMetadata",
             Self::PathPointCurveType { .. } => "PathPointCurveType",
             Self::PathPointSet { .. } => "PathPointSet",

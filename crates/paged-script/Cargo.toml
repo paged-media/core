@@ -21,6 +21,8 @@ serde_json = "1"
 # Budget tests build a minimal in-memory IDML package so they don't
 # depend on the gitignored fidelity corpus (the worktree has none).
 zip = { workspace = true }
+# W1.20 — the groups-v2 script test reads parsed `FrameRef` members.
+paged-parse = { path = "../paged-parse" }
 
 [lints]
 workspace = true

@@ -2610,6 +2610,7 @@ dependencies = [
  "boa_engine",
  "paged-canvas",
  "paged-mutate",
+ "paged-parse",
  "serde",
  "serde_json",
  "zip",

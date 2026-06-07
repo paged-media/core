@@ -653,3 +653,79 @@ fn paged_set_with_malformed_story_range_returns_false() {
         .expect("no results line");
     assert!(line.contains("false false false"), "got: {line}");
 }
+
+/// W1.20 (groups v2) — `paged.set("group:<id>", "groupTransform",
+/// [a,b,c,d,tx,ty])` routes to the dedicated `SetGroupTransform`
+/// mutation: the group's own transform is set AND its members' effective
+/// transforms compose the delta (move as a unit). Distinct from
+/// `frameTransform` on a group, which only stores the group's metadata.
+#[test]
+fn paged_set_group_transform_moves_the_group_as_a_unit() {
+    let mut model = load();
+    // Discover a parsed group id + one of its leaf members.
+    let (group_id, leaf_id, leaf_before) = {
+        let mut found = None;
+        'spreads: for parsed in &model.scene().spreads {
+            let spread = &parsed.spread;
+            for g in &spread.groups {
+                if let Some(gid) = &g.self_id {
+                    if let Some(paged_parse::FrameRef::Rectangle(i)) = g
+                        .members
+                        .iter()
+                        .find(|m| matches!(m, paged_parse::FrameRef::Rectangle(_)))
+                    {
+                        if let Some(r) = spread.rectangles.get(*i) {
+                            if let Some(rid) = &r.self_id {
+                                found = Some((gid.clone(), rid.clone(), r.item_transform));
+                                break 'spreads;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        found.expect("geometry-groups fixture has a group with a rectangle member")
+    };
+
+    let script = format!(
+        r#"const ok = paged.set("group:{group_id}", "groupTransform", [1, 0, 0, 1, 64, 48]); console.log("ok=" + ok);"#
+    );
+    let result = execute_script(&mut model, &script);
+    assert!(result.error.is_none(), "script error: {:?}", result.error);
+    assert!(
+        result.output.iter().any(|l| l.contains("ok=true")),
+        "groupTransform set should succeed: {:?}",
+        result.output
+    );
+
+    // The group's own transform now carries (64, 48), and the member's
+    // effective transform shifted by the same delta from its prior value.
+    let mut group_t = None;
+    let mut leaf_after = None;
+    for parsed in &model.scene().spreads {
+        for g in &parsed.spread.groups {
+            if g.self_id.as_deref() == Some(group_id.as_str()) {
+                group_t = Some(g.item_transform);
+            }
+        }
+        for r in &parsed.spread.rectangles {
+            if r.self_id.as_deref() == Some(leaf_id.as_str()) {
+                leaf_after = Some(r.item_transform);
+            }
+        }
+    }
+    let group_t = group_t.flatten().expect("group transform set");
+    assert!(
+        (group_t[4] - 64.0).abs() < 1e-3 && (group_t[5] - 48.0).abs() < 1e-3,
+        "group own transform set to (64,48): {group_t:?}"
+    );
+    // delta = g_new * inv(g_old); for the geometry-groups variant the
+    // member is identity-local so it lands rigidly shifted. We just
+    // assert it CHANGED (the precise composition is covered by the
+    // paged-mutate suite).
+    let leaf_after = leaf_after.expect("member rectangle still present");
+    assert_ne!(
+        leaf_before, leaf_after,
+        "the group member's effective transform must follow the group move"
+    );
+}
