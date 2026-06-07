@@ -1562,3 +1562,61 @@ fn group_member_transform_unchanged_round_trips_byte_identical() {
         }
     }
 }
+
+// ---------------------------------------------------------------------
+// 9. W1.15 — inserted PAGES (DEFERRED 2026-06-07). This guards the
+//    documented defer: an `InsertPage` must not crash the writer, and
+//    the existing spreads must still round-trip cleanly. Serialising the
+//    NEW spread (new ZIP entry + designmap manifest patch) is the
+//    deferred work — see the loss list in `rewrite.rs`.
+// ---------------------------------------------------------------------
+
+#[test]
+fn inserted_page_does_not_break_existing_entries() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+    let before_spreads = doc.spreads.len();
+    // Address the first page so InsertPage has a valid `after_page_id`.
+    let page_id = doc
+        .spreads
+        .iter()
+        .find_map(|s| s.spread.pages.iter().find_map(|p| p.self_id.clone()))
+        .expect("a page");
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::InsertPage {
+            after_page_id: Some(page_id),
+            master_id: None,
+            spread_self_id: None,
+            page_self_id: None,
+            restore_spread_json: None,
+        })
+        .expect("insert page");
+    // The model grew a spread...
+    assert_eq!(
+        project.document().spreads.len(),
+        before_spreads + 1,
+        "model gained a spread"
+    );
+
+    // ...but the writer (which only patches source entries) produces a
+    // valid package whose EXISTING entries are unchanged. The new spread
+    // is NOT yet serialised (deferred): the entry set is the source's.
+    let out = write_idml(project.document(), &original).expect("write must not crash");
+    let src = entries(&original);
+    let dst = entries(&out);
+    assert_eq!(
+        src.keys().collect::<Vec<_>>(),
+        dst.keys().collect::<Vec<_>>(),
+        "entry set unchanged (new spread not yet serialised — deferred)"
+    );
+    // Re-open: the output is a valid, parseable IDML with the original
+    // spread count (the inserted page is the documented loss).
+    let re = Document::open(&out).expect("output re-parses");
+    assert_eq!(
+        re.spreads.len(),
+        before_spreads,
+        "inserted page not yet in the written package (deferred lane 5)"
+    );
+}

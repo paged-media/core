@@ -55,8 +55,13 @@
 //!
 //! The patch surface is the intersection of (a) attributes the parser
 //! round-trips onto the model and (b) the page-item / story properties
-//! the mutation layer (`paged_mutate::PropertyPath`) can change. See
-//! [`rewrite`] for the per-element inventory and the documented losses.
+//! the mutation layer (`paged_mutate::PropertyPath`) can change. On top
+//! of that property-patch foundation, W1.15 adds STRUCTURAL save-back:
+//! page-item inserts / removes within a spread, new swatches / gradients
+//! / styles injected into the Resources entries (see [`resources`]),
+//! table-cell text + style edits, and group-member transforms. See
+//! [`rewrite`] for the per-element inventory and the documented losses
+//! (inserted / removed PAGES are the precise remaining defer).
 
 use std::io::{Cursor, Read, Write};
 

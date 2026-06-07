@@ -77,26 +77,62 @@
 //!     `<TextVariableInstance>`, an anchored frame, an unknown entity)
 //!     passes through verbatim — never clobbered (see Known losses).
 //!
+//! # Structural edits (W1.15 — landed)
+//!
+//! * **Page-item inserts / removes.** A page item created by an
+//!   `InsertNode` op (a frame / rect / oval / polygon since load) is
+//!   serialised as a new element at the spread's close, in the canonical
+//!   `paged_gen` shape (geometry in `<Properties><PathGeometry>` at the
+//!   model bounds, identity `ItemTransform`); an item removed by
+//!   `RemoveNode` is dropped from the XML (element + subtree). See
+//!   [`write_inserted_items`] / the `remove_depth` skip in
+//!   [`rewrite_spread`].
+//! * **New resources.** Swatches / gradients / paragraph + character
+//!   styles created by ops are injected into `Resources/Graphic.xml` /
+//!   `Resources/Styles.xml` (see the `resources` module), so a frame
+//!   referencing a freshly-minted `Color/u3` resolves on re-open.
+//! * **Table-cell text + styles.** A `<Cell Self="...">` is matched to
+//!   its model `TableCell`, and its `<ParagraphStyleRange>` /
+//!   `<CharacterStyleRange>` patch against the cell paragraphs with
+//!   cell-local cursors (text + character-style attrs save).
+//! * **Group-member transforms.** The composed group∘member
+//!   `item_transform` is de-composed back to the on-disk member
+//!   transform by inverting the group-transform accumulation (see
+//!   [`recover_member_transform`]).
+//!
 //! # Known losses (documented, not silent)
 //!
-//! * **Table-cell text + styles.** `<ParagraphStyleRange>` /
-//!   `<CharacterStyleRange>` *inside* a `<Table>` belong to cell
-//!   paragraphs the parser stores on `paragraph.table.cells[]`, not on
-//!   the story's top-level `paragraphs`; patching them positionally
-//!   would misalign, so table-cell content passes through verbatim.
-//! * **Group-member transforms / paths.** Inside a `<Group>` the parser
-//!   composes the group transform into each member's `item_transform`
-//!   (and into its path anchors), so the model value isn't the on-disk
-//!   member geometry — patching it would corrupt the composition. Group
-//!   members keep their `ItemTransform` and `<PathPointArray>` verbatim.
+//! * **Inserted / removed PAGES (and their spread wrapping).** An
+//!   `InsertPage` op adds a new `ParsedSpread` (with a fresh
+//!   `Spreads/Spread_*.xml` src) and a `RemovePage` drops one, but the
+//!   writer only patches / copies the SOURCE archive's existing entries
+//!   — it has no machinery to ADD a new ZIP entry, edit `designmap.xml`'s
+//!   `<idPkg:Spread>` manifest, or drop a removed spread's entry, and no
+//!   from-scratch full-`<Spread>` serialiser. An inserted spread is
+//!   therefore silently skipped (its src isn't in the source ZIP →
+//!   `entry_bytes` returns `None`); a removed spread's entry survives
+//!   (orphaned, no longer referenced once designmap is also patched).
+//!   DEFERRED 2026-06-07 (W1.15): needs (a) a full-spread emitter, (b)
+//!   designmap.xml `<idPkg:Spread>` add/remove, (c) ZIP add/drop in
+//!   `write_idml`'s container assembly + the master-spread interaction —
+//!   roughly the size of the four landed lanes combined. Page-item
+//!   inserts WITHIN an existing spread (above) are fully handled.
+//! * **Singular group transform.** A group whose `ItemTransform` linear
+//!   part is non-invertible can't have its member transforms de-composed;
+//!   such a member keeps its `ItemTransform` verbatim (degenerate case;
+//!   InDesign never emits one for a translate/rotate/scale group).
+//! * **Group-member PATH anchors.** A group member's `<PathPointArray>`
+//!   still passes through verbatim. (The parser does NOT compose the
+//!   group transform into member anchors — it stores them raw — so a
+//!   `FramePathPoint` edit on a grouped item is not yet written; the
+//!   transform lane above covers the common move/scale/rotate gesture.)
 //! * **Runs with foreign inline markup.** A run whose text body carries
 //!   an `<?ACE?>` page-number marker, a `<TextVariableInstance>`, an
 //!   anchored frame, or an unknown entity passes through verbatim (its
 //!   attributes still patch). The structured text rewrite only fires on
 //!   pure `<Content>` / `<Br/>` / `<Tab/>` runs.
-//! * **Structural edits** (InsertNode / RemoveNode / MoveNode, new
-//!   swatches / styles / sections) are not reflected: this milestone is
-//!   the property-patch foundation. Adding / removing elements is W1.15.
+//! * **MoveNode / sections.** Reparenting a node across spreads
+//!   (`MoveNode`) and new `<Section>` definitions are not yet reflected.
 //! * Anything the parser never modeled (preferences, fonts, tags, the
 //!   XML backing store, master-spread item internals beyond the patched
 //!   attributes) is carried through verbatim and so is always faithful.
