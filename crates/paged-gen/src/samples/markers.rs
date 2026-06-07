@@ -186,12 +186,14 @@ pub fn build() -> Sample {
                 name: "Season".to_string(),
                 variable_type: "CustomTextType".to_string(),
                 contents: Some("Spring 2026".to_string()),
+                ..Default::default()
             },
             TextVariableDef {
                 self_id: pagecount_var.clone(),
                 name: "Page Count".to_string(),
                 variable_type: "PageCountType".to_string(),
                 contents: None,
+                ..Default::default()
             },
         ],
         hyperlink_destinations: vec![

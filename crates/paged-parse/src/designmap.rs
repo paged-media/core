@@ -341,6 +341,15 @@ pub struct TextVariable {
     /// `<TextVariablePreference TextAfter="...">` decoration appended to
     /// the resolved value.
     pub text_after: Option<String>,
+    /// W1.18c — `<TextVariablePreference AppliedParagraphStyle="...">`
+    /// (or `AppliedCharacterStyle`) for `RunningHeaderType` variables:
+    /// the style whose nearest on-page occurrence supplies the header
+    /// text. `None` for non-header variables.
+    pub running_header_style: Option<String>,
+    /// W1.18c — `<TextVariablePreference Use="FirstOnPage|LastOnPage">`
+    /// — which on-page match a running header picks up. `None` ⇒
+    /// FirstOnPage (InDesign's default).
+    pub running_header_use: Option<String>,
 }
 
 /// IDML `<Layer>` definition. Only the fields the renderer needs
@@ -599,6 +608,8 @@ impl DesignMap {
                                 date_format: None,
                                 text_before: None,
                                 text_after: None,
+                                running_header_style: None,
+                                running_header_use: None,
                             };
                             // A self-closing `<TextVariable/>` carries no
                             // preference child; push it straight away.
@@ -622,6 +633,19 @@ impl DesignMap {
                             var.date_format = attr(&e, b"Format").or(var.date_format.take());
                             var.text_before = attr(&e, b"TextBefore").or(var.text_before.take());
                             var.text_after = attr(&e, b"TextAfter").or(var.text_after.take());
+                            // W1.18c — running-header pickup: the style
+                            // whose nearest on-page occurrence supplies
+                            // the text, plus the First/LastOnPage choice.
+                            // InDesign serialises the style under either
+                            // `AppliedParagraphStyle` or
+                            // `AppliedCharacterStyle` depending on the
+                            // MatchParagraphStyle vs MatchCharacterStyle
+                            // variant; either fills the same slot.
+                            var.running_header_style = attr(&e, b"AppliedParagraphStyle")
+                                .or_else(|| attr(&e, b"AppliedCharacterStyle"))
+                                .or(var.running_header_style.take());
+                            var.running_header_use =
+                                attr(&e, b"Use").or(var.running_header_use.take());
                         }
                     }
                     // W1.4 — hyperlink destination resources.

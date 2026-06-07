@@ -28,8 +28,8 @@ pub use diagnostics::{Diagnostic, DiagnosticCode, RenderDiagnostics, Severity};
 pub use pipeline::{
     build, build_document, build_run_paint_picker, resolve_fill, resolve_stroke,
     BodyStoryEmissionDelta, BodyStoryPageDelta, BuiltDocument, BuiltPage, CellAddr, CellRect,
-    ClusterPos, FontMetricsOverride, FontTable, LineLayout, MasterTextEmitDelta, PageId,
-    PipelineOptions, PipelineStats, RunPaintPicker,
+    ClusterPos, DateParts, DocumentClock, FontMetricsOverride, FontTable, LineLayout,
+    MasterTextEmitDelta, PageId, PipelineOptions, PipelineStats, RunPaintPicker,
 };
 
 #[cfg(feature = "cpu")]

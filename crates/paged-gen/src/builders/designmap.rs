@@ -44,6 +44,9 @@ pub struct MarkerResources {
     /// separator rule and footnote spacing. `None` emits nothing, keeping
     /// every other sample's designmap byte-identical.
     pub footnote_option: Option<FootnoteOptionDef>,
+    /// W1.18b — `<Section>` definitions for chapter numbering / page
+    /// labels. Empty for samples that don't exercise sections.
+    pub sections: Vec<SectionDef>,
 }
 
 /// W1.8 — a document-level `<FootnoteOption>` to emit. Attribute names
@@ -64,14 +67,25 @@ pub struct FootnoteOptionDef {
     pub space_between: Option<f32>,
 }
 
-/// W1.4 — a `<TextVariable>` to emit. `contents` populates the
+/// W1.4 / W1.18 — a `<TextVariable>` to emit. `contents` populates the
 /// `<TextVariablePreference Contents="...">` child for custom-text
-/// variables; the renderer resolves all other types itself.
+/// variables; `date_format` the `Format` of a date variable;
+/// `running_header_style` / `running_header_use` the pickup style +
+/// First/LastOnPage choice of a running-header variable. The renderer
+/// resolves each type itself.
+#[derive(Default)]
 pub struct TextVariableDef {
     pub self_id: String,
     pub name: String,
     pub variable_type: String,
     pub contents: Option<String>,
+    /// W1.18a — `<TextVariablePreference Format="...">` for date types.
+    pub date_format: Option<String>,
+    /// W1.18c — running-header pickup style (an
+    /// `AppliedParagraphStyle` ref).
+    pub running_header_style: Option<String>,
+    /// W1.18c — `Use="FirstOnPage|LastOnPage"`.
+    pub running_header_use: Option<String>,
 }
 
 /// W1.4 — a `<Hyperlink>` (source span → destination resource).
@@ -82,12 +96,31 @@ pub struct HyperlinkDef {
     pub destination: String,
 }
 
-/// W1.4 — a hyperlink destination resource.
+/// W1.4 / W1.19 — a hyperlink destination resource.
 pub enum HyperlinkDestinationDef {
     /// `<HyperlinkURLDestination Self=... DestinationURL=...>`.
     Url { self_id: String, url: String },
     /// `<HyperlinkPageDestination Self=... DestinationPage=...>`.
     Page { self_id: String, page: String },
+    /// W1.19 — `<HyperlinkTextDestination Self=... DestinationText=...>`
+    /// — an in-story text anchor. The renderer resolves it to the page
+    /// the destination story landed on (post-layout), so a cross-
+    /// reference "see page N" re-resolves when the story moves.
+    TextAnchor { self_id: String, story: String },
+}
+
+/// W1.18b — a `<Section>` definition for chapter numbering.
+#[derive(Default)]
+pub struct SectionDef {
+    pub self_id: String,
+    /// `PageStart` — the `<Page Self>` the section begins at.
+    pub page_start: String,
+    /// `PageNumberStyle` (Arabic / UpperRoman / …).
+    pub number_style: Option<String>,
+    /// `PageNumberStart` — the section's first number.
+    pub start_at: Option<u32>,
+    /// `Marker` — an explicit chapter label (wins verbatim).
+    pub marker: Option<String>,
 }
 
 pub fn write_designmap(dm: &DesignMap) -> Vec<u8> {
@@ -149,12 +182,42 @@ pub fn write_designmap_with_markers(dm: &DesignMap, markers: &MarkerResources) -
                 ("VariableType", v.variable_type.as_str()),
             ],
         );
-        // Real exports nest a <TextVariablePreference>; for custom
-        // text it carries the literal `Contents`. Emit it for every
-        // variable (empty for non-custom) so the parser folds it in.
+        // Real exports nest a <TextVariablePreference> carrying the
+        // type-specific payload: `Contents` for custom text, `Format`
+        // for dates, `AppliedParagraphStyle` + `Use` for running
+        // headers. Emit only the attributes this variable sets so the
+        // existing custom/page-count call sites stay byte-identical.
         let contents = v.contents.as_deref().unwrap_or("");
-        b.empty("TextVariablePreference", &[("Contents", contents)]);
+        let mut attrs: Vec<(&str, &str)> = vec![("Contents", contents)];
+        if let Some(fmt) = v.date_format.as_deref() {
+            attrs.push(("Format", fmt));
+        }
+        if let Some(style) = v.running_header_style.as_deref() {
+            attrs.push(("AppliedParagraphStyle", style));
+        }
+        if let Some(use_v) = v.running_header_use.as_deref() {
+            attrs.push(("Use", use_v));
+        }
+        b.empty("TextVariablePreference", &attrs);
         b.end("TextVariable");
+    }
+    for sec in &markers.sections {
+        let mut attrs: Vec<(&str, &str)> = vec![
+            ("Self", sec.self_id.as_str()),
+            ("PageStart", sec.page_start.as_str()),
+        ];
+        let start_buf;
+        if let Some(start) = sec.start_at {
+            start_buf = start.to_string();
+            attrs.push(("PageNumberStart", &start_buf));
+        }
+        if let Some(style) = sec.number_style.as_deref() {
+            attrs.push(("PageNumberStyle", style));
+        }
+        if let Some(marker) = sec.marker.as_deref() {
+            attrs.push(("Marker", marker));
+        }
+        b.empty("Section", &attrs);
     }
     for d in &markers.hyperlink_destinations {
         match d {
@@ -177,6 +240,17 @@ pub fn write_designmap_with_markers(dm: &DesignMap, markers: &MarkerResources) -
                         ("Name", self_id.as_str()),
                         ("DestinationPage", page.as_str()),
                         ("DestinationPageSetting", "FitVisible"),
+                        ("Hidden", "false"),
+                    ],
+                );
+            }
+            HyperlinkDestinationDef::TextAnchor { self_id, story } => {
+                b.empty(
+                    "HyperlinkTextDestination",
+                    &[
+                        ("Self", self_id.as_str()),
+                        ("Name", self_id.as_str()),
+                        ("DestinationText", story.as_str()),
                         ("Hidden", "false"),
                     ],
                 );
