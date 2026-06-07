@@ -364,11 +364,24 @@ pub enum MainToWorkerKind {
         story_id: String,
         offset: u32,
         direction: crate::geometry::CaretDirection,
+        /// W1.13 — cell qualifier (rides v35, additive). `None` ⇒
+        /// `offset` is a story-local body offset; `Some` ⇒ cell-local.
+        /// Navigation stays WITHIN the addressed stream (a cell's
+        /// caret-up/down does not escape the cell). See `TextCellAddr`.
+        #[serde(default)]
+        cell: Option<crate::selection::TextCellAddr>,
     },
     /// panels.md (W0.6 caret queries) — the `[line_start, line_end]`
     /// story offsets of the visible line containing `offset` (Home /
     /// End targets). Reply: `LineBoundsResult`.
-    RequestLineBounds { story_id: String, offset: u32 },
+    RequestLineBounds {
+        story_id: String,
+        offset: u32,
+        /// W1.13 — cell qualifier (rides v35, additive). See
+        /// `RequestCaretNav::cell`.
+        #[serde(default)]
+        cell: Option<crate::selection::TextCellAddr>,
+    },
     /// Aftercare-A (protocol v31) — the `[start, end]` story byte
     /// offsets of the word containing the character at `offset`, per
     /// Unicode word segmentation (UAX-29). The editor flips
@@ -379,7 +392,15 @@ pub enum MainToWorkerKind {
     /// whitespace selects that whitespace span (documented in
     /// `word_bounds`); an offset past the story end clamps to the
     /// final word.
-    RequestWordBounds { story_id: String, offset: u32 },
+    RequestWordBounds {
+        story_id: String,
+        offset: u32,
+        /// W1.13 — cell qualifier (rides v35, additive). When `Some`,
+        /// offsets are cell-local and segmentation runs over the cell's
+        /// text. See `RequestCaretNav::cell`.
+        #[serde(default)]
+        cell: Option<crate::selection::TextCellAddr>,
+    },
     /// W1.23 (protocol v35) — the `[start, end)` story byte offsets of
     /// the paragraph containing the character at `offset`. The editor
     /// flips triple-click paragraph-selection on this. Reply:
@@ -390,7 +411,14 @@ pub enum MainToWorkerKind {
     /// separators (the boundary `\n` is excluded from the span). An
     /// offset past the story end clamps to the final paragraph. Mirrors
     /// `RequestWordBounds` exactly.
-    RequestParagraphBounds { story_id: String, offset: u32 },
+    RequestParagraphBounds {
+        story_id: String,
+        offset: u32,
+        /// W1.13 — cell qualifier (rides v35, additive). See
+        /// `RequestCaretNav::cell`.
+        #[serde(default)]
+        cell: Option<crate::selection::TextCellAddr>,
+    },
     /// Undo the most recent applied mutation. Reply: `UndoApplied`
     /// or `MutationFailed` (when the log is empty).
     Undo,
@@ -2011,11 +2039,20 @@ pub enum Mutation {
         story_id: String,
         offset: u32,
         text: String,
+        /// W1.13 — cell qualifier (rides v35, additive). `None` /
+        /// absent ⇒ `offset` is a story-local body offset; `Some` ⇒
+        /// cell-local offset into the named table cell. Mirrors
+        /// `ContentSelection.cell` / `TextOp::cell`.
+        #[serde(default)]
+        cell: Option<crate::selection::TextCellAddr>,
     },
     DeleteRange {
         story_id: String,
         start: u32,
         end: u32,
+        /// W1.13 — cell qualifier (see `InsertText::cell`).
+        #[serde(default)]
+        cell: Option<crate::selection::TextCellAddr>,
     },
     /// W0.5 — apply a named paragraph/character style to a story
     /// range. `scope` picks the level; `style` is the style ref
@@ -2933,6 +2970,7 @@ mod tests {
             story_id: "s1".into(),
             offset: 0,
             text: "x".into(),
+            cell: None,
         };
         assert_eq!(m.discriminant(), "InsertText");
         let json = serde_json::to_string(&m).unwrap();
@@ -3099,6 +3137,7 @@ mod tests {
             kind: MainToWorkerKind::RequestParagraphBounds {
                 story_id: "story1".into(),
                 offset: 7,
+                cell: None,
             },
         };
         let json = serde_json::to_string(&env).unwrap();
@@ -3109,7 +3148,11 @@ mod tests {
         assert!(json.contains("\"storyId\":\"story1\""), "{json}");
         let back: MainToWorker = serde_json::from_str(&json).unwrap();
         match back.kind {
-            MainToWorkerKind::RequestParagraphBounds { story_id, offset } => {
+            MainToWorkerKind::RequestParagraphBounds {
+                story_id,
+                offset,
+                cell: _,
+            } => {
                 assert_eq!(story_id, "story1");
                 assert_eq!(offset, 7);
             }
@@ -3314,6 +3357,7 @@ mod tests {
                 story_id: "u10".into(),
                 offset: 5,
                 direction: crate::geometry::CaretDirection::Down,
+                cell: None,
             },
         };
         let json = serde_json::to_string(&msg).unwrap();
@@ -3325,6 +3369,7 @@ mod tests {
                 story_id,
                 offset,
                 direction,
+                cell: _,
             } => {
                 assert_eq!(story_id, "u10");
                 assert_eq!(offset, 5);
@@ -3379,13 +3424,18 @@ mod tests {
             kind: MainToWorkerKind::RequestWordBounds {
                 story_id: "u10".into(),
                 offset: 7,
+                cell: None,
             },
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"kind\":\"requestWordBounds\""), "{json}");
         let back: MainToWorker = serde_json::from_str(&json).unwrap();
         match back.kind {
-            MainToWorkerKind::RequestWordBounds { story_id, offset } => {
+            MainToWorkerKind::RequestWordBounds {
+                story_id,
+                offset,
+                cell: _,
+            } => {
                 assert_eq!(story_id, "u10");
                 assert_eq!(offset, 7);
             }

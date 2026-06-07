@@ -38,6 +38,7 @@
 //! replays could leave a story with different but visually identical
 //! run topologies.
 
+use crate::selection::TextCellAddr;
 use paged_parse::CharacterRun;
 use paged_scene::Document;
 use serde::{Deserialize, Serialize};
@@ -62,6 +63,13 @@ pub enum TextOp {
         story_id: String,
         offset: u32,
         text: String,
+        /// W1.13 — cell qualifier. `None` ⇒ `offset` is a story-local
+        /// body offset; `Some(addr)` ⇒ cell-local offset into that
+        /// cell's paragraph stream. Rides v35 additively. The inverse
+        /// op carries the SAME qualifier so undo lands in the same
+        /// stream.
+        #[serde(default)]
+        cell: Option<TextCellAddr>,
     },
     DeleteRange {
         story_id: String,
@@ -72,7 +80,19 @@ pub enum TextOp {
         /// can call `InsertText` with the right payload.
         #[serde(default)]
         recovered: String,
+        /// W1.13 — cell qualifier (see `InsertText::cell`).
+        #[serde(default)]
+        cell: Option<TextCellAddr>,
     },
+}
+
+impl TextOp {
+    /// W1.13 — the cell qualifier this op addresses (`None` for body).
+    pub fn cell(&self) -> &Option<TextCellAddr> {
+        match self {
+            TextOp::InsertText { cell, .. } | TextOp::DeleteRange { cell, .. } => cell,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Error)]
@@ -98,24 +118,73 @@ pub fn apply(doc: &mut Document, op: &TextOp) -> Result<AppliedText, TextOpError
             story_id,
             offset,
             text,
-        } => apply_insert_text(doc, story_id, *offset, text),
+            cell,
+        } => apply_insert_text(doc, story_id, cell, *offset, text),
         TextOp::DeleteRange {
             story_id,
             start,
             end,
+            cell,
             ..
-        } => apply_delete_range(doc, story_id, *start, *end),
+        } => apply_delete_range(doc, story_id, cell, *start, *end),
     }
+}
+
+/// W1.13 — resolve the mutable paragraph stream a text address targets:
+/// the story's body `paragraphs` when `cell` is `None`, or the named
+/// cell's `paragraphs` when `cell` is `Some`. The whole `locate` /
+/// `splice` / run-merge machinery operates on this `&mut Vec<Paragraph>`
+/// so body and cell editing share ONE code path.
+fn find_paragraphs_mut<'a>(
+    doc: &'a mut Document,
+    story_id: &str,
+    cell: &Option<TextCellAddr>,
+) -> Result<&'a mut Vec<paged_parse::Paragraph>, TextOpError> {
+    let story = find_story_mut(doc, story_id)?;
+    match cell {
+        None => Ok(&mut story.paragraphs),
+        Some(addr) => find_cell_paragraphs_mut(story, story_id, addr),
+    }
+}
+
+/// Locate the cell's paragraph stream inside a story's body paragraphs.
+/// A `<Table>` hangs off a host paragraph's `table` field; the cell is
+/// matched by `(col, row)` coords. Returns `UnknownStory` (reused as a
+/// generic "address not found") when the table or cell is absent —
+/// e.g. an edit aimed at a stale cell after the table shape changed.
+fn find_cell_paragraphs_mut<'a>(
+    story: &'a mut paged_parse::Story,
+    story_id: &str,
+    addr: &TextCellAddr,
+) -> Result<&'a mut Vec<paged_parse::Paragraph>, TextOpError> {
+    for para in story.paragraphs.iter_mut() {
+        let Some(table) = para.table.as_mut() else {
+            continue;
+        };
+        if table.self_id.as_deref() != Some(addr.table_id.as_str()) {
+            continue;
+        }
+        for c in table.cells.iter_mut() {
+            if c.coords() == Some((addr.col, addr.row)) {
+                return Ok(&mut c.paragraphs);
+            }
+        }
+    }
+    Err(TextOpError::UnknownStory(format!(
+        "{story_id} cell {}:{} of table {}",
+        addr.col, addr.row, addr.table_id
+    )))
 }
 
 fn apply_insert_text(
     doc: &mut Document,
     story_id: &str,
+    cell: &Option<TextCellAddr>,
     offset: u32,
     text: &str,
 ) -> Result<AppliedText, TextOpError> {
-    let story = find_story_mut(doc, story_id)?;
-    let len = story_byte_len(&*story);
+    let paragraphs = find_paragraphs_mut(doc, story_id, cell)?;
+    let len = paragraphs_byte_len(paragraphs);
     if offset > len {
         return Err(TextOpError::OffsetOutOfRange {
             story_id: story_id.into(),
@@ -138,26 +207,26 @@ fn apply_insert_text(
     // chaining the resulting locate() to the next insertion point.
     let segments: Vec<&str> = text.split('\n').collect();
     if segments.len() == 1 {
-        insert_one_segment(story, offset, segments[0]);
+        insert_one_segment(paragraphs, offset, segments[0]);
     } else {
         // First segment: insert in place.
-        insert_one_segment(story, offset, segments[0]);
+        insert_one_segment(paragraphs, offset, segments[0]);
         let mut next_offset = offset + segments[0].len() as u32;
         // For each remaining segment: split the paragraph at
         // next_offset (creating a new paragraph), then insert the
         // segment at the head of the new paragraph.
         for seg in &segments[1..] {
-            split_paragraph_at(story, next_offset);
+            split_paragraph_at(paragraphs, next_offset);
             // The split inserts a paragraph break at next_offset;
             // the new paragraph starts at next_offset + 1 (per the
             // story-offset contract: synthetic \n between paragraphs
             // consumes 1 byte of story-local offset).
             next_offset += 1;
-            insert_one_segment(story, next_offset, seg);
+            insert_one_segment(paragraphs, next_offset, seg);
             next_offset += seg.len() as u32;
         }
     }
-    merge_adjacent_runs_in_target(story, offset);
+    merge_adjacent_runs_in_target(paragraphs, offset);
     Ok(AppliedText {
         story_id: story_id.into(),
         inverse: TextOp::DeleteRange {
@@ -168,29 +237,31 @@ fn apply_insert_text(
             // covers the exact stretch we just inserted.
             end: offset + text.len() as u32,
             recovered: String::new(),
+            // W1.13 — undo must land in the same stream we edited.
+            cell: cell.clone(),
         },
     })
 }
 
 /// Insert plain (no-newline) text at `offset`. Internal helper —
 /// caller guarantees no `\n` in `seg`.
-fn insert_one_segment(story: &mut paged_parse::Story, offset: u32, seg: &str) {
+fn insert_one_segment(paragraphs: &mut [paged_parse::Paragraph], offset: u32, seg: &str) {
     if seg.is_empty() {
         return;
     }
-    let target = locate(story, offset);
+    let target = locate(paragraphs, offset);
     match target {
         Locate::InRun {
             paragraph_idx,
             run_idx,
             byte_in_run,
         } => {
-            let para = &mut story.paragraphs[paragraph_idx];
+            let para = &mut paragraphs[paragraph_idx];
             let run = &mut para.runs[run_idx];
             run.text.insert_str(byte_in_run, seg);
         }
         Locate::EndOfStory { paragraph_idx } => {
-            let para = &mut story.paragraphs[paragraph_idx];
+            let para = &mut paragraphs[paragraph_idx];
             if let Some(run) = para.runs.last_mut() {
                 run.text.push_str(seg);
             } else {
@@ -205,7 +276,7 @@ fn insert_one_segment(story: &mut paged_parse::Story, offset: u32, seg: &str) {
             after_paragraph_idx,
         } => {
             let next_idx = after_paragraph_idx + 1;
-            let next_para = &mut story.paragraphs[next_idx];
+            let next_para = &mut paragraphs[next_idx];
             if let Some(run) = next_para.runs.first_mut() {
                 run.text.insert_str(0, seg);
             } else {
@@ -224,8 +295,8 @@ fn insert_one_segment(story: &mut paged_parse::Story, offset: u32, seg: &str) {
 /// Inherits the original paragraph's style attributes (the only
 /// thing IDML's paragraph carries that's level-affecting — runs keep
 /// their own character styles intact).
-fn split_paragraph_at(story: &mut paged_parse::Story, offset: u32) {
-    let target = locate(story, offset);
+fn split_paragraph_at(paragraphs: &mut Vec<paged_parse::Paragraph>, offset: u32) {
+    let target = locate(paragraphs, offset);
     let (paragraph_idx, run_idx, byte_in_run) = match target {
         Locate::InRun {
             paragraph_idx,
@@ -235,12 +306,12 @@ fn split_paragraph_at(story: &mut paged_parse::Story, offset: u32) {
         Locate::EndOfStory { paragraph_idx } => {
             // Split at the end of the paragraph — the new paragraph
             // is empty.
-            let para = &story.paragraphs[paragraph_idx];
+            let para = &paragraphs[paragraph_idx];
             let new_para = paged_parse::Paragraph {
                 paragraph_style: para.paragraph_style.clone(),
                 ..Default::default()
             };
-            story.paragraphs.insert(paragraph_idx + 1, new_para);
+            paragraphs.insert(paragraph_idx + 1, new_para);
             return;
         }
         Locate::AtParagraphBreak { .. } => {
@@ -248,7 +319,7 @@ fn split_paragraph_at(story: &mut paged_parse::Story, offset: u32) {
             return;
         }
     };
-    let para = &mut story.paragraphs[paragraph_idx];
+    let para = &mut paragraphs[paragraph_idx];
     // Tail runs that come AFTER the split point move to the new
     // paragraph. The split-point run itself is split into two halves;
     // the right half becomes the first run of the new paragraph.
@@ -270,12 +341,13 @@ fn split_paragraph_at(story: &mut paged_parse::Story, offset: u32) {
         runs: tail_runs,
         ..Default::default()
     };
-    story.paragraphs.insert(paragraph_idx + 1, new_para);
+    paragraphs.insert(paragraph_idx + 1, new_para);
 }
 
 fn apply_delete_range(
     doc: &mut Document,
     story_id: &str,
+    cell: &Option<TextCellAddr>,
     start: u32,
     end: u32,
 ) -> Result<AppliedText, TextOpError> {
@@ -289,11 +361,12 @@ fn apply_delete_range(
                 story_id: story_id.into(),
                 offset: start,
                 text: String::new(),
+                cell: cell.clone(),
             },
         });
     }
-    let story = find_story_mut(doc, story_id)?;
-    let len = story_byte_len(&*story);
+    let paragraphs = find_paragraphs_mut(doc, story_id, cell)?;
+    let len = paragraphs_byte_len(paragraphs);
     if end > len {
         return Err(TextOpError::OffsetOutOfRange {
             story_id: story_id.into(),
@@ -319,18 +392,18 @@ fn apply_delete_range(
     //      c. Append end_para's tail-runs (runs from end_local onward)
     //         to start_para.
     //      d. Drop paragraphs (start_para+1..=end_para).
-    let (start_para, start_local) = locate_para_local(&*story, start);
-    let (end_para, end_local) = locate_para_local(&*story, end);
+    let (start_para, start_local) = locate_para_local(paragraphs, start);
+    let (end_para, end_local) = locate_para_local(paragraphs, end);
 
     let mut recovered = String::with_capacity((end - start) as usize);
     if start_para == end_para {
         // Same-paragraph fast path.
-        let para = &mut story.paragraphs[start_para];
+        let para = &mut paragraphs[start_para];
         splice_paragraph(para, start_local, end_local, &mut recovered);
     } else {
         // Capture tail of start_para.
         {
-            let para = &story.paragraphs[start_para];
+            let para = &paragraphs[start_para];
             for run in &para.runs {
                 let already: usize = run_text_total_before(para, run);
                 let run_end_in_para = already + run.text.len();
@@ -346,15 +419,14 @@ fn apply_delete_range(
             recovered.push('\n');
         }
         // Capture whole middle paragraphs + the head of end_para.
-        for p in (start_para + 1)..end_para {
-            let para = &story.paragraphs[p];
+        for para in &paragraphs[(start_para + 1)..end_para] {
             for run in &para.runs {
                 recovered.push_str(&run.text);
             }
             recovered.push('\n');
         }
         {
-            let para = &story.paragraphs[end_para];
+            let para = &paragraphs[end_para];
             let mut acc: usize = 0;
             for run in &para.runs {
                 let rlen = run.text.len();
@@ -372,41 +444,42 @@ fn apply_delete_range(
 
         // Now mutate: trim start_para to its [0..start_local] runs,
         // then append end_para's tail.
-        let end_tail_runs = capture_tail_runs(&story.paragraphs[end_para], end_local);
-        let start_para_ref = &mut story.paragraphs[start_para];
+        let end_tail_runs = capture_tail_runs(&paragraphs[end_para], end_local);
+        let start_para_ref = &mut paragraphs[start_para];
         truncate_paragraph_to(start_para_ref, start_local);
         start_para_ref.runs.extend(end_tail_runs);
         // Drop paragraphs (start_para+1 ..= end_para).
-        story.paragraphs.drain((start_para + 1)..=end_para);
+        paragraphs.drain((start_para + 1)..=end_para);
     }
 
-    merge_adjacent_runs_in_target(story, start);
+    merge_adjacent_runs_in_target(paragraphs, start);
     Ok(AppliedText {
         story_id: story_id.into(),
         inverse: TextOp::InsertText {
             story_id: story_id.into(),
             offset: start,
             text: recovered,
+            cell: cell.clone(),
         },
     })
 }
 
-/// Convert a story-local offset to (paragraph_idx, byte-within-paragraph).
+/// Convert a stream-local offset to (paragraph_idx, byte-within-paragraph).
 /// `AtParagraphBreak` resolves to the START of the next paragraph
 /// (which matches the offset's logical position past the break).
-fn locate_para_local(story: &paged_parse::Story, offset: u32) -> (usize, usize) {
-    match locate(story, offset) {
+fn locate_para_local(paragraphs: &[paged_parse::Paragraph], offset: u32) -> (usize, usize) {
+    match locate(paragraphs, offset) {
         Locate::InRun {
             paragraph_idx,
             run_idx,
             byte_in_run,
         } => {
-            let para = &story.paragraphs[paragraph_idx];
+            let para = &paragraphs[paragraph_idx];
             let head: usize = para.runs[..run_idx].iter().map(|r| r.text.len()).sum();
             (paragraph_idx, head + byte_in_run)
         }
         Locate::EndOfStory { paragraph_idx } => {
-            let para = &story.paragraphs[paragraph_idx];
+            let para = &paragraphs[paragraph_idx];
             let total: usize = para.runs.iter().map(|r| r.text.len()).sum();
             (paragraph_idx, total)
         }
@@ -502,11 +575,13 @@ fn find_story_mut<'a>(
         .ok_or_else(|| TextOpError::UnknownStory(story_id.into()))
 }
 
-/// Total byte length per the story-offset contract: sum of run bytes
-/// + one synthetic `\n` per inter-paragraph boundary.
-fn story_byte_len(story: &paged_parse::Story) -> u32 {
+/// Total byte length of a paragraph stream per the story-offset
+/// contract: sum of run bytes + one synthetic `\n` per inter-paragraph
+/// boundary. Works for the body flow and for a cell's `paragraphs`
+/// alike (the contract is stream-local — W1.13).
+fn paragraphs_byte_len(paragraphs: &[paged_parse::Paragraph]) -> u32 {
     let mut total: u32 = 0;
-    for (i, p) in story.paragraphs.iter().enumerate() {
+    for (i, p) in paragraphs.iter().enumerate() {
         if i > 0 {
             total += 1;
         }
@@ -517,9 +592,9 @@ fn story_byte_len(story: &paged_parse::Story) -> u32 {
     total
 }
 
-fn locate(story: &paged_parse::Story, story_offset: u32) -> Locate {
+fn locate(paragraphs: &[paged_parse::Paragraph], story_offset: u32) -> Locate {
     let mut consumed: u32 = 0;
-    for (pi, p) in story.paragraphs.iter().enumerate() {
+    for (pi, p) in paragraphs.iter().enumerate() {
         let para_byte_len: u32 = p.runs.iter().map(|r| r.text.len() as u32).sum();
         // Is the offset in this paragraph's runs?
         if story_offset <= consumed + para_byte_len {
@@ -544,7 +619,7 @@ fn locate(story: &paged_parse::Story, story_offset: u32) -> Locate {
         consumed += para_byte_len;
         // Synthetic \n between paragraphs. If the offset falls
         // *exactly* on the synthetic byte, it's the paragraph break.
-        if story_offset == consumed && pi + 1 < story.paragraphs.len() {
+        if story_offset == consumed && pi + 1 < paragraphs.len() {
             return Locate::AtParagraphBreak {
                 after_paragraph_idx: pi,
             };
@@ -553,7 +628,7 @@ fn locate(story: &paged_parse::Story, story_offset: u32) -> Locate {
     }
     // Offset past last paragraph: pin to last paragraph.
     Locate::EndOfStory {
-        paragraph_idx: story.paragraphs.len().saturating_sub(1),
+        paragraph_idx: paragraphs.len().saturating_sub(1),
     }
 }
 
@@ -587,11 +662,11 @@ fn splice_paragraph(
 /// coalesce adjacent runs whose **every** style field is identical.
 /// Without this, repeated edits fragment a paragraph into many
 /// effectively-identical runs and break determinism hashing.
-fn merge_adjacent_runs_in_target(story: &mut paged_parse::Story, story_offset: u32) {
+fn merge_adjacent_runs_in_target(paragraphs: &mut [paged_parse::Paragraph], story_offset: u32) {
     // Find the target paragraph.
     let mut consumed: u32 = 0;
     let mut target: Option<usize> = None;
-    for (pi, p) in story.paragraphs.iter().enumerate() {
+    for (pi, p) in paragraphs.iter().enumerate() {
         let para_byte_len: u32 = p.runs.iter().map(|r| r.text.len() as u32).sum();
         if story_offset <= consumed + para_byte_len {
             target = Some(pi);
@@ -600,10 +675,10 @@ fn merge_adjacent_runs_in_target(story: &mut paged_parse::Story, story_offset: u
         consumed += para_byte_len + 1;
     }
     let pi = target.unwrap_or(0);
-    if pi >= story.paragraphs.len() {
+    if pi >= paragraphs.len() {
         return;
     }
-    let para = &mut story.paragraphs[pi];
+    let para = &mut paragraphs[pi];
     if para.runs.len() < 2 {
         return;
     }
@@ -698,6 +773,7 @@ mod tests {
                 story_id: "story1".into(),
                 offset: 5,
                 text: ",".into(),
+                cell: None,
             },
         )
         .unwrap();
@@ -726,6 +802,7 @@ mod tests {
                 start: 5,
                 end: 11,
                 recovered: String::new(),
+                cell: None,
             },
         )
         .unwrap();
@@ -751,6 +828,7 @@ mod tests {
                 story_id: "story1".into(),
                 offset: 5,
                 text: ",".into(),
+                cell: None,
             },
         )
         .unwrap();
@@ -780,6 +858,7 @@ mod tests {
                 story_id: "story1".into(),
                 offset: 5,
                 text: "\n".into(),
+                cell: None,
             },
         )
         .unwrap();
@@ -803,6 +882,7 @@ mod tests {
                 story_id: "story1".into(),
                 offset: 5,
                 text: "X\nY".into(),
+                cell: None,
             },
         )
         .unwrap();
@@ -824,6 +904,7 @@ mod tests {
                 story_id: "story1".into(),
                 offset: 5,
                 text: "\n".into(),
+                cell: None,
             },
         )
         .unwrap();
@@ -836,6 +917,7 @@ mod tests {
                 start: 3,
                 end: 8,
                 recovered: String::new(),
+                cell: None,
             },
         )
         .unwrap();
@@ -851,5 +933,291 @@ mod tests {
             }
             other => panic!("unexpected inverse: {other:?}"),
         }
+    }
+
+    // ---- W1.13 — cell text editing (apply-level unit tests) --------
+
+    use paged_parse::{Paragraph, Story, Table, TableCell};
+    use paged_scene::{Document, ParsedStory};
+
+    /// Build a single-cell text paragraph carrying `text`.
+    fn cell_with_text(name: &str, span_cols: u32, text: &str) -> TableCell {
+        TableCell {
+            name: Some(name.to_string()),
+            row_span: 1,
+            column_span: span_cols.max(1),
+            paragraphs: vec![Paragraph {
+                runs: vec![CharacterRun {
+                    text: text.to_string(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// A `Document` whose story `t1` holds a host paragraph carrying a
+    /// table `tbl1` with the supplied cells. `Document` doesn't derive
+    /// `Default`, so we clone a real loaded scene and replace its single
+    /// story's paragraphs — this keeps `find_story_mut` / cell lookup
+    /// honest without hand-building `Container` / `Graphic` / styles.
+    fn doc_with_table(cells: Vec<TableCell>) -> Document {
+        doc_with_paragraphs(vec![Paragraph {
+            table: Some(Table {
+                self_id: Some("tbl1".into()),
+                body_row_count: 2,
+                column_count: 2,
+                cells,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }])
+    }
+
+    /// Clone the `small_idml` scene and overwrite its one story's
+    /// paragraphs + id so tests can inject arbitrary structures.
+    fn doc_with_paragraphs(paragraphs: Vec<Paragraph>) -> Document {
+        let model = CanvasModel::load("d", &small_idml(), CanvasOptions::default()).unwrap();
+        let mut doc = model.scene().clone();
+        doc.stories = vec![ParsedStory {
+            src: "Stories/Story_t1.xml".into(),
+            self_id: "t1".into(),
+            story: Story {
+                paragraphs,
+                ..Default::default()
+            },
+        }];
+        doc
+    }
+
+    fn cell_addr(col: u32, row: u32) -> TextCellAddr {
+        TextCellAddr {
+            table_id: "tbl1".into(),
+            row,
+            col,
+        }
+    }
+
+    fn read_cell(doc: &Document, col: u32, row: u32) -> String {
+        let table = doc.stories[0]
+            .story
+            .paragraphs
+            .iter()
+            .find_map(|p| p.table.as_ref())
+            .unwrap();
+        let c = table
+            .cells
+            .iter()
+            .find(|c| c.coords() == Some((col, row)))
+            .unwrap();
+        c.paragraphs
+            .iter()
+            .flat_map(|p| p.runs.iter())
+            .map(|r| r.text.clone())
+            .collect()
+    }
+
+    #[test]
+    fn cell_insert_apply_and_invert_round_trip() {
+        let mut doc = doc_with_table(vec![
+            cell_with_text("0:0", 1, "abc"),
+            cell_with_text("1:0", 1, "def"),
+        ]);
+        // Insert "Z" at cell-local offset 2 of cell (0,0): "abc" → "abZc".
+        let applied = apply(
+            &mut doc,
+            &TextOp::InsertText {
+                story_id: "t1".into(),
+                offset: 2,
+                text: "Z".into(),
+                cell: Some(cell_addr(0, 0)),
+            },
+        )
+        .unwrap();
+        assert_eq!(read_cell(&doc, 0, 0), "abZc");
+        // Sibling untouched.
+        assert_eq!(read_cell(&doc, 1, 0), "def");
+        // Inverse carries the cell qualifier and restores the cell.
+        assert_eq!(applied.inverse.cell(), &Some(cell_addr(0, 0)));
+        apply(&mut doc, &applied.inverse).unwrap();
+        assert_eq!(read_cell(&doc, 0, 0), "abc");
+    }
+
+    #[test]
+    fn cell_delete_apply_and_invert_round_trip() {
+        let mut doc = doc_with_table(vec![cell_with_text("0:0", 1, "hello")]);
+        let applied = apply(
+            &mut doc,
+            &TextOp::DeleteRange {
+                story_id: "t1".into(),
+                start: 1,
+                end: 4,
+                recovered: String::new(),
+                cell: Some(cell_addr(0, 0)),
+            },
+        )
+        .unwrap();
+        assert_eq!(read_cell(&doc, 0, 0), "ho");
+        // Inverse is a cell-qualified InsertText recovering "ell".
+        match &applied.inverse {
+            TextOp::InsertText {
+                offset, text, cell, ..
+            } => {
+                assert_eq!(*offset, 1);
+                assert_eq!(text, "ell");
+                assert_eq!(cell, &Some(cell_addr(0, 0)));
+            }
+            other => panic!("inverse must be InsertText, got {other:?}"),
+        }
+        apply(&mut doc, &applied.inverse).unwrap();
+        assert_eq!(read_cell(&doc, 0, 0), "hello");
+    }
+
+    #[test]
+    fn cell_multi_paragraph_insert_and_invert() {
+        let mut doc = doc_with_table(vec![cell_with_text("0:0", 1, "onetwo")]);
+        // Insert "\n" at offset 3 → two cell paragraphs "one" / "two".
+        let applied = apply(
+            &mut doc,
+            &TextOp::InsertText {
+                story_id: "t1".into(),
+                offset: 3,
+                text: "\n".into(),
+                cell: Some(cell_addr(0, 0)),
+            },
+        )
+        .unwrap();
+        let table = doc.stories[0]
+            .story
+            .paragraphs
+            .iter()
+            .find_map(|p| p.table.as_ref())
+            .unwrap();
+        let c = table
+            .cells
+            .iter()
+            .find(|c| c.coords() == Some((0, 0)))
+            .unwrap();
+        assert_eq!(c.paragraphs.len(), 2, "cell split into two paragraphs");
+        // Cell-local text contract: "one" + \n + "two".
+        assert_eq!(read_cell(&doc, 0, 0), "onetwo"); // read_cell flattens runs; \n is paragraph break
+                                                     // Invert merges the cell paragraphs back to one.
+        apply(&mut doc, &applied.inverse).unwrap();
+        let table = doc.stories[0]
+            .story
+            .paragraphs
+            .iter()
+            .find_map(|p| p.table.as_ref())
+            .unwrap();
+        let c = table
+            .cells
+            .iter()
+            .find(|c| c.coords() == Some((0, 0)))
+            .unwrap();
+        assert_eq!(c.paragraphs.len(), 1, "undo must merge cell paragraphs");
+        assert_eq!(read_cell(&doc, 0, 0), "onetwo");
+    }
+
+    #[test]
+    fn spanned_cell_addressed_at_span_origin() {
+        // A 2-column-span cell occupies (0,0)+(1,0); it is addressed at
+        // its origin (0,0). Editing it must reach the span-origin cell's
+        // text. (The non-origin coord (1,0) has no `<Cell>` of its own.)
+        let mut doc = doc_with_table(vec![cell_with_text("0:0", 2, "wide")]);
+        apply(
+            &mut doc,
+            &TextOp::InsertText {
+                story_id: "t1".into(),
+                offset: 4,
+                text: "r".into(),
+                cell: Some(cell_addr(0, 0)),
+            },
+        )
+        .unwrap();
+        assert_eq!(read_cell(&doc, 0, 0), "wider");
+        // Addressing the covered (non-origin) coord is an error, not a
+        // silent body edit.
+        let err = apply(
+            &mut doc,
+            &TextOp::InsertText {
+                story_id: "t1".into(),
+                offset: 0,
+                text: "x".into(),
+                cell: Some(cell_addr(1, 0)),
+            },
+        );
+        assert!(err.is_err(), "covered span coord has no addressable cell");
+    }
+
+    #[test]
+    fn unknown_cell_address_errors_without_touching_body() {
+        let mut doc = doc_with_table(vec![cell_with_text("0:0", 1, "x")]);
+        let err = apply(
+            &mut doc,
+            &TextOp::InsertText {
+                story_id: "t1".into(),
+                offset: 0,
+                text: "y".into(),
+                cell: Some(cell_addr(5, 5)),
+            },
+        );
+        assert!(matches!(err, Err(TextOpError::UnknownStory(_))));
+        // Body host paragraph is still empty (no stray insert).
+        assert!(doc.stories[0].story.paragraphs[0].runs.is_empty());
+    }
+
+    #[test]
+    fn body_and_cell_offsets_are_independent_streams() {
+        // Body has a real paragraph 0 carrying text; the table host is a
+        // SEPARATE paragraph. A body insert at offset 0 and a cell insert
+        // at offset 0 must not interfere.
+        let body_para = Paragraph {
+            runs: vec![CharacterRun {
+                text: "body".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let host = Paragraph {
+            table: Some(Table {
+                self_id: Some("tbl1".into()),
+                cells: vec![cell_with_text("0:0", 1, "cell")],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut doc = doc_with_paragraphs(vec![body_para, host]);
+
+        // Edit body offset 0.
+        apply(
+            &mut doc,
+            &TextOp::InsertText {
+                story_id: "t1".into(),
+                offset: 0,
+                text: "B".into(),
+                cell: None,
+            },
+        )
+        .unwrap();
+        // Edit cell offset 0.
+        apply(
+            &mut doc,
+            &TextOp::InsertText {
+                story_id: "t1".into(),
+                offset: 0,
+                text: "C".into(),
+                cell: Some(cell_addr(0, 0)),
+            },
+        )
+        .unwrap();
+
+        let body0: String = doc.stories[0].story.paragraphs[0]
+            .runs
+            .iter()
+            .map(|r| r.text.clone())
+            .collect();
+        assert_eq!(body0, "Bbody");
+        assert_eq!(read_cell(&doc, 0, 0), "Ccell");
     }
 }

@@ -30,9 +30,50 @@ use paged_renderer::{BuiltDocument, LineLayout, PageId};
 use serde::{Deserialize, Serialize};
 use tsify_next::Tsify;
 
-use crate::hit::paragraph_byte_offset;
-use crate::selection::ContentSelection;
+use crate::hit::{cell_paragraph_byte_offset, paragraph_byte_offset};
+use crate::selection::{ContentSelection, TextCellAddr};
 use crate::SelectionRect;
+
+/// W1.13 — the LineLayout set for a content address's stream: the
+/// story's body lines when `cell` is `None`, or one cell's lines when
+/// `cell` is `Some`. Routing both bounds / caret / selection queries
+/// through this keeps the cell path from forking the query machinery.
+fn stream_lines<'a>(
+    built: &'a BuiltDocument,
+    story_id: &str,
+    cell: &Option<TextCellAddr>,
+) -> Vec<&'a LineLayout> {
+    match cell {
+        None => built.story_layout(story_id),
+        Some(addr) => built.cell_layout(story_id, &to_renderer_cell(addr)),
+    }
+}
+
+/// W1.13 — the byte offset at which a line's paragraph starts, in the
+/// stream the address names (body vs. cell). Pairs with `stream_lines`.
+fn stream_paragraph_byte_offset(
+    built: &BuiltDocument,
+    story_id: &str,
+    cell: &Option<TextCellAddr>,
+    paragraph_idx: u32,
+) -> u32 {
+    match cell {
+        None => paragraph_byte_offset(built, story_id, paragraph_idx),
+        Some(addr) => {
+            cell_paragraph_byte_offset(built, story_id, &to_renderer_cell(addr), paragraph_idx)
+        }
+    }
+}
+
+/// Bridge the wire-side `TextCellAddr` to the renderer-side `CellAddr`
+/// (same three fields; distinct crates).
+fn to_renderer_cell(addr: &TextCellAddr) -> paged_renderer::CellAddr {
+    paged_renderer::CellAddr {
+        table_id: addr.table_id.clone(),
+        row: addr.row,
+        col: addr.col,
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -57,7 +98,7 @@ pub struct CaretGeometry {
 /// document carries no fonts so no glyphs were emitted) — the caller
 /// can render a no-caret placeholder.
 pub fn caret_geometry(built: &BuiltDocument, sel: &ContentSelection) -> Option<CaretGeometry> {
-    let lines: Vec<&LineLayout> = built.story_layout(&sel.story_id);
+    let lines: Vec<&LineLayout> = stream_lines(built, &sel.story_id, &sel.cell);
     if lines.is_empty() {
         return None;
     }
@@ -72,7 +113,8 @@ pub fn caret_geometry(built: &BuiltDocument, sel: &ContentSelection) -> Option<C
     let mut chosen: Option<(&&LineLayout, u32)> = None; // (line, line_start_in_story)
     let mut prev: Option<(&&LineLayout, u32)> = None;
     for line in &lines {
-        let para_start = paragraph_byte_offset(built, &sel.story_id, line.paragraph_idx);
+        let para_start =
+            stream_paragraph_byte_offset(built, &sel.story_id, &sel.cell, line.paragraph_idx);
         let line_start = para_start + line.byte_range.start;
         let line_end = para_start + line.byte_range.end;
         if target_offset < line_start {
@@ -80,7 +122,8 @@ pub fn caret_geometry(built: &BuiltDocument, sel: &ContentSelection) -> Option<C
             // the offset equals prev's end (line-break boundary),
             // pick *this* line when affinity is downstream.
             if let Some((p, _)) = prev {
-                let p_para_start = paragraph_byte_offset(built, &sel.story_id, p.paragraph_idx);
+                let p_para_start =
+                    stream_paragraph_byte_offset(built, &sel.story_id, &sel.cell, p.paragraph_idx);
                 let p_end = p_para_start + p.byte_range.end;
                 if sel.affinity && target_offset == p_end {
                     chosen = Some((line, line_start));
@@ -121,10 +164,11 @@ pub fn selection_geometry(built: &BuiltDocument, sel: &ContentSelection) -> Vec<
     if sel.is_caret() {
         return Vec::new();
     }
-    let lines: Vec<&LineLayout> = built.story_layout(&sel.story_id);
+    let lines: Vec<&LineLayout> = stream_lines(built, &sel.story_id, &sel.cell);
     let mut out: Vec<SelectionRect> = Vec::new();
     for line in &lines {
-        let para_start = paragraph_byte_offset(built, &sel.story_id, line.paragraph_idx);
+        let para_start =
+            stream_paragraph_byte_offset(built, &sel.story_id, &sel.cell, line.paragraph_idx);
         let line_start = para_start + line.byte_range.start;
         let line_end = para_start + line.byte_range.end;
         // Line is in the selection if its range intersects [sel.start, sel.end).
@@ -176,19 +220,23 @@ pub fn selection_geometry(built: &BuiltDocument, sel: &ContentSelection) -> Vec<
 pub fn caret_nav(
     built: &BuiltDocument,
     story_id: &str,
+    cell: &Option<TextCellAddr>,
     offset: u32,
     direction: CaretDirection,
 ) -> Option<u32> {
-    let lines: Vec<&LineLayout> = built.story_layout(story_id);
+    // W1.13 — navigation stays within the addressed stream: a cell's
+    // up/down walks the cell's lines; a body caret walks body lines.
+    let lines: Vec<&LineLayout> = stream_lines(built, story_id, cell);
     if lines.is_empty() {
         return None;
     }
-    // Per-line absolute [start, end] story offsets (paragraph offset
+    // Per-line absolute [start, end] stream offsets (paragraph offset
     // + line byte range), parallel to `lines`.
     let spans: Vec<(u32, u32)> = lines
         .iter()
         .map(|line| {
-            let para_start = paragraph_byte_offset(built, story_id, line.paragraph_idx);
+            let para_start =
+                stream_paragraph_byte_offset(built, story_id, cell, line.paragraph_idx);
             (
                 para_start + line.byte_range.start,
                 para_start + line.byte_range.end,
@@ -247,10 +295,15 @@ pub fn caret_nav(
 /// and shift-Home/shift-End without the editor re-deriving line
 /// breaks. `None` when the story has no layout or the offset doesn't
 /// fall on any visible line.
-pub fn line_bounds(built: &BuiltDocument, story_id: &str, offset: u32) -> Option<LineBounds> {
-    let lines: Vec<&LineLayout> = built.story_layout(story_id);
+pub fn line_bounds(
+    built: &BuiltDocument,
+    story_id: &str,
+    cell: &Option<TextCellAddr>,
+    offset: u32,
+) -> Option<LineBounds> {
+    let lines: Vec<&LineLayout> = stream_lines(built, story_id, cell);
     for line in &lines {
-        let para_start = paragraph_byte_offset(built, story_id, line.paragraph_idx);
+        let para_start = stream_paragraph_byte_offset(built, story_id, cell, line.paragraph_idx);
         let line_start = para_start + line.byte_range.start;
         let line_end = para_start + line.byte_range.end;
         if offset >= line_start && offset <= line_end {
@@ -671,7 +724,8 @@ mod tests {
 
         // From a caret on line 0 (offset 2, inside "Hello"), Down lands
         // on line 1, and Up from there returns to line 0.
-        let down = caret_nav(built, "u10", 2, CaretDirection::Down).expect("a line below line 0");
+        let down =
+            caret_nav(built, "u10", &None, 2, CaretDirection::Down).expect("a line below line 0");
         // The destination must be past the first line's end (i.e. on
         // the second visible line).
         let l0_end = {
@@ -685,7 +739,7 @@ mod tests {
         );
 
         let back_up =
-            caret_nav(built, "u10", down, CaretDirection::Up).expect("a line above line 1");
+            caret_nav(built, "u10", &None, down, CaretDirection::Up).expect("a line above line 1");
         assert!(
             back_up <= l0_end,
             "up ({back_up}) should land back on line 0 (≤ {l0_end})"
@@ -696,7 +750,7 @@ mod tests {
     fn caret_nav_up_from_first_line_is_none() {
         let model = load_two_line_model();
         assert!(
-            caret_nav(model.built(), "u10", 1, CaretDirection::Up).is_none(),
+            caret_nav(model.built(), "u10", &None, 1, CaretDirection::Up).is_none(),
             "no line above the first"
         );
     }
@@ -711,7 +765,7 @@ mod tests {
         let ps = crate::hit::paragraph_byte_offset(built, "u10", last.paragraph_idx);
         let last_offset = ps + last.byte_range.start;
         assert!(
-            caret_nav(built, "u10", last_offset, CaretDirection::Down).is_none(),
+            caret_nav(built, "u10", &None, last_offset, CaretDirection::Down).is_none(),
             "no line below the last"
         );
     }
@@ -720,7 +774,7 @@ mod tests {
     fn line_bounds_returns_the_containing_line_span() {
         let model = load_two_line_model();
         let built = model.built();
-        let b = line_bounds(built, "u10", 2).expect("line bounds for offset 2");
+        let b = line_bounds(built, "u10", &None, 2).expect("line bounds for offset 2");
         // The first line starts at 0 and ends before the second line.
         assert_eq!(b.line_start, 0);
         assert!(
@@ -734,7 +788,7 @@ mod tests {
             let l1 = lines[1];
             let ps = crate::hit::paragraph_byte_offset(built, "u10", l1.paragraph_idx);
             let mid = ps + l1.byte_range.start;
-            let b2 = line_bounds(built, "u10", mid).expect("line bounds line 1");
+            let b2 = line_bounds(built, "u10", &None, mid).expect("line bounds line 1");
             assert!(
                 b2.line_start >= b.line_end,
                 "line 1 starts after line 0 ends"
@@ -745,7 +799,7 @@ mod tests {
     #[test]
     fn line_bounds_for_unknown_story_is_none() {
         let model = load_model("Hello");
-        assert!(line_bounds(model.built(), "nope", 0).is_none());
+        assert!(line_bounds(model.built(), "nope", &None, 0).is_none());
     }
 
     // ---- Aftercare-A — word segmentation ------------------------
@@ -811,7 +865,7 @@ mod tests {
         // mid-word offset on the loaded story returns the word span.
         let model = load_model("Hello world.");
         let wb = model
-            .word_bounds("u10", 8)
+            .word_bounds("u10", None, 8)
             .expect("word bounds for offset 8");
         assert_eq!((wb.start, wb.end), (6, 11));
     }
@@ -819,7 +873,7 @@ mod tests {
     #[test]
     fn model_word_bounds_unknown_story_is_none() {
         let model = load_model("Hello");
-        assert!(model.word_bounds("nope", 0).is_none());
+        assert!(model.word_bounds("nope", None, 0).is_none());
     }
 
     // ---- W1.23 — paragraph segmentation -------------------------
@@ -915,12 +969,12 @@ mod tests {
         // "Alpha" is 5 bytes; the synthetic `\n` is byte 5; "Beta"
         // starts at byte 6. Offset 7 is inside "Beta".
         let pb = model
-            .paragraph_bounds("u10", 7)
+            .paragraph_bounds("u10", None, 7)
             .expect("paragraph bounds for offset 7");
         assert_eq!((pb.start, pb.end), (6, 10));
         // Offset in the first paragraph reports the first span.
         let pb0 = model
-            .paragraph_bounds("u10", 2)
+            .paragraph_bounds("u10", None, 2)
             .expect("paragraph bounds for offset 2");
         assert_eq!((pb0.start, pb0.end), (0, 5));
     }
@@ -928,7 +982,7 @@ mod tests {
     #[test]
     fn model_paragraph_bounds_unknown_story_is_none() {
         let model = load_model("Hello");
-        assert!(model.paragraph_bounds("nope", 0).is_none());
+        assert!(model.paragraph_bounds("nope", None, 0).is_none());
     }
 
     /// A story with two paragraphs ("Alpha" then "Beta"), each its own

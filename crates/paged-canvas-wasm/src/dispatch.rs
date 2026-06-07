@@ -390,40 +390,54 @@ impl WorkerCore {
                 story_id,
                 offset,
                 direction,
+                cell,
             } => {
                 let Some(model) = self.model.as_ref() else {
                     reply!(WorkerToMainKind::MutationFailed {
                         error: WorkerError::NoDocument,
                     });
                 };
-                let offset = paged_canvas::caret_nav(model.built(), &story_id, offset, direction);
+                let offset =
+                    paged_canvas::caret_nav(model.built(), &story_id, &cell, offset, direction);
                 WorkerToMainKind::CaretNavResult { offset }
             }
-            MainToWorkerKind::RequestLineBounds { story_id, offset } => {
+            MainToWorkerKind::RequestLineBounds {
+                story_id,
+                offset,
+                cell,
+            } => {
                 let Some(model) = self.model.as_ref() else {
                     reply!(WorkerToMainKind::MutationFailed {
                         error: WorkerError::NoDocument,
                     });
                 };
-                let bounds = paged_canvas::line_bounds(model.built(), &story_id, offset);
+                let bounds = paged_canvas::line_bounds(model.built(), &story_id, &cell, offset);
                 WorkerToMainKind::LineBoundsResult { bounds }
             }
-            MainToWorkerKind::RequestWordBounds { story_id, offset } => {
+            MainToWorkerKind::RequestWordBounds {
+                story_id,
+                offset,
+                cell,
+            } => {
                 let Some(model) = self.model.as_ref() else {
                     reply!(WorkerToMainKind::MutationFailed {
                         error: WorkerError::NoDocument,
                     });
                 };
-                let bounds = model.word_bounds(&story_id, offset);
+                let bounds = model.word_bounds(&story_id, cell.as_ref(), offset);
                 WorkerToMainKind::WordBoundsResult { bounds }
             }
-            MainToWorkerKind::RequestParagraphBounds { story_id, offset } => {
+            MainToWorkerKind::RequestParagraphBounds {
+                story_id,
+                offset,
+                cell,
+            } => {
                 let Some(model) = self.model.as_ref() else {
                     reply!(WorkerToMainKind::MutationFailed {
                         error: WorkerError::NoDocument,
                     });
                 };
-                let bounds = model.paragraph_bounds(&story_id, offset);
+                let bounds = model.paragraph_bounds(&story_id, cell.as_ref(), offset);
                 WorkerToMainKind::ParagraphBoundsResult { bounds }
             }
             MainToWorkerKind::Undo => {

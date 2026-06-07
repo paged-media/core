@@ -1298,6 +1298,7 @@ impl CanvasModel {
                     story_id: String::new(),
                     offset: 0,
                     text: String::new(),
+                    cell: None,
                 },
                 created_id: None,
                 page_structure_changed: false,
@@ -1357,6 +1358,7 @@ impl CanvasModel {
                     story_id: String::new(),
                     offset: 0,
                     text: String::new(),
+                    cell: None,
                 },
                 created_id: None,
                 page_structure_changed: false,
@@ -1407,6 +1409,7 @@ impl CanvasModel {
                     story_id: String::new(),
                     offset: 0,
                     text: String::new(),
+                    cell: None,
                 },
                 created_id: None,
                 page_structure_changed: false,
@@ -1446,6 +1449,7 @@ impl CanvasModel {
                     story_id: String::new(),
                     offset: 0,
                     text: String::new(),
+                    cell: None,
                 },
                 created_id: None,
                 page_structure_changed: false,
@@ -1465,6 +1469,7 @@ impl CanvasModel {
                     story_id: String::new(),
                     offset: 0,
                     text: String::new(),
+                    cell: None,
                 },
                 created_id: None,
                 page_structure_changed: false,
@@ -1500,6 +1505,7 @@ impl CanvasModel {
                     story_id: String::new(),
                     offset: 0,
                     text: String::new(),
+                    cell: None,
                 },
                 created_id,
                 page_structure_changed,
@@ -1510,20 +1516,24 @@ impl CanvasModel {
                 story_id,
                 offset,
                 text,
+                cell,
             } => crate::mutate::TextOp::InsertText {
                 story_id: story_id.clone(),
                 offset: *offset,
                 text: text.clone(),
+                cell: cell.clone(),
             },
             Mutation::DeleteRange {
                 story_id,
                 start,
                 end,
+                cell,
             } => crate::mutate::TextOp::DeleteRange {
                 story_id: story_id.clone(),
                 start: *start,
                 end: *end,
                 recovered: String::new(),
+                cell: cell.clone(),
             },
             other => {
                 return Err(crate::channel::WorkerError::NotImplemented {
@@ -1559,13 +1569,15 @@ impl CanvasModel {
                     story_id,
                     offset,
                     text,
-                } => sel.shift_for_insert(story_id, *offset, text.chars().count() as u32),
+                    cell,
+                } => sel.shift_for_insert(story_id, cell, *offset, text.chars().count() as u32),
                 crate::mutate::TextOp::DeleteRange {
                     story_id,
                     start,
                     end,
+                    cell,
                     ..
-                } => sel.shift_for_delete(story_id, *start, *end),
+                } => sel.shift_for_delete(story_id, cell, *start, *end),
             };
             self.current_selection = Some(shifted);
         }
@@ -5260,37 +5272,61 @@ impl CanvasModel {
     /// word-selection drives this. `None` when the story id doesn't
     /// resolve or the story has no text. See [`geometry::word_bounds`]
     /// for the whitespace / boundary / clamp behaviour.
-    pub fn word_bounds(&self, story_id: &str, offset: u32) -> Option<crate::geometry::WordBounds> {
-        let story = self.scene.stories.iter().find(|s| s.self_id == story_id)?;
-        // Join paragraphs with the single synthetic `\n` that
-        // `paragraph_byte_offset` accounts for (`end + 1` per prior
-        // paragraph), so the reconstructed byte string is index-
-        // compatible with every other story offset on the wire.
-        let mut text = String::new();
-        for (i, para) in story.story.paragraphs.iter().enumerate() {
-            if i > 0 {
-                text.push('\n');
-            }
-            for run in &para.runs {
-                text.push_str(&run.text);
-            }
-        }
+    pub fn word_bounds(
+        &self,
+        story_id: &str,
+        cell: Option<&crate::selection::TextCellAddr>,
+        offset: u32,
+    ) -> Option<crate::geometry::WordBounds> {
+        let text = self.stream_byte_text(story_id, cell)?;
         crate::geometry::word_bounds(&text, offset)
     }
 
     /// W1.23 — the `[start, end)` byte span of the paragraph containing
-    /// `offset`, per the story's reconstructed byte string (paragraphs
+    /// `offset`, per the stream's reconstructed byte string (paragraphs
     /// joined by the synthetic inter-paragraph `\n`). Backs the caret's
     /// triple-click paragraph-selection. Mirrors [`Self::word_bounds`]
     /// exactly: same reconstruction, same byte-offset address space.
     pub fn paragraph_bounds(
         &self,
         story_id: &str,
+        cell: Option<&crate::selection::TextCellAddr>,
         offset: u32,
     ) -> Option<crate::geometry::ParagraphBounds> {
+        let text = self.stream_byte_text(story_id, cell)?;
+        crate::geometry::paragraph_bounds(&text, offset)
+    }
+
+    /// W1.13 — reconstruct the byte-text of a paragraph stream: the
+    /// story body when `cell` is `None`, or the named cell's paragraphs
+    /// when `cell` is `Some`. Paragraphs are joined with the single
+    /// synthetic `\n` that the offset contract accounts for, so the
+    /// string is index-compatible with every stream offset on the wire.
+    /// `None` when the story / table / cell address doesn't resolve.
+    fn stream_byte_text(
+        &self,
+        story_id: &str,
+        cell: Option<&crate::selection::TextCellAddr>,
+    ) -> Option<String> {
         let story = self.scene.stories.iter().find(|s| s.self_id == story_id)?;
+        let paragraphs: &[paged_parse::Paragraph] = match cell {
+            None => &story.story.paragraphs,
+            Some(addr) => {
+                let table = story
+                    .story
+                    .paragraphs
+                    .iter()
+                    .filter_map(|p| p.table.as_ref())
+                    .find(|t| t.self_id.as_deref() == Some(addr.table_id.as_str()))?;
+                &table
+                    .cells
+                    .iter()
+                    .find(|c| c.coords() == Some((addr.col, addr.row)))?
+                    .paragraphs
+            }
+        };
         let mut text = String::new();
-        for (i, para) in story.story.paragraphs.iter().enumerate() {
+        for (i, para) in paragraphs.iter().enumerate() {
             if i > 0 {
                 text.push('\n');
             }
@@ -5298,7 +5334,7 @@ impl CanvasModel {
                 text.push_str(&run.text);
             }
         }
-        crate::geometry::paragraph_bounds(&text, offset)
+        Some(text)
     }
 
     pub fn element_geometry(

@@ -259,15 +259,6 @@ impl CanvasModel {
                     continue;
                 }
 
-                let offset = c.parent_story.as_deref().and_then(|sid| {
-                    story_offset_at_point(
-                        self.built(),
-                        sid,
-                        page_id,
-                        Some(c.element_id.raw_id()),
-                        doc_point,
-                    )
-                });
                 // W3.A1 — resolve the table cell under the pointer, if
                 // the hit frame's story owns a table whose cells landed
                 // on this page. `doc_point` and `cell_rects` are both
@@ -276,6 +267,30 @@ impl CanvasModel {
                     .parent_story
                     .as_deref()
                     .and_then(|sid| table_cell_at_point(built_page, sid, doc_point));
+                // W1.13 — when the click landed in a cell, the caret
+                // offset is CELL-LOCAL (into that cell's paragraph
+                // stream), not a body offset. Resolve it against the
+                // cell's own LineLayout set so a click maps to the right
+                // glyph inside the cell. Outside any cell, fall back to
+                // the body story offset.
+                let offset = match (c.parent_story.as_deref(), table_context.as_ref()) {
+                    (Some(sid), Some(tc)) => {
+                        let addr = paged_renderer::CellAddr {
+                            table_id: tc.table_id.clone(),
+                            row: tc.row,
+                            col: tc.col,
+                        };
+                        Some(cell_offset_at_point(self.built(), sid, &addr, doc_point))
+                    }
+                    (Some(sid), None) => story_offset_at_point(
+                        self.built(),
+                        sid,
+                        page_id,
+                        Some(c.element_id.raw_id()),
+                        doc_point,
+                    ),
+                    (None, _) => None,
+                };
                 let bbox = transform_bbox(c.bounds, c.item_transform);
                 return HitTestResult {
                     element: Some(c.element_id.clone()),
@@ -781,6 +796,12 @@ pub(crate) fn story_offset_at_point(
     let lines: Vec<&LineLayout> = built
         .story_layout(story_id)
         .into_iter()
+        // W1.13 — body hits address the body flow only. Cell lines live
+        // in a disjoint stream (the caller routes in-cell clicks through
+        // `cell_offset_at_point` instead), so excluding them here keeps
+        // a body click near a table from snapping onto cell text and
+        // returning a bogus body offset.
+        .filter(|l| l.cell.is_none())
         .filter(|l| &l.page_id == page_id)
         .filter(|l| match (frame_id, l.frame_id.as_deref()) {
             (Some(f), Some(lf)) => f == lf,
@@ -846,9 +867,42 @@ fn pick_cluster_byte(line: &LineLayout, x: f32) -> u32 {
     }
 }
 
+/// Body-stream byte offset of paragraph `paragraph_idx`'s start. Sums
+/// each prior BODY paragraph's max line end + 1 synthetic `\n`. W1.13:
+/// cell lines are excluded (they live in a disjoint stream); use
+/// [`cell_paragraph_byte_offset`] for cell-local offsets.
 pub(crate) fn paragraph_byte_offset(
     built: &BuiltDocument,
     story_id: &str,
+    paragraph_idx: u32,
+) -> u32 {
+    paragraph_byte_offset_from_lines(
+        built
+            .story_layout(story_id)
+            .into_iter()
+            .filter(|l| l.cell.is_none()),
+        paragraph_idx,
+    )
+}
+
+/// W1.13 — cell-local byte offset of `paragraph_idx`'s start within the
+/// cell named by `addr`. Same accumulation rule as the body variant but
+/// over the cell's own LineLayout set, so offsets index the cell's
+/// paragraph stream (matching `mutate::locate` over `cell.paragraphs`).
+pub(crate) fn cell_paragraph_byte_offset(
+    built: &BuiltDocument,
+    story_id: &str,
+    addr: &paged_renderer::CellAddr,
+    paragraph_idx: u32,
+) -> u32 {
+    paragraph_byte_offset_from_lines(built.cell_layout(story_id, addr).into_iter(), paragraph_idx)
+}
+
+/// Shared accumulator: the byte offset at which `paragraph_idx` starts,
+/// given a set of lines already restricted to ONE paragraph stream
+/// (body or a single cell).
+fn paragraph_byte_offset_from_lines<'a>(
+    lines: impl Iterator<Item = &'a LineLayout>,
     paragraph_idx: u32,
 ) -> u32 {
     if paragraph_idx == 0 {
@@ -856,9 +910,9 @@ pub(crate) fn paragraph_byte_offset(
     }
     let mut total: u32 = 0;
     let mut max_end: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
-    for line in built.story_layout(story_id) {
+    for line in lines {
         if line.paragraph_idx >= paragraph_idx {
-            break;
+            continue;
         }
         let entry = max_end.entry(line.paragraph_idx).or_insert(0);
         if line.byte_range.end > *entry {
@@ -869,6 +923,33 @@ pub(crate) fn paragraph_byte_offset(
         total += end + 1; // +1 for the synthetic inter-paragraph \n
     }
     total
+}
+
+/// W1.13 — map a page-local click inside a table cell to the cell-local
+/// caret byte offset. Mirrors [`story_offset_at_point`] but walks the
+/// cell's own LineLayout set (`cell_layout`) and bases the result on
+/// [`cell_paragraph_byte_offset`]. Empty cell (no lines) → 0.
+pub(crate) fn cell_offset_at_point(
+    built: &BuiltDocument,
+    story_id: &str,
+    addr: &paged_renderer::CellAddr,
+    doc_point: (f32, f32),
+) -> u32 {
+    let lines = built.cell_layout(story_id, addr);
+    if lines.is_empty() {
+        return 0;
+    }
+    let mut best: &LineLayout = lines[0];
+    let mut best_distance = vertical_distance_to(best, doc_point.1);
+    for line in &lines[1..] {
+        let d = vertical_distance_to(line, doc_point.1);
+        if d < best_distance {
+            best = line;
+            best_distance = d;
+        }
+    }
+    let cluster_byte = pick_cluster_byte(best, doc_point.0);
+    cell_paragraph_byte_offset(built, story_id, addr, best.paragraph_idx) + cluster_byte
 }
 
 #[cfg(test)]

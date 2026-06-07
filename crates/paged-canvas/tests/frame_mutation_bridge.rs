@@ -167,6 +167,7 @@ fn unified_undo_alternates_text_and_frame_entries() {
             story_id: "story1".into(),
             offset: 5,
             text: "!".into(),
+            cell: None,
         })
         .expect("text apply");
     // Then a frame resize.

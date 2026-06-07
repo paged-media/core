@@ -89,16 +89,19 @@ fn replay_produces_byte_identical_state() {
             story_id: "story1".into(),
             offset: 5,
             text: ",".into(),
+            cell: None,
         },
         Mutation::InsertText {
             story_id: "story1".into(),
             offset: 0,
             text: "Greeting: ".into(),
+            cell: None,
         },
         Mutation::DeleteRange {
             story_id: "story1".into(),
             start: 0,
             end: 1,
+            cell: None,
         },
     ];
     let a = replay_log(&bytes, &ops);
@@ -121,16 +124,19 @@ fn undo_all_returns_to_initial_hash() {
             story_id: "story1".into(),
             offset: 5,
             text: ",".into(),
+            cell: None,
         },
         Mutation::InsertText {
             story_id: "story1".into(),
             offset: 0,
             text: "Greeting: ".into(),
+            cell: None,
         },
         Mutation::DeleteRange {
             story_id: "story1".into(),
             start: 0,
             end: 1,
+            cell: None,
         },
     ];
     let mut m = replay_log(&bytes, &ops);
@@ -154,6 +160,7 @@ fn undo_then_redo_returns_to_post_op_hash() {
         story_id: "story1".into(),
         offset: 5,
         text: ",".into(),
+        cell: None,
     };
     m.apply_mutation(&op).unwrap();
     let post = m.current_state_hash();
@@ -172,6 +179,7 @@ fn new_mutation_clears_redo_stack() {
         story_id: "story1".into(),
         offset: 5,
         text: ",".into(),
+        cell: None,
     })
     .unwrap();
     m.undo().unwrap();
@@ -180,6 +188,7 @@ fn new_mutation_clears_redo_stack() {
         story_id: "story1".into(),
         offset: 0,
         text: "X".into(),
+        cell: None,
     })
     .unwrap();
     assert_eq!(m.redo_log_len(), 0, "new mutation must clear redo log");
@@ -201,11 +210,13 @@ fn zoom_independence_via_logical_replay() {
             story_id: "story1".into(),
             offset: 5,
             text: ",".into(),
+            cell: None,
         },
         Mutation::DeleteRange {
             story_id: "story1".into(),
             start: 11,
             end: 12,
+            cell: None,
         },
     ];
     let a = replay_log(&bytes, &ops);
@@ -220,6 +231,7 @@ fn zoom_independence_via_logical_replay() {
             story_id: "story1".into(),
             offset: 5,
             text: ",".into(),
+            cell: None,
         },
     )
     .unwrap();
@@ -230,6 +242,7 @@ fn zoom_independence_via_logical_replay() {
             start: 11,
             end: 12,
             recovered: String::new(),
+            cell: None,
         },
     )
     .unwrap();

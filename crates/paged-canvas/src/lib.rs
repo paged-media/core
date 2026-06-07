@@ -77,7 +77,7 @@ pub use gesture::{
 };
 pub use hit::HitTestResult;
 pub use mutate::{AppliedText, TextOp, TextOpError};
-pub use selection::{ContentSelection, Side};
+pub use selection::{ContentSelection, Side, TextCellAddr};
 pub use snap::{SnapAxis, SnapLine};
 
 /// Phase 3 Item 4 — one rect-per-line in page-local coords for a
@@ -111,4 +111,4 @@ pub use snapshot::{SnapshotError, SnapshotPng};
 
 // Re-export upstream identifiers + the display-list IR so consumers
 // depend on a single root crate.
-pub use paged_renderer::{BuiltDocument, BuiltPage, DisplayCommand, DisplayList, PageId};
+pub use paged_renderer::{BuiltDocument, BuiltPage, CellAddr, DisplayCommand, DisplayList, PageId};

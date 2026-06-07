@@ -187,6 +187,7 @@ fn text_undo_restores_the_display_list() {
             story_id: "u10".into(),
             offset: 4,
             text: "INSERTED ".into(),
+            cell: None,
         })
         .expect("insert text");
     let edited = page_dl(&model, "p1");
@@ -276,6 +277,7 @@ fn insert_page_middle_keeps_story_on_its_page() {
             story_id: "u10".into(),
             offset: 0,
             text: "X".into(),
+            cell: None,
         })
         .expect("text edit after the shift");
     model.undo().expect("undo after the shift");

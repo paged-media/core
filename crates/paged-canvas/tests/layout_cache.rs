@@ -139,6 +139,7 @@ fn mutation_rebuild_hits_unchanged_paragraphs() {
         story_id: "u10".into(),
         offset: 0,
         text: "X".into(),
+        cell: None,
     };
     model.apply_mutation(&m).expect("apply mutation");
     let stats = model.layout_cache_stats();
@@ -183,6 +184,7 @@ fn pages_for_story_updates_after_mutation() {
             story_id: "u10".into(),
             offset: 0,
             text: "Z".into(),
+            cell: None,
         })
         .unwrap();
     let after = model.pages_for_story("u10").to_vec();
@@ -204,6 +206,7 @@ fn second_identical_rebuild_is_all_hits() {
             story_id: "u10".into(),
             offset: 0,
             text: "X".into(),
+            cell: None,
         })
         .unwrap();
     model
@@ -211,6 +214,7 @@ fn second_identical_rebuild_is_all_hits() {
             story_id: "u10".into(),
             start: 0,
             end: 1,
+            cell: None,
         })
         .unwrap();
     let stats = model.layout_cache_stats();
