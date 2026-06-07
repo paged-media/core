@@ -120,6 +120,7 @@ pub fn build() -> Sample {
             text_wrap: None,
             anchored_setting: None,
             frame_effects: Vec::new(),
+            text_frame_pref: None,
         }
         .into();
         let overridable_master_rect: PageItem = Rect {
@@ -140,6 +141,7 @@ pub fn build() -> Sample {
             text_wrap: None,
             anchored_setting: None,
             frame_effects: Vec::new(),
+            text_frame_pref: None,
         }
         .into();
 
@@ -189,6 +191,7 @@ pub fn build() -> Sample {
                         text_wrap: None,
                         anchored_setting: None,
                         frame_effects: Vec::new(),
+                        text_frame_pref: None,
                     }
                     .into(),
                 );

@@ -30,6 +30,7 @@ pub mod strokes_fills;
 pub mod tables;
 pub mod text;
 pub mod text_advanced;
+pub mod text_autosize;
 pub mod text_letterspacing;
 pub mod text_overset;
 pub mod text_wrap;

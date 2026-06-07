@@ -223,6 +223,26 @@ pub struct Rect {
     /// top-level frame still emits the element so a parser
     /// round-trip records `is_anchored = true`.
     pub anchored_setting: Option<AnchoredObjectSetting>,
+    /// Optional `<TextFramePreference>` payload. When set on a text
+    /// frame (one with a `parent_story`), the builder emits a
+    /// `<TextFramePreference>` carrying AutoSizing attributes — the W1.7
+    /// AutoSizing fixtures author an undersized frame the renderer grows
+    /// to fit its story.
+    pub text_frame_pref: Option<TextFramePref>,
+}
+
+/// `<TextFramePreference>` payload — currently the AutoSizing knobs the
+/// W1.7 fixtures need. Each is optional so the element only carries the
+/// attributes the sample sets; absent ⇒ the IDML default (static frame).
+#[derive(Clone, Default)]
+pub struct TextFramePref {
+    /// `AutoSizingType` — `"Off"`, `"HeightOnly"`, `"WidthOnly"`,
+    /// `"HeightAndWidth"`, `"HeightAndWidthProportionally"`.
+    pub auto_sizing_type: Option<&'static str>,
+    /// `AutoSizingReferencePoint` — `"TopLeftPoint"`, `"CenterPoint"`,
+    /// `"BottomRightPoint"`, etc. The corner/edge pinned as the frame
+    /// grows.
+    pub auto_sizing_reference_point: Option<&'static str>,
 }
 
 /// `<TextWrapPreference>` payload emitted as a child of a page item.
@@ -459,7 +479,14 @@ impl Rect {
             text_wrap: None,
             anchored_setting: None,
             frame_effects: Vec::new(),
+            text_frame_pref: None,
         }
+    }
+
+    /// Attach a `<TextFramePreference>` (AutoSizing) payload.
+    pub fn with_text_frame_pref(mut self, pref: TextFramePref) -> Self {
+        self.text_frame_pref = Some(pref);
+        self
     }
 
     pub fn with_fill(mut self, color: impl Into<String>) -> Self {
@@ -678,6 +705,19 @@ impl Rect {
                 &[("LinkResourceURI", img.link_resource_uri.as_str())],
             );
             b.end("Image");
+        }
+        // `<TextFramePreference>` — sibling of Properties. Carries the
+        // AutoSizing attributes; the parser reads them onto the open
+        // text frame (`AutoSizingType` / `AutoSizingReferencePoint`).
+        if let Some(tfp) = &self.text_frame_pref {
+            let mut tfa: Vec<(&str, &str)> = Vec::new();
+            if let Some(at) = tfp.auto_sizing_type {
+                tfa.push(("AutoSizingType", at));
+            }
+            if let Some(rp) = tfp.auto_sizing_reference_point {
+                tfa.push(("AutoSizingReferencePoint", rp));
+            }
+            b.empty("TextFramePreference", &tfa);
         }
         // `<TextWrapPreference>` — sibling of Properties / Image. The
         // parser inspects this on every shape kind (text frame,

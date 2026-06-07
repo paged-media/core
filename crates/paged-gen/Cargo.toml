@@ -22,6 +22,7 @@ clap = { version = "4", features = ["derive"] }
 paged-parse = { path = "../paged-parse" }
 paged-scene = { path = "../paged-scene" }
 paged-renderer = { path = "../paged-renderer" }
+paged-compose = { path = "../paged-compose" }
 sha2 = "0.10"
 
 [[bin]]

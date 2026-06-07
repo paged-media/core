@@ -281,6 +281,7 @@ pub fn build() -> Sample {
         text_wrap: None,
         anchored_setting: None,
         frame_effects: Vec::new(),
+        text_frame_pref: None,
     };
 
     let spread0 = crate::builders::spread::write_spread(&crate::builders::spread::Spread {

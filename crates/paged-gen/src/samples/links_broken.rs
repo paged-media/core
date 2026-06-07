@@ -181,6 +181,7 @@ fn label(page_name: &str, story_id: &str, frame_id: String, y_pt: f32) -> (Rect,
         text_wrap: None,
         anchored_setting: None,
         frame_effects: Vec::new(),
+        text_frame_pref: None,
     };
     (frame, story)
 }
@@ -293,6 +294,7 @@ pub fn build() -> Sample {
             text_wrap: None,
             anchored_setting: None,
             frame_effects: Vec::new(),
+            text_frame_pref: None,
         };
         items.push(rect.into());
     }

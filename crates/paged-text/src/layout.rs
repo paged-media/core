@@ -633,17 +633,62 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     let stretch = (natural_space as f32 * opts.stretch_ratio).round() as i32;
     let shrink = (natural_space as f32 * opts.shrink_ratio).round() as i32;
 
+    // Hyphenation-zone gate (W1.17). A word whose start falls within
+    // `zone` of the right margin is kept whole rather than hyphenated,
+    // trading a more ragged right edge for fewer hyphens — InDesign's
+    // "hyphenation zone". This mirrors the gate in `compose_paragraph`
+    // (the single-run path) so the renderer's multi-run path honours
+    // the zone too. We don't know the breaker's chosen line starts a
+    // priori, so we estimate each word's within-line offset as its
+    // cumulative natural x modulo the reference column width.
+    //
+    // The zone is a RAGGED-edge feature only. Adobe: "The Hyphenation
+    // Zone … applies only when you're using the Single-line Composer
+    // with nonjustified text." (helpx.adobe.com/indesign/using/text-
+    // composition.html — "Compose and hyphenate text".) A justified
+    // paragraph has no rag, so the zone has nothing to bound and
+    // InDesign ignores it. We zero the zone for justified paragraphs:
+    // their hyphenation is driven purely by the breaker's geometric
+    // fit, exactly as InDesign's justified composer does. (W1.3 landed
+    // the ragged gate in `compose_paragraph`; W1.17 extends it to the
+    // renderer path and pins the justified no-op.)
+    let zone = if options.alignment == Alignment::Justify {
+        0
+    } else {
+        opts.hyphenation_zone.max(0)
+    };
+    let zone_ref_width = opts.column_width.max(1);
+    let zone_threshold = (zone_ref_width - zone).max(0);
+    let mut zone_natural_x: i64 = 0;
+
     let mut items: Vec<Item<()>> = Vec::with_capacity(words.len() * 4 + 2);
     let mut byte_ends: Vec<usize> = Vec::with_capacity(items.capacity());
     let mut is_hyphen: Vec<bool> = Vec::with_capacity(items.capacity());
     for (i, w) in words.iter().enumerate() {
+        let word_width = sum_advances_in(&flat, w.start as u32..w.end as u32);
+        // A word is hyphenation-eligible only when its start falls
+        // before the zone threshold. With `zone == 0` (no zone, or a
+        // justified paragraph) the threshold is the full column width,
+        // so every word stays eligible.
+        let zone_offset = (zone_natural_x % zone_ref_width as i64) as i32;
+        let zone_allows_hyphenation = zone == 0 || zone_offset < zone_threshold;
+        // Advance the zone cursor past this word + its trailing space so
+        // the next word's gate sees its correct within-line offset. The
+        // zone is a geometric distance, independent of the breaker's
+        // per-line word-spacing scale, so use the natural widths.
+        if zone > 0 {
+            zone_natural_x += word_width as i64;
+            if i + 1 < words.len() {
+                zone_natural_x += natural_space as i64;
+            }
+        }
         // Hyphenate iff the word is entirely within one run AND a
-        // hyphenator is configured. Multi-run words (rare — usually a
-        // bold "hold" + italic "ing") fall through to a single Box;
-        // they still break at glue boundaries.
+        // hyphenator is configured AND the zone permits it. Multi-run
+        // words (rare — usually a bold "hold" + italic "ing") fall
+        // through to a single Box; they still break at glue boundaries.
         let single_run = run_index_for_word(&flat, w.start as u32, w.end as u32);
         let breaks: Vec<usize> = match (opts.hyphenator, single_run) {
-            (Some(h), Some(_)) => {
+            (Some(h), Some(_)) if zone_allows_hyphenation => {
                 let word_text = &paragraph_text[w.start..w.end];
                 h.opportunities(word_text)
                     .into_iter()
@@ -685,9 +730,21 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         byte_ends.push(w.end);
         is_hyphen.push(false);
         if i + 1 < words.len() {
+            // When a ragged zone is active we widen every inter-word
+            // glue's stretch to at least `zone` so the breaker can end a
+            // line short — by up to the zone — without that line becoming
+            // infeasible (the breaker's internal ratio cap would
+            // otherwise reject a short ragged line, degrading to the
+            // P-17 one-box-per-line fallback). For ragged text the
+            // breaker ratio is discarded at glyph-emit (left-flush), so
+            // the extra stretch only changes WHERE breaks land, not the
+            // rendered spacing. Mirrors `compose_paragraph`'s zone glue
+            // widening. Justified paragraphs have `zone == 0` here, so
+            // their calibrated stretch is untouched.
+            let glue_stretch = if zone > 0 { stretch.max(zone) } else { stretch };
             items.push(Item::Glue {
                 width: space_width,
-                stretch,
+                stretch: glue_stretch,
                 shrink,
             });
             byte_ends.push(w.end);

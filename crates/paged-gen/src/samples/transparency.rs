@@ -349,6 +349,7 @@ pub fn build() -> Sample {
             text_wrap: None,
             anchored_setting: None,
             frame_effects: Vec::new(),
+            text_frame_pref: None,
         };
 
         let backdrop_x = BACKDROP_CX_PT - BACKDROP_W_PT * 0.5;
@@ -374,6 +375,7 @@ pub fn build() -> Sample {
             text_wrap: None,
             anchored_setting: None,
             frame_effects: Vec::new(),
+            text_frame_pref: None,
         };
 
         let mut page_items = Vec::with_capacity(3);
@@ -400,6 +402,7 @@ pub fn build() -> Sample {
                     text_wrap: None,
                     anchored_setting: None,
                     frame_effects: Vec::new(),
+                    text_frame_pref: None,
                 }
                 .into(),
             );

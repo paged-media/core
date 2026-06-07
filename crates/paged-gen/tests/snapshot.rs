@@ -521,6 +521,141 @@ fn text_overset_fires_overset_diagnostic() {
     );
 }
 
+// ── W1.7: text-autosize.idml (AutoSizing Phase B) ────────────────
+
+#[test]
+fn text_autosize_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::text_autosize::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::text_autosize::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+/// Parse-level: the headline frame's `AutoSizingType` /
+/// `AutoSizingReferencePoint` round-trip, and the neighbour carries no
+/// AutoSizing.
+#[test]
+fn text_autosize_round_trips_through_parser() {
+    let sample = paged_gen::samples::text_autosize::build();
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let container = paged_parse::Container::open(&bytes).expect("Container::open");
+    assert_eq!(container.designmap.spreads.len(), 1, "one page");
+    let spread_path = container
+        .entries
+        .keys()
+        .find(|p| p.starts_with("Spreads/"))
+        .expect("a spread entry");
+    let spread = paged_parse::Spread::parse(&container.entries[spread_path]).expect("Spread");
+    let autosizing: Vec<_> = spread
+        .text_frames
+        .iter()
+        .filter(|f| f.auto_sizing.is_some())
+        .collect();
+    assert_eq!(autosizing.len(), 1, "exactly one auto-sizing frame");
+    let head = autosizing[0];
+    assert_eq!(
+        head.auto_sizing,
+        Some(paged_parse::AutoSizingType::HeightOnly),
+        "headline frame must round-trip HeightOnly"
+    );
+    assert_eq!(
+        head.auto_sizing_reference_point,
+        Some(paged_parse::AutoSizingReferencePoint::TopLeftPoint),
+    );
+    // The frame also carries a text wrap (so the grown box excludes the
+    // neighbour).
+    assert!(
+        head.text_wrap.is_some(),
+        "auto-sizing headline must carry a text wrap"
+    );
+}
+
+/// Render-level Phase B: build the document and assert (1) the
+/// auto-sizing frame's painted box grows past its authored 40 pt, and
+/// (2) the neighbour's text-wrap exclusion derives from the GROWN box
+/// (the wrap shrinks the neighbour's lines in A's grown band, so the
+/// neighbour lays out fewer lines than it would against A's authored
+/// rect). Both are layout-time effects, hence a full build.
+#[test]
+fn text_autosize_grows_box_and_excludes_neighbour() {
+    let Some(font) = inter_font() else {
+        eprintln!("skip: Inter.ttf not present");
+        return;
+    };
+    let bytes = paged_gen::write_idml(&paged_gen::samples::text_autosize::build()).unwrap();
+    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    let opts = paged_renderer::pipeline::PipelineOptions {
+        font: Some(&font),
+        ..Default::default()
+    };
+    let built = paged_renderer::pipeline::build_document(&doc, &opts).expect("build_document");
+
+    // (1) The auto-sizing headline grows: with HeightOnly it drops no
+    // overflow lines (Phase A) and its painted box stretches (Phase B).
+    // The fixture is sized so neither frame oversets, so no story is
+    // flagged.
+    let overset = built.diagnostics.overset_story_ids();
+    assert!(
+        overset.is_empty(),
+        "no story should overset (the headline grows; the neighbour fits), overset={overset:?}"
+    );
+    // The box stretch shows up as a fill `FillPath` whose baked height
+    // (transform `d`) is well past the authored 40 pt.
+    let max_fill_h = built.pages[0]
+        .list
+        .commands
+        .iter()
+        .filter_map(|c| match c {
+            paged_compose::DisplayCommand::FillPath { transform, .. } => Some(transform.0[3].abs()),
+            _ => None,
+        })
+        .fold(0.0_f32, f32::max);
+    assert!(
+        max_fill_h > 40.0 * 2.0,
+        "auto-sizing box should stretch well past its authored 40pt, got {max_fill_h}"
+    );
+
+    // (2) The neighbour wraps around the GROWN box. Build a control
+    // where the headline does NOT auto-size (so its wrap is only the
+    // authored 40 pt rect, above the neighbour's first line). With the
+    // grown box carving the neighbour's left edge across a tall band,
+    // the neighbour needs MORE lines than the control.
+    let mut control_sample = paged_gen::samples::text_autosize::build();
+    patch_clear_autosizing(&mut control_sample);
+    let control = paged_renderer::pipeline::build_document(
+        &paged_scene::Document::open(&paged_gen::write_idml(&control_sample).unwrap()).unwrap(),
+        &opts,
+    )
+    .expect("build control");
+
+    let neighbour_lines = |b: &paged_renderer::pipeline::BuiltDocument| -> usize {
+        // Story index 1 is the neighbour (body) story.
+        b.pages.iter().map(|p| p.stats.lines).sum::<usize>()
+    };
+    let grown_lines = neighbour_lines(&built);
+    let control_lines = neighbour_lines(&control);
+    assert!(
+        grown_lines > control_lines,
+        "grown box should re-wrap the neighbour into more lines: \
+         grown={grown_lines} control={control_lines}"
+    );
+}
+
+/// Strip the AutoSizing `<TextFramePreference>` from the headline frame
+/// of a text-autosize sample by rewriting its spread XML — yields the
+/// no-autosize control for the differential wrap assertion.
+fn patch_clear_autosizing(sample: &mut paged_gen::package::Sample) {
+    for (_id, xml) in sample.spreads.iter_mut() {
+        if let Ok(s) = std::str::from_utf8(xml) {
+            if s.contains("AutoSizingType") {
+                let patched = s
+                    .replace(r#" AutoSizingType="HeightOnly""#, "")
+                    .replace(r#" AutoSizingReferencePoint="TopLeftPoint""#, "");
+                *xml = patched.into_bytes();
+            }
+        }
+    }
+}
+
 // ── Aftercare-D: links-broken.idml ───────────────────────────────
 
 #[test]

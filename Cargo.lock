@@ -2371,6 +2371,7 @@ dependencies = [
  "base64",
  "blake3",
  "clap",
+ "paged-compose",
  "paged-parse",
  "paged-renderer",
  "paged-scene",

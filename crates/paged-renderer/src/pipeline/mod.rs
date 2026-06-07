@@ -768,6 +768,22 @@ pub fn build_document(
     // Per-page image diagnostics are aggregated separately at the end.
     let mut emit_diagnostics: Vec<Diagnostic> = Vec::new();
 
+    // W1.7 Phase B: precompute each AutoSizing text frame's GROWN
+    // inner-coord bounds, keyed by `Self` id. Computed once up front so
+    // the frame-paint pass (the box stretches to fit) and the text-wrap
+    // collection (neighbours wrap around the grown box) both see the
+    // same extent. Only frames that actually grow get an entry.
+    let auto_sized_bounds: HashMap<String, paged_parse::Bounds> = document
+        .spreads
+        .iter()
+        .flat_map(|parsed| parsed.spread.text_frames.iter())
+        .filter_map(|frame| {
+            let id = frame.self_id.clone()?;
+            let grown = compute_auto_sized_bounds(document, frame)?;
+            Some((id, grown))
+        })
+        .collect();
+
     // Walk every page in every spread. We capture each page's bounds,
     // origin, and applied-master reference so the next passes can
     // route frames by containment and apply master backgrounds.
@@ -1062,6 +1078,7 @@ pub fn build_document(
                 options.fallback_frame_fill,
                 cmyk_xform.as_ref(),
                 None, // master items don't carry a drop shadow today.
+                None, // master frames don't auto-size in our model.
             );
             // Stash a relocated copy so the master-story pass below
             // can flow this frame's hosted story (page-number footers,
@@ -1338,6 +1355,7 @@ pub fn build_document(
             palette: &Graphic,
             options: &PipelineOptions,
             cmyk_xform: Option<&paged_color::IccTransform>,
+            auto_sized_bounds: &HashMap<String, paged_parse::Bounds>,
         ) {
             match fr {
                 paged_parse::FrameRef::TextFrame(idx) => {
@@ -1348,6 +1366,15 @@ pub fn build_document(
                         return;
                     }
                     total_stats.frames += 1;
+                    // W1.7 Phase B: paint the box at its grown extent when
+                    // this frame auto-sizes (key by Self id). Routing still
+                    // uses the authored bounds — the grown box only changes
+                    // what's painted, not which page hosts the frame.
+                    let grown = frame
+                        .self_id
+                        .as_deref()
+                        .and_then(|id| auto_sized_bounds.get(id))
+                        .copied();
                     let spread_bounds = transform_bounds(frame.bounds, frame.item_transform);
                     let centroid_local = page_for_frame(&spread_bounds, local_geoms).unwrap_or(0);
                     let centroid_page = range.start + centroid_local;
@@ -1371,6 +1398,7 @@ pub fn build_document(
                             options.fallback_frame_fill,
                             cmyk_xform,
                             options.frame_drop_shadow,
+                            grown,
                         );
                         let after = pages[page_idx].list.commands.len();
                         if after > before && frame_spans.text_frames[idx].is_none() {
@@ -1576,6 +1604,7 @@ pub fn build_document(
                                 palette,
                                 options,
                                 cmyk_xform,
+                                auto_sized_bounds,
                             );
                         }
                     }
@@ -1599,6 +1628,7 @@ pub fn build_document(
                 palette,
                 options,
                 cmyk_xform.as_ref(),
+                &auto_sized_bounds,
             );
         }
         spread_frame_spans.push(frame_spans);
@@ -1650,7 +1680,8 @@ pub fn build_document(
     // contribute. Used by StoryEmitter::new to shrink the head text
     // frame's effective column width and shift its origin past any
     // intruding shape.
-    let wrap_rects_per_page = collect_wrap_rects_per_page(document, &spread_page_ranges);
+    let wrap_rects_per_page =
+        collect_wrap_rects_per_page(document, &spread_page_ranges, &auto_sized_bounds);
 
     // Master-story pass: emit each master text frame's hosted story
     // (page-number footers, running headers) per body page that
@@ -5598,6 +5629,7 @@ fn compose_outer_matrix(outer: Transform, inner: Option<[f32; 6]>) -> [f32; 6] {
 fn collect_wrap_rects_per_page(
     document: &Document,
     spread_page_ranges: &[std::ops::Range<usize>],
+    auto_sized_bounds: &HashMap<String, paged_parse::Bounds>,
 ) -> Vec<Vec<WrapShape>> {
     let total_pages: usize = spread_page_ranges.last().map(|r| r.end).unwrap_or(0);
     let mut out: Vec<Vec<WrapShape>> = (0..total_pages).map(|_| Vec::new()).collect();
@@ -5653,7 +5685,18 @@ fn collect_wrap_rects_per_page(
         };
         for f in &parsed.spread.text_frames {
             if let Some(w) = f.text_wrap {
-                push(&mut out, f.bounds, f.item_transform, w);
+                // W1.7 Phase B: a neighbouring frame wraps around the
+                // GROWN box of an auto-sized frame, not its authored
+                // undersized rect. Substitute the precomputed grown
+                // inner-coord bounds when this frame auto-sizes so the
+                // exclusion rect matches the painted box.
+                let wrap_bounds = f
+                    .self_id
+                    .as_deref()
+                    .and_then(|id| auto_sized_bounds.get(id))
+                    .copied()
+                    .unwrap_or(f.bounds);
+                push(&mut out, wrap_bounds, f.item_transform, w);
             }
         }
         for r in &parsed.spread.rectangles {
@@ -6937,6 +6980,208 @@ fn q02_estimate_auto_sizing_width(document: &Document, frame: &TextFrame) -> f32
     max_line
 }
 
+/// W1.7 Phase B — rough wrapped-line-count estimator for an
+/// AutoSizing-height frame. Walks the story's runs, wraps each
+/// paragraph at `inner_width_pt` using the same cheap 0.62 advance
+/// ratio as [`q02_estimate_auto_sizing_width`] (no shape calls), and
+/// returns the total line count. Hard breaks (`\n`) start a new line;
+/// an empty trailing segment still contributes one line (an empty
+/// paragraph occupies a line). Returns at least 1 so a non-empty frame
+/// never grows to zero height.
+///
+/// Deliberately mirrors the width estimator's cheapness: the count is
+/// the *grown box* budget, not the rendered line positions (those come
+/// from the real composer in the story pass). A few % over/under-count
+/// shifts the painted box by a fraction of a line — far better than
+/// leaving the box at the authored undersized height while the text
+/// (placed by Phase A) spills past it.
+fn estimate_auto_sizing_line_count(
+    document: &Document,
+    frame: &TextFrame,
+    inner_width_pt: f32,
+) -> u32 {
+    let Some(story_id) = frame.parent_story.as_deref() else {
+        return 1;
+    };
+    let Some(story) = document.stories.iter().find(|s| s.self_id == story_id) else {
+        return 1;
+    };
+    let width = inner_width_pt.max(1.0);
+    let mut total_lines: u32 = 0;
+    for paragraph in &story.story.paragraphs {
+        // Accumulate the paragraph's natural width across its runs,
+        // resetting on every hard line break. `\n`-delimited segments
+        // wrap independently.
+        let mut seg_natural: f32 = 0.0;
+        let mut seg_has_content = false;
+        let flush = |seg_natural: f32, has_content: bool, total: &mut u32| {
+            // ceil(natural / width) lines, min 1 — an empty segment is
+            // still one (blank) line.
+            let lines = if has_content && seg_natural > 0.0 {
+                (seg_natural / width).ceil().max(1.0) as u32
+            } else {
+                1
+            };
+            *total += lines;
+        };
+        for run in &paragraph.runs {
+            let point_size = run.point_size.unwrap_or(12.0);
+            let mut first_seg = true;
+            for line in run.text.split('\n') {
+                if !first_seg {
+                    // A hard break closed the previous segment.
+                    flush(seg_natural, seg_has_content, &mut total_lines);
+                    seg_natural = 0.0;
+                    seg_has_content = false;
+                }
+                first_seg = false;
+                let chars = line.chars().count() as f32;
+                if chars > 0.0 {
+                    seg_natural += chars * point_size * 0.62;
+                    seg_has_content = true;
+                }
+            }
+        }
+        // Close the paragraph's final (or only) segment.
+        flush(seg_natural, seg_has_content, &mut total_lines);
+    }
+    total_lines.max(1)
+}
+
+/// W1.7 Phase B — compute an AutoSizing frame's GROWN inner-coord
+/// bounds. Phase A grew the text *placement* downward (lines past the
+/// authored bottom are kept rather than dropped); Phase B makes the
+/// frame's visible extent — its painted fill/stroke box and the
+/// text-wrap exclusion neighbouring frames see — match that growth.
+///
+/// The grown box honours the `AutoSizingType` (which axes may grow) and
+/// the `AutoSizingReferencePoint` (which corner/edge stays pinned while
+/// the box grows). Width growth reuses [`q02_estimate_auto_sizing_width`];
+/// height growth uses the wrapped line count × auto-leading. Floors
+/// from `MinimumWidthForAutoSizing` / `MinimumHeightForAutoSizing`
+/// (the latter only when `UseMinimumHeightForAutoSizing`) apply. A box
+/// never shrinks below its authored bounds — AutoSizing only grows.
+///
+/// Returns `None` when the frame doesn't auto-size (or only grows in a
+/// way that doesn't change the authored bounds), so callers can keep
+/// the cheap authored-bounds path.
+fn compute_auto_sized_bounds(
+    document: &Document,
+    frame: &TextFrame,
+) -> Option<paged_parse::Bounds> {
+    let at = frame.auto_sizing?;
+    if matches!(at, paged_parse::AutoSizingType::Off) {
+        return None;
+    }
+    let authored = frame.bounds;
+    let insets = frame.inset_spacing.unwrap_or([0.0; 4]); // top,left,bottom,right
+    let authored_w = authored.width().max(0.0);
+    let authored_h = authored.height().max(0.0);
+
+    // --- Width axis ---
+    let mut grown_w = authored_w;
+    if at.grows_width() {
+        let est = q02_estimate_auto_sizing_width(document, frame); // inner text width
+        let floor = frame.minimum_width_for_auto_sizing.unwrap_or(0.0);
+        // The estimate + floor are inner (text) widths; the box adds the
+        // L/R insets back to compare against the authored *outer* width.
+        let needed_outer = est.max(floor) + insets[1] + insets[3];
+        grown_w = needed_outer.max(authored_w);
+    }
+
+    // --- Height axis ---
+    let mut grown_h = authored_h;
+    if at.grows_height() {
+        // Wrap at the (possibly grown) inner width so a width-grown box
+        // needs fewer lines.
+        let inner_w = (grown_w - insets[1] - insets[3]).max(1.0);
+        let lines = estimate_auto_sizing_line_count(document, frame, inner_w);
+        // Auto-leading is 1.2 × point size (LayoutOptions::new); use the
+        // story's leading run size as the representative line height.
+        let line_height_pt = auto_sizing_line_height_pt(document, frame);
+        let needed_inner_h = lines as f32 * line_height_pt;
+        let mut needed_outer_h = needed_inner_h + insets[0] + insets[2];
+        if frame.use_minimum_height_for_auto_sizing == Some(true) {
+            if let Some(min_h) = frame.minimum_height_for_auto_sizing {
+                needed_outer_h = needed_outer_h.max(min_h);
+            }
+        }
+        grown_h = needed_outer_h.max(authored_h);
+    }
+
+    // HeightAndWidthProportionally: keep the authored aspect ratio while
+    // growing. Take the larger growth factor on either axis and apply it
+    // to both so the box scales uniformly (InDesign's "Proportionally").
+    if matches!(
+        at,
+        paged_parse::AutoSizingType::HeightAndWidthProportionally
+    ) && authored_w > 0.0
+        && authored_h > 0.0
+    {
+        let fx = grown_w / authored_w;
+        let fy = grown_h / authored_h;
+        let f = fx.max(fy).max(1.0);
+        grown_w = authored_w * f;
+        grown_h = authored_h * f;
+    }
+
+    // No change ⇒ let the caller use the authored bounds.
+    if grown_w <= authored_w + 0.01 && grown_h <= authored_h + 0.01 {
+        return None;
+    }
+
+    // --- Reference-point anchoring ---
+    // The reference point is the corner/edge that stays fixed as the box
+    // grows. Distribute the width delta to left/right and the height
+    // delta to top/bottom per the pinned point. Default TopLeftPoint:
+    // grow right + down (top-left pinned), matching Phase A's downward
+    // line placement.
+    use paged_parse::AutoSizingReferencePoint as RP;
+    let rp = frame
+        .auto_sizing_reference_point
+        .unwrap_or(RP::TopLeftPoint);
+    let dw = grown_w - authored_w;
+    let dh = grown_h - authored_h;
+    // Horizontal split: fraction of dw added to the LEFT (box extends
+    // leftward by `left_frac * dw`, rightward by the remainder).
+    let left_frac = match rp {
+        RP::TopLeftPoint | RP::CenterLeftPoint | RP::BottomLeftPoint => 0.0,
+        RP::TopCenterPoint | RP::CenterPoint | RP::BottomCenterPoint => 0.5,
+        RP::TopRightPoint | RP::CenterRightPoint | RP::BottomRightPoint => 1.0,
+    };
+    // Vertical split: fraction of dh added to the TOP.
+    let top_frac = match rp {
+        RP::TopLeftPoint | RP::TopCenterPoint | RP::TopRightPoint => 0.0,
+        RP::CenterLeftPoint | RP::CenterPoint | RP::CenterRightPoint => 0.5,
+        RP::BottomLeftPoint | RP::BottomCenterPoint | RP::BottomRightPoint => 1.0,
+    };
+    Some(paged_parse::Bounds {
+        left: authored.left - dw * left_frac,
+        right: authored.right + dw * (1.0 - left_frac),
+        top: authored.top - dh * top_frac,
+        bottom: authored.bottom + dh * (1.0 - top_frac),
+    })
+}
+
+/// Representative auto-leading line height (pt) for an AutoSizing
+/// frame's story: the leading run's point size × 1.2 (the auto-leading
+/// factor `LayoutOptions::new` uses), or an explicit `Leading` when the
+/// leading run carries one. Falls back to 12pt × 1.2.
+fn auto_sizing_line_height_pt(document: &Document, frame: &TextFrame) -> f32 {
+    let lh = frame
+        .parent_story
+        .as_deref()
+        .and_then(|sid| document.stories.iter().find(|s| s.self_id == sid))
+        .and_then(|story| story.story.paragraphs.iter().flat_map(|p| &p.runs).next())
+        .map(|run| {
+            run.leading
+                .filter(|l| *l > 0.0)
+                .unwrap_or_else(|| run.point_size.unwrap_or(12.0) * 1.2)
+        })
+        .unwrap_or(12.0 * 1.2);
+    lh.max(1.0)
+}
+
 fn pages_overlapping_frame(frame: &paged_parse::Bounds, pages: &[PageGeom]) -> Vec<usize> {
     let mut out: Vec<usize> = Vec::new();
     for (i, p) in pages.iter().enumerate() {
@@ -6960,8 +7205,25 @@ fn emit_text_frame_into(
     fallback: Paint,
     cmyk_xform: Option<&paged_color::IccTransform>,
     drop_shadow: Option<DropShadow>,
+    auto_sized_bounds: Option<paged_parse::Bounds>,
 ) {
     let mut resolved = ResolvedFrame::from_text_frame(frame);
+    // W1.7 Phase B: an AutoSizing frame paints its fill / stroke to the
+    // GROWN extent, not the authored undersized box. Substitute the
+    // grown rect into the resolved geometry so the box, its effects, and
+    // its drop shadow all stretch to where the auto-sized text actually
+    // reaches. Only the rectangular text-panel case is grown — a
+    // non-rectangular (`Polygon`) text frame keeps its authored outline.
+    if let Some(grown) = auto_sized_bounds {
+        if let Geometry::TextFrameRect { rect } = &mut resolved.geometry {
+            *rect = Rect {
+                x: grown.left,
+                y: grown.top,
+                w: grown.width(),
+                h: grown.height(),
+            };
+        }
+    }
     let style = crate::module::resolve_applied_style(&resolved, document);
     if let Some(s) = &style {
         crate::module::object_style_cascade(&mut resolved, s);
@@ -7682,10 +7944,28 @@ fn apply_paragraph_compose_options<'a>(
     // that would start within `zone` of the right margin is kept whole
     // rather than broken (InDesign's "hyphenation zone"). `None`/0 ⇒
     // no zone restriction (hyphenate anywhere an opportunity exists).
-    lopts.compose.hyphenation_zone = resolved
+    //
+    // W1.17: the zone is a *ragged-edge* feature. Adobe: "The
+    // Hyphenation Zone … applies only when you're using the Single-line
+    // Composer with nonjustified text." (helpx.adobe.com/indesign/using/
+    // text-composition.html — "Compose and hyphenate text".) The zone's
+    // whole job is to bound how far the right edge may rag before a
+    // hyphen is forced; a justified paragraph has no rag (every line is
+    // flushed to the column), so the option has no meaning there and
+    // InDesign ignores it. Mirror that exactly: zero the zone for
+    // justified paragraphs so the composer's hyphenation penalties are
+    // driven purely by geometric fit, as InDesign's justified composer
+    // does. W1.3 landed the ragged-only zone gate; this closes the
+    // justified case as a documented no-op rather than a behaviour.
+    let zone_64 = resolved
         .hyphenation_zone
         .map(|z| (z.max(0.0) * paged_text::shape::ADVANCE_PRECISION).round() as i32)
         .unwrap_or(0);
+    lopts.compose.hyphenation_zone = if lopts.alignment == paged_text::Alignment::Justify {
+        0
+    } else {
+        zone_64
+    };
     // Word spacing: IDML carries percentages on the [Min..=Desired..=Max]
     // axis relative to the natural space-glyph advance. The composer's
     // `desired_space_ratio` scales the glue's natural width;
@@ -10774,6 +11054,447 @@ mod tests {
         assert!(
             grown_lines > plain_lines,
             "autosized frame should render more lines: grown={grown_lines} plain={plain_lines}"
+        );
+    }
+
+    #[test]
+    fn hyphenation_zone_is_noop_for_justified_but_active_for_ragged() {
+        // W1.17: the Hyphenation Zone is a RAGGED-edge feature. Adobe:
+        // "The Hyphenation Zone … applies only when you're using the
+        // Single-line Composer with nonjustified text." (Adobe, "Compose
+        // and hyphenate text in InDesign",
+        // helpx.adobe.com/indesign/using/text-composition.html). A
+        // justified paragraph has no rag — every line is flushed to the
+        // column — so the zone has nothing to bound and InDesign ignores
+        // it. We mirror that exactly: `layout_runs` zeroes the zone for
+        // justified paragraphs, so the line breaks are IDENTICAL with or
+        // without a HyphenationZone. For a ragged (Left-aligned)
+        // paragraph the same zone DOES suppress a hyphen near the right
+        // margin and end the line short — proving the fixture is
+        // sensitive and the justified equality is a real no-op, not an
+        // inert column. (W1.3 landed the zone gate in `compose_paragraph`;
+        // W1.17 extends it to the renderer's multi-run path and pins the
+        // justified case.)
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+        let font = inter_font_bytes();
+        // (justification token, HyphenationZone pt) → per-line source
+        // text. The zone is carried on an applied ParagraphStyle because
+        // an inline `HyphenationZone` on a `<ParagraphStyleRange>` is not
+        // captured by the scene cascade (only the applied style is) —
+        // Justification, by contrast, IS read inline.
+        let breaks_for = |justification: &str, zone_pt: &str| -> Vec<String> {
+            let buf = std::io::Cursor::new(Vec::new());
+            let mut zip = ZipWriter::new(buf);
+            let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            let deflated =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            zip.start_file("mimetype", stored).unwrap();
+            zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+                .unwrap();
+            zip.start_file("designmap.xml", deflated).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Styles src="Resources/Styles.xml"/>
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_s1.xml"/>
+</Document>"#,
+            )
+            .unwrap();
+            zip.start_file("Resources/Styles.xml", deflated).unwrap();
+            let styles = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <RootParagraphStyleGroup>
+    <ParagraphStyle Self="ParagraphStyle/Z" Hyphenation="true" HyphenationZone="{zone_pt}"/>
+  </RootParagraphStyleGroup>
+</idPkg:Styles>"#
+            );
+            zip.write_all(styles.as_bytes()).unwrap();
+            // Narrow column (frame width 140pt) so the long hyphenatable
+            // word "communication" lands near the right margin and the
+            // zone has something to gate. Tall enough that nothing
+            // oversets.
+            zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 800 400"/>
+    <TextFrame Self="frameA" ParentStory="s1" GeometricBounds="20 20 400 160"/>
+  </Spread>
+</idPkg:Spread>"#,
+            )
+            .unwrap();
+            let story = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="s1">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Z" Justification="{justification}">
+      <CharacterStyleRange AppliedFont="Inter" PointSize="11"><Content>the quick brown communication network protocol gateway</Content></CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#
+            );
+            zip.start_file("Stories/Story_s1.xml", deflated).unwrap();
+            zip.write_all(story.as_bytes()).unwrap();
+            let bytes = zip.finish().unwrap().into_inner();
+            let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+            let options = PipelineOptions {
+                font: Some(&font),
+                collect_breaks: true,
+                ..PipelineOptions::default()
+            };
+            let built = build_document(&doc, &options).expect("build");
+            built
+                .breaks
+                .iter()
+                .map(|b| b.source_text.trim().to_string())
+                .collect()
+        };
+
+        // Justified: a non-zero zone must NOT change the breaks — the
+        // zone is a documented no-op for justified text.
+        let just_no_zone = breaks_for("FullyJustified", "0");
+        let just_zone = breaks_for("FullyJustified", "36");
+        assert!(
+            just_no_zone.len() >= 2,
+            "need a wrap to exercise the zone, got {just_no_zone:?}"
+        );
+        assert_eq!(
+            just_no_zone, just_zone,
+            "HyphenationZone must be ignored for justified text: \
+             zone-0={just_no_zone:?} vs zone-36={just_zone:?}"
+        );
+        // The justified control actually hyphenates (so the equality
+        // above is meaningful: the zone would have suppressed it if it
+        // applied). "communication" splits as "commu-/nication".
+        assert!(
+            just_no_zone.iter().any(|l| l.ends_with("commu")),
+            "justified control should hyphenate near the margin: {just_no_zone:?}"
+        );
+
+        // Ragged (Left): the SAME zone DOES move a break — it suppresses
+        // the "commu-" hyphen and pushes "communication" whole to the
+        // next line, ending line 1 short (the hyphenation-zone trade).
+        let rag_no_zone = breaks_for("LeftAlign", "0");
+        let rag_zone = breaks_for("LeftAlign", "36");
+        assert_ne!(
+            rag_no_zone, rag_zone,
+            "HyphenationZone must change ragged breaks: \
+             zone-0={rag_no_zone:?} vs zone-36={rag_zone:?}"
+        );
+        assert!(
+            rag_no_zone.iter().any(|l| l.ends_with("commu")),
+            "ragged zone-0 should still hyphenate: {rag_no_zone:?}"
+        );
+        assert!(
+            rag_zone.iter().all(|l| !l.ends_with("commu")),
+            "ragged zone-36 should suppress the commu- hyphen: {rag_zone:?}"
+        );
+    }
+
+    #[test]
+    fn autosize_phase_b_grows_box_and_shifts_neighbour_wrap() {
+        // W1.7 Phase B. Frame A is an AutoSizingType="HeightOnly" frame
+        // authored undersized (40pt tall) with a fill, a stroke, and an
+        // active TextWrap, holding many short paragraphs so it grows to
+        // ~10× its authored height. Frame B is a plain neighbour text
+        // frame that overlaps A's GROWN vertical band.
+        //
+        // Two visible Phase-B effects are asserted differentially against
+        // a no-autosize control (AutoSizingType absent):
+        //   (1) A's painted fill box stretches to the grown extent — the
+        //       `FillPath` for A's box is much taller with autosizing.
+        //   (2) B's text wraps around A's GROWN box, not its authored
+        //       rect — B's line breaks shift vs the control.
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+        let font = inter_font_bytes();
+        // Returns (A's painted-box height in pt, B's per-line texts).
+        let build = |auto: &str| -> (f32, Vec<String>) {
+            let buf = std::io::Cursor::new(Vec::new());
+            let mut zip = ZipWriter::new(buf);
+            let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            let deflated =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            zip.start_file("mimetype", stored).unwrap();
+            zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+                .unwrap();
+            zip.start_file("designmap.xml", deflated).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_a.xml"/>
+  <idPkg:Story src="Stories/Story_b.xml"/>
+</Document>"#,
+            )
+            .unwrap();
+            // Page origin (0,0) so the page-outer transform is identity
+            // and a box `FillPath`'s transform `d` component is exactly
+            // the painted box height in pt.
+            //
+            // Frame A: authored 40pt tall (top 20, bottom 60), 180 wide,
+            // fill Black, with a BoundingBox TextWrap (no offsets). Frame
+            // B: a tall neighbour starting at y=80 that overlaps A's
+            // grown band (A grows well past y=80). B has no fill, so the
+            // only frame `FillPath` is A's box.
+            let spread = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 800 600"/>
+    <TextFrame Self="frameA" ParentStory="a" GeometricBounds="20 20 60 200" FillColor="Color/Black">
+      <Properties/>
+      <TextFramePreference{auto}/>
+      <TextWrapPreference Inverse="false" TextWrapMode="BoundingBoxTextWrap">
+        <Properties>
+          <TextWrapOffset Top="0" Left="0" Bottom="0" Right="0"/>
+        </Properties>
+      </TextWrapPreference>
+    </TextFrame>
+    <TextFrame Self="frameB" ParentStory="b" GeometricBounds="80 20 600 400"/>
+  </Spread>
+</idPkg:Spread>"#
+            );
+            zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+            zip.write_all(spread.as_bytes()).unwrap();
+            // Story A: many short paragraphs so the 40pt frame grows tall.
+            let mut story_a = String::from(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="a">"#,
+            );
+            for i in 0..14 {
+                story_a.push_str(&format!(
+                    r#"<ParagraphStyleRange><CharacterStyleRange AppliedFont="Inter" PointSize="10"><Content>Headline line {i}</Content></CharacterStyleRange></ParagraphStyleRange>"#
+                ));
+            }
+            story_a.push_str("</Story></idPkg:Story>");
+            zip.start_file("Stories/Story_a.xml", deflated).unwrap();
+            zip.write_all(story_a.as_bytes()).unwrap();
+            // Story B: one long paragraph that wraps; its lines that fall
+            // in A's grown band get carved on the left, shifting breaks.
+            let story_b = r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="b">
+    <ParagraphStyleRange Justification="LeftAlign">
+      <CharacterStyleRange AppliedFont="Inter" PointSize="11"><Content>alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega</Content></CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#;
+            zip.start_file("Stories/Story_b.xml", deflated).unwrap();
+            zip.write_all(story_b.as_bytes()).unwrap();
+            let bytes = zip.finish().unwrap().into_inner();
+            let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+            let options = PipelineOptions {
+                font: Some(&font),
+                collect_breaks: true,
+                ..PipelineOptions::default()
+            };
+            let built = build_document(&doc, &options).expect("build");
+            // A's painted box: the page-outer transform is identity, so
+            // the box `FillPath`'s transform is for_rect_in(rect, I) =
+            // [w, 0, 0, h, x, y]. `d` (index 3) is the box height. B has
+            // no fill, so the single frame-box FillPath is A's.
+            let box_h = built.pages[0]
+                .list
+                .commands
+                .iter()
+                .find_map(|c| match c {
+                    paged_compose::DisplayCommand::FillPath { transform, .. } => {
+                        Some(transform.0[3])
+                    }
+                    _ => None,
+                })
+                .expect("frame A should emit a fill box");
+            // B's per-line source texts (story "b").
+            let b_lines: Vec<String> = built
+                .breaks
+                .iter()
+                .filter(|r| r.story_id == "b")
+                .map(|r| r.source_text.trim().to_string())
+                .collect();
+            (box_h, b_lines)
+        };
+
+        let (plain_box_h, plain_b_lines) = build("");
+        let (grown_box_h, grown_b_lines) =
+            build(r#" AutoSizingType="HeightOnly" AutoSizingReferencePoint="TopLeftPoint""#);
+
+        // (1) The painted box stretches to the auto-sized extent. The
+        // authored box is 40pt; with 14 lines at ~12pt leading it grows
+        // several-fold. Allow generous slack — the exact grown height is
+        // an estimate, the contract is "much taller than authored".
+        assert!(
+            (plain_box_h - 40.0).abs() < 1.0,
+            "control box should stay at its authored 40pt height, got {plain_box_h}"
+        );
+        assert!(
+            grown_box_h > plain_box_h * 2.0,
+            "autosized box should stretch well past authored: grown={grown_box_h} plain={plain_box_h}"
+        );
+
+        // (2) Neighbour text-wrap derives from the GROWN box: B's line
+        // breaks shift vs the no-autosize control. (With the control, A
+        // is only 40pt tall and ends at y=60, above B's first line at
+        // y≈80, so A's authored box barely carves B; the grown box
+        // reaches deep into B's column and re-wraps it.)
+        assert!(
+            !plain_b_lines.is_empty() && !grown_b_lines.is_empty(),
+            "both runs should lay out neighbour text"
+        );
+        assert_ne!(
+            grown_b_lines, plain_b_lines,
+            "neighbour wrap must shift with the grown box: \
+             grown={grown_b_lines:?} plain={plain_b_lines:?}"
+        );
+    }
+
+    #[test]
+    fn autosize_phase_b_reference_point_anchors_box_growth() {
+        // W1.7 Phase B reference-point anchoring. The same growing
+        // headline frame is auto-sized under three AutoSizingReferencePoint
+        // values; the painted box's top-left (`x`,`y` baked into the box
+        // FillPath transform) moves per the pinned point:
+        //   - TopLeftPoint   → top-left pinned: x,y stay at authored.
+        //   - CenterPoint    → centre pinned: box extends up AND left.
+        //   - BottomRightPoint → bottom-right pinned: box extends up+left
+        //     by the full delta (top-left moves the most).
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+        let font = inter_font_bytes();
+        // Returns the painted box rect (x, y, w, h) for frame A.
+        let box_rect = |auto: &str| -> (f32, f32, f32, f32) {
+            let buf = std::io::Cursor::new(Vec::new());
+            let mut zip = ZipWriter::new(buf);
+            let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            let deflated =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            zip.start_file("mimetype", stored).unwrap();
+            zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+                .unwrap();
+            zip.start_file("designmap.xml", deflated).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_a.xml"/>
+</Document>"#,
+            )
+            .unwrap();
+            // Authored box: 200..240 in y (40pt tall), 100..280 in x
+            // (180 wide), centred in a large page so growth in any
+            // direction stays on-page. Page origin (0,0) ⇒ identity outer.
+            let spread = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 800 600"/>
+    <TextFrame Self="frameA" ParentStory="a" GeometricBounds="200 100 240 280" FillColor="Color/Black">
+      <Properties/>
+      <TextFramePreference{auto}/>
+    </TextFrame>
+  </Spread>
+</idPkg:Spread>"#
+            );
+            zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+            zip.write_all(spread.as_bytes()).unwrap();
+            let mut story_a = String::from(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="a">"#,
+            );
+            for i in 0..12 {
+                // Each line is long enough that the longest-line width
+                // estimate exceeds the authored 180pt width, so a
+                // HeightAndWidth frame grows on BOTH axes (exercising the
+                // horizontal AND vertical reference-point split).
+                story_a.push_str(&format!(
+                    r#"<ParagraphStyleRange><CharacterStyleRange AppliedFont="Inter" PointSize="10"><Content>Supercalifragilistic headline number {i}</Content></CharacterStyleRange></ParagraphStyleRange>"#
+                ));
+            }
+            story_a.push_str("</Story></idPkg:Story>");
+            zip.start_file("Stories/Story_a.xml", deflated).unwrap();
+            zip.write_all(story_a.as_bytes()).unwrap();
+            let bytes = zip.finish().unwrap().into_inner();
+            let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+            let options = PipelineOptions {
+                font: Some(&font),
+                ..PipelineOptions::default()
+            };
+            let built = build_document(&doc, &options).expect("build");
+            built.pages[0]
+                .list
+                .commands
+                .iter()
+                .find_map(|c| match c {
+                    paged_compose::DisplayCommand::FillPath { transform, .. } => {
+                        let t = transform.0;
+                        // for_rect_in(rect, I) = [w, 0, 0, h, x, y].
+                        Some((t[4], t[5], t[0], t[3]))
+                    }
+                    _ => None,
+                })
+                .expect("frame A should emit a fill box")
+        };
+
+        let top_left =
+            box_rect(r#" AutoSizingType="HeightAndWidth" AutoSizingReferencePoint="TopLeftPoint""#);
+        let center =
+            box_rect(r#" AutoSizingType="HeightAndWidth" AutoSizingReferencePoint="CenterPoint""#);
+        let bottom_right = box_rect(
+            r#" AutoSizingType="HeightAndWidth" AutoSizingReferencePoint="BottomRightPoint""#,
+        );
+
+        // All three grow to the SAME size (same content), differing only
+        // in where the top-left lands.
+        let eq = |a: f32, b: f32| (a - b).abs() < 0.01;
+        assert!(
+            eq(top_left.2, center.2) && eq(center.2, bottom_right.2),
+            "width should be identical across reference points"
+        );
+        assert!(
+            eq(top_left.3, center.3) && eq(center.3, bottom_right.3),
+            "height should be identical across reference points"
+        );
+
+        // TopLeft: top-left pinned at the authored (100, 200).
+        assert!(
+            eq(top_left.0, 100.0) && eq(top_left.1, 200.0),
+            "TopLeftPoint must pin the authored top-left, got ({}, {})",
+            top_left.0,
+            top_left.1
+        );
+
+        // Centre pinned ⇒ box extends left and up by HALF the delta:
+        // top-left sits left of and above the authored corner, but not as
+        // far as the BottomRight case (full delta).
+        assert!(
+            center.0 < 100.0 && center.1 < 200.0,
+            "CenterPoint must extend the box up and left, got ({}, {})",
+            center.0,
+            center.1
+        );
+        assert!(
+            bottom_right.0 < center.0 && bottom_right.1 < center.1,
+            "BottomRightPoint must move the top-left further than CenterPoint: \
+             br=({}, {}) center=({}, {})",
+            bottom_right.0,
+            bottom_right.1,
+            center.0,
+            center.1
+        );
+        // The bottom-right corner stays pinned at the authored (280, 240)
+        // for the BottomRight case.
+        assert!(
+            eq(bottom_right.0 + bottom_right.2, 280.0)
+                && eq(bottom_right.1 + bottom_right.3, 240.0),
+            "BottomRightPoint must pin the authored bottom-right corner, got ({}, {})",
+            bottom_right.0 + bottom_right.2,
+            bottom_right.1 + bottom_right.3
         );
     }
 
