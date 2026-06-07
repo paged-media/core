@@ -256,6 +256,12 @@ impl WorkerCore {
                         effect = cache_effect_for_story(model, affected_story.as_deref());
                         let mut stats: LayoutCacheStats = model.layout_cache_stats().into();
                         stats.rebuild_ms = (clock() - t0) as f32;
+                        // W1.24 (audit B18) — fold the model's internal
+                        // op-apply / pages / paragraphs / rebuild-count
+                        // breakdown onto the wire stats (additive, rides
+                        // v35). `rebuild_ms` above stays the end-to-end
+                        // measure; these add the finer split.
+                        stats = stats.with_rebuild_stats(&model.last_rebuild_stats());
                         // page-list mutations carry the refreshed sizes
                         // so the editor can rebuild its page grid
                         // without a document reload.
@@ -458,6 +464,12 @@ impl WorkerCore {
                             cache_effect_for_story(model, outcome.affected_story_id.as_deref());
                         let mut stats: LayoutCacheStats = model.layout_cache_stats().into();
                         stats.rebuild_ms = (clock() - t0) as f32;
+                        // W1.24 (audit B18) — fold the model's internal
+                        // op-apply / pages / paragraphs / rebuild-count
+                        // breakdown onto the wire stats (additive, rides
+                        // v35). `rebuild_ms` above stays the end-to-end
+                        // measure; these add the finer split.
+                        stats = stats.with_rebuild_stats(&model.last_rebuild_stats());
                         let pages_after = page_table(model);
                         let page_structure_changed = pages_before != pages_after;
                         WorkerToMainKind::UndoApplied {
@@ -795,6 +807,12 @@ impl WorkerCore {
                         effect = CacheEffect::ClearAll;
                         let mut stats: LayoutCacheStats = model.layout_cache_stats().into();
                         stats.rebuild_ms = (clock() - t0) as f32;
+                        // W1.24 (audit B18) — fold the model's internal
+                        // op-apply / pages / paragraphs / rebuild-count
+                        // breakdown onto the wire stats (additive, rides
+                        // v35). `rebuild_ms` above stays the end-to-end
+                        // measure; these add the finer split.
+                        stats = stats.with_rebuild_stats(&model.last_rebuild_stats());
                         WorkerToMainKind::GestureCommitted {
                             handle,
                             applied_seq: outcome.applied_seq,
@@ -834,6 +852,12 @@ impl WorkerCore {
                             cache_effect_for_story(model, outcome.affected_story_id.as_deref());
                         let mut stats: LayoutCacheStats = model.layout_cache_stats().into();
                         stats.rebuild_ms = (clock() - t0) as f32;
+                        // W1.24 (audit B18) — fold the model's internal
+                        // op-apply / pages / paragraphs / rebuild-count
+                        // breakdown onto the wire stats (additive, rides
+                        // v35). `rebuild_ms` above stays the end-to-end
+                        // measure; these add the finer split.
+                        stats = stats.with_rebuild_stats(&model.last_rebuild_stats());
                         let pages_after = page_table(model);
                         let page_structure_changed = pages_before != pages_after;
                         WorkerToMainKind::RedoApplied {

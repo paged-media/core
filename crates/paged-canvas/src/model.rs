@@ -960,7 +960,43 @@ pub struct CanvasModel {
     /// structural commits.
     body_story_emit_cache:
         std::cell::RefCell<HashMap<(String, u64), paged_renderer::BodyStoryEmissionDelta>>,
+    /// W1.24 (audit B18) — stats for the most recent rebuild. Refreshed
+    /// by `rebuild_after_mutation` (build timing + sizes) and by the
+    /// mutation entrypoints (op-apply timing). Read via
+    /// `last_rebuild_stats`.
+    rebuild_stats: RebuildStats,
+    /// W1.24 (audit B18) — op-apply duration (ms) staged by a mutation
+    /// entrypoint just before it calls `rebuild_after_mutation`, which
+    /// folds it into `rebuild_stats`. Reset to 0 by every rebuild after
+    /// it is consumed, so a view-state rebuild (no preceding edit) reads
+    /// 0 rather than a stale value.
+    pending_op_apply_ms: f64,
 }
+
+/// W1.24 (audit B19) — hard cap on the undo log's length.
+///
+/// `applied_log` is the **undo stack**: each entry pairs a forward op
+/// with the pre-captured inverse that reverses it (see `undo` / `redo`).
+/// It is NOT the save-back source (that is `source_idml` + the live
+/// scene; `export_idml` re-serialises the current scene, never replays
+/// the log) and NOT the determinism replay source (the determinism
+/// tests build their own op list). So the only correctness contract the
+/// log carries is: *the most recent N mutations can be undone.* Bounding
+/// it to the N freshest entries therefore costs only the ability to undo
+/// past the cap — a deliberate, documented trade most editors make
+/// (InDesign itself bounds undo). We evict from the FRONT (oldest first)
+/// so the freshest `CAP` mutations always stay undoable; the redo stack
+/// is a transient of in-session undo and is not separately capped (it can
+/// never exceed what was undone, which is bounded by the same cap).
+///
+/// 10_000 entries: at a generous ~1 KiB/entry (a `TextOp` inverse holds a
+/// deleted-text `String`; a `Frame` inverse holds an `AppliedOperation`)
+/// that is ~10 MiB worst case — well under the multi-MB `source_idml`
+/// copy the model already holds, and far more undo depth than any human
+/// session reaches. Pragmatic count cap over a byte-accounting scheme:
+/// the per-entry size is bounded in practice and a count is O(1) to
+/// enforce without walking the payloads.
+pub const MAX_APPLIED_LOG: usize = 10_000;
 
 /// One entry in the applied / redo logs.
 ///
@@ -973,6 +1009,44 @@ pub struct CanvasModel {
 pub struct AppliedRecord {
     pub applied_seq: u64,
     pub kind: LoggedMutation,
+}
+
+/// W1.24 (audit B18) — per-rebuild timing + size instrumentation.
+///
+/// Captured by `rebuild_after_mutation` (and the initial `load`) on every
+/// pipeline run so native callers can read "the last relayout took X ms
+/// over N pages" without wiring a `Clock` of their own, and the wasm
+/// dispatch can fold the breakdown onto the wire `LayoutCacheStats`
+/// additively. Timing uses the same monotonic-on-native /
+/// `js_sys::Date::now`-on-wasm source the crate's `phase_*` helpers use,
+/// so it compiles and runs on `wasm32` (no `std::time::Instant`, which
+/// panics there).
+///
+/// `op_apply_ms` is filled by the mutation entrypoints (`apply_mutation`
+/// / `apply_operation` / `undo` / `redo`) which own the scene edit that
+/// precedes the rebuild; `rebuild_after_mutation` only knows `build_ms`,
+/// so it leaves `op_apply_ms` at its prior value. Read the pair together
+/// via `last_rebuild_stats`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct RebuildStats {
+    /// Wall-clock of the `pipeline::build_document` call inside the most
+    /// recent rebuild, in milliseconds.
+    pub build_ms: f64,
+    /// Wall-clock of the scene-edit (`paged_mutate::apply` /
+    /// `crate::mutate::apply`) that preceded the rebuild, in
+    /// milliseconds. 0.0 for the initial `load` (no edit) and for
+    /// rebuilds triggered by view-state changes (colour settings).
+    pub op_apply_ms: f64,
+    /// Pages in the freshly built document.
+    pub pages: usize,
+    /// `PipelineStats::paragraphs` — relayout cost scales with this.
+    pub paragraphs: usize,
+    /// Monotone count of rebuilds this model has run (initial load = 1).
+    /// Lets a HUD show "rebuild #K" and tests assert monotonicity.
+    pub rebuilds: u64,
+    /// Undo-log depth right after this rebuild (the B19 cap is visible
+    /// here: it never exceeds `MAX_APPLIED_LOG`).
+    pub applied_log_len: usize,
 }
 
 // Boxing the large `Frame` payload would change this public, re-exported
@@ -1094,8 +1168,18 @@ impl CanvasModel {
                 pipeline::build_document(&scene, &options)
             })
         };
+        // W1.24 (audit B18) — capture the cold build duration before
+        // the `?` so the seeded `rebuild_stats` carries real timing even
+        // on the first build. `phase_elapsed_ms` reads the same monotone
+        // source `phase_log` does, so this is one extra clock read.
+        let load_build_ms = phase_elapsed_ms(t_build);
         let built = built_result.map_err(|e| LoadError::Build(e.to_string()))?;
         phase_log("CanvasModel::load build", t_build);
+
+        // W1.24 (audit B18) — snapshot the sizes before `built` moves
+        // into Self so the seeded `rebuild_stats` reads the cold build.
+        let load_pages = built.pages.len();
+        let load_paragraphs = built.stats.paragraphs;
 
         let t_post = phase_now();
         let page_index = built
@@ -1150,6 +1234,19 @@ impl CanvasModel {
             master_text_emit_cache,
             // Perf-BodyStory — same lifecycle as master_text.
             body_story_emit_cache,
+            // W1.24 (audit B18) — seeded with the cold-build sizes +
+            // timing so a caller that never mutates still sees a
+            // populated, plausible stat. `rebuilds` starts at 1: the
+            // initial build counts as the model's first rebuild.
+            rebuild_stats: RebuildStats {
+                build_ms: load_build_ms,
+                op_apply_ms: 0.0,
+                pages: load_pages,
+                paragraphs: load_paragraphs,
+                rebuilds: 1,
+                applied_log_len: 0,
+            },
+            pending_op_apply_ms: 0.0,
         })
     }
 
@@ -1541,11 +1638,15 @@ impl CanvasModel {
                 })
             }
         };
+        // W1.24 (audit B18) — time the scene edit; the next rebuild
+        // folds it into RebuildStats.op_apply_ms.
+        let t_op = phase_now();
         let applied = crate::mutate::apply(&mut self.scene, &text_op).map_err(|e| {
             crate::channel::WorkerError::NotImplemented {
                 what: format!("text mutation failed: {e}"),
             }
         })?;
+        self.stage_op_apply_ms(phase_elapsed_ms(t_op));
         // Perf-BodyStory — text edits change the *content* of a story
         // but not its frame chain, so the body-story signature would
         // wrongly match and the edit would never display. Blow the
@@ -1582,8 +1683,10 @@ impl CanvasModel {
             self.current_selection = Some(shifted);
         }
         // Phase 3 Item 7 — push to undo log; clear redo log (any
-        // pending redo is invalidated by a fresh mutation).
-        self.applied_log.push(AppliedRecord {
+        // pending redo is invalidated by a fresh mutation). W1.24
+        // (B19) — routed through `push_applied` so the MAX_APPLIED_LOG
+        // cap is enforced.
+        self.push_applied(AppliedRecord {
             applied_seq,
             kind: LoggedMutation::Text {
                 op: text_op,
@@ -2626,11 +2729,15 @@ impl CanvasModel {
         &mut self,
         op: paged_mutate::Operation,
     ) -> Result<FrameMutationOutcome, crate::channel::WorkerError> {
+        // W1.24 (audit B18) — time the scene edit; the rebuild folds it
+        // into RebuildStats.op_apply_ms.
+        let t_op = phase_now();
         let applied = paged_mutate::apply(&mut self.scene, &op).map_err(|e| {
             crate::channel::WorkerError::NotImplemented {
                 what: format!("frame mutation failed: {e}"),
             }
         })?;
+        self.stage_op_apply_ms(phase_elapsed_ms(t_op));
         // Perf-MasterText + Perf-BodyStory — committed mutations
         // can shift the per-page pool state (Alt-duplicate inserts
         // a new frame whose path the frame pass emits earlier,
@@ -2649,7 +2756,8 @@ impl CanvasModel {
             })?;
         let applied_seq = self.bump_applied_seq();
         let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
-        self.applied_log.push(AppliedRecord {
+        // W1.24 (B19) — capped push (oldest-evicted).
+        self.push_applied(AppliedRecord {
             applied_seq,
             kind: LoggedMutation::Frame(applied.clone()),
         });
@@ -2729,7 +2837,10 @@ impl CanvasModel {
         let redone_seq = rec.applied_seq;
         let applied_seq = self.bump_applied_seq();
         let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
-        self.applied_log.push(AppliedRecord {
+        // W1.24 (B19) — capped push (oldest-evicted). A redo can only
+        // re-grow the log up to the cap; the front-eviction here is the
+        // same as the forward paths.
+        self.push_applied(AppliedRecord {
             applied_seq: redone_seq,
             kind: new_kind,
         });
@@ -5764,9 +5875,13 @@ impl CanvasModel {
         };
         let mut cache = std::mem::take(&mut self.layout_cache);
         cache.reset_stats();
+        // W1.24 (audit B18) — time just the pipeline build (the
+        // dominant cost; op-apply is staged separately by the caller).
+        let t_build = phase_now();
         let (build_result, cache) = paged_text::cache::with_layout_cache(cache, || {
             pipeline::build_document(&self.scene, &options)
         });
+        let build_ms = phase_elapsed_ms(t_build);
         self.layout_cache = cache;
         let built = build_result.map_err(|e| crate::channel::LoadError::Build(e.to_string()))?;
         self.page_index = built
@@ -5776,8 +5891,71 @@ impl CanvasModel {
             .map(|(i, p)| (p.id.clone(), i))
             .collect();
         self.story_pages = compute_story_pages(&built);
+        // W1.24 (audit B18) — refresh the per-rebuild stats. `rebuilds`
+        // is monotone; `op_apply_ms` consumes whatever a mutation
+        // entrypoint staged (0 for a view-state rebuild). Done before
+        // `self.built` is moved so the sizes read the fresh document.
+        self.rebuild_stats = RebuildStats {
+            build_ms,
+            op_apply_ms: std::mem::take(&mut self.pending_op_apply_ms),
+            pages: built.pages.len(),
+            paragraphs: built.stats.paragraphs,
+            rebuilds: self.rebuild_stats.rebuilds.saturating_add(1),
+            // Snapshotted pre-push (the caller pushes after this
+            // returns); `last_rebuild_stats` recomputes it live so the
+            // reported value is the true post-mutation depth.
+            applied_log_len: self.applied_log.len(),
+        };
         self.built = built;
         Ok(())
+    }
+
+    /// W1.24 (audit B18) — stats for the most recent rebuild (or the
+    /// initial `load`). Native callers (the editor's worker, tests) read
+    /// this directly; the wasm dispatch folds the breakdown onto the wire
+    /// `LayoutCacheStats` additively. Always populated.
+    ///
+    /// `applied_log_len` is read LIVE from the log here rather than from
+    /// the value snapshotted during the rebuild: the forward-mutation
+    /// paths push onto `applied_log` *after* `rebuild_after_mutation`
+    /// returns, so the snapshot would always trail by one. Reading it at
+    /// stats-read time reports the true post-mutation undo depth (and the
+    /// B19 cap, which lives here).
+    pub fn last_rebuild_stats(&self) -> RebuildStats {
+        RebuildStats {
+            applied_log_len: self.applied_log.len(),
+            ..self.rebuild_stats
+        }
+    }
+
+    /// W1.24 (audit B18) — stage the op-apply duration (ms) a mutation
+    /// entrypoint measured for the scene edit that precedes its rebuild.
+    /// Consumed (and zeroed) by the next `rebuild_after_mutation`. Kept
+    /// `pub(crate)` so only the in-crate mutation paths feed it.
+    pub(crate) fn stage_op_apply_ms(&mut self, ms: f64) {
+        self.pending_op_apply_ms = ms;
+    }
+
+    /// W1.24 (audit B19) — push an `AppliedRecord` onto the undo log,
+    /// enforcing the `MAX_APPLIED_LOG` cap. Evicts from the FRONT
+    /// (oldest first) so the freshest `MAX_APPLIED_LOG` mutations stay
+    /// undoable. Every forward-mutation path (`apply_mutation` /
+    /// `apply_operation` / `redo`) routes its push here so the cap is
+    /// enforced in exactly one place. `undo` does NOT use this — it
+    /// `pop`s (shrinks) the log — and the redo stack is a transient of
+    /// in-session undo, bounded by the same cap, so it needs no
+    /// separate cap.
+    fn push_applied(&mut self, rec: AppliedRecord) {
+        self.applied_log.push(rec);
+        if self.applied_log.len() > MAX_APPLIED_LOG {
+            // O(n) on the eviction only; eviction happens at most once
+            // per push past the cap, so amortised O(1). A VecDeque would
+            // make the front-pop O(1) but `applied_log` is read as a
+            // slice elsewhere (`applied_log_back`); keep the Vec and pay
+            // the rare shift.
+            let overflow = self.applied_log.len() - MAX_APPLIED_LOG;
+            self.applied_log.drain(0..overflow);
+        }
     }
 
     /// Phase 4 instrumentation — last rebuild's layout cache stats.
@@ -5922,6 +6100,20 @@ fn phase_log(label: &str, start: f64) {
 fn phase_log(label: &str, start: std::time::Instant) {
     let ms = start.elapsed().as_secs_f64() * 1000.0;
     tracing::info!("[paged-canvas perf] {label}: {ms:.0} ms");
+}
+
+/// W1.24 (audit B18) — milliseconds elapsed since `start`, read from the
+/// same monotone source as `phase_log` but RETURNED (not logged) so the
+/// `RebuildStats` capture can store it. Wasm uses `js_sys::Date::now`
+/// (sub-ms resolution is fine for HUD-grade timing); native uses the
+/// monotonic `Instant`. Never panics on `wasm32`.
+#[cfg(target_arch = "wasm32")]
+fn phase_elapsed_ms(start: f64) -> f64 {
+    js_sys::Date::now() - start
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn phase_elapsed_ms(start: std::time::Instant) -> f64 {
+    start.elapsed().as_secs_f64() * 1000.0
 }
 
 /// Build a `BytesResolver` from a font registry. Returns `None` when
@@ -6600,5 +6792,89 @@ mod tests {
             .find(|s| s.self_id == "ParagraphStyle/Body")
             .expect("Body style present");
         assert_eq!(body.next_style, None, "Body declares no NextStyle");
+    }
+
+    // ---- W1.24 (audit B19) — applied_log cap ----------------------------
+
+    /// A throwaway `AppliedRecord` carrying its `applied_seq` as an
+    /// identity tag. The `LoggedMutation::Text` payload is empty so the
+    /// push is allocation-cheap — this lets us drive the log 10k+ entries
+    /// past the cap in microseconds (no rebuilds), exercising the
+    /// eviction logic directly rather than through `apply_mutation`.
+    fn dummy_record(seq: u64) -> AppliedRecord {
+        AppliedRecord {
+            applied_seq: seq,
+            kind: LoggedMutation::Text {
+                op: crate::mutate::TextOp::InsertText {
+                    story_id: String::new(),
+                    offset: 0,
+                    text: String::new(),
+                    cell: None,
+                },
+                inverse: crate::mutate::TextOp::DeleteRange {
+                    story_id: String::new(),
+                    start: 0,
+                    end: 0,
+                    recovered: String::new(),
+                    cell: None,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn applied_log_caps_at_max_and_evicts_oldest_first() {
+        let bytes = minimal_idml_bytes();
+        let mut model = CanvasModel::load("doc-cap", &bytes, CanvasOptions::default()).unwrap();
+
+        let overflow = 7usize;
+        let total = MAX_APPLIED_LOG + overflow;
+        // applied_seq is 1-based and increases by one per push.
+        for seq in 1..=total as u64 {
+            model.push_applied(dummy_record(seq));
+            // Invariant at EVERY step, not just the end.
+            assert!(
+                model.applied_log.len() <= MAX_APPLIED_LOG,
+                "log exceeded cap at push {seq}: {}",
+                model.applied_log.len()
+            );
+        }
+
+        // Saturated exactly at the cap.
+        assert_eq!(model.applied_log.len(), MAX_APPLIED_LOG);
+        // Oldest-first eviction: the first `overflow` seqs (1..=overflow)
+        // were dropped, so the FRONT now holds seq == overflow + 1 and
+        // the BACK holds the freshest seq == total.
+        assert_eq!(
+            model.applied_log.first().unwrap().applied_seq,
+            overflow as u64 + 1,
+            "oldest survivor must be seq overflow+1 (older ones evicted)"
+        );
+        assert_eq!(
+            model.applied_log.last().unwrap().applied_seq,
+            total as u64,
+            "freshest entry must always be retained"
+        );
+        // And the surviving window is exactly the freshest MAX entries:
+        // contiguous seqs [overflow+1 ..= total].
+        for (i, rec) in model.applied_log.iter().enumerate() {
+            assert_eq!(rec.applied_seq, overflow as u64 + 1 + i as u64);
+        }
+    }
+
+    #[test]
+    fn push_under_cap_never_evicts() {
+        let bytes = minimal_idml_bytes();
+        let mut model = CanvasModel::load("doc-under", &bytes, CanvasOptions::default()).unwrap();
+        for seq in 1..=100u64 {
+            model.push_applied(dummy_record(seq));
+        }
+        assert_eq!(model.applied_log.len(), 100, "no eviction under the cap");
+        assert_eq!(
+            model.applied_log.first().unwrap().applied_seq,
+            1,
+            "seq 1 kept"
+        );
+        assert_eq!(model.applied_log.last().unwrap().applied_seq, 100);
     }
 }
