@@ -49,6 +49,11 @@ pub struct DesignMap {
     /// them for BleedBox/MediaBox geometry. Zeros when the element
     /// or attribute is absent.
     pub document_preference: DocumentPreference,
+    /// W1.8 — document-level `<FootnoteOption>` settings (separator
+    /// rule + footnote spacing). Default (all-`None`, `present=false`)
+    /// when the element is absent; the renderer then applies InDesign's
+    /// built-in defaults. See [`FootnoteOptions`].
+    pub footnote_options: FootnoteOptions,
     /// Document layers, in serialization order (which mirrors the
     /// stacking order — first layer = bottom of the z-stack). Each
     /// page item references its layer via `ItemLayer="<self_id>"`.
@@ -402,6 +407,71 @@ pub struct DocumentPreference {
     pub slug_right_or_outside: f32,
 }
 
+/// `<FootnoteOption>` — document-level footnote separator + spacing
+/// settings. In IDML this element is serialised inside the document's
+/// `<RootFootnoteStory>` (or directly under `<Document>`); its attribute
+/// names mirror the InDesign DOM `FootnoteOption` object exactly. Only
+/// the subset the renderer consumes is modelled here.
+///
+/// W1.8 — the renderer draws a separator rule above each frame's
+/// footnote pool when `rule_on` is true, using `rule_*`. The `spacer`
+/// (minimum gap between body and first footnote) and `space_between`
+/// (gap between footnotes) feed the pool layout's vertical metrics.
+///
+/// `None` everywhere is the absent-element default; the renderer then
+/// falls back to InDesign's own defaults (`rule_on = true`, a 0.5pt
+/// black rule 50% of the column wide). See [`FootnoteOptions::is_default`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct FootnoteOptions {
+    /// True when the element was present in the designmap. When false
+    /// the struct is all-`None` and the renderer applies its built-in
+    /// defaults; we keep the flag so "rule explicitly off" (`rule_on =
+    /// Some(false)`) is distinguishable from "no FootnoteOption at all".
+    pub present: bool,
+    /// `RuleOn` — draw the separator rule above the first footnote.
+    pub rule_on: Option<bool>,
+    /// `RuleColor` — swatch id (`Color/...`) for the rule stroke.
+    pub rule_color: Option<String>,
+    /// `RuleTint` — tint percent (0–100) of the rule colour.
+    pub rule_tint: Option<f32>,
+    /// `RuleLineWeight` — stroke weight of the rule, in points.
+    pub rule_line_weight: Option<f32>,
+    /// `RuleWidth` — length of the rule, in points (the drawn segment;
+    /// InDesign measures it from `rule_left_indent`).
+    pub rule_width: Option<f32>,
+    /// `RuleLeftIndent` — left inset of the rule from the column edge,
+    /// in points.
+    pub rule_left_indent: Option<f32>,
+    /// `RuleOffset` — vertical offset of the rule above the first
+    /// footnote's baseline-anchored top, in points.
+    pub rule_offset: Option<f32>,
+    /// `SeparatorText` — string between the footnote marker number and
+    /// its text (e.g. `"\t"`). The renderer expands `^t`/`^m` markers.
+    pub separator_text: Option<String>,
+    /// `Spacer` — minimum vertical space between the text-column bottom
+    /// and the first footnote, in points.
+    pub spacer: Option<f32>,
+    /// `SpaceBetween` — vertical space between consecutive footnotes,
+    /// in points.
+    pub space_between: Option<f32>,
+}
+
+impl FootnoteOptions {
+    /// True when no `<FootnoteOption>` was parsed (or it carried no
+    /// recognised attributes). Lets the renderer cheaply skip the
+    /// separator/spacing machinery for the overwhelmingly common case
+    /// of a document with no customised footnote settings.
+    pub fn is_default(&self) -> bool {
+        !self.present
+    }
+
+    /// Effective `rule_on`, applying InDesign's default (rule ON) when
+    /// the document didn't say.
+    pub fn rule_on_effective(&self) -> bool {
+        self.rule_on.unwrap_or(true)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SpreadRef {
     pub src: String,
@@ -470,6 +540,30 @@ impl DesignMap {
                             slug_bottom: f(b"SlugBottomOffset"),
                             slug_inside_or_left: f(b"SlugInsideOrLeftOffset"),
                             slug_right_or_outside: f(b"SlugRightOrOutsideOffset"),
+                        };
+                    }
+                    // W1.8 — `<FootnoteOption>` document-level footnote
+                    // separator + spacing settings. InDesign serialises
+                    // this once per document (inside `<RootFootnoteStory>`
+                    // or directly under `<Document>`); we match on the
+                    // element name wherever it appears. Attribute names
+                    // mirror the DOM `FootnoteOption` object.
+                    if e.name().as_ref() == b"FootnoteOption" {
+                        let f = |name: &[u8]| -> Option<f32> {
+                            attr(&e, name).and_then(|s| s.parse().ok())
+                        };
+                        out.footnote_options = FootnoteOptions {
+                            present: true,
+                            rule_on: attr(&e, b"RuleOn").and_then(|s| s.parse().ok()),
+                            rule_color: attr(&e, b"RuleColor"),
+                            rule_tint: f(b"RuleTint"),
+                            rule_line_weight: f(b"RuleLineWeight"),
+                            rule_width: f(b"RuleWidth"),
+                            rule_left_indent: f(b"RuleLeftIndent"),
+                            rule_offset: f(b"RuleOffset"),
+                            separator_text: attr(&e, b"SeparatorText"),
+                            spacer: f(b"Spacer"),
+                            space_between: f(b"SpaceBetween"),
                         };
                     }
                     if e.name().as_ref() == b"Layer" {
@@ -872,5 +966,54 @@ mod document_preference_tests {
         let xml = br#"<?xml version="1.0"?><Document DOMVersion="18.5"/>"#;
         let dm = DesignMap::parse(xml).expect("parse");
         assert_eq!(dm.document_preference, DocumentPreference::default());
+    }
+
+    #[test]
+    fn parses_footnote_option_rule_and_spacing() {
+        // W1.8 — a document-level <FootnoteOption> as InDesign
+        // serialises it (PascalCase DOM-mirroring attributes). The
+        // parser must lift the separator-rule and spacing settings.
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document DOMVersion="20.0">
+  <RootFootnoteStory>
+    <FootnoteOption RuleOn="true" RuleColor="Color/FootRule" RuleTint="100"
+      RuleLineWeight="1.5" RuleWidth="120" RuleLeftIndent="6" RuleOffset="4"
+      SeparatorText="^t" Spacer="9" SpaceBetween="3"/>
+  </RootFootnoteStory>
+</Document>"#;
+        let dm = DesignMap::parse(xml).expect("parse");
+        let fo = &dm.footnote_options;
+        assert!(fo.present);
+        assert!(!fo.is_default());
+        assert_eq!(fo.rule_on, Some(true));
+        assert!(fo.rule_on_effective());
+        assert_eq!(fo.rule_color.as_deref(), Some("Color/FootRule"));
+        assert_eq!(fo.rule_tint, Some(100.0));
+        assert_eq!(fo.rule_line_weight, Some(1.5));
+        assert_eq!(fo.rule_width, Some(120.0));
+        assert_eq!(fo.rule_left_indent, Some(6.0));
+        assert_eq!(fo.rule_offset, Some(4.0));
+        assert_eq!(fo.separator_text.as_deref(), Some("^t"));
+        assert_eq!(fo.spacer, Some(9.0));
+        assert_eq!(fo.space_between, Some(3.0));
+    }
+
+    #[test]
+    fn footnote_option_rule_off_is_distinct_from_absent() {
+        // RuleOn="false" must round-trip as Some(false) — the renderer
+        // distinguishes "rule explicitly off" from "no element at all"
+        // (which defaults to rule ON, InDesign's behaviour).
+        let off = br#"<?xml version="1.0"?><Document><FootnoteOption RuleOn="false"/></Document>"#;
+        let dm = DesignMap::parse(off).expect("parse");
+        assert!(dm.footnote_options.present);
+        assert_eq!(dm.footnote_options.rule_on, Some(false));
+        assert!(!dm.footnote_options.rule_on_effective());
+
+        let absent = br#"<?xml version="1.0"?><Document/>"#;
+        let dm = DesignMap::parse(absent).expect("parse");
+        assert!(dm.footnote_options.is_default());
+        assert_eq!(dm.footnote_options.rule_on, None);
+        // Absent ⇒ default to rule ON.
+        assert!(dm.footnote_options.rule_on_effective());
     }
 }

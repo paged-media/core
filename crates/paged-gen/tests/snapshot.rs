@@ -787,3 +787,36 @@ fn links_broken_missing_and_ok_classification() {
         "exactly the two broken links must be missing, got {missing:?}",
     );
 }
+
+#[test]
+fn footnotes_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::footnotes::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::footnotes::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+#[test]
+fn footnotes_round_trips_through_parser() {
+    // W1.8 — the footnotes sample carries a document-level
+    // `<FootnoteOption>` (separator rule) plus a story whose body
+    // paragraph anchors three `<Footnote>` elements. Parse it back and
+    // assert both survive: the FootnoteOption settings AND the footnote
+    // bodies on the host paragraph.
+    let sample = paged_gen::samples::footnotes::build();
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let container = paged_parse::Container::open(&bytes).expect("Container::open");
+    let fo = &container.designmap.footnote_options;
+    assert!(fo.present, "FootnoteOption must round-trip");
+    assert_eq!(fo.rule_on, Some(true));
+    assert_eq!(fo.rule_width, Some(140.0));
+    assert_eq!(fo.rule_color.as_deref(), Some("Color/Black"));
+
+    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    let footnote_count: usize = doc
+        .stories
+        .iter()
+        .flat_map(|s| s.story.paragraphs.iter())
+        .map(|p| p.footnotes.len())
+        .sum();
+    assert_eq!(footnote_count, 3, "three footnotes must round-trip");
+}

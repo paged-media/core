@@ -219,6 +219,7 @@ pub fn build() -> Sample {
                 destination: page_dest,
             },
         ],
+        ..MarkerResources::default()
     };
 
     // The body paragraph: plain text interleaved with a custom
