@@ -272,6 +272,7 @@ pub fn build() -> Sample {
             } else {
                 None
             },
+            clipping_path: None,
         };
 
         let rect = Rect {

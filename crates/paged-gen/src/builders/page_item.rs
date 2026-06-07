@@ -181,6 +181,7 @@ impl PathPoint {
 /// becomes a single `<GeometryPathType>` element with its own
 /// `<PathPointArray>`. Multiple sub-paths in one polygon = compound
 /// path (visible via the renderer's even-odd fill rule).
+#[derive(Clone)]
 pub struct PolygonSubPath {
     /// Points walked in order. For a closed sub-path, the emitter sets
     /// `PathOpen="false"`; the points themselves don't repeat the
@@ -198,6 +199,77 @@ impl PolygonSubPath {
             points: anchors.into_iter().map(PathPoint::corner).collect(),
             closed,
         }
+    }
+}
+
+/// W1.21: `<ClippingPathSettings>` nested inside a placed `<Image>`.
+/// Drives the renderer's detached image-clip. `subpaths` carries the
+/// resolved clip geometry (in the image's pixel space) for a
+/// `UserModifiedPath`; leave it empty for the deferred types
+/// (PhotoshopPath / AlphaChannel / DetectEdges), which reference a path
+/// in the image binary the renderer can't reach from the XML.
+#[derive(Clone)]
+pub struct ClipPathSpec {
+    /// `ClippingType` — `"UserModifiedPath"` (geometry inline),
+    /// `"PhotoshopPath"` / `"AlphaChannel"` / `"DetectEdges"` (deferred),
+    /// or `"None"`.
+    pub clipping_type: &'static str,
+    /// `InvertPath` — keep the area outside the path.
+    pub invert: bool,
+    /// `IncludeInsideEdges` — keep interior contours as holes.
+    pub include_inside_edges: bool,
+    /// `AppliedPathName` — the named 8BIM path / alpha channel (for the
+    /// deferred types). `None` ⇒ omitted.
+    pub applied_path_name: Option<&'static str>,
+    /// Resolved clip-path contours in image-pixel coordinates. Empty for
+    /// the deferred types. Multiple subpaths = compound clip (holes).
+    pub subpaths: Vec<PolygonSubPath>,
+}
+
+impl ClipPathSpec {
+    fn write(&self, b: &mut XmlBuilder) {
+        let invert = if self.invert { "true" } else { "false" };
+        let inside = if self.include_inside_edges {
+            "true"
+        } else {
+            "false"
+        };
+        let mut attrs: Vec<(&str, &str)> = vec![
+            ("ClippingType", self.clipping_type),
+            ("InvertPath", invert),
+            ("IncludeInsideEdges", inside),
+        ];
+        if let Some(name) = self.applied_path_name {
+            attrs.push(("AppliedPathName", name));
+        }
+        if self.subpaths.is_empty() {
+            b.empty("ClippingPathSettings", &attrs);
+            return;
+        }
+        b.start("ClippingPathSettings", &attrs);
+        b.start("PathGeometry", &[]);
+        for sub in &self.subpaths {
+            let open = if sub.closed { "false" } else { "true" };
+            b.start("GeometryPathType", &[("PathOpen", open)]);
+            b.start("PathPointArray", &[]);
+            for p in &sub.points {
+                let anchor = format!("{} {}", format_f32(p.anchor.0), format_f32(p.anchor.1));
+                let left = format!("{} {}", format_f32(p.left.0), format_f32(p.left.1));
+                let right = format!("{} {}", format_f32(p.right.0), format_f32(p.right.1));
+                b.empty(
+                    "PathPointType",
+                    &[
+                        ("Anchor", &anchor),
+                        ("LeftDirection", &left),
+                        ("RightDirection", &right),
+                    ],
+                );
+            }
+            b.end("PathPointArray");
+            b.end("GeometryPathType");
+        }
+        b.end("PathGeometry");
+        b.end("ClippingPathSettings");
     }
 }
 
@@ -537,6 +609,9 @@ pub struct PlacedImage {
     /// missing-image placeholder. `None` ⇒ link-only (resolved via the
     /// URI; "missing" when nothing on disk answers it).
     pub inline_bytes: Option<Vec<u8>>,
+    /// W1.21: `<ClippingPathSettings>` nested in the `<Image>`. `None`
+    /// ⇒ no detached clip (the frame outline is the only crop).
+    pub clipping_path: Option<ClipPathSpec>,
 }
 
 /// IDML `<BlendingSetting>` — `Opacity` is 0..=100, `BlendMode` is
@@ -860,6 +935,12 @@ impl Rect {
                 b.end("Contents");
             }
             b.end("Properties");
+            // W1.21: `<ClippingPathSettings>` is a sibling of
+            // `<Properties>` / `<Link>` inside the `<Image>`. The parser
+            // keys it onto the host frame's pending clip.
+            if let Some(clip) = &img.clipping_path {
+                clip.write(b);
+            }
             b.empty(
                 "Link",
                 &[("LinkResourceURI", img.link_resource_uri.as_str())],

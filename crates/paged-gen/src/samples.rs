@@ -21,6 +21,7 @@ pub mod effects;
 pub mod geometry;
 pub mod geometry_groups;
 pub mod gradients;
+pub mod image_clipping;
 pub mod images;
 pub mod links_broken;
 pub mod markers;

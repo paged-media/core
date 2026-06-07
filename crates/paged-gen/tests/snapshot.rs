@@ -445,6 +445,56 @@ fn images_round_trips_through_parser() {
     );
 }
 
+// ── W1.21: image-clipping.idml ───────────────────────────────────
+
+#[test]
+fn image_clipping_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::image_clipping::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::image_clipping::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+#[test]
+fn image_clipping_round_trips_clipping_path_settings() {
+    use paged_parse::ClippingType;
+    let sample = paged_gen::samples::image_clipping::build();
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let container = paged_parse::Container::open(&bytes).expect("Container::open");
+
+    let mut user_paths_with_geometry = 0;
+    let mut deferred = 0;
+    let mut invert_seen = false;
+    for entry_path in container.entries.keys() {
+        if !entry_path.starts_with("Spreads/") {
+            continue;
+        }
+        let spread =
+            paged_parse::Spread::parse(&container.entries[entry_path]).expect("Spread::parse");
+        for r in &spread.rectangles {
+            if let Some(clip) = &r.image_clip {
+                if clip.has_renderable_geometry() {
+                    user_paths_with_geometry += 1;
+                }
+                if clip.is_deferred_clip() {
+                    deferred += 1;
+                }
+                if clip.invert_path {
+                    invert_seen = true;
+                }
+                // The deferred variant names its 8BIM path.
+                if matches!(clip.clipping_type, Some(ClippingType::PhotoshopPath)) {
+                    assert_eq!(clip.applied_path_name.as_deref(), Some("Path 1"));
+                }
+            }
+        }
+    }
+    // Three UserModifiedPath variants (star, star+hole, invert) carry
+    // inline geometry; one PhotoshopPath defers.
+    assert_eq!(user_paths_with_geometry, 3, "three renderable clip paths");
+    assert_eq!(deferred, 1, "one deferred (PhotoshopPath) clip");
+    assert!(invert_seen, "the invert variant round-trips InvertPath");
+}
+
 // ── Aftercare-D: text-overset.idml ───────────────────────────────
 
 /// Load the harness Inter face. Returns `None` (and the caller skips)
