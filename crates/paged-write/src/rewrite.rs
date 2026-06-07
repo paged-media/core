@@ -232,13 +232,10 @@ fn recover_member_transform(
         None => Some(composed),
         Some(g) => {
             let inv = invert_matrix(&g)?;
-            match composed {
-                // A member with no composed transform under a non-identity
-                // group is unusual; fall back to verbatim (return None →
-                // caller suppresses the patch).
-                None => None,
-                Some(c) => Some(Some(compose_matrix(&inv, &c))),
-            }
+            // A member with no composed transform under a non-identity
+            // group is unusual; `None` falls through to verbatim (the
+            // outer `None` suppresses the patch at the call site).
+            composed.map(|c| Some(compose_matrix(&inv, &c)))
         }
     }
 }
