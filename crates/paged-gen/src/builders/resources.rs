@@ -304,6 +304,48 @@ ContinueNumbersAcrossDocuments=\"false\"/>\
     spliced.into_bytes()
 }
 
+/// One `<Condition>` definition for [`styles_xml_with_conditions`]:
+/// a `Self` id (the value `AppliedConditions` references), a display
+/// `Name`, and a `Visible` toggle. `IndicatorMethod` is fixed to the
+/// InDesign default — only `Visible` matters to the renderer's
+/// pre-layout drop rule.
+pub struct ConditionSpec {
+    /// e.g. `"Condition/Draft"` — the exact token a run's
+    /// `AppliedConditions` must carry to be gated by this condition.
+    pub self_id: &'static str,
+    pub name: &'static str,
+    pub visible: bool,
+}
+
+/// W4.3 — `Resources/Styles.xml` carrying a `<RootConditionalTextGroup>`
+/// with the supplied `<Condition>` definitions (plus the default
+/// `[No ...]` styles). Closes the W2.14 honest gap: no corpus IDML
+/// previously carried `<Condition Visible="false">` defs, so the
+/// renderer's conditional-text DROP path had no end-to-end fixture. A
+/// run whose `AppliedConditions` reference a `Visible="false"` condition
+/// is dropped pre-layout; `Visible="true"` (and unknown) refs render.
+/// Built by post-processing `styles_xml()` exactly like
+/// [`styles_xml_with_numbering_list`] so the default structure stays the
+/// single source of truth.
+pub fn styles_xml_with_conditions(conditions: &[ConditionSpec]) -> Vec<u8> {
+    let mut group = String::from("<RootConditionalTextGroup>");
+    for c in conditions {
+        group.push_str(&format!(
+            "<Condition Self=\"{}\" Name=\"{}\" Visible=\"{}\" \
+IndicatorMethod=\"UseHighlight\"/>",
+            c.self_id, c.name, c.visible
+        ));
+    }
+    group.push_str("</RootConditionalTextGroup>");
+    let text = String::from_utf8(styles_xml()).expect("styles_xml is valid utf-8");
+    let closing = "</idPkg:Styles>";
+    let spliced = match text.rfind(closing) {
+        Some(idx) => format!("{}{}{}", &text[..idx], group, &text[idx..]),
+        None => format!("{text}{group}"),
+    };
+    spliced.into_bytes()
+}
+
 /// Combined builder behind the [`styles_xml`] family — table styles
 /// and custom stroke styles in one `Resources/Styles.xml`.
 pub fn styles_xml_full(
