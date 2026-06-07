@@ -151,7 +151,10 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          npm publish --access public dist/canvas-wasm
-          npm publish --access public dist/introspect-wasm
-          npm publish --access public dist/sdk
-          npm publish --access public web/idml-viewer
+          # Leading ./ is load-bearing: a bare `dist/canvas-wasm` is
+          # parsed by npm as a GitHub owner/repo shorthand, not a path
+          # (it tried git ls-remote github.com/dist/canvas-wasm.git).
+          npm publish --access public ./dist/canvas-wasm
+          npm publish --access public ./dist/introspect-wasm
+          npm publish --access public ./dist/sdk
+          npm publish --access public ./web/idml-viewer
