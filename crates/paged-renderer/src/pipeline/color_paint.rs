@@ -702,6 +702,38 @@ pub(super) fn build_run_paint_picker_resolved(
     RunPaintPicker { bands, default }
 }
 
+/// W1.8 — build a cluster→paint picker for ONE footnote paragraph's
+/// runs. `run_text_lens[i]` is the byte length of run `i`'s SHAPED text
+/// (i.e. including the synthesised `"N." + separator` marker folded onto
+/// run 0 of the first paragraph), so band offsets line up with the
+/// styled-run text the footnote composer actually shaped. The marker
+/// inherits run 0's paint. Per-run `FillColor` + `FillTint` resolve
+/// exactly as for body text.
+pub(super) fn build_footnote_paint_picker(
+    resolved_runs: &[paged_scene::ResolvedRunAttrs],
+    run_text_lens: &[usize],
+    palette: &Graphic,
+    cmyk_xform: Option<&paged_color::IccTransform>,
+    default: Paint,
+) -> RunPaintPicker {
+    let mut bands: Vec<(u32, Paint)> = Vec::with_capacity(resolved_runs.len() + 1);
+    let mut cursor: u32 = 0;
+    for (i, attrs) in resolved_runs.iter().enumerate() {
+        let base = attrs
+            .fill_color
+            .as_deref()
+            .and_then(|id| {
+                color_id_to_paint(id, palette, cmyk_xform)
+                    .or_else(|| gradient_midpoint_paint(id, palette, cmyk_xform))
+            })
+            .unwrap_or(default);
+        let paint = apply_fill_tint(base, attrs.fill_tint);
+        bands.push((cursor, paint));
+        cursor += run_text_lens.get(i).copied().unwrap_or(0) as u32;
+    }
+    RunPaintPicker { bands, default }
+}
+
 /// Map an IDML `StrokeType` reference to a [`Stroke`] of the given
 /// width with the appropriate dash pattern. Recognises the canonical
 /// built-in styles (`StrokeStyle/$ID/Solid`, `Dashed`, `Dotted`,
