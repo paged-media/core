@@ -108,6 +108,7 @@ pub fn build() -> Sample {
             placed_image: None,
             text_wrap: None,
             anchored_setting: None,
+            text_frame_pref: None,
         };
 
         spreads.push((

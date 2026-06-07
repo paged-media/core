@@ -141,6 +141,7 @@ fn label(page_name: &str, story_id: &str, frame_id: String) -> (Rect, Story) {
         placed_image: None,
         text_wrap: None,
         anchored_setting: None,
+        text_frame_pref: None,
     };
     (frame, story)
 }
@@ -209,6 +210,7 @@ pub fn build() -> Sample {
             placed_image: None,
             text_wrap: None,
             anchored_setting: None,
+            text_frame_pref: None,
         };
 
         let items: Vec<PageItem> = vec![label_frame.into(), body_frame.into()];
@@ -272,6 +274,7 @@ pub fn build() -> Sample {
             placed_image: None,
             text_wrap: None,
             anchored_setting: None,
+            text_frame_pref: None,
         };
         // Frame B — tail of the chain: same ParentStory,
         // PreviousTextFrame → A, no NextTextFrame (end of chain, so
@@ -293,6 +296,7 @@ pub fn build() -> Sample {
             placed_image: None,
             text_wrap: None,
             anchored_setting: None,
+            text_frame_pref: None,
         };
 
         let items: Vec<PageItem> = vec![label_frame.into(), frame_a.into(), frame_b.into()];

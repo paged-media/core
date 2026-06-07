@@ -53,6 +53,7 @@ fn emit_sample(name: &str, out_dir: &std::path::Path) -> Result<()> {
         "strokes-fills" => paged_gen::samples::strokes_fills::build(),
         "text" => paged_gen::samples::text::build(),
         "text-advanced" => paged_gen::samples::text_advanced::build(),
+        "text-autosize" => paged_gen::samples::text_autosize::build(),
         "text-letterspacing" => paged_gen::samples::text_letterspacing::build(),
         "text-overset" => paged_gen::samples::text_overset::build(),
         "text-wrap" => paged_gen::samples::text_wrap::build(),
@@ -68,7 +69,7 @@ fn emit_sample(name: &str, out_dir: &std::path::Path) -> Result<()> {
         "links-broken" => paged_gen::samples::links_broken::build(),
         other => {
             anyhow::bail!(
-                "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, text-letterspacing, text-overset, text-wrap, effects, gradients, tables, images, anchored, transparency, markers, masters, corners, links-broken"
+                "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, text-autosize, text-letterspacing, text-overset, text-wrap, effects, gradients, tables, images, anchored, transparency, markers, masters, corners, links-broken"
             )
         }
     };

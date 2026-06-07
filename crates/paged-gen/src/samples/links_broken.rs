@@ -180,6 +180,7 @@ fn label(page_name: &str, story_id: &str, frame_id: String, y_pt: f32) -> (Rect,
         placed_image: None,
         text_wrap: None,
         anchored_setting: None,
+        text_frame_pref: None,
     };
     (frame, story)
 }
@@ -290,6 +291,7 @@ pub fn build() -> Sample {
             placed_image: Some(placed),
             text_wrap: None,
             anchored_setting: None,
+            text_frame_pref: None,
         };
         items.push(rect.into());
     }

@@ -359,6 +359,7 @@ pub fn build() -> Sample {
             placed_image: None,
             text_wrap: None,
             anchored_setting: None,
+            text_frame_pref: None,
         };
 
         // Demo rectangle centred on the page. Baseline: black 6pt
@@ -386,6 +387,7 @@ pub fn build() -> Sample {
             placed_image: None,
             text_wrap: None,
             anchored_setting: None,
+            text_frame_pref: None,
         };
 
         spreads.push((
