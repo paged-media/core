@@ -3143,15 +3143,12 @@ fn split_run_at(
     // Find the byte position of the char_idx'th character. char_indices
     // yields each char's byte offset; chars past the end map to the
     // string's total byte length.
-    let mut byte_idx = run.text.len();
-    let mut chars_seen: u32 = 0;
-    for (byte, _) in run.text.char_indices() {
-        if chars_seen == char_idx {
-            byte_idx = byte;
-            break;
-        }
-        chars_seen += 1;
-    }
+    let byte_idx = run
+        .text
+        .char_indices()
+        .nth(char_idx as usize)
+        .map(|(byte, _)| byte)
+        .unwrap_or(run.text.len());
     let left_text = run.text[..byte_idx].to_string();
     let right_text = run.text[byte_idx..].to_string();
     let mut left = run.clone();
@@ -5058,7 +5055,7 @@ fn apply_create_group(
         .insert(earliest, FrameRef::Group(new_group_idx));
     spread
         .frames_in_order
-        .retain(|r| !(members_doc_order.contains(r) && !matches!(r, FrameRef::Group(_))));
+        .retain(|r| !members_doc_order.contains(r) || matches!(r, FrameRef::Group(_)));
 
     let mut resolved = spec.clone();
     resolved.self_id = Some(self_id.clone());
@@ -6823,7 +6820,7 @@ fn find_path_anchors_mut<'a>(
 /// same subpath) never inserts AT a subpath boundary, so this rule is
 /// sufficient. Edge cases that need a verbatim restore are handled
 /// via `prev_subpath_starts` on the inverse.
-fn increment_subpath_starts(starts: &mut Vec<usize>, n: usize) {
+fn increment_subpath_starts(starts: &mut [usize], n: usize) {
     for s in starts.iter_mut() {
         if *s > n {
             *s += 1;
@@ -6930,8 +6927,8 @@ fn apply_path_open_at(
             // anchor leads, then append its coincident twin so every
             // original edge survives (InDesign scissors-at-anchor).
             anchors[start..end].rotate_left(index - start);
-            let mut head = anchors[start].clone();
-            let mut tail = head.clone();
+            let mut head = anchors[start];
+            let mut tail = head;
             // The head keeps the outgoing handle; the tail keeps the
             // incoming one. The severed sides collapse to endpoints.
             head.left = head.anchor;
@@ -6953,8 +6950,8 @@ fn apply_path_open_at(
                     reason: "cutting an open contour at its endpoint is a no-op".to_string(),
                 });
             }
-            let mut first_half_end = anchors[index].clone();
-            let mut second_half_start = first_half_end.clone();
+            let mut first_half_end = anchors[index];
+            let mut second_half_start = first_half_end;
             first_half_end.right = first_half_end.anchor;
             second_half_start.left = second_half_start.anchor;
             anchors[index] = first_half_end;
@@ -7025,7 +7022,7 @@ fn apply_path_kernel_op(
 
     let invalid = |reason: String| OperationError::InvalidValue {
         node: node.clone(),
-        path: path.clone(),
+        path: *path,
         reason,
     };
 
@@ -7055,7 +7052,7 @@ fn apply_path_kernel_op(
         ),
         _ => {
             return Err(OperationError::TypeMismatch {
-                path: path.clone(),
+                path: *path,
                 expected: "OutlineStroke | OffsetPath | SimplifyPath".to_string(),
             })
         }
@@ -7177,12 +7174,12 @@ fn apply_path_kernel_op(
     Ok(AppliedOperation {
         op: Operation::SetProperty {
             node: node.clone(),
-            path: path.clone(),
+            path: *path,
             value: value.clone(),
         },
         inverse: Operation::SetProperty {
             node: node.clone(),
-            path: path.clone(),
+            path: *path,
             value: with_prev(value),
         },
         invalidation: InvalidationHint {
@@ -9552,4 +9549,50 @@ fn apply_delete_section(
             ..Default::default()
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_with(text: &str) -> paged_parse::CharacterRun {
+        paged_parse::CharacterRun {
+            text: text.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn split_run_at_partitions_by_char_index() {
+        let (l, r) = split_run_at(run_with("hello"), 2);
+        assert_eq!(l.text, "he");
+        assert_eq!(r.text, "llo");
+    }
+
+    #[test]
+    fn split_run_at_zero_keeps_all_on_the_right() {
+        let (l, r) = split_run_at(run_with("hello"), 0);
+        assert_eq!(l.text, "");
+        assert_eq!(r.text, "hello");
+    }
+
+    #[test]
+    fn split_run_at_or_past_end_keeps_all_on_the_left() {
+        let (l, r) = split_run_at(run_with("hi"), 2);
+        assert_eq!(l.text, "hi");
+        assert_eq!(r.text, "");
+        // char_idx beyond the char count clamps to the byte length.
+        let (l2, r2) = split_run_at(run_with("hi"), 99);
+        assert_eq!(l2.text, "hi");
+        assert_eq!(r2.text, "");
+    }
+
+    #[test]
+    fn split_run_at_respects_multibyte_char_boundaries() {
+        // "é" + "🚀" are 2- and 4-byte chars; splitting at char 1 must
+        // land on a valid UTF-8 boundary, not mid-codepoint.
+        let (l, r) = split_run_at(run_with("é🚀x"), 1);
+        assert_eq!(l.text, "é");
+        assert_eq!(r.text, "🚀x");
+    }
 }

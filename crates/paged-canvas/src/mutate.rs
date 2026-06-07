@@ -190,8 +190,10 @@ fn insert_one_segment(story: &mut paged_parse::Story, offset: u32, seg: &str) {
             if let Some(run) = para.runs.last_mut() {
                 run.text.push_str(seg);
             } else {
-                let mut run = CharacterRun::default();
-                run.text = seg.into();
+                let run = CharacterRun {
+                    text: seg.into(),
+                    ..Default::default()
+                };
                 para.runs.push(run);
             }
         }
@@ -203,8 +205,10 @@ fn insert_one_segment(story: &mut paged_parse::Story, offset: u32, seg: &str) {
             if let Some(run) = next_para.runs.first_mut() {
                 run.text.insert_str(0, seg);
             } else {
-                let mut run = CharacterRun::default();
-                run.text = seg.into();
+                let run = CharacterRun {
+                    text: seg.into(),
+                    ..Default::default()
+                };
                 next_para.runs.push(run);
             }
         }

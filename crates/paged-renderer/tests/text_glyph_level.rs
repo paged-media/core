@@ -2350,18 +2350,20 @@ fn per_run_fill_color_on_character_style_range_paints_run_specific_colour() {
     let mut saw_crimson = false;
     let mut saw_other = false;
     for c in &page.list.commands {
-        if let DisplayCommand::FillPath { paint, .. } = c {
-            if let paged_compose::Paint::Solid(c) = paint {
-                // Crimson is a red-dominant shade: r >> g, b. The
-                // exact RGB depends on the colour-management pipeline
-                // (sRGB vs linear, ICC profile, etc.) — assert on
-                // "red-dominant" rather than an exact tuple.
-                let crimson_match = c.r > 0.4 && c.g < 0.4 && c.b < 0.4;
-                if crimson_match {
-                    saw_crimson = true;
-                } else {
-                    saw_other = true;
-                }
+        if let DisplayCommand::FillPath {
+            paint: paged_compose::Paint::Solid(c),
+            ..
+        } = c
+        {
+            // Crimson is a red-dominant shade: r >> g, b. The
+            // exact RGB depends on the colour-management pipeline
+            // (sRGB vs linear, ICC profile, etc.) — assert on
+            // "red-dominant" rather than an exact tuple.
+            let crimson_match = c.r > 0.4 && c.g < 0.4 && c.b < 0.4;
+            if crimson_match {
+                saw_crimson = true;
+            } else {
+                saw_other = true;
             }
         }
     }

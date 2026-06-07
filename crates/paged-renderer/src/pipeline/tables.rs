@@ -1655,11 +1655,11 @@ fn emit_nested_table_inline(
         a: 1.0,
     });
     // Horizontal lines (top of each row + bottom of last row).
-    for r in 0..=total_rows {
+    for &y in &row_y {
         emit_rect(
             Rect {
                 x: origin_x,
-                y: origin_y + row_y[r] - GRID_W * 0.5,
+                y: origin_y + y - GRID_W * 0.5,
                 w: total_w,
                 h: GRID_W,
             },
@@ -1668,10 +1668,10 @@ fn emit_nested_table_inline(
         );
     }
     // Vertical lines (left of each column + right of last column).
-    for c in 0..=col_widths.len() {
+    for &x in &col_x {
         emit_rect(
             Rect {
-                x: origin_x + col_x[c] - GRID_W * 0.5,
+                x: origin_x + x - GRID_W * 0.5,
                 y: origin_y,
                 w: GRID_W,
                 h: table_h,

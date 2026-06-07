@@ -12,8 +12,8 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! Phase B/C/D — gesture spine integration tests (translate + resize
-//! + rotate). The pure math is covered by `gesture::tests` in
+//! Phase B/C/D — gesture spine integration tests (translate, resize,
+//! rotate). The pure math is covered by `gesture::tests` in
 //! `gesture.rs`; this file drives the full `begin / update / commit /
 //! cancel` lifecycle against a real `CanvasModel`.
 
@@ -443,7 +443,7 @@ fn alt_translate_duplicates_instead_of_moving() {
         .find(|f| {
             f.self_id
                 .as_deref()
-                .map_or(false, |s| s.starts_with("tf1_dup_"))
+                .is_some_and(|s| s.starts_with("tf1_dup_"))
         })
         .expect("found duplicate");
     assert!((dup.bounds.top - before_tf[0] - 25.0).abs() < 1e-3);

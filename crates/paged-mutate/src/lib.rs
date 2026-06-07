@@ -155,6 +155,9 @@ impl Project {
 }
 
 #[cfg(test)]
+// 0.7071 literals are cos/sin 45° rotation fixtures; the explicit matrix
+// reads clearer than FRAC_1_SQRT_2 here.
+#[allow(clippy::approx_constant)]
 mod tests {
     use super::*;
     use std::cell::Cell;
@@ -221,8 +224,10 @@ mod tests {
     }
 
     fn document_with_one_textframe(self_id: &str) -> Document {
-        let mut spread = Spread::default();
-        spread.self_id = Some("Spread/u_main".to_string());
+        let mut spread = Spread {
+            self_id: Some("Spread/u_main".to_string()),
+            ..Default::default()
+        };
         spread.text_frames.push(empty_text_frame(
             self_id,
             Bounds {
@@ -1412,8 +1417,10 @@ mod tests {
         src_spread_origin: (f32, f32),
         dest_spread_origin: (f32, f32),
     ) -> Document {
-        let mut src_spread = Spread::default();
-        src_spread.self_id = Some("Spread/u_src".to_string());
+        let mut src_spread = Spread {
+            self_id: Some("Spread/u_src".to_string()),
+            ..Default::default()
+        };
         src_spread.item_transform = Some([
             1.0,
             0.0,
@@ -1426,8 +1433,10 @@ mod tests {
             .text_frames
             .push(empty_text_frame(src_id, src_bounds));
 
-        let mut dest_spread = Spread::default();
-        dest_spread.self_id = Some("Spread/u_dest".to_string());
+        let mut dest_spread = Spread {
+            self_id: Some("Spread/u_dest".to_string()),
+            ..Default::default()
+        };
         dest_spread.item_transform = Some([
             1.0,
             0.0,
@@ -1608,8 +1617,10 @@ mod tests {
     /// per `paged-parse/spread.rs:141-144`. The Group's own
     /// `item_transform` is what L.1 mutates.
     fn document_with_group(group_xform: Option<[f32; 6]>) -> Document {
-        let mut spread = Spread::default();
-        spread.self_id = Some("Spread/u_main".to_string());
+        let mut spread = Spread {
+            self_id: Some("Spread/u_main".to_string()),
+            ..Default::default()
+        };
         spread.text_frames.push(empty_text_frame(
             "TextFrame/leaf_a",
             Bounds {
@@ -1778,8 +1789,10 @@ mod tests {
         anchors: Vec<PathAnchor>,
         subpath_starts: Vec<usize>,
     ) -> Project {
-        let mut spread = Spread::default();
-        spread.self_id = Some("Spread/u_main".to_string());
+        let mut spread = Spread {
+            self_id: Some("Spread/u_main".to_string()),
+            ..Default::default()
+        };
         spread
             .polygons
             .push(polygon_with_anchors(self_id, anchors, subpath_starts));
@@ -1805,7 +1818,7 @@ mod tests {
         Project::new(doc)
     }
 
-    fn polygon_of<'a>(project: &'a Project) -> &'a Polygon {
+    fn polygon_of(project: &Project) -> &Polygon {
         &project.document().spreads[0].spread.polygons[0]
     }
 
@@ -2219,8 +2232,10 @@ mod tests {
     // ---- Track M — layer toggle ops ------------------------------------
 
     fn document_with_one_layer(self_id: &str) -> Document {
-        let mut spread = Spread::default();
-        spread.self_id = Some("Spread/u_main".to_string());
+        let spread = Spread {
+            self_id: Some("Spread/u_main".to_string()),
+            ..Default::default()
+        };
         let mut designmap = DesignMap::default();
         designmap.layers.push(paged_parse::Layer {
             self_id: self_id.to_string(),
@@ -2259,7 +2274,7 @@ mod tests {
         }
     }
 
-    fn layer_of<'a>(project: &'a Project) -> &'a paged_parse::Layer {
+    fn layer_of(project: &Project) -> &paged_parse::Layer {
         &project.document().container.designmap.layers[0]
     }
 
@@ -2424,7 +2439,7 @@ mod tests {
         project
     }
 
-    fn textframe_of<'a>(project: &'a Project) -> &'a ParsedTextFrame {
+    fn textframe_of(project: &Project) -> &ParsedTextFrame {
         &project.document().spreads[0].spread.text_frames[0]
     }
 
@@ -2965,9 +2980,10 @@ mod tests {
             spreads: vec![ParsedSpread {
                 src: "Spreads/syn.xml".to_string(),
                 spread: {
-                    let mut s = Spread::default();
-                    s.self_id = Some("Spread/u_main".to_string());
-                    s
+                    Spread {
+                        self_id: Some("Spread/u_main".to_string()),
+                        ..Default::default()
+                    }
                 },
             }],
             stories: Vec::new(),
@@ -3436,9 +3452,10 @@ mod tests {
             spreads: vec![ParsedSpread {
                 src: "Spreads/syn.xml".to_string(),
                 spread: {
-                    let mut s = paged_parse::Spread::default();
-                    s.self_id = Some("Spread/u_main".to_string());
-                    s
+                    paged_parse::Spread {
+                        self_id: Some("Spread/u_main".to_string()),
+                        ..Default::default()
+                    }
                 },
             }],
             stories: Vec::new(),
@@ -5278,8 +5295,10 @@ mod tests {
         /// Doc with two text frames (one carrying a story, one empty)
         /// on a single spread.
         fn doc_two_frames() -> Document {
-            let mut spread = Spread::default();
-            spread.self_id = Some("Spread/u_main".to_string());
+            let mut spread = Spread {
+                self_id: Some("Spread/u_main".to_string()),
+                ..Default::default()
+            };
             spread.text_frames.push(text_frame("TextFrame/from", Some("Story/u1")));
             spread.text_frames.push(text_frame("TextFrame/to", None));
             let story = Story {
@@ -5468,8 +5487,10 @@ mod tests {
         // ---- Guide CRUD --------------------------------------------------
 
         fn doc_with_spread() -> Document {
-            let mut spread = Spread::default();
-            spread.self_id = Some("Spread/u_main".to_string());
+            let mut spread = Spread {
+                self_id: Some("Spread/u_main".to_string()),
+                ..Default::default()
+            };
             spread.pages.push(page("Page/u1"));
             let mut doc = base_doc();
             doc.spreads.push(paged_scene::ParsedSpread {
@@ -5794,8 +5815,10 @@ mod tests {
         /// round-trips are observable. A `TextFrame/u1` hosts the story
         /// so `frame_for_story` resolves for reflow hints.
         fn document_with_table() -> Document {
-            let mut spread = Spread::default();
-            spread.self_id = Some("Spread/u_main".to_string());
+            let mut spread = Spread {
+                self_id: Some("Spread/u_main".to_string()),
+                ..Default::default()
+            };
             let mut frame = empty_text_frame(
                 "TextFrame/u1",
                 Bounds {
@@ -5896,7 +5919,7 @@ mod tests {
                 .expect("table present")
         }
 
-        fn cell_named<'a>(t: &'a Table, col: u32, row: u32) -> &'a TableCell {
+        fn cell_named(t: &Table, col: u32, row: u32) -> &TableCell {
             t.cells
                 .iter()
                 .find(|c| c.coords() == Some((col, row)))

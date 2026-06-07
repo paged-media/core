@@ -24,9 +24,12 @@
 
 use crate::operation::AppliedOperation;
 
+/// A subscriber callback invoked once per applied top-level operation.
+type Listener = Box<dyn FnMut(&AppliedOperation)>;
+
 #[derive(Default)]
 pub struct Notifier {
-    listeners: Vec<Box<dyn FnMut(&AppliedOperation)>>,
+    listeners: Vec<Listener>,
 }
 
 impl Notifier {

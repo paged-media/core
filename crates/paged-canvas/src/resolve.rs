@@ -475,7 +475,7 @@ mod tests {
         assert_eq!(result.numbering.len(), 2);
         // Both headings live in the same story on page p1, so the
         // story → first-page-id mapping puts both on page 1.
-        for (_id, pos) in &result.numbering.0 {
+        for pos in result.numbering.0.values() {
             assert_eq!(pos.page_number, 1);
             assert_eq!(pos.page_id.as_ref().map(|p| p.as_str()), Some("p1"));
         }

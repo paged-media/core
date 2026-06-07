@@ -516,7 +516,7 @@ pub fn apply_mojikumi_half_width(shape: &mut ShapedRun, text: &str) {
             // them so the same characters drive both kinsoku break
             // suppression and mojikumi width tightening.
             if kinsoku::is_no_start(c) || kinsoku::is_no_end(c) {
-                g.x_advance = g.x_advance / 2;
+                g.x_advance /= 2;
             }
         }
         total = total.saturating_add(g.x_advance);

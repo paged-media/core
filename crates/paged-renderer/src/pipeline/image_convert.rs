@@ -119,8 +119,8 @@ fn cmyk32_to_rgba_via_icc(
             ];
         }
         xform.cmyk_bytes_to_rgb_bytes(&cmyk_buf[..n], &mut rgb_buf[..n]);
-        for i in 0..n {
-            rgba.extend_from_slice(&[rgb_buf[i][0], rgb_buf[i][1], rgb_buf[i][2], 255]);
+        for rgb in &rgb_buf[..n] {
+            rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
         }
     }
     Some(rgba)

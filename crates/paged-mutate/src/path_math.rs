@@ -261,6 +261,9 @@ pub fn group_rebase_delta(g_old: Option<Affine>, g_new: Affine) -> Option<Affine
 }
 
 #[cfg(test)]
+// 0.7071 literals are cos/sin 45° rotation fixtures; the explicit affine
+// matrix reads clearer than FRAC_1_SQRT_2 here.
+#[allow(clippy::approx_constant)]
 mod tests {
     use super::*;
 

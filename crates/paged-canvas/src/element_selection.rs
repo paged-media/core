@@ -100,7 +100,7 @@ impl ElementId {
     }
 
     /// Short human-readable kind label used by the Inspector panel
-    /// + scene tree. Matches the IDML element name conventionally
+    /// and scene tree. Matches the IDML element name conventionally
     /// shown to designers.
     pub fn kind_label(&self) -> &'static str {
         match self {

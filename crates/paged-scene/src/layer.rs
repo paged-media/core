@@ -282,9 +282,9 @@ mod tests {
         assert!(layer_render_visible(&d, Some("child_ok")));
         // The precomputed map must agree with the one-shot.
         let render = build_layer_render_map(&d);
-        assert_eq!(render["child_vis"], false);
-        assert_eq!(render["child2"], false);
-        assert_eq!(render["child_ok"], true);
+        assert!(!render["child_vis"]);
+        assert!(!render["child2"]);
+        assert!(render["child_ok"]);
     }
 
     #[test]
@@ -297,7 +297,7 @@ mod tests {
         ]);
         assert!(layer_locked(&d, Some("child")));
         let locked = build_layer_locked_map(&d);
-        assert_eq!(locked["child"], true);
+        assert!(locked["child"]);
     }
 
     #[test]

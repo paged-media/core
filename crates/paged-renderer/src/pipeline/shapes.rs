@@ -1228,6 +1228,9 @@ pub(crate) fn per_corner_radii(
 /// `rect.y`); the renderer's `outer` transform handles spread-origin
 /// and ItemTransform composition the same way it does for polygons.
 /// Walks clockwise from the top edge.
+// Uniform-radius convenience over `corner_rect_path`; kept for callers
+// even though the per-corner path is the only one wired in today.
+#[allow(dead_code)]
 pub(crate) fn rounded_rect_path(rect: Rect, radius: f32) -> paged_compose::PathData {
     corner_rect_path(
         rect,
@@ -1465,7 +1468,7 @@ pub(crate) fn corner_rect_path(
 pub(super) fn unit_ellipse_path() -> paged_compose::PathData {
     use paged_compose::PathSegment;
     // Kappa for circular Bezier approximation.
-    const K: f32 = 0.5522847498307933;
+    const K: f32 = 0.552_284_8;
     // Unit ellipse in the [0,1]×[0,1] rect: center (0.5, 0.5),
     // radius 0.5. Each quadrant is one CubicTo.
     let cx = 0.5;

@@ -318,9 +318,9 @@ pub fn color_id_to_paint_with_list_dir(
         if raw_stops.len() < 2 {
             return None;
         }
-        let stops: Vec<paged_compose::GradientStop> = if cmyk_xform.is_some()
-            && raw_stops.iter().any(|s| s.cmyk.is_some())
-        {
+        let cmyk_tessellate_xform =
+            cmyk_xform.filter(|_| raw_stops.iter().any(|s| s.cmyk.is_some()));
+        let stops: Vec<paged_compose::GradientStop> = if let Some(xform) = cmyk_tessellate_xform {
             // At least one stop carries CMYK (process or spot-with-
             // CMYK-alternate). Tessellate the gradient in CMYK space
             // and convert each tessellated point through the ICC
@@ -356,7 +356,6 @@ pub fn color_id_to_paint_with_list_dir(
             }
             const SUB_STOPS: usize = 16;
             let mut out: Vec<paged_compose::GradientStop> = Vec::new();
-            let xform = cmyk_xform.unwrap();
             for win in raw_stops.windows(2) {
                 let a = &win[0];
                 let b = &win[1];

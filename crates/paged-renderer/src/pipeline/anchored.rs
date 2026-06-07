@@ -200,7 +200,7 @@ pub(super) fn emit_anchored_frames_for_paragraph(
 
 /// Phase 5 — resolve the horizontal reference x for a `Custom`-
 /// positioned anchored frame, accounting for `HorizontalReferencePoint`
-/// + `HorizontalAlignment`. Returns the page-local pt x that the
+/// and `HorizontalAlignment`. Returns the page-local pt x that the
 /// frame's anchor corner attaches to BEFORE the AnchoredObjectSetting
 /// offset and the corner-of-frame correction are applied.
 ///

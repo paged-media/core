@@ -690,7 +690,8 @@ mod tests {
     fn shaping_features_each_discrete_toggle_emits_its_tag() {
         // Each discrete OTF toggle, in isolation, must emit exactly its
         // own enabling tag (value 1) and nothing else.
-        let cases: &[(fn(&mut ShapingFeatures), &str)] = &[
+        type SetToggle = fn(&mut ShapingFeatures);
+        let cases: &[(SetToggle, &str)] = &[
             (|f| f.discretionary_ligatures = true, "dlig"),
             (|f| f.fractions = true, "frac"),
             (|f| f.ordinals = true, "ordn"),

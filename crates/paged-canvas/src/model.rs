@@ -823,6 +823,10 @@ pub struct AppliedRecord {
     pub kind: LoggedMutation,
 }
 
+// Boxing the large `Frame` payload would change this public, re-exported
+// enum's variant signature and every construction/match site — out of
+// scope for a lint pass. The undo log is short-lived, not bulk-allocated.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum LoggedMutation {
     /// Legacy text edit. `op` is the forward action; `inverse` is the
@@ -5024,16 +5028,20 @@ impl CanvasModel {
         use crate::element_selection::ElementId;
         use paged_parse::PathAnchor;
 
+        // Resolved per-frame path geometry borrowed from the scene:
+        // (bounds, item_transform, anchors, subpath_starts, subpath_open).
+        type FramePathGeom<'a> = (
+            paged_parse::Bounds,
+            Option<[f32; 6]>,
+            &'a [PathAnchor],
+            &'a [usize],
+            &'a [bool],
+        );
+
         let raw = id.raw_id();
         for parsed in &self.scene().spreads {
             let spread = &parsed.spread;
-            let resolved: Option<(
-                paged_parse::Bounds,
-                Option<[f32; 6]>,
-                &[PathAnchor],
-                &[usize],
-                &[bool],
-            )> = match id {
+            let resolved: Option<FramePathGeom> = match id {
                 ElementId::TextFrame(_) => spread
                     .text_frames
                     .iter()

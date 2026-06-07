@@ -1216,7 +1216,7 @@ pub fn build_document(
     // — dropping it would invalidate the `&mut HashMap` reference.
     let mut local_image_cache: HashMap<String, paged_compose::DecodedImage> = HashMap::new();
     let mut _owned_borrow: Option<std::cell::RefMut<'_, HashMap<String, paged_compose::DecodedImage>>> = None;
-    let mut decoded_image_cache: &mut HashMap<String, paged_compose::DecodedImage> =
+    let decoded_image_cache: &mut HashMap<String, paged_compose::DecodedImage> =
         match options.image_decode_cache {
             Some(rc) => {
                 _owned_borrow = Some(rc.borrow_mut());
@@ -1247,12 +1247,13 @@ pub fn build_document(
         let spread = &parsed.spread;
         let range = spread_page_ranges[spread_idx].clone();
         let local_geoms = &page_geometries[range.clone()];
-        let mut frame_spans = crate::module::SpreadFrameSpans::default();
-        frame_spans.text_frames = vec![None; spread.text_frames.len()];
-        frame_spans.rectangles = vec![None; spread.rectangles.len()];
-        frame_spans.ovals = vec![None; spread.ovals.len()];
-        frame_spans.graphic_lines = vec![None; spread.graphic_lines.len()];
-        frame_spans.polygons = vec![None; spread.polygons.len()];
+        let mut frame_spans = crate::module::SpreadFrameSpans {
+            text_frames: vec![None; spread.text_frames.len()],
+            rectangles: vec![None; spread.rectangles.len()],
+            ovals: vec![None; spread.ovals.len()],
+            graphic_lines: vec![None; spread.graphic_lines.len()],
+            polygons: vec![None; spread.polygons.len()],
+        };
 
         // Q-10: build a flat (layer_z, xml_order, FrameRef) list from
         // `frames_in_order` so cross-shape z-order honours ItemLayer.
@@ -1309,7 +1310,7 @@ pub fn build_document(
             // (the overwhelming majority) keep verbatim XML order.
             let mut zs = keyed.iter().map(|(z, _, _)| *z);
             let first = zs.next();
-            let multi_layer = first.map_or(false, |f| zs.any(|z| z != f));
+            let multi_layer = first.is_some_and(|f| zs.any(|z| z != f));
             if multi_layer {
                 // Cycle-8: IDML's designmap lists layers in the order
                 // matching InDesign's layer panel from BOTTOM to TOP
@@ -1597,7 +1598,7 @@ pub fn build_document(
                 local_geoms,
                 &mut pages,
                 &mut page_image_caches,
-                &mut decoded_image_cache,
+                decoded_image_cache,
                 &mut frame_to_page,
                 &mut frame_spans,
                 &mut total_stats,
@@ -1812,7 +1813,7 @@ pub fn build_document(
                     options,
                     palette,
                     cmyk_xform.as_ref(),
-                    &font_table,
+                    font_table,
                 );
             }
         }
@@ -1867,7 +1868,7 @@ pub fn build_document(
                     options,
                     palette,
                     cmyk_xform.as_ref(),
-                    &font_table,
+                    font_table,
                 );
             }
         }
@@ -1912,7 +1913,7 @@ pub fn build_document(
                     options,
                     palette,
                     cmyk_xform.as_ref(),
-                    &font_table,
+                    font_table,
                 );
             }
         }
@@ -2085,7 +2086,7 @@ pub fn build_document(
                 options,
                 palette,
                 cmyk_xform.as_ref(),
-                &font_table,
+                font_table,
                 chain_for_post.clone(),
                 chain_pages_for_post.clone(),
                 &page_labels,
@@ -2248,7 +2249,7 @@ pub fn build_document(
             entry.height,
             options,
             &mut page_image_caches[entry.target_page],
-            &mut decoded_image_cache,
+            decoded_image_cache,
         );
     }
 
@@ -2265,7 +2266,7 @@ pub fn build_document(
     // frame) and anchor-character superscript substitution are
     // queued follow-ups.
     let footnote_options = options.clone();
-    emit_footnote_pools(&mut pages, &font_table, &footnote_options);
+    emit_footnote_pools(&mut pages, font_table, &footnote_options);
 
     // Aggregate diagnostics: the per-story emit channel (overset,
     // section fallback) already carries page indices; the per-page
@@ -2827,10 +2828,10 @@ impl<'a> StoryEmitter<'a> {
     /// would need to be transformed *with* the frame at emit time —
     /// out of scope today).
     fn apply_polygon_clip(&mut self, pages: &mut [BuiltPage]) {
-        // Collect (frame_idx, page_idx, start, end, verts) tuples,
-        // grouped by page so we can splice in reverse start-order.
-        let mut per_page: HashMap<usize, Vec<(usize, usize, usize, Vec<(f32, f32)>)>> =
-            HashMap::new();
+        // Collect (frame_idx, start, end, verts) clip records grouped by
+        // page so we can splice in reverse start-order.
+        type ClipRecord = (usize, usize, usize, Vec<(f32, f32)>);
+        let mut per_page: HashMap<usize, Vec<ClipRecord>> = HashMap::new();
         for (i, frame) in self.chain.iter().enumerate() {
             let Some((start, end)) = self.frame_cmd_ranges[i] else {
                 continue;
@@ -3859,15 +3860,13 @@ fn emit_paragraph_into_chain(
         // character; IDML's serialisation matches char count not
         // grapheme count.
         let head = styled_runs[0].text;
-        let mut split = head.len();
-        let mut taken = 0u32;
-        for (i, _c) in head.char_indices() {
-            if taken == paragraph.drop_cap_characters {
-                split = i;
-                break;
-            }
-            taken += 1;
-        }
+        // Byte offset of the `drop_cap_characters`th scalar; past the
+        // end keeps the whole run (split == head.len()).
+        let split = head
+            .char_indices()
+            .nth(paragraph.drop_cap_characters as usize)
+            .map(|(i, _)| i)
+            .unwrap_or(head.len());
         if split > 0 {
             let dropped_slice = &head[..split];
             let cap_face_idx = unique_idx[0];
@@ -4862,12 +4861,12 @@ fn emit_paragraph_into_chain(
         // collapsed to "group centered" in the MVP — distributing
         // ruby chars per base char (`PerCharacter` mode) requires
         // a more involved layout pass and is queued.
-        if em.options.font.is_some() {
+        if let Some(font) = em.options.font {
             emit_ruby_for_line(
                 &line,
                 paragraph,
                 &resolved_runs,
-                em.options.font.unwrap(),
+                font,
                 (sx - ox, sy - oy),
                 &mut pages[target_page].list,
             );
@@ -5871,6 +5870,7 @@ fn split_paragraph_at_breaks(paragraph: &paged_parse::Paragraph) -> Vec<paged_pa
 ///   drawn (no clip / cross-frame continuation yet),
 /// - Footnote separator rule (the thin horizontal line InDesign
 ///   draws between body text and the footnote pool).
+///
 /// Perf-BodyStory — signature for a story's emission inputs. Hashes
 /// the frame chain's (self_id, bounds, item_transform) plus the
 /// wrap_rects on each chain page. A gesture that moves a frame
@@ -6449,6 +6449,8 @@ fn pairs_from_xs(xs: &[f32]) -> Vec<(f32, f32)> {
 /// order. Mirrors the wrap-rect carve loop in
 /// `build_perline_wrap_widths` but expressed as a free fn so the
 /// polygon path can reuse it.
+// Staged helper for the polygon-path wrap rework; not yet wired in.
+#[allow(dead_code)]
 fn carve_holes(mut segments: Vec<(f32, f32)>, holes: &[(f32, f32)]) -> Vec<(f32, f32)> {
     for (hl, hr) in holes {
         let mut next: Vec<(f32, f32)> = Vec::with_capacity(segments.len() + 1);
@@ -8042,15 +8044,11 @@ fn find_nested_end(
                 }
                 idx += 1;
             }
-            // If text ended mid-word, count that word.
-            if in_word {
-                words_seen += 1;
-            }
-            if words_seen >= repetition {
-                text.len()
-            } else {
-                text.len()
-            }
+            // Reaching here means fewer than `repetition` word boundaries
+            // were found before the slice ended (the in-loop check at the
+            // `repetition`th word returns early), so the boundary is the
+            // end of the text — whether or not it ended mid-word.
+            text.len()
         }
         D::Sentences => {
             // A sentence boundary is `.`, `!`, or `?` followed by
@@ -9652,6 +9650,9 @@ mod tests {
     }
 
     #[test]
+    // Deliberately asserts on source constants: this test pins the
+    // placeholder calibration values so an accidental edit trips CI.
+    #[allow(clippy::assertions_on_constants)]
     fn q22_missing_image_placeholder_calibration_pinned() {
         assert!(
             (PLACEHOLDER_FILL_RGB - 0.5).abs() < 1e-6,
@@ -9771,7 +9772,7 @@ mod tests {
         assert!(decoded.rgba.chunks_exact(4).all(|p| p[3] == 255));
     }
 
-    /// Track 1a: small JPEGs (longest edge ≤ cap) skip the streaming
+    // Track 1a: small JPEGs (longest edge ≤ cap) skip the streaming
     // ── Phase 4 typography — nested-style overlay walker ──────────
 
     fn ns(style: &str, delim: paged_parse::NestedDelimiter, rep: i32, inc: bool)

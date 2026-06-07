@@ -18,9 +18,9 @@
 //! idml's anchor model carries three points per node:
 //!   - `anchor`   the on-curve point
 //!   - `left`     the incoming Bezier handle (from the previous
-//!                segment that ends at this anchor)
+//!     segment that ends at this anchor)
 //!   - `right`    the outgoing Bezier handle (to the next segment
-//!                starting from this anchor)
+//!     starting from this anchor)
 //!
 //! flo_curves's `SimpleBezierPath` is `(Coord2, Vec<(Coord2, Coord2,
 //! Coord2)>)` — a start point plus a list of `(cp1, cp2, end)`

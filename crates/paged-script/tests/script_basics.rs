@@ -296,7 +296,7 @@ fn paged_selection_returns_current_element_selection() {
     let target = ElementId::TextFrame(TEXT_FRAME_ID.to_string());
     model
         .element_selection
-        .apply_mode(&[target.clone()], SelectionMode::Replace);
+        .apply_mode(std::slice::from_ref(&target), SelectionMode::Replace);
 
     let result = execute_script(&mut model, "paged.selection();");
     assert!(result.error.is_none(), "script error: {:?}", result.error);

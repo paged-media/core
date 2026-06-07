@@ -63,9 +63,10 @@ export type WorkerToMain = WorkerToMainKind & {
 /// Main thread compares this against its bundled value at worker
 /// handshake and refuses to proceed on mismatch — better to fail
 /// loud than to silently desync.
-/// v27: NodeSpec carries item_transform (RemoveNode → undo keeps the
-/// frame in place instead of snapping to the page origin).
-/// v28 (W0.5/W0.6): the final wire-expansion bump. Covers
+///
+/// - v27: NodeSpec carries item_transform (RemoveNode → undo keeps the
+///   frame in place instead of snapping to the page origin).
+/// - v28 (W0.5/W0.6): the final wire-expansion bump. Covers
 ///   - W0.6 caret queries: `RequestCaretNav` / `RequestLineBounds`
 ///     requests + `CaretNavResult` / `LineBoundsResult` replies.
 ///   - W0.5 operations reachable via `Mutation` translation:
@@ -78,7 +79,7 @@ export type WorkerToMain = WorkerToMainKind & {
 ///     `NodeSpec::Oval` insert kind. (The new `paged_mutate::Operation`
 ///     variants ride the existing `Mutate(Mutation)` envelope, so the
 ///     Mutation enum gains the variants below.)
-/// v29 (W3.A1 — table NodeId surface): tables become addressable +
+/// - v29 (W3.A1 — table NodeId surface): tables become addressable +
 ///   mutable through the wire. Covers:
 ///   - `HitResult.table_context` — `HitTest` into a table cell now
 ///     returns the `(tableId, row, col)` it landed in (new
@@ -94,7 +95,7 @@ export type WorkerToMain = WorkerToMainKind & {
 ///     `DeleteTableColumn` (translate to the matching new
 ///     `paged_mutate::Operation` variants, with delete capturing the
 ///     removed line for undo).
-/// v31 (Aftercare-A — editor read-surface fill-in): three read-only
+/// - v31 (Aftercare-A — editor read-surface fill-in): three read-only
 ///   additions found during the gap campaign.
 ///   - `RequestWordBounds` / `WordBoundsResult`: the word containing a
 ///     story byte offset, per Unicode word segmentation (UAX-29). The
@@ -110,20 +111,20 @@ export type WorkerToMain = WorkerToMainKind & {
 ///     `ElementId::TableCell` now resolves against the BuiltPage's
 ///     `cell_rects` (page-local pt, `item_transform: None`) instead of
 ///     returning nothing.
-/// v32 (B-04 — groups): `CreateGroup { member_ids }` /
+/// - v32 (B-04 — groups): `CreateGroup { member_ids }` /
 ///   `DissolveGroup { group_id }` mutations. Create is z-order-neutral
 ///   for members contiguous in paint order (scattered members collect
 ///   at the earliest member's slot, InDesign-style); the reply carries
 ///   the minted group id as `createdId`. Undo restores the exact
 ///   pre-group z-order via inverse-side `restore_slots` (internal —
 ///   not a wire field).
-/// v34 (batch-created sentinel): inside a `Batch`, a child
+/// - v34 (batch-created sentinel): inside a `Batch`, a child
 ///   `SetPluginMetadata` / `SetElementProperty` whose element id is
 ///   the literal `$created` addresses the element minted by the most
 ///   recent CREATING child of the same (flat) batch — create + attach
 ///   metadata/properties as ONE atomic, single-undo-step mutation.
 ///   Nested batches don't propagate the sentinel outward.
-/// v33 (plugin-metadata carrier, decision 9 facility):
+/// - v33 (plugin-metadata carrier, decision 9 facility):
 ///   `SetPluginMetadata { element_id, key, value }` — set / replace /
 ///   delete (value: null) one `Properties/Label` `KeyValuePair` in the
 ///   reserved `x-paged:` namespace (engine-gated: key prefix, 64 KiB
@@ -1203,6 +1204,9 @@ impl CollectionName {
         }
     }
 
+    // Inherent `from_str` returns `Option` (unknown name → `None`); the
+    // `FromStr` trait would force a `Result`/`Err` type and change callers.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         Some(match s {
             "swatches" => Self::Swatches,
@@ -1396,8 +1400,8 @@ pub struct GuideSummary {
 }
 
 /// SDK Phase 5 (v1 sweep) — one page summary. Backs
-/// `documentCollection:pages`. Mirrors `DocumentHandle.page_ids`
-/// + `page_sizes_pt` so a Pages-as-collection panel can render a
+/// `documentCollection:pages`. Mirrors `DocumentHandle.page_ids` plus
+/// `page_sizes_pt` so a Pages-as-collection panel can render a
 /// thumbnail/label list. The Navigator (existing legacy panel)
 /// uses the same data through a different surface.
 #[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
@@ -2698,7 +2702,7 @@ mod tests {
         // mirror needs updating in lockstep — the browser will see
         // `undefined` for the field and React renders will crash.
         assert!(
-            json.contains("\"cmykIccProfile\":") || json.contains("\"cmyk_icc_profile\":") == false,
+            json.contains("\"cmykIccProfile\":") || !json.contains("\"cmyk_icc_profile\":"),
             "camelCase field rename broken: {json}"
         );
         let back: MainToWorker = serde_json::from_str(&json).unwrap();

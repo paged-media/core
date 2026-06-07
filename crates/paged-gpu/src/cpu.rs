@@ -928,7 +928,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
     // (shadowed) target stay alive but don't apply here.
     fn resolve_target<'a>(
         page_pixmap: &'a mut Pixmap,
-        group_stack: &'a mut Vec<GroupFrame>,
+        group_stack: &'a mut [GroupFrame],
         page_to_px: TsTransform,
         clip_stack: &'a [ClipEntry],
     ) -> (&'a mut Pixmap, TsTransform, Option<&'a TsMask>) {
@@ -1080,8 +1080,10 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                             scratch_xform,
                             None,
                         );
-                        let mut composite = PixmapPaint::default();
-                        composite.blend_mode = ts_mode;
+                        let composite = PixmapPaint {
+                            blend_mode: ts_mode,
+                            ..Default::default()
+                        };
                         target.draw_pixmap(
                             off_x_px,
                             off_y_px,
@@ -1905,9 +1907,11 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                         gaussian_blur_premul(group_pix.data_mut(), w, h, &kernel);
                     }
                 }
-                let mut composite = PixmapPaint::default();
-                composite.blend_mode = blend_mode;
-                composite.opacity = opacity;
+                let composite = PixmapPaint {
+                    blend_mode,
+                    opacity,
+                    ..Default::default()
+                };
                 // Composite the group buffer onto the next-outer
                 // target. The active clip stack now resolves to the
                 // parent target's scope (page or outer group).
@@ -2998,8 +3002,10 @@ fn render_inner_shadow(
         data[q + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
     }
 
-    let mut composite = PixmapPaint::default();
-    composite.blend_mode = blend_mode_to_ts(params.blend_mode);
+    let composite = PixmapPaint {
+        blend_mode: blend_mode_to_ts(params.blend_mode),
+        ..Default::default()
+    };
     target.draw_pixmap(
         off_x_px,
         off_y_px,
@@ -3081,8 +3087,10 @@ fn render_outer_glow(
         data[q + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
     }
 
-    let mut composite = PixmapPaint::default();
-    composite.blend_mode = blend_mode_to_ts(params.blend_mode);
+    let composite = PixmapPaint {
+        blend_mode: blend_mode_to_ts(params.blend_mode),
+        ..Default::default()
+    };
     target.draw_pixmap(
         off_x_px,
         off_y_px,
@@ -3157,8 +3165,10 @@ fn render_inner_glow(
         data[q + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
     }
 
-    let mut composite = PixmapPaint::default();
-    composite.blend_mode = blend_mode_to_ts(params.blend_mode);
+    let composite = PixmapPaint {
+        blend_mode: blend_mode_to_ts(params.blend_mode),
+        ..Default::default()
+    };
     target.draw_pixmap(
         off_x_px,
         off_y_px,
@@ -3364,8 +3374,10 @@ fn render_satin(
         data[q + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
     }
 
-    let mut composite = PixmapPaint::default();
-    composite.blend_mode = blend_mode_to_ts(params.blend_mode);
+    let composite = PixmapPaint {
+        blend_mode: blend_mode_to_ts(params.blend_mode),
+        ..Default::default()
+    };
     target.draw_pixmap(
         off_x_px,
         off_y_px,
@@ -3459,14 +3471,13 @@ fn render_feather(
         None => return,
     };
     let data = scratch.data_mut();
-    for i in 0..(w_px as usize * h_px as usize) {
-        let m = feather_mask[i] as f32 / 255.0;
+    for (&mask, px) in feather_mask.iter().zip(data.chunks_exact_mut(4)) {
+        let m = mask as f32 / 255.0;
         let a = (m * 0.5).clamp(0.0, 1.0);
-        let q = i * 4;
-        data[q] = 0;
-        data[q + 1] = 0;
-        data[q + 2] = 0;
-        data[q + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
+        px[0] = 0;
+        px[1] = 0;
+        px[2] = 0;
+        px[3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
     }
 
     let composite = PixmapPaint::default();
@@ -3809,14 +3820,13 @@ fn composite_alpha_mask(
         None => return,
     };
     let data = scratch.data_mut();
-    for i in 0..(w_px as usize * h_px as usize) {
-        let m = mask[i] as f32 / 255.0;
+    for (&m_u8, px) in mask.iter().zip(data.chunks_exact_mut(4)) {
+        let m = m_u8 as f32 / 255.0;
         let a = (m * 0.5).clamp(0.0, 1.0);
-        let q = i * 4;
-        data[q] = 0;
-        data[q + 1] = 0;
-        data[q + 2] = 0;
-        data[q + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
+        px[0] = 0;
+        px[1] = 0;
+        px[2] = 0;
+        px[3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
     }
     let composite = PixmapPaint::default();
     target.draw_pixmap(

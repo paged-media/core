@@ -161,7 +161,11 @@ pub(crate) fn group_pass(
     // Build per-group, per-page (start, end) windows. We retain the
     // original group index so we can splice in reverse iteration
     // order (last group first → earlier spans aren't shifted).
-    let mut entries: Vec<(usize, Vec<(usize, usize, usize)>)> = Vec::new();
+    // `PageWindow` = (page_idx, start, end); `GroupEntry` pairs a group
+    // index with its per-page windows.
+    type PageWindow = (usize, usize, usize);
+    type GroupEntry = (usize, Vec<PageWindow>);
+    let mut entries: Vec<GroupEntry> = Vec::new();
     for (gi, group) in spread.groups.iter().enumerate() {
         if !group_needs_bracket(group) {
             continue;
@@ -185,7 +189,7 @@ pub(crate) fn group_pass(
                 entry.1 = s.end;
             }
         }
-        let per_page: Vec<(usize, usize, usize)> = by_page
+        let per_page: Vec<PageWindow> = by_page
             .into_iter()
             .map(|(p, (a, b))| (p, a, b))
             .collect();

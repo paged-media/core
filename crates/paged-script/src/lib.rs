@@ -96,6 +96,7 @@ fn push_output(line: String) {
 ///     large document never trips it (10M iterations ≈ tens of ms),
 ///     tight enough that an infinite loop dies promptly.
 ///   - `RECURSION_LIMIT` keeps Boa's default (512) explicit.
+///
 /// What stock Boa CANNOT give yet (recorded, not faked): instruction
 /// metering / wall-clock interruption (a long-running but FINITE
 /// loop still blocks until done) and per-context memory caps. The
@@ -1058,17 +1059,17 @@ fn js_value_to_wire(
                 .ok()? as usize;
             if len == 4 {
                 let mut out = [0.0f32; 4];
-                for i in 0..4 {
+                for (i, slot) in out.iter_mut().enumerate() {
                     let v = obj.get(i as u32, ctx).ok()?;
-                    out[i] = v.as_number()? as f32;
+                    *slot = v.as_number()? as f32;
                 }
                 return Some(W::Bounds(out));
             }
             if len == 6 {
                 let mut out = [0.0f32; 6];
-                for i in 0..6 {
+                for (i, slot) in out.iter_mut().enumerate() {
                     let v = obj.get(i as u32, ctx).ok()?;
-                    out[i] = v.as_number()? as f32;
+                    *slot = v.as_number()? as f32;
                 }
                 return Some(W::Transform(Some(out)));
             }

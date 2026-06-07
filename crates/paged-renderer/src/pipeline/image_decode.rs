@@ -69,7 +69,8 @@ pub(super) fn decode_image_bytes(bytes: &[u8]) -> Option<paged_compose::DecodedI
 /// detects the empty `rgba` and runs the full decoder on demand.
 /// Width / height come from header peeks where possible (PNG, JPEG,
 /// SVG) so the display-list transform stays accurate without paying
-/// for the pixel decode.
+/// for the pixel decode. Only the wasm32 path defers decode this way.
+#[cfg(target_arch = "wasm32")]
 fn peek_image_lazy(bytes: &[u8], max_px: u32) -> Option<paged_compose::DecodedImage> {
     if is_eps_magic(bytes) {
         return None;
@@ -133,7 +134,8 @@ fn decode_svg_bytes(bytes: &[u8], max_px: u32) -> Option<paged_compose::DecodedI
 /// Read width / height from the image header without materialising
 /// the pixel buffer. For JPEGs we apply the same DCT-scale logic as
 /// the eager decoder so the displayed dimensions match what the
-/// rasterizer will actually produce.
+/// rasterizer will actually produce. Only used by the wasm32 lazy path.
+#[cfg(target_arch = "wasm32")]
 fn peek_image_dimensions(bytes: &[u8], max_px: u32) -> Option<(u32, u32)> {
     if is_jpeg_magic(bytes) {
         let (src_w, src_h) = peek_jpeg_dimensions(bytes)?;

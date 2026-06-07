@@ -30,6 +30,10 @@ use super::*;
 /// distinct `MoveTo`/`Close` sequences rather than connecting the
 /// inner contour to the outer one with a stray segment. An empty
 /// or single-entry slice means "single contour" — the legacy path.
+///
+/// Only the pipeline tests call this no-`subpath_open` convenience
+/// wrapper; production code goes through `..._with_open` directly.
+#[cfg(test)]
 pub(super) fn polygon_path_from_anchors(anchors: &[PathAnchor], subpath_starts: &[usize]) -> PathData {
     polygon_path_from_anchors_with_open(anchors, subpath_starts, &[])
 }
