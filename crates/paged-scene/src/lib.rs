@@ -357,9 +357,34 @@ impl Document {
     /// they're functions of the underlying data. The hash is *not*
     /// guaranteed equal across renderer versions — only across runs
     /// of the same binary.
+    /// W1.13 — fold a run list's text + font + size into the canonical
+    /// hash. Shared by the body-paragraph and table-cell-paragraph
+    /// passes so both streams hash identically (a cell edit and the
+    /// same body edit produce the same per-run contribution).
+    fn hash_runs(h: &mut blake3::Hasher, runs: &[CharacterRun]) {
+        for (ri, r) in runs.iter().enumerate() {
+            h.update(b"\0r");
+            h.update(&(ri as u32).to_le_bytes());
+            h.update(b"\0t\0");
+            h.update(r.text.as_bytes());
+            if let Some(font) = r.font.as_deref() {
+                h.update(b"\0f\0");
+                h.update(font.as_bytes());
+            }
+            if let Some(size) = r.point_size {
+                h.update(b"\0sz\0");
+                h.update(&size.to_le_bytes());
+            }
+        }
+    }
+
     pub fn canonical_hash(&self) -> [u8; 32] {
         let mut h = blake3::Hasher::new();
-        h.update(b"paged-scene-canonical-v1");
+        // v2 (W1.13): cell-paragraph text now folds into the hash so
+        // table-cell edits + their undo are observable to determinism
+        // replay and the canvas undo gate. Bumped from v1 to invalidate
+        // any persisted v1 digests.
+        h.update(b"paged-scene-canonical-v2");
 
         // Stories — text + style names, in document order.
         h.update(b"stories:");
@@ -373,18 +398,32 @@ impl Document {
                     h.update(b"\0ps\0");
                     h.update(style.as_bytes());
                 }
-                for (ri, r) in p.runs.iter().enumerate() {
-                    h.update(b"\0r");
-                    h.update(&(ri as u32).to_le_bytes());
-                    h.update(b"\0t\0");
-                    h.update(r.text.as_bytes());
-                    if let Some(font) = r.font.as_deref() {
-                        h.update(b"\0f\0");
-                        h.update(font.as_bytes());
+                Self::hash_runs(&mut h, &p.runs);
+                // W1.13 — table-cell paragraph text. A paragraph hosting
+                // a `<Table>` folds each cell's `(col,row)` + paragraph
+                // text into the hash so cell edits change the digest
+                // (and an undo restores it). Walks cells in document
+                // order; the per-cell `Name` keys the address so two
+                // cells with identical text stay distinguishable.
+                if let Some(table) = p.table.as_ref() {
+                    h.update(b"\0tbl\0");
+                    if let Some(tid) = table.self_id.as_deref() {
+                        h.update(tid.as_bytes());
                     }
-                    if let Some(size) = r.point_size {
-                        h.update(b"\0sz\0");
-                        h.update(&size.to_le_bytes());
+                    for cell in &table.cells {
+                        h.update(b"\0cell\0");
+                        if let Some(name) = cell.name.as_deref() {
+                            h.update(name.as_bytes());
+                        }
+                        for (cpi, cp) in cell.paragraphs.iter().enumerate() {
+                            h.update(b"\0cp");
+                            h.update(&(cpi as u32).to_le_bytes());
+                            if let Some(style) = cp.paragraph_style.as_deref() {
+                                h.update(b"\0cps\0");
+                                h.update(style.as_bytes());
+                            }
+                            Self::hash_runs(&mut h, &cp.runs);
+                        }
                     }
                 }
             }
