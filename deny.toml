@@ -18,6 +18,9 @@ confidence-threshold = 0.9
 # ttf-parser, tiny-skia, Vello, lcms2, …).
 allow = [
     "MPL-2.0",
+    # Our own workspace crates: dual MPL-2.0 OR PMEL (the Paged Media
+    # Engine License; SPDX has no id for it, hence the LicenseRef form).
+    "LicenseRef-PMEL",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "MIT",
