@@ -13,8 +13,21 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Resolve the pinned toolchain from rust-toolchain.toml (audit B21) so
+  # this workflow installs the same version as ci.yml instead of `@stable`.
+  toolchain:
+    name: resolve pinned toolchain
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.pin.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pin
+        run: echo "channel=$(bash scripts/rust-channel.sh)" >> "$GITHUB_OUTPUT"
+
   corpus:
     name: corpus diff (${{ matrix.os }})
+    needs: toolchain
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -22,7 +35,10 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          # Pinned from rust-toolchain.toml via the toolchain job (B21).
+          toolchain: ${{ needs.toolchain.outputs.channel }}
       - uses: Swatinem/rust-cache@v2
 
       - name: install poppler-utils (pdftoppm) — Ubuntu

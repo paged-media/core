@@ -1,0 +1,20 @@
+# cargo-nextest configuration (W0.6 evidence lane, audit V26).
+#
+# The `ci` profile emits JUnit XML that ci.yml's `nextest` job hands to
+# paged-media/state's publish-results action (format: nextest-junit). The
+# default profile is unchanged — local `cargo nextest run` behaves as
+# before; only `--profile ci` turns on JUnit.
+#
+# Output path: store/<profile>/<junit.path> → target/nextest/ci/junit.xml.
+
+[profile.ci]
+# Don't stop at the first failure: the state matrix wants every red row,
+# not just the first one, so collect the full suite result.
+fail-fast = false
+
+[profile.ci.junit]
+# Relative to target/nextest/ci/ — the workflow reads
+# target/nextest/ci/junit.xml.
+path = "junit.xml"
+# Keep the report self-describing for the converter.
+report-name = "paged-core-nextest"

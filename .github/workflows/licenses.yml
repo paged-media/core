@@ -14,4 +14,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          command: check licenses bans sources
+          # advisories MUST be listed explicitly (audit B22): naming a
+          # subset of checks makes cargo-deny run ONLY those, so the prior
+          # `licenses bans sources` silently skipped the RUSTSEC advisory
+          # scan even though deny.toml has an [advisories] section. All
+          # four checks now run: vulnerabilities + license policy +
+          # dup/wildcard bans + registry/source allowlist.
+          command: check advisories licenses bans sources

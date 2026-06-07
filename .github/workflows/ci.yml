@@ -10,8 +10,22 @@ env:
   RUSTFLAGS: -Dwarnings
 
 jobs:
+  # Resolve the pinned toolchain ONCE from rust-toolchain.toml (audit B21)
+  # so every downstream job installs the same version the file pins
+  # (channel = "1.94.1") instead of drifting on `@stable`.
+  toolchain:
+    name: resolve pinned toolchain
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.pin.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pin
+        run: echo "channel=$(bash scripts/rust-channel.sh)" >> "$GITHUB_OUTPUT"
+
   check:
     name: check + test
+    needs: toolchain
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -19,8 +33,10 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          # Pinned from rust-toolchain.toml via the toolchain job (B21).
+          toolchain: ${{ needs.toolchain.outputs.channel }}
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
@@ -34,14 +50,90 @@ jobs:
       - name: test
         run: cargo test --workspace
 
-  wasm-size:
-    name: wasm-size gate (Spike C)
+  # W0.6 evidence (audit V26): run the workspace suite under cargo-nextest
+  # with JUnit output and publish normalized results to paged-media/state
+  # via the shared publish-results action (mirrors plugin-draw's vitest.yml
+  # + editor's tests.yml: source `core`, junit format, map:true against the
+  # state repo's test-map). The suite name `nextest-unit` is the one the
+  # state repo registers for (source=core) in ingest/suites.yaml — using
+  # the registered name is load-bearing: publish-results' convert step
+  # requires the (source,suite) pair to exist there. Degrades gracefully
+  # when STATE_DISPATCH_TOKEN is unset — the suite still runs and the JUnit
+  # uploads; only the cross-repo dispatch is skipped.
+  nextest:
+    name: nextest evidence
+    needs: toolchain
     runs-on: ubuntu-latest
-    needs: check
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ needs.toolchain.outputs.channel }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: nextest (workspace) → JUnit
+        # Red results must still publish (the state matrix wants the ✗),
+        # so don't let a test failure abort before the JUnit emits.
+        # nextest writes target/nextest/ci/junit.xml when [profile.ci]
+        # carries `junit.path` (see .config/nextest.toml).
+        run: cargo nextest run --workspace --profile ci || true
+
+      - name: upload JUnit artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-junit
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: error
+          retention-days: 14
+
+      # Convert → contract-v1, apply ingest/test-map.yaml (core's tests
+      # carry no @feat: tags yet → map:true), gate feature ids, upload the
+      # normalized artifact, and dispatch results-published at state. The
+      # action self-conditions the dispatch on a non-empty dispatch-token,
+      # so an unset secret degrades to "convert + gate + upload, no
+      # dispatch" rather than failing.
+      - name: publish results to paged-media/state
+        if: ${{ !cancelled() }}
+        uses: paged-media/state/actions/publish-results@main
+        with:
+          source: core
+          suite: nextest-unit
+          format: nextest-junit
+          path: target/nextest/ci/junit.xml
+          map: "true"
+          dispatch-token: ${{ secrets.STATE_DISPATCH_TOKEN }}
+
+  # Wasm-lane placeholder (W0.8 substance lands crate-side): invoke the
+  # Makefile `test-wasm` target, which calls scripts/test-wasm.sh. That
+  # script is a STUB exiting 0 (pending W0.8) until the sibling replaces
+  # it with the real headless wasm-test runner.
+  test-wasm:
+    name: wasm test lane (stub, pending W0.8)
+    needs: toolchain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ needs.toolchain.outputs.channel }}
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: make test-wasm
+        run: make test-wasm
+
+  wasm-size:
+    name: wasm-size gate (Spike C)
+    needs: [toolchain, check]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ needs.toolchain.outputs.channel }}
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - name: install binaryen + brotli
@@ -57,4 +149,36 @@ jobs:
           if [ "$SIZE" -gt 3670016 ]; then
             echo "::error::WASM compressed size $SIZE exceeds 3.5 MB budget"
             exit 1
+          fi
+
+  # W0.9 tag-on-bump nudge (protocol-governance §4): a protocol bump on
+  # main without a matching `v0.<P>.*` tag is an unpublished engine — the
+  # editor can't pin it. This greps the canonical PROTOCOL_VERSION const
+  # and warn-annotates (never fails) when no tag exists for that protocol
+  # on a main push. Promotion to a hard gate is a later flip.
+  tag-on-bump:
+    name: tag-on-bump nudge
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need tags for `git tag -l`
+      - name: warn if PROTOCOL_VERSION is unpublished (no matching tag)
+        run: |
+          set -euo pipefail
+          CHANNEL=crates/paged-canvas/src/channel.rs
+          # PROTOCOL_VERSION: ProtocolVersion(34);  →  34
+          P=$(grep -E 'pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion\(' "$CHANNEL" \
+                | head -n1 | sed -E 's/.*ProtocolVersion\(([0-9]+)\).*/\1/')
+          if [ -z "$P" ]; then
+            echo "::warning::could not parse PROTOCOL_VERSION from $CHANNEL — skipping tag-on-bump check"
+            exit 0
+          fi
+          echo "PROTOCOL_VERSION = $P"
+          git fetch --tags --quiet || true
+          if [ -n "$(git tag -l "v0.${P}.*")" ]; then
+            echo "tag-on-bump ok — a v0.${P}.* tag exists; protocol $P is publishable."
+          else
+            echo "::warning title=Unpublished protocol::PROTOCOL_VERSION is $P but no v0.${P}.* tag exists. Tag \`v0.${P}.<patch>\` to publish the engine packages the editor pins (protocol-governance §4)."
           fi

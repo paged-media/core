@@ -1,0 +1,115 @@
+name: gpu
+
+# W0.7 GPU lane (audit B14): exercise the Vello/wgpu rasterizer headlessly
+# on a software Vulkan stack (Mesa lavapipe) so the GPU code path gets CI
+# coverage without a physical GPU. The paged-gpu `vello-backend` tests
+# (crates/paged-gpu/src/vello_rs.rs `mod tests`) request a real wgpu
+# adapter via `init_gpu()`; with lavapipe installed and VK_ICD_FILENAMES
+# pointed at it, that adapter request succeeds and the pixel-level Vello
+# assertions actually run. Without it (or on a stock runner) those same
+# tests skip silently — so this lane only adds coverage, never flakes the
+# default pipeline.
+#
+# ADVISORY: the whole job is `continue-on-error: true` and writes a loud
+# step-summary banner. Software-rasterizer parity isn't a merge gate yet
+# (lavapipe ≠ a real GPU, and Vello on llvmpipe can diverge at the pixel
+# level); promotion to a hard gate is a later, deliberate flip once the
+# lane has proven stable.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'crates/paged-gpu/**'
+      - 'crates/paged-compose/**'
+      - '.github/workflows/gpu.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  toolchain:
+    name: resolve pinned toolchain
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.pin.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pin
+        run: echo "channel=$(bash scripts/rust-channel.sh)" >> "$GITHUB_OUTPUT"
+
+  vello-lavapipe:
+    name: vello on lavapipe (advisory)
+    needs: toolchain
+    runs-on: ubuntu-latest
+    # ADVISORY — a red result here never blocks a merge (see header).
+    continue-on-error: true
+    env:
+      # Force wgpu/Vulkan onto Mesa's lavapipe software ICD. Both env
+      # names are honoured by the loader across versions; set both.
+      VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+      VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+      # Surface adapter-selection detail in wgpu logs if a test fails.
+      RUST_LOG: wgpu=warn,vello=warn
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ needs.toolchain.outputs.channel }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: install Mesa lavapipe (software Vulkan) + vulkan tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          # mesa-vulkan-drivers ships lavapipe (lvp); vulkan-tools gives
+          # vulkaninfo for the sanity check below; libvulkan1 + the loader
+          # let wgpu find the ICD.
+          sudo apt-get install -y --no-install-recommends \
+            mesa-vulkan-drivers vulkan-tools libvulkan1
+
+      - name: sanity — lavapipe is the active Vulkan device
+        run: |
+          set -euo pipefail
+          echo "VK_ICD_FILENAMES=$VK_ICD_FILENAMES"
+          ls -la /usr/share/vulkan/icd.d/ || true
+          # `vulkaninfo --summary` prints the device name; assert llvmpipe.
+          if vulkaninfo --summary 2>/dev/null | grep -i 'llvmpipe\|lavapipe'; then
+            echo "lavapipe present — the Vello GPU tests will exercise the real path."
+          else
+            echo "::warning::lavapipe not detected by vulkaninfo; GPU tests may skip (still advisory)."
+          fi
+
+      - name: cargo test -p paged-gpu --features vello-backend
+        id: gpu_tests
+        run: |
+          set -uo pipefail
+          # The vello_rs test module drives the Vello rasterizer; with
+          # lavapipe active, init_gpu() succeeds and the pixel assertions
+          # run instead of skipping.
+          cargo test -p paged-gpu --features vello-backend -- --nocapture
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+
+      - name: loud advisory summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "## GPU lane (Vello on lavapipe) — ADVISORY"
+            echo ""
+            if [ "${{ steps.gpu_tests.outcome }}" = "success" ]; then
+              echo "✅ \`cargo test -p paged-gpu --features vello-backend\` PASSED on Mesa lavapipe."
+            else
+              echo "⚠️ \`cargo test -p paged-gpu --features vello-backend\` did NOT pass on Mesa lavapipe."
+              echo ""
+              echo "This lane is **advisory** (\`continue-on-error: true\`) — it does **not** block the merge."
+              echo "Software-rasterizer (llvmpipe) parity can diverge from a real GPU; triage the log, don't auto-trust red."
+            fi
+            echo ""
+            echo "Promotion to a hard gate is a later, deliberate flip once the lane is proven stable (W0.7)."
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Also emit a workflow annotation so it shows on the checks tab.
+          if [ "${{ steps.gpu_tests.outcome }}" != "success" ]; then
+            echo "::warning title=GPU lane advisory::Vello-on-lavapipe tests did not pass; advisory only (does not block merge)."
+          fi

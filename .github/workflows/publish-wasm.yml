@@ -28,8 +28,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Pin the toolchain from rust-toolchain.toml (audit B21) — the
+      # published wasm must be built with the same compiler the rest of
+      # CI uses, not a drifting `@stable`.
+      - name: resolve pinned toolchain
+        id: pin
+        run: echo "channel=$(bash scripts/rust-channel.sh)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ steps.pin.outputs.channel }}
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-bindgen-cli (lockfile pin) + binaryen (pinned)
@@ -56,6 +63,24 @@ jobs:
       - name: Resolve version from tag
         id: ver
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # W0.9 dist-tag rider (protocol-governance §4): prerelease tags
+      # (`v0.N.0-rc.x` — anything with a `-suffix`) publish under the
+      # `next` dist-tag, never `latest`. A clean `0.N.P` publishes under
+      # npm's default (`latest`). This sets a `dist-tag` output the
+      # publish step appends as `--tag` only for prereleases.
+      - name: Derive npm dist-tag from version
+        id: disttag
+        run: |
+          set -euo pipefail
+          V="${{ steps.ver.outputs.version }}"
+          if [[ "$V" == *-* ]]; then
+            echo "tag=next" >> "$GITHUB_OUTPUT"
+            echo "prerelease version '$V' → npm dist-tag 'next' (not latest)"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+            echo "release version '$V' → npm dist-tag 'latest' (default)"
+          fi
 
       - name: Build @paged-media/canvas-wasm
         run: |
@@ -154,7 +179,14 @@ jobs:
           # Leading ./ is load-bearing: a bare `dist/canvas-wasm` is
           # parsed by npm as a GitHub owner/repo shorthand, not a path
           # (it tried git ls-remote github.com/dist/canvas-wasm.git).
-          npm publish --access public ./dist/canvas-wasm
-          npm publish --access public ./dist/introspect-wasm
-          npm publish --access public ./dist/sdk
-          npm publish --access public ./web/idml-viewer
+          #
+          # --tag from the dist-tag rider (W0.9): prereleases land on
+          # `next`, releases on `latest`. Passing `--tag latest`
+          # explicitly is a no-op vs npm's default, so the command is
+          # uniform either way.
+          TAG="${{ steps.disttag.outputs.tag }}"
+          echo "publishing under npm dist-tag: $TAG"
+          npm publish --access public --tag "$TAG" ./dist/canvas-wasm
+          npm publish --access public --tag "$TAG" ./dist/introspect-wasm
+          npm publish --access public --tag "$TAG" ./dist/sdk
+          npm publish --access public --tag "$TAG" ./web/idml-viewer
