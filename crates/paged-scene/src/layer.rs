@@ -32,9 +32,18 @@
 //!
 //! ## Z-order
 //!
-//! IDML lists layers top-first (`layers[0]` = topmost), so the z-index
-//! returned by `layer_z_index` is **lower = higher z**. Sorting items
-//! by ascending z-index walks them top-to-bottom in paint order.
+//! IDML lists layers **bottom-first** (`designmap[0]` = the bottom of
+//! the z-stack — the layer that paints first / sits furthest back),
+//! matching InDesign's Layers panel read bottom-to-top. The z-index
+//! returned by `layer_z_index` is therefore **higher = higher z**:
+//! `layers[0]` (z=0) is the backmost, the last layer (max z) is the
+//! topmost. (Cycle 2's Q-10 commit had this inverted — assuming
+//! top-first — which painted bottom layers over top ones on
+//! multi-layer packs; the cycle-8 fix flipped the renderer's sort to
+//! ascending-z = back-to-front paint order. Any consumer that wants
+//! "topmost" must therefore pick the **highest** z, not the lowest.)
+//! Sorting items by ascending z-index walks them back-to-front in
+//! paint order.
 
 use std::collections::HashMap;
 
@@ -124,8 +133,11 @@ pub fn build_layer_locked_map(designmap: &DesignMap) -> HashMap<&str, bool> {
         .collect()
 }
 
-/// Build `layer_id → z-position` (0 = topmost). Used to sort items
-/// across kinds into the same paint order the renderer follows.
+/// Build `layer_id → z-position` (0 = backmost / bottom of the
+/// z-stack; higher = closer to the top). Used to sort items across
+/// kinds into the same paint order the renderer follows. Sorting
+/// **ascending** by this value yields back-to-front paint order;
+/// "topmost" is the **maximum** z.
 pub fn layer_z_index(designmap: &DesignMap) -> HashMap<&str, usize> {
     designmap
         .layers
@@ -175,9 +187,13 @@ pub fn layer_locked(designmap: &DesignMap, item_layer_ref: Option<&str>) -> bool
 }
 
 /// One-shot: z-position of the layer `item_layer_ref` references
-/// (0 = topmost). Returns `usize::MAX` for unknown / missing refs so
-/// stable sorts keep those items in their original document order
-/// (below everything that does resolve).
+/// (0 = backmost / bottom of the z-stack; higher = closer to the top).
+/// Returns `usize::MAX` for unknown / missing refs so stable sorts keep
+/// those items in their original document order. NOTE: because `MAX`
+/// sorts last, an un-resolved item ends up at the **top** under
+/// ascending-z paint order — matching the renderer, which leaves
+/// no-`ItemLayer` items in verbatim XML position and paints them after
+/// the layered ones.
 pub fn layer_z(designmap: &DesignMap, item_layer_ref: Option<&str>) -> usize {
     match item_layer_ref {
         Some(id) => designmap
@@ -248,17 +264,25 @@ mod tests {
     }
 
     #[test]
-    fn z_index_is_top_first() {
+    fn z_index_is_bottom_first() {
+        // Cycle-8 convention: designmap lists layers bottom-first, so
+        // index 0 is the backmost layer and the last index is topmost.
+        // `bot` is declared first (z=0, paints first / furthest back);
+        // `top` is declared last (highest z, paints last / on top).
         let d = dm(vec![
-            layer("top", true, false, true),
-            layer("mid", true, false, true),
             layer("bot", true, false, true),
+            layer("mid", true, false, true),
+            layer("top", true, false, true),
         ]);
         let z = layer_z_index(&d);
-        assert_eq!(z["top"], 0);
+        assert_eq!(z["bot"], 0, "first-declared layer is the backmost");
         assert_eq!(z["mid"], 1);
-        assert_eq!(z["bot"], 2);
-        assert_eq!(layer_z(&d, Some("top")), 0);
+        assert_eq!(z["top"], 2, "last-declared layer is the topmost");
+        assert_eq!(layer_z(&d, Some("bot")), 0);
+        assert_eq!(layer_z(&d, Some("top")), 2);
+        // Unknown / missing refs sort last (MAX) → end up on top under
+        // ascending-z paint order, matching the renderer's no-ItemLayer
+        // handling.
         assert_eq!(layer_z(&d, Some("missing")), usize::MAX);
         assert_eq!(layer_z(&d, None), usize::MAX);
     }

@@ -19,6 +19,14 @@
 //! same paint order the renderer follows — layer order first
 //! (`paged_scene::layer_z_index`), then document order within a layer.
 //!
+//! Z-order direction (cycle-8): the renderer paints layers in
+//! **ascending** `layer_z` (designmap[0] = backmost, paints first; the
+//! highest-z layer paints last and lands on top). So "topmost" is the
+//! **highest** `layer_z`, then the **last**-painted (highest
+//! `doc_order`) item within that layer. This hit-tester must sort that
+//! way or selection disagrees with what the user sees on multi-layer
+//! documents.
+//!
 //! Containment is **oriented**: the point is inverse-transformed into
 //! each candidate frame's content-box space and tested against its raw
 //! `bounds`. A 45°-rotated frame's empty AABB corners are correctly
@@ -148,8 +156,11 @@ impl CanvasModel {
                 }
             }
         }
-        // Top-first: lower layer_z first, then later doc_order first.
-        hits.sort_by_key(|(z, doc, _)| (*z, std::cmp::Reverse(*doc)));
+        // Top-first (cycle-8): the renderer paints ascending layer_z
+        // (designmap[0] = backmost), so the topmost item is the
+        // HIGHEST layer_z, then the last-painted (highest doc_order)
+        // within that layer.
+        hits.sort_by_key(|(z, doc, _)| (std::cmp::Reverse(*z), std::cmp::Reverse(*doc)));
         hits.into_iter().map(|(_, _, id)| id).collect()
     }
 
@@ -193,9 +204,14 @@ impl CanvasModel {
             }
 
             let mut candidates = collect_candidates(&parsed.spread, &layer_z);
-            // Top-first: lower layer_z (top layer) first, then later
-            // doc_order (last-painted) first.
-            candidates.sort_by_key(|c| (c.layer_z, std::cmp::Reverse(c.doc_order)));
+            // Top-first (cycle-8): the renderer paints ascending
+            // layer_z (designmap[0] = backmost), so the topmost item is
+            // the HIGHEST layer_z, then the last-painted (highest
+            // doc_order) within that layer. Returning the first
+            // point-containing candidate then yields the visually
+            // topmost frame.
+            candidates
+                .sort_by_key(|c| (std::cmp::Reverse(c.layer_z), std::cmp::Reverse(c.doc_order)));
 
             for c in &candidates {
                 if !paged_scene::lookup_layer_render_visible(
