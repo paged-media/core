@@ -100,6 +100,27 @@ fn command_stream_digest(doc: &Document) -> Vec<String> {
         .collect()
 }
 
+/// The `(tx, ty)` translations of every FillPath emitted for `page_idx`
+/// — a coordinate-level read of where the renderer actually paints, so
+/// a group-transform's effect on member geometry is provable, not just
+/// "the digest changed".
+fn fill_translations(doc: &Document, page_idx: usize) -> Vec<(f32, f32)> {
+    use paged_compose::DisplayCommand;
+    let built = build_document(doc, &PipelineOptions::default()).expect("build");
+    built.pages[page_idx]
+        .list
+        .commands
+        .iter()
+        .filter_map(|c| match c {
+            DisplayCommand::FillPath { transform, .. }
+            | DisplayCommand::FillPathBlend { transform, .. } => {
+                Some((transform.0[4], transform.0[5]))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 #[test]
 fn create_group_is_z_order_neutral_and_round_trips() {
     let mut doc = Document::open(&fixture_bytes()).expect("open");
@@ -114,6 +135,8 @@ fn create_group_is_z_order_neutral_and_round_trips() {
             spec: GroupSpec {
                 self_id: None,
                 members: members.clone(),
+                parent: None,
+                item_transform: None,
             },
         },
     )
@@ -218,6 +241,8 @@ fn scattered_members_collect_deterministically_and_undo_is_exact() {
             spec: GroupSpec {
                 self_id: None,
                 members: members.clone(),
+                parent: None,
+                item_transform: None,
             },
         },
     )
@@ -317,6 +342,8 @@ fn atomic_rejections_leave_the_document_untouched() {
             spec: GroupSpec {
                 self_id: None,
                 members: vec![members[0].clone(), NodeId::Rectangle("uNOPE".into())],
+                parent: None,
+                item_transform: None,
             },
         },
     );
@@ -330,19 +357,24 @@ fn atomic_rejections_leave_the_document_untouched() {
             spec: GroupSpec {
                 self_id: None,
                 members: vec![members[0].clone(), members[0].clone()],
+                parent: None,
+                item_transform: None,
             },
         },
     );
     assert!(err.is_err());
     assert_eq!(order_snapshot(&doc, si), before);
 
-    // Group as member (flat v1).
+    // Unknown group as member (v2 allows group members, but this id
+    // resolves to nothing → still rejects, document untouched).
     let err = apply(
         &mut doc,
         &Operation::CreateGroup {
             spec: GroupSpec {
                 self_id: None,
-                members: vec![members[0].clone(), NodeId::Group("uG".into())],
+                members: vec![members[0].clone(), NodeId::Group("uNOGROUP".into())],
+                parent: None,
+                item_transform: None,
             },
         },
     );
@@ -357,6 +389,8 @@ fn atomic_rejections_leave_the_document_untouched() {
             spec: GroupSpec {
                 self_id: None,
                 members: members.clone(),
+                parent: None,
+                item_transform: None,
             },
         },
     )
@@ -367,10 +401,495 @@ fn atomic_rejections_leave_the_document_untouched() {
             spec: GroupSpec {
                 self_id: None,
                 members: vec![members[0].clone()],
+                parent: None,
+                item_transform: None,
             },
         },
     );
     assert!(err.is_err(), "already-grouped member must reject");
     apply(&mut doc, &applied.inverse).expect("cleanup");
     assert_eq!(order_snapshot(&doc, si), before);
+}
+
+// ---------------------------------------------------------------------------
+// W1.20 — groups v2: nested create, group transforms, nested dissolve.
+// ---------------------------------------------------------------------------
+
+fn close6(a: [f32; 6], b: [f32; 6]) -> bool {
+    a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < 1e-3)
+}
+
+/// Effective `item_transform` of a leaf NodeId on a spread.
+fn leaf_transform(spread: &paged_parse::Spread, node: &NodeId) -> Option<[f32; 6]> {
+    let id = node.self_id();
+    match node {
+        NodeId::TextFrame(_) => spread
+            .text_frames
+            .iter()
+            .find(|f| f.self_id.as_deref() == Some(id))
+            .map(|f| f.item_transform.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])),
+        NodeId::Rectangle(_) => spread
+            .rectangles
+            .iter()
+            .find(|f| f.self_id.as_deref() == Some(id))
+            .map(|f| f.item_transform.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])),
+        NodeId::Oval(_) => spread
+            .ovals
+            .iter()
+            .find(|f| f.self_id.as_deref() == Some(id))
+            .map(|f| f.item_transform.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])),
+        NodeId::Polygon(_) => spread
+            .polygons
+            .iter()
+            .find(|f| f.self_id.as_deref() == Some(id))
+            .map(|f| f.item_transform.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])),
+        NodeId::GraphicLine(_) => spread
+            .graphic_lines
+            .iter()
+            .find(|f| f.self_id.as_deref() == Some(id))
+            .map(|f| f.item_transform.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])),
+        _ => None,
+    }
+}
+
+/// Find a spread holding an EXISTING top-level group plus at least one
+/// top-level leaf, so we can nest the group-of-groups (group an
+/// existing `Group` with a leaf). Returns `(spread, existing_group_id,
+/// a_top_level_leaf)`.
+fn group_plus_leaf(doc: &Document) -> Option<(usize, String, NodeId)> {
+    for (si, parsed) in doc.spreads.iter().enumerate() {
+        let spread = &parsed.spread;
+        let group_id = spread.frames_in_order.iter().find_map(|r| match r {
+            FrameRef::Group(gi) => spread.groups.get(*gi).and_then(|g| g.self_id.clone()),
+            _ => None,
+        });
+        let leaf = spread
+            .frames_in_order
+            .iter()
+            .find_map(|r| node_for(spread, *r));
+        if let (Some(gid), Some(leaf)) = (group_id, leaf) {
+            return Some((si, gid, leaf));
+        }
+    }
+    None
+}
+
+#[test]
+fn nested_create_round_trips_and_restores_prior_structure() {
+    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    // NESTED create: group an EXISTING top-level group G1 together with
+    // a top-level leaf into a new outer group G2 (group-of-groups).
+    let Some((si, g1_id, leaf)) = group_plus_leaf(&doc) else {
+        eprintln!("fixture has no top-level group + leaf spread — skipping");
+        return;
+    };
+
+    let before_order = order_snapshot(&doc, si);
+    let before_paint = command_stream_digest(&doc);
+
+    let g2 = apply(
+        &mut doc,
+        &Operation::CreateGroup {
+            spec: GroupSpec {
+                self_id: None,
+                // A `Group` id as a member — the v2 nesting case.
+                members: vec![NodeId::Group(g1_id.clone()), leaf.clone()],
+                parent: None,
+                item_transform: None,
+            },
+        },
+    )
+    .expect("create nested group-of-groups");
+    let g2_id = match &g2.op {
+        Operation::CreateGroup { spec } => spec.self_id.clone().unwrap(),
+        _ => unreachable!(),
+    };
+
+    // Structure: G2 exists and nests G1 as a `FrameRef::Group` member;
+    // G1 left the spread root, G2 took its place.
+    {
+        let spread = &doc.spreads[si].spread;
+        let g2_idx = spread
+            .groups
+            .iter()
+            .position(|g| g.self_id.as_deref() == Some(g2_id.as_str()))
+            .expect("G2 present");
+        let g1_idx = spread
+            .groups
+            .iter()
+            .position(|g| g.self_id.as_deref() == Some(g1_id.as_str()))
+            .expect("G1 still present");
+        assert!(
+            spread.groups[g2_idx]
+                .members
+                .contains(&FrameRef::Group(g1_idx)),
+            "G2 must nest G1 as a member"
+        );
+        assert!(
+            !spread.frames_in_order.contains(&FrameRef::Group(g1_idx)),
+            "nested G1 must leave the spread root"
+        );
+        assert!(spread.frames_in_order.contains(&FrameRef::Group(g2_idx)));
+    }
+
+    // KEYSTONE — grouping is paint-neutral (the members' effective
+    // transforms are unchanged; only the wrapper structure changed).
+    assert_eq!(
+        command_stream_digest(&doc),
+        before_paint,
+        "nested grouping must not change the rendered paint stream"
+    );
+
+    // Undo (DissolveGroup of G2) restores the exact prior structure,
+    // re-surfacing G1 at the spread root at its original slot.
+    let undone = apply(&mut doc, &g2.inverse).expect("undo G2");
+    assert_eq!(
+        order_snapshot(&doc, si),
+        before_order,
+        "undo of the nested group restores the exact prior structure"
+    );
+    assert_eq!(command_stream_digest(&doc), before_paint);
+
+    // Redo (the undo's own inverse re-creates G2 with the same id +
+    // nested structure).
+    apply(&mut doc, &undone.inverse).expect("redo G2");
+    {
+        let spread = &doc.spreads[si].spread;
+        let g2_idx = spread
+            .groups
+            .iter()
+            .position(|g| g.self_id.as_deref() == Some(g2_id.as_str()))
+            .expect("G2 re-created on redo");
+        let g1_idx = spread
+            .groups
+            .iter()
+            .position(|g| g.self_id.as_deref() == Some(g1_id.as_str()))
+            .expect("G1 present after redo");
+        assert!(
+            spread.groups[g2_idx]
+                .members
+                .contains(&FrameRef::Group(g1_idx)),
+            "redo re-nests G1 inside G2"
+        );
+    }
+    assert_eq!(command_stream_digest(&doc), before_paint);
+}
+
+#[test]
+fn group_transform_moves_members_hit_and_render_agree_and_undo_restores() {
+    use paged_mutate::path_math::affine_multiply;
+
+    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    // Group two adjacent leaves so we own a group with a known member
+    // set, then transform the GROUP and verify each member's effective
+    // transform composed the delta.
+    let (si, members) = adjacent_leaf_pair(&doc);
+    let created = apply(
+        &mut doc,
+        &Operation::CreateGroup {
+            spec: GroupSpec {
+                self_id: None,
+                members: members.clone(),
+                parent: None,
+                item_transform: None,
+            },
+        },
+    )
+    .expect("create group");
+    let group_id = match &created.op {
+        Operation::CreateGroup { spec } => spec.self_id.clone().unwrap(),
+        _ => unreachable!(),
+    };
+
+    // Member effective transforms before the group move.
+    let before: Vec<[f32; 6]> = members
+        .iter()
+        .map(|m| leaf_transform(&doc.spreads[si].spread, m).expect("leaf"))
+        .collect();
+    let before_paint = command_stream_digest(&doc);
+
+    // Move the group: translate by (40, 25) (group's own prev = None ⇒
+    // identity, so delta == this matrix).
+    let g_new = [1.0, 0.0, 0.0, 1.0, 40.0, 25.0];
+    let moved = apply(
+        &mut doc,
+        &Operation::SetGroupTransform {
+            group: group_id.clone(),
+            transform: Some(g_new),
+            prev: None,
+        },
+    )
+    .expect("set group transform");
+
+    // Each member's EFFECTIVE transform = delta * old (delta == g_new
+    // since prev was identity).
+    for (m, old) in members.iter().zip(&before) {
+        let now = leaf_transform(&doc.spreads[si].spread, m).expect("leaf");
+        let expected = affine_multiply(g_new, *old);
+        assert!(
+            close6(now, expected),
+            "member {m:?} effective transform must compose the group delta\n got {now:?}\n want {expected:?}"
+        );
+    }
+    // The group's own transform was set.
+    {
+        let spread = &doc.spreads[si].spread;
+        let g = spread
+            .groups
+            .iter()
+            .find(|g| g.self_id.as_deref() == Some(group_id.as_str()))
+            .unwrap();
+        assert!(close6(
+            g.item_transform.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+            g_new
+        ));
+    }
+    // Paint changed (the members moved on the page).
+    assert_ne!(
+        command_stream_digest(&doc),
+        before_paint,
+        "moving the group must change the rendered geometry"
+    );
+
+    // Undo restores every member's effective transform + the paint.
+    apply(&mut doc, &moved.inverse).expect("undo group transform");
+    for (m, old) in members.iter().zip(&before) {
+        let now = leaf_transform(&doc.spreads[si].spread, m).expect("leaf");
+        assert!(
+            close6(now, *old),
+            "undo must restore member {m:?} effective transform"
+        );
+    }
+    assert_eq!(
+        command_stream_digest(&doc),
+        before_paint,
+        "undo of the group transform restores the paint stream"
+    );
+
+    // Cleanup: dissolve the group we created.
+    apply(&mut doc, &created.inverse).expect("cleanup dissolve");
+}
+
+#[test]
+fn nested_dissolve_splices_into_parent_geometry_invariant() {
+    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    // Find a NESTED parsed group: a group G that is a member of some
+    // parent group P. The geometry-groups fixture's variant 4 builds a
+    // 3-deep outer→middle→inner stack, so such a group exists.
+    let mut target: Option<(usize, String, String)> = None; // (spread, inner_id, parent_id)
+    'outer: for (si, parsed) in doc.spreads.iter().enumerate() {
+        let spread = &parsed.spread;
+        for (pi, p) in spread.groups.iter().enumerate() {
+            for m in &p.members {
+                if let FrameRef::Group(gi) = *m {
+                    if let (Some(inner_id), Some(parent_id)) =
+                        (spread.groups[gi].self_id.clone(), p.self_id.clone())
+                    {
+                        target = Some((si, inner_id, parent_id));
+                        break 'outer;
+                    }
+                }
+            }
+            let _ = pi;
+        }
+    }
+    let Some((si, inner_id, parent_id)) = target else {
+        eprintln!("fixture has no nested group — skipping");
+        return;
+    };
+
+    // KEYSTONE: the rendered paint stream is the invariant. Dissolving a
+    // nested group only removes the wrapper; members keep their pre-baked
+    // EFFECTIVE transforms, so geometry must be byte-identical.
+    let before_paint = command_stream_digest(&doc);
+
+    // Capture the inner group's members + the parent's member-slot.
+    let (inner_members, parent_slot_before): (Vec<FrameRef>, usize) = {
+        let spread = &doc.spreads[si].spread;
+        let gi = spread
+            .groups
+            .iter()
+            .position(|g| g.self_id.as_deref() == Some(inner_id.as_str()))
+            .unwrap();
+        let pi = spread
+            .groups
+            .iter()
+            .position(|g| g.self_id.as_deref() == Some(parent_id.as_str()))
+            .unwrap();
+        let slot = spread.groups[pi]
+            .members
+            .iter()
+            .position(|r| *r == FrameRef::Group(gi))
+            .unwrap();
+        (spread.groups[gi].members.clone(), slot)
+    };
+
+    let dissolved = apply(
+        &mut doc,
+        &Operation::DissolveGroup {
+            group_id: inner_id.clone(),
+            restore_slots: None,
+        },
+    )
+    .expect("dissolve nested group");
+
+    // The inner group is gone; its members are now direct members of the
+    // parent at the inner group's former slot.
+    {
+        let spread = &doc.spreads[si].spread;
+        assert!(
+            spread
+                .groups
+                .iter()
+                .all(|g| g.self_id.as_deref() != Some(inner_id.as_str())),
+            "inner group removed"
+        );
+        let pi = spread
+            .groups
+            .iter()
+            .position(|g| g.self_id.as_deref() == Some(parent_id.as_str()))
+            .expect("parent still present");
+        // The spliced members occupy `inner_members.len()` consecutive
+        // slots starting at the inner group's former position.
+        for (k, _) in inner_members.iter().enumerate() {
+            assert!(
+                parent_slot_before + k < spread.groups[pi].members.len(),
+                "spliced member slot in range"
+            );
+        }
+    }
+
+    // GEOMETRY INVARIANT: the rendered output is unchanged.
+    assert_eq!(
+        command_stream_digest(&doc),
+        before_paint,
+        "dissolving a nested group must not change the rendered geometry"
+    );
+
+    // Undo re-nests the inner group inside the parent at the same slot,
+    // and the paint returns bytewise.
+    apply(&mut doc, &dissolved.inverse).expect("undo nested dissolve");
+    {
+        let spread = &doc.spreads[si].spread;
+        let pi = spread
+            .groups
+            .iter()
+            .position(|g| g.self_id.as_deref() == Some(parent_id.as_str()))
+            .expect("parent present after undo");
+        let gi = spread
+            .groups
+            .iter()
+            .position(|g| g.self_id.as_deref() == Some(inner_id.as_str()))
+            .expect("inner group restored after undo");
+        let slot = spread.groups[pi]
+            .members
+            .iter()
+            .position(|r| *r == FrameRef::Group(gi))
+            .expect("inner group re-nested in parent");
+        assert_eq!(
+            slot, parent_slot_before,
+            "re-nest restores the inner group at its original parent slot"
+        );
+    }
+    assert_eq!(
+        command_stream_digest(&doc),
+        before_paint,
+        "undo of the nested dissolve restores the paint stream"
+    );
+}
+
+#[test]
+fn renderer_paints_group_members_at_the_composed_transform() {
+    // Renderer-level proof (extends the geometry-groups sample): apply a
+    // SetGroupTransform to a PARSED group and confirm every FillPath the
+    // renderer emits for that page shifts by exactly the group delta —
+    // i.e. the members paint at the composed transform, and undo paints
+    // them back.
+    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    // Pick the first spread whose top-level item is a single group with
+    // leaf members (variant 1 — "identity · two-rects").
+    let (si, group_id) = doc
+        .spreads
+        .iter()
+        .enumerate()
+        .find_map(|(si, parsed)| {
+            let spread = &parsed.spread;
+            let only_group = spread.frames_in_order.iter().find_map(|r| match r {
+                FrameRef::Group(gi) => {
+                    let g = &spread.groups[*gi];
+                    let flat_leaves = !g.members.is_empty()
+                        && g.members.iter().all(|m| !matches!(m, FrameRef::Group(_)));
+                    // Any flat top-level group works — the pure-translate
+                    // delta left-multiplies onto whatever prior transform
+                    // the parser baked in, so the member fills shift by
+                    // exactly (dx, dy) regardless of the group's own
+                    // starting transform.
+                    flat_leaves.then(|| g.self_id.clone()).flatten()
+                }
+                _ => None,
+            });
+            only_group.map(|gid| (si, gid))
+        })
+        .expect("fixture has a flat top-level group");
+
+    let before = fill_translations(&doc, si);
+    assert!(
+        before.len() >= 2,
+        "the variant page paints at least the two group member rects"
+    );
+
+    // Read the group's prior own transform so we can predict where each
+    // member lands: `SetGroupTransform` writes the ABSOLUTE group
+    // transform, so each member's effective transform becomes
+    // `g_new * inv(g_old) * effective_old`. For these identity-local
+    // members that means they move RIGIDLY by `g_new_translate -
+    // g_old_translate`, preserving the inter-member spacing.
+    let g_old = doc.spreads[si]
+        .spread
+        .groups
+        .iter()
+        .find(|g| g.self_id.as_deref() == Some(group_id.as_str()))
+        .and_then(|g| g.item_transform)
+        .unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let g_new = [1.0, 0.0, 0.0, 1.0, 37.0, -19.0];
+    let shift = (g_new[4] - g_old[4], g_new[5] - g_old[5]);
+
+    let applied = apply(
+        &mut doc,
+        &Operation::SetGroupTransform {
+            group: group_id.clone(),
+            transform: Some(g_new),
+            prev: None,
+        },
+    )
+    .expect("set group transform");
+
+    let after = fill_translations(&doc, si);
+    assert_eq!(
+        after.len(),
+        before.len(),
+        "the same number of fills paint (no member dropped)"
+    );
+    // At least the two group member rects paint shifted RIGIDLY by the
+    // group's translation change (the lone label TextFrame doesn't move).
+    let moved = before
+        .iter()
+        .zip(&after)
+        .filter(|((bx, by), (ax, ay))| {
+            (ax - bx - shift.0).abs() < 1e-2 && (ay - by - shift.1).abs() < 1e-2
+        })
+        .count();
+    assert!(
+        moved >= 2,
+        "at least the two group member rects must paint shifted by the group's \
+         translation change {shift:?} (before={before:?}, after={after:?})"
+    );
+
+    // Undo restores the original paint translations bytewise.
+    apply(&mut doc, &applied.inverse).expect("undo group transform");
+    assert_eq!(
+        fill_translations(&doc, si),
+        before,
+        "undo repaints the members at their original positions"
+    );
 }

@@ -61,9 +61,9 @@ pub use history::{History, DEFAULT_HISTORY_CAPACITY};
 pub use notify::Notifier;
 pub use operation::{
     AppliedOperation, ColorGroupSpec, FieldKind, GradientSpec, GradientStopSpec, GroupSpec,
-    GuideOrientationSpec, InvalidationHint, NodeId, NodeSpec, NumberingListSpec, Operation,
-    PathPointAddress, PathPointRole, PathfinderKind, PropertyPath, StyleCollection, StyleScope,
-    SwatchSpec, Value,
+    GuideOrientationSpec, InvalidationHint, NestedParent, NodeId, NodeSpec, NumberingListSpec,
+    Operation, PathPointAddress, PathPointRole, PathfinderKind, PropertyPath, StyleCollection,
+    StyleScope, SwatchSpec, Value,
 };
 pub use path_math::fit_polyline_to_anchors;
 

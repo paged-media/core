@@ -187,6 +187,11 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             group_id,
             restore_slots,
         } => apply_dissolve_group(doc, group_id, restore_slots.as_deref()),
+        Operation::SetGroupTransform {
+            group,
+            transform,
+            prev,
+        } => apply_set_group_transform(doc, group, *transform, *prev),
         Operation::CreateGradient { spec } => apply_create_gradient(doc, spec),
         Operation::EditGradient { gradient_id, spec } => {
             apply_edit_gradient(doc, gradient_id, spec)
@@ -5160,6 +5165,39 @@ fn leaf_frame_ref(spread: &paged_parse::Spread, node: &NodeId) -> Option<paged_p
     }
 }
 
+/// W1.20 (groups v2) — resolve a member NodeId to its `FrameRef`,
+/// extending `leaf_frame_ref` with `NodeId::Group` so `createGroup`
+/// can nest an existing group (group-of-groups).
+fn member_frame_ref(spread: &paged_parse::Spread, node: &NodeId) -> Option<paged_parse::FrameRef> {
+    use paged_parse::FrameRef;
+    match node {
+        NodeId::Group(id) => spread
+            .groups
+            .iter()
+            .position(|g| g.self_id.as_deref() == Some(id.as_str()))
+            .map(FrameRef::Group),
+        other => leaf_frame_ref(spread, other),
+    }
+}
+
+/// W1.20 — map a `FrameRef` back to the `NodeId` of the page item it
+/// addresses (leaf shapes AND `Group`s, unlike the leaf-only inline
+/// resolver `apply_dissolve_group` used in v1). Returns `None` for an
+/// id-less frame.
+fn node_for_frame_ref(spread: &paged_parse::Spread, r: paged_parse::FrameRef) -> Option<NodeId> {
+    use paged_parse::FrameRef;
+    Some(match r {
+        FrameRef::TextFrame(i) => NodeId::TextFrame(spread.text_frames.get(i)?.self_id.clone()?),
+        FrameRef::Rectangle(i) => NodeId::Rectangle(spread.rectangles.get(i)?.self_id.clone()?),
+        FrameRef::Oval(i) => NodeId::Oval(spread.ovals.get(i)?.self_id.clone()?),
+        FrameRef::GraphicLine(i) => {
+            NodeId::GraphicLine(spread.graphic_lines.get(i)?.self_id.clone()?)
+        }
+        FrameRef::Polygon(i) => NodeId::Polygon(spread.polygons.get(i)?.self_id.clone()?),
+        FrameRef::Group(i) => NodeId::Group(spread.groups.get(i)?.self_id.clone()?),
+    })
+}
+
 /// Plugin-metadata write cap: keeps documents loadable and the Label
 /// mechanism friendly to other IDML consumers (facility design §2).
 const PLUGIN_METADATA_MAX_BYTES: usize = 64 * 1024;
@@ -5292,13 +5330,14 @@ fn apply_plugin_metadata(
     })
 }
 
-/// B-04 — group leaf page items. Fully validated BEFORE any mutation
-/// (atomicity invariant). Members contiguous in z-order group
-/// paint-neutrally (the group ref takes the earliest member's
-/// `frames_in_order` slot, paint recursion emits members there in
-/// stored order); scattered members deterministically collect at the
-/// earliest slot. The inverse carries the original slots so undo
-/// restores z-order EXACTLY either way.
+/// B-04 / W1.20 — group page items (leaf shapes OR existing groups,
+/// the latter producing a nested group-of-groups). Fully validated
+/// BEFORE any mutation (atomicity invariant). Members contiguous in
+/// z-order group paint-neutrally (the group ref takes the earliest
+/// member's `frames_in_order` slot, paint recursion emits members
+/// there in stored order); scattered members deterministically
+/// collect at the earliest slot. The inverse carries the original
+/// slots so undo restores z-order EXACTLY either way.
 fn apply_create_group(
     doc: &mut paged_scene::Document,
     spec: &GroupSpec,
@@ -5314,12 +5353,6 @@ fn apply_create_group(
     if spec.members.is_empty() {
         return Err(invalid("a group needs at least one member".into()));
     }
-    // v1: flat groups — leaf kinds only.
-    if spec.members.iter().any(|m| matches!(m, NodeId::Group(_))) {
-        return Err(invalid(
-            "nested groups are not supported yet (flat groups in v1)".into(),
-        ));
-    }
     // Duplicate member ids.
     {
         let mut seen = std::collections::HashSet::new();
@@ -5330,13 +5363,14 @@ fn apply_create_group(
         }
     }
     // Locate the ONE spread holding every member; resolve FrameRefs.
+    // `member_frame_ref` resolves Group members too (v2 nesting).
     let mut located: Option<(usize, Vec<FrameRef>)> = None;
     for (si, parsed) in doc.spreads.iter().enumerate() {
         let spread = &parsed.spread;
         let refs: Vec<Option<FrameRef>> = spec
             .members
             .iter()
-            .map(|m| leaf_frame_ref(spread, m))
+            .map(|m| member_frame_ref(spread, m))
             .collect();
         if refs.iter().all(|r| r.is_some()) {
             located = Some((si, refs.into_iter().flatten().collect()));
@@ -5350,18 +5384,58 @@ fn apply_create_group(
         return Err(invalid("member not found in any spread".into()));
     };
     let spread = &doc.spreads[spread_idx].spread;
-    // Already grouped? (Direct membership scan — nesting is v1-flat.)
-    for g in &spread.groups {
+    // W1.20 — nested re-create (inverse-only): the new group nests
+    // inside `parent` at a captured slot. Its members are expected to
+    // be DIRECT members of that parent (they were spliced in by the
+    // dissolve this inverts), not top-level `frames_in_order` entries —
+    // so the placement / validation differs from a fresh top-level
+    // create. Resolve the parent now.
+    let nested_parent: Option<usize> = match &spec.parent {
+        Some(p) => match spread
+            .groups
+            .iter()
+            .position(|g| g.self_id.as_deref() == Some(p.group_id.as_str()))
+        {
+            Some(gi) => Some(gi),
+            None => {
+                return Err(invalid(format!(
+                    "parent group \"{}\" not found",
+                    p.group_id
+                )))
+            }
+        },
+        None => None,
+    };
+    // Already grouped? A member may not already belong to a DIFFERENT
+    // group. For the nested re-create the members legitimately sit in
+    // the named parent (we're about to move them out of it), so skip
+    // that one group in the scan.
+    for (gi, g) in spread.groups.iter().enumerate() {
+        if nested_parent == Some(gi) {
+            continue;
+        }
         for r in &member_refs {
             if g.members.contains(r) {
                 return Err(invalid("a member already belongs to another group".into()));
             }
         }
     }
-    // Every member must sit in frames_in_order (top-level item).
-    for r in &member_refs {
-        if !spread.frames_in_order.contains(r) {
-            return Err(invalid("member is not a top-level spread item".into()));
+    if let Some(parent_idx) = nested_parent {
+        // Nested path: every member must currently be a direct member
+        // of the parent group.
+        for r in &member_refs {
+            if !spread.groups[parent_idx].members.contains(r) {
+                return Err(invalid(
+                    "nested-create member is not a direct child of the named parent".into(),
+                ));
+            }
+        }
+    } else {
+        // Top-level path: every member must sit in frames_in_order.
+        for r in &member_refs {
+            if !spread.frames_in_order.contains(r) {
+                return Err(invalid("member is not a top-level spread item".into()));
+            }
         }
     }
     // Mint or validate the id.
@@ -5381,39 +5455,91 @@ fn apply_create_group(
 
     // ---- mutation (validated; cannot fail past this point) ----
     let spread = &mut doc.spreads[spread_idx].spread;
-    // Members in DOCUMENT order (their frames_in_order positions).
-    let mut ordered: Vec<(usize, FrameRef)> = member_refs
-        .iter()
-        .map(|r| {
-            let pos = spread
-                .frames_in_order
-                .iter()
-                .position(|x| x == r)
-                .expect("validated above");
-            (pos, *r)
-        })
-        .collect();
-    ordered.sort_by_key(|(pos, _)| *pos);
-    let earliest = ordered[0].0;
-    let members_doc_order: Vec<FrameRef> = ordered.iter().map(|(_, r)| *r).collect();
-    // Snapshot for the inverse: exact pre-group slots (doc order).
-    let restore_slots: Vec<u32> = ordered.iter().map(|(pos, _)| *pos as u32).collect();
-
     let new_group_idx = spread.groups.len();
-    spread.groups.push(paged_parse::Group {
-        self_id: Some(self_id.clone()),
-        members: members_doc_order.clone(),
-        transparency: Default::default(),
-        item_transform: None,
-    });
-    // frames_in_order surgery: group ref at the earliest slot, member
-    // entries removed.
-    spread
-        .frames_in_order
-        .insert(earliest, FrameRef::Group(new_group_idx));
-    spread
-        .frames_in_order
-        .retain(|r| !members_doc_order.contains(r) || matches!(r, FrameRef::Group(_)));
+
+    // Inverse-only for the TOP-LEVEL create: the members' exact
+    // pre-group `frames_in_order` slots, so undo restores scattered
+    // z-order bytewise. Nested re-creates leave it `None` (the
+    // dissolve they invert re-nests via its own captured inverse).
+    let top_level_restore_slots: Option<Vec<u32>> = if let Some(parent_idx) = nested_parent {
+        // Nested re-create: order members by their position in the
+        // parent's `members` (the order the dissolve spliced them in),
+        // splice them OUT, and reference the new group from the parent
+        // at the recorded index.
+        let parent_members = &spread.groups[parent_idx].members;
+        let mut ordered: Vec<(usize, FrameRef)> = member_refs
+            .iter()
+            .map(|r| {
+                let pos = parent_members
+                    .iter()
+                    .position(|x| x == r)
+                    .expect("validated: member is a direct child of the parent");
+                (pos, *r)
+            })
+            .collect();
+        ordered.sort_by_key(|(pos, _)| *pos);
+        let members_in_order: Vec<FrameRef> = ordered.iter().map(|(_, r)| *r).collect();
+        spread.groups.push(paged_parse::Group {
+            self_id: Some(self_id.clone()),
+            members: members_in_order.clone(),
+            transparency: Default::default(),
+            item_transform: spec.item_transform,
+        });
+        // The recorded slot is where `FrameRef::Group(new_group_idx)`
+        // goes in the parent's members. Remove the member entries (may
+        // be `FrameRef::Group`s — sub-groups) FIRST, then insert the new
+        // wrapper at the recorded slot (clamped post-removal).
+        spread.groups[parent_idx]
+            .members
+            .retain(|r| !members_in_order.contains(r));
+        let at = spec
+            .parent
+            .as_ref()
+            .map(|p| p.index as usize)
+            .unwrap_or(0)
+            .min(spread.groups[parent_idx].members.len());
+        spread.groups[parent_idx]
+            .members
+            .insert(at, FrameRef::Group(new_group_idx));
+        None
+    } else {
+        // Top-level create: members ordered by frames_in_order slots;
+        // the group ref takes the earliest member's slot (the InDesign
+        // "group adopts the topmost member's z-position" rule).
+        let mut ordered: Vec<(usize, FrameRef)> = member_refs
+            .iter()
+            .map(|r| {
+                let pos = spread
+                    .frames_in_order
+                    .iter()
+                    .position(|x| x == r)
+                    .expect("validated above");
+                (pos, *r)
+            })
+            .collect();
+        ordered.sort_by_key(|(pos, _)| *pos);
+        let earliest = ordered[0].0;
+        let members_doc_order: Vec<FrameRef> = ordered.iter().map(|(_, r)| *r).collect();
+        let slots: Vec<u32> = ordered.iter().map(|(pos, _)| *pos as u32).collect();
+        spread.groups.push(paged_parse::Group {
+            self_id: Some(self_id.clone()),
+            members: members_doc_order.clone(),
+            transparency: Default::default(),
+            item_transform: spec.item_transform,
+        });
+        // Remove the member entries (which MAY be `FrameRef::Group`s in
+        // v2 nested create), THEN re-insert the new group ref at the
+        // earliest member's former slot. Removing first avoids the
+        // ambiguity of "is this group ref a member or the new wrapper?".
+        spread
+            .frames_in_order
+            .retain(|r| !members_doc_order.contains(r));
+        let insert_at = earliest.min(spread.frames_in_order.len());
+        spread
+            .frames_in_order
+            .insert(insert_at, FrameRef::Group(new_group_idx));
+        Some(slots)
+    };
 
     let mut resolved = spec.clone();
     resolved.self_id = Some(self_id.clone());
@@ -5421,7 +5547,7 @@ fn apply_create_group(
         op: Operation::CreateGroup { spec: resolved },
         inverse: Operation::DissolveGroup {
             group_id: self_id,
-            restore_slots: Some(restore_slots),
+            restore_slots: top_level_restore_slots,
         },
         invalidation: InvalidationHint {
             structural: true,
@@ -5431,11 +5557,20 @@ fn apply_create_group(
     })
 }
 
-/// B-04 — dissolve a group: members return to the group's
-/// `frames_in_order` slot in stored order — or, when an undo inverse
-/// carries `restore_slots`, at their exact pre-group indices;
+/// B-04 / W1.20 — dissolve a group; members are spliced back at the
+/// group's slot in stored order — or, for an undo inverse carrying
+/// `restore_slots`, at their exact pre-group indices.
+///
+/// v2: a NESTED group (one that is a member of a parent group) splices
+/// its members into the PARENT's `members` at the group's slot, rather
+/// than rejecting (v1) or surfacing them at the spread root. Member
+/// EFFECTIVE transforms are pre-baked (they already compose the
+/// dissolved group's `ItemTransform`), so the rendered geometry is
+/// unchanged — the dissolve only removes the wrapper. The inverse
+/// `CreateGroup` carries the captured parent link + the group's own
+/// `ItemTransform` so re-grouping restores the exact prior structure.
 /// `FrameRef::Group` indices above the removed entry are fixed up
-/// across the spread.
+/// across the spread (frames_in_order AND every group's members).
 fn apply_dissolve_group(
     doc: &mut paged_scene::Document,
     group_id: &str,
@@ -5467,88 +5602,115 @@ fn apply_dissolve_group(
         return Err(OperationError::NodeNotFound(node));
     };
     let spread = &doc.spreads[spread_idx].spread;
-    // v1: refuse to dissolve a group that is itself a member of
-    // another group (parsed nested structures stay intact).
-    if spread
+
+    // Where does this group live? Either nested inside a parent group
+    // (splice members into the parent) or at the spread root (splice
+    // into frames_in_order). v2 handles both.
+    let parent_idx: Option<usize> = spread
         .groups
         .iter()
-        .any(|g| g.members.contains(&FrameRef::Group(group_idx)))
-    {
-        return Err(invalid(
-            "group is nested inside another group; dissolve the outer group first".into(),
-        ));
+        .position(|g| g.members.contains(&FrameRef::Group(group_idx)));
+
+    enum Site {
+        /// `frames_in_order` slot (top-level group).
+        Root(usize),
+        /// (parent group index, position within parent.members).
+        Nested(usize, usize),
     }
-    // The group must be a top-level frames_in_order entry.
-    let Some(slot) = spread
-        .frames_in_order
-        .iter()
-        .position(|r| *r == FrameRef::Group(group_idx))
-    else {
-        return Err(invalid("group is not a top-level spread item".into()));
+    let site = match parent_idx {
+        Some(pi) => {
+            let pos = spread.groups[pi]
+                .members
+                .iter()
+                .position(|r| *r == FrameRef::Group(group_idx))
+                .expect("parent contains this group (just found)");
+            Site::Nested(pi, pos)
+        }
+        None => {
+            let Some(slot) = spread
+                .frames_in_order
+                .iter()
+                .position(|r| *r == FrameRef::Group(group_idx))
+            else {
+                return Err(invalid("group is not a top-level spread item".into()));
+            };
+            Site::Root(slot)
+        }
     };
-    // Members must be resolvable to NodeIds for the inverse spec
-    // (leaf members only in v1 — nested parsed groups refuse above
-    // only covers THIS group being nested; a group CONTAINING groups
-    // also stays untouched in v1).
+
+    // Members → NodeIds for the inverse spec. v2 resolves nested
+    // `FrameRef::Group` members too (a group-of-groups dissolves, its
+    // sub-groups splicing up one level).
     let member_nodes: Option<Vec<NodeId>> = spread.groups[group_idx]
         .members
         .iter()
-        .map(|r| match *r {
-            FrameRef::TextFrame(i) => spread
-                .text_frames
-                .get(i)
-                .and_then(|f| f.self_id.clone())
-                .map(NodeId::TextFrame),
-            FrameRef::Rectangle(i) => spread
-                .rectangles
-                .get(i)
-                .and_then(|f| f.self_id.clone())
-                .map(NodeId::Rectangle),
-            FrameRef::Oval(i) => spread
-                .ovals
-                .get(i)
-                .and_then(|f| f.self_id.clone())
-                .map(NodeId::Oval),
-            FrameRef::GraphicLine(i) => spread
-                .graphic_lines
-                .get(i)
-                .and_then(|f| f.self_id.clone())
-                .map(NodeId::GraphicLine),
-            FrameRef::Polygon(i) => spread
-                .polygons
-                .get(i)
-                .and_then(|f| f.self_id.clone())
-                .map(NodeId::Polygon),
-            FrameRef::Group(_) => None,
-        })
+        .map(|r| node_for_frame_ref(spread, *r))
         .collect();
     let Some(member_nodes) = member_nodes else {
         return Err(invalid(
-            "group contains nested groups or id-less members; v1 dissolves flat groups only".into(),
+            "group has an id-less member that cannot round-trip".into(),
         ));
+    };
+    // Capture the parent-group id NOW (before the index fix-up shifts
+    // `parent_idx`), for the inverse's nested re-create.
+    let parent_link = match &site {
+        Site::Nested(pi, pos) => {
+            spread.groups[*pi]
+                .self_id
+                .clone()
+                .map(|gid| crate::operation::NestedParent {
+                    group_id: gid,
+                    index: *pos as u32,
+                })
+        }
+        Site::Root(_) => None,
     };
 
     // ---- mutation ----
     let spread = &mut doc.spreads[spread_idx].spread;
     let group = spread.groups.remove(group_idx);
-    spread.frames_in_order.remove(slot);
-    match restore_slots {
-        // Undo path: members back at their exact pre-group indices
-        // (captured ascending, paired with stored member order).
-        Some(slots) if slots.len() == group.members.len() => {
-            for (r, s) in group.members.iter().zip(slots) {
-                let at = (*s as usize).min(spread.frames_in_order.len());
-                spread.frames_in_order.insert(at, *r);
+
+    match &site {
+        Site::Root(slot) => {
+            spread.frames_in_order.remove(*slot);
+            match restore_slots {
+                // Undo path: members back at their exact pre-group
+                // indices (captured ascending, paired with member order).
+                Some(slots) if slots.len() == group.members.len() => {
+                    for (r, s) in group.members.iter().zip(slots) {
+                        let at = (*s as usize).min(spread.frames_in_order.len());
+                        spread.frames_in_order.insert(at, *r);
+                    }
+                }
+                // User-initiated ungroup: members stay together at the
+                // group's slot (the InDesign semantic).
+                _ => {
+                    for (k, r) in group.members.iter().enumerate() {
+                        spread.frames_in_order.insert(slot + k, *r);
+                    }
+                }
             }
         }
-        // User-initiated ungroup: members stay together at the
-        // group's slot (the InDesign semantic).
-        _ => {
+        Site::Nested(parent_orig, pos) => {
+            // Removing `group_idx` from `spread.groups` shifts every
+            // later index down by one — including the parent's, if it
+            // sat after the dissolved group. Recompute the parent index
+            // post-removal.
+            let parent_now = if *parent_orig > group_idx {
+                *parent_orig - 1
+            } else {
+                *parent_orig
+            };
+            // Drop the group ref from the parent, splice the members in
+            // at the same slot in stored order (geometry invariant: the
+            // members keep their pre-baked effective transforms).
+            spread.groups[parent_now].members.remove(*pos);
             for (k, r) in group.members.iter().enumerate() {
-                spread.frames_in_order.insert(slot + k, *r);
+                spread.groups[parent_now].members.insert(pos + k, *r);
             }
         }
     }
+
     // Index fix-up: every FrameRef::Group(j) with j > group_idx
     // decrements, in frames_in_order AND in remaining groups' members.
     let fix = |r: &mut FrameRef| {
@@ -5576,10 +5738,187 @@ fn apply_dissolve_group(
             spec: GroupSpec {
                 self_id: group.self_id.clone(),
                 members: member_nodes,
+                parent: parent_link,
+                item_transform: group.item_transform,
             },
         },
         invalidation: InvalidationHint {
             structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+/// W1.20 (groups v2) — move/scale/rotate a group as a unit. Sets the
+/// group's own `ItemTransform` to `transform` and rebases every
+/// descendant's pre-baked EFFECTIVE transform by the delta
+/// `transform * inv(prev)` so the members follow rigidly. The renderer
+/// and the hit-tester both read each leaf's effective `item_transform`,
+/// so they agree by construction. Nested child groups' own transforms
+/// ride the delta too (keeping the stored "un-composed group
+/// transform" field consistent for re-serialization). Inverse: the
+/// same op carrying the captured `prev` as the new transform.
+fn apply_set_group_transform(
+    doc: &mut paged_scene::Document,
+    group_id: &str,
+    transform: Option<[f32; 6]>,
+    prev_arg: Option<[f32; 6]>,
+) -> Result<AppliedOperation, OperationError> {
+    use crate::path_math::{affine_multiply, group_rebase_delta, AFFINE_IDENTITY};
+    use paged_parse::FrameRef;
+
+    let node = NodeId::Group(group_id.to_string());
+
+    // Locate the group + its spread.
+    let mut found: Option<(usize, usize)> = None;
+    for (si, parsed) in doc.spreads.iter().enumerate() {
+        if let Some(gi) = parsed
+            .spread
+            .groups
+            .iter()
+            .position(|g| g.self_id.as_deref() == Some(group_id))
+        {
+            found = Some((si, gi));
+            break;
+        }
+    }
+    let Some((spread_idx, group_idx)) = found else {
+        return Err(OperationError::NodeNotFound(node));
+    };
+
+    let spread = &mut doc.spreads[spread_idx].spread;
+    let g_old = spread.groups[group_idx].item_transform;
+    let g_new = transform.unwrap_or(AFFINE_IDENTITY);
+    // The captured previous value (for the inverse). On the inverse
+    // pass the caller passes `prev_arg = None` and we recapture from the
+    // live state, which is the just-applied `g_new` — exactly what the
+    // inverse needs.
+    let captured_prev = g_old;
+    let _ = prev_arg;
+
+    // Delta that maps the old effective geometry to the new:
+    // `delta = g_new * inv(g_old)`. A singular old transform (never in
+    // well-formed IDML) makes the rebase a no-op rather than panicking.
+    let Some(delta) = group_rebase_delta(g_old, g_new) else {
+        // Degenerate prior transform: still store the new own-transform
+        // (no member rebase possible) so at least the group field is set.
+        spread.groups[group_idx].item_transform = transform;
+        return Ok(AppliedOperation {
+            op: Operation::SetGroupTransform {
+                group: group_id.to_string(),
+                transform,
+                prev: captured_prev,
+            },
+            inverse: Operation::SetGroupTransform {
+                group: group_id.to_string(),
+                transform: captured_prev,
+                prev: transform,
+            },
+            invalidation: InvalidationHint {
+                frame_geometry: vec![node],
+                ..Default::default()
+            },
+        });
+    };
+
+    // Collect every descendant FrameRef (leaves + nested groups),
+    // descending through nested groups. We then rebase each.
+    let mut leaves: Vec<FrameRef> = Vec::new();
+    let mut nested_groups: Vec<usize> = Vec::new();
+    fn walk(
+        spread: &paged_parse::Spread,
+        gi: usize,
+        leaves: &mut Vec<FrameRef>,
+        nested_groups: &mut Vec<usize>,
+    ) {
+        for m in &spread.groups[gi].members {
+            match *m {
+                FrameRef::Group(child) => {
+                    nested_groups.push(child);
+                    walk(spread, child, leaves, nested_groups);
+                }
+                leaf => leaves.push(leaf),
+            }
+        }
+    }
+    walk(spread, group_idx, &mut leaves, &mut nested_groups);
+
+    // Rebase a leaf's effective transform: `leaf' = delta * leaf`
+    // (`None` ⇒ identity leaf, so `leaf' = delta`). An exact-identity
+    // result collapses back to `None` so an inverse op (`inv(delta)`
+    // applied to the rebased value) restores the original `None`
+    // bytewise — the common translate/undo path round-trips exactly.
+    let rebase = |cur: Option<[f32; 6]>| -> Option<[f32; 6]> {
+        let m = affine_multiply(delta, cur.unwrap_or(AFFINE_IDENTITY));
+        if m == AFFINE_IDENTITY {
+            None
+        } else {
+            Some(m)
+        }
+    };
+    for leaf in &leaves {
+        match *leaf {
+            FrameRef::TextFrame(i) => {
+                if let Some(f) = spread.text_frames.get_mut(i) {
+                    f.item_transform = rebase(f.item_transform);
+                }
+            }
+            FrameRef::Rectangle(i) => {
+                if let Some(f) = spread.rectangles.get_mut(i) {
+                    f.item_transform = rebase(f.item_transform);
+                }
+            }
+            FrameRef::Oval(i) => {
+                if let Some(f) = spread.ovals.get_mut(i) {
+                    f.item_transform = rebase(f.item_transform);
+                }
+            }
+            FrameRef::GraphicLine(i) => {
+                if let Some(f) = spread.graphic_lines.get_mut(i) {
+                    f.item_transform = rebase(f.item_transform);
+                }
+            }
+            FrameRef::Polygon(i) => {
+                if let Some(f) = spread.polygons.get_mut(i) {
+                    f.item_transform = rebase(f.item_transform);
+                }
+            }
+            FrameRef::Group(_) => unreachable!("groups collected separately"),
+        }
+    }
+    // Nested child groups: their own (un-composed) transform also rides
+    // the delta, keeping the stored field consistent with the rebased
+    // member geometry on re-serialization. Same exact-identity → `None`
+    // collapse as the leaf rebase so undo round-trips bytewise.
+    for child in &nested_groups {
+        if let Some(g) = spread.groups.get_mut(*child) {
+            g.item_transform = rebase(g.item_transform);
+        }
+    }
+    // Finally set THIS group's own transform.
+    spread.groups[group_idx].item_transform = transform;
+
+    // Invalidation: every leaf node id that moved (frame geometry).
+    let mut moved: Vec<NodeId> = vec![node.clone()];
+    for leaf in &leaves {
+        if let Some(nid) = node_for_frame_ref(spread, *leaf) {
+            moved.push(nid);
+        }
+    }
+
+    Ok(AppliedOperation {
+        op: Operation::SetGroupTransform {
+            group: group_id.to_string(),
+            transform,
+            prev: captured_prev,
+        },
+        inverse: Operation::SetGroupTransform {
+            group: group_id.to_string(),
+            transform: captured_prev,
+            prev: transform,
+        },
+        invalidation: InvalidationHint {
+            frame_geometry: moved,
             ..Default::default()
         },
     })

@@ -2119,12 +2119,14 @@ pub struct GradientStopSpec {
 }
 
 /// B-04 — creation spec for a page-item group. Members are NodeIds
-/// of LEAF page items (flat groups in v1; nesting is a follow-up);
-/// the apply layer resolves them to `FrameRef`s, orders them by
-/// current document order, and performs the `frames_in_order`
-/// surgery so z-order is provably unchanged. `self_id` follows the
-/// page-item `u<hex>` convention (minted when absent; echoed
-/// resolved in the applied op so the wire reports `createdId`).
+/// of page items: leaf shapes OR (v2 / W1.20) existing `Group`s, so
+/// `createGroup` can nest a group-of-groups. The apply layer resolves
+/// them to `FrameRef`s, orders them by current document order, and
+/// performs the `frames_in_order` surgery so z-order is provably
+/// unchanged (the new group takes the slot of its topmost member —
+/// the InDesign semantic, identical to the flat v1 rule). `self_id`
+/// follows the page-item `u<hex>` convention (minted when absent;
+/// echoed resolved in the applied op so the wire reports `createdId`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
@@ -2132,6 +2134,34 @@ pub struct GroupSpec {
     #[serde(default)]
     pub self_id: Option<String>,
     pub members: Vec<NodeId>,
+    /// W1.20 inverse-only — when the group being (re)created is NESTED
+    /// inside a parent group, this carries `(parent_group_id,
+    /// index_in_parent_members)` so `apply_create_group` re-nests it
+    /// into the parent's `members` at the exact slot (rather than the
+    /// default top-level `frames_in_order` placement). Wire callers
+    /// creating a fresh top-level group omit it; it is filled by the
+    /// `DissolveGroup` inverse so undo of a nested ungroup restores the
+    /// parent→child link bytewise. `members` is likewise the captured
+    /// `Group`'s own member NodeIds, so the group's transform + member
+    /// order survive the round-trip.
+    #[serde(default)]
+    pub parent: Option<NestedParent>,
+    /// W1.20 inverse-only — the group's own `ItemTransform` to restore
+    /// on re-creation (a nested group carries its own transform, which
+    /// a fresh top-level create never has). `None` ⇒ identity.
+    #[serde(default)]
+    pub item_transform: Option<[f32; 6]>,
+}
+
+/// W1.20 — `(parent_group_id, index_within_parent_members)` carried by
+/// a `GroupSpec` when a group must be (re)created nested inside another
+/// group rather than at the spread's top level. Inverse-only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct NestedParent {
+    pub group_id: String,
+    pub index: u32,
 }
 
 /// Wire description of a gradient swatch, mirroring `GradientEntry`.
@@ -2429,6 +2459,29 @@ pub enum Operation {
         /// omit it.
         #[serde(default)]
         restore_slots: Option<Vec<u32>>,
+    },
+    /// W1.20 (groups v2) — move/scale/rotate a group AS A UNIT. Unlike
+    /// the v1 `SetProperty(Group, FrameTransform)` arm (which stores
+    /// only the group's own `ItemTransform` and relies on the editor to
+    /// pair it with per-leaf rebase ops in a Batch), this op does the
+    /// whole composition atomically: it sets the group's own transform
+    /// to `transform` AND rebases every descendant's EFFECTIVE
+    /// `item_transform` by the delta `transform * inv(prev)` so the
+    /// members follow the group rigidly (renderer + hit-test agree —
+    /// both read each leaf's pre-baked effective transform). Nested
+    /// child groups' own transforms ride the delta too. Inverse: the
+    /// same op carrying the captured `prev` as the new transform.
+    SetGroupTransform {
+        group: String,
+        /// New group-local `ItemTransform` `[a, b, c, d, tx, ty]`;
+        /// `None` ⇒ identity.
+        #[serde(default)]
+        transform: Option<[f32; 6]>,
+        /// Inverse-only: the group's transform before this op. Wire
+        /// callers omit it; the apply layer captures it for the
+        /// inverse so undo restores the prior geometry exactly.
+        #[serde(default)]
+        prev: Option<[f32; 6]>,
     },
     CreateGradient {
         spec: GradientSpec,
