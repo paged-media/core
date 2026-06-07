@@ -229,6 +229,19 @@ pub enum PropertyPathJson {
     CellInsetBottom,
     CellInsetRight,
     CellVerticalJustification,
+    // W1.11b — per-cell edge strokes.
+    CellTopEdgeStrokeColor,
+    CellTopEdgeStrokeWeight,
+    CellTopEdgeStrokeTint,
+    CellBottomEdgeStrokeColor,
+    CellBottomEdgeStrokeWeight,
+    CellBottomEdgeStrokeTint,
+    CellLeftEdgeStrokeColor,
+    CellLeftEdgeStrokeWeight,
+    CellLeftEdgeStrokeTint,
+    CellRightEdgeStrokeColor,
+    CellRightEdgeStrokeWeight,
+    CellRightEdgeStrokeTint,
     // Aftercare-A — table dimensions (read-only).
     TableRowCount,
     TableColumnCount,
@@ -472,6 +485,21 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::CellInsetBottom => PropertyPathJson::CellInsetBottom,
             PropertyPath::CellInsetRight => PropertyPathJson::CellInsetRight,
             PropertyPath::CellVerticalJustification => PropertyPathJson::CellVerticalJustification,
+            // W1.11b — per-cell edge strokes.
+            PropertyPath::CellTopEdgeStrokeColor => PropertyPathJson::CellTopEdgeStrokeColor,
+            PropertyPath::CellTopEdgeStrokeWeight => PropertyPathJson::CellTopEdgeStrokeWeight,
+            PropertyPath::CellTopEdgeStrokeTint => PropertyPathJson::CellTopEdgeStrokeTint,
+            PropertyPath::CellBottomEdgeStrokeColor => PropertyPathJson::CellBottomEdgeStrokeColor,
+            PropertyPath::CellBottomEdgeStrokeWeight => {
+                PropertyPathJson::CellBottomEdgeStrokeWeight
+            }
+            PropertyPath::CellBottomEdgeStrokeTint => PropertyPathJson::CellBottomEdgeStrokeTint,
+            PropertyPath::CellLeftEdgeStrokeColor => PropertyPathJson::CellLeftEdgeStrokeColor,
+            PropertyPath::CellLeftEdgeStrokeWeight => PropertyPathJson::CellLeftEdgeStrokeWeight,
+            PropertyPath::CellLeftEdgeStrokeTint => PropertyPathJson::CellLeftEdgeStrokeTint,
+            PropertyPath::CellRightEdgeStrokeColor => PropertyPathJson::CellRightEdgeStrokeColor,
+            PropertyPath::CellRightEdgeStrokeWeight => PropertyPathJson::CellRightEdgeStrokeWeight,
+            PropertyPath::CellRightEdgeStrokeTint => PropertyPathJson::CellRightEdgeStrokeTint,
             // Aftercare-A — table dimensions (read-only).
             PropertyPath::TableRowCount => PropertyPathJson::TableRowCount,
             PropertyPath::TableColumnCount => PropertyPathJson::TableColumnCount,
@@ -719,6 +747,21 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::CellInsetBottom => PropertyPath::CellInsetBottom,
             PropertyPathJson::CellInsetRight => PropertyPath::CellInsetRight,
             PropertyPathJson::CellVerticalJustification => PropertyPath::CellVerticalJustification,
+            // W1.11b — per-cell edge strokes.
+            PropertyPathJson::CellTopEdgeStrokeColor => PropertyPath::CellTopEdgeStrokeColor,
+            PropertyPathJson::CellTopEdgeStrokeWeight => PropertyPath::CellTopEdgeStrokeWeight,
+            PropertyPathJson::CellTopEdgeStrokeTint => PropertyPath::CellTopEdgeStrokeTint,
+            PropertyPathJson::CellBottomEdgeStrokeColor => PropertyPath::CellBottomEdgeStrokeColor,
+            PropertyPathJson::CellBottomEdgeStrokeWeight => {
+                PropertyPath::CellBottomEdgeStrokeWeight
+            }
+            PropertyPathJson::CellBottomEdgeStrokeTint => PropertyPath::CellBottomEdgeStrokeTint,
+            PropertyPathJson::CellLeftEdgeStrokeColor => PropertyPath::CellLeftEdgeStrokeColor,
+            PropertyPathJson::CellLeftEdgeStrokeWeight => PropertyPath::CellLeftEdgeStrokeWeight,
+            PropertyPathJson::CellLeftEdgeStrokeTint => PropertyPath::CellLeftEdgeStrokeTint,
+            PropertyPathJson::CellRightEdgeStrokeColor => PropertyPath::CellRightEdgeStrokeColor,
+            PropertyPathJson::CellRightEdgeStrokeWeight => PropertyPath::CellRightEdgeStrokeWeight,
+            PropertyPathJson::CellRightEdgeStrokeTint => PropertyPath::CellRightEdgeStrokeTint,
             // Aftercare-A — table dimensions (read-only).
             PropertyPathJson::TableRowCount => PropertyPath::TableRowCount,
             PropertyPathJson::TableColumnCount => PropertyPath::TableColumnCount,

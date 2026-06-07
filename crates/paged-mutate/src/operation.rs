@@ -1030,6 +1030,30 @@ pub enum PropertyPath {
     /// when the cell-vertical-justify pass lands. Reflow-affecting.
     CellVerticalJustification,
 
+    // ---- W1.11b — per-cell edge strokes -------------------------
+    // Per-cell boundary stroke overrides, addressed against a
+    // `NodeId::TableCell`. IDML serialises each cell edge explicitly
+    // (`Top/Bottom/Left/RightEdgeStroke{Color,Weight,Tint}`) even when
+    // the AppliedCellStyle is `[None]`; without honouring these the
+    // row/column dividers vanish. Four edges × three facets =
+    // twelve paths, following the one-path-per-side `CellInset*`
+    // precedent. Colour paths carry `Value::ColorRef` (`None` clears
+    // the inline override → cascade), weight/tint carry `Value::Length`
+    // (`None` clears). All ride v35 (additive PropertyPath variants on
+    // the unpublished protocol — the `FrameStrokeDashArray` precedent).
+    CellTopEdgeStrokeColor,
+    CellTopEdgeStrokeWeight,
+    CellTopEdgeStrokeTint,
+    CellBottomEdgeStrokeColor,
+    CellBottomEdgeStrokeWeight,
+    CellBottomEdgeStrokeTint,
+    CellLeftEdgeStrokeColor,
+    CellLeftEdgeStrokeWeight,
+    CellLeftEdgeStrokeTint,
+    CellRightEdgeStrokeColor,
+    CellRightEdgeStrokeWeight,
+    CellRightEdgeStrokeTint,
+
     // ---- Aftercare-A — table dimensions (READ-ONLY) -------------
     // Like `NextTextFrame` / `PreviousTextFrame`, these exist only so
     // the inspector can *read* a table's shape as `PropertyEntry`s:
@@ -1331,6 +1355,19 @@ impl PropertyPath {
             PropertyPath::CellInsetBottom => "cell.insetBottom",
             PropertyPath::CellInsetRight => "cell.insetRight",
             PropertyPath::CellVerticalJustification => "cell.verticalJustification",
+            // W1.11b — per-cell edge strokes.
+            PropertyPath::CellTopEdgeStrokeColor => "cell.topEdgeStrokeColor",
+            PropertyPath::CellTopEdgeStrokeWeight => "cell.topEdgeStrokeWeight",
+            PropertyPath::CellTopEdgeStrokeTint => "cell.topEdgeStrokeTint",
+            PropertyPath::CellBottomEdgeStrokeColor => "cell.bottomEdgeStrokeColor",
+            PropertyPath::CellBottomEdgeStrokeWeight => "cell.bottomEdgeStrokeWeight",
+            PropertyPath::CellBottomEdgeStrokeTint => "cell.bottomEdgeStrokeTint",
+            PropertyPath::CellLeftEdgeStrokeColor => "cell.leftEdgeStrokeColor",
+            PropertyPath::CellLeftEdgeStrokeWeight => "cell.leftEdgeStrokeWeight",
+            PropertyPath::CellLeftEdgeStrokeTint => "cell.leftEdgeStrokeTint",
+            PropertyPath::CellRightEdgeStrokeColor => "cell.rightEdgeStrokeColor",
+            PropertyPath::CellRightEdgeStrokeWeight => "cell.rightEdgeStrokeWeight",
+            PropertyPath::CellRightEdgeStrokeTint => "cell.rightEdgeStrokeTint",
             // Aftercare-A — table dimensions (read-only).
             PropertyPath::TableRowCount => "table.rowCount",
             PropertyPath::TableColumnCount => "table.columnCount",
@@ -2700,6 +2737,72 @@ pub enum Operation {
         story_id: String,
         table_id: String,
         at: u32,
+    },
+
+    // ── W1.12a — header / footer row inserts (ride v35) ─────────────
+    // IDML's `<Table HeaderRowCount="…" FooterRowCount="…">` carves the
+    // row sequence into a header band (the first N rows), the body, and
+    // a footer band (the last M rows). Header / footer rows replay
+    // across NextTextFrame breaks (see `pipeline/tables.rs`). These ops
+    // grow / shrink those bands. Insert mints an empty row at the band
+    // boundary and bumps the band count; the inverse removes it. All
+    // ride v35 — additive `Operation` variants on the unpublished
+    // protocol (the W1.22 list-definition precedent).
+    /// W1.12a — insert an empty row at the TOP of the header band
+    /// (header index 0; existing header rows + the whole body shift
+    /// down by one). `header_row_count` increments. Inverse:
+    /// `RemoveHeaderRow`. `restore` is inverse-only (the `RemoveHeaderRow`
+    /// undo re-inserts the captured row, like `InsertTableRow`).
+    InsertHeaderRow {
+        story_id: String,
+        table_id: String,
+        #[serde(default)]
+        restore: Option<TableLineRestoreJson>,
+    },
+    /// W1.12a — remove the FIRST header row (the top of the table).
+    /// Captures it for the inverse (`InsertHeaderRow { restore }`).
+    /// `header_row_count` decrements. Rejected when the table has no
+    /// header rows.
+    RemoveHeaderRow {
+        story_id: String,
+        table_id: String,
+    },
+    /// W1.12a — insert an empty row at the BOTTOM of the footer band
+    /// (after the last existing row). `footer_row_count` increments.
+    /// Inverse: `RemoveFooterRow`.
+    InsertFooterRow {
+        story_id: String,
+        table_id: String,
+        #[serde(default)]
+        restore: Option<TableLineRestoreJson>,
+    },
+    /// W1.12a — remove the LAST footer row (the bottom of the table).
+    /// Captures it for the inverse. `footer_row_count` decrements.
+    /// Rejected when the table has no footer rows.
+    RemoveFooterRow {
+        story_id: String,
+        table_id: String,
+    },
+
+    // ── W1.12b — merge / split spans (ride v35) ─────────────────────
+    /// W1.12b — set the `RowSpan` / `ColumnSpan` of the cell originating
+    /// at `(row, col)`. Merging (`row_span` / `column_span` > 1) makes
+    /// the cell cover the slots below / to the right of it — InDesign's
+    /// "Merge Cells". Splitting back to `(1, 1)` is "Unmerge". The
+    /// inverse carries the prior `(row_span, column_span)` so undo
+    /// restores the exact prior spans. The renderer already widens /
+    /// lengthens a cell's rect by its spans (`pipeline/tables.rs`), so a
+    /// span change is immediately visible once the host story reflows.
+    /// Cells the new span newly covers are NOT removed from the cell
+    /// list (the renderer skips slots a span already painted); pruning
+    /// covered cells is a future-fidelity follow-up.
+    SetCellSpan {
+        story_id: String,
+        table_id: String,
+        row: u32,
+        col: u32,
+        row_span: u32,
+        column_span: u32,
     },
 }
 

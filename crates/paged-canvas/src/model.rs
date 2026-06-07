@@ -2454,6 +2454,43 @@ impl CanvasModel {
                 table_id: table_id.clone(),
                 at: *at,
             }),
+            // W1.12a — header / footer row inserts. The `restore` blob is
+            // engine-internal (the Remove* inverse fills it); wire callers
+            // always insert empties, so `restore: None`.
+            Mutation::InsertHeaderRow { story_id, table_id } => Some(Operation::InsertHeaderRow {
+                story_id: story_id.clone(),
+                table_id: table_id.clone(),
+                restore: None,
+            }),
+            Mutation::RemoveHeaderRow { story_id, table_id } => Some(Operation::RemoveHeaderRow {
+                story_id: story_id.clone(),
+                table_id: table_id.clone(),
+            }),
+            Mutation::InsertFooterRow { story_id, table_id } => Some(Operation::InsertFooterRow {
+                story_id: story_id.clone(),
+                table_id: table_id.clone(),
+                restore: None,
+            }),
+            Mutation::RemoveFooterRow { story_id, table_id } => Some(Operation::RemoveFooterRow {
+                story_id: story_id.clone(),
+                table_id: table_id.clone(),
+            }),
+            // W1.12b — merge / split spans.
+            Mutation::SetCellSpan {
+                story_id,
+                table_id,
+                row,
+                col,
+                row_span,
+                column_span,
+            } => Some(Operation::SetCellSpan {
+                story_id: story_id.clone(),
+                table_id: table_id.clone(),
+                row: *row,
+                col: *col,
+                row_span: *row_span,
+                column_span: *column_span,
+            }),
             _ => None,
         }
     }
@@ -4092,6 +4129,58 @@ impl CanvasModel {
                 value: Some(Value::Text(
                     cell.applied_cell_style.clone().unwrap_or_default(),
                 )),
+            },
+            // W1.11b — per-cell edge strokes (colour / weight / tint per
+            // edge). Colour reads back as a `ColorRef`, weight + tint as
+            // `Length`; an absent inline override reports `None` (the
+            // value falls through to the cell-style cascade at render).
+            PropertyEntry {
+                path: PropertyPath::CellTopEdgeStrokeColor,
+                value: Some(Value::ColorRef(cell.top_edge_stroke_color.clone())),
+            },
+            PropertyEntry {
+                path: PropertyPath::CellTopEdgeStrokeWeight,
+                value: Some(Value::Length(cell.top_edge_stroke_weight)),
+            },
+            PropertyEntry {
+                path: PropertyPath::CellTopEdgeStrokeTint,
+                value: Some(Value::Length(cell.top_edge_stroke_tint)),
+            },
+            PropertyEntry {
+                path: PropertyPath::CellBottomEdgeStrokeColor,
+                value: Some(Value::ColorRef(cell.bottom_edge_stroke_color.clone())),
+            },
+            PropertyEntry {
+                path: PropertyPath::CellBottomEdgeStrokeWeight,
+                value: Some(Value::Length(cell.bottom_edge_stroke_weight)),
+            },
+            PropertyEntry {
+                path: PropertyPath::CellBottomEdgeStrokeTint,
+                value: Some(Value::Length(cell.bottom_edge_stroke_tint)),
+            },
+            PropertyEntry {
+                path: PropertyPath::CellLeftEdgeStrokeColor,
+                value: Some(Value::ColorRef(cell.left_edge_stroke_color.clone())),
+            },
+            PropertyEntry {
+                path: PropertyPath::CellLeftEdgeStrokeWeight,
+                value: Some(Value::Length(cell.left_edge_stroke_weight)),
+            },
+            PropertyEntry {
+                path: PropertyPath::CellLeftEdgeStrokeTint,
+                value: Some(Value::Length(cell.left_edge_stroke_tint)),
+            },
+            PropertyEntry {
+                path: PropertyPath::CellRightEdgeStrokeColor,
+                value: Some(Value::ColorRef(cell.right_edge_stroke_color.clone())),
+            },
+            PropertyEntry {
+                path: PropertyPath::CellRightEdgeStrokeWeight,
+                value: Some(Value::Length(cell.right_edge_stroke_weight)),
+            },
+            PropertyEntry {
+                path: PropertyPath::CellRightEdgeStrokeTint,
+                value: Some(Value::Length(cell.right_edge_stroke_tint)),
             },
         ];
         Some(ElementProperties {

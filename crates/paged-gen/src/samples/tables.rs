@@ -406,6 +406,76 @@ fn variants() -> Vec<Variant> {
                 },
             }),
         },
+        // Tables v2 (W1.11 / W1.12) — one fixture exercising the full
+        // v2 surface: a header row, a footer row, a column-spanning
+        // header cell, a row-spanning body cell, per-cell edge strokes
+        // (colour + tint), and per-cell vertical justification
+        // (Center / Bottom). Header + footer fills tint the bands so the
+        // diff harness can attribute each band; the spanning cells widen
+        // / lengthen as the renderer's span path dictates.
+        Variant {
+            name: "tables · v2 · header-footer-spans-strokes-vjust",
+            table: Box::new(|id| Table {
+                self_id: id.to_string(),
+                applied_table_style: None,
+                header_row_count: 1,
+                footer_row_count: 1,
+                body_row_count: 2,
+                column_count: 3,
+                // Tall rows so vertical-justify has slack to distribute.
+                row_heights_pt: vec![ROW_H_PT, ROW_H_PT * 2.0, ROW_H_PT * 2.0, ROW_H_PT],
+                column_widths_pt: vec![COL_W_PT; 3],
+                cells: {
+                    // Column-major, with spans omitting covered slots.
+                    // Header row 0: a single cell spanning all 3 columns.
+                    // Body rows 1–2: col 0 has a cell spanning both body
+                    // rows (a row-span); cols 1–2 are plain, one
+                    // Center-justified, one Bottom-justified, with a
+                    // magenta-tinted edge stroke on the centre body cell.
+                    // Footer row 3: three plain cells.
+                    let header = Cell {
+                        fill_color: Some("Color/CMYKCyan20".to_string()),
+                        ..Cell::plain("Header (spans 3 cols)")
+                    }
+                    .with_span(1, 3);
+
+                    let row_span_cell = Cell {
+                        fill_color: Some("Color/CMYKCyan20".to_string()),
+                        ..Cell::plain("Spans 2 rows")
+                    }
+                    .with_span(2, 1);
+
+                    let centered = Cell {
+                        top_edge_stroke_color: Some("Color/CMYKMagenta"),
+                        top_edge_stroke_weight: Some(2.0),
+                        top_edge_stroke_tint: Some(50.0),
+                        ..Cell::plain("Center")
+                    }
+                    .with_vertical_justification("CenterAlign");
+
+                    let bottomed = Cell::plain("Bottom").with_vertical_justification("BottomAlign");
+
+                    vec![
+                        // col 0: header (covers cols 0–2 of row 0), then
+                        // the row-span cell (covers rows 1–2 of col 0),
+                        // then the footer cell for row 3.
+                        header,
+                        row_span_cell,
+                        // (col 0 row 2 covered by the row-span)
+                        Cell::plain("Foot 1"),
+                        // col 1: row 0 covered by the header col-span;
+                        // body rows 1–2 are the justified cells; footer.
+                        centered,
+                        Cell::plain("R2C2"),
+                        Cell::plain("Foot 2"),
+                        // col 2: row 0 covered; body rows; footer.
+                        Cell::plain("R1C3"),
+                        bottomed,
+                        Cell::plain("Foot 3"),
+                    ]
+                },
+            }),
+        },
         // Cell diagonals. Top-left cell carries a TL→BR ("Left")
         // diagonal; top-right a TR→BL ("Right") diagonal; bottom-left
         // carries BOTH (an X); bottom-right draws a Left diagonal with

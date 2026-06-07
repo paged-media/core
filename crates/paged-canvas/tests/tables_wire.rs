@@ -373,3 +373,156 @@ fn insert_table_row_mutation_applies() {
         Some(paged_mutate::Value::ColorRef(Some("Color/C".into())))
     );
 }
+
+// ── W1.11b — per-cell edge strokes over the wire ────────────────────
+
+#[test]
+fn cell_edge_stroke_read_entries_present() {
+    // `element_properties` on a cell now also reports the twelve
+    // per-edge stroke paths (colour / weight / tint × 4 edges).
+    let model = load_model();
+    let id = ElementId::TableCell {
+        story_id: "u10".into(),
+        table_id: "t1".into(),
+        row: 0,
+        col: 0,
+    };
+    let props = model.element_properties(&id).expect("cell props");
+    for p in [
+        paged_mutate::PropertyPath::CellTopEdgeStrokeColor,
+        paged_mutate::PropertyPath::CellTopEdgeStrokeWeight,
+        paged_mutate::PropertyPath::CellTopEdgeStrokeTint,
+        paged_mutate::PropertyPath::CellBottomEdgeStrokeColor,
+        paged_mutate::PropertyPath::CellLeftEdgeStrokeColor,
+        paged_mutate::PropertyPath::CellRightEdgeStrokeColor,
+    ] {
+        assert!(
+            props.entries.iter().any(|e| e.path == p),
+            "missing edge-stroke entry {p:?}"
+        );
+    }
+}
+
+#[test]
+fn cell_edge_stroke_mutation_round_trips_through_the_wire() {
+    let mut model = load_model();
+    let id = ElementId::TableCell {
+        story_id: "u10".into(),
+        table_id: "t1".into(),
+        row: 0,
+        col: 0,
+    };
+    model
+        .apply_mutation(&Mutation::SetElementProperty {
+            element_id: id.clone(),
+            path: paged_mutate::PropertyPath::CellTopEdgeStrokeColor,
+            value: paged_mutate::Value::ColorRef(Some("Color/A".into())),
+        })
+        .expect("edge color mutation");
+    let props = model.element_properties(&id).expect("re-read");
+    let color = props
+        .entries
+        .iter()
+        .find(|e| e.path == paged_mutate::PropertyPath::CellTopEdgeStrokeColor)
+        .and_then(|e| e.value.clone());
+    assert_eq!(
+        color,
+        Some(paged_mutate::Value::ColorRef(Some("Color/A".into())))
+    );
+}
+
+// ── W1.12a / W1.12b — structural mutations over the wire ────────────
+
+#[test]
+fn insert_header_row_mutation_applies() {
+    let mut model = load_model();
+    // The fixture has HeaderRowCount=0; an insert makes the FIRST row a
+    // fresh empty header and shifts the original top row (Color/A) down.
+    model
+        .apply_mutation(&Mutation::InsertHeaderRow {
+            story_id: "u10".into(),
+            table_id: "t1".into(),
+        })
+        .expect("insert header row");
+    // The original (0,0)=Color/A cell is now at row 1.
+    let props = model
+        .element_properties(&ElementId::TableCell {
+            story_id: "u10".into(),
+            table_id: "t1".into(),
+            row: 1,
+            col: 0,
+        })
+        .expect("shifted cell");
+    let fill = props
+        .entries
+        .iter()
+        .find(|e| e.path == paged_mutate::PropertyPath::CellFillColor)
+        .and_then(|e| e.value.clone());
+    assert_eq!(
+        fill,
+        Some(paged_mutate::Value::ColorRef(Some("Color/A".into())))
+    );
+}
+
+#[test]
+fn insert_footer_row_mutation_applies() {
+    let mut model = load_model();
+    model
+        .apply_mutation(&Mutation::InsertFooterRow {
+            story_id: "u10".into(),
+            table_id: "t1".into(),
+        })
+        .expect("insert footer row");
+    // The table read-side now reports 3 rows (was 2).
+    let props = model
+        .element_properties(&ElementId::Table {
+            story_id: "u10".into(),
+            table_id: "t1".into(),
+        })
+        .expect("table props");
+    let rows = props
+        .entries
+        .iter()
+        .find(|e| e.path == paged_mutate::PropertyPath::TableRowCount)
+        .and_then(|e| e.value.clone());
+    assert_eq!(rows, Some(paged_mutate::Value::Length(Some(3.0))));
+}
+
+#[test]
+fn set_cell_span_mutation_applies() {
+    let mut model = load_model();
+    model
+        .apply_mutation(&Mutation::SetCellSpan {
+            story_id: "u10".into(),
+            table_id: "t1".into(),
+            row: 0,
+            col: 0,
+            row_span: 1,
+            column_span: 2,
+        })
+        .expect("merge cell mutation");
+    // The merge applied (a ColumnSpan=2 over the two-column table). The
+    // spanning origin cell (0,0) keeps its hit context, and its cell
+    // geometry now covers both columns (100 + 60 = 160pt wide vs the
+    // original 100pt). `element_geometry` reports the BuiltPage cell
+    // rect the render pass widened.
+    let page_id = PageId("p1".into());
+    let hit = model.hit_test(&page_id, (60.0, 50.0));
+    let tc = hit.table_context.expect("origin cell context");
+    assert_eq!((tc.row, tc.col), (0, 0));
+    let id = ElementId::TableCell {
+        story_id: "u10".into(),
+        table_id: "t1".into(),
+        row: 0,
+        col: 0,
+    };
+    let items = model.element_geometry(std::slice::from_ref(&id));
+    assert_eq!(items.len(), 1, "origin cell geometry resolves");
+    // Bounds are [top, left, bottom, right]; width = right - left.
+    let [_, left, _, right] = items[0].bounds;
+    let width = right - left;
+    assert!(
+        (width - 160.0).abs() < 0.5,
+        "merged cell spans both columns (100 + 60 = 160pt), got {width}"
+    );
+}

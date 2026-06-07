@@ -418,3 +418,129 @@ fn cell_vjust_justify_distributes_between_paragraphs() {
         max_ty(&justify)
     );
 }
+
+// ── W1.12b — renderer honours RowSpan / ColumnSpan ──────────────────
+
+/// Build a 2-column × 2-row table where cell 0:0 carries the supplied
+/// span attributes + a Cyan fill (so the spanning cell paints a fill
+/// whose rect we can measure). Each column is 100pt wide, each row 30pt
+/// tall, so a `ColumnSpan="2"` fill must be ~200pt wide and a
+/// `RowSpan="2"` fill ~60pt tall.
+fn build_span_table_idml(cell00_span_attrs: &str) -> Vec<u8> {
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    let put = |zip: &mut ZipWriter<_>, name: &str, body: &[u8]| {
+        zip.start_file(name, deflated).unwrap();
+        zip.write_all(body).unwrap();
+    };
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    put(
+        &mut zip,
+        "designmap.xml",
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_u10.xml"/>
+</Document>"#,
+    );
+    put(
+        &mut zip,
+        "Resources/Graphic.xml",
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic><Color Self="Color/Cyan" Name="Cyan" Space="CMYK" ColorValue="100 0 0 0"/></Graphic>
+</idPkg:Graphic>"#,
+    );
+    put(
+        &mut zip,
+        "Spreads/Spread_sp1.xml",
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 400 400"/>
+    <TextFrame Self="frameA" ParentStory="u10" GeometricBounds="0 0 400 400" FillColor="Swatch/None" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#,
+    );
+    // Cell 0:0 takes the span attrs; the covered slot (the cell the span
+    // overlaps) is omitted, IDML's column-major span convention.
+    let story = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">
+    <ParagraphStyleRange>
+      <CharacterStyleRange>
+        <Table Self="t1" BodyRowCount="2" ColumnCount="2">
+          <Row Self="r0" Name="0" SingleRowHeight="30"/>
+          <Row Self="r1" Name="1" SingleRowHeight="30"/>
+          <Column Self="c0" Name="0" SingleColumnWidth="100"/>
+          <Column Self="c1" Name="1" SingleColumnWidth="100"/>
+          <Cell Self="c00" Name="0:0" FillColor="Color/Cyan" {cell00_span_attrs}><ParagraphStyleRange><CharacterStyleRange><Content>X</Content></CharacterStyleRange></ParagraphStyleRange></Cell>
+          <Cell Self="c01" Name="0:1"><ParagraphStyleRange><CharacterStyleRange><Content>Y</Content></CharacterStyleRange></ParagraphStyleRange></Cell>
+          <Cell Self="c11" Name="1:1"><ParagraphStyleRange><CharacterStyleRange><Content>Z</Content></CharacterStyleRange></ParagraphStyleRange></Cell>
+        </Table>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#
+    );
+    put(&mut zip, "Stories/Story_u10.xml", story.as_bytes());
+    zip.finish().unwrap().into_inner()
+}
+
+/// The (width, height) of the first FillPath rect — for `emit_rect` the
+/// transform encodes the rect as `[w, 0, 0, h, x, y]`, so `.0[0]` is the
+/// width and `.0[3]` the height in pt.
+fn first_fill_dims(cmds: &[DisplayCommand]) -> (f32, f32) {
+    cmds.iter()
+        .find_map(|c| match c {
+            DisplayCommand::FillPath { transform, .. } => Some((transform.0[0], transform.0[3])),
+            _ => None,
+        })
+        .expect("a cell fill present")
+}
+
+#[test]
+fn cell_column_span_widens_fill_rect() {
+    // ColumnSpan="2" → the spanning cell's fill spans both 100pt columns.
+    let bytes = build_span_table_idml(r#"ColumnSpan="2""#);
+    let cmds = build_commands(&bytes);
+    let (w, h) = first_fill_dims(&cmds);
+    assert!(
+        (w - 200.0).abs() < 0.5,
+        "column-span fill must be ~200pt wide, got {w}"
+    );
+    assert!((h - 30.0).abs() < 0.5, "single-row height ~30pt, got {h}");
+}
+
+#[test]
+fn cell_row_span_lengthens_fill_rect() {
+    // RowSpan="2" → the spanning cell's fill covers both 30pt rows.
+    let bytes = build_span_table_idml(r#"RowSpan="2""#);
+    let cmds = build_commands(&bytes);
+    let (w, h) = first_fill_dims(&cmds);
+    assert!(
+        (w - 100.0).abs() < 0.5,
+        "single-column width ~100pt, got {w}"
+    );
+    assert!(
+        (h - 60.0).abs() < 0.5,
+        "row-span fill must be ~60pt tall, got {h}"
+    );
+}
+
+#[test]
+fn cell_no_span_is_single_cell() {
+    // Baseline: no span → fill is exactly one 100×30 cell.
+    let bytes = build_span_table_idml("");
+    let cmds = build_commands(&bytes);
+    let (w, h) = first_fill_dims(&cmds);
+    assert!(
+        (w - 100.0).abs() < 0.5 && (h - 30.0).abs() < 0.5,
+        "1×1 cell"
+    );
+}

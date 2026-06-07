@@ -167,6 +167,16 @@ pub struct Cell {
     /// `RightLine*` the TR→BL diagonal. `diagonal_in_front` maps to
     /// `DiagonalLineInFront`.
     pub diagonal: CellDiagonal,
+    /// `VerticalJustification` enum string (`"TopAlign"`,
+    /// `"CenterAlign"`, `"BottomAlign"`, `"JustifyAlign"`). `None` ⇒
+    /// the attribute is omitted (renderer defaults to Top).
+    pub vertical_justification: Option<&'static str>,
+    /// Per-edge stroke tint percentages (0..=100). `None` ⇒ omit; the
+    /// edge paints at full strength. Pairs with the edge colours above.
+    pub top_edge_stroke_tint: Option<f32>,
+    pub bottom_edge_stroke_tint: Option<f32>,
+    pub left_edge_stroke_tint: Option<f32>,
+    pub right_edge_stroke_tint: Option<f32>,
 }
 
 /// Generator-side mirror of IDML's per-cell diagonal stroke
@@ -201,6 +211,11 @@ impl Cell {
             column_span: 1,
             rotation_angle: None,
             diagonal: CellDiagonal::default(),
+            vertical_justification: None,
+            top_edge_stroke_tint: None,
+            bottom_edge_stroke_tint: None,
+            left_edge_stroke_tint: None,
+            right_edge_stroke_tint: None,
         }
     }
 
@@ -217,6 +232,11 @@ impl Cell {
 
     pub fn with_diagonal(mut self, diagonal: CellDiagonal) -> Self {
         self.diagonal = diagonal;
+        self
+    }
+
+    pub fn with_vertical_justification(mut self, vj: &'static str) -> Self {
+        self.vertical_justification = Some(vj);
         self
     }
 }
@@ -620,11 +640,17 @@ fn write_table(b: &mut XmlBuilder, t: &Table) {
             if let Some(w) = cell.top_edge_stroke_weight {
                 a.push(("TopEdgeStrokeWeight", crate::xml::format_f32(w)));
             }
+            if let Some(t) = cell.top_edge_stroke_tint {
+                a.push(("TopEdgeStrokeTint", crate::xml::format_f32(t)));
+            }
             if let Some(c) = cell.bottom_edge_stroke_color {
                 a.push(("BottomEdgeStrokeColor", c.to_string()));
             }
             if let Some(w) = cell.bottom_edge_stroke_weight {
                 a.push(("BottomEdgeStrokeWeight", crate::xml::format_f32(w)));
+            }
+            if let Some(t) = cell.bottom_edge_stroke_tint {
+                a.push(("BottomEdgeStrokeTint", crate::xml::format_f32(t)));
             }
             if let Some(c) = cell.left_edge_stroke_color {
                 a.push(("LeftEdgeStrokeColor", c.to_string()));
@@ -632,11 +658,20 @@ fn write_table(b: &mut XmlBuilder, t: &Table) {
             if let Some(w) = cell.left_edge_stroke_weight {
                 a.push(("LeftEdgeStrokeWeight", crate::xml::format_f32(w)));
             }
+            if let Some(t) = cell.left_edge_stroke_tint {
+                a.push(("LeftEdgeStrokeTint", crate::xml::format_f32(t)));
+            }
             if let Some(c) = cell.right_edge_stroke_color {
                 a.push(("RightEdgeStrokeColor", c.to_string()));
             }
             if let Some(w) = cell.right_edge_stroke_weight {
                 a.push(("RightEdgeStrokeWeight", crate::xml::format_f32(w)));
+            }
+            if let Some(t) = cell.right_edge_stroke_tint {
+                a.push(("RightEdgeStrokeTint", crate::xml::format_f32(t)));
+            }
+            if let Some(vj) = cell.vertical_justification {
+                a.push(("VerticalJustification", vj.to_string()));
             }
             if let Some(deg) = cell.rotation_angle {
                 a.push(("RotationAngle", crate::xml::format_f32(deg)));

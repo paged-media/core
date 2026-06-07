@@ -772,6 +772,19 @@ fn parse_property_path(s: &str) -> Option<paged_mutate::PropertyPath> {
         "cellInsetBottom" => CellInsetBottom,
         "cellInsetRight" => CellInsetRight,
         "cellVerticalJustification" => CellVerticalJustification,
+        // W1.11b — per-cell edge strokes (writable).
+        "cellTopEdgeStrokeColor" => CellTopEdgeStrokeColor,
+        "cellTopEdgeStrokeWeight" => CellTopEdgeStrokeWeight,
+        "cellTopEdgeStrokeTint" => CellTopEdgeStrokeTint,
+        "cellBottomEdgeStrokeColor" => CellBottomEdgeStrokeColor,
+        "cellBottomEdgeStrokeWeight" => CellBottomEdgeStrokeWeight,
+        "cellBottomEdgeStrokeTint" => CellBottomEdgeStrokeTint,
+        "cellLeftEdgeStrokeColor" => CellLeftEdgeStrokeColor,
+        "cellLeftEdgeStrokeWeight" => CellLeftEdgeStrokeWeight,
+        "cellLeftEdgeStrokeTint" => CellLeftEdgeStrokeTint,
+        "cellRightEdgeStrokeColor" => CellRightEdgeStrokeColor,
+        "cellRightEdgeStrokeWeight" => CellRightEdgeStrokeWeight,
+        "cellRightEdgeStrokeTint" => CellRightEdgeStrokeTint,
         // Aftercare-A — table dimensions (read-only; resolvable by name
         // so scripts can read them, rejected on write by the apply layer).
         "tableRowCount" => TableRowCount,
@@ -982,6 +995,18 @@ fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
         CellInsetBottom => "cellInsetBottom",
         CellInsetRight => "cellInsetRight",
         CellVerticalJustification => "cellVerticalJustification",
+        CellTopEdgeStrokeColor => "cellTopEdgeStrokeColor",
+        CellTopEdgeStrokeWeight => "cellTopEdgeStrokeWeight",
+        CellTopEdgeStrokeTint => "cellTopEdgeStrokeTint",
+        CellBottomEdgeStrokeColor => "cellBottomEdgeStrokeColor",
+        CellBottomEdgeStrokeWeight => "cellBottomEdgeStrokeWeight",
+        CellBottomEdgeStrokeTint => "cellBottomEdgeStrokeTint",
+        CellLeftEdgeStrokeColor => "cellLeftEdgeStrokeColor",
+        CellLeftEdgeStrokeWeight => "cellLeftEdgeStrokeWeight",
+        CellLeftEdgeStrokeTint => "cellLeftEdgeStrokeTint",
+        CellRightEdgeStrokeColor => "cellRightEdgeStrokeColor",
+        CellRightEdgeStrokeWeight => "cellRightEdgeStrokeWeight",
+        CellRightEdgeStrokeTint => "cellRightEdgeStrokeTint",
         // Aftercare-A — table dimensions (read-only).
         TableRowCount => "tableRowCount",
         TableColumnCount => "tableColumnCount",
@@ -1097,6 +1122,12 @@ fn js_value_to_wire(
             | P::FrameDropShadowColor
             // W3.A1 — cell fill colour ref.
             | P::CellFillColor
+            // W1.11b — per-cell edge-stroke colour refs (weight / tint
+            // arrive as numbers, handled by the `as_number` branch above).
+            | P::CellTopEdgeStrokeColor
+            | P::CellBottomEdgeStrokeColor
+            | P::CellLeftEdgeStrokeColor
+            | P::CellRightEdgeStrokeColor
             // W0.3 — stroke gap colour.
             | P::FrameStrokeGapColor
             // W0.4 — transparency-effect colour refs.

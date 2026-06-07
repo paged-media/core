@@ -323,6 +323,42 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             table_id,
             at,
         } => apply_delete_table_column(doc, story_id, table_id, *at),
+        Operation::InsertHeaderRow {
+            story_id,
+            table_id,
+            restore,
+        } => apply_insert_band_row(
+            doc,
+            story_id,
+            table_id,
+            TableBand::Header,
+            restore.as_deref(),
+        ),
+        Operation::RemoveHeaderRow { story_id, table_id } => {
+            apply_remove_band_row(doc, story_id, table_id, TableBand::Header)
+        }
+        Operation::InsertFooterRow {
+            story_id,
+            table_id,
+            restore,
+        } => apply_insert_band_row(
+            doc,
+            story_id,
+            table_id,
+            TableBand::Footer,
+            restore.as_deref(),
+        ),
+        Operation::RemoveFooterRow { story_id, table_id } => {
+            apply_remove_band_row(doc, story_id, table_id, TableBand::Footer)
+        }
+        Operation::SetCellSpan {
+            story_id,
+            table_id,
+            row,
+            col,
+            row_span,
+            column_span,
+        } => apply_set_cell_span(doc, story_id, table_id, *row, *col, *row_span, *column_span),
     }
 }
 
@@ -8545,6 +8581,86 @@ fn apply_cell_property(
             cell.vertical_justification = if new.is_empty() { None } else { Some(new) };
             Value::Text(prev)
         }
+        // W1.11b — per-cell edge-stroke overrides. Colour paths take a
+        // `Value::ColorRef` (`None` clears the inline override back to
+        // the cell-style cascade); weight / tint paths take a
+        // `Value::Length` (`None` clears). Each arm snapshots the prior
+        // value into the inverse so undo round-trips bytewise. The
+        // renderer already honours these parse fields (per-edge stroke
+        // emit in `pipeline/tables.rs`), so a write is immediately
+        // visible once the host story reflows.
+        PropertyPath::CellTopEdgeStrokeColor => {
+            let new = expect_color_ref(path, value)?;
+            let prev = cell.top_edge_stroke_color.clone();
+            cell.top_edge_stroke_color = new;
+            Value::ColorRef(prev)
+        }
+        PropertyPath::CellTopEdgeStrokeWeight => {
+            let new = expect_length(path, value)?;
+            let prev = cell.top_edge_stroke_weight;
+            cell.top_edge_stroke_weight = new;
+            Value::Length(prev)
+        }
+        PropertyPath::CellTopEdgeStrokeTint => {
+            let new = expect_length(path, value)?;
+            let prev = cell.top_edge_stroke_tint;
+            cell.top_edge_stroke_tint = new;
+            Value::Length(prev)
+        }
+        PropertyPath::CellBottomEdgeStrokeColor => {
+            let new = expect_color_ref(path, value)?;
+            let prev = cell.bottom_edge_stroke_color.clone();
+            cell.bottom_edge_stroke_color = new;
+            Value::ColorRef(prev)
+        }
+        PropertyPath::CellBottomEdgeStrokeWeight => {
+            let new = expect_length(path, value)?;
+            let prev = cell.bottom_edge_stroke_weight;
+            cell.bottom_edge_stroke_weight = new;
+            Value::Length(prev)
+        }
+        PropertyPath::CellBottomEdgeStrokeTint => {
+            let new = expect_length(path, value)?;
+            let prev = cell.bottom_edge_stroke_tint;
+            cell.bottom_edge_stroke_tint = new;
+            Value::Length(prev)
+        }
+        PropertyPath::CellLeftEdgeStrokeColor => {
+            let new = expect_color_ref(path, value)?;
+            let prev = cell.left_edge_stroke_color.clone();
+            cell.left_edge_stroke_color = new;
+            Value::ColorRef(prev)
+        }
+        PropertyPath::CellLeftEdgeStrokeWeight => {
+            let new = expect_length(path, value)?;
+            let prev = cell.left_edge_stroke_weight;
+            cell.left_edge_stroke_weight = new;
+            Value::Length(prev)
+        }
+        PropertyPath::CellLeftEdgeStrokeTint => {
+            let new = expect_length(path, value)?;
+            let prev = cell.left_edge_stroke_tint;
+            cell.left_edge_stroke_tint = new;
+            Value::Length(prev)
+        }
+        PropertyPath::CellRightEdgeStrokeColor => {
+            let new = expect_color_ref(path, value)?;
+            let prev = cell.right_edge_stroke_color.clone();
+            cell.right_edge_stroke_color = new;
+            Value::ColorRef(prev)
+        }
+        PropertyPath::CellRightEdgeStrokeWeight => {
+            let new = expect_length(path, value)?;
+            let prev = cell.right_edge_stroke_weight;
+            cell.right_edge_stroke_weight = new;
+            Value::Length(prev)
+        }
+        PropertyPath::CellRightEdgeStrokeTint => {
+            let new = expect_length(path, value)?;
+            let prev = cell.right_edge_stroke_tint;
+            cell.right_edge_stroke_tint = new;
+            Value::Length(prev)
+        }
         PropertyPath::AppliedCellStyle => {
             let new = expect_text(path, value)?;
             let prev = cell.applied_cell_style.clone().unwrap_or_default();
@@ -9008,6 +9124,294 @@ fn apply_delete_table_column(
             table_id: table_id.to_string(),
             at,
             restore: Some(restore_blob),
+        },
+        invalidation,
+    })
+}
+
+/// W1.12a — which row band (`HeaderRowCount` / `FooterRowCount`) an
+/// insert / remove targets. The body band is implicit (total − header −
+/// footer); header rows sit at the top of the row sequence, footer rows
+/// at the bottom.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TableBand {
+    Header,
+    Footer,
+}
+
+/// W1.12a — insert an empty row into the header (top) or footer (bottom)
+/// band, bumping the band's count. Header inserts land at row index 0
+/// (everything shifts down); footer inserts land after the last row.
+/// `restore` (the `Remove*` inverse) re-inserts the captured row + cells
+/// verbatim; otherwise a fresh empty cell per column is minted. Inverse:
+/// `Remove{Header,Footer}Row`.
+fn apply_insert_band_row(
+    doc: &mut Document,
+    story_id: &str,
+    table_id: &str,
+    band: TableBand,
+    restore: Option<&str>,
+) -> Result<AppliedOperation, OperationError> {
+    let node = NodeId::Table {
+        story_id: story_id.to_string(),
+        table_id: table_id.to_string(),
+    };
+    let table = find_table_mut(doc, story_id, table_id)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    let total_rows = table.rows.len() as u32;
+    // Header rows prepend at index 0; footer rows append at the end.
+    let at = match band {
+        TableBand::Header => 0,
+        TableBand::Footer => total_rows,
+    };
+    let col_count = table.columns.len().max(table.column_count as usize);
+
+    // Shift existing cells in rows ≥ `at` down by one (header insert
+    // pushes the whole table down; a footer append shifts nothing).
+    for cell in &mut table.cells {
+        if let Some((c, r)) = cell.coords() {
+            if r >= at {
+                set_cell_name(cell, c, r + 1);
+            }
+        }
+    }
+
+    let (new_row, new_cells): (paged_parse::TableRow, Vec<paged_parse::TableCell>) = match restore {
+        Some(blob) => {
+            let removed = parse_restore_blob(blob, story_id, table_id)?;
+            let mut cells: Vec<paged_parse::TableCell> =
+                removed.cells.iter().map(TableCellSpec::to_parse).collect();
+            for cell in &mut cells {
+                if let Some((c, _)) = cell.coords() {
+                    set_cell_name(cell, c, at);
+                }
+            }
+            let row = removed
+                .row
+                .as_ref()
+                .map(TableRowSpec::to_parse)
+                .unwrap_or_default();
+            (row, cells)
+        }
+        None => {
+            let row = paged_parse::TableRow {
+                name: Some(at.to_string()),
+                ..Default::default()
+            };
+            let cells: Vec<paged_parse::TableCell> = (0..col_count as u32)
+                .map(|c| paged_parse::TableCell {
+                    name: Some(format!("{c}:{at}")),
+                    row_span: 1,
+                    column_span: 1,
+                    ..Default::default()
+                })
+                .collect();
+            (row, cells)
+        }
+    };
+
+    table.rows.insert(at as usize, new_row);
+    table.cells.extend(new_cells);
+    match band {
+        TableBand::Header => {
+            table.header_row_count = table.header_row_count.saturating_add(1);
+        }
+        TableBand::Footer => {
+            table.footer_row_count = table.footer_row_count.saturating_add(1);
+        }
+    }
+    renumber_table_rows(table);
+
+    let (op, inverse) = match band {
+        TableBand::Header => (
+            Operation::InsertHeaderRow {
+                story_id: story_id.to_string(),
+                table_id: table_id.to_string(),
+                restore: restore.map(str::to_string),
+            },
+            Operation::RemoveHeaderRow {
+                story_id: story_id.to_string(),
+                table_id: table_id.to_string(),
+            },
+        ),
+        TableBand::Footer => (
+            Operation::InsertFooterRow {
+                story_id: story_id.to_string(),
+                table_id: table_id.to_string(),
+                restore: restore.map(str::to_string),
+            },
+            Operation::RemoveFooterRow {
+                story_id: story_id.to_string(),
+                table_id: table_id.to_string(),
+            },
+        ),
+    };
+
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op,
+        inverse,
+        invalidation,
+    })
+}
+
+/// W1.12a — remove the first header row (band == Header) or last footer
+/// row (band == Footer), decrementing the band's count. Captures the
+/// removed row + its cells into the inverse's `restore` blob so undo
+/// (`Insert{Header,Footer}Row { restore }`) is lossless. Rejected when
+/// the band is empty.
+fn apply_remove_band_row(
+    doc: &mut Document,
+    story_id: &str,
+    table_id: &str,
+    band: TableBand,
+) -> Result<AppliedOperation, OperationError> {
+    let node = NodeId::Table {
+        story_id: story_id.to_string(),
+        table_id: table_id.to_string(),
+    };
+    let table = find_table_mut(doc, story_id, table_id)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    let total_rows = table.rows.len() as u32;
+    let band_count = match band {
+        TableBand::Header => table.header_row_count,
+        TableBand::Footer => table.footer_row_count,
+    };
+    if band_count == 0 {
+        let which = match band {
+            TableBand::Header => "header",
+            TableBand::Footer => "footer",
+        };
+        return Err(OperationError::InvalidValue {
+            node,
+            path: PropertyPath::FrameBounds,
+            reason: format!("table has no {which} row to remove"),
+        });
+    }
+    // Header removes the top row (index 0); footer removes the bottom.
+    let at = match band {
+        TableBand::Header => 0,
+        TableBand::Footer => total_rows - 1,
+    };
+
+    let removed_row = table.rows.remove(at as usize);
+    let mut captured_cells: Vec<TableCellSpec> = Vec::new();
+    table.cells.retain(|cell| match cell.coords() {
+        Some((_, r)) if r == at => {
+            captured_cells.push(TableCellSpec::from_parse(cell));
+            false
+        }
+        _ => true,
+    });
+    // Shift cells in rows > `at` up by one.
+    for cell in &mut table.cells {
+        if let Some((c, r)) = cell.coords() {
+            if r > at {
+                set_cell_name(cell, c, r - 1);
+            }
+        }
+    }
+    match band {
+        TableBand::Header => {
+            table.header_row_count = table.header_row_count.saturating_sub(1);
+        }
+        TableBand::Footer => {
+            table.footer_row_count = table.footer_row_count.saturating_sub(1);
+        }
+    }
+    renumber_table_rows(table);
+
+    let restore_blob = serde_json::to_string(&RemovedTableLine {
+        row: Some(TableRowSpec::from_parse(&removed_row)),
+        column: None,
+        cells: captured_cells,
+    })
+    .expect("RemovedTableLine serialises");
+
+    let (op, inverse) = match band {
+        TableBand::Header => (
+            Operation::RemoveHeaderRow {
+                story_id: story_id.to_string(),
+                table_id: table_id.to_string(),
+            },
+            Operation::InsertHeaderRow {
+                story_id: story_id.to_string(),
+                table_id: table_id.to_string(),
+                restore: Some(restore_blob),
+            },
+        ),
+        TableBand::Footer => (
+            Operation::RemoveFooterRow {
+                story_id: story_id.to_string(),
+                table_id: table_id.to_string(),
+            },
+            Operation::InsertFooterRow {
+                story_id: story_id.to_string(),
+                table_id: table_id.to_string(),
+                restore: Some(restore_blob),
+            },
+        ),
+    };
+
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op,
+        inverse,
+        invalidation,
+    })
+}
+
+/// W1.12b — set the `RowSpan` / `ColumnSpan` of the cell originating at
+/// `(row, col)`. The inverse carries the prior `(row_span, column_span)`
+/// so undo restores the exact prior spans. Spans clamp to ≥ 1 (a 0 span
+/// is meaningless; IDML's minimum is 1). Rejected when no cell
+/// originates at `(row, col)` — span only applies to a real grid origin,
+/// not a slot already covered by another cell's span.
+#[allow(clippy::too_many_arguments)]
+fn apply_set_cell_span(
+    doc: &mut Document,
+    story_id: &str,
+    table_id: &str,
+    row: u32,
+    col: u32,
+    row_span: u32,
+    column_span: u32,
+) -> Result<AppliedOperation, OperationError> {
+    let node = NodeId::TableCell {
+        story_id: story_id.to_string(),
+        table_id: table_id.to_string(),
+        row,
+        col,
+    };
+    let table = find_table_mut(doc, story_id, table_id)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    let cell = table
+        .cells
+        .iter_mut()
+        .find(|c| c.coords() == Some((col, row)))
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    let prev_row_span = cell.row_span.max(1);
+    let prev_col_span = cell.column_span.max(1);
+    cell.row_span = row_span.max(1);
+    cell.column_span = column_span.max(1);
+
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::SetCellSpan {
+            story_id: story_id.to_string(),
+            table_id: table_id.to_string(),
+            row,
+            col,
+            row_span,
+            column_span,
+        },
+        inverse: Operation::SetCellSpan {
+            story_id: story_id.to_string(),
+            table_id: table_id.to_string(),
+            row,
+            col,
+            row_span: prev_row_span,
+            column_span: prev_col_span,
         },
         invalidation,
     })

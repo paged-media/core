@@ -152,6 +152,18 @@ export type WorkerToMain = WorkerToMainKind & {
 ///     `NumberingListSummary`, `ParagraphAppliedNumberingList` +
 ///     `ParagraphStyleNextStyle` PropertyPaths, and the
 ///     `ParagraphStyleSummary.next_style` `#[serde(default)]` field.
+///   - W1.11b / W1.12a / W1.12b (tables v2) also ride v35 — same
+///     unpublished-protocol posture (rule 4). New, additive:
+///     - W1.11b: twelve per-cell edge-stroke `PropertyPath`s
+///       (`cell{Top,Bottom,Left,Right}EdgeStroke{Color,Weight,Tint}`)
+///       on a `NodeId::TableCell`, reachable via `SetElementProperty`;
+///       `element_properties` reports them read-side.
+///     - W1.12a: `Mutation::{Insert,Remove}{Header,Footer}Row` (→ the
+///       matching `Operation` variants) growing / shrinking the
+///       `HeaderRowCount` / `FooterRowCount` bands.
+///     - W1.12b: `Mutation::SetCellSpan` (→ `Operation::SetCellSpan`)
+///       setting a cell's `RowSpan` / `ColumnSpan` (merge / split),
+///       inverse restoring the prior spans.
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(35);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
@@ -2600,6 +2612,45 @@ pub enum Mutation {
         table_id: String,
         at: u32,
     },
+    // ── W1.12a — header / footer row inserts ────────────────────────
+    // New Mutation variants → matching `paged_mutate::Operation`
+    // variants. // rides v35 (additive; v35 is unpublished — highest
+    // tag is v0.34.0, same posture as the W1.22 list-definition CRUD).
+    /// W1.12a — insert an empty row at the top of the header band.
+    /// Routes to `Operation::InsertHeaderRow`.
+    InsertHeaderRow {
+        story_id: String,
+        table_id: String,
+    },
+    /// W1.12a — remove the first header row. Routes to
+    /// `Operation::RemoveHeaderRow` (captures content for undo).
+    RemoveHeaderRow {
+        story_id: String,
+        table_id: String,
+    },
+    /// W1.12a — insert an empty row at the bottom of the footer band.
+    /// Routes to `Operation::InsertFooterRow`.
+    InsertFooterRow {
+        story_id: String,
+        table_id: String,
+    },
+    /// W1.12a — remove the last footer row. Routes to
+    /// `Operation::RemoveFooterRow`.
+    RemoveFooterRow {
+        story_id: String,
+        table_id: String,
+    },
+    // ── W1.12b — merge / split spans ────────────────────────────────
+    /// W1.12b — set a cell's `RowSpan` / `ColumnSpan`. Routes to
+    /// `Operation::SetCellSpan`. // rides v35.
+    SetCellSpan {
+        story_id: String,
+        table_id: String,
+        row: u32,
+        col: u32,
+        row_span: u32,
+        column_span: u32,
+    },
 }
 
 impl Mutation {
@@ -2694,6 +2745,11 @@ impl Mutation {
             Self::DeleteTableRow { .. } => "DeleteTableRow",
             Self::InsertTableColumn { .. } => "InsertTableColumn",
             Self::DeleteTableColumn { .. } => "DeleteTableColumn",
+            Self::InsertHeaderRow { .. } => "InsertHeaderRow",
+            Self::RemoveHeaderRow { .. } => "RemoveHeaderRow",
+            Self::InsertFooterRow { .. } => "InsertFooterRow",
+            Self::RemoveFooterRow { .. } => "RemoveFooterRow",
+            Self::SetCellSpan { .. } => "SetCellSpan",
         }
     }
 }
