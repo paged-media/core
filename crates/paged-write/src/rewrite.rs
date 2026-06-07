@@ -518,6 +518,409 @@ fn write_path_point(
 }
 
 // ---------------------------------------------------------------------
+// New page-item emission (structural inserts — W1.15)
+// ---------------------------------------------------------------------
+//
+// A page item created by an op since load (`InsertNode`) has a model
+// entry but no XML element. We serialise it here in the canonical
+// `paged_gen` shape so the writer's own parser round-trips it:
+//
+//   * geometry lives in `<Properties><PathGeometry>` (inner coords),
+//     NOT in a `GeometricBounds` attribute. The parser derives
+//     `bounds = bounds_from_anchors(raw anchors)`, so we emit corner
+//     anchors directly AT the model's spread-space bounds with an
+//     identity `ItemTransform`. (Inserted nodes carry their placement
+//     in `bounds`; `item_transform` is `None`/identity — see
+//     `paged_mutate::apply::new_rectangle` et al.)
+//   * an explicit `StrokeWeight="0"` makes "no stroke" survive
+//     InDesign's object-style cascade, matching the generator.
+
+/// `<PathGeometry>` for an axis-aligned box whose corners sit at the
+/// given spread-space bounds (top-left, bottom-left, bottom-right,
+/// top-right — the generator + `rect_corners` order). The parser reads
+/// the anchors back verbatim, so `bounds_from_anchors` reproduces these
+/// bounds exactly.
+fn write_box_path_geometry(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    b: Bounds,
+) -> Result<(), quick_xml::Error> {
+    writer.write_event(Event::Start(BytesStart::new("PathGeometry")))?;
+    let mut gp = BytesStart::new("GeometryPathType");
+    gp.push_attribute(("PathOpen", "false"));
+    writer.write_event(Event::Start(gp))?;
+    writer.write_event(Event::Start(BytesStart::new("PathPointArray")))?;
+    for a in rect_corners(b) {
+        write_path_point(writer, &a)?;
+    }
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
+        "PathPointArray",
+    )))?;
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
+        "GeometryPathType",
+    )))?;
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new("PathGeometry")))?;
+    Ok(())
+}
+
+/// `<PathGeometry>` carrying explicit anchor contours (the Polygon /
+/// GraphicLine inserted-node case). `subpath_starts` splits `anchors`
+/// into `<GeometryPathType>` contours; `subpath_open` marks the open
+/// ones (`PathOpen="true"`). An empty `subpath_starts` is one closed
+/// contour over all anchors.
+fn write_contour_path_geometry(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    anchors: &[PathAnchor],
+    subpath_starts: &[usize],
+    subpath_open: &[bool],
+) -> Result<(), quick_xml::Error> {
+    writer.write_event(Event::Start(BytesStart::new("PathGeometry")))?;
+    let starts: Vec<usize> = if subpath_starts.is_empty() {
+        vec![0]
+    } else {
+        subpath_starts.to_vec()
+    };
+    for (ci, &start) in starts.iter().enumerate() {
+        let end = starts.get(ci + 1).copied().unwrap_or(anchors.len());
+        let open = subpath_open.get(ci).copied().unwrap_or(false);
+        let mut gp = BytesStart::new("GeometryPathType");
+        gp.push_attribute(("PathOpen", if open { "true" } else { "false" }));
+        writer.write_event(Event::Start(gp))?;
+        writer.write_event(Event::Start(BytesStart::new("PathPointArray")))?;
+        for a in anchors.get(start..end).unwrap_or(&[]) {
+            write_path_point(writer, a)?;
+        }
+        writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
+            "PathPointArray",
+        )))?;
+        writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
+            "GeometryPathType",
+        )))?;
+    }
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new("PathGeometry")))?;
+    Ok(())
+}
+
+/// Common fill/stroke/transform attributes every inserted page item
+/// carries, in the generator's order. `kind`-specific attrs (ParentStory
+/// etc.) are pushed by the caller before this runs.
+fn push_common_item_attrs(
+    attrs: &mut Vec<(&'static str, String)>,
+    item_transform: Option<[f32; 6]>,
+    fill_color: &Option<String>,
+    stroke_color: &Option<String>,
+    stroke_weight: Option<f32>,
+) {
+    attrs.push(("AppliedObjectStyle", "ObjectStyle/$ID/[None]".to_string()));
+    attrs.push((
+        "ItemTransform",
+        format_matrix(&item_transform.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])),
+    ));
+    attrs.push((
+        "FillColor",
+        fill_color
+            .clone()
+            .unwrap_or_else(|| "Swatch/None".to_string()),
+    ));
+    attrs.push((
+        "StrokeColor",
+        stroke_color
+            .clone()
+            .unwrap_or_else(|| "Swatch/None".to_string()),
+    ));
+    // Always emit StrokeWeight so the "no stroke" intent survives the
+    // object-style cascade (the generator's rationale).
+    attrs.push(("StrokeWeight", format_f32(stroke_weight.unwrap_or(0.0))));
+}
+
+/// Emit a start tag from `(key, value)` pairs (values escaped). Element
+/// name is taken verbatim.
+fn emit_start_with_attrs(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    name: &str,
+    attrs: &[(&str, String)],
+) -> Result<(), quick_xml::Error> {
+    let mut content = name.as_bytes().to_vec();
+    for (k, v) in attrs {
+        content.push(b' ');
+        content.extend_from_slice(k.as_bytes());
+        content.extend_from_slice(b"=\"");
+        content.extend_from_slice(escape_attr(v).as_bytes());
+        content.push(b'"');
+    }
+    let content = String::from_utf8(content).map_err(|e| {
+        quick_xml::Error::Io(std::sync::Arc::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            e,
+        )))
+    })?;
+    writer.write_event(Event::Start(BytesStart::from_content(content, name.len())))?;
+    Ok(())
+}
+
+/// Serialise an inserted `<TextFrame>`. The model classification is
+/// authoritative — the element is always emitted as `<TextFrame>` so the
+/// re-parse files it back under `Spread::text_frames` (the parser keys
+/// on element name, not on `ParentStory`). A frame the model carries
+/// without a story still emits `ParentStory="n"` / `ContentType` so it
+/// reads back as a (currently empty) text frame.
+fn write_new_text_frame(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    f: &TextFrame,
+) -> Result<(), quick_xml::Error> {
+    let Some(self_id) = f.self_id.as_deref() else {
+        return Ok(());
+    };
+    let mut attrs: Vec<(&str, String)> = vec![("Self", self_id.to_string())];
+    attrs.push((
+        "ParentStory",
+        f.parent_story.clone().unwrap_or_else(|| "n".to_string()),
+    ));
+    attrs.push(("PreviousTextFrame", "n".to_string()));
+    attrs.push((
+        "NextTextFrame",
+        f.next_text_frame.clone().unwrap_or_else(|| "n".to_string()),
+    ));
+    attrs.push(("ContentType", "TextType".to_string()));
+    push_common_item_attrs(
+        &mut attrs,
+        f.item_transform,
+        &f.fill_color,
+        &f.stroke_color,
+        f.stroke_weight,
+    );
+    if f.nonprinting {
+        attrs.push(("Nonprinting", "true".to_string()));
+    }
+    emit_start_with_attrs(writer, "TextFrame", &attrs)?;
+    writer.write_event(Event::Start(BytesStart::new("Properties")))?;
+    write_box_path_geometry(writer, f.bounds)?;
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new("Properties")))?;
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new("TextFrame")))?;
+    Ok(())
+}
+
+/// Serialise an inserted bounds-only vector frame (`<Rectangle>` /
+/// `<Oval>`). Geometry is the four-corner box at the model bounds.
+fn write_new_box_item(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    kind: &str,
+    self_id: &str,
+    item_transform: Option<[f32; 6]>,
+    fill_color: &Option<String>,
+    stroke_color: &Option<String>,
+    stroke_weight: Option<f32>,
+    nonprinting: bool,
+    bounds: Bounds,
+) -> Result<(), quick_xml::Error> {
+    let mut attrs: Vec<(&str, String)> = vec![("Self", self_id.to_string())];
+    push_common_item_attrs(
+        &mut attrs,
+        item_transform,
+        fill_color,
+        stroke_color,
+        stroke_weight,
+    );
+    if nonprinting {
+        attrs.push(("Nonprinting", "true".to_string()));
+    }
+    emit_start_with_attrs(writer, kind, &attrs)?;
+    writer.write_event(Event::Start(BytesStart::new("Properties")))?;
+    write_box_path_geometry(writer, bounds)?;
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new("Properties")))?;
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new(kind)))?;
+    Ok(())
+}
+
+/// Serialise an inserted path-bearing vector frame (`<Polygon>` /
+/// `<GraphicLine>`). Geometry is the explicit anchor contours; when the
+/// model has no anchors (rare for these kinds) it falls back to the
+/// bounds box so the element still parses.
+#[allow(clippy::too_many_arguments)]
+fn write_new_path_item(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    kind: &str,
+    self_id: &str,
+    item_transform: Option<[f32; 6]>,
+    fill_color: &Option<String>,
+    stroke_color: &Option<String>,
+    stroke_weight: Option<f32>,
+    nonprinting: bool,
+    bounds: Bounds,
+    anchors: &[PathAnchor],
+    subpath_starts: &[usize],
+    subpath_open: &[bool],
+) -> Result<(), quick_xml::Error> {
+    let mut attrs: Vec<(&str, String)> = vec![("Self", self_id.to_string())];
+    push_common_item_attrs(
+        &mut attrs,
+        item_transform,
+        fill_color,
+        stroke_color,
+        stroke_weight,
+    );
+    if nonprinting {
+        attrs.push(("Nonprinting", "true".to_string()));
+    }
+    emit_start_with_attrs(writer, kind, &attrs)?;
+    writer.write_event(Event::Start(BytesStart::new("Properties")))?;
+    if anchors.is_empty() {
+        write_box_path_geometry(writer, bounds)?;
+    } else {
+        write_contour_path_geometry(writer, anchors, subpath_starts, subpath_open)?;
+    }
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new("Properties")))?;
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new(kind)))?;
+    Ok(())
+}
+
+/// Append every model page item whose `Self` id was NOT seen in the
+/// source XML — the inserted nodes. Emitted at the spread's close in
+/// the model's per-kind vec order. Group members are skipped (a group's
+/// own insertion is a separate, deferred lane — see Known losses).
+fn write_inserted_items(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    spread: &Spread,
+    seen: &std::collections::HashSet<String>,
+) -> Result<(), quick_xml::Error> {
+    // Collect the `Self` ids that live inside a group so we don't emit
+    // a group member as a stray top-level item.
+    let mut grouped: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for g in &spread.groups {
+        collect_group_member_ids(spread, g, &mut grouped);
+    }
+    for f in &spread.text_frames {
+        if let Some(id) = f.self_id.as_deref() {
+            if !seen.contains(id) && !grouped.contains(id) {
+                write_new_text_frame(writer, f)?;
+            }
+        }
+    }
+    for r in &spread.rectangles {
+        if let Some(id) = r.self_id.as_deref() {
+            if !seen.contains(id) && !grouped.contains(id) {
+                write_new_box_item(
+                    writer,
+                    "Rectangle",
+                    id,
+                    r.item_transform,
+                    &r.fill_color,
+                    &r.stroke_color,
+                    r.stroke_weight,
+                    r.nonprinting,
+                    r.bounds,
+                )?;
+            }
+        }
+    }
+    for o in &spread.ovals {
+        if let Some(id) = o.self_id.as_deref() {
+            if !seen.contains(id) && !grouped.contains(id) {
+                write_new_box_item(
+                    writer,
+                    "Oval",
+                    id,
+                    o.item_transform,
+                    &o.fill_color,
+                    &o.stroke_color,
+                    o.stroke_weight,
+                    o.nonprinting,
+                    o.bounds,
+                )?;
+            }
+        }
+    }
+    for p in &spread.polygons {
+        if let Some(id) = p.self_id.as_deref() {
+            if !seen.contains(id) && !grouped.contains(id) {
+                write_new_path_item(
+                    writer,
+                    "Polygon",
+                    id,
+                    p.item_transform,
+                    &p.fill_color,
+                    &p.stroke_color,
+                    p.stroke_weight,
+                    p.nonprinting,
+                    p.bounds,
+                    &p.anchors,
+                    &p.subpath_starts,
+                    &p.subpath_open,
+                )?;
+            }
+        }
+    }
+    for l in &spread.graphic_lines {
+        if let Some(id) = l.self_id.as_deref() {
+            if !seen.contains(id) && !grouped.contains(id) {
+                write_new_path_item(
+                    writer,
+                    "GraphicLine",
+                    id,
+                    l.item_transform,
+                    &None,
+                    &l.stroke_color,
+                    l.stroke_weight,
+                    l.nonprinting,
+                    l.bounds,
+                    &l.anchors,
+                    &l.subpath_starts,
+                    &l.subpath_open,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Recursively gather the `Self` ids of every page item referenced by a
+/// group (and its sub-groups) so inserted-item emission skips them.
+fn collect_group_member_ids<'a>(
+    spread: &'a Spread,
+    group: &'a paged_parse::Group,
+    out: &mut std::collections::HashSet<&'a str>,
+) {
+    use paged_parse::FrameRef;
+    for m in &group.members {
+        match *m {
+            FrameRef::TextFrame(i) => {
+                if let Some(id) = spread.text_frames.get(i).and_then(|f| f.self_id.as_deref()) {
+                    out.insert(id);
+                }
+            }
+            FrameRef::Rectangle(i) => {
+                if let Some(id) = spread.rectangles.get(i).and_then(|r| r.self_id.as_deref()) {
+                    out.insert(id);
+                }
+            }
+            FrameRef::Oval(i) => {
+                if let Some(id) = spread.ovals.get(i).and_then(|o| o.self_id.as_deref()) {
+                    out.insert(id);
+                }
+            }
+            FrameRef::GraphicLine(i) => {
+                if let Some(id) = spread
+                    .graphic_lines
+                    .get(i)
+                    .and_then(|l| l.self_id.as_deref())
+                {
+                    out.insert(id);
+                }
+            }
+            FrameRef::Polygon(i) => {
+                if let Some(id) = spread.polygons.get(i).and_then(|p| p.self_id.as_deref()) {
+                    out.insert(id);
+                }
+            }
+            FrameRef::Group(i) => {
+                if let Some(sub) = spread.groups.get(i) {
+                    collect_group_member_ids(spread, sub, out);
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
 // Spread rewrite
 // ---------------------------------------------------------------------
 
@@ -533,6 +936,45 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
             frames.insert(id, f);
         }
     }
+
+    // W1.15 — structural inserts/removes. `model_ids` is every page-item
+    // `Self` the model still carries; `seen_ids` accumulates the ids that
+    // appear in the source XML. A top-level XML item whose id left the
+    // model is a REMOVE (the element is dropped); a model id never seen
+    // in the XML is an INSERT (emitted at the spread's close in model
+    // order). Group members are not removed structurally here — a group
+    // dissolve / regroup is a separate deferred lane (see Known losses).
+    let mut model_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for f in &spread.text_frames {
+        if let Some(id) = f.self_id.as_deref() {
+            model_ids.insert(id);
+        }
+    }
+    for r in &spread.rectangles {
+        if let Some(id) = r.self_id.as_deref() {
+            model_ids.insert(id);
+        }
+    }
+    for o in &spread.ovals {
+        if let Some(id) = o.self_id.as_deref() {
+            model_ids.insert(id);
+        }
+    }
+    for p in &spread.polygons {
+        if let Some(id) = p.self_id.as_deref() {
+            model_ids.insert(id);
+        }
+    }
+    for l in &spread.graphic_lines {
+        if let Some(id) = l.self_id.as_deref() {
+            model_ids.insert(id);
+        }
+    }
+    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Depth of the open element being dropped as a REMOVE, plus the
+    // depth it opened at; while `> 0` every event passes through to the
+    // bit-bucket until the matching close. `0` ⇒ not removing.
+    let mut remove_depth: usize = 0;
 
     let mut reader = Reader::from_reader(original);
     let config = reader.config_mut();
@@ -630,6 +1072,24 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
             Event::Start(e) => {
                 depth += 1;
                 let name_owned = e.name().as_ref().to_vec();
+                // Inside a REMOVE drop everything until the matching
+                // close — the element and its whole subtree vanish.
+                if remove_depth != 0 {
+                    buf.clear();
+                    continue;
+                }
+                // A top-level page item whose `Self` left the model is a
+                // structural REMOVE: drop the element + its subtree.
+                if group_depth == 0 && ITEM_KINDS.contains(&name_owned.as_slice()) {
+                    if let Some(id) = attr_value(&e, b"Self") {
+                        seen_ids.insert(id.clone());
+                        if !model_ids.contains(id.as_str()) {
+                            remove_depth = depth;
+                            buf.clear();
+                            continue;
+                        }
+                    }
+                }
                 // Buffer a `<PathPointArray>` for the innermost path
                 // item so its points can be rewritten at close.
                 if name_owned == b"PathPointArray" {
@@ -735,6 +1195,22 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                 }
             }
             Event::Empty(e) => {
+                // Inside a REMOVE every empty element vanishes too.
+                if remove_depth != 0 {
+                    buf.clear();
+                    continue;
+                }
+                // A self-closing top-level page item: track it as seen,
+                // and drop it when its `Self` left the model (REMOVE).
+                if group_depth == 0 && ITEM_KINDS.contains(&e.name().as_ref()) {
+                    if let Some(id) = attr_value(&e, b"Self") {
+                        seen_ids.insert(id.clone());
+                        if !model_ids.contains(id.as_str()) {
+                            buf.clear();
+                            continue;
+                        }
+                    }
+                }
                 // Buffer a `<PathPointType>` (or any empty element)
                 // inside an open `<PathPointArray>`.
                 if let Some(ctx) = path_ctx.last_mut() {
@@ -799,6 +1275,27 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
             }
             Event::End(e) => {
                 let name_owned = e.name().as_ref().to_vec();
+                // Closing a REMOVE: when this End matches the removed
+                // element's open depth the drop ends; otherwise it is a
+                // child of the removed subtree and also vanishes.
+                if remove_depth != 0 {
+                    if depth == remove_depth {
+                        remove_depth = 0;
+                    }
+                    depth = depth.saturating_sub(1);
+                    buf.clear();
+                    continue;
+                }
+                // Closing the `<Spread>` / `<MasterSpread>`: before the
+                // tag, flush every model page item the source XML never
+                // carried — the structural INSERTs.
+                if name_owned == b"Spread" || name_owned == b"MasterSpread" {
+                    write_inserted_items(&mut writer, spread, &seen_ids)?;
+                    depth = depth.saturating_sub(1);
+                    writer.write_event(Event::End(e))?;
+                    buf.clear();
+                    continue;
+                }
                 // Close of the buffered `<PathPointArray>`: decide whether
                 // this contour diverged and emit the model anchors, or
                 // replay the original points verbatim.
@@ -889,6 +1386,12 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                 writer.write_event(Event::End(e))?;
             }
             Event::Text(t) => {
+                // Text inside a removed subtree (incl. the indentation
+                // around it) vanishes with the element.
+                if remove_depth != 0 {
+                    buf.clear();
+                    continue;
+                }
                 // Whitespace/indentation inside a buffered
                 // `<PathPointArray>` rides with the buffered points so a
                 // verbatim replay stays byte-exact.
@@ -908,6 +1411,11 @@ pub fn rewrite_spread(original: &[u8], spread: &Spread) -> Result<Vec<u8>, quick
                 writer.write_event(Event::Text(t))?;
             }
             other => {
+                // PIs / comments inside a removed subtree vanish too.
+                if remove_depth != 0 {
+                    buf.clear();
+                    continue;
+                }
                 // Any other event inside a buffered array is foreign —
                 // keep the original points (drop the rewrite) by leaving
                 // the buffer intact and replaying it at array close.

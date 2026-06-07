@@ -824,3 +824,239 @@ fn path_point_mutate_then_undo_round_trips_byte_identical() {
     let out = write_idml(project.document(), &original).expect("write");
     assert_eq!(original, out, "path-point set→undo is a no-op write");
 }
+
+// ---------------------------------------------------------------------
+// 5. W1.15 — structural inserts / removes of page items.
+// ---------------------------------------------------------------------
+
+use paged_mutate::NodeSpec;
+
+/// The `Self` id of the first spread carrying page items, for use as an
+/// `InsertNode` parent.
+fn first_spread_id(doc: &Document) -> String {
+    doc.spreads
+        .iter()
+        .find_map(|s| s.spread.self_id.clone())
+        .expect("a spread with a Self id")
+}
+
+/// An inserted `<Rectangle>` (created by an op since load) serialises as
+/// a new XML element with its model geometry / fill, re-parses to the
+/// same bounds + fill, and leaves every untouched entry byte-identical.
+#[test]
+fn inserted_rectangle_saves_and_reparses() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+    let spread_id = first_spread_id(&doc);
+    let spread_idx = doc
+        .spreads
+        .iter()
+        .position(|s| s.spread.self_id.as_deref() == Some(spread_id.as_str()))
+        .unwrap();
+    // Pick a real fill swatch so the round-trip resolves to a colour.
+    let fill = doc.palette.colors.keys().next().cloned().expect("a swatch");
+    let new_id = "Rectangle/w1insert".to_string();
+    let bounds = [40.0_f32, 50.0, 140.0, 210.0]; // top, left, bottom, right
+    let rect_pos = doc.spreads[spread_idx].spread.rectangles.len();
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::InsertNode {
+            parent: NodeId::Spread(spread_id.clone()),
+            position: rect_pos,
+            node: NodeSpec::Rectangle {
+                self_id: new_id.clone(),
+                bounds,
+                fill_color: Some(fill.clone()),
+                stroke_color: None,
+                stroke_weight: None,
+                item_transform: None,
+            },
+            z_slot: None,
+        })
+        .expect("insert rectangle");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    assert_ne!(original, out, "an insert must change bytes");
+    let re = Document::open(&out).expect("reparse");
+
+    let rect = re.spreads[spread_idx]
+        .spread
+        .rectangles
+        .iter()
+        .find(|r| r.self_id.as_deref() == Some(new_id.as_str()))
+        .expect("inserted rectangle re-parsed");
+    assert_eq!(
+        rect.fill_color.as_deref(),
+        Some(fill.as_str()),
+        "fill saved"
+    );
+    // Geometry derives from the rewritten `<PathGeometry>` corners.
+    assert!((rect.bounds.top - bounds[0]).abs() < 1e-3, "top");
+    assert!((rect.bounds.left - bounds[1]).abs() < 1e-3, "left");
+    assert!((rect.bounds.bottom - bounds[2]).abs() < 1e-3, "bottom");
+    assert!((rect.bounds.right - bounds[3]).abs() < 1e-3, "right");
+
+    // Re-parsed model matches the in-memory mutated model.
+    let model_rect = project.document().spreads[spread_idx]
+        .spread
+        .rectangles
+        .iter()
+        .find(|r| r.self_id.as_deref() == Some(new_id.as_str()))
+        .expect("model rect");
+    assert!((rect.bounds.top - model_rect.bounds.top).abs() < 1e-3);
+    assert!((rect.bounds.right - model_rect.bounds.right).abs() < 1e-3);
+
+    // Only one Spread entry changed.
+    let src = entries(&original);
+    let dst = entries(&out);
+    let changed: Vec<&String> = src
+        .iter()
+        .filter(|(k, v)| dst.get(*k).map(|d| d != *v).unwrap_or(true))
+        .map(|(k, _)| k)
+        .collect();
+    assert_eq!(changed.len(), 1, "only the spread changed: {changed:?}");
+    assert!(changed[0].starts_with("Spreads/"));
+}
+
+/// An inserted `<TextFrame>` (with a parent story) serialises with the
+/// `ParentStory` / `ContentType` attributes so a re-parse recognises it
+/// as a text frame, not a rectangle.
+#[test]
+fn inserted_text_frame_saves_as_text_frame() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+    let spread_id = first_spread_id(&doc);
+    let spread_idx = doc
+        .spreads
+        .iter()
+        .position(|s| s.spread.self_id.as_deref() == Some(spread_id.as_str()))
+        .unwrap();
+    let new_id = "TextFrame/w1insert".to_string();
+    let before = doc.spreads[spread_idx].spread.text_frames.len();
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::InsertNode {
+            parent: NodeId::Spread(spread_id.clone()),
+            position: before,
+            node: NodeSpec::TextFrame {
+                self_id: new_id.clone(),
+                bounds: [10.0, 20.0, 90.0, 180.0],
+                fill_color: None,
+                stroke_color: None,
+                stroke_weight: None,
+                item_transform: None,
+            },
+            z_slot: None,
+        })
+        .expect("insert text frame");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    let re = Document::open(&out).expect("reparse");
+    assert_eq!(
+        re.spreads[spread_idx].spread.text_frames.len(),
+        before + 1,
+        "text frame count grew by one"
+    );
+    let f = re.spreads[spread_idx]
+        .spread
+        .text_frames
+        .iter()
+        .find(|f| f.self_id.as_deref() == Some(new_id.as_str()))
+        .expect("inserted text frame re-parsed as a TextFrame");
+    assert!((f.bounds.right - 180.0).abs() < 1e-3, "frame bounds saved");
+}
+
+/// A `RemoveNode` (delete a frame created-or-loaded) drops the element
+/// from the XML: the re-parse no longer carries it, and surviving
+/// siblings still parse.
+#[test]
+fn removed_rectangle_drops_from_xml() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+
+    let (spread_idx, rect_id) = doc
+        .spreads
+        .iter()
+        .enumerate()
+        .find_map(|(si, s)| {
+            s.spread
+                .rectangles
+                .iter()
+                .find_map(|r| r.self_id.clone())
+                .map(|id| (si, id))
+        })
+        .expect("a rectangle to remove");
+    let before = doc.spreads[spread_idx].spread.rectangles.len();
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::RemoveNode {
+            node: NodeId::Rectangle(rect_id.clone()),
+        })
+        .expect("remove rectangle");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    assert_ne!(original, out, "a remove must change bytes");
+    let re = Document::open(&out).expect("reparse");
+    assert!(
+        re.spreads[spread_idx]
+            .spread
+            .rectangles
+            .iter()
+            .all(|r| r.self_id.as_deref() != Some(rect_id.as_str())),
+        "removed rectangle is gone from the re-parsed model"
+    );
+    assert_eq!(
+        re.spreads[spread_idx].spread.rectangles.len(),
+        before - 1,
+        "exactly one rectangle removed"
+    );
+}
+
+/// Insert-then-undo (and remove-then-undo) write byte-identically:
+/// proves the structural rewrite is value-driven (no element appears /
+/// disappears when the net model is unchanged).
+#[test]
+fn structural_edit_then_undo_round_trips_byte_identical() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+    let spread_id = first_spread_id(&doc);
+    let rect_id = doc
+        .spreads
+        .iter()
+        .find_map(|s| s.spread.rectangles.iter().find_map(|r| r.self_id.clone()))
+        .expect("a rectangle");
+
+    // Insert → undo.
+    let mut p1 = Project::new(doc);
+    p1.apply(Operation::InsertNode {
+        parent: NodeId::Spread(spread_id),
+        position: 0,
+        node: NodeSpec::Rectangle {
+            self_id: "Rectangle/w1undo".to_string(),
+            bounds: [0.0, 0.0, 10.0, 10.0],
+            fill_color: None,
+            stroke_color: None,
+            stroke_weight: None,
+            item_transform: None,
+        },
+        z_slot: None,
+    })
+    .unwrap();
+    p1.undo().unwrap().expect("undo insert");
+    let out1 = write_idml(p1.document(), &original).expect("write");
+    assert_eq!(original, out1, "insert→undo is a no-op write");
+
+    // Remove → undo.
+    let doc2 = Document::open(&original).unwrap();
+    let mut p2 = Project::new(doc2);
+    p2.apply(Operation::RemoveNode {
+        node: NodeId::Rectangle(rect_id),
+    })
+    .unwrap();
+    p2.undo().unwrap().expect("undo remove");
+    let out2 = write_idml(p2.document(), &original).expect("write");
+    assert_eq!(original, out2, "remove→undo is a no-op write");
+}
