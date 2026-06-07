@@ -123,10 +123,13 @@ pub struct Spread {
     /// `ItemTransform` on the `<Spread>` (or `<MasterSpread>`)
     /// element. Per the IDML spec §10.3.3, this maps the spread's
     /// inner coords into the document's pasteboard. InDesign limits
-    /// this to translation + 0/90/180/270 rotation. Per-page
-    /// rendering doesn't need the value (each page already lives in
-    /// the spread's coord system), but pasteboard-faithful output
-    /// across the whole document does. `None` ⇒ identity.
+    /// this to translation + 0/90/180/270 rotation. W1.9: the
+    /// renderer honours its rotation/scale (linear part) per page via
+    /// `BuiltPage::spread_transform` — composed into every page-item
+    /// emission and inverted by the canvas hit-tester so selection
+    /// stays in lockstep. A pure translation cancels against the
+    /// spread-inner page origin, so only the linear part has effect.
+    /// `None` ⇒ identity.
     pub item_transform: Option<[f32; 6]>,
     pub pages: Vec<Page>,
     pub text_frames: Vec<TextFrame>,
@@ -1096,6 +1099,10 @@ pub struct Oval {
     pub stroke_weight: Option<f32>,
     /// `StrokeType` reference; see [`Rectangle::stroke_type`].
     pub stroke_type: Option<String>,
+    /// `StrokeAlignment` (`Center`/`Inside`/`Outside`); see
+    /// [`Rectangle::stroke_alignment`]. W1.5 honours inside/outside on
+    /// the elliptical outline by offsetting it ±weight/2.
+    pub stroke_alignment: Option<String>,
     /// `GapColor` / `GapTint`; see [`Rectangle::stroke_gap_color`].
     pub stroke_gap_color: Option<String>,
     pub stroke_gap_tint: Option<f32>,
@@ -1350,6 +1357,10 @@ pub struct Polygon {
     pub stroke_weight: Option<f32>,
     /// `StrokeType` reference; see [`Rectangle::stroke_type`].
     pub stroke_type: Option<String>,
+    /// `StrokeAlignment` (`Center`/`Inside`/`Outside`); see
+    /// [`Rectangle::stroke_alignment`]. W1.5 honours inside/outside on
+    /// the closed polygon outline by offsetting it ±weight/2.
+    pub stroke_alignment: Option<String>,
     /// `GapColor` / `GapTint`; see [`Rectangle::stroke_gap_color`].
     pub stroke_gap_color: Option<String>,
     pub stroke_gap_tint: Option<f32>,
@@ -2127,6 +2138,7 @@ impl Spread {
                             stroke_color: common.stroke_color,
                             stroke_weight: common.stroke_weight,
                             stroke_type: common.stroke_type,
+                            stroke_alignment: attr(&e, b"StrokeAlignment"),
                             stroke_gap_color: common.stroke_gap_color,
                             stroke_gap_tint: common.stroke_gap_tint,
                             stroke_dash: common.stroke_dash,
@@ -3011,6 +3023,7 @@ impl Spread {
                             stroke_color: common.stroke_color,
                             stroke_weight: common.stroke_weight,
                             stroke_type: common.stroke_type,
+                            stroke_alignment: attr(&e, b"StrokeAlignment"),
                             stroke_gap_color: common.stroke_gap_color,
                             stroke_gap_tint: common.stroke_gap_tint,
                             stroke_dash: common.stroke_dash,

@@ -402,6 +402,7 @@ fn build_variant(seq: u32, idx: usize) -> Vec<PageItem> {
                 fill_color: Some("Color/RGBMagenta".to_string()),
                 stroke_color: Some("Color/Black".to_string()),
                 stroke_weight_pt: Some(1.0),
+                extra_attrs: Vec::new(),
                 subpaths: vec![outer_path, inner_path],
                 text_path: None,
             };

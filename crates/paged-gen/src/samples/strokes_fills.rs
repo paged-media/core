@@ -38,7 +38,7 @@
 use crate::builders::{
     designmap::{write_designmap, DesignMap},
     master::{write_master, Master},
-    page_item::Rect,
+    page_item::{Oval, Polygon, PolygonSubPath, Rect},
     resources::{
         container_xml, fonts_xml, graphic_xml_with_extras, preferences_xml,
         styles_xml_with_stroke_styles, ExtraColor, StrokeStyleSpec,
@@ -409,6 +409,26 @@ pub fn build() -> Sample {
         spread_refs.push(spread_id);
     }
 
+    // ---- W1.5 stroke-ALIGNMENT on closed NON-rect shapes ----
+    //
+    // Appended after the variant pages (and after the W1.2 style pages),
+    // so the baked reference PDF — capped in fidelity-thresholds.json —
+    // is unaffected. Each page carries a single heavy-stroked shape with
+    // Inside / Outside alignment so the offset outline is visible: an
+    // oval (Outside, grows the ellipse) and a polygon octagon (Inside,
+    // shrinks the outline). These exercise the renderer's
+    // `aligned_outline_path` (oval ellipse offset + polygon miter offset)
+    // that flat rects never reached.
+    let w15_pages = w15_alignment_pages(variants.len() as u32);
+    for (master_id, master_xml, story_id, story_xml, spread_id, spread_xml) in w15_pages {
+        master_spreads.push((master_id.clone(), master_xml));
+        master_refs.push(master_id);
+        stories.push((story_id.clone(), story_xml));
+        story_refs.push(story_id);
+        spreads.push((spread_id.clone(), spread_xml));
+        spread_refs.push(spread_id);
+    }
+
     let designmap = write_designmap(&DesignMap {
         self_id: "d".to_string(),
         master_spreads: master_refs,
@@ -429,6 +449,148 @@ pub fn build() -> Sample {
         master_spreads,
         spreads,
         stories,
+    }
+}
+
+/// Build the W1.5 stroke-alignment pages (oval + polygon). Returns one
+/// `(master_id, master_xml, story_id, story_xml, spread_id, spread_xml)`
+/// tuple per page, sequenced after the `base_seq` variant pages so ids
+/// stay unique and deterministic.
+#[allow(clippy::type_complexity)]
+fn w15_alignment_pages(base_seq: u32) -> Vec<(String, Vec<u8>, String, Vec<u8>, String, Vec<u8>)> {
+    // (label, shape-builder).
+    let specs: [(&str, ShapeKind); 2] = [
+        ("strokes · alignment · oval-outside", ShapeKind::OvalOutside),
+        (
+            "strokes · alignment · polygon-inside",
+            ShapeKind::PolygonInside,
+        ),
+    ];
+    let mut out = Vec::with_capacity(specs.len());
+    for (i, (label, kind)) in specs.iter().enumerate() {
+        let seq = base_seq + i as u32;
+        let master_id = self_id(SAMPLE, "MasterSpread", seq);
+        let master_page_id = self_id(SAMPLE, "MasterPage", seq);
+        let spread_id = self_id(SAMPLE, "Spread", seq);
+        let page_id = self_id(SAMPLE, "Page", seq);
+        let story_id = self_id(SAMPLE, "Story", seq);
+        let label_frame_id = self_id(SAMPLE, "TextFrame", seq);
+        let shape_id = self_id(SAMPLE, "Shape", seq);
+
+        let master_xml = write_master(&Master {
+            self_id: format!("MasterSpread/{master_id}"),
+            page_self_id: master_page_id,
+            page_width_pt: PAGE_W_PT,
+            page_height_pt: PAGE_H_PT,
+            page_items: Vec::new(),
+        });
+        let story_xml = write_story(&Story {
+            self_id: story_id.clone(),
+            paragraphs: vec![Paragraph::plain(*label)],
+        });
+
+        let label_item = Rect {
+            self_id: label_frame_id,
+            width_pt: LABEL_W_PT,
+            height_pt: LABEL_H_PT,
+            item_transform: translate(36.0, 36.0),
+            fill_color: None,
+            stroke_color: None,
+            stroke_weight_pt: None,
+            parent_story: Some(story_id.clone()),
+            next_text_frame: None,
+            previous_text_frame: None,
+            extra_attrs: Vec::new(),
+            blending: None,
+            drop_shadow: None,
+            placed_image: None,
+            text_wrap: None,
+            anchored_setting: None,
+            frame_effects: Vec::new(),
+            text_frame_pref: None,
+        };
+
+        // Heavy 18pt stroke so the ±9pt alignment offset is obvious.
+        let xform = compose_translate((PAGE_W_PT - DEMO_W_PT) * 0.5, (PAGE_H_PT - DEMO_H_PT) * 0.5);
+        let shape_item = kind.build(shape_id, xform);
+
+        let spread_xml = write_spread(&Spread {
+            self_id: spread_id.clone(),
+            page_self_id: page_id,
+            page_name: label.to_string(),
+            applied_master: format!("MasterSpread/{master_id}"),
+            page_width_pt: PAGE_W_PT,
+            page_height_pt: PAGE_H_PT,
+            page_items: vec![label_item.into(), shape_item],
+            override_list: Vec::new(),
+            margins: None,
+        });
+        out.push((
+            master_id, master_xml, story_id, story_xml, spread_id, spread_xml,
+        ));
+    }
+    out
+}
+
+/// Which W1.5 alignment shape a page carries.
+enum ShapeKind {
+    /// An oval with `OutsideAlignment` — the ellipse outline grows.
+    OvalOutside,
+    /// An octagon polygon with `InsideAlignment` — the outline shrinks.
+    PolygonInside,
+}
+
+impl ShapeKind {
+    fn build(
+        &self,
+        self_id: String,
+        item_transform: Matrix,
+    ) -> crate::builders::page_item::PageItem {
+        const W: f32 = DEMO_W_PT;
+        const H: f32 = DEMO_H_PT;
+        match self {
+            ShapeKind::OvalOutside => Oval {
+                self_id,
+                width_pt: W,
+                height_pt: H,
+                item_transform,
+                fill_color: Some("Color/Paper".to_string()),
+                stroke_color: Some("Color/Black".to_string()),
+                stroke_weight_pt: Some(18.0),
+                extra_attrs: vec![(
+                    "StrokeAlignment".to_string(),
+                    "OutsideAlignment".to_string(),
+                )],
+            }
+            .into(),
+            ShapeKind::PolygonInside => {
+                // A regular octagon inscribed in the W×H box, centred.
+                let cx = W * 0.5;
+                let cy = H * 0.5;
+                let rx = W * 0.5;
+                let ry = H * 0.5;
+                let mut anchors = Vec::with_capacity(8);
+                for k in 0..8 {
+                    // Start at -22.5° so edges sit flat-ish; clockwise.
+                    let a = std::f32::consts::FRAC_PI_8 + k as f32 * std::f32::consts::FRAC_PI_4;
+                    anchors.push((cx + rx * a.cos(), cy + ry * a.sin()));
+                }
+                Polygon {
+                    self_id,
+                    item_transform,
+                    fill_color: Some("Color/Paper".to_string()),
+                    stroke_color: Some("Color/Black".to_string()),
+                    stroke_weight_pt: Some(18.0),
+                    extra_attrs: vec![(
+                        "StrokeAlignment".to_string(),
+                        "InsideAlignment".to_string(),
+                    )],
+                    text_path: None,
+                    subpaths: vec![PolygonSubPath::corners(anchors, true)],
+                }
+                .into()
+            }
+        }
     }
 }
 

@@ -241,6 +241,7 @@ pub fn build() -> Sample {
             fill_color: None,
             stroke_color: Some("Color/Black".to_string()),
             stroke_weight_pt: Some(1.0),
+            extra_attrs: Vec::new(),
             subpaths: vec![variant.subpath],
             text_path: Some(TextPathChild {
                 self_id: tp_id,

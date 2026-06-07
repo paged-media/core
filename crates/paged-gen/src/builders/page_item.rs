@@ -31,6 +31,7 @@ pub enum PageItem {
     Rect(Box<Rect>),
     Group(Group),
     Polygon(Polygon),
+    Oval(Oval),
 }
 
 impl From<Rect> for PageItem {
@@ -51,13 +52,71 @@ impl From<Polygon> for PageItem {
     }
 }
 
+impl From<Oval> for PageItem {
+    fn from(o: Oval) -> Self {
+        PageItem::Oval(o)
+    }
+}
+
 impl PageItem {
     pub fn write(&self, b: &mut XmlBuilder) {
         match self {
             PageItem::Rect(r) => r.write(b),
             PageItem::Group(g) => g.write(b),
             PageItem::Polygon(p) => p.write(b),
+            PageItem::Oval(o) => o.write(b),
         }
+    }
+}
+
+/// IDML `<Oval>` — an ellipse inscribed in `width_pt × height_pt` at
+/// inner origin. Emits the four-corner `<PathGeometry>` bounding box
+/// InDesign writes for an oval (the renderer derives the inscribed
+/// ellipse from the bounds). Used by the W1.5 stroke-alignment page.
+pub struct Oval {
+    pub self_id: String,
+    pub width_pt: f32,
+    pub height_pt: f32,
+    pub item_transform: Matrix,
+    pub fill_color: Option<String>,
+    pub stroke_color: Option<String>,
+    pub stroke_weight_pt: Option<f32>,
+    /// Extra attributes (e.g. `("StrokeAlignment", "InsideAlignment")`).
+    pub extra_attrs: Vec<(String, String)>,
+}
+
+impl Oval {
+    pub fn write(&self, b: &mut XmlBuilder) {
+        let mut attrs: Vec<(&str, String)> = vec![
+            ("Self", self.self_id.clone()),
+            ("AppliedObjectStyle", "ObjectStyle/$ID/[None]".to_string()),
+            ("ItemTransform", format_matrix(&self.item_transform)),
+            (
+                "FillColor",
+                self.fill_color
+                    .clone()
+                    .unwrap_or_else(|| "Swatch/None".to_string()),
+            ),
+            (
+                "StrokeColor",
+                self.stroke_color
+                    .clone()
+                    .unwrap_or_else(|| "Swatch/None".to_string()),
+            ),
+            (
+                "StrokeWeight",
+                format_f32(self.stroke_weight_pt.unwrap_or(0.0)),
+            ),
+        ];
+        for (k, v) in &self.extra_attrs {
+            attrs.push((k.as_str(), v.clone()));
+        }
+        let attr_refs: Vec<(&str, &str)> = attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        b.start("Oval", &attr_refs);
+        b.start("Properties", &[]);
+        write_path_geometry(b, self.width_pt, self.height_pt);
+        b.end("Properties");
+        b.end("Oval");
     }
 }
 
@@ -192,6 +251,10 @@ pub struct Polygon {
     pub fill_color: Option<String>,
     pub stroke_color: Option<String>,
     pub stroke_weight_pt: Option<f32>,
+    /// Extra attributes appended after the standard fill/stroke attrs
+    /// (e.g. `("StrokeAlignment", "OutsideAlignment")` for W1.5). Same
+    /// "last attribute wins" escape hatch as [`Rect::extra_attrs`].
+    pub extra_attrs: Vec<(String, String)>,
     pub subpaths: Vec<PolygonSubPath>,
     /// Optional text-on-path child. The polygon's geometry supplies
     /// the curve; the child references the story whose text rides it.
@@ -219,6 +282,9 @@ impl Polygon {
         ];
         if let Some(w) = self.stroke_weight_pt {
             attrs.push(("StrokeWeight", format_f32(w)));
+        }
+        for (k, v) in &self.extra_attrs {
+            attrs.push((k.as_str(), v.clone()));
         }
         let attr_refs: Vec<(&str, &str)> = attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
         b.start("Polygon", &attr_refs);
