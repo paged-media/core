@@ -36,3 +36,4 @@ pub mod text_on_path;
 pub mod text_overset;
 pub mod text_wrap;
 pub mod transparency;
+pub mod variables;

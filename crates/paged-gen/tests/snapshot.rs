@@ -399,6 +399,58 @@ fn markers_round_trips_through_parser() {
 }
 
 #[test]
+fn variables_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::variables::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::variables::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+    // The moved-destination variant is independently deterministic too.
+    let m1 = paged_gen::write_idml(&paged_gen::samples::variables::build_moved()).unwrap();
+    let m2 = paged_gen::write_idml(&paged_gen::samples::variables::build_moved()).unwrap();
+    assert_eq!(sha256(&m1), sha256(&m2));
+    // The two variants differ (the moved one carries the blank spacer).
+    assert_ne!(sha256(&a), sha256(&m1));
+}
+
+#[test]
+fn variables_round_trips_through_parser() {
+    let sample = paged_gen::samples::variables::build();
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let container = paged_parse::Container::open(&bytes).expect("Container::open");
+    let dm = &container.designmap;
+    // Four variables (creation date / chapter / running-header / output
+    // date), one section, one xref hyperlink + its text-anchor
+    // destination.
+    assert_eq!(dm.text_variables.len(), 4);
+    assert_eq!(dm.sections.len(), 1);
+    assert_eq!(dm.hyperlinks.len(), 1);
+    assert_eq!(dm.hyperlink_destinations.len(), 1);
+    // The date variable round-trips its Format; the running-header
+    // variable its pickup style + Use.
+    assert!(dm
+        .text_variables
+        .iter()
+        .any(|v| v.variable_type.as_deref() == Some("CreationDateType")
+            && v.date_format.as_deref() == Some("MMMM d, yyyy")));
+    assert!(dm
+        .text_variables
+        .iter()
+        .any(|v| v.variable_type.as_deref() == Some("RunningHeaderType")
+            && v.running_header_style.as_deref() == Some("ParagraphStyle/Heading")
+            && v.running_header_use.as_deref() == Some("FirstOnPage")));
+    // The section carries the UpperRoman numbering + start 2.
+    assert_eq!(
+        dm.sections[0].numbering_style,
+        paged_parse::NumberingStyle::UpperRoman
+    );
+    assert_eq!(dm.sections[0].start_at, Some(2));
+    // The xref destination is a text anchor (story-targeting).
+    assert!(matches!(
+        &dm.hyperlink_destinations[0].kind,
+        paged_parse::HyperlinkDestinationKind::TextAnchor(_)
+    ));
+}
+
+#[test]
 fn images_emit_is_byte_deterministic() {
     let a = paged_gen::write_idml(&paged_gen::samples::images::build()).unwrap();
     let b = paged_gen::write_idml(&paged_gen::samples::images::build()).unwrap();
