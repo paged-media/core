@@ -62,6 +62,7 @@ use std::io::{Cursor, Read, Write};
 
 use paged_scene::Document;
 
+pub mod resources;
 pub mod rewrite;
 
 /// Errors raised while re-serializing a document.
@@ -127,6 +128,36 @@ pub fn write_idml(doc: &Document, original: &[u8]) -> Result<Vec<u8>, WriteError
             if new != orig.as_slice() {
                 patched.insert(story.src.clone(), new);
             }
+        }
+    }
+
+    // W1.15 lane 2 — new resources. Swatches / gradients created by ops
+    // are injected into `Resources/Graphic.xml`; new paragraph / character
+    // styles into `Resources/Styles.xml`. Both patchers are pure
+    // pass-throughs when the model carries nothing the source lacks, so
+    // an unmutated round-trip leaves these entries byte-identical (and the
+    // entry takes the verbatim copy path below).
+    const GRAPHIC_SRC: &str = "Resources/Graphic.xml";
+    const STYLES_SRC: &str = "Resources/Styles.xml";
+    if let Some(orig) = entry_bytes(&mut src, GRAPHIC_SRC)? {
+        let new = resources::patch_graphic(&orig, &doc.palette).map_err(|source| {
+            WriteError::Rewrite {
+                entry: GRAPHIC_SRC.to_string(),
+                source,
+            }
+        })?;
+        if new != orig.as_slice() {
+            patched.insert(GRAPHIC_SRC.to_string(), new);
+        }
+    }
+    if let Some(orig) = entry_bytes(&mut src, STYLES_SRC)? {
+        let new =
+            resources::patch_styles(&orig, &doc.styles).map_err(|source| WriteError::Rewrite {
+                entry: STYLES_SRC.to_string(),
+                source,
+            })?;
+        if new != orig.as_slice() {
+            patched.insert(STYLES_SRC.to_string(), new);
         }
     }
 

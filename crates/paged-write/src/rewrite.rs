@@ -115,7 +115,7 @@ use paged_parse::{Bounds, CharacterRun, PathAnchor, Spread, Story, TextFrame};
 /// crate that pulls clap/anyhow) so this runtime crate stays minimal +
 /// wasm-clean. InDesign serialises floats this way, so patched values
 /// match the surrounding hand-written / exported numbers.
-fn format_f32(v: f32) -> String {
+pub(crate) fn format_f32(v: f32) -> String {
     let rounded = (v * 10_000.0).round() / 10_000.0;
     if rounded == 0.0 {
         return "0".to_string();
@@ -221,7 +221,7 @@ where
 /// Patched values are IDML ids / numbers / colour refs that almost never
 /// contain these, but a style name could — so escape defensively to keep
 /// the output well-formed.
-fn escape_attr(s: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn escape_attr(s: &str) -> std::borrow::Cow<'_, str> {
     if s.bytes()
         .any(|b| matches!(b, b'&' | b'<' | b'>' | b'"' | b'\''))
     {

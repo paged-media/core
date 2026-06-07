@@ -1060,3 +1060,249 @@ fn structural_edit_then_undo_round_trips_byte_identical() {
     let out2 = write_idml(p2.document(), &original).expect("write");
     assert_eq!(original, out2, "remove→undo is a no-op write");
 }
+
+// ---------------------------------------------------------------------
+// 6. W1.15 — new resources (swatches / gradients → Graphic.xml;
+//    paragraph / character styles → Styles.xml).
+// ---------------------------------------------------------------------
+
+use paged_mutate::SwatchSpec;
+
+/// A swatch created by `CreateSwatch` serialises into `Resources/Graphic.xml`
+/// and re-parses with the same colour values — closing the
+/// "referenced-but-undefined resource" loss.
+#[test]
+fn created_swatch_saves_to_graphic_and_reparses() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::CreateSwatch {
+            spec: SwatchSpec {
+                self_id: Some("Color/w1new".to_string()),
+                name: Some("W1 New".to_string()),
+                space: "RGB".to_string(),
+                value: vec![10.0, 120.0, 240.0],
+                model: Some("Process".to_string()),
+                alternate_space: None,
+                alternate_value: Vec::new(),
+                tint: None,
+                alpha: None,
+            },
+        })
+        .expect("create swatch");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    assert_ne!(original, out, "a new swatch must change bytes");
+    let re = Document::open(&out).expect("reparse");
+
+    let color = re
+        .palette
+        .colors
+        .get("Color/w1new")
+        .expect("swatch re-parsed into the palette");
+    assert_eq!(color.name.as_deref(), Some("W1 New"));
+    assert_eq!(
+        color.value,
+        vec![10.0, 120.0, 240.0],
+        "channel values saved"
+    );
+
+    // Only Graphic.xml changed.
+    let src = entries(&original);
+    let dst = entries(&out);
+    let changed: Vec<&String> = src
+        .iter()
+        .filter(|(k, v)| dst.get(*k).map(|d| d != *v).unwrap_or(true))
+        .map(|(k, _)| k)
+        .collect();
+    assert_eq!(changed, vec!["Resources/Graphic.xml"], "only Graphic.xml");
+}
+
+/// A swatch create-then-undo writes byte-identically (value-driven, not
+/// touch-driven).
+#[test]
+fn created_swatch_then_undo_round_trips_byte_identical() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::CreateSwatch {
+            spec: SwatchSpec {
+                self_id: Some("Color/w1undo".to_string()),
+                name: Some("U".to_string()),
+                space: "RGB".to_string(),
+                value: vec![1.0, 2.0, 3.0],
+                model: None,
+                alternate_space: None,
+                alternate_value: Vec::new(),
+                tint: None,
+                alpha: None,
+            },
+        })
+        .unwrap();
+    project.undo().unwrap().expect("undo");
+    let out = write_idml(project.document(), &original).expect("write");
+    assert_eq!(original, out, "swatch create→undo is a no-op write");
+}
+
+/// A paragraph style created by `CreateParagraphStyle` serialises into
+/// `Resources/Styles.xml` (inside `RootParagraphStyleGroup`) and
+/// re-parses with its name + based-on intact.
+#[test]
+fn created_paragraph_style_saves_to_styles_and_reparses() {
+    let original = build_sample("text");
+    let doc = Document::open(&original).unwrap();
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::CreateParagraphStyle {
+            self_id: Some("ParagraphStyle/w1head".to_string()),
+            name: Some("W1 Heading".to_string()),
+            based_on: Some("ParagraphStyle/$ID/[No paragraph style]".to_string()),
+            restore_json: None,
+        })
+        .expect("create paragraph style");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    assert_ne!(original, out, "a new style must change bytes");
+    let re = Document::open(&out).expect("reparse");
+
+    let style = re
+        .styles
+        .paragraph_styles
+        .get("ParagraphStyle/w1head")
+        .expect("style re-parsed into the stylesheet");
+    assert_eq!(style.name.as_deref(), Some("W1 Heading"));
+    assert_eq!(
+        style.based_on.as_deref(),
+        Some("ParagraphStyle/$ID/[No paragraph style]")
+    );
+
+    let src = entries(&original);
+    let dst = entries(&out);
+    let changed: Vec<&String> = src
+        .iter()
+        .filter(|(k, v)| dst.get(*k).map(|d| d != *v).unwrap_or(true))
+        .map(|(k, _)| k)
+        .collect();
+    assert_eq!(changed, vec!["Resources/Styles.xml"], "only Styles.xml");
+}
+
+/// A character style created via `CreateCharacterStyle` round-trips
+/// (lands in `RootCharacterStyleGroup`).
+#[test]
+fn created_character_style_saves_to_styles() {
+    let original = build_sample("text");
+    let doc = Document::open(&original).unwrap();
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::CreateCharacterStyle {
+            self_id: Some("CharacterStyle/w1emph".to_string()),
+            name: Some("W1 Emph".to_string()),
+            based_on: None,
+            restore_json: None,
+        })
+        .expect("create character style");
+    let out = write_idml(project.document(), &original).expect("write");
+    let re = Document::open(&out).expect("reparse");
+    let style = re
+        .styles
+        .character_styles
+        .get("CharacterStyle/w1emph")
+        .expect("character style re-parsed");
+    assert_eq!(style.name.as_deref(), Some("W1 Emph"));
+}
+
+/// The full W1.15 round-trip the task asks for: a created frame whose
+/// fill references a NEW swatch, plus a NEW paragraph style — open
+/// fixture, apply ops, save, re-open, and assert every piece re-parses
+/// with its resolved appearance (frame present + fill resolves to the
+/// new swatch; style present).
+#[test]
+fn created_frame_with_new_swatch_and_style_round_trips() {
+    let original = build_sample("text");
+    let doc = Document::open(&original).unwrap();
+    let spread_id = first_spread_id(&doc);
+    let spread_idx = doc
+        .spreads
+        .iter()
+        .position(|s| s.spread.self_id.as_deref() == Some(spread_id.as_str()))
+        .unwrap();
+    let rect_pos = doc.spreads[spread_idx].spread.rectangles.len();
+
+    let mut project = Project::new(doc);
+    // New swatch.
+    project
+        .apply(Operation::CreateSwatch {
+            spec: SwatchSpec {
+                self_id: Some("Color/w1brand".to_string()),
+                name: Some("Brand".to_string()),
+                space: "RGB".to_string(),
+                value: vec![200.0, 30.0, 90.0],
+                model: Some("Process".to_string()),
+                alternate_space: None,
+                alternate_value: Vec::new(),
+                tint: None,
+                alpha: None,
+            },
+        })
+        .expect("swatch");
+    // New paragraph style.
+    project
+        .apply(Operation::CreateParagraphStyle {
+            self_id: Some("ParagraphStyle/w1body".to_string()),
+            name: Some("W1 Body".to_string()),
+            based_on: None,
+            restore_json: None,
+        })
+        .expect("style");
+    // New rectangle filled with the new swatch.
+    project
+        .apply(Operation::InsertNode {
+            parent: NodeId::Spread(spread_id.clone()),
+            position: rect_pos,
+            node: NodeSpec::Rectangle {
+                self_id: "Rectangle/w1frame".to_string(),
+                bounds: [12.0, 24.0, 96.0, 168.0],
+                fill_color: Some("Color/w1brand".to_string()),
+                stroke_color: None,
+                stroke_weight: None,
+                item_transform: None,
+            },
+            z_slot: None,
+        })
+        .expect("frame");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    let re = Document::open(&out).expect("reparse");
+
+    // The new swatch resolves.
+    let swatch = re
+        .palette
+        .colors
+        .get("Color/w1brand")
+        .expect("new swatch present after round-trip");
+    assert_eq!(swatch.value, vec![200.0, 30.0, 90.0]);
+    // The new style is present.
+    assert!(
+        re.styles
+            .paragraph_styles
+            .contains_key("ParagraphStyle/w1body"),
+        "new style present"
+    );
+    // The new frame is present AND its fill references the new swatch,
+    // which now resolves (no dangling reference).
+    let rect = re.spreads[spread_idx]
+        .spread
+        .rectangles
+        .iter()
+        .find(|r| r.self_id.as_deref() == Some("Rectangle/w1frame"))
+        .expect("new frame present");
+    assert_eq!(rect.fill_color.as_deref(), Some("Color/w1brand"));
+    assert!(
+        re.palette.resolve("Color/w1brand").is_some(),
+        "frame fill resolves to a real swatch (appearance preserved)"
+    );
+}
