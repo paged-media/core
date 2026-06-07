@@ -11,6 +11,10 @@
 #   make test           # cargo test --workspace
 #   make check-wasm     # wasm32 build of the four wasm-target crates
 #   make test-wasm      # headless wasm test lane (scripts/test-wasm.sh)
+#   make bench          # W1.24 (B17) criterion perf benches. ADDITIVE —
+#                        # NOT part of `verify`: benches profile, they
+#                        # don't gate. `make bench-smoke` for a fast
+#                        # compile+one-iteration check (what CI can run).
 #   make fidelity       # the hard fidelity gate (delegates to diff.sh),
 #                        # or SKIP with a reason when its deps are absent
 #   make fidelity-deps  # the local-runnability doctor for the gate
@@ -33,6 +37,7 @@ SHELL := bash
 WASM_TARGET := wasm32-unknown-unknown
 
 .PHONY: verify clippy fmt test check-wasm test-wasm fidelity fidelity-deps \
+        bench bench-smoke \
         _board_init _board_report \
         _verify_clippy _verify_fmt _verify_test _verify_check_wasm \
         _verify_test_wasm _verify_fidelity
@@ -117,9 +122,8 @@ check-wasm:
 	cargo check --target $(WASM_TARGET) -p paged-sdk --features gpu
 	cargo check --target $(WASM_TARGET) -p paged-write
 
-# Headless wasm test lane. scripts/test-wasm.sh is a STUB exiting 0
-# (pending W0.8); the W0.8 crate-side work replaces it with the real
-# runner. The CI job + this target are wired to it now so the lane exists.
+# Headless wasm test lane: scripts/test-wasm.sh runs the wasm-bindgen
+# tests node-hosted (W0.8).
 test-wasm:
 	bash scripts/test-wasm.sh
 
@@ -133,3 +137,17 @@ fidelity:
 # missing. Exit 0 = gate runnable; exit 1 = something to install/fetch.
 fidelity-deps:
 	bash scripts/fidelity-deps.sh
+
+# W1.24 (audit B17) — criterion perf benches. Times the full pipeline
+# (build_document), the mutation→rebuild round-trip, hit-test, and the
+# display-list digest on regenerated paged-gen fixtures (text + tables).
+# ADDITIVE: deliberately NOT a `verify` lane — benches are a profiling
+# tool, not a pass/fail gate. See crates/paged-canvas/benches/pipeline.rs.
+bench:
+	cargo bench -p paged-canvas --bench pipeline
+
+# Fast compile + single-iteration smoke of the bench lane (no timing
+# statistics). This is the CI-affordable check that the benches still
+# build and run; the full `make bench` is for local profiling.
+bench-smoke:
+	cargo bench -p paged-canvas --bench pipeline -- --test

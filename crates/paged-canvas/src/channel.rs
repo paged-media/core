@@ -2026,7 +2026,7 @@ pub struct NearestPathPointResult {
 ///
 /// Sent piggyback on `MutationApplied` / `UndoApplied` / `RedoApplied`
 /// so the main thread's HUD can show the incremental-layout win.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Tsify)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct LayoutCacheStats {
@@ -2039,6 +2039,30 @@ pub struct LayoutCacheStats {
     /// compare cache wins against the underlying budget (AC-E-1
     /// requires < 32 ms).
     pub rebuild_ms: f32,
+    // ---- W1.24 (audit B18) — additive RebuildStats breakdown. -------
+    // These ride v35 (additive, `#[serde(default)]`): the existing
+    // `rebuild_ms` already shipped on this struct, so a richer
+    // breakdown is a back-compatible field add, not a new message kind
+    // — no PROTOCOL_VERSION bump (governance rule 1). A pre-W1.24 main
+    // thread that omits them deserialises to 0; the editor HUD reads
+    // them to show "build X ms / op Y ms over N pages" instead of one
+    // opaque number.
+    /// Wall-clock of the scene edit that preceded the rebuild, ms.
+    #[serde(default)]
+    pub op_apply_ms: f32,
+    /// Pages in the freshly built document.
+    #[serde(default)]
+    pub pages: u32,
+    /// Paragraphs laid out (relayout cost scales with this).
+    #[serde(default)]
+    pub paragraphs: u32,
+    /// Monotone rebuild counter (initial load = 1).
+    #[serde(default)]
+    pub rebuilds: u64,
+    /// Undo-log depth after this rebuild (B19 cap visible here — never
+    /// exceeds `paged_canvas::MAX_APPLIED_LOG`).
+    #[serde(default)]
+    pub applied_log_len: u32,
 }
 
 impl From<paged_text::CacheStats> for LayoutCacheStats {
@@ -2049,7 +2073,30 @@ impl From<paged_text::CacheStats> for LayoutCacheStats {
             len: s.len,
             capacity: s.capacity,
             rebuild_ms: 0.0,
+            op_apply_ms: 0.0,
+            pages: 0,
+            paragraphs: 0,
+            rebuilds: 0,
+            applied_log_len: 0,
         }
+    }
+}
+
+impl LayoutCacheStats {
+    /// W1.24 (audit B18) — fold a model's `RebuildStats` breakdown onto
+    /// the wire stats. The dispatch layer calls this after a mutation /
+    /// undo / redo so the main thread gets the op-apply / pages /
+    /// paragraphs / rebuild-count detail alongside the cache hit ratio.
+    /// `rebuild_ms` stays whatever the caller measured end-to-end (it
+    /// already includes op-apply + build); the added fields are the
+    /// finer split the model captured internally.
+    pub fn with_rebuild_stats(mut self, s: &crate::RebuildStats) -> Self {
+        self.op_apply_ms = s.op_apply_ms as f32;
+        self.pages = s.pages as u32;
+        self.paragraphs = s.paragraphs as u32;
+        self.rebuilds = s.rebuilds;
+        self.applied_log_len = s.applied_log_len as u32;
+        self
     }
 }
 
@@ -3250,6 +3297,48 @@ mod tests {
         let legacy = r#"{"family":"Inter","referenceCount":1,"isMissing":false}"#;
         let back: FontSummary = serde_json::from_str(legacy).unwrap();
         assert!(back.styles.is_empty(), "missing styles must default empty");
+    }
+
+    /// W1.24 (audit B18) — the additive `RebuildStats` breakdown on
+    /// `LayoutCacheStats` serialises as camelCase fields, round-trips,
+    /// AND an older payload that omits them deserialises to 0 (the
+    /// `#[serde(default)]` back-compat that lets them ride v35 without a
+    /// PROTOCOL_VERSION bump — `rebuild_ms` already shipped on this
+    /// struct, so the breakdown is a back-compatible field add).
+    #[test]
+    fn w124_layout_cache_stats_rebuild_breakdown_round_trips_and_defaults() {
+        let stats = LayoutCacheStats {
+            hits: 9,
+            misses: 1,
+            len: 10,
+            capacity: 16,
+            rebuild_ms: 12.5,
+            op_apply_ms: 0.3,
+            pages: 4,
+            paragraphs: 42,
+            rebuilds: 7,
+            applied_log_len: 3,
+        };
+        let json = serde_json::to_string(&stats).unwrap();
+        // Additive fields present in camelCase.
+        assert!(json.contains("\"opApplyMs\":0.3"), "{json}");
+        assert!(json.contains("\"pages\":4"), "{json}");
+        assert!(json.contains("\"paragraphs\":42"), "{json}");
+        assert!(json.contains("\"rebuilds\":7"), "{json}");
+        assert!(json.contains("\"appliedLogLen\":3"), "{json}");
+        let back: LayoutCacheStats = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, stats);
+
+        // A legacy payload carrying only the pre-W1.24 fields
+        // deserialises with the new fields defaulted to 0 — no bump.
+        let legacy = r#"{"hits":1,"misses":0,"len":1,"capacity":4,"rebuildMs":5.0}"#;
+        let back: LayoutCacheStats = serde_json::from_str(legacy).unwrap();
+        assert_eq!(back.op_apply_ms, 0.0, "missing opApplyMs defaults to 0");
+        assert_eq!(back.pages, 0, "missing pages defaults to 0");
+        assert_eq!(back.paragraphs, 0);
+        assert_eq!(back.rebuilds, 0);
+        assert_eq!(back.applied_log_len, 0);
+        assert_eq!(back.rebuild_ms, 5.0, "pre-existing rebuildMs still parses");
     }
 
     #[test]
