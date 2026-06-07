@@ -375,22 +375,22 @@ fn build_variant(seq: u32, idx: usize) -> Vec<PageItem> {
             let outer = 200.0_f32;
             let inner_inset = (outer - 80.0) * 0.5;
             let inner = inner_inset + 80.0;
-            let outer_path = PolygonSubPath {
-                anchors: vec![(0.0, 0.0), (outer, 0.0), (outer, outer), (0.0, outer)],
-                closed: true,
-            };
+            let outer_path = PolygonSubPath::corners(
+                [(0.0, 0.0), (outer, 0.0), (outer, outer), (0.0, outer)],
+                true,
+            );
             // Inner sub-path walked in opposite winding so the
             // even-odd rule treats it as a hole rather than an
             // extra fill.
-            let inner_path = PolygonSubPath {
-                anchors: vec![
+            let inner_path = PolygonSubPath::corners(
+                [
                     (inner_inset, inner_inset),
                     (inner_inset, inner),
                     (inner, inner),
                     (inner, inner_inset),
                 ],
-                closed: true,
-            };
+                true,
+            );
             let polygon = Polygon {
                 self_id: polygon_id,
                 item_transform: translate((PAGE_W_PT - outer) * 0.5, (PAGE_H_PT - outer) * 0.5),
@@ -398,6 +398,7 @@ fn build_variant(seq: u32, idx: usize) -> Vec<PageItem> {
                 stroke_color: Some("Color/Black".to_string()),
                 stroke_weight_pt: Some(1.0),
                 subpaths: vec![outer_path, inner_path],
+                text_path: None,
             };
             vec![polygon.into()]
         }

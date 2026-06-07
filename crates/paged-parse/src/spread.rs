@@ -1305,13 +1305,23 @@ pub struct TextPath {
     /// Story reference (e.g. `u3ae`). Same shape as
     /// `TextFrame::parent_story`.
     pub parent_story: String,
-    /// `PathAlignment` — `CenterPathAlignment` (default), `TopPathAlignment`,
-    /// `BottomPathAlignment`. Captured for future fidelity work; the
-    /// current renderer assumes the glyphs sit on the host path.
+    /// `PathAlignment` — a non-standard knob the early foundation read;
+    /// kept for back-compat. Real InDesign IDML uses `PathTypeAlignment`
+    /// (below) for the glyph's vertical seat on the path. The current
+    /// renderer ignores this field; prefer `path_type_alignment`.
     pub path_alignment: Option<String>,
-    /// `PathEffect` — `RainbowPathEffect`, `SkewPathEffect`,
-    /// `Path3DRibbonEffect`, `StairStepPathEffect`,
-    /// `GravityPathEffect`. Currently informational.
+    /// `PathTypeAlignment` — IDML's vertical alignment of each glyph to
+    /// the path: `BaselinePathType` (default — glyph baseline rides the
+    /// path), `CenterPathType` (glyph em-box centre on the path),
+    /// `AscenderPathType` (glyph top on the path), `DescenderPathType`
+    /// (glyph bottom on the path). The renderer honours Baseline /
+    /// Center; Ascender / Descender land too but are exercised less.
+    pub path_type_alignment: Option<String>,
+    /// `PathEffect` — `RainbowPathEffect` (default; glyph rotated to the
+    /// local tangent), `SkewPathEffect`, `Path3DRibbonEffect`,
+    /// `StairStepPathEffect`, `GravityPathEffect`. The renderer ships
+    /// Rainbow; the other four parse but render as Rainbow today (see
+    /// `emit_text_path_into`).
     pub path_effect: Option<String>,
     /// `FlipPathEffect` — `Flipped` flips the text to the path's
     /// other side. `NotFlipped` is the IDML default.
@@ -2903,6 +2913,7 @@ impl Spread {
                                 self_id: attr(&e, b"Self"),
                                 parent_story,
                                 path_alignment: attr(&e, b"PathAlignment"),
+                                path_type_alignment: attr(&e, b"PathTypeAlignment"),
                                 path_effect: attr(&e, b"PathEffect"),
                                 flip_path_effect: attr(&e, b"FlipPathEffect"),
                                 start_bracket: attr(&e, b"StartBracket")
@@ -4259,6 +4270,7 @@ mod tests {
               </Properties>
               <TextPath Self="tp1" ParentStory="story_u1"
                         PathAlignment="CenterPathAlignment"
+                        PathTypeAlignment="CenterPathType"
                         PathEffect="RainbowPathEffect"
                         FlipPathEffect="NotFlipped"
                         StartBracket="0" EndBracket="100"/>
@@ -4272,6 +4284,7 @@ mod tests {
         assert_eq!(tp.parent_story, "story_u1");
         assert_eq!(tp.self_id.as_deref(), Some("tp1"));
         assert_eq!(tp.path_alignment.as_deref(), Some("CenterPathAlignment"));
+        assert_eq!(tp.path_type_alignment.as_deref(), Some("CenterPathType"));
         assert_eq!(tp.path_effect.as_deref(), Some("RainbowPathEffect"));
         assert_eq!(tp.start_bracket, Some(0.0));
         assert_eq!(tp.end_bracket, Some(100.0));

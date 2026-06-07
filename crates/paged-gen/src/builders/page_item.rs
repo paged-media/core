@@ -87,21 +87,105 @@ impl Group {
     }
 }
 
+/// One `<PathPointType>`: an anchor plus its incoming (`left`) and
+/// outgoing (`right`) Bézier control handles. For a straight corner
+/// all three coincide (IDML's degenerate-handle serialisation); for a
+/// curve the handles pull the cubic off the chord.
+#[derive(Clone, Copy)]
+pub struct PathPoint {
+    pub anchor: (f32, f32),
+    pub left: (f32, f32),
+    pub right: (f32, f32),
+}
+
+impl PathPoint {
+    /// Straight corner — handles collapse onto the anchor.
+    pub fn corner(anchor: (f32, f32)) -> Self {
+        Self {
+            anchor,
+            left: anchor,
+            right: anchor,
+        }
+    }
+
+    /// Curve point with explicit incoming / outgoing handles.
+    pub fn curve(anchor: (f32, f32), left: (f32, f32), right: (f32, f32)) -> Self {
+        Self {
+            anchor,
+            left,
+            right,
+        }
+    }
+}
+
 /// One sub-path inside a `<Polygon>`'s `<PathGeometry>`. Each entry
 /// becomes a single `<GeometryPathType>` element with its own
 /// `<PathPointArray>`. Multiple sub-paths in one polygon = compound
 /// path (visible via the renderer's even-odd fill rule).
 pub struct PolygonSubPath {
-    /// Anchor points walked in order. For a closed sub-path, the
-    /// emitter sets `PathOpen="false"`; the points themselves don't
-    /// repeat the first vertex.
-    pub anchors: Vec<(f32, f32)>,
+    /// Points walked in order. For a closed sub-path, the emitter sets
+    /// `PathOpen="false"`; the points themselves don't repeat the
+    /// first vertex.
+    pub points: Vec<PathPoint>,
     pub closed: bool,
+}
+
+impl PolygonSubPath {
+    /// Build a straight-corner sub-path from bare anchor coordinates
+    /// (the legacy convenience — every handle collapses onto its
+    /// anchor).
+    pub fn corners(anchors: impl IntoIterator<Item = (f32, f32)>, closed: bool) -> Self {
+        Self {
+            points: anchors.into_iter().map(PathPoint::corner).collect(),
+            closed,
+        }
+    }
+}
+
+/// `<TextPath>` child of a host shape — attaches a story so its text
+/// flows along the shape's path rather than filling a column. Mirrors
+/// `paged_parse::spread::TextPath`; only the attributes the renderer
+/// reads are emitted.
+pub struct TextPathChild {
+    pub self_id: String,
+    pub parent_story: String,
+    /// `PathTypeAlignment` — `BaselinePathType` (default),
+    /// `CenterPathType`, `AscenderPathType`, `DescenderPathType`.
+    pub path_type_alignment: Option<&'static str>,
+    /// `PathEffect` — `RainbowPathEffect` (default) etc.
+    pub path_effect: Option<&'static str>,
+    /// `StartBracket` / `EndBracket` — arc-length window for the text.
+    pub start_bracket: Option<f32>,
+    pub end_bracket: Option<f32>,
+}
+
+impl TextPathChild {
+    fn write(&self, b: &mut XmlBuilder) {
+        let mut attrs: Vec<(&str, String)> = vec![
+            ("Self", self.self_id.clone()),
+            ("ParentStory", self.parent_story.clone()),
+        ];
+        if let Some(a) = self.path_type_alignment {
+            attrs.push(("PathTypeAlignment", a.to_string()));
+        }
+        if let Some(e) = self.path_effect {
+            attrs.push(("PathEffect", e.to_string()));
+        }
+        if let Some(s) = self.start_bracket {
+            attrs.push(("StartBracket", format_f32(s)));
+        }
+        if let Some(e) = self.end_bracket {
+            attrs.push(("EndBracket", format_f32(e)));
+        }
+        let refs: Vec<(&str, &str)> = attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        b.empty("TextPath", &refs);
+    }
 }
 
 /// IDML `<Polygon>` with a fully custom `<PathGeometry>` containing
 /// one or more sub-paths. Used for compound paths (e.g. a square
-/// with a square hole).
+/// with a square hole) and for text-on-path host shapes (a curved
+/// open path or a circle carrying a `<TextPath>` child).
 pub struct Polygon {
     pub self_id: String,
     pub item_transform: Matrix,
@@ -109,6 +193,9 @@ pub struct Polygon {
     pub stroke_color: Option<String>,
     pub stroke_weight_pt: Option<f32>,
     pub subpaths: Vec<PolygonSubPath>,
+    /// Optional text-on-path child. The polygon's geometry supplies
+    /// the curve; the child references the story whose text rides it.
+    pub text_path: Option<TextPathChild>,
 }
 
 impl Polygon {
@@ -141,14 +228,16 @@ impl Polygon {
             let open = if sub.closed { "false" } else { "true" };
             b.start("GeometryPathType", &[("PathOpen", open)]);
             b.start("PathPointArray", &[]);
-            for (x, y) in &sub.anchors {
-                let xy = format!("{} {}", format_f32(*x), format_f32(*y));
+            for p in &sub.points {
+                let anchor = format!("{} {}", format_f32(p.anchor.0), format_f32(p.anchor.1));
+                let left = format!("{} {}", format_f32(p.left.0), format_f32(p.left.1));
+                let right = format!("{} {}", format_f32(p.right.0), format_f32(p.right.1));
                 b.empty(
                     "PathPointType",
                     &[
-                        ("Anchor", &xy),
-                        ("LeftDirection", &xy),
-                        ("RightDirection", &xy),
+                        ("Anchor", &anchor),
+                        ("LeftDirection", &left),
+                        ("RightDirection", &right),
                     ],
                 );
             }
@@ -157,6 +246,11 @@ impl Polygon {
         }
         b.end("PathGeometry");
         b.end("Properties");
+        // `<TextPath>` is a sibling of `<Properties>` inside the host
+        // shape — the parser keys it to the current frame.
+        if let Some(tp) = &self.text_path {
+            tp.write(b);
+        }
         b.end("Polygon");
     }
 }
