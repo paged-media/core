@@ -292,6 +292,7 @@ pub fn build() -> Sample {
         page_height_pt: PAGE_H_PT,
         page_items: vec![body_frame.into()],
         override_list: Vec::new(),
+        margins: None,
     });
     // Page 2 — the page-hyperlink jump target. No body items.
     let spread1 = crate::builders::spread::write_spread(&crate::builders::spread::Spread {
@@ -303,6 +304,7 @@ pub fn build() -> Sample {
         page_height_pt: PAGE_H_PT,
         page_items: Vec::new(),
         override_list: Vec::new(),
+        margins: None,
     });
 
     let designmap = write_designmap_with_markers(

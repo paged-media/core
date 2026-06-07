@@ -5123,8 +5123,84 @@ fn emit_paragraph_into_chain(
     // for TextFrames; richer recursion (nested transparency, full
     // fill cascade) lands when the corpus needs it.
     if !paragraph.anchored_frames.is_empty() {
-        emit_anchored_frames_for_paragraph(em, paragraph, pages, total_stats);
+        // Resolve the anchor line's vertical metrics (x-height /
+        // cap-height / leading-top) for the `Line*` vertical reference
+        // points. Source the metrics the same way as the rest of the
+        // baseline math: the IDML family override first, then the head
+        // run's real parsed font metrics keyed by the raw byte hash
+        // (NOT `font_ids[0]`, which mixes in the wght axis and is
+        // keyed differently from `FontTable::metrics`). The leading is
+        // the paragraph's effective line height (explicit override or
+        // 1.2× auto).
+        let anchor_family = resolved_runs.first().and_then(|r| r.font.as_deref());
+        let anchor_metrics = anchor_family
+            .and_then(|f| em.font_table.metrics_for_family(f))
+            .or_else(|| {
+                bytes_pool
+                    .first()
+                    .map(|b| fnv_1a_u32(b.as_ref()))
+                    .and_then(|id| em.font_table.metrics_for(id))
+            });
+        let baseline_y_pt = {
+            let frame = em.chain[em.frame_idx];
+            let (_ox, oy) = pages[em.chain_pages[em.frame_idx]].spread_origin;
+            let (_sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
+            let para_origin_y = sy - oy;
+            if em.y_cursor >= 0 {
+                para_origin_y + em.y_cursor as f32 / paged_text::shape::ADVANCE_PRECISION
+            } else {
+                para_origin_y
+            }
+        };
+        let leading_pt = lopts.leading_override.unwrap_or(lopts.line_height).max(1) as f32
+            / paged_text::shape::ADVANCE_PRECISION;
+        let line_metrics = anchored::LineRefMetrics::resolve(
+            baseline_y_pt,
+            paragraph_size,
+            leading_pt,
+            anchor_metrics,
+        );
+        // W0.6 margin box for the anchor's host page, page-local pt.
+        let margin_box = resolve_page_margin_box(em.document, &pages[em.chain_pages[em.frame_idx]]);
+        emit_anchored_frames_for_paragraph(
+            em,
+            paragraph,
+            pages,
+            line_metrics,
+            margin_box,
+            total_stats,
+        );
     }
+}
+
+/// Resolve the host page's `<MarginPreference>` margin box into a
+/// page-local pt rectangle for the anchored `PageMargins` reference
+/// point. The margins live on the parsed `Spread` as a side map
+/// (`page_margins`) keyed by the page's `Self` id (W0.6); `BuiltPage::id`
+/// carries that same id. Page `Self` ids are document-unique, so a flat
+/// scan across spreads finds the one owning this page. Margins inset the
+/// page rectangle, so the box is `[left, top, width-right, height-bottom]`
+/// in the page's own (0,0)-top-left coordinate frame. Returns `None` when
+/// the page declared no margins (the reference then degenerates to the
+/// page edge).
+fn resolve_page_margin_box(
+    document: &Document,
+    page: &BuiltPage,
+) -> Option<anchored::PageMarginBox> {
+    let page_self = page.id.0.as_str();
+    if page_self.is_empty() {
+        return None;
+    }
+    let m = document
+        .spreads
+        .iter()
+        .find_map(|s| s.spread.page_margins.get(page_self))?;
+    Some(anchored::PageMarginBox {
+        left: m.left,
+        top: m.top,
+        right: (page.width_pt - m.right).max(m.left),
+        bottom: (page.height_pt - m.bottom).max(m.top),
+    })
 }
 
 /// Wraps a page's bounds for centre-point routing + its master
@@ -8347,6 +8423,13 @@ struct FontMetrics {
     x_height: Option<f32>,
     /// `hhea.ascender`, fraction of em. Always present.
     ascender: f32,
+    /// `hhea.descender`, fraction of em, stored as a POSITIVE distance
+    /// below the baseline (ttf-parser returns a negative value; we flip
+    /// the sign at parse time). Used by the anchored `TopOfLeading`
+    /// vertical reference point to split a line's leading into its
+    /// above- and below-baseline portions in the font's own
+    /// ascent:descent proportion (InDesign's leading model).
+    descender: f32,
 }
 
 impl FontTable {
@@ -8578,6 +8661,7 @@ impl FontTable {
                     cap_height: None,
                     x_height: None,
                     ascender: ov.ascender,
+                    descender: 0.0,
                 });
             family_metrics.insert(
                 family.clone(),
@@ -8585,6 +8669,9 @@ impl FontTable {
                     ascender: ov.ascender,
                     cap_height: ov.cap_height.or(substitute.cap_height),
                     x_height: ov.x_height.or(substitute.x_height),
+                    // Descender isn't an override axis (it only feeds the
+                    // anchored leading split); inherit the substitute's.
+                    descender: substitute.descender,
                 },
             );
         }
@@ -8689,6 +8776,9 @@ fn parse_font_metrics(bytes: &[u8]) -> Option<FontMetrics> {
         cap_height: face.capital_height().map(|v| v as f32 / upem),
         x_height: face.x_height().map(|v| v as f32 / upem),
         ascender: face.ascender() as f32 / upem,
+        // `hhea.descender` is negative (below the baseline); store the
+        // magnitude so the leading-split math reads naturally.
+        descender: (face.descender() as f32 / upem).abs(),
     })
 }
 

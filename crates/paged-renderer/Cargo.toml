@@ -69,3 +69,7 @@ image = { workspace = true }
 zip = { workspace = true }
 tempfile = "3"
 serde_json = "1"
+# Used by the anchored emission test to read the test font's real
+# cap-height / x-height / ascent / descent so the vertical-reference
+# assertions track the metrics instead of baked magic numbers.
+ttf-parser = "0.24"

@@ -61,7 +61,7 @@ use crate::builders::{
     master::{write_master, Master},
     page_item::{AnchoredObjectSetting, Rect, TextWrap},
     resources::{container_xml, fonts_xml, graphic_xml, preferences_xml, styles_xml},
-    spread::{write_spread, Spread},
+    spread::{write_spread, MarginPreference, Spread},
     story::{write_story, Paragraph, Run, Story},
     xml_folder::{backing_story_xml, mapping_xml, tags_xml},
 };
@@ -87,7 +87,21 @@ struct Variant {
     /// When true, the anchored frame also carries a
     /// `<TextWrapPreference>` so the host story flows around it.
     with_wrap: bool,
+    /// When true, the host `<Page>` emits a `<MarginPreference>` so the
+    /// `PageMargins` reference point resolves to the margin box instead
+    /// of degenerating to the page edge. Only the page-margins variant
+    /// sets this — the rest leave the page margin-less.
+    with_margins: bool,
 }
+
+/// Margin box (pt) for the page-margins variant. Asymmetric on every
+/// edge so the emission test can prove each margin is honoured
+/// independently (and that the right/bottom inset, not the page edge,
+/// drives the anchored placement).
+const MARGIN_TOP_PT: f32 = 36.0;
+const MARGIN_BOTTOM_PT: f32 = 48.0;
+const MARGIN_LEFT_PT: f32 = 54.0;
+const MARGIN_RIGHT_PT: f32 = 60.0;
 
 fn inline() -> AnchoredObjectSetting {
     AnchoredObjectSetting::inline()
@@ -150,6 +164,94 @@ fn custom_textframe_topright() -> AnchoredObjectSetting {
     }
 }
 
+/// Vertical reference against the anchor LINE's baseline, with the same
+/// deterministic horizontal placement as [`custom_line_cap_height`]
+/// (TextFrame + RightAlign + TopRightAnchor). The reference Y for the
+/// cap-height / top-of-leading variants is measured relative to THIS
+/// one, so they must share an identical horizontal anchor and the same
+/// anchor line — only `vertical_reference_point` differs.
+fn custom_line_baseline() -> AnchoredObjectSetting {
+    AnchoredObjectSetting {
+        anchored_position: "Anchored",
+        spine_relative: false,
+        lock_position: false,
+        pin_position: true,
+        anchor_point: Some("TopRightAnchor"),
+        horizontal_reference_point: Some("TextFrame"),
+        vertical_reference_point: Some("LineBaseline"),
+        horizontal_alignment: Some("RightAlign"),
+        vertical_alignment: Some("TopAlign"),
+        anchor_x_offset: None,
+        anchor_y_offset: None,
+    }
+}
+
+/// Like [`custom_line_baseline`] but anchors the frame's vertical
+/// position against the anchor LINE's cap-height instead of the
+/// baseline. Horizontal placement is unchanged (TextFrame + RightAlign +
+/// TopRightAnchor ⇒ deterministic x), so the renderer emission test can
+/// isolate the vertical reference: the frame's top lands
+/// `cap_height · point_size` above the anchor line's baseline.
+fn custom_line_cap_height() -> AnchoredObjectSetting {
+    AnchoredObjectSetting {
+        anchored_position: "Anchored",
+        spine_relative: false,
+        lock_position: false,
+        pin_position: true,
+        anchor_point: Some("TopRightAnchor"),
+        horizontal_reference_point: Some("TextFrame"),
+        vertical_reference_point: Some("LineCapHeight"),
+        horizontal_alignment: Some("RightAlign"),
+        vertical_alignment: Some("TopAlign"),
+        anchor_x_offset: None,
+        anchor_y_offset: None,
+    }
+}
+
+/// Vertical reference against the anchor line's leading-top
+/// (`TopOfLeading`); same deterministic horizontal placement as
+/// [`custom_line_cap_height`]. The frame's top lands at the top of the
+/// line's leading slug — `leading · ascent/(ascent+descent)` above the
+/// baseline.
+fn custom_line_top_of_leading() -> AnchoredObjectSetting {
+    AnchoredObjectSetting {
+        anchored_position: "Anchored",
+        spine_relative: false,
+        lock_position: false,
+        pin_position: true,
+        anchor_point: Some("TopRightAnchor"),
+        horizontal_reference_point: Some("TextFrame"),
+        vertical_reference_point: Some("TopOfLeading"),
+        horizontal_alignment: Some("RightAlign"),
+        vertical_alignment: Some("TopAlign"),
+        anchor_x_offset: None,
+        anchor_y_offset: None,
+    }
+}
+
+/// Custom positioning against the page MARGIN box, bottom-right corner.
+/// Exercises the W1.16 margin wire-up: with `<MarginPreference>` parsed,
+/// `PageMargins` resolves to the margin rectangle, NOT the page edge. The
+/// frame's bottom-right corner snaps to the margin box's bottom-right:
+///   ref_x = page_width - margin_right (RightAlign);
+///   ref_y = page_height - margin_bottom (BottomAlign);
+///   BottomRightAnchor ⇒ frame_left = ref_x - frame_w, frame_top = ref_y - frame_h.
+fn custom_page_margins_bottom_right() -> AnchoredObjectSetting {
+    AnchoredObjectSetting {
+        anchored_position: "Anchored",
+        spine_relative: false,
+        lock_position: false,
+        pin_position: true,
+        anchor_point: Some("BottomRightAnchor"),
+        horizontal_reference_point: Some("PageMargins"),
+        vertical_reference_point: Some("PageMargins"),
+        horizontal_alignment: Some("RightAlign"),
+        vertical_alignment: Some("BottomAlign"),
+        anchor_x_offset: None,
+        anchor_y_offset: None,
+    }
+}
+
 fn lock_position() -> AnchoredObjectSetting {
     AnchoredObjectSetting {
         lock_position: true,
@@ -170,36 +272,76 @@ fn variants() -> Vec<Variant> {
             name: "anchored · inline · in-line-with-text",
             setting_factory: inline,
             with_wrap: false,
+            with_margins: false,
         },
         Variant {
             name: "anchored · above-line · custom",
             setting_factory: above_line,
             with_wrap: false,
+            with_margins: false,
         },
         Variant {
             name: "anchored · custom-x-y · 24-12pt-offset",
             setting_factory: custom_offset,
             with_wrap: false,
+            with_margins: false,
         },
         Variant {
             name: "anchored · custom · textframe-top-right",
             setting_factory: custom_textframe_topright,
             with_wrap: false,
+            with_margins: false,
         },
         Variant {
             name: "anchored · prevent-manual-positioning",
             setting_factory: lock_position,
             with_wrap: false,
+            with_margins: false,
         },
         Variant {
             name: "anchored · spine-relative",
             setting_factory: spine_relative,
             with_wrap: false,
+            with_margins: false,
         },
         Variant {
             name: "anchored · with-text-wrap",
             setting_factory: inline,
             with_wrap: true,
+            with_margins: false,
+        },
+        // W1.16 — deterministic vertical-reference-point variants. The
+        // first three share identical horizontal placement (TextFrame +
+        // RightAlign + TopRightAnchor) and the SAME anchor line, so the
+        // emission test isolates the vertical reference: the Y delta
+        // between them equals exactly the font-metric distance
+        // (baseline → cap-height, baseline → top-of-leading).
+        Variant {
+            name: "anchored · custom · line-baseline",
+            setting_factory: custom_line_baseline,
+            with_wrap: false,
+            with_margins: false,
+        },
+        Variant {
+            name: "anchored · custom · line-cap-height",
+            setting_factory: custom_line_cap_height,
+            with_wrap: false,
+            with_margins: false,
+        },
+        Variant {
+            name: "anchored · custom · line-top-of-leading",
+            setting_factory: custom_line_top_of_leading,
+            with_wrap: false,
+            with_margins: false,
+        },
+        // W1.16 — PageMargins reference. This page DOES declare margins,
+        // so the anchored frame snaps to the margin box's bottom-right,
+        // proving the placement diverges from the page edge.
+        Variant {
+            name: "anchored · custom · page-margins-bottom-right",
+            setting_factory: custom_page_margins_bottom_right,
+            with_wrap: false,
+            with_margins: true,
         },
     ]
 }
@@ -433,6 +575,16 @@ pub fn build() -> Sample {
                 page_height_pt: PAGE_H_PT,
                 page_items: vec![label.into(), body.into()],
                 override_list: Vec::new(),
+                margins: if variant.with_margins {
+                    Some(MarginPreference {
+                        top: MARGIN_TOP_PT,
+                        bottom: MARGIN_BOTTOM_PT,
+                        left: MARGIN_LEFT_PT,
+                        right: MARGIN_RIGHT_PT,
+                    })
+                } else {
+                    None
+                },
             }),
         ));
         spread_refs.push(spread_id);

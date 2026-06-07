@@ -281,6 +281,7 @@ pub fn build() -> Sample {
                 // Z-order: body first so the obstacle paints on top.
                 page_items: vec![label.into(), body.into(), obstacle.into()],
                 override_list: Vec::new(),
+                margins: None,
             }),
         ));
         spread_refs.push(spread_id);
