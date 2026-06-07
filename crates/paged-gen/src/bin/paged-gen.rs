@@ -57,6 +57,7 @@ fn emit_sample(name: &str, out_dir: &std::path::Path) -> Result<()> {
         "text-letterspacing" => paged_gen::samples::text_letterspacing::build(),
         "text-on-path" => paged_gen::samples::text_on_path::build(),
         "text-overset" => paged_gen::samples::text_overset::build(),
+        "text-in-shape" => paged_gen::samples::text_in_shape::build(),
         "text-wrap" => paged_gen::samples::text_wrap::build(),
         "effects" => paged_gen::samples::effects::build(),
         "footnotes" => paged_gen::samples::footnotes::build(),
@@ -73,7 +74,7 @@ fn emit_sample(name: &str, out_dir: &std::path::Path) -> Result<()> {
         "numbering" => paged_gen::samples::numbering::build(),
         other => {
             anyhow::bail!(
-                "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, text-autosize, text-letterspacing, text-on-path, text-overset, text-wrap, effects, footnotes, gradients, tables, images, anchored, transparency, markers, masters, corners, links-broken, numbering"
+                "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, text-autosize, text-letterspacing, text-on-path, text-overset, text-in-shape, text-wrap, effects, footnotes, gradients, tables, images, image-clipping, anchored, transparency, markers, masters, corners, links-broken, numbering"
             )
         }
     };

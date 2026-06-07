@@ -33,6 +33,7 @@ pub mod tables;
 pub mod text;
 pub mod text_advanced;
 pub mod text_autosize;
+pub mod text_in_shape;
 pub mod text_letterspacing;
 pub mod text_on_path;
 pub mod text_overset;

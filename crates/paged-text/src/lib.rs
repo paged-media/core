@@ -26,6 +26,7 @@
 
 pub mod cache;
 pub mod compose;
+pub mod frame_shape;
 pub mod hyphenate;
 pub mod layout;
 pub mod shape;
@@ -37,6 +38,7 @@ pub use compose::{
     ComposedLine, DropCapComposition, DropCapSpec, MonospaceMeasurer, RustybuzzMeasurer,
     TextShaper,
 };
+pub use frame_shape::{cubic_steps_for_tolerance, flatten_cubic, Contour, FrameShape};
 pub use hyphenate::{Hyphenator, Language};
 pub use layout::{
     apply_bidi_reorder, layout_paragraph, layout_runs, position_line, Alignment, BidiDirection,

@@ -174,7 +174,9 @@ pub fn build() -> Sample {
         text_frame_pref: Some(TextFramePref {
             auto_sizing_type: Some("HeightOnly"),
             auto_sizing_reference_point: Some("TopLeftPoint"),
+            ..Default::default()
         }),
+        custom_subpaths: None,
     };
     // Frame B — the wrapped neighbour: plain body text frame.
     let body_frame = Rect {
@@ -196,6 +198,7 @@ pub fn build() -> Sample {
         anchored_setting: None,
         frame_effects: Vec::new(),
         text_frame_pref: None,
+        custom_subpaths: None,
     };
 
     let stories: Vec<(String, Vec<u8>)> = vec![

@@ -452,6 +452,7 @@ pub fn build() -> Sample {
             anchored_setting: None,
             frame_effects: Vec::new(),
             text_frame_pref: None,
+            custom_subpaths: None,
         };
 
         let demo_x = (PAGE_W_PT - DEMO_W_PT) * 0.5;
@@ -475,6 +476,7 @@ pub fn build() -> Sample {
             anchored_setting: None,
             frame_effects: variant.frame_effects.clone(),
             text_frame_pref: None,
+            custom_subpaths: None,
         };
 
         let mut page_items = Vec::with_capacity(3);
@@ -501,6 +503,7 @@ pub fn build() -> Sample {
                     anchored_setting: None,
                     frame_effects: Vec::new(),
                     text_frame_pref: None,
+                    custom_subpaths: None,
                 }
                 .into(),
             );
