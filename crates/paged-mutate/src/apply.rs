@@ -2567,6 +2567,113 @@ fn apply_set_property(
             )
         }
 
+        // ---- W1.16 — anchored-object settings -------------------
+        // Kind-agnostic over the page-item NodeId variants: the
+        // anchored frame is addressed by its own `Self` id regardless
+        // of whether it is an anchored TextFrame / Rectangle / Group.
+        // The setting lives in the stories, so `find_anchored_setting_mut`
+        // scans there (materialising a default block on first write).
+        // All ten share the `text_reflow` invalidation — moving an
+        // anchored object reflows its host line.
+        (
+            NodeId::TextFrame(id)
+            | NodeId::Rectangle(id)
+            | NodeId::Group(id)
+            | NodeId::Polygon(id)
+            | NodeId::Oval(id)
+            | NodeId::GraphicLine(id),
+            PropertyPath::AnchoredPosition
+            | PropertyPath::AnchorPoint
+            | PropertyPath::AnchoredHorizontalReference
+            | PropertyPath::AnchoredVerticalReference
+            | PropertyPath::AnchoredHorizontalAlignment
+            | PropertyPath::AnchoredVerticalAlignment,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let setting = find_anchored_setting_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            // The empty string clears the override (back to the
+            // cascaded default) for every Option<String> field.
+            let next = if new_val.is_empty() {
+                None
+            } else {
+                Some(new_val.clone())
+            };
+            let slot = match path {
+                PropertyPath::AnchoredPosition => &mut setting.anchored_position,
+                PropertyPath::AnchorPoint => &mut setting.anchor_point,
+                PropertyPath::AnchoredHorizontalReference => {
+                    &mut setting.horizontal_reference_point
+                }
+                PropertyPath::AnchoredVerticalReference => &mut setting.vertical_reference_point,
+                PropertyPath::AnchoredHorizontalAlignment => &mut setting.horizontal_alignment,
+                PropertyPath::AnchoredVerticalAlignment => &mut setting.vertical_alignment,
+                _ => unreachable!("guarded by the outer match"),
+            };
+            let prev = std::mem::replace(slot, next);
+            (
+                // A `None` prior round-trips as the empty string (the
+                // clear sentinel) — symmetric with the forward op.
+                Value::Text(prev.unwrap_or_default()),
+                InvalidationHint {
+                    text_reflow: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (
+            NodeId::TextFrame(id)
+            | NodeId::Rectangle(id)
+            | NodeId::Group(id)
+            | NodeId::Polygon(id)
+            | NodeId::Oval(id)
+            | NodeId::GraphicLine(id),
+            PropertyPath::AnchoredXOffset | PropertyPath::AnchoredYOffset,
+        ) => {
+            // `Length(None)` resets the offset to 0 (IDML's default).
+            let new_val = expect_length(path, value)?.unwrap_or(0.0);
+            let setting = find_anchored_setting_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let slot = match path {
+                PropertyPath::AnchoredXOffset => &mut setting.anchor_x_offset,
+                PropertyPath::AnchoredYOffset => &mut setting.anchor_y_offset,
+                _ => unreachable!("guarded by the outer match"),
+            };
+            let prev = std::mem::replace(slot, new_val);
+            (
+                Value::Length(Some(prev)),
+                InvalidationHint {
+                    text_reflow: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (
+            NodeId::TextFrame(id)
+            | NodeId::Rectangle(id)
+            | NodeId::Group(id)
+            | NodeId::Polygon(id)
+            | NodeId::Oval(id)
+            | NodeId::GraphicLine(id),
+            PropertyPath::AnchoredSpineRelative | PropertyPath::AnchoredLockPosition,
+        ) => {
+            let new_val = expect_bool(path, value)?;
+            let setting = find_anchored_setting_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let slot = match path {
+                PropertyPath::AnchoredSpineRelative => &mut setting.spine_relative,
+                PropertyPath::AnchoredLockPosition => &mut setting.lock_position,
+                _ => unreachable!("guarded by the outer match"),
+            };
+            let prev = std::mem::replace(slot, new_val);
+            (
+                Value::Bool(prev),
+                InvalidationHint {
+                    text_reflow: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         _ => {
             return Err(OperationError::UnsupportedProperty {
                 node: node.clone(),
@@ -6192,6 +6299,44 @@ fn find_rectangle_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mu
         for rect in &mut parsed.spread.rectangles {
             if rect.self_id.as_deref() == Some(self_id) {
                 return Some(rect);
+            }
+        }
+    }
+    None
+}
+
+/// W1.16 — locate an anchored frame's `AnchoredObjectSetting` by its
+/// `Self` id, materialising a default block when the frame carried
+/// none (writing a single anchored attribute on a frame with no
+/// `<AnchoredObjectSetting>` yet creates one — matching the
+/// drop-shadow / text-wrap "materialise on first write" precedent).
+/// Anchored frames live on a story's `Paragraph.anchored_frames`
+/// (parsed from frames nested under a `<CharacterStyleRange>`), not in
+/// the spread page-item vecs, so this scans the stories — recursing
+/// into anchored Group children, which can themselves nest frames.
+fn find_anchored_setting_mut<'a>(
+    doc: &'a mut Document,
+    self_id: &str,
+) -> Option<&'a mut paged_parse::AnchoredObjectSetting> {
+    fn in_frames<'b>(
+        frames: &'b mut [paged_parse::AnchoredFrame],
+        self_id: &str,
+    ) -> Option<&'b mut paged_parse::AnchoredObjectSetting> {
+        for frame in frames.iter_mut() {
+            if frame.self_id.as_deref() == Some(self_id) {
+                return Some(frame.setting.get_or_insert_with(Default::default));
+            }
+            // Anchored Groups can nest further anchored frames.
+            if let Some(found) = in_frames(&mut frame.children, self_id) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    for parsed in &mut doc.stories {
+        for para in &mut parsed.story.paragraphs {
+            if let Some(found) = in_frames(&mut para.anchored_frames, self_id) {
+                return Some(found);
             }
         }
     }

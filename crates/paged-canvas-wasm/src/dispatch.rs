@@ -417,6 +417,15 @@ impl WorkerCore {
                 let bounds = model.word_bounds(&story_id, offset);
                 WorkerToMainKind::WordBoundsResult { bounds }
             }
+            MainToWorkerKind::RequestParagraphBounds { story_id, offset } => {
+                let Some(model) = self.model.as_ref() else {
+                    reply!(WorkerToMainKind::MutationFailed {
+                        error: WorkerError::NoDocument,
+                    });
+                };
+                let bounds = model.paragraph_bounds(&story_id, offset);
+                WorkerToMainKind::ParagraphBoundsResult { bounds }
+            }
             MainToWorkerKind::Undo => {
                 if self.model.is_none() {
                     reply!(WorkerToMainKind::MutationFailed {

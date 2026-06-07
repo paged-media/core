@@ -131,7 +131,17 @@ export type WorkerToMain = WorkerToMainKind & {
 ///   cap, JSON envelope `{v, data, engine?}`). `element_properties` on
 ///   a leaf page item now also returns its `x-paged:*` entries as
 ///   `PropertyPath::PluginMetadata` / `Value::PluginMetadata` pairs.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(34);
+/// - v35 (W1.23 — paragraph-bounds read surface): new message kinds
+///   `RequestParagraphBounds { story_id, offset }` →
+///   `ParagraphBoundsResult { bounds }` — the `[start, end)` byte span
+///   of the paragraph containing the offset (the caret's triple-click
+///   wire). Mirrors `RequestWordBounds` / `WordBoundsResult` exactly.
+///   New message kinds, so this bumps. Rides v35 (added before first
+///   consumer sync): the additive `FontSummary.styles` field (W1.23 —
+///   styles-per-family for the glyphs panel) — a `#[serde(default)]`
+///   field that wouldn't bump on its own, but it ships in the same
+///   mergeable unit as the new kinds.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(35);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -347,6 +357,17 @@ pub enum MainToWorkerKind {
     /// `word_bounds`); an offset past the story end clamps to the
     /// final word.
     RequestWordBounds { story_id: String, offset: u32 },
+    /// W1.23 (protocol v35) — the `[start, end)` story byte offsets of
+    /// the paragraph containing the character at `offset`. The editor
+    /// flips triple-click paragraph-selection on this. Reply:
+    /// `ParagraphBoundsResult`. Offsets are story-local *bytes* — the
+    /// same address space `HitResult.offset_within_story` /
+    /// `RequestWordBounds` / `RequestLineBounds` use; a paragraph is a
+    /// maximal run between the synthetic inter-paragraph `\n`
+    /// separators (the boundary `\n` is excluded from the span). An
+    /// offset past the story end clamps to the final paragraph. Mirrors
+    /// `RequestWordBounds` exactly.
+    RequestParagraphBounds { story_id: String, offset: u32 },
     /// Undo the most recent applied mutation. Reply: `UndoApplied`
     /// or `MutationFailed` (when the log is empty).
     Undo,
@@ -750,6 +771,14 @@ pub enum WorkerToMainKind {
     WordBoundsResult {
         #[serde(default)]
         bounds: Option<crate::geometry::WordBounds>,
+    },
+    /// W1.23 (protocol v35) — `RequestParagraphBounds` reply. `None`
+    /// when the story doesn't resolve or carries no text; otherwise the
+    /// `[start, end)` byte span of the paragraph containing the
+    /// requested offset.
+    ParagraphBoundsResult {
+        #[serde(default)]
+        bounds: Option<crate::geometry::ParagraphBounds>,
     },
     /// Phase 3 Item 7 — undo applied. `undone_seq` is the
     /// `applied_seq` of the mutation that was reversed.
@@ -1526,6 +1555,16 @@ pub struct FontSummary {
     /// a fabricated `embedded` flag would mislead the panel.
     #[serde(default)]
     pub is_missing: bool,
+    /// W1.23 — the distinct style strings observed for this family,
+    /// sorted. Populated from the document's own `FontStyle` strings
+    /// (character runs + paragraph/character style defaults) unioned
+    /// with the styles registered for the family via `RegisterFont`.
+    /// The glyphs / fonts panel renders these as the per-family style
+    /// list. Additive field (rides v35) — `#[serde(default)]` keeps the
+    /// wire backward-compatible, so an older consumer that doesn't know
+    /// the field reads an empty list.
+    #[serde(default)]
+    pub styles: Vec<String>,
 }
 
 /// SDK Phase 5 (v1 sweep) — resolved colour readout for a single
@@ -2928,8 +2967,99 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v34() {
-        assert_eq!(PROTOCOL_VERSION.0, 34);
+    fn protocol_version_is_v35() {
+        assert_eq!(PROTOCOL_VERSION.0, 35);
+    }
+
+    /// W1.23 — the new `RequestParagraphBounds` request kind serialises
+    /// with the camelCase tag the TS side switches on and round-trips
+    /// its `storyId` / `offset` payload.
+    #[test]
+    fn w123_request_paragraph_bounds_round_trips() {
+        let env = MainToWorker {
+            seq: 9,
+            protocol: PROTOCOL_VERSION,
+            kind: MainToWorkerKind::RequestParagraphBounds {
+                story_id: "story1".into(),
+                offset: 7,
+            },
+        };
+        let json = serde_json::to_string(&env).unwrap();
+        assert!(
+            json.contains("\"kind\":\"requestParagraphBounds\""),
+            "tag missing: {json}"
+        );
+        assert!(json.contains("\"storyId\":\"story1\""), "{json}");
+        let back: MainToWorker = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            MainToWorkerKind::RequestParagraphBounds { story_id, offset } => {
+                assert_eq!(story_id, "story1");
+                assert_eq!(offset, 7);
+            }
+            other => panic!("expected RequestParagraphBounds, got {other:?}"),
+        }
+    }
+
+    /// W1.23 — the `ParagraphBoundsResult` reply kind serialises with
+    /// its camelCase tag and round-trips the `bounds` payload (both the
+    /// `Some` span and the `None` "no resolution" case).
+    #[test]
+    fn w123_paragraph_bounds_result_round_trips() {
+        let env = WorkerToMain {
+            seq: Some(9),
+            protocol: PROTOCOL_VERSION,
+            kind: WorkerToMainKind::ParagraphBoundsResult {
+                bounds: Some(crate::geometry::ParagraphBounds { start: 6, end: 10 }),
+            },
+        };
+        let json = serde_json::to_string(&env).unwrap();
+        assert!(
+            json.contains("\"kind\":\"paragraphBoundsResult\""),
+            "tag missing: {json}"
+        );
+        let back: WorkerToMain = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            WorkerToMainKind::ParagraphBoundsResult { bounds } => {
+                let b = bounds.expect("Some span");
+                assert_eq!((b.start, b.end), (6, 10));
+            }
+            other => panic!("expected ParagraphBoundsResult, got {other:?}"),
+        }
+        // The `None` case also round-trips.
+        let none = WorkerToMain {
+            seq: Some(9),
+            protocol: PROTOCOL_VERSION,
+            kind: WorkerToMainKind::ParagraphBoundsResult { bounds: None },
+        };
+        let json = serde_json::to_string(&none).unwrap();
+        let back: WorkerToMain = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            back.kind,
+            WorkerToMainKind::ParagraphBoundsResult { bounds: None }
+        ));
+    }
+
+    /// W1.23 — the additive `FontSummary.styles` field serialises as a
+    /// camelCase array and survives a round-trip, AND an older payload
+    /// that omits the field deserialises to an empty list (the
+    /// `#[serde(default)]` back-compat that lets it ride v35 without an
+    /// extra bump).
+    #[test]
+    fn w123_font_summary_styles_field_round_trips_and_defaults() {
+        let fs = FontSummary {
+            family: "Open Sans".into(),
+            reference_count: 3,
+            is_missing: false,
+            styles: vec!["Bold".into(), "Regular".into()],
+        };
+        let json = serde_json::to_string(&fs).unwrap();
+        assert!(json.contains("\"styles\":[\"Bold\",\"Regular\"]"), "{json}");
+        let back: FontSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.styles, vec!["Bold".to_string(), "Regular".to_string()]);
+        // A legacy payload with no `styles` key defaults to empty.
+        let legacy = r#"{"family":"Inter","referenceCount":1,"isMissing":false}"#;
+        let back: FontSummary = serde_json::from_str(legacy).unwrap();
+        assert!(back.styles.is_empty(), "missing styles must default empty");
     }
 
     #[test]

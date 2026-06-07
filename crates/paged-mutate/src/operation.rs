@@ -1037,6 +1037,55 @@ pub enum PropertyPath {
     /// `value: None` deletes the entry. Write-gated at apply time:
     /// key prefix, 64 KiB cap, JSON envelope `{v, data, …}`.
     PluginMetadata,
+
+    // ---- W1.16 — anchored-object settings -----------------------
+    // The `<AnchoredObjectSetting>` block that lives on an inline /
+    // anchored frame nested inside a story's `<CharacterStyleRange>`.
+    // The frame is addressed by its OWN page-item `NodeId` (the
+    // anchored TextFrame / Rectangle / Group's `Self` id) — the apply
+    // arm locates its `AnchoredObjectSetting` by scanning the stories'
+    // runs (and nested group children) rather than the spread page-item
+    // vecs. All ten are kind-agnostic over the page-item NodeId
+    // variants (like the Track J path ops). The setting changes the
+    // anchored frame's placement, so the InvalidationHint targets
+    // text_reflow (anchored placement reflows the host line). Writing
+    // any of them materialises a default `AnchoredObjectSetting` when
+    // the frame carried none.
+    /// W1.16 — `AnchoredPosition` (`"InlinePosition"`, `"AbovePosition"`,
+    /// `"Custom"`). `Value::Text`; empty clears the override (`None` ⇒
+    /// the cascaded `InlinePosition` default).
+    AnchoredPosition,
+    /// W1.16 — `AnchorPoint` (`"TopLeftAnchor"`, `"CenterAnchor"`, …).
+    /// `Value::Text`; empty clears the override.
+    AnchorPoint,
+    /// W1.16 — `AnchorXoffset` in pt (horizontal nudge from the anchor
+    /// point). `Value::Length(Some(_))`; `Length(None)` resets to 0
+    /// (the IDML default offset).
+    AnchoredXOffset,
+    /// W1.16 — `AnchorYoffset` in pt. Same shape as `AnchoredXOffset`.
+    AnchoredYOffset,
+    /// W1.16 — `HorizontalReferencePoint` for Custom positioning
+    /// (`"AnchorLocation"`, `"ColumnEdge"`, `"TextFrame"`,
+    /// `"PageMargins"`, `"PageEdge"`). `Value::Text`; empty clears.
+    AnchoredHorizontalReference,
+    /// W1.16 — `VerticalReferencePoint` (`"LineBaseline"`,
+    /// `"LineXHeight"`, `"Column"`, `"TextFrame"`, `"PageMargins"`,
+    /// `"PageEdge"`, …). `Value::Text`; empty clears.
+    AnchoredVerticalReference,
+    /// W1.16 — `HorizontalAlignment` (`"LeftAlign"`, `"CenterAlign"`,
+    /// `"RightAlign"`). `Value::Text`; empty clears.
+    AnchoredHorizontalAlignment,
+    /// W1.16 — `VerticalAlignment` (`"TopAlign"`, `"CenterAlign"`,
+    /// `"BottomAlign"`). `Value::Text`; empty clears.
+    AnchoredVerticalAlignment,
+    /// W1.16 — `SpineRelative` flag (flips the offset direction on
+    /// facing pages). `Value::Bool`. The parse field is a plain
+    /// `bool` (default `false`), so this round-trips bytewise.
+    AnchoredSpineRelative,
+    /// W1.16 — `LockPosition` flag (pins the anchored frame to its
+    /// current page position). `Value::Bool`. Plain `bool` parse
+    /// field (default `false`); round-trips bytewise.
+    AnchoredLockPosition,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -1265,6 +1314,16 @@ impl PropertyPath {
             PropertyPath::TableRowCount => "table.rowCount",
             PropertyPath::TableColumnCount => "table.columnCount",
             PropertyPath::PluginMetadata => "plugin.metadata",
+            PropertyPath::AnchoredPosition => "anchored.position",
+            PropertyPath::AnchorPoint => "anchored.anchorPoint",
+            PropertyPath::AnchoredXOffset => "anchored.xOffset",
+            PropertyPath::AnchoredYOffset => "anchored.yOffset",
+            PropertyPath::AnchoredHorizontalReference => "anchored.horizontalReference",
+            PropertyPath::AnchoredVerticalReference => "anchored.verticalReference",
+            PropertyPath::AnchoredHorizontalAlignment => "anchored.horizontalAlignment",
+            PropertyPath::AnchoredVerticalAlignment => "anchored.verticalAlignment",
+            PropertyPath::AnchoredSpineRelative => "anchored.spineRelative",
+            PropertyPath::AnchoredLockPosition => "anchored.lockPosition",
         }
     }
 }

@@ -376,6 +376,160 @@ fn request_caret_nav_replies_caret_nav_result() {
 }
 
 // ---------------------------------------------------------------------
+// 4b. Paragraph bounds (W1.23 — caret triple-click wire)
+// ---------------------------------------------------------------------
+
+/// A two-page-irrelevant, single-frame IDML whose story `story1`
+/// carries THREE paragraphs ("Alpha", "Beta", "Gamma") so the
+/// paragraph-bounds dispatch can be exercised across the synthetic
+/// inter-paragraph `\n` separators. Reconstructed story text is
+/// "Alpha\nBeta\nGamma": "Alpha" = [0,5), `\n` at 5, "Beta" = [6,10),
+/// `\n` at 10, "Gamma" = [11,16).
+fn multi_para_idml() -> Vec<u8> {
+    let mut buf = Vec::new();
+    {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("mimetype", opts).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+        zip.start_file("META-INF/container.xml", opts).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+<rootfiles><rootfile full-path="designmap.xml" media-type="text/xml"/></rootfiles></container>"#,
+        )
+        .unwrap();
+        zip.start_file("designmap.xml", opts).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document DOMVersion="13.1" Self="d1">
+<idPkg:Spread src="Spreads/Spread_s1.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/>
+<idPkg:Story src="Stories/Story_story1.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/>
+</Document>"#,
+        )
+        .unwrap();
+        zip.start_file("Spreads/Spread_s1.xml", opts).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="13.1">
+<Spread Self="s1" PageCount="1">
+<Page Self="p1" Name="1" GeometricBounds="0 0 792 612" ItemTransform="1 0 0 1 0 0"/>
+<TextFrame Self="tf1" ParentStory="story1" GeometricBounds="100 100 400 400" ItemTransform="1 0 0 1 0 0"/>
+</Spread></idPkg:Spread>"#,
+        )
+        .unwrap();
+        zip.start_file("Stories/Story_story1.xml", opts).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="13.1">
+<Story Self="story1">
+<ParagraphStyleRange><CharacterStyleRange><Content>Alpha</Content></CharacterStyleRange></ParagraphStyleRange>
+<ParagraphStyleRange><CharacterStyleRange><Content>Beta</Content></CharacterStyleRange></ParagraphStyleRange>
+<ParagraphStyleRange><CharacterStyleRange><Content>Gamma</Content></CharacterStyleRange></ParagraphStyleRange>
+</Story></idPkg:Story>"#,
+        )
+        .unwrap();
+        zip.finish().unwrap();
+    }
+    buf
+}
+
+/// Load `multi_para_idml()` and assert the load succeeded.
+fn multi_para_core() -> WorkerCore {
+    let mut core = WorkerCore::new();
+    let bytes: Vec<u8> = multi_para_idml();
+    let reply = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 1,
+            "protocol": protocol(),
+            "kind": "loadDocument",
+            "payload": { "bytes": bytes }
+        }),
+    );
+    assert_eq!(reply["kind"], "documentLoaded", "fixture must load: {reply}");
+    core
+}
+
+/// Round-trip a `requestParagraphBounds` and return `(start, end)`.
+fn para_bounds(core: &mut WorkerCore, offset: u64) -> (u64, u64) {
+    let reply = roundtrip(
+        core,
+        &serde_json::json!({
+            "seq": 40 + offset,
+            "protocol": protocol(),
+            "kind": "requestParagraphBounds",
+            "payload": { "storyId": "story1", "offset": offset }
+        }),
+    );
+    assert_eq!(reply["kind"], "paragraphBoundsResult", "{reply}");
+    let b = &reply["payload"]["bounds"];
+    assert!(b.is_object(), "expected a paragraph span, got {b}");
+    (b["start"].as_u64().unwrap(), b["end"].as_u64().unwrap())
+}
+
+#[test]
+fn request_paragraph_bounds_middle_of_first_paragraph() {
+    let mut core = multi_para_core();
+    // Offset 2 is inside "Alpha" → [0, 5).
+    assert_eq!(para_bounds(&mut core, 2), (0, 5));
+}
+
+#[test]
+fn request_paragraph_bounds_at_paragraph_leading_edge() {
+    let mut core = multi_para_core();
+    // Offset 6 is "Beta"'s first byte → [6, 10).
+    assert_eq!(para_bounds(&mut core, 6), (6, 10));
+}
+
+#[test]
+fn request_paragraph_bounds_on_separator_resolves_to_preceding() {
+    let mut core = multi_para_core();
+    // Offset 5 lands on the first synthetic `\n`; it resolves to the
+    // paragraph that ENDS there ("Alpha", [0, 5)).
+    assert_eq!(para_bounds(&mut core, 5), (0, 5));
+}
+
+#[test]
+fn request_paragraph_bounds_middle_paragraph() {
+    let mut core = multi_para_core();
+    // Offset 8 is inside "Beta" → [6, 10).
+    assert_eq!(para_bounds(&mut core, 8), (6, 10));
+}
+
+#[test]
+fn request_paragraph_bounds_last_paragraph() {
+    let mut core = multi_para_core();
+    // Offset 13 is inside "Gamma" → [11, 16).
+    assert_eq!(para_bounds(&mut core, 13), (11, 16));
+}
+
+#[test]
+fn request_paragraph_bounds_past_end_clamps_to_final_paragraph() {
+    let mut core = multi_para_core();
+    // Far past the story end clamps to "Gamma" → [11, 16).
+    assert_eq!(para_bounds(&mut core, 9999), (11, 16));
+}
+
+#[test]
+fn request_paragraph_bounds_with_no_document_fails_cleanly() {
+    let mut core = WorkerCore::new();
+    let reply = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 60,
+            "protocol": protocol(),
+            "kind": "requestParagraphBounds",
+            "payload": { "storyId": "story1", "offset": 0 }
+        }),
+    );
+    assert_eq!(reply["kind"], "mutationFailed");
+    assert_eq!(reply["payload"]["error"]["kind"], "noDocument");
+}
+
+// ---------------------------------------------------------------------
 // 5. Page request + unknown page
 // ---------------------------------------------------------------------
 
@@ -461,19 +615,19 @@ fn export_idml_without_document_replies_failed() {
 }
 
 // ---------------------------------------------------------------------
-// 7. Protocol-version sentinel (v34) + unknown kind
+// 7. Protocol-version sentinel (v35) + unknown kind
 // ---------------------------------------------------------------------
 
 #[test]
 fn every_reply_stamps_the_current_protocol_version() {
-    // v34 sentinel — every reply must carry the build's PROTOCOL_VERSION
+    // v35 sentinel — every reply must carry the build's PROTOCOL_VERSION
     // so the client can detect a stale worker. We assert the constant is
-    // 34 (the documented current version) AND that an arbitrary reply
+    // 35 (the documented current version) AND that an arbitrary reply
     // stamps it.
     assert_eq!(
         protocol(),
-        34,
-        "PROTOCOL_VERSION drifted from documented v34"
+        35,
+        "PROTOCOL_VERSION drifted from documented v35"
     );
     let mut core = loaded_core();
     let reply = roundtrip(
@@ -484,7 +638,7 @@ fn every_reply_stamps_the_current_protocol_version() {
             "kind": "requestDocumentMeta"
         }),
     );
-    assert_eq!(reply["protocol"].as_u64().unwrap(), 34);
+    assert_eq!(reply["protocol"].as_u64().unwrap(), 35);
     assert_eq!(reply["kind"], "documentMetaReply");
 }
 

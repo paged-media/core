@@ -775,6 +775,17 @@ fn parse_property_path(s: &str) -> Option<paged_mutate::PropertyPath> {
         "tableRowCount" => TableRowCount,
         "tableColumnCount" => TableColumnCount,
         "pluginMetadata" => PluginMetadata,
+        // W1.16 — anchored-object settings.
+        "anchoredPosition" => AnchoredPosition,
+        "anchorPoint" => AnchorPoint,
+        "anchoredXOffset" => AnchoredXOffset,
+        "anchoredYOffset" => AnchoredYOffset,
+        "anchoredHorizontalReference" => AnchoredHorizontalReference,
+        "anchoredVerticalReference" => AnchoredVerticalReference,
+        "anchoredHorizontalAlignment" => AnchoredHorizontalAlignment,
+        "anchoredVerticalAlignment" => AnchoredVerticalAlignment,
+        "anchoredSpineRelative" => AnchoredSpineRelative,
+        "anchoredLockPosition" => AnchoredLockPosition,
         _ => return None,
     })
 }
@@ -971,6 +982,17 @@ fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
         TableRowCount => "tableRowCount",
         TableColumnCount => "tableColumnCount",
         PluginMetadata => "pluginMetadata",
+        // W1.16 — anchored-object settings.
+        AnchoredPosition => "anchoredPosition",
+        AnchorPoint => "anchorPoint",
+        AnchoredXOffset => "anchoredXOffset",
+        AnchoredYOffset => "anchoredYOffset",
+        AnchoredHorizontalReference => "anchoredHorizontalReference",
+        AnchoredVerticalReference => "anchoredVerticalReference",
+        AnchoredHorizontalAlignment => "anchoredHorizontalAlignment",
+        AnchoredVerticalAlignment => "anchoredVerticalAlignment",
+        AnchoredSpineRelative => "anchoredSpineRelative",
+        AnchoredLockPosition => "anchoredLockPosition",
     }
 }
 
@@ -1053,7 +1075,14 @@ fn js_value_to_wire(
             | P::FrameFeatherCornerType
             | P::FrameBlendMode
             // W3.A1 — cell vertical-justify enum string.
-            | P::CellVerticalJustification => W::Text(s),
+            | P::CellVerticalJustification
+            // W1.16 — anchored-object enum-string settings.
+            | P::AnchoredPosition
+            | P::AnchorPoint
+            | P::AnchoredHorizontalReference
+            | P::AnchoredVerticalReference
+            | P::AnchoredHorizontalAlignment
+            | P::AnchoredVerticalAlignment => W::Text(s),
             // Color-ref paths.
             P::FrameFillColor
             | P::FrameStrokeColor

@@ -2778,6 +2778,100 @@ impl CanvasModel {
     /// `CharacterRun`s within `[start, end)`, collapses uniform
     /// values, emits `None` for "mixed" so the binding renderer
     /// can show an em-dash placeholder.
+    /// W1.16 — read entries for an anchored frame's
+    /// `AnchoredObjectSetting`. Anchored frames live on a story's
+    /// `CharacterRun.anchored_frames` (recursing into anchored Group
+    /// children), addressed by their own `Self` id. Returns `None` when
+    /// no anchored frame carries the requested id (so `element_properties`
+    /// can fall through to the spread page-item lookup). The ten entries
+    /// mirror the W1.16 mutation surface; `None`-valued Option fields read
+    /// back as the clear sentinel (empty `Text`), matching the apply arm.
+    fn anchored_frame_properties(
+        &self,
+        id: &crate::element_selection::ElementId,
+    ) -> Option<crate::channel::ElementProperties> {
+        use crate::channel::{ElementProperties, PropertyEntry};
+        use paged_parse::{AnchoredFrame, AnchoredObjectSetting};
+        use paged_mutate::{PropertyPath, Value};
+
+        let raw = id.raw_id();
+
+        fn find<'a>(frames: &'a [AnchoredFrame], raw: &str) -> Option<&'a AnchoredFrame> {
+            for frame in frames {
+                if frame.self_id.as_deref() == Some(raw) {
+                    return Some(frame);
+                }
+                if let Some(found) = find(&frame.children, raw) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let frame = self.scene.stories.iter().find_map(|parsed| {
+            parsed
+                .story
+                .paragraphs
+                .iter()
+                .find_map(|p| find(&p.anchored_frames, raw))
+        })?;
+
+        // Read against the materialised-or-default setting so the
+        // inspector always shows every row (an anchored frame with no
+        // `<AnchoredObjectSetting>` reads the IDML defaults).
+        let default = AnchoredObjectSetting::default();
+        let s = frame.setting.as_ref().unwrap_or(&default);
+        let text = |v: &Option<String>| Value::Text(v.clone().unwrap_or_default());
+        let entries = vec![
+            PropertyEntry {
+                path: PropertyPath::AnchoredPosition,
+                value: Some(text(&s.anchored_position)),
+            },
+            PropertyEntry {
+                path: PropertyPath::AnchorPoint,
+                value: Some(text(&s.anchor_point)),
+            },
+            PropertyEntry {
+                path: PropertyPath::AnchoredXOffset,
+                value: Some(Value::Length(Some(s.anchor_x_offset))),
+            },
+            PropertyEntry {
+                path: PropertyPath::AnchoredYOffset,
+                value: Some(Value::Length(Some(s.anchor_y_offset))),
+            },
+            PropertyEntry {
+                path: PropertyPath::AnchoredHorizontalReference,
+                value: Some(text(&s.horizontal_reference_point)),
+            },
+            PropertyEntry {
+                path: PropertyPath::AnchoredVerticalReference,
+                value: Some(text(&s.vertical_reference_point)),
+            },
+            PropertyEntry {
+                path: PropertyPath::AnchoredHorizontalAlignment,
+                value: Some(text(&s.horizontal_alignment)),
+            },
+            PropertyEntry {
+                path: PropertyPath::AnchoredVerticalAlignment,
+                value: Some(text(&s.vertical_alignment)),
+            },
+            PropertyEntry {
+                path: PropertyPath::AnchoredSpineRelative,
+                value: Some(Value::Bool(s.spine_relative)),
+            },
+            PropertyEntry {
+                path: PropertyPath::AnchoredLockPosition,
+                value: Some(Value::Bool(s.lock_position)),
+            },
+        ];
+        Some(ElementProperties {
+            id: id.clone(),
+            kind: id.kind_label().to_string(),
+            name: frame.self_id.clone(),
+            entries,
+        })
+    }
+
     pub fn element_properties(
         &self,
         id: &crate::element_selection::ElementId,
@@ -2809,6 +2903,21 @@ impl CanvasModel {
         } = id
         {
             return self.cell_properties(story_id, table_id, *row, *col, id);
+        }
+
+        // W1.16 — an anchored frame is addressed by its own page-item
+        // id, but it lives in a story's run (not the spread page-item
+        // vecs), so resolve it here before the spread loop. The
+        // `AnchoredObjectSetting` read entries surface its placement.
+        if matches!(
+            id,
+            ElementId::TextFrame(_) | ElementId::Rectangle(_) | ElementId::Group(_)
+        ) {
+            if let Some(props) = self.anchored_frame_properties(id) {
+                return Some(props);
+            }
+            // Fall through: a non-anchored TextFrame / Rectangle / Group
+            // resolves against the spreads below as usual.
         }
 
         let raw = id.raw_id();
@@ -4332,13 +4441,31 @@ impl CanvasModel {
     /// "fonts installed".
     pub fn fonts(&self) -> Vec<crate::channel::FontSummary> {
         use crate::channel::FontSummary;
-        use std::collections::BTreeMap;
+        use std::collections::{BTreeMap, BTreeSet};
         let mut counts: BTreeMap<String, u32> = BTreeMap::new();
+        // W1.23 — distinct style strings per family. The parse layer
+        // has no Fonts.xml registry (fonts are referenced by name from
+        // runs + style defaults), so the honest source for "styles in
+        // this family" is the `FontStyle` strings the document itself
+        // carries, unioned with the styles the worker has registered
+        // face bytes for via `RegisterFont`.
+        let mut styles: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut note_style = |family: &str, style: &Option<String>| {
+            if let Some(style) = style {
+                if !style.is_empty() {
+                    styles
+                        .entry(family.to_string())
+                        .or_default()
+                        .insert(style.clone());
+                }
+            }
+        };
         for story in &self.scene.stories {
             for para in &story.story.paragraphs {
                 for run in &para.runs {
                     if let Some(family) = &run.font {
                         *counts.entry(family.clone()).or_default() += 1;
+                        note_style(family, &run.font_style);
                     }
                 }
             }
@@ -4346,11 +4473,27 @@ impl CanvasModel {
         for (_, style) in self.scene.styles.paragraph_styles.iter() {
             if let Some(family) = &style.font {
                 *counts.entry(family.clone()).or_default() += 1;
+                note_style(family, &style.font_style);
             }
         }
         for (_, style) in self.scene.styles.character_styles.iter() {
             if let Some(family) = &style.font {
                 *counts.entry(family.clone()).or_default() += 1;
+                note_style(family, &style.font_style);
+            }
+        }
+        // Union in the styles the worker registered face bytes for, so
+        // the panel can list a registered style even if no content uses
+        // it yet. Family match is exact here (the registry is keyed by
+        // the family string as the editor registered it).
+        for entry in &self.font_registry {
+            if let Some(style) = &entry.style {
+                if !style.is_empty() {
+                    styles
+                        .entry(entry.family.clone())
+                        .or_default()
+                        .insert(style.clone());
+                }
             }
         }
         // panels.md gap 4 — a family is "missing" when the worker's
@@ -4370,10 +4513,15 @@ impl CanvasModel {
             .into_iter()
             .map(|(family, reference_count)| {
                 let is_missing = !registered.contains(&family.to_lowercase());
+                let styles = styles
+                    .get(&family)
+                    .map(|s| s.iter().cloned().collect())
+                    .unwrap_or_default();
                 FontSummary {
                     family,
                     reference_count,
                     is_missing,
+                    styles,
                 }
             })
             .collect()
@@ -5005,6 +5153,29 @@ impl CanvasModel {
             }
         }
         crate::geometry::word_bounds(&text, offset)
+    }
+
+    /// W1.23 — the `[start, end)` byte span of the paragraph containing
+    /// `offset`, per the story's reconstructed byte string (paragraphs
+    /// joined by the synthetic inter-paragraph `\n`). Backs the caret's
+    /// triple-click paragraph-selection. Mirrors [`Self::word_bounds`]
+    /// exactly: same reconstruction, same byte-offset address space.
+    pub fn paragraph_bounds(
+        &self,
+        story_id: &str,
+        offset: u32,
+    ) -> Option<crate::geometry::ParagraphBounds> {
+        let story = self.scene.stories.iter().find(|s| s.self_id == story_id)?;
+        let mut text = String::new();
+        for (i, para) in story.story.paragraphs.iter().enumerate() {
+            if i > 0 {
+                text.push('\n');
+            }
+            for run in &para.runs {
+                text.push_str(&run.text);
+            }
+        }
+        crate::geometry::paragraph_bounds(&text, offset)
     }
 
     pub fn element_geometry(
@@ -6102,5 +6273,82 @@ mod tests {
         assert_eq!(m.bump_applied_seq(), 1);
         assert_eq!(m.bump_applied_seq(), 2);
         assert_eq!(m.last_applied_seq(), 2);
+    }
+
+    /// An IDML whose story carries two runs in the same family
+    /// ("Open Sans") with distinct `FontStyle`s ("Regular", "Bold"),
+    /// so `fonts()` can surface the styles-per-family list.
+    fn idml_with_font_styles() -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file("mimetype", opts).unwrap();
+            zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+                .unwrap();
+            zip.start_file("META-INF/container.xml", opts).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+<rootfiles><rootfile full-path="designmap.xml" media-type="text/xml"/></rootfiles></container>"#,
+            )
+            .unwrap();
+            zip.start_file("designmap.xml", opts).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document DOMVersion="13.1" Self="d1">
+<idPkg:Spread src="Spreads/Spread_s1.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/>
+<idPkg:Story src="Stories/Story_st1.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/>
+</Document>"#,
+            )
+            .unwrap();
+            zip.start_file("Spreads/Spread_s1.xml", opts).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="13.1">
+<Spread Self="s1" PageCount="1">
+<Page Self="p1" Name="1" GeometricBounds="0 0 792 612" ItemTransform="1 0 0 1 0 0"/>
+<TextFrame Self="tf1" ParentStory="st1" GeometricBounds="100 100 400 400" ItemTransform="1 0 0 1 0 0"/>
+</Spread></idPkg:Spread>"#,
+            )
+            .unwrap();
+            zip.start_file("Stories/Story_st1.xml", opts).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="13.1">
+<Story Self="st1">
+<ParagraphStyleRange>
+<CharacterStyleRange AppliedFont="Open Sans" FontStyle="Regular"><Content>Hello </Content></CharacterStyleRange>
+<CharacterStyleRange AppliedFont="Open Sans" FontStyle="Bold"><Content>world</Content></CharacterStyleRange>
+</ParagraphStyleRange>
+</Story></idPkg:Story>"#,
+            )
+            .unwrap();
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn fonts_reports_styles_per_family() {
+        let bytes = idml_with_font_styles();
+        let model = CanvasModel::load("doc-fonts", &bytes, CanvasOptions::default()).unwrap();
+        let fonts = model.fonts();
+        let open_sans = fonts
+            .iter()
+            .find(|f| f.family == "Open Sans")
+            .expect("Open Sans family present");
+        // Both runs reference the family → reference_count 2.
+        assert_eq!(open_sans.reference_count, 2);
+        // The styles list is the deduped, sorted set of FontStyles seen.
+        assert_eq!(
+            open_sans.styles,
+            vec!["Bold".to_string(), "Regular".to_string()]
+        );
+        // No font registered → missing, but styles still populate from
+        // the document content (the honest "styles in use" source).
+        assert!(open_sans.is_missing);
     }
 }

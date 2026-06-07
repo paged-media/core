@@ -337,6 +337,71 @@ pub fn word_bounds(text: &str, offset: u32) -> Option<WordBounds> {
     })
 }
 
+/// W1.23 — `RequestParagraphBounds` reply payload. Story-local byte
+/// offsets of the `[start, end)` span the paragraph containing the
+/// requested offset covers. Same address space as [`WordBounds`] /
+/// [`LineBounds`] and `HitResult.offset_within_story`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct ParagraphBounds {
+    /// Story byte offset of the paragraph's first character.
+    pub start: u32,
+    /// Story byte offset just past the paragraph's last character
+    /// (the synthetic inter-paragraph `\n`, when present, is the
+    /// boundary — it is NOT included in the span).
+    pub end: u32,
+}
+
+/// W1.23 — the `[start, end)` byte span of the paragraph containing
+/// `offset`. `text` is the story's reconstructed byte string
+/// (paragraphs joined by the synthetic inter-paragraph `\n`, the same
+/// convention `word_bounds` / `caret_nav` / `line_bounds` use), so a
+/// paragraph is a maximal run between `\n` separators. Mirrors
+/// [`word_bounds`] exactly — the caret's triple-click selection drives
+/// this.
+///
+/// Behaviour at the requested offset:
+/// - Offset inside a paragraph (incl. at its leading edge) → that
+///   whole paragraph's span, excluding the trailing `\n`.
+/// - Offset exactly on a separator `\n` → the paragraph that *ends*
+///   at that `\n` (the separator belongs to the preceding paragraph's
+///   boundary, matching how Home/End and triple-click treat the
+///   newline as the paragraph's terminator rather than the start of
+///   the next one).
+/// - Offset at or past the story end → the final paragraph (clamped).
+/// - Empty story → `None`.
+pub fn paragraph_bounds(text: &str, offset: u32) -> Option<ParagraphBounds> {
+    if text.is_empty() {
+        return None;
+    }
+    let offset = (offset as usize).min(text.len());
+    // Each paragraph is a maximal run between `\n` separators. Walk the
+    // separators tracking the current paragraph's `[start, end)`; the
+    // paragraph whose half-open span contains the offset wins, where
+    // `end` is the index of the separating `\n` (or the text end for
+    // the final paragraph). An offset landing on a `\n` resolves to the
+    // paragraph that ends there (`offset <= end`).
+    let mut start = 0usize;
+    for (idx, ch) in text.char_indices() {
+        if ch == '\n' {
+            if offset <= idx {
+                return Some(ParagraphBounds {
+                    start: start as u32,
+                    end: idx as u32,
+                });
+            }
+            start = idx + 1;
+        }
+    }
+    // The final paragraph (no trailing separator): everything from the
+    // last separator to the text end. Clamped offsets land here.
+    Some(ParagraphBounds {
+        start: start as u32,
+        end: text.len() as u32,
+    })
+}
+
 /// Direction for [`caret_nav`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
@@ -755,5 +820,170 @@ mod tests {
     fn model_word_bounds_unknown_story_is_none() {
         let model = load_model("Hello");
         assert!(model.word_bounds("nope", 0).is_none());
+    }
+
+    // ---- W1.23 — paragraph segmentation -------------------------
+
+    #[test]
+    fn paragraph_bounds_middle_of_paragraph_selects_the_whole_paragraph() {
+        // Single paragraph "Hello world." — any in-range offset selects
+        // the whole text (no `\n` separators).
+        let text = "Hello world.";
+        let pb = paragraph_bounds(text, 6).expect("a paragraph at offset 6");
+        assert_eq!((pb.start, pb.end), (0, text.len() as u32));
+        assert_eq!(&text[pb.start as usize..pb.end as usize], "Hello world.");
+    }
+
+    #[test]
+    fn paragraph_bounds_selects_the_first_of_several() {
+        // "Alpha\nBeta\nGamma" — paragraph 0 is [0, 5) ("Alpha"); the
+        // separating `\n` at index 5 is excluded from the span.
+        let text = "Alpha\nBeta\nGamma";
+        let pb = paragraph_bounds(text, 2).expect("first paragraph");
+        assert_eq!((pb.start, pb.end), (0, 5));
+        assert_eq!(&text[pb.start as usize..pb.end as usize], "Alpha");
+    }
+
+    #[test]
+    fn paragraph_bounds_selects_a_middle_paragraph() {
+        // "Beta" sits between the two separators: [6, 10).
+        let text = "Alpha\nBeta\nGamma";
+        let pb = paragraph_bounds(text, 7).expect("middle paragraph");
+        assert_eq!((pb.start, pb.end), (6, 10));
+        assert_eq!(&text[pb.start as usize..pb.end as usize], "Beta");
+    }
+
+    #[test]
+    fn paragraph_bounds_selects_the_last_paragraph() {
+        // The final paragraph runs from the last separator to the end.
+        let text = "Alpha\nBeta\nGamma";
+        let pb = paragraph_bounds(text, 13).expect("last paragraph");
+        assert_eq!((pb.start, pb.end), (11, 16));
+        assert_eq!(&text[pb.start as usize..pb.end as usize], "Gamma");
+    }
+
+    #[test]
+    fn paragraph_bounds_on_separator_resolves_to_the_preceding_paragraph() {
+        // Offset 5 lands exactly on the first `\n`. It resolves to the
+        // paragraph that ENDS there ("Alpha", [0, 5)), matching how the
+        // newline terminates a paragraph rather than starting the next.
+        let text = "Alpha\nBeta\nGamma";
+        let pb = paragraph_bounds(text, 5).expect("paragraph ending at the separator");
+        assert_eq!((pb.start, pb.end), (0, 5));
+    }
+
+    #[test]
+    fn paragraph_bounds_at_paragraph_leading_edge_selects_that_paragraph() {
+        // Offset exactly at "Beta"'s first byte (6) selects "Beta".
+        let text = "Alpha\nBeta\nGamma";
+        let pb = paragraph_bounds(text, 6).expect("paragraph at its leading edge");
+        assert_eq!((pb.start, pb.end), (6, 10));
+    }
+
+    #[test]
+    fn paragraph_bounds_past_end_clamps_to_final_paragraph() {
+        let text = "Alpha\nBeta\nGamma";
+        let pb = paragraph_bounds(text, text.len() as u32 + 50).expect("clamped to last");
+        assert_eq!((pb.start, pb.end), (11, 16));
+    }
+
+    #[test]
+    fn paragraph_bounds_empty_story_is_none() {
+        assert!(paragraph_bounds("", 0).is_none());
+    }
+
+    #[test]
+    fn paragraph_bounds_multibyte_uses_byte_offsets() {
+        // "café\nroad" — "café" is 5 bytes (the é is 2 bytes), the `\n`
+        // is byte 5, "road" spans bytes [6, 10). An offset in the second
+        // paragraph must report byte (not char) offsets.
+        let text = "café\nroad";
+        let pb = paragraph_bounds(text, 7).expect("second paragraph");
+        assert_eq!((pb.start, pb.end), (6, 10));
+        assert_eq!(&text[pb.start as usize..pb.end as usize], "road");
+        // And the first paragraph is the 5-byte "café".
+        let pb0 = paragraph_bounds(text, 2).expect("first paragraph");
+        assert_eq!((pb0.start, pb0.end), (0, 5));
+    }
+
+    #[test]
+    fn model_paragraph_bounds_resolves_across_the_synthetic_newline() {
+        // End-to-end through the model's story-text reconstruction: a
+        // two-paragraph story joins paragraphs with the synthetic `\n`,
+        // so an offset in the second paragraph reports the second span.
+        let model = load_two_paragraph_model();
+        // "Alpha" is 5 bytes; the synthetic `\n` is byte 5; "Beta"
+        // starts at byte 6. Offset 7 is inside "Beta".
+        let pb = model
+            .paragraph_bounds("u10", 7)
+            .expect("paragraph bounds for offset 7");
+        assert_eq!((pb.start, pb.end), (6, 10));
+        // Offset in the first paragraph reports the first span.
+        let pb0 = model
+            .paragraph_bounds("u10", 2)
+            .expect("paragraph bounds for offset 2");
+        assert_eq!((pb0.start, pb0.end), (0, 5));
+    }
+
+    #[test]
+    fn model_paragraph_bounds_unknown_story_is_none() {
+        let model = load_model("Hello");
+        assert!(model.paragraph_bounds("nope", 0).is_none());
+    }
+
+    /// A story with two paragraphs ("Alpha" then "Beta"), each its own
+    /// `<ParagraphStyleRange>`, so the model reconstructs them joined by
+    /// the synthetic inter-paragraph `\n`.
+    fn load_two_paragraph_model() -> CanvasModel {
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+        let buf = std::io::Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        zip.start_file("mimetype", stored).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+        zip.start_file("designmap.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_u10.xml"/>
+</Document>"#,
+        )
+        .unwrap();
+        zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 400 612"/>
+    <TextFrame Self="frameA" ParentStory="u10" GeometricBounds="40 40 380 572" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#,
+        )
+        .unwrap();
+        zip.start_file("Stories/Story_u10.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="36"><Content>Alpha</Content></CharacterStyleRange>
+    </ParagraphStyleRange>
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="36"><Content>Beta</Content></CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+        )
+        .unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let opts = CanvasOptions {
+            fonts: vec![read_font("Inter.ttf")],
+            ..Default::default()
+        };
+        CanvasModel::load("d", &bytes, opts).unwrap()
     }
 }

@@ -232,6 +232,17 @@ pub enum PropertyPathJson {
     TableColumnCount,
     /// Plugin-metadata carrier (Label KeyValuePair).
     PluginMetadata,
+    // W1.16 — anchored-object settings.
+    AnchoredPosition,
+    AnchorPoint,
+    AnchoredXOffset,
+    AnchoredYOffset,
+    AnchoredHorizontalReference,
+    AnchoredVerticalReference,
+    AnchoredHorizontalAlignment,
+    AnchoredVerticalAlignment,
+    AnchoredSpineRelative,
+    AnchoredLockPosition,
 }
 
 impl From<PropertyPath> for PropertyPathJson {
@@ -459,6 +470,24 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::TableRowCount => PropertyPathJson::TableRowCount,
             PropertyPath::TableColumnCount => PropertyPathJson::TableColumnCount,
             PropertyPath::PluginMetadata => PropertyPathJson::PluginMetadata,
+            PropertyPath::AnchoredPosition => PropertyPathJson::AnchoredPosition,
+            PropertyPath::AnchorPoint => PropertyPathJson::AnchorPoint,
+            PropertyPath::AnchoredXOffset => PropertyPathJson::AnchoredXOffset,
+            PropertyPath::AnchoredYOffset => PropertyPathJson::AnchoredYOffset,
+            PropertyPath::AnchoredHorizontalReference => {
+                PropertyPathJson::AnchoredHorizontalReference
+            }
+            PropertyPath::AnchoredVerticalReference => {
+                PropertyPathJson::AnchoredVerticalReference
+            }
+            PropertyPath::AnchoredHorizontalAlignment => {
+                PropertyPathJson::AnchoredHorizontalAlignment
+            }
+            PropertyPath::AnchoredVerticalAlignment => {
+                PropertyPathJson::AnchoredVerticalAlignment
+            }
+            PropertyPath::AnchoredSpineRelative => PropertyPathJson::AnchoredSpineRelative,
+            PropertyPath::AnchoredLockPosition => PropertyPathJson::AnchoredLockPosition,
         }
     }
 }
@@ -688,6 +717,24 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::TableRowCount => PropertyPath::TableRowCount,
             PropertyPathJson::TableColumnCount => PropertyPath::TableColumnCount,
             PropertyPathJson::PluginMetadata => PropertyPath::PluginMetadata,
+            PropertyPathJson::AnchoredPosition => PropertyPath::AnchoredPosition,
+            PropertyPathJson::AnchorPoint => PropertyPath::AnchorPoint,
+            PropertyPathJson::AnchoredXOffset => PropertyPath::AnchoredXOffset,
+            PropertyPathJson::AnchoredYOffset => PropertyPath::AnchoredYOffset,
+            PropertyPathJson::AnchoredHorizontalReference => {
+                PropertyPath::AnchoredHorizontalReference
+            }
+            PropertyPathJson::AnchoredVerticalReference => {
+                PropertyPath::AnchoredVerticalReference
+            }
+            PropertyPathJson::AnchoredHorizontalAlignment => {
+                PropertyPath::AnchoredHorizontalAlignment
+            }
+            PropertyPathJson::AnchoredVerticalAlignment => {
+                PropertyPath::AnchoredVerticalAlignment
+            }
+            PropertyPathJson::AnchoredSpineRelative => PropertyPath::AnchoredSpineRelative,
+            PropertyPathJson::AnchoredLockPosition => PropertyPath::AnchoredLockPosition,
         }
     }
 }

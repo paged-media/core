@@ -31,3 +31,6 @@ flo_curves = "=0.8.0"
 paged-renderer = { path = "../paged-renderer" }
 paged-compose = { path = "../paged-compose" }
 bytes = { workspace = true }
+# W1.16 — the anchored-object round-trip test builds an in-memory IDML
+# package (anchored frame nested in a story) to drive `Document::open`.
+zip = { workspace = true }
