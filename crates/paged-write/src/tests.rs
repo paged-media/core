@@ -1306,3 +1306,142 @@ fn created_frame_with_new_swatch_and_style_round_trips() {
         "frame fill resolves to a real swatch (appearance preserved)"
     );
 }
+
+// ---------------------------------------------------------------------
+// 7. W1.15 — table-cell text write-back.
+// ---------------------------------------------------------------------
+
+/// Locate `(story_idx, para_idx, cell_idx, run path)` of the first table
+/// cell carrying a run with text, so a cell-text edit exercises the
+/// cell-content rewrite. Returns the cell's `Self` id + first run text.
+fn first_table_cell_with_text(doc: &Document) -> Option<(usize, usize, usize, String, String)> {
+    for (si, s) in doc.stories.iter().enumerate() {
+        for (pi, p) in s.story.paragraphs.iter().enumerate() {
+            if let Some(table) = &p.table {
+                for (ci, cell) in table.cells.iter().enumerate() {
+                    if let Some(id) = cell.self_id.clone() {
+                        if let Some(run) = cell
+                            .paragraphs
+                            .iter()
+                            .flat_map(|cp| cp.runs.iter())
+                            .find(|r| !r.text.is_empty())
+                        {
+                            return Some((si, pi, ci, id, run.text.clone()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A table-cell text change (whatever the model holds for the cell
+/// paragraph) writes back: save → re-parse shows the new cell text, and
+/// untouched cells survive. Closes loss (a) — table-cell content
+/// previously passed through verbatim. The edit is applied directly to
+/// the model cell paragraph (the cell-text editing op is a parallel
+/// lane; the writer serialises whatever the model already carries).
+#[test]
+fn table_cell_text_change_writes_back() {
+    let original = build_sample("tables");
+    let mut doc = Document::open(&original).unwrap();
+    let (si, pi, ci, cell_id, old_text) =
+        first_table_cell_with_text(&doc).expect("a table cell with text");
+
+    // Edit the first run of the cell's first paragraph in the model.
+    let new_text = "WroteBack".to_string();
+    {
+        let cell = doc.stories[si].story.paragraphs[pi]
+            .table
+            .as_mut()
+            .unwrap()
+            .cells
+            .get_mut(ci)
+            .unwrap();
+        let run = cell
+            .paragraphs
+            .iter_mut()
+            .flat_map(|cp| cp.runs.iter_mut())
+            .find(|r| !r.text.is_empty())
+            .unwrap();
+        assert_eq!(run.text, old_text, "found the run we measured");
+        run.text = new_text.clone();
+    }
+
+    let out = write_idml(&doc, &original).expect("write");
+    assert_ne!(original, out, "a cell-text edit must change bytes");
+    let re = Document::open(&out).expect("reparse");
+
+    // The edited cell re-parses with the new text.
+    let cell = re.stories[si].story.paragraphs[pi]
+        .table
+        .as_ref()
+        .unwrap()
+        .cells
+        .iter()
+        .find(|c| c.self_id.as_deref() == Some(cell_id.as_str()))
+        .expect("edited cell present");
+    let got: String = cell
+        .paragraphs
+        .iter()
+        .flat_map(|cp| cp.runs.iter())
+        .map(|r| r.text.clone())
+        .collect();
+    assert!(
+        got.contains(&new_text),
+        "cell text saved + re-parsed (got {got:?})"
+    );
+
+    // A sibling cell is untouched.
+    let table = re.stories[si].story.paragraphs[pi].table.as_ref().unwrap();
+    let other = table
+        .cells
+        .iter()
+        .find(|c| c.self_id.as_deref() != Some(cell_id.as_str()))
+        .expect("a sibling cell");
+    let other_model = doc.stories[si].story.paragraphs[pi]
+        .table
+        .as_ref()
+        .unwrap()
+        .cells
+        .iter()
+        .find(|c| c.self_id == other.self_id)
+        .unwrap();
+    let other_text = |c: &paged_parse::TableCell| -> String {
+        c.paragraphs
+            .iter()
+            .flat_map(|cp| cp.runs.iter())
+            .map(|r| r.text.clone())
+            .collect()
+    };
+    assert_eq!(
+        other_text(other),
+        other_text(other_model),
+        "sibling cell survived"
+    );
+}
+
+/// A cell-text mutate-then-restore writes byte-identically — the cell
+/// rewrite is value-driven (it only diverges when the model text differs
+/// from the on-disk cell content).
+#[test]
+fn table_cell_unchanged_round_trips_byte_identical() {
+    // The tables sample's stories all carry cell content; an unmutated
+    // write must leave every Stories/* entry byte-identical (the cell
+    // pass-through is now active but value-driven).
+    let original = build_sample("tables");
+    let doc = Document::open(&original).unwrap();
+    let out = write_idml(&doc, &original).expect("write");
+    let src = entries(&original);
+    let dst = entries(&out);
+    for (path, sb) in &src {
+        if path.starts_with("Stories/") {
+            assert_eq!(
+                sb,
+                dst.get(path).expect("entry present"),
+                "{path}: table story not byte-identical unmutated"
+            );
+        }
+    }
+}

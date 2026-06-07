@@ -107,7 +107,7 @@ use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 
-use paged_parse::{Bounds, CharacterRun, PathAnchor, Spread, Story, TextFrame};
+use paged_parse::{Bounds, CharacterRun, PathAnchor, Spread, Story, TableCell, TextFrame};
 
 /// Mirror of `paged_gen::xml::format_f32`: round to 4 decimals, drop
 /// trailing zeros + a dangling `.`, normalise `-0` to `0`. Kept as a
@@ -1731,6 +1731,26 @@ fn opt_f32_patch(v: Option<f32>) -> Patch {
 // Story rewrite
 // ---------------------------------------------------------------------
 
+/// Index every `<Table>` cell in the story by its `Self` id so a `<Cell
+/// Self="...">` start tag in the XML can find its model counterpart
+/// (W1.15 lane 3). Cells hang off `Paragraph::table.cells`; IDML can't
+/// nest a table inside a table, so one flat pass over the story's
+/// top-level paragraphs covers them all. A cell with no `Self` id (rare)
+/// is skipped — its content keeps passing through verbatim.
+fn collect_story_cells(story: &Story) -> std::collections::HashMap<&str, &TableCell> {
+    let mut out: std::collections::HashMap<&str, &TableCell> = std::collections::HashMap::new();
+    for p in &story.paragraphs {
+        if let Some(table) = &p.table {
+            for cell in &table.cells {
+                if let Some(id) = cell.self_id.as_deref() {
+                    out.insert(id, cell);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Rewrite a `Story_*.xml` body so its `<ParagraphStyleRange>` /
 /// `<CharacterStyleRange>` attributes + single-Content text reflect the
 /// current model. Ranges are matched positionally (IDML carries no id on
@@ -1764,26 +1784,60 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
     // Depth of open `<Table>` elements. Inside a table the
     // `<ParagraphStyleRange>` / `<CharacterStyleRange>` belong to CELL
     // paragraphs, which the parser stores on `paragraph.table.cells[]`,
-    // NOT on the story's top-level `paragraphs`. Patching them
-    // positionally against `story.paragraphs` would misalign + corrupt,
-    // so table-cell content passes through verbatim (a documented loss —
-    // cell text/style edits don't save this milestone) and does not
-    // advance the story-level cursors.
+    // NOT on the story's top-level `paragraphs`. Patching them against
+    // `story.paragraphs` would misalign, so the story-level cursors do
+    // NOT advance inside a table.
     let mut table_depth: usize = 0;
+
+    // W1.15 lane 3 — table-cell text write-back. Inside a `<Cell
+    // Self="...">` the `<ParagraphStyleRange>` / `<CharacterStyleRange>`
+    // patch against the matched model `TableCell.paragraphs[]` with
+    // cell-local positional cursors (reset on each `<Cell>` open). When
+    // a cell has no model match — or the cell text is unchanged — its
+    // content passes through verbatim, exactly as before.
+    let cells = collect_story_cells(story);
+    let mut current_cell: Option<&TableCell> = None;
+    let mut cell_depth: usize = 0; // depth of the open `<Cell>`, or 0
+    let mut cell_para_idx: isize = -1;
+    let mut cell_run_idx: isize = -1;
 
     loop {
         match reader.read_event_into(&mut buf)? {
             Event::Eof => break,
             Event::Start(e) => {
+                // True while patching cell content: inside a `<Cell>`
+                // that matched a model cell. The ranges then resolve
+                // against the cell's paragraphs with cell-local cursors.
+                let in_cell = table_depth > 0 && current_cell.is_some();
                 match e.name().as_ref() {
                     b"Table" => {
                         table_depth += 1;
+                        writer.write_event(Event::Start(e.into_owned()))?;
+                    }
+                    b"Cell" if table_depth > 0 && cell_depth == 0 => {
+                        // Enter a cell — bind its model counterpart (by
+                        // `Self`) + reset the cell-local cursors. The
+                        // start tag passes through verbatim (cell-level
+                        // attributes are patched elsewhere / not here).
+                        cell_depth = table_depth;
+                        cell_para_idx = -1;
+                        cell_run_idx = -1;
+                        current_cell =
+                            attr_value(&e, b"Self").and_then(|id| cells.get(id.as_str()).copied());
                         writer.write_event(Event::Start(e.into_owned()))?;
                     }
                     b"ParagraphStyleRange" if table_depth == 0 => {
                         para_idx += 1;
                         run_idx = -1;
                         let para = story.paragraphs.get(para_idx as usize);
+                        let start = patch_paragraph_range(&e, para)?;
+                        writer.write_event(Event::Start(start))?;
+                    }
+                    b"ParagraphStyleRange" if in_cell => {
+                        cell_para_idx += 1;
+                        cell_run_idx = -1;
+                        let para =
+                            current_cell.and_then(|c| c.paragraphs.get(cell_para_idx as usize));
                         let start = patch_paragraph_range(&e, para)?;
                         writer.write_event(Event::Start(start))?;
                     }
@@ -1797,7 +1851,16 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                         let start = patch_character_range(&e, current_run)?;
                         writer.write_event(Event::Start(start))?;
                     }
-                    b"Content" if table_depth == 0 => {
+                    b"CharacterStyleRange" if in_cell => {
+                        cell_run_idx += 1;
+                        current_run = current_cell
+                            .and_then(|c| c.paragraphs.get(cell_para_idx as usize))
+                            .and_then(|p| p.runs.get(cell_run_idx as usize));
+                        body = RunBody::default();
+                        let start = patch_character_range(&e, current_run)?;
+                        writer.write_event(Event::Start(start))?;
+                    }
+                    b"Content" if table_depth == 0 || in_cell => {
                         // A `<Content>` opens the inline body region (or
                         // continues it). Buffer the start; the text /
                         // entities inside accumulate into the body, and
@@ -1822,6 +1885,7 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                 }
             }
             Event::Empty(e) => {
+                let in_cell = table_depth > 0 && current_cell.is_some();
                 // A self-closing CharacterStyleRange / ParagraphStyleRange
                 // still advances the positional cursor + patches attrs.
                 match e.name().as_ref() {
@@ -1829,6 +1893,14 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                         para_idx += 1;
                         run_idx = -1;
                         let para = story.paragraphs.get(para_idx as usize);
+                        let start = patch_paragraph_range(&e, para)?;
+                        writer.write_event(Event::Empty(start))?;
+                    }
+                    b"ParagraphStyleRange" if in_cell => {
+                        cell_para_idx += 1;
+                        cell_run_idx = -1;
+                        let para =
+                            current_cell.and_then(|c| c.paragraphs.get(cell_para_idx as usize));
                         let start = patch_paragraph_range(&e, para)?;
                         writer.write_event(Event::Empty(start))?;
                     }
@@ -1843,7 +1915,17 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                         let start = patch_character_range(&e, run)?;
                         writer.write_event(Event::Empty(start))?;
                     }
-                    b"Br" if table_depth == 0 && !body.in_content => {
+                    b"CharacterStyleRange" if in_cell => {
+                        cell_run_idx += 1;
+                        current_run = None;
+                        body = RunBody::default();
+                        let run = current_cell
+                            .and_then(|c| c.paragraphs.get(cell_para_idx as usize))
+                            .and_then(|p| p.runs.get(cell_run_idx as usize));
+                        let start = patch_character_range(&e, run)?;
+                        writer.write_event(Event::Empty(start))?;
+                    }
+                    b"Br" if (table_depth == 0 || in_cell) && !body.in_content => {
                         // `<Br/>` is an inline leaf → `\n` in the parser's
                         // run text. It opens (or continues) the body
                         // region — a run can start with `\n` (a leading
@@ -1853,7 +1935,7 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                         body.text.push('\n');
                         body.events.push(Event::Empty(e.into_owned()));
                     }
-                    b"Tab" if table_depth == 0 && !body.in_content => {
+                    b"Tab" if (table_depth == 0 || in_cell) && !body.in_content => {
                         // `<Tab/>` is an inline leaf → `\t`. Opens or
                         // continues the body region (see `<Br/>`).
                         body.active = true;
@@ -1916,6 +1998,13 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
             Event::End(e) => {
                 match e.name().as_ref() {
                     b"Table" => table_depth = table_depth.saturating_sub(1),
+                    b"Cell" if cell_depth != 0 && table_depth == cell_depth => {
+                        // Leave the cell — unbind so sibling cells (and
+                        // any markup after the table) don't keep patching
+                        // against this cell's paragraphs.
+                        current_cell = None;
+                        cell_depth = 0;
+                    }
                     b"Content" if body.active => {
                         body.in_content = false;
                         body.events.push(Event::End(e.into_owned()));
