@@ -243,7 +243,9 @@ mod tests {
     fn locked_layer_reports_locked() {
         let d = dm(vec![layer("a", true, true, true)]);
         assert!(layer_locked(&d, Some("a")));
-        assert!(!layer_render_visible(&d, Some("a")) || true);
+        // A locked layer still renders (lock blocks editing, not display);
+        // "a" is visible + printable, so render-visibility stays true.
+        assert!(layer_render_visible(&d, Some("a")));
     }
 
     #[test]
