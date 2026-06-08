@@ -251,6 +251,36 @@ impl PreflightFinding {
             page_index,
         }
     }
+
+    /// Punch-list — promote a BUILD-time render diagnostic (overset,
+    /// missing image link, missing/undecodable resource) collected at
+    /// `build_document` into a preflight finding, so the export dialog's
+    /// findings list surfaces document problems alongside the
+    /// export-stage ones (font embedding, image bytes). The build already
+    /// computed these; the exporter previously dropped them on the floor.
+    fn from_render_diagnostic(d: &paged_renderer::Diagnostic) -> Self {
+        use paged_renderer::{DiagnosticCode as C, Severity as S};
+        let code: &'static str = match d.code {
+            C::OversetTextDropped => "overset_text_dropped",
+            C::ImageLinkMissing => "image_link_missing",
+            C::ImageDecodeFailed => "image_decode_failed",
+            C::ImageClippingPathDeferred => "image_clipping_path_deferred",
+            C::FootnoteOverflow => "footnote_overflow",
+            C::SectionNumberingFallback => "section_numbering_fallback",
+        };
+        // `FindingSeverity` has no `Info` rung; build infos ride as
+        // warnings (the preflight list groups by warning/error only).
+        let severity = match d.severity {
+            S::Error => FindingSeverity::Error,
+            S::Warning | S::Info => FindingSeverity::Warning,
+        };
+        Self {
+            code,
+            severity,
+            message: d.message.clone(),
+            page_index: d.page_index,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -301,9 +331,12 @@ pub struct ExportInput<'a> {
 pub struct ExportResult {
     pub bytes: Vec<u8>,
     pub diagnostics: Vec<ExportDiagnostic>,
-    /// panels.md gap 20 — `diagnostics` enriched with severity + the
-    /// body-page index each was raised on. Parallel to `diagnostics`
-    /// (same length, same order).
+    /// panels.md gap 20 — the user-facing preflight list. Leads with the
+    /// promoted BUILD diagnostics (overset / missing link / missing font,
+    /// computed at `build_document`; punch-list) and then the export-stage
+    /// `diagnostics` enriched with severity + page. NOT parallel to
+    /// `diagnostics` (it is a superset): `diagnostics` stays the raw
+    /// export-stage vector.
     pub findings: Vec<PreflightFinding>,
     pub pages_exported: usize,
 }
@@ -402,11 +435,23 @@ impl ExportSession {
         let bytes = self.state.finish(input, &mut self.diagnostics)?;
         // Document-`finish` diagnostics have no single page.
         self.finding_pages.resize(self.diagnostics.len(), None);
-        let findings = self
+        // Punch-list — promote the BUILD diagnostics (overset, missing
+        // link/font, …) the pipeline collected on `BuiltDocument` into
+        // findings FIRST, so document-level problems lead the preflight
+        // list; the export-stage findings (font embed / image bytes)
+        // follow.
+        let findings = input
+            .doc
             .diagnostics
+            .items
             .iter()
-            .zip(self.finding_pages.iter())
-            .map(|(d, page)| PreflightFinding::from_diag(d, *page))
+            .map(PreflightFinding::from_render_diagnostic)
+            .chain(
+                self.diagnostics
+                    .iter()
+                    .zip(self.finding_pages.iter())
+                    .map(|(d, page)| PreflightFinding::from_diag(d, *page)),
+            )
             .collect();
         Ok(ExportResult {
             bytes,

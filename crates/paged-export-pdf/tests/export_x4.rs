@@ -99,6 +99,34 @@ fn build_fixture(name: &str, font: &Option<Vec<u8>>) -> Option<Built> {
     })
 }
 
+/// Build a `Built` straight from in-memory IDML bytes (so a test can use
+/// a `paged-gen` sample without depending on the gitignored
+/// corpus/generated fixtures).
+fn build_from_bytes(bytes: &[u8], font: &Option<Vec<u8>>) -> Option<Built> {
+    let document = Document::open(bytes).ok()?;
+    let mut opts = PipelineOptions {
+        collect_glyph_runs: true,
+        ..Default::default()
+    };
+    opts.font = font.as_deref();
+    let fonts = FontTable::build(&document, &opts);
+    let doc = {
+        let mut opts2 = PipelineOptions {
+            collect_glyph_runs: true,
+            ..Default::default()
+        };
+        opts2.font = font.as_deref();
+        opts2.pre_built_font_table = Some(&fonts);
+        pipeline::build_document(&document, &opts2).ok()?
+    };
+    let palette = document.palette.clone();
+    Some(Built {
+        doc,
+        fonts,
+        palette,
+    })
+}
+
 fn export(built: &Built, profile: Option<&[u8]>) -> Vec<u8> {
     let cmm = paged_color::IccCmm::new(profile, paged_color::DisplaySetup::default());
     let (standard, condition) = match profile {
@@ -285,5 +313,71 @@ fn effects_fixture_exports_transparency_groups() {
     assert!(
         groups > 0,
         "expected transparency-group forms in effects.idml export"
+    );
+}
+
+/// Punch-list (AC-PREFLIGHT-2): build-time render diagnostics (overset,
+/// missing link / undecodable image) computed at `build_document` are
+/// promoted into the export's `PreflightFinding` list. The `preflight`
+/// `paged-gen` sample is the "unhealthy publication" — an overset story,
+/// a by-design missing font, and an undecodable placed image — so the
+/// export must surface >= 2 findings. Self-contained: builds the sample
+/// IDML in-memory, no corpus/generated dependency.
+#[test]
+fn build_diagnostics_promote_to_preflight_findings() {
+    let bytes = paged_gen::write_idml(&paged_gen::samples::preflight::build())
+        .expect("emit preflight sample IDML");
+    let font = fallback_font();
+    let Some(built) = build_from_bytes(&bytes, &font) else {
+        eprintln!("preflight: sample build failed — skipping");
+        return;
+    };
+
+    // Sanity: the build itself collected the document-health diagnostics
+    // (the source the exporter now promotes).
+    assert!(
+        built.doc.diagnostics.len() >= 2,
+        "preflight sample should collect >= 2 build diagnostics (overset + \
+         broken image); got {:?}",
+        built.doc.diagnostics.items,
+    );
+
+    let cmm = paged_color::IccCmm::new(None, paged_color::DisplaySetup::default());
+    let input = ExportInput {
+        doc: &built.doc,
+        palette: &built.palette,
+        fonts: Some(&built.fonts),
+        cmm: &cmm,
+        profiles: ExportProfiles {
+            cmyk_working: None,
+            output_intent: None,
+            srgb: None,
+        },
+        inks: ExportInkSettings::default(),
+        options: ExportOptions {
+            standard: PdfStandard::Pdf17,
+            ..Default::default()
+        },
+        doc_bleed: [0.0; 4],
+        doc_slug: [0.0; 4],
+    };
+    let result = export_pdf(input).expect("export preflight sample");
+
+    // The build diagnostics are promoted into the preflight findings.
+    assert!(
+        result.findings.len() >= 2,
+        "overset + broken image must surface as >= 2 preflight findings \
+         through the export path; got {:?}",
+        result.findings,
+    );
+    // The overset finding (a promoted build diagnostic) must be present —
+    // the export stage alone would never raise it.
+    assert!(
+        result
+            .findings
+            .iter()
+            .any(|f| f.code == "overset_text_dropped"),
+        "the promoted overset build diagnostic must appear in findings: {:?}",
+        result.findings,
     );
 }
