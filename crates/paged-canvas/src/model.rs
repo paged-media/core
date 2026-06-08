@@ -3923,10 +3923,157 @@ impl CanvasModel {
                             },
                         ]
                     }),
-                // Oval / Polygon / GraphicLine: v1 surfaces only the
-                // geometry common to all kinds (bounds + transform).
-                // Per-kind authored properties (fill, stroke) follow
-                // once the apply arms cover them.
+                // Punch-list (rides v35) — Polygon / GraphicLine surface
+                // the stroke property set so the closed-path
+                // join/miter/alignment mutations (now apply-wired for all
+                // path kinds) read back. Oval stays on the geometry-only
+                // default below until its apply arms cover the set too.
+                ElementId::Polygon(_) => spread
+                    .polygons
+                    .iter()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                    .map(|p| {
+                        vec![
+                            PropertyEntry {
+                                path: PropertyPath::FrameBounds,
+                                value: Some(Value::Bounds([
+                                    p.bounds.top,
+                                    p.bounds.left,
+                                    p.bounds.bottom,
+                                    p.bounds.right,
+                                ])),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameTransform,
+                                value: Some(Value::Transform(p.item_transform)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameFillColor,
+                                value: Some(Value::ColorRef(p.fill_color.clone())),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameFillTint,
+                                value: Some(Value::Length(p.fill_tint)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeColor,
+                                value: Some(Value::ColorRef(p.stroke_color.clone())),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeWeight,
+                                value: Some(Value::Length(p.stroke_weight)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameOpacity,
+                                value: Some(Value::Length(p.opacity)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeType,
+                                value: Some(Value::Text(
+                                    p.stroke_type.clone().unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeJoin,
+                                value: Some(Value::Text(
+                                    p.end_join.clone().unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeMiterLimit,
+                                value: Some(Value::Length(p.miter_limit)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeAlignment,
+                                value: Some(Value::Text(
+                                    p.stroke_alignment.clone().unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeGapColor,
+                                value: Some(Value::ColorRef(p.stroke_gap_color.clone())),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeGapTint,
+                                value: Some(Value::Length(p.stroke_gap_tint)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeDashArray,
+                                value: Some(Value::Lengths(p.stroke_dash.clone())),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::AppliedObjectStyle,
+                                value: Some(Value::Text(
+                                    p.applied_object_style.clone().unwrap_or_default(),
+                                )),
+                            },
+                        ]
+                    }),
+                ElementId::GraphicLine(_) => spread
+                    .graphic_lines
+                    .iter()
+                    .find(|l| l.self_id.as_deref() == Some(raw))
+                    .map(|l| {
+                        vec![
+                            PropertyEntry {
+                                path: PropertyPath::FrameBounds,
+                                value: Some(Value::Bounds([
+                                    l.bounds.top,
+                                    l.bounds.left,
+                                    l.bounds.bottom,
+                                    l.bounds.right,
+                                ])),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameTransform,
+                                value: Some(Value::Transform(l.item_transform)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeColor,
+                                value: Some(Value::ColorRef(l.stroke_color.clone())),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeWeight,
+                                value: Some(Value::Length(l.stroke_weight)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeType,
+                                value: Some(Value::Text(
+                                    l.stroke_type.clone().unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeJoin,
+                                value: Some(Value::Text(
+                                    l.end_join.clone().unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeMiterLimit,
+                                value: Some(Value::Length(l.miter_limit)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeGapColor,
+                                value: Some(Value::ColorRef(l.stroke_gap_color.clone())),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeGapTint,
+                                value: Some(Value::Length(l.stroke_gap_tint)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeDashArray,
+                                value: Some(Value::Lengths(l.stroke_dash.clone())),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::AppliedObjectStyle,
+                                value: Some(Value::Text(
+                                    l.applied_object_style.clone().unwrap_or_default(),
+                                )),
+                            },
+                        ]
+                    }),
+                // Oval: geometry-only default until its apply arms cover
+                // the stroke set.
                 _ => None,
             };
             if let Some(mut entries) = entries {

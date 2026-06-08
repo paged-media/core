@@ -1325,6 +1325,12 @@ pub struct GraphicLine {
     pub stroke_weight: Option<f32>,
     /// `StrokeType` reference; see [`Rectangle::stroke_type`].
     pub stroke_type: Option<String>,
+    /// `EndJoin`; see [`Rectangle::end_join`]. Multi-segment / curved
+    /// lines miter their interior joins.
+    pub end_join: Option<String>,
+    /// `MiterLimit`; see [`Rectangle::miter_limit`]. Punch-list: wired
+    /// for all path kinds, not just rectangles.
+    pub miter_limit: Option<f32>,
     /// `GapColor` / `GapTint`; see [`Rectangle::stroke_gap_color`].
     pub stroke_gap_color: Option<String>,
     pub stroke_gap_tint: Option<f32>,
@@ -1586,6 +1592,14 @@ pub struct Polygon {
     /// [`Rectangle::stroke_alignment`]. W1.5 honours inside/outside on
     /// the closed polygon outline by offsetting it ±weight/2.
     pub stroke_alignment: Option<String>,
+    /// `EndJoin` — `MiterEndJoin` (default) / `RoundEndJoin` /
+    /// `BevelEndJoin`; see [`Rectangle::end_join`]. Closed polygons miter
+    /// their corners like a rect's four corners.
+    pub end_join: Option<String>,
+    /// `MiterLimit`; see [`Rectangle::miter_limit`]. A polygon corner
+    /// sharper than this limit bevels rather than spiking. Punch-list:
+    /// wired for all closed path kinds, not just rectangles.
+    pub miter_limit: Option<f32>,
     /// `GapColor` / `GapTint`; see [`Rectangle::stroke_gap_color`].
     pub stroke_gap_color: Option<String>,
     pub stroke_gap_tint: Option<f32>,
@@ -3429,6 +3443,8 @@ impl Spread {
                             stroke_color: common.stroke_color,
                             stroke_weight: common.stroke_weight,
                             stroke_type: common.stroke_type,
+                            end_join: attr(&e, b"EndJoin"),
+                            miter_limit: attr(&e, b"MiterLimit").and_then(|s| s.parse().ok()),
                             stroke_gap_color: common.stroke_gap_color,
                             stroke_gap_tint: common.stroke_gap_tint,
                             stroke_dash: common.stroke_dash,
@@ -3497,6 +3513,8 @@ impl Spread {
                             stroke_weight: common.stroke_weight,
                             stroke_type: common.stroke_type,
                             stroke_alignment: attr(&e, b"StrokeAlignment"),
+                            end_join: attr(&e, b"EndJoin"),
+                            miter_limit: attr(&e, b"MiterLimit").and_then(|s| s.parse().ok()),
                             stroke_gap_color: common.stroke_gap_color,
                             stroke_gap_tint: common.stroke_gap_tint,
                             stroke_dash: common.stroke_dash,

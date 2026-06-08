@@ -608,3 +608,111 @@ fn polygon_stroke_alignment_center_keeps_outline() {
         "max=({max_x},{max_y})"
     );
 }
+
+// ----------------------------------------------------------------------
+// Punch-list (rides v35) — `frameStrokeMiterLimit` on closed polygons,
+// not just rectangles. The renderer's stroke-join code already bevels a
+// miter past the limit (tiny-skia / Vello stroker); the wire just had to
+// thread the polygon's `MiterLimit` attribute through to the display-list
+// `Stroke`. The first test asserts that wire; the second proves the limit
+// changes the rendered acute apex (high limit → mitered spike, low limit
+// → bevelled flat).
+// ----------------------------------------------------------------------
+
+/// Single-page IDML carrying one sharp-apex `<Polygon>` triangle (apex
+/// at the top, near `(100,10)`) plus the supplied stroke attributes. The
+/// acute apex is where the miter limit decides spike-vs-bevel.
+fn build_spike_polygon_idml(stroke_attrs: &str) -> Vec<u8> {
+    let geom = r#"<Properties>
+          <PathGeometry>
+            <GeometryPathType PathOpen="false">
+              <PathPointArray>
+                <PathPointType Anchor="100 10" LeftDirection="100 10" RightDirection="100 10"/>
+                <PathPointType Anchor="120 150" LeftDirection="120 150" RightDirection="120 150"/>
+                <PathPointType Anchor="80 150" LeftDirection="80 150" RightDirection="80 150"/>
+              </PathPointArray>
+            </GeometryPathType>
+          </PathGeometry>
+        </Properties>"#;
+    build_shape_idml("Polygon", geom, stroke_attrs)
+}
+
+/// `Stroke.miter_limit` of the first emitted `StrokePath`.
+fn first_stroke_miter_limit(bytes: &[u8]) -> f32 {
+    let cmds = built_commands(bytes);
+    cmds.iter()
+        .find_map(|c| match c {
+            DisplayCommand::StrokePath { stroke, .. } => Some(stroke.miter_limit),
+            _ => None,
+        })
+        .expect("a StrokePath")
+}
+
+#[test]
+fn polygon_miter_limit_threads_into_display_list_stroke() {
+    // A polygon's `MiterLimit` attribute now reaches the display-list
+    // `Stroke` (previously Rectangle-only; non-rect kinds defaulted to
+    // the 4.0 PDF default no matter what the IDML declared).
+    let bytes =
+        build_polygon_idml(r#"StrokeColor="Color/Black" StrokeWeight="8" MiterLimit="1.5""#);
+    assert!(
+        (first_stroke_miter_limit(&bytes) - 1.5).abs() < 1e-4,
+        "polygon MiterLimit=1.5 must thread through; got {}",
+        first_stroke_miter_limit(&bytes)
+    );
+
+    // And a high declared limit threads through too (control).
+    let bytes_hi =
+        build_polygon_idml(r#"StrokeColor="Color/Black" StrokeWeight="8" MiterLimit="20""#);
+    assert!(
+        (first_stroke_miter_limit(&bytes_hi) - 20.0).abs() < 1e-4,
+        "polygon MiterLimit=20 must thread through; got {}",
+        first_stroke_miter_limit(&bytes_hi)
+    );
+}
+
+#[test]
+fn polygon_sharp_corner_bevels_past_miter_limit() {
+    use paged_compose::Color;
+
+    // Render the spike at a HIGH miter limit (the acute apex extends into
+    // a long mitered point that pokes above the geometric apex) and at a
+    // LOW limit (the join bevels flat, so the region above the apex stays
+    // background). Probe a pixel a few px ABOVE the apex tip at (100,10):
+    // mitered → painted dark, bevelled → background white.
+    let render_apex = |miter: &str| -> [u8; 4] {
+        let attrs = format!(
+            r#"StrokeColor="Color/Black" StrokeWeight="22" EndJoin="MiterEndJoin" MiterLimit="{miter}""#
+        );
+        let bytes = build_spike_polygon_idml(&attrs);
+        let document = Document::open(&bytes).unwrap();
+        let opts = PipelineOptions::default();
+        let (_built, images) =
+            pipeline::render_document(&document, &opts, 72.0, Color::WHITE).unwrap();
+        // Page 300×400 at 72 dpi → 300×400 px (1pt ≈ 1px). Apex tip at
+        // inner/page (100,10); probe (100,4), just above the tip.
+        images[0].get_pixel(100, 4).0
+    };
+
+    let mitered = render_apex("20");
+    let bevelled = render_apex("1");
+
+    // High limit: the long miter point covers (100,4) → dark.
+    assert!(
+        mitered[0] < 120 && mitered[1] < 120 && mitered[2] < 120,
+        "high miter limit should paint the mitered spike above the apex; got {mitered:?}"
+    );
+    // Low limit: the join bevels back, leaving the region above the apex
+    // as white background.
+    assert!(
+        bevelled[0] > 200 && bevelled[1] > 200 && bevelled[2] > 200,
+        "low miter limit should bevel the apex, leaving background; got {bevelled:?}"
+    );
+    // The luminance gap is the load-bearing difference.
+    assert!(
+        bevelled[0] as i32 - mitered[0] as i32 > 100,
+        "miter vs bevel must differ at the apex: bevelled {} vs mitered {}",
+        bevelled[0],
+        mitered[0]
+    );
+}

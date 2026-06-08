@@ -1965,6 +1965,8 @@ mod tests {
             stroke_weight: None,
             stroke_type: None,
             stroke_alignment: None,
+            end_join: None,
+            miter_limit: None,
             stroke_gap_color: None,
             stroke_gap_tint: None,
             stroke_dash: Vec::new(),
@@ -2130,6 +2132,136 @@ mod tests {
                     prev_subpath_starts: None,
                 },
             }
+        );
+    }
+
+    /// Punch-list (rides v35): `frameStrokeMiterLimit` and
+    /// `frameStrokeJoin` apply + invert on a Polygon (previously
+    /// Rectangle-only). A sharp polygon corner past the miter limit is
+    /// what the renderer then bevels; here we only assert the mutation
+    /// surface (apply lands, inverse restores).
+    #[test]
+    fn polygon_stroke_miter_and_join_round_trip() {
+        let mut project = project_with_polygon(
+            "Polygon/p1",
+            vec![
+                anchor_at(0.0, 0.0),
+                anchor_at(10.0, 0.0),
+                anchor_at(5.0, 8.0),
+            ],
+            vec![],
+        );
+        let node = NodeId::Polygon("Polygon/p1".to_string());
+        assert_round_trips(
+            &mut project,
+            set_op(
+                node.clone(),
+                PropertyPath::FrameStrokeMiterLimit,
+                Value::Length(Some(2.0)),
+            ),
+            |d| assert_eq!(d.spreads[0].spread.polygons[0].miter_limit, Some(2.0)),
+        );
+        assert_round_trips(
+            &mut project,
+            set_op(
+                node.clone(),
+                PropertyPath::FrameStrokeJoin,
+                Value::Text("BevelEndJoin".into()),
+            ),
+            |d| {
+                assert_eq!(
+                    d.spreads[0].spread.polygons[0].end_join.as_deref(),
+                    Some("BevelEndJoin")
+                )
+            },
+        );
+    }
+
+    /// Punch-list (rides v35): the same pair on a GraphicLine.
+    #[test]
+    fn graphic_line_stroke_miter_and_join_round_trip() {
+        use paged_parse::{Bounds, GraphicLine};
+        let mut spread = Spread {
+            self_id: Some("Spread/u_main".to_string()),
+            ..Default::default()
+        };
+        spread.graphic_lines.push(GraphicLine {
+            self_id: Some("GraphicLine/l1".to_string()),
+            bounds: Bounds {
+                top: 0.0,
+                left: 0.0,
+                bottom: 10.0,
+                right: 10.0,
+            },
+            item_transform: None,
+            stroke_color: None,
+            stroke_weight: None,
+            stroke_type: None,
+            end_join: None,
+            miter_limit: None,
+            stroke_gap_color: None,
+            stroke_gap_tint: None,
+            stroke_dash: Vec::new(),
+            applied_object_style: None,
+            text_wrap: None,
+            item_layer: None,
+            anchors: Vec::new(),
+            subpath_starts: Vec::new(),
+            subpath_open: Vec::new(),
+            text_paths: Vec::new(),
+            effects: None,
+            overprint_stroke: false,
+            nonprinting: false,
+            visible: true,
+            locked: false,
+            start_arrow: paged_parse::ArrowheadType::None,
+            end_arrow: paged_parse::ArrowheadType::None,
+            start_arrow_scale: 100.0,
+            end_arrow_scale: 100.0,
+        });
+        let doc = Document {
+            container: Container {
+                mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
+                designmap_raw: Bytes::new(),
+                designmap: DesignMap::default(),
+                entries: BTreeMap::new(),
+            },
+            palette: Graphic::default(),
+            spreads: vec![ParsedSpread {
+                src: "Spreads/syn.xml".to_string(),
+                spread,
+            }],
+            stories: Vec::new(),
+            master_spreads: HashMap::new(),
+            frame_for_story: HashMap::new(),
+            text_frame_index: HashMap::new(),
+            styles: StyleSheet::default(),
+            anchors: Vec::new(),
+        };
+        let mut project = Project::new(doc);
+        let node = NodeId::GraphicLine("GraphicLine/l1".to_string());
+        assert_round_trips(
+            &mut project,
+            set_op(
+                node.clone(),
+                PropertyPath::FrameStrokeMiterLimit,
+                Value::Length(Some(3.5)),
+            ),
+            |d| assert_eq!(d.spreads[0].spread.graphic_lines[0].miter_limit, Some(3.5)),
+        );
+        assert_round_trips(
+            &mut project,
+            set_op(
+                node.clone(),
+                PropertyPath::FrameStrokeJoin,
+                Value::Text("RoundEndJoin".into()),
+            ),
+            |d| {
+                assert_eq!(
+                    d.spreads[0].spread.graphic_lines[0].end_join.as_deref(),
+                    Some("RoundEndJoin")
+                )
+            },
         );
     }
 

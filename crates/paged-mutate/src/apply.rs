@@ -2555,14 +2555,17 @@ fn apply_set_property(
                 },
             )
         }
-        // Stroke join / miter / alignment are Rectangle-only parse
-        // fields.
-        (NodeId::Rectangle(id), PropertyPath::FrameStrokeJoin) => {
+        // Stroke alignment is a Rectangle-only parse field; join /
+        // miter ride v35 across all closed-path kinds (punch-list).
+        (
+            NodeId::Rectangle(_) | NodeId::Polygon(_) | NodeId::GraphicLine(_),
+            PropertyPath::FrameStrokeJoin,
+        ) => {
             let new_val = expect_text(path, value)?;
-            let rect = find_rectangle_mut(doc, id)
+            let slot = find_end_join_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
-            let prev = rect.end_join.clone().unwrap_or_default();
-            rect.end_join = if new_val.is_empty() {
+            let prev = slot.clone().unwrap_or_default();
+            *slot = if new_val.is_empty() {
                 None
             } else {
                 Some(new_val.clone())
@@ -2593,12 +2596,15 @@ fn apply_set_property(
                 },
             )
         }
-        (NodeId::Rectangle(id), PropertyPath::FrameStrokeMiterLimit) => {
+        (
+            NodeId::Rectangle(_) | NodeId::Polygon(_) | NodeId::GraphicLine(_),
+            PropertyPath::FrameStrokeMiterLimit,
+        ) => {
             let new_val = expect_length(path, value)?;
-            let rect = find_rectangle_mut(doc, id)
+            let slot = find_miter_limit_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
-            let prev = rect.miter_limit;
-            rect.miter_limit = new_val;
+            let prev = *slot;
+            *slot = new_val;
             (
                 Value::Length(prev),
                 InvalidationHint {
@@ -7118,6 +7124,32 @@ fn find_stroke_gap_tint_mut<'a>(
     }
 }
 
+/// Punch-list (rides v35) — locate the `miter_limit: Option<f32>` field.
+/// Carried by every closed-path kind that can show a mitered corner:
+/// Rectangle (its four corners), Polygon (its vertices), and GraphicLine
+/// (multi-segment / curved joins). Oval has no corners and TextFrame's
+/// stroke is the rectangular frame, which keeps the legacy Rectangle-only
+/// mutation surface.
+fn find_miter_limit_mut<'a>(doc: &'a mut Document, node: &NodeId) -> Option<&'a mut Option<f32>> {
+    match node {
+        NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.miter_limit),
+        NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.miter_limit),
+        NodeId::GraphicLine(id) => find_graphic_line_mut(doc, id).map(|l| &mut l.miter_limit),
+        _ => None,
+    }
+}
+
+/// Punch-list (rides v35) — locate the `end_join: Option<String>` field.
+/// Same kinds as [`find_miter_limit_mut`] (the two are an IDML pair).
+fn find_end_join_mut<'a>(doc: &'a mut Document, node: &NodeId) -> Option<&'a mut Option<String>> {
+    match node {
+        NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.end_join),
+        NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.end_join),
+        NodeId::GraphicLine(id) => find_graphic_line_mut(doc, id).map(|l| &mut l.end_join),
+        _ => None,
+    }
+}
+
 /// W1.1 — locate the `stroke_dash: Vec<f32>` field (per-frame
 /// `StrokeDashAndGap` override) on any stroked page-item kind.
 fn find_stroke_dash_mut<'a>(doc: &'a mut Document, node: &NodeId) -> Option<&'a mut Vec<f32>> {
@@ -8799,6 +8831,8 @@ fn new_graphic_line(
         stroke_color,
         stroke_weight,
         stroke_type: None,
+        end_join: None,
+        miter_limit: None,
         stroke_gap_color: None,
         stroke_gap_tint: None,
         stroke_dash: Vec::new(),
@@ -8842,6 +8876,8 @@ fn new_polygon(
         stroke_weight,
         stroke_type: None,
         stroke_alignment: None,
+        end_join: None,
+        miter_limit: None,
         stroke_gap_color: None,
         stroke_gap_tint: None,
         stroke_dash: Vec::new(),
