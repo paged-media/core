@@ -96,6 +96,7 @@ pub enum PropertyPathJson {
     FrameGradientStrokeLength,
     PathOpenAt,
     OutlineStroke,
+    OutlineStrokeVariable,
     OffsetPath,
     SimplifyPath,
     PageBounds,
@@ -327,6 +328,7 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::FrameGradientStrokeLength => PropertyPathJson::FrameGradientStrokeLength,
             PropertyPath::PathOpenAt => PropertyPathJson::PathOpenAt,
             PropertyPath::OutlineStroke => PropertyPathJson::OutlineStroke,
+            PropertyPath::OutlineStrokeVariable => PropertyPathJson::OutlineStrokeVariable,
             PropertyPath::OffsetPath => PropertyPathJson::OffsetPath,
             PropertyPath::SimplifyPath => PropertyPathJson::SimplifyPath,
             PropertyPath::PageBounds => PropertyPathJson::PageBounds,
@@ -596,6 +598,7 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::FrameGradientStrokeLength => PropertyPath::FrameGradientStrokeLength,
             PropertyPathJson::PathOpenAt => PropertyPath::PathOpenAt,
             PropertyPathJson::OutlineStroke => PropertyPath::OutlineStroke,
+            PropertyPathJson::OutlineStrokeVariable => PropertyPath::OutlineStrokeVariable,
             PropertyPathJson::OffsetPath => PropertyPath::OffsetPath,
             PropertyPathJson::SimplifyPath => PropertyPath::SimplifyPath,
             PropertyPathJson::PageBounds => PropertyPath::PageBounds,
@@ -864,6 +867,7 @@ impl From<Value> for AuthoredValue {
             | Value::FramePath { .. }
             | Value::PathOpenAt { .. }
             | Value::OutlineStroke { .. }
+            | Value::OutlineStrokeVariable { .. }
             | Value::OffsetPath { .. }
             | Value::SimplifyPath { .. }
             | Value::GradientFeather(_)

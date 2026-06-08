@@ -122,6 +122,7 @@ fn evid_plugin_metadata_label_round_trips_with_was_absent_inverse() {
             value: Value::PluginMetadata {
                 key: key.to_string(),
                 value: Some(envelope.to_string()),
+                caller: None,
                 prev: None,
             },
         },
@@ -164,6 +165,7 @@ fn evid_plugin_metadata_rejects_foreign_namespace_and_bad_envelope() {
             value: Value::PluginMetadata {
                 key: "other:demo".to_string(),
                 value: Some(r#"{"v":1,"data":{}}"#.to_string()),
+                caller: None,
                 prev: None,
             },
         },
@@ -178,9 +180,67 @@ fn evid_plugin_metadata_rejects_foreign_namespace_and_bad_envelope() {
             value: Value::PluginMetadata {
                 key: "x-paged:demo".to_string(),
                 value: Some("not json".to_string()),
+                caller: None,
                 prev: None,
             },
         },
     );
     assert!(bad_envelope.is_err(), "non-envelope value must be rejected");
+}
+
+/// B-16 — the engine-side caller-identity gate. When a write names its
+/// calling plugin (`caller`), the engine enforces that the key is in
+/// THAT plugin's `x-paged:<caller>` namespace, mirroring the SDK door.
+/// `caller: None` (the editor / pre-B-16 callers) keeps the prior
+/// prefix-only behaviour — the additive, non-breaking contract.
+#[test]
+fn evid_plugin_metadata_caller_gate_blocks_foreign_namespace() {
+    let bytes = fixture_bytes();
+    let mut doc = Document::open(&bytes).expect("open");
+    let (rect_id, _) = first_rectangle(&doc);
+    let envelope = r#"{"v":1,"data":{}}"#.to_string();
+
+    let write = |doc: &mut Document, key: &str, caller: Option<&str>| {
+        apply(
+            doc,
+            &Operation::SetProperty {
+                node: NodeId::Rectangle(rect_id.clone()),
+                path: PropertyPath::PluginMetadata,
+                value: Value::PluginMetadata {
+                    key: key.to_string(),
+                    value: Some(envelope.clone()),
+                    caller: caller.map(str::to_string),
+                    prev: None,
+                },
+            },
+        )
+    };
+
+    // caller matches the key namespace → accepted.
+    assert!(
+        write(
+            &mut doc,
+            "x-paged:media.paged.draw",
+            Some("media.paged.draw")
+        )
+        .is_ok(),
+        "a caller writing its OWN namespace is accepted"
+    );
+    // caller does NOT match the key namespace → REJECTED (the bypass
+    // a raw-handle bundle exploited is now closed server-side).
+    assert!(
+        write(
+            &mut doc,
+            "x-paged:media.paged.web",
+            Some("media.paged.draw")
+        )
+        .is_err(),
+        "a caller writing ANOTHER plugin's namespace is rejected"
+    );
+    // No caller → back-compat: prefix-only gate (the editor's own
+    // writes / paged.script are unaffected).
+    assert!(
+        write(&mut doc, "x-paged:media.paged.web", None).is_ok(),
+        "caller=None keeps the prior prefix-only behaviour (additive)"
+    );
 }

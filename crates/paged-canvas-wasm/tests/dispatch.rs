@@ -623,14 +623,14 @@ fn export_idml_without_document_replies_failed() {
 
 #[test]
 fn every_reply_stamps_the_current_protocol_version() {
-    // v35 sentinel — every reply must carry the build's PROTOCOL_VERSION
+    // v36 sentinel — every reply must carry the build's PROTOCOL_VERSION
     // so the client can detect a stale worker. We assert the constant is
-    // 35 (the documented current version) AND that an arbitrary reply
+    // 36 (the documented current version) AND that an arbitrary reply
     // stamps it.
     assert_eq!(
         protocol(),
-        35,
-        "PROTOCOL_VERSION drifted from documented v35"
+        36,
+        "PROTOCOL_VERSION drifted from documented v36"
     );
     let mut core = loaded_core();
     let reply = roundtrip(
@@ -641,7 +641,7 @@ fn every_reply_stamps_the_current_protocol_version() {
             "kind": "requestDocumentMeta"
         }),
     );
-    assert_eq!(reply["protocol"].as_u64().unwrap(), 35);
+    assert_eq!(reply["protocol"].as_u64().unwrap(), 36);
     assert_eq!(reply["kind"], "documentMetaReply");
 }
 

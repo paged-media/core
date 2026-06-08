@@ -392,6 +392,7 @@ fn batch_created_sentinel_attaches_metadata_in_one_undo_step() {
                 element_id: paged_canvas::ElementId::Rectangle("$created".into()),
                 key: "x-paged:media.paged.web".into(),
                 value: Some(envelope.into()),
+                caller: None,
             },
         ],
     };
@@ -435,6 +436,7 @@ fn batch_sentinel_without_create_rejects() {
             element_id: paged_canvas::ElementId::Rectangle("$created".into()),
             key: "x-paged:media.paged.web".into(),
             value: Some(r#"{"v":1,"data":{}}"#.into()),
+            caller: None,
         }],
     });
     assert!(result.is_err(), "got {result:?}");

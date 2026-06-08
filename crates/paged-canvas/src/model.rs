@@ -2112,12 +2112,14 @@ impl CanvasModel {
                 element_id,
                 key,
                 value,
+                caller,
             } => Some(Operation::SetProperty {
                 node: element_to_leaf_node_id(element_id)?,
                 path: PropertyPath::PluginMetadata,
                 value: Value::PluginMetadata {
                     key: key.clone(),
                     value: value.clone(),
+                    caller: caller.clone(),
                     prev: None,
                 },
             }),
@@ -2172,6 +2174,7 @@ impl CanvasModel {
                                 element_id,
                                 key,
                                 value,
+                                caller,
                             },
                             Some(created),
                         ) if element_id.raw_id() == "$created" => {
@@ -2179,6 +2182,7 @@ impl CanvasModel {
                                 element_id: created.clone(),
                                 key: key.clone(),
                                 value: value.clone(),
+                                caller: caller.clone(),
                             };
                             &substituted
                         }
@@ -4088,6 +4092,7 @@ impl CanvasModel {
                                 value: Some(Value::PluginMetadata {
                                     key: key.clone(),
                                     value: Some(value.clone()),
+                                    caller: None,
                                     prev: None,
                                 }),
                             });

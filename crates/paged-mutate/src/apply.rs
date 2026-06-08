@@ -599,7 +599,10 @@ fn apply_set_property(
             | NodeId::TextFrame(_)
             | NodeId::Rectangle(_)
             | NodeId::GraphicLine(_),
-            PropertyPath::OutlineStroke | PropertyPath::OffsetPath | PropertyPath::SimplifyPath,
+            PropertyPath::OutlineStroke
+            | PropertyPath::OutlineStrokeVariable
+            | PropertyPath::OffsetPath
+            | PropertyPath::SimplifyPath,
         ) => {
             return apply_path_kernel_op(doc, node, &path, value);
         }
@@ -5400,6 +5403,7 @@ fn apply_plugin_metadata(
     let Value::PluginMetadata {
         key,
         value: new_value,
+        caller,
         ..
     } = value
     else {
@@ -5409,6 +5413,20 @@ fn apply_plugin_metadata(
         return Err(invalid(format!(
             "metadata keys live in the reserved namespace: expected \"x-paged:<plugin>\", got \"{key}\""
         )));
+    }
+    // B-16 — caller-identity gate (additive). When the request names a
+    // calling plugin, the engine enforces that the key lives in THAT
+    // plugin's namespace, mirroring the SDK door's `foreignMetadataKey`.
+    // A bundle holding the raw handle can no longer write another
+    // plugin's `x-paged:<other>` by passing `caller`. `None` (the
+    // editor / pre-B-16 callers) keeps the prior behaviour.
+    if let Some(caller) = caller {
+        let own = format!("x-paged:{caller}");
+        if key != &own {
+            return Err(invalid(format!(
+                "caller \"{caller}\" may only write its own namespace \"{own}\", not \"{key}\""
+            )));
+        }
     }
     if let Some(v) = new_value {
         if v.len() > PLUGIN_METADATA_MAX_BYTES {
@@ -5467,15 +5485,19 @@ fn apply_plugin_metadata(
             value: Value::PluginMetadata {
                 key: key.clone(),
                 value: new_value.clone(),
+                caller: caller.clone(),
                 prev: Some(prev.clone()),
             },
         },
         inverse: Operation::SetProperty {
             node: node.clone(),
             path: PropertyPath::PluginMetadata,
+            // The inverse is an engine-authoritative restore, not a
+            // plugin call — no caller gate (B-16).
             value: Value::PluginMetadata {
                 key: key.clone(),
                 value: prev,
+                caller: None,
                 prev: Some(new_value.clone()),
             },
         },
@@ -8183,6 +8205,12 @@ fn apply_path_kernel_op(
             prev_subpath_open,
             ..
         }
+        | Value::OutlineStrokeVariable {
+            prev_anchors,
+            prev_subpath_starts,
+            prev_subpath_open,
+            ..
+        }
         | Value::OffsetPath {
             prev_anchors,
             prev_subpath_starts,
@@ -8202,7 +8230,8 @@ fn apply_path_kernel_op(
         _ => {
             return Err(OperationError::TypeMismatch {
                 path: *path,
-                expected: "OutlineStroke | OffsetPath | SimplifyPath".to_string(),
+                expected: "OutlineStroke | OutlineStrokeVariable | OffsetPath | SimplifyPath"
+                    .to_string(),
             })
         }
     };
@@ -8240,6 +8269,21 @@ fn apply_path_kernel_op(
                 subpath_starts,
                 subpath_open,
                 *width,
+                parse_cap(cap).ok_or_else(|| invalid(format!("unknown cap \"{cap}\"")))?,
+                parse_join(join).ok_or_else(|| invalid(format!("unknown join \"{join}\"")))?,
+                *miter_limit,
+            ),
+            Value::OutlineStrokeVariable {
+                widths,
+                cap,
+                join,
+                miter_limit,
+                ..
+            } => kurbo_kernel::variable_width_outline_stroke(
+                anchors,
+                subpath_starts,
+                subpath_open,
+                widths,
                 parse_cap(cap).ok_or_else(|| invalid(format!("unknown cap \"{cap}\"")))?,
                 parse_join(join).ok_or_else(|| invalid(format!("unknown join \"{join}\"")))?,
                 *miter_limit,
@@ -8285,6 +8329,21 @@ fn apply_path_kernel_op(
                 ..
             } => Value::OutlineStroke {
                 width,
+                cap,
+                join,
+                miter_limit,
+                prev_anchors: Some(snap_anchors.clone()),
+                prev_subpath_starts: Some(snap_starts.clone()),
+                prev_subpath_open: Some(snap_open.clone()),
+            },
+            Value::OutlineStrokeVariable {
+                widths,
+                cap,
+                join,
+                miter_limit,
+                ..
+            } => Value::OutlineStrokeVariable {
+                widths,
                 cap,
                 join,
                 miter_limit,

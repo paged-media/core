@@ -338,6 +338,12 @@ pub enum PropertyPath {
     /// transfer (fill := old stroke, stroke := none) is the
     /// CALLER's batch, keeping the op kind-generic.
     OutlineStroke,
+    /// B-08 kernel op — replace an open path with a VARIABLE-width
+    /// stroke outline (`Value::OutlineStrokeVariable`), tapering across
+    /// per-anchor width stops (the pressure profile the editor's Pen
+    /// captures). Same geometry-only / caller-batch-paint convention as
+    /// `OutlineStroke`.
+    OutlineStrokeVariable,
     /// B-05 kernel op — replace a single closed contour with its
     /// inset/outset (`Value::OffsetPath`).
     OffsetPath,
@@ -1240,6 +1246,7 @@ impl PropertyPath {
             PropertyPath::FrameGradientStrokeLength => "frame.gradientStrokeLength",
             PropertyPath::PathOpenAt => "path.openAt",
             PropertyPath::OutlineStroke => "path.outlineStroke",
+            PropertyPath::OutlineStrokeVariable => "path.outlineStrokeVariable",
             PropertyPath::OffsetPath => "path.offset",
             PropertyPath::SimplifyPath => "path.simplify",
             PropertyPath::FrameGradientFeather => "frame.gradientFeather",
@@ -1835,6 +1842,15 @@ pub enum Value {
     PluginMetadata {
         key: String,
         value: Option<String>,
+        /// B-16 — the calling plugin's manifest id. When `Some(id)`, the
+        /// engine enforces that `key == "x-paged:<id>"` (mirrors the SDK
+        /// door `foreignMetadataKey`), closing the bypass where a bundle
+        /// holding the raw handle writes another plugin's namespace.
+        /// Additive: `None` (the editor / pre-B-16 callers) keeps the
+        /// prefix+cap+envelope-only behaviour. Full teeth arrive with the
+        /// isolate; this is the server-side defence-in-depth half.
+        #[serde(default)]
+        caller: Option<String>,
         #[serde(default)]
         prev: Option<Option<String>>,
     },
@@ -1886,6 +1902,23 @@ pub enum Value {
     /// `join`: `"miter" | "round" | "bevel"`.
     OutlineStroke {
         width: f32,
+        cap: String,
+        join: String,
+        miter_limit: f32,
+        #[serde(default)]
+        prev_anchors: Option<Vec<PathAnchorSpec>>,
+        #[serde(default)]
+        prev_subpath_starts: Option<Vec<usize>>,
+        #[serde(default)]
+        prev_subpath_open: Option<Vec<bool>>,
+    },
+    /// B-08 — VARIABLE-width stroke outline. `widths` are the full
+    /// stroke widths at evenly-spaced stops along the centreline
+    /// (arc-length-normalised), tapering the brush stroke; otherwise the
+    /// same snapshot-inverse convention as `OutlineStroke`. `cap`/`join`
+    /// reserved for v2 end/join styling.
+    OutlineStrokeVariable {
+        widths: Vec<f32>,
         cap: String,
         join: String,
         miter_limit: f32,

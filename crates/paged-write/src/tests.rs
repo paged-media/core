@@ -407,6 +407,7 @@ fn plugin_metadata_round_trips_through_write() {
             value: Value::PluginMetadata {
                 key: "x-paged:web".to_string(),
                 value: Some(envelope.to_string()),
+                caller: None,
                 prev: None,
             },
         })
@@ -436,6 +437,7 @@ fn plugin_metadata_round_trips_through_write() {
             value: Value::PluginMetadata {
                 key: "x-paged:web".to_string(),
                 value: None,
+                caller: None,
                 prev: None,
             },
         })
@@ -459,6 +461,7 @@ fn plugin_metadata_round_trips_through_write() {
             value: Value::PluginMetadata {
                 key: "x-paged:web".to_string(),
                 value: Some(envelope.to_string()),
+                caller: None,
                 prev: None,
             },
         })
@@ -488,6 +491,7 @@ fn plugin_metadata_write_gates_reject_cleanly() {
         value: Value::PluginMetadata {
             key: key.to_string(),
             value,
+            caller: None,
             prev: None,
         },
     };

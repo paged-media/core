@@ -103,6 +103,50 @@ fn outline_stroke_round_trips() {
 }
 
 #[test]
+fn outline_stroke_variable_round_trips_or_rejects_cleanly() {
+    // B-08 — the variable-width outline op through the apply layer. The
+    // kernel math (taper + closed contour) is unit-tested on an open
+    // line in `kurbo_kernel`; here we pin the APPLY contract: the new
+    // `Value::OutlineStrokeVariable` dispatches, and on a path the v1
+    // kernel accepts it round-trips bytewise (forward changes the path,
+    // inverse restores, redo reproduces), while on a path it rejects by
+    // design (multi-subpath — the fixture polygon is `[0,4]`) it returns
+    // a clean `InvalidValue`, never a panic or silent corruption. (Same
+    // accept-or-reject-cleanly shape as `offset_path_…` below.)
+    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    let id = first_polygon(&doc);
+    let op = Operation::SetProperty {
+        node: NodeId::Polygon(id.clone()),
+        path: PropertyPath::OutlineStrokeVariable,
+        value: Value::OutlineStrokeVariable {
+            widths: vec![1.0, 6.0, 2.0],
+            cap: "butt".to_string(),
+            join: "miter".to_string(),
+            miter_limit: 4.0,
+            prev_anchors: None,
+            prev_subpath_starts: None,
+            prev_subpath_open: None,
+        },
+    };
+    let before = anchors_of(&doc, &id);
+    match apply(&mut doc, &op) {
+        Ok(applied) => {
+            assert_ne!(anchors_of(&doc, &id), before, "forward changes the path");
+            apply(&mut doc, &applied.inverse).expect("inverse apply");
+            assert_eq!(anchors_of(&doc, &id), before, "inverse restores bytewise");
+        }
+        Err(e) => {
+            assert_eq!(anchors_of(&doc, &id), before, "rejection mutates nothing");
+            let msg = format!("{e:?}");
+            assert!(
+                msg.contains("InvalidValue") || msg.contains("kernel"),
+                "clean validation error, got: {msg}"
+            );
+        }
+    }
+}
+
+#[test]
 fn simplify_path_removes_a_redundant_anchor_and_round_trips() {
     use paged_mutate::operation::PathAnchorSpec;
 

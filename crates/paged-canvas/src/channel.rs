@@ -175,7 +175,13 @@ export type WorkerToMain = WorkerToMainKind & {
 ///     (rule 1): the Group `element_properties` now reports
 ///     `FrameBounds` (the union AABB) + `FrameTransform` (own group
 ///     transform); the scene-tree already nests group members.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(35);
+///   - v36 (2026-06-08): two additive wire changes earn the bump.
+///     B-08 — `OutlineStrokeVariable` (a new `PropertyPath` + `Value`
+///     variant: the variable-width stroke outline op, so a bump, not a
+///     ride). B-16 — an optional `caller` field on
+///     `Value::PluginMetadata` (`serde(default)`); additive, bundled in
+///     so the engine-side caller-identity gate pins to a protocol number.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(36);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -2430,13 +2436,18 @@ pub enum Mutation {
     /// Plugin-metadata carrier (protocol v33) — one Label
     /// `KeyValuePair` on a leaf page item. `value: None` deletes the
     /// entry. The engine gates the write (reserved `x-paged:` key
-    /// namespace, 64 KiB cap, JSON envelope); plugin identity is
-    /// enforced one layer up in the SDK's document door.
+    /// namespace, 64 KiB cap, JSON envelope). B-16: an optional
+    /// `caller` (the calling plugin's manifest id) makes the engine ALSO
+    /// enforce that the key is in that plugin's own namespace — the
+    /// server-side half of the identity gate the SDK door enforces.
+    /// `None` keeps the prior behaviour (the editor / pre-B-16 callers).
     SetPluginMetadata {
         element_id: crate::element_selection::ElementId,
         key: String,
         #[serde(default)]
         value: Option<String>,
+        #[serde(default)]
+        caller: Option<String>,
     },
     /// Track J — toggle the curve type of an anchor between corner
     /// (handles equal to anchor) and smooth (handles derived from
@@ -3248,8 +3259,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v35() {
-        assert_eq!(PROTOCOL_VERSION.0, 35);
+    fn protocol_version_is_v36() {
+        assert_eq!(PROTOCOL_VERSION.0, 36);
     }
 
     /// W1.23 — the new `RequestParagraphBounds` request kind serialises

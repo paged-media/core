@@ -290,6 +290,113 @@ pub fn outline_stroke(
     Some((a, s, closed))
 }
 
+/// Variable-width stroke outline (B-08, the open half of §13.12). The
+/// constant-width [`outline_stroke`] can't taper, so a pressure-varying
+/// pen stroke needs this: `widths[i]` is the FULL stroke width sampled
+/// at width-stop `i` (the editor's Pen maps its per-anchor pressure
+/// profile through `draw-tools` `strokeWidthFromPressure`). The
+/// centreline is flattened to a polyline; each vertex takes a half-width
+/// linearly interpolated across the width stops by NORMALISED arc length
+/// and is pushed along the local unit normal, producing ONE closed
+/// filled contour (left side forward, then right side back). It fills
+/// correctly under the engine's nonzero winding — the same rationale
+/// [`outline_stroke`] documents.
+///
+/// v1 scope (documented, not silent): a SINGLE open contour (a brush
+/// stroke), butt ends; round/square caps, miter/round joins, and
+/// multi-subpath inputs are follow-ups (the `cap`/`join`/`miter` params
+/// are accepted now so the op signature is stable). Returns `None` on
+/// degenerate input (< 2 anchors, no width stops, zero-length path, or a
+/// multi-subpath input).
+pub fn variable_width_outline_stroke(
+    anchors: &[PathAnchor],
+    subpath_starts: &[usize],
+    _subpath_open: &[bool],
+    widths: &[f32],
+    _cap: StrokeCap,
+    _join: StrokeJoin,
+    _miter_limit: f32,
+) -> Option<(Vec<PathAnchor>, Vec<usize>, Vec<bool>)> {
+    if anchors.len() < 2 || widths.is_empty() {
+        return None;
+    }
+    // v1: a single contour (a brush stroke). Multi-subpath variable
+    // width is a follow-up.
+    if subpath_starts.len() > 1 {
+        return None;
+    }
+    // A brush stroke is an OPEN centreline regardless of the stored flag.
+    let path = anchors_to_bezpath(anchors, subpath_starts, &[true]);
+
+    // Flatten the centreline to a polyline (curves → lines at TOLERANCE).
+    let mut pts: Vec<Point> = Vec::new();
+    kurbo::flatten(path.elements().iter().copied(), TOLERANCE, |el| match el {
+        PathEl::MoveTo(p) | PathEl::LineTo(p) => pts.push(p),
+        _ => {}
+    });
+    pts.dedup_by(|a, b| (*a - *b).hypot() < EPS);
+    if pts.len() < 2 {
+        return None;
+    }
+
+    // Cumulative arc length per vertex.
+    let mut cum = vec![0.0f64; pts.len()];
+    for i in 1..pts.len() {
+        cum[i] = cum[i - 1] + (pts[i] - pts[i - 1]).hypot();
+    }
+    let total = *cum.last().unwrap();
+    if total <= EPS {
+        return None;
+    }
+
+    // Half-width at a normalised arc-length position `s` (0..=1), lerped
+    // across the width stops (distributed uniformly over 0..=1 by index).
+    let half_width = |s: f64| -> f64 {
+        let n = widths.len();
+        if n == 1 {
+            return f64::from(widths[0]).max(0.0) * 0.5;
+        }
+        let x = s.clamp(0.0, 1.0) * (n - 1) as f64;
+        let i = (x.floor() as usize).min(n - 2);
+        let frac = x - i as f64;
+        let w = f64::from(widths[i]) * (1.0 - frac) + f64::from(widths[i + 1]) * frac;
+        w.max(0.0) * 0.5
+    };
+
+    // Offset each vertex along the local unit normal (left = +normal).
+    let n = pts.len();
+    let mut left: Vec<Point> = Vec::with_capacity(n);
+    let mut right: Vec<Point> = Vec::with_capacity(n);
+    for i in 0..n {
+        let prev = pts[i.saturating_sub(1)];
+        let next = pts[(i + 1).min(n - 1)];
+        let tang = next - prev;
+        let len = tang.hypot();
+        let (nx, ny) = if len > EPS {
+            (-tang.y / len, tang.x / len)
+        } else {
+            (0.0, 1.0)
+        };
+        let hw = half_width(cum[i] / total);
+        left.push(Point::new(pts[i].x + nx * hw, pts[i].y + ny * hw));
+        right.push(Point::new(pts[i].x - nx * hw, pts[i].y - ny * hw));
+    }
+
+    // Closed contour: left forward, right backward (corner anchors).
+    let corner = |p: Point| PathAnchor {
+        anchor: xy(p),
+        left: xy(p),
+        right: xy(p),
+    };
+    let mut out: Vec<PathAnchor> = Vec::with_capacity(2 * n);
+    out.extend(left.iter().map(|&p| corner(p)));
+    out.extend(right.iter().rev().map(|&p| corner(p)));
+    if out.len() < 3 {
+        return None;
+    }
+    Some((out, vec![0], vec![false]))
+}
+
 /// Simplify (§13.1): re-express the path within `tolerance` pt of the
 /// original with (typically far) fewer anchors.
 pub fn simplify_path(
@@ -558,6 +665,74 @@ mod tests {
         // 100 × 10 band centred on the line.
         assert!((x0 - 0.0).abs() < 0.5 && (x1 - 100.0).abs() < 0.5);
         assert!((y0 + 5.0).abs() < 0.5 && (y1 - 5.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn variable_width_outline_tapers_along_the_centreline() {
+        // B-08 — a horizontal centreline whose width grows 2pt → 8pt.
+        let anchors = vec![corner(0.0, 0.0), corner(50.0, 0.0), corner(100.0, 0.0)];
+        let (a, _s, o) = variable_width_outline_stroke(
+            &anchors,
+            &[0],
+            &[true],
+            &[2.0, 8.0],
+            StrokeCap::Butt,
+            StrokeJoin::Miter,
+            4.0,
+        )
+        .expect("variable-width outline");
+        assert!(o.iter().all(|open| !open), "outline contour is closed");
+
+        // Band half-thickness at an x position = max |y| over the
+        // contour vertices near that x. At the start (x≈0) the full
+        // width is ~2 (half ~1); at the end (x≈100) it is ~8 (half ~4).
+        let near = |x: f32| {
+            a.iter()
+                .filter(|p| (p.anchor.0 - x).abs() < 1.0)
+                .map(|p| p.anchor.1.abs())
+                .fold(0.0f32, f32::max)
+        };
+        let start_half = near(0.0);
+        let end_half = near(100.0);
+        assert!(
+            (start_half - 1.0).abs() < 0.6,
+            "start half-width ~1, got {start_half}"
+        );
+        assert!(
+            (end_half - 4.0).abs() < 0.6,
+            "end half-width ~4, got {end_half}"
+        );
+        assert!(end_half > start_half * 2.0, "the stroke tapers wider");
+    }
+
+    #[test]
+    fn variable_width_outline_rejects_degenerate_input() {
+        assert!(
+            variable_width_outline_stroke(
+                &[corner(0.0, 0.0)],
+                &[0],
+                &[true],
+                &[2.0],
+                StrokeCap::Butt,
+                StrokeJoin::Miter,
+                4.0
+            )
+            .is_none(),
+            "a single anchor has no centreline"
+        );
+        assert!(
+            variable_width_outline_stroke(
+                &[corner(0.0, 0.0), corner(10.0, 0.0)],
+                &[0],
+                &[true],
+                &[],
+                StrokeCap::Butt,
+                StrokeJoin::Miter,
+                4.0
+            )
+            .is_none(),
+            "no width stops → None"
+        );
     }
 
     #[test]
