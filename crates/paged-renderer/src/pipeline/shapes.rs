@@ -528,8 +528,13 @@ fn emit_rectangle_polygon_path(
     // (whose gaps would otherwise show the page) into a gap-filled
     // styled stroke even when the style def declares no gap colour.
     let gap_override = frame_gap_override(resolved, &stroke, &class);
-    let styled =
-        !matches!(class, StrokeStyleClass::Plain { gap_color: None }) || gap_override.is_some();
+    let styled = !matches!(
+        class,
+        StrokeStyleClass::Plain {
+            gap_color: None,
+            ..
+        }
+    ) || gap_override.is_some();
     let handled = if styled && stroke_width > 0.0 {
         if let (Some(base), Some(paint)) = (
             base_path.as_ref(),
@@ -764,8 +769,13 @@ pub(super) fn emit_rectangle_into(
             // FINDING #7.5 — per-frame GapColor override (see the polygon
             // path for the rationale).
             let gap_override = frame_gap_override(&resolved, &stroke, &class);
-            let styled = !matches!(class, StrokeStyleClass::Plain { gap_color: None })
-                || gap_override.is_some();
+            let styled = !matches!(
+                class,
+                StrokeStyleClass::Plain {
+                    gap_color: None,
+                    ..
+                }
+            ) || gap_override.is_some();
             let handled = if styled {
                 let base = axis_rect_path(inset);
                 let seed = resolved
@@ -945,13 +955,20 @@ pub(crate) enum StrokeStyleClass<'a> {
     /// Default: a single straight `StrokePath` (the existing emit). Dash
     /// pattern, if any, already lives on the `Stroke`. `gap_color` is
     /// the gap swatch for a patterned (dashed/dotted) stroke, if set.
-    Plain { gap_color: Option<&'a str> },
+    /// `gap_tint` is that style def's `GapTint` (punch-list: the gap pass
+    /// must dilute the gap colour toward paper, not paint it at full
+    /// strength); a per-frame `GapTint` still overrides it.
+    Plain {
+        gap_color: Option<&'a str>,
+        gap_tint: Option<f32>,
+    },
     /// `<StripedStrokeStyle>`: N parallel rules. Each `(centre, weight)`
     /// is the stripe centreline offset from the stroke's upper edge and
     /// its sub-weight, both in pt.
     Striped {
         rules: Vec<(f32, f32)>,
         gap_color: Option<&'a str>,
+        gap_tint: Option<f32>,
     },
     /// `<WavyStrokeStyle>`: a sine ribbon. `amplitude` / `period` in pt;
     /// `sub_weight` is the pen width of the wave line.
@@ -977,7 +994,11 @@ fn frame_gap_override<'a>(
     let gc = resolved.stroke_gap_color?;
     let class_has_gaps = matches!(
         class,
-        StrokeStyleClass::Striped { .. } | StrokeStyleClass::Plain { gap_color: Some(_) }
+        StrokeStyleClass::Striped { .. }
+            | StrokeStyleClass::Plain {
+                gap_color: Some(_),
+                ..
+            }
     );
     if stroke.dash.len == 0 && !class_has_gaps {
         return None;
@@ -1001,16 +1022,24 @@ pub(crate) fn classify_stroke_style<'a>(
 ) -> StrokeStyleClass<'a> {
     use paged_parse::StrokeStyleKind as K;
     let Some(name) = stroke_type else {
-        return StrokeStyleClass::Plain { gap_color: None };
+        return StrokeStyleClass::Plain {
+            gap_color: None,
+            gap_tint: None,
+        };
     };
     // Custom `<StrokeStyle>` definition wins over the built-in name.
     if let Some(def) = stroke_styles.get(name) {
         let gap_color = def.gap_color.as_deref();
+        let gap_tint = def.gap_tint;
         match def.kind {
             K::Striped => {
                 let rules = stripe_rules_from_def(&def.stripes, weight);
                 if !rules.is_empty() {
-                    return StrokeStyleClass::Striped { rules, gap_color };
+                    return StrokeStyleClass::Striped {
+                        rules,
+                        gap_color,
+                        gap_tint,
+                    };
                 }
             }
             K::Wavy => {
@@ -1023,9 +1052,14 @@ pub(crate) fn classify_stroke_style<'a>(
                 };
             }
             // Dashed / Dotted gap colour rides the default single
-            // StrokePath; the gap swatch flows through for the
+            // StrokePath; the gap swatch + its tint flow through for the
             // under-stroke pass.
-            K::Dashed | K::Dotted => return StrokeStyleClass::Plain { gap_color },
+            K::Dashed | K::Dotted => {
+                return StrokeStyleClass::Plain {
+                    gap_color,
+                    gap_tint,
+                }
+            }
         }
     }
     // Built-in names. `Canned ` prefix and the `StrokeStyle/$ID/`
@@ -1038,6 +1072,7 @@ pub(crate) fn classify_stroke_style<'a>(
             return StrokeStyleClass::Striped {
                 rules,
                 gap_color: None,
+                gap_tint: None,
             };
         }
     }
@@ -1049,7 +1084,10 @@ pub(crate) fn classify_stroke_style<'a>(
             sub_weight,
         };
     }
-    StrokeStyleClass::Plain { gap_color: None }
+    StrokeStyleClass::Plain {
+        gap_color: None,
+        gap_tint: None,
+    }
 }
 
 /// Convert a stripe table (`left`/`width` as 0..1 fractions of the total
@@ -1187,17 +1225,24 @@ pub(crate) fn emit_styled_stroke(
     use crate::pipeline::stroke_geom;
     // Resolve a gap-colour paint (if any) so the under-stroke pass can
     // run beneath dashed/dotted/striped patterns.
-    let style_gap_color = match class {
-        StrokeStyleClass::Plain { gap_color } | StrokeStyleClass::Striped { gap_color, .. } => {
-            *gap_color
+    let (style_gap_color, style_gap_tint) = match class {
+        StrokeStyleClass::Plain {
+            gap_color,
+            gap_tint,
         }
-        StrokeStyleClass::Wavy { .. } => None,
+        | StrokeStyleClass::Striped {
+            gap_color,
+            gap_tint,
+            ..
+        } => (*gap_color, *gap_tint),
+        StrokeStyleClass::Wavy { .. } => (None, None),
     };
     // Frame instance gap colour wins; fall back to the style def's. The
-    // instance tint (if any) rides through `apply_fill_tint`.
+    // instance tint (if any) rides through `apply_fill_tint`; otherwise
+    // the style def's own `GapTint` dilutes the gap colour (punch-list).
     let (gap_color, gap_tint) = match gap_override {
         Some((gc, tint)) => (Some(gc), tint),
-        None => (style_gap_color, None),
+        None => (style_gap_color, style_gap_tint),
     };
     // Gap-colour second pass: a continuous solid under-stroke of the full
     // weight in the gap colour, beneath the patterned/striped stroke, so
@@ -2074,7 +2119,7 @@ mod stroke_style_class_tests {
         d.gap_color = Some("Color/Cyan".to_string());
         let m = styles(vec![d]);
         match classify_stroke_style(Some("StrokeStyle/G"), 4.0, &m) {
-            StrokeStyleClass::Plain { gap_color } => {
+            StrokeStyleClass::Plain { gap_color, .. } => {
                 assert_eq!(gap_color, Some("Color/Cyan"));
             }
             other => panic!("expected Plain with gap, got {other:?}"),
@@ -2086,11 +2131,17 @@ mod stroke_style_class_tests {
         let m = BTreeMap::new();
         assert!(matches!(
             classify_stroke_style(Some("StrokeStyle/$ID/Solid"), 2.0, &m),
-            StrokeStyleClass::Plain { gap_color: None }
+            StrokeStyleClass::Plain {
+                gap_color: None,
+                ..
+            }
         ));
         assert!(matches!(
             classify_stroke_style(None, 2.0, &m),
-            StrokeStyleClass::Plain { gap_color: None }
+            StrokeStyleClass::Plain {
+                gap_color: None,
+                ..
+            }
         ));
     }
 }

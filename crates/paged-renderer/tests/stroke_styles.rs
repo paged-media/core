@@ -261,6 +261,61 @@ fn gap_color_dash_emits_under_stroke_plus_dash() {
     assert!(!top.dash.is_solid(), "top stroke is dashed");
 }
 
+/// Punch-list: the gap-colour pass must apply the style def's `GapTint`,
+/// diluting the gap colour toward paper. Pre-fix the under-stroke painted
+/// the gap colour at full strength regardless of `GapTint`. A tint < 100
+/// must produce a lighter gap paint than tint = 100.
+#[test]
+fn gap_tint_lightens_the_rendered_gap_colour() {
+    // Helper: the RGB of the first (under-)StrokePath's paint for a dashed
+    // style whose gap is Cyan at the given tint.
+    fn gap_under_rgb(tint: u32) -> paged_compose::Color {
+        let style = format!(
+            r#"<DashedStrokeStyle Self="StrokeStyle/GapDash" Name="GapDash"
+                GapColor="Color/Cyan" GapTint="{tint}" Pattern="8 6"/>"#
+        );
+        let bytes = build_idml(
+            r#"StrokeColor="Color/Black" StrokeWeight="8" StrokeType="StrokeStyle/GapDash""#,
+            &style,
+        );
+        let document = Document::open(&bytes).unwrap();
+        let built = pipeline::build_document(&document, &PipelineOptions::default()).unwrap();
+        let page = &built.pages[0];
+        let strokes = stroke_paths(&page.list.commands);
+        // The gap under-stroke is drawn first.
+        match strokes[0] {
+            DisplayCommand::StrokePath { paint, .. } => match *paint {
+                paged_compose::Paint::Solid(c) => c,
+                paged_compose::Paint::Cmyk { rgb, .. } => rgb,
+                other => panic!("unexpected gap paint {other:?}"),
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    let full = gap_under_rgb(100);
+    let diluted = gap_under_rgb(40);
+
+    // Cyan (CMYK 100 0 0 0) has a low red channel at full strength; tinting
+    // toward paper white raises every channel toward 1.0. The red channel
+    // is the discriminator (cyan's lowest), so a 40% tint must lift it.
+    assert!(
+        diluted.r > full.r + 0.2,
+        "GapTint=40 must lighten the gap colour toward paper: \
+         diluted r={} vs full r={}",
+        diluted.r,
+        full.r,
+    );
+    // Sanity: the diluted gap is genuinely lighter overall (higher sum).
+    let lum = |c: paged_compose::Color| c.r + c.g + c.b;
+    assert!(
+        lum(diluted) > lum(full) + 0.3,
+        "GapTint=40 must be lighter overall: diluted={:?} full={:?}",
+        diluted,
+        full,
+    );
+}
+
 #[test]
 fn frame_gap_color_overrides_style_def_gap_color() {
     // FINDING #7.5 — a per-FRAME `GapColor` (W0.3's mutation target)
