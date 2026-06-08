@@ -4307,6 +4307,58 @@ mod tests {
         assert_eq!(story.paragraphs[0].runs[1].ligatures_on, Some(true));
     }
 
+    /// Punch-list: `characterLigatures` toggled from the DEFAULT-ON
+    /// state (`ligatures_on = None`, i.e. inherit ⇒ ligatures on per
+    /// OpenType/InDesign). Pre-fix the inverse captured
+    /// `None.unwrap_or(false) = false`, so undoing a toggle-off left the
+    /// run at `Some(false)` (OFF) instead of restoring the visible ON
+    /// default. The inverse must now restore the ON state.
+    #[test]
+    fn character_ligatures_undo_restores_default_on() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        register_host_frame(&mut project, "Story/u1", "TextFrame/f1");
+        // Leave run 1 at the default (None ⇒ ligatures ON).
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].runs[1].ligatures_on,
+            None,
+            "run starts at the inherit default (ligatures ON)"
+        );
+
+        let op = Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 6,
+                end: 11,
+            },
+            path: PropertyPath::CharacterLigatures,
+            value: Value::Bool(false),
+        };
+        let applied = project.apply(op).expect("apply must succeed");
+        // Toggled OFF.
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].runs[1].ligatures_on,
+            Some(false)
+        );
+        // The inverse carries the EFFECTIVE prior value (ON), not the
+        // wrong-polarity `false`.
+        let Operation::SetProperty {
+            value: Value::Bool(inv),
+            ..
+        } = &applied.inverse
+        else {
+            panic!("inverse should be a Bool SetProperty");
+        };
+        assert!(*inv, "inverse must restore ligatures ON, not OFF");
+
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        // Undo restores the visible ON state.
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].runs[1].ligatures_on,
+            Some(true),
+            "undo must restore ligatures ON (the default), not leave them OFF"
+        );
+    }
+
     /// Mid-run range: `characterFontStyle` over [2, 4) splits the
     /// first run "Hello " (0..6) into "He" / "ll" / "o ", mutating
     /// only the middle piece. Undo restores the prior value per

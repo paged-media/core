@@ -4374,9 +4374,12 @@ impl CanvasModel {
                 path: PropertyPath::CharacterStrikethru,
                 value: collapse_uniform(&strikethrus).map(|o| Value::Bool(o.unwrap_or(false))),
             },
+            // Ligatures default ON per OpenType / InDesign (unlike
+            // underline / strikethru, which default OFF); a run with no
+            // explicit `Ligatures` attribute reads `true` (punch-list).
             PropertyEntry {
                 path: PropertyPath::CharacterLigatures,
-                value: collapse_uniform(&ligatures).map(|o| Value::Bool(o.unwrap_or(false))),
+                value: collapse_uniform(&ligatures).map(|o| Value::Bool(o.unwrap_or(true))),
             },
             // W0.2 — paragraph formatting. Length fields surface the
             // `Option<f32>` collapsed; drop-cap counts surface as

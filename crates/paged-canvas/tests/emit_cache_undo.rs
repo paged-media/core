@@ -426,3 +426,63 @@ fn character_property_undo_restores_display_list_no_stale_cache() {
         );
     }
 }
+
+/// Punch-list (AC-E2E-CHAR-ligatures): a run with no explicit
+/// `Ligatures` attribute is ligatures-ON by default (OpenType /
+/// InDesign). The StoryRange read must report `true`, not `false`, in
+/// that default state, and a toggle off→on round-trips through
+/// element_properties.
+#[test]
+fn character_ligatures_reads_default_on_and_round_trips() {
+    use paged_canvas::channel::Mutation;
+    use paged_canvas::element_selection::ElementId;
+    use paged_mutate::{PropertyPath, Value};
+
+    fn read_ligatures(model: &CanvasModel, range: &ElementId) -> Option<Value> {
+        model
+            .element_properties(range)
+            .expect("story-range props")
+            .entries
+            .iter()
+            .find(|e| e.path == PropertyPath::CharacterLigatures)
+            .expect("ligatures entry present")
+            .value
+            .clone()
+    }
+
+    let mut model = single_page_with_story();
+    let range = ElementId::StoryRange {
+        story_id: "u10".into(),
+        start: 0,
+        end: 1000,
+    };
+
+    // Default state (no `Ligatures` attribute): reads ON.
+    assert_eq!(
+        read_ligatures(&model, &range),
+        Some(Value::Bool(true)),
+        "ligatures must read ON by default (OpenType/InDesign), not OFF",
+    );
+
+    // Toggle OFF.
+    model
+        .apply_mutation(&Mutation::SetElementProperty {
+            element_id: range.clone(),
+            path: PropertyPath::CharacterLigatures,
+            value: Value::Bool(false),
+        })
+        .expect("toggle off");
+    assert_eq!(
+        read_ligatures(&model, &range),
+        Some(Value::Bool(false)),
+        "after toggle, ligatures read OFF",
+    );
+
+    // Undo restores the visible ON state.
+    model.undo().expect("undo toggle");
+    assert_eq!(
+        read_ligatures(&model, &range),
+        Some(Value::Bool(true)),
+        "undo must restore ligatures ON (the default), not leave them OFF",
+    );
+}

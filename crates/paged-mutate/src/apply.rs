@@ -3691,6 +3691,7 @@ fn set_run_bool_field(
     run: &mut paged_parse::CharacterRun,
     path: PropertyPath,
     value: &Value,
+    default: bool,
     field: impl FnOnce(&mut paged_parse::CharacterRun) -> &mut Option<bool>,
 ) -> Result<(Value, Value), OperationError> {
     let Value::Bool(new_val) = value else {
@@ -3700,7 +3701,12 @@ fn set_run_bool_field(
         });
     };
     let slot = field(run);
-    let prev = slot.unwrap_or(false);
+    // `None` means "inherit the field's default". The inverse must
+    // restore the EFFECTIVE prior value, so collapse `None` to the
+    // field's default (ligatures default ON; underline/strikethru OFF) —
+    // undoing a toggle on a defaulted run lands the visible default back,
+    // not the wrong-polarity `false` the old `unwrap_or(false)` produced.
+    let prev = slot.unwrap_or(default);
     *slot = Some(*new_val);
     Ok((Value::Bool(prev), Value::Bool(*new_val)))
 }
@@ -3847,13 +3853,15 @@ fn apply_character_field_on_run(
         // `Some(false)` (see the path doc-comments for the
         // documented default-restore limitation).
         PropertyPath::CharacterUnderline => {
-            set_run_bool_field(run, path, value, |r| &mut r.underline)
+            set_run_bool_field(run, path, value, false, |r| &mut r.underline)
         }
         PropertyPath::CharacterStrikethru => {
-            set_run_bool_field(run, path, value, |r| &mut r.strikethru)
+            set_run_bool_field(run, path, value, false, |r| &mut r.strikethru)
         }
+        // Ligatures default ON (OpenType/InDesign): undo of a toggle on a
+        // defaulted run must restore the visible ON state (punch-list).
         PropertyPath::CharacterLigatures => {
-            set_run_bool_field(run, path, value, |r| &mut r.ligatures_on)
+            set_run_bool_field(run, path, value, true, |r| &mut r.ligatures_on)
         }
         _ => Err(OperationError::UnsupportedProperty {
             node: NodeId::StoryRange {
