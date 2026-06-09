@@ -102,22 +102,16 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # Convert → contract-v1, apply ingest/test-map.yaml (core's tests
-      # carry no @feat: tags yet → map:true), gate feature ids, upload the
-      # normalized artifact, and dispatch results-published at state. The
-      # action self-conditions the dispatch on a non-empty dispatch-token,
-      # so an unset secret degrades to "convert + gate + upload, no
-      # dispatch" rather than failing.
-      - name: publish results to paged-media/state
-        if: ${{ !cancelled() }}
-        uses: paged-media/state/actions/publish-results@main
-        with:
-          source: core
-          suite: nextest-unit
-          format: nextest-junit
-          path: target/nextest/ci/junit.xml
-          map: "true"
-          dispatch-token: ${{ secrets.STATE_DISPATCH_TOKEN }}
+      # NOTE: core is a PUBLIC repo; the publish-results action lives in the
+      # PRIVATE state repo, and GitHub blocks a public workflow from
+      # resolving a private repo's action (it would leak private action code
+      # into public logs) — "Unable to resolve action paged-media/state".
+      # So core evidence is NOT pushed from here; the `nextest-junit`
+      # artifact above is the hand-off. Private state CAN read this public
+      # repo's artifacts, so the ingest direction is inverted: a state-side
+      # job pulls the latest core `nextest-junit` artifact (gh API) and runs
+      # convert/gate/ingest there. (Editor + plugin repos are private, so
+      # they keep using the action directly.) Tracked as a state follow-up.
 
   # Wasm-lane placeholder (W0.8 substance lands crate-side): invoke the
   # Makefile `test-wasm` target, which calls scripts/test-wasm.sh. That
@@ -134,6 +128,19 @@ jobs:
           toolchain: ${{ needs.toolchain.outputs.channel }}
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+      # scripts/test-wasm.sh runs the wasm-bindgen tests node-hosted, so it
+      # needs wasm-bindgen-test-runner (shipped by wasm-bindgen-cli, pinned
+      # to the lockfile version) + node on PATH. Without these the lane
+      # failed "wasm-bindgen-test-runner not found".
+      - name: install wasm-bindgen-cli (lockfile pin)
+        run: |
+          set -euo pipefail
+          WB=$(awk '/^name = "wasm-bindgen"$/{getline; gsub(/version = "|"/,""); print; exit}' Cargo.lock)
+          echo "wasm-bindgen pin: $WB"
+          cargo install wasm-bindgen-cli --version "$WB" --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: make test-wasm
         run: make test-wasm
 
