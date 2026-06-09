@@ -24,7 +24,7 @@
 
 use std::io::Write;
 
-use paged_mutate::{apply, NodeId, Operation, PropertyPath, Value};
+use paged_mutate::{apply, NodeId, NodeSpec, Operation, PropertyPath, Value};
 use paged_scene::Document;
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
@@ -516,4 +516,211 @@ fn set_cell_span_unknown_cell_rejected() {
         },
     );
     assert!(err.is_err(), "no cell originates at (9,9)");
+}
+
+// ── S-03 — table CREATE (InsertNode { Story, NodeSpec::Table }) ──────
+
+/// A one-page IDML whose story `u30` carries a single text paragraph and
+/// NO table — the InsertTable create-op target. (`table_idml`'s story
+/// already owns `t1`, so a fresh fixture is needed to test creation into
+/// a table-free story.)
+fn empty_story_idml() -> Vec<u8> {
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    let put = |zip: &mut ZipWriter<_>, name: &str, body: &[u8]| {
+        zip.start_file(name, deflated).unwrap();
+        zip.write_all(body).unwrap();
+    };
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    put(
+        &mut zip,
+        "designmap.xml",
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" Self="d1">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_u30.xml"/>
+</Document>"#,
+    );
+    put(
+        &mut zip,
+        "Spreads/Spread_sp1.xml",
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1" PageCount="1">
+    <Page Self="p1" GeometricBounds="0 0 400 612" ItemTransform="1 0 0 1 0 0"/>
+    <TextFrame Self="frameA" ParentStory="u30" GeometricBounds="40 40 380 572" ItemTransform="1 0 0 1 0 0"/>
+  </Spread>
+</idPkg:Spread>"#,
+    );
+    put(
+        &mut zip,
+        "Stories/Story_u30.xml",
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u30">
+    <ParagraphStyleRange>
+      <CharacterStyleRange><Content>Hello</Content></CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+    );
+    zip.finish().unwrap().into_inner()
+}
+
+fn open_empty_story_doc() -> Document {
+    Document::open(&empty_story_idml()).expect("empty-story fixture must open")
+}
+
+/// Locate the table identified by `table_id` in `story_id`, if present.
+fn find_table<'a>(
+    doc: &'a Document,
+    story_id: &str,
+    table_id: &str,
+) -> Option<&'a paged_parse::Table> {
+    doc.stories
+        .iter()
+        .find(|s| s.self_id == story_id)?
+        .story
+        .paragraphs
+        .iter()
+        .find_map(|p| p.table.as_ref())
+        .filter(|t| t.self_id.as_deref() == Some(table_id))
+}
+
+fn insert_table_op(self_id: &str, rows: u32, cols: u32) -> Operation {
+    Operation::InsertNode {
+        parent: NodeId::Story("u30".into()),
+        position: 0,
+        node: NodeSpec::Table {
+            self_id: self_id.into(),
+            rows,
+            cols,
+            header_rows: 1,
+            footer_rows: 0,
+            column_widths: vec![120.0, 80.0],
+            row_heights: vec![],
+        },
+        z_slot: None,
+    }
+}
+
+#[test]
+fn insert_table_creates_rows_cols_and_cells() {
+    let mut doc = open_empty_story_doc();
+    assert!(
+        find_table(&doc, "u30", "tbl1").is_none(),
+        "story starts table-free"
+    );
+
+    let applied = apply(&mut doc, &insert_table_op("tbl1", 3, 2)).expect("insert table");
+
+    let table = find_table(&doc, "u30", "tbl1").expect("table created");
+    // 3 rows × 2 columns → 6 cells, keyed "col:row".
+    assert_eq!(table.rows.len(), 3);
+    assert_eq!(table.columns.len(), 2);
+    assert_eq!(table.column_count, 2);
+    assert_eq!(table.cells.len(), 6);
+    // Header band carved off the top; the rest is the body.
+    assert_eq!(table.header_row_count, 1);
+    assert_eq!(table.footer_row_count, 0);
+    assert_eq!(table.body_row_count, 2);
+    // Column widths applied from the spec.
+    assert_eq!(table.columns[0].single_column_width, Some(120.0));
+    assert_eq!(table.columns[1].single_column_width, Some(80.0));
+    // Every (col,row) cell exists.
+    for c in 0..2u32 {
+        for r in 0..3u32 {
+            assert!(
+                table.cells.iter().any(|cell| cell.coords() == Some((c, r))),
+                "cell ({c},{r}) present"
+            );
+        }
+    }
+    // Inverse removes the created table.
+    assert!(matches!(
+        applied.inverse,
+        Operation::RemoveNode {
+            node: NodeId::Table { .. }
+        }
+    ));
+}
+
+#[test]
+fn insert_table_round_trips_via_inverse() {
+    let mut doc = open_empty_story_doc();
+    let paras_before = doc
+        .stories
+        .iter()
+        .find(|s| s.self_id == "u30")
+        .unwrap()
+        .story
+        .paragraphs
+        .len();
+
+    let applied = apply(&mut doc, &insert_table_op("tbl1", 3, 2)).expect("insert table");
+    assert!(find_table(&doc, "u30", "tbl1").is_some());
+    let paras_after = doc
+        .stories
+        .iter()
+        .find(|s| s.self_id == "u30")
+        .unwrap()
+        .story
+        .paragraphs
+        .len();
+    assert_eq!(paras_after, paras_before + 1, "table adds one paragraph");
+
+    // Undo: the story returns to its prior table-free state.
+    apply(&mut doc, &applied.inverse).expect("undo insert table");
+    assert!(
+        find_table(&doc, "u30", "tbl1").is_none(),
+        "inverse removes the table"
+    );
+    let paras_final = doc
+        .stories
+        .iter()
+        .find(|s| s.self_id == "u30")
+        .unwrap()
+        .story
+        .paragraphs
+        .len();
+    assert_eq!(paras_final, paras_before, "paragraph count restored");
+}
+
+#[test]
+fn insert_table_unknown_story_is_noop_error() {
+    // mutate-never-throws: an InsertTable into a missing story returns an
+    // error outcome (the channel surfaces it as a failed mutation),
+    // never a panic, and the doc is left untouched.
+    let mut doc = open_empty_story_doc();
+    let err = apply(
+        &mut doc,
+        &Operation::InsertNode {
+            parent: NodeId::Story("does-not-exist".into()),
+            position: 0,
+            node: NodeSpec::Table {
+                self_id: "tblX".into(),
+                rows: 2,
+                cols: 2,
+                header_rows: 0,
+                footer_rows: 0,
+                column_widths: vec![],
+                row_heights: vec![],
+            },
+            z_slot: None,
+        },
+    );
+    assert!(err.is_err(), "unknown story must reject, not panic");
+    assert!(find_table(&doc, "does-not-exist", "tblX").is_none());
+}
+
+#[test]
+fn insert_table_duplicate_id_rejected() {
+    let mut doc = open_empty_story_doc();
+    apply(&mut doc, &insert_table_op("dup", 2, 2)).expect("first insert ok");
+    let err = apply(&mut doc, &insert_table_op("dup", 2, 2));
+    assert!(err.is_err(), "a duplicate table id must reject");
 }

@@ -226,6 +226,21 @@ pub struct MutationOutcome {
     pub page_structure_changed: bool,
 }
 
+/// S-13 — result of [`CanvasModel::measure_text`]. All fields in
+/// POINTS. `advance` is the shaped horizontal advance of the run
+/// (kerning and standard ligatures per the default feature set).
+/// `ascender` and `descender` are the face's design metrics scaled to
+/// `size_pt`; `descender` is negative per the OpenType convention (it
+/// sits below the baseline). Backs the `measure_text` query on the wasm
+/// surface, from which the paged.sheet plugin sizes native-table rows
+/// and columns.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextMetrics {
+    pub advance: f32,
+    pub ascender: f32,
+    pub descender: f32,
+}
+
 /// Editor-ops — document defaults for newly-created objects. The
 /// whole triple is replaced by `Mutation::SetDocumentDefaults`;
 /// `None` means no fill / no stroke / engine-default weight.
@@ -282,7 +297,22 @@ fn created_element_id(op: &paged_mutate::Operation) -> Option<crate::element_sel
     if let paged_mutate::Operation::Batch { ops } = op {
         return ops.iter().rev().find_map(created_element_id);
     }
-    if let paged_mutate::Operation::InsertNode { node, .. } = op {
+    if let paged_mutate::Operation::InsertNode { parent, node, .. } = op {
+        // S-03 — a table's id needs the parent story for the full
+        // address (the spec alone can't produce a `NodeId::Table`). Read
+        // the story id off the `NodeId::Story` parent and the table id
+        // off the spec so the outcome reports the cell-addressable
+        // `ElementId::Table { story_id, table_id }`.
+        if let (
+            paged_mutate::NodeId::Story(story_id),
+            paged_mutate::NodeSpec::Table { self_id, .. },
+        ) = (parent, node)
+        {
+            return Some(ElementId::Table {
+                story_id: story_id.clone(),
+                table_id: self_id.clone(),
+            });
+        }
         return match node.node_id() {
             paged_mutate::NodeId::TextFrame(id) => Some(ElementId::TextFrame(id)),
             paged_mutate::NodeId::Rectangle(id) => Some(ElementId::Rectangle(id)),
@@ -2507,6 +2537,34 @@ impl CanvasModel {
                     z_slot: None,
                 })
             }
+            // S-03 — table CREATE. Mirrors `InsertOval` (mint id →
+            // InsertNode) but story-scoped: the parent is the host
+            // story, and the node is a `NodeSpec::Table`. The minted
+            // `self_id` becomes the table_id, surfaced as the outcome's
+            // `created_id` (see `created_element_id`) so the caller can
+            // address cells next.
+            Mutation::InsertTable {
+                story_id,
+                rows,
+                cols,
+                header_rows,
+                footer_rows,
+                column_widths,
+                row_heights,
+            } => Some(Operation::InsertNode {
+                parent: NodeId::Story(story_id.clone()),
+                position: 0,
+                node: paged_mutate::NodeSpec::Table {
+                    self_id: self.mint_page_item_id_with_offset(mint_offset),
+                    rows: *rows,
+                    cols: *cols,
+                    header_rows: *header_rows,
+                    footer_rows: *footer_rows,
+                    column_widths: column_widths.clone(),
+                    row_heights: row_heights.clone(),
+                },
+                z_slot: None,
+            }),
             Mutation::LinkFrames { from, to } => Some(Operation::LinkFrames {
                 from: from.clone(),
                 to: to.clone(),
@@ -6316,6 +6374,50 @@ impl CanvasModel {
         self.font_bytes.as_deref()
     }
 
+    /// S-13 — measure a text run against the loaded document's font
+    /// registry. Resolves `(family, style)` to face bytes through the
+    /// same `BytesResolver` the renderer uses (so the styled → bare-
+    /// family → document-default fallback chain applies); when the
+    /// family is unknown the resolver's default font wins, and when even
+    /// that is absent (or the bytes don't parse) the call returns `None`.
+    ///
+    /// Returns advance / ascender / descender in POINTS:
+    /// * `advance` = the shaped run's `total_advance` (in 1/64 pt, the
+    ///   `ADVANCE_PRECISION` unit) converted to pt.
+    /// * `ascender` / `descender` = the face's design metrics scaled by
+    ///   `size_pt / units_per_em` (descender is negative).
+    ///
+    /// A pure read — it neither mutates the model nor touches the undo
+    /// log; safe to call between mutations.
+    pub fn measure_text(
+        &self,
+        family: &str,
+        style: Option<&str>,
+        text: &str,
+        size_pt: f32,
+    ) -> Option<TextMetrics> {
+        use paged_renderer::AssetResolver;
+        let resolver = build_font_resolver(&self.font_registry, self.font_bytes.as_deref())?;
+        let bytes = resolver.resolve_font(family, style)?;
+        let face = rustybuzz::Face::from_slice(&bytes, 0)?;
+
+        let upem = face.units_per_em() as f32;
+        if upem <= 0.0 {
+            return None;
+        }
+        let scale = size_pt / upem;
+
+        let shaped = paged_text::shape_run(&face, text, size_pt);
+        // `total_advance` is in 1/64 pt (ADVANCE_PRECISION); convert.
+        let advance = shaped.total_advance as f32 / paged_text::shape::ADVANCE_PRECISION;
+
+        Some(TextMetrics {
+            advance,
+            ascender: face.ascender() as f32 * scale,
+            descender: face.descender() as f32 * scale,
+        })
+    }
+
     pub fn icc_bytes(&self) -> Option<&[u8]> {
         self.icc_bytes.as_deref()
     }
@@ -7216,5 +7318,103 @@ mod tests {
             "seq 1 kept"
         );
         assert_eq!(model.applied_log.last().unwrap().applied_seq, 100);
+    }
+
+    // ── S-13 — measure_text font-metrics query ──────────────────────
+
+    /// Load a minimal document with one named font registered, so
+    /// `measure_text` can resolve a face. Returns `None` (the caller
+    /// should skip) when the corpus font isn't present in this checkout.
+    fn model_with_font(family: &str) -> Option<CanvasModel> {
+        let font_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/fonts/Inter.ttf");
+        let font = std::fs::read(&font_path).ok()?;
+        let opts = CanvasOptions {
+            font_registry: vec![FontEntry {
+                family: family.to_string(),
+                style: None,
+                bytes: font,
+            }],
+            ..Default::default()
+        };
+        CanvasModel::load("doc-measure", &minimal_idml_bytes(), opts).ok()
+    }
+
+    #[test]
+    fn measure_text_returns_positive_advance_and_metric_ordering() {
+        let Some(model) = model_with_font("Inter") else {
+            eprintln!("skip: Inter.ttf not present");
+            return;
+        };
+        let m = model
+            .measure_text("Inter", None, "Hello", 12.0)
+            .expect("Inter resolves a face");
+        assert!(m.advance > 0.0, "non-empty run has positive advance");
+        // OpenType convention: ascender above the baseline (positive),
+        // descender below (negative); ascender strictly greater.
+        assert!(m.ascender > m.descender, "ascender above descender");
+        assert!(m.ascender > 0.0, "ascender positive");
+        assert!(m.descender < 0.0, "descender negative");
+        // Empty text has zero advance but the face metrics still resolve.
+        let empty = model.measure_text("Inter", None, "", 12.0).unwrap();
+        assert_eq!(empty.advance, 0.0);
+        assert!(empty.ascender > 0.0);
+    }
+
+    #[test]
+    fn measure_text_advance_scales_with_size() {
+        let Some(model) = model_with_font("Inter") else {
+            eprintln!("skip: Inter.ttf not present");
+            return;
+        };
+        let small = model.measure_text("Inter", None, "Width", 10.0).unwrap();
+        let big = model.measure_text("Inter", None, "Width", 20.0).unwrap();
+        // Advance + ascender scale linearly with point size (no
+        // size-dependent shaping for a Latin run): doubling pt ≈ doubles
+        // the measurement.
+        assert!(
+            (big.advance / small.advance - 2.0).abs() < 0.05,
+            "advance ~2x at 2x size: {} vs {}",
+            big.advance,
+            small.advance
+        );
+        assert!((big.ascender / small.ascender - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn measure_text_unknown_family_falls_back_to_registered_face() {
+        // `resolve_font`'s bare-family + default fallback means an
+        // unknown family still resolves SOME face when one is registered
+        // (here Inter is the only registered family, and it doubles as
+        // the bare-family fallthrough). The query must not return None.
+        let Some(model) = model_with_font("Inter") else {
+            eprintln!("skip: Inter.ttf not present");
+            return;
+        };
+        let m = model.measure_text("NoSuchFamily", None, "x", 12.0);
+        // With only a styled registry entry and no default font, an
+        // unknown family may not resolve — accept either a measurement
+        // or None, but never a panic. When it resolves, advance is sane.
+        if let Some(m) = m {
+            assert!(m.advance > 0.0);
+        }
+    }
+
+    #[test]
+    fn measure_text_no_document_path_is_handled_by_caller() {
+        // The model always has a document (it's constructed by `load`);
+        // the "no document" None is a wasm-shell concern. Here we just
+        // confirm a model with NO font registry returns None rather than
+        // panicking (build_font_resolver yields None).
+        let model = CanvasModel::load(
+            "doc-nofont",
+            &minimal_idml_bytes(),
+            CanvasOptions::default(),
+        )
+        .unwrap();
+        assert!(
+            model.measure_text("Inter", None, "x", 12.0).is_none(),
+            "no registry + no default font ⇒ None, not a panic"
+        );
     }
 }

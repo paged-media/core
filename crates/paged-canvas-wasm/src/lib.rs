@@ -351,6 +351,53 @@ mod wasm {
             serde_json::to_string(&result).ok()
         }
 
+        /// S-13 — measure a text run against the loaded document's font
+        /// registry. Returns a plain JS object
+        /// `{ advance, ascender, descender }` (all in POINTS;
+        /// `descender` is negative per the OpenType convention) or
+        /// `null` when no document is loaded / the family resolves to no
+        /// face (and no default font is registered). `style` is IDML's
+        /// `FontStyle` ("Bold", "Italic", …) or omitted. A READ — no
+        /// protocol / wire change, no mutation, no undo-log touch. The
+        /// face resolution uses the renderer's styled → bare-family →
+        /// document-default fallback, so an unknown `family` falls back
+        /// to the default face when one is registered.
+        #[wasm_bindgen(js_name = measureText)]
+        pub fn measure_text(
+            &self,
+            family: &str,
+            style: Option<String>,
+            text: &str,
+            size_pt: f32,
+        ) -> JsValue {
+            let Some(model) = self.core.model.as_ref() else {
+                return JsValue::NULL;
+            };
+            let Some(metrics) = model.measure_text(family, style.as_deref(), text, size_pt) else {
+                return JsValue::NULL;
+            };
+            let obj = js_sys::Object::new();
+            // Ignore set failures — Reflect::set on a fresh Object never
+            // fails in practice; on the off-chance it does, the missing
+            // key surfaces as `undefined` on the JS side.
+            let _ = js_sys::Reflect::set(
+                &obj,
+                &JsValue::from_str("advance"),
+                &JsValue::from_f64(metrics.advance as f64),
+            );
+            let _ = js_sys::Reflect::set(
+                &obj,
+                &JsValue::from_str("ascender"),
+                &JsValue::from_f64(metrics.ascender as f64),
+            );
+            let _ = js_sys::Reflect::set(
+                &obj,
+                &JsValue::from_str("descender"),
+                &JsValue::from_f64(metrics.descender as f64),
+            );
+            obj.into()
+        }
+
         /// Initialise the WebGPU + Vello surface presenter against
         /// `canvas`. Async because the browser's adapter and device
         /// requests are Promise-based. On success the worker can call

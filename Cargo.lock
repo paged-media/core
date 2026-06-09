@@ -2367,6 +2367,7 @@ dependencies = [
  "paged-scene",
  "paged-text",
  "paged-write",
+ "rustybuzz 0.18.0",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

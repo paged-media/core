@@ -45,6 +45,11 @@ image = { workspace = true }
 # (double-click word selection). Already in the lockfile via
 # paged-text; wasm-clean (pure-Rust tables, no native deps).
 unicode-segmentation = "1"
+# S-13 — the `measure_text` font-metrics query constructs a
+# `rustybuzz::Face` directly to read ascender / descender + shape the
+# run via `paged_text::shape_run`. Already in the lockfile via
+# paged-text; wasm-clean.
+rustybuzz = "0.18"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"

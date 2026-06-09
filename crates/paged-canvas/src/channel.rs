@@ -181,7 +181,14 @@ export type WorkerToMain = WorkerToMainKind & {
 ///     ride). B-16 — an optional `caller` field on
 ///     `Value::PluginMetadata` (`serde(default)`); additive, bundled in
 ///     so the engine-side caller-identity gate pins to a protocol number.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(36);
+///   - v37 — additive `InsertTable` (the missing table-CREATE
+///     `Mutation` → `Operation::InsertNode { parent: NodeId::Story,
+///     node: NodeSpec::Table }`; backs the paged.sheet plugin's
+///     native-table lowering) + the `measure_text` font-metrics query
+///     on the canvas-wasm surface (a READ, no wire change of its own,
+///     ships in the same artifact). The new `Mutation` variant earns
+///     the bump.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(37);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -2824,6 +2831,29 @@ pub enum Mutation {
         row_span: u32,
         column_span: u32,
     },
+    // ── S-03 — table CREATE (v37) ───────────────────────────────────
+    /// S-03 — create a `<Table>` inside a story (the missing table-CREATE
+    /// op; the row/column/band/span ops above all edit an EXISTING
+    /// table). Routes to `Operation::InsertNode { parent:
+    /// NodeId::Story(story_id), node: NodeSpec::Table { … } }`. The model
+    /// mints the table's `Self` id and returns it as the
+    /// `MutationOutcome::created_id` so the plugin can address cells next.
+    /// `column_widths` / `row_heights` are pt; a short / empty vec leaves
+    /// the trailing lines unsized. The table attaches on a fresh
+    /// paragraph at the END of the story (see `apply_insert_table`).
+    InsertTable {
+        story_id: String,
+        rows: u32,
+        cols: u32,
+        #[serde(default)]
+        header_rows: u32,
+        #[serde(default)]
+        footer_rows: u32,
+        #[serde(default)]
+        column_widths: Vec<f32>,
+        #[serde(default)]
+        row_heights: Vec<f32>,
+    },
 }
 
 impl Mutation {
@@ -2924,6 +2954,7 @@ impl Mutation {
             Self::InsertFooterRow { .. } => "InsertFooterRow",
             Self::RemoveFooterRow { .. } => "RemoveFooterRow",
             Self::SetCellSpan { .. } => "SetCellSpan",
+            Self::InsertTable { .. } => "InsertTable",
         }
     }
 }
@@ -3259,8 +3290,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v36() {
-        assert_eq!(PROTOCOL_VERSION.0, 36);
+    fn protocol_version_is_v37() {
+        assert_eq!(PROTOCOL_VERSION.0, 37);
     }
 
     /// W1.23 — the new `RequestParagraphBounds` request kind serialises
@@ -3450,6 +3481,76 @@ mod tests {
                 MainToWorkerKind::Mutate(m2) => assert_eq!(m2.discriminant(), disc, "{json}"),
                 other => panic!("unexpected: {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn s03_insert_table_round_trips_through_the_mutate_envelope() {
+        let m = Mutation::InsertTable {
+            story_id: "Story/u30".into(),
+            rows: 3,
+            cols: 2,
+            header_rows: 1,
+            footer_rows: 0,
+            column_widths: vec![120.0, 80.0],
+            row_heights: vec![],
+        };
+        assert_eq!(m.discriminant(), "InsertTable");
+        let env = MainToWorker {
+            seq: 1,
+            protocol: PROTOCOL_VERSION,
+            kind: MainToWorkerKind::Mutate(m),
+        };
+        let json = serde_json::to_string(&env).unwrap();
+        // camelCase tag + field shape the TS plugin emits.
+        assert!(json.contains("\"op\":\"insertTable\""), "{json}");
+        assert!(json.contains("\"storyId\":\"Story/u30\""), "{json}");
+        assert!(json.contains("\"headerRows\":1"), "{json}");
+        assert!(json.contains("\"columnWidths\":[120.0,80.0]"), "{json}");
+        let back: MainToWorker = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            MainToWorkerKind::Mutate(Mutation::InsertTable {
+                story_id,
+                rows,
+                cols,
+                header_rows,
+                footer_rows,
+                column_widths,
+                row_heights,
+            }) => {
+                assert_eq!(story_id, "Story/u30");
+                assert_eq!((rows, cols), (3, 2));
+                assert_eq!((header_rows, footer_rows), (1, 0));
+                assert_eq!(column_widths, vec![120.0, 80.0]);
+                assert!(row_heights.is_empty());
+            }
+            other => panic!("expected InsertTable, got {other:?}"),
+        }
+    }
+
+    /// S-03 — the band/sizing fields are `serde(default)`, so a minimal
+    /// `insertTable` payload (only story/rows/cols) deserialises with the
+    /// bands at 0 and the size vecs empty.
+    #[test]
+    fn s03_insert_table_minimal_payload_defaults() {
+        let json = r#"{"op":"insertTable","args":{"storyId":"u30","rows":2,"cols":2}}"#;
+        let m: Mutation = serde_json::from_str(json).expect("minimal insertTable parses");
+        match m {
+            Mutation::InsertTable {
+                story_id,
+                rows,
+                cols,
+                header_rows,
+                footer_rows,
+                column_widths,
+                row_heights,
+            } => {
+                assert_eq!(story_id, "u30");
+                assert_eq!((rows, cols), (2, 2));
+                assert_eq!((header_rows, footer_rows), (0, 0));
+                assert!(column_widths.is_empty() && row_heights.is_empty());
+            }
+            other => panic!("expected InsertTable, got {other:?}"),
         }
     }
 

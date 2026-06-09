@@ -3986,6 +3986,12 @@ fn apply_insert_node(
     if let NodeSpec::CloneTranslate { .. } = spec {
         return apply_insert_clone_translate(doc, position, spec);
     }
+    // S-03 — a table is in-story content, not a page item. It targets a
+    // `NodeId::Story` parent and nests under `Paragraph::table`, so it
+    // takes a wholly different path from the spread-bound shape inserts.
+    if let NodeSpec::Table { .. } = spec {
+        return apply_insert_table(doc, parent, position, spec);
+    }
     let parent_id = match parent {
         NodeId::Spread(id) => id,
         _ => {
@@ -4166,6 +4172,11 @@ fn apply_insert_node(
         NodeSpec::CloneTranslate { .. } => {
             // Handled by `apply_insert_clone_translate` above.
             unreachable!("CloneTranslate routed via the early-return");
+        }
+        NodeSpec::Table { .. } => {
+            // S-03 — handled by `apply_insert_table` via the early-return
+            // (a table targets a `NodeId::Story`, not this spread path).
+            unreachable!("Table insert routed via the early-return");
         }
     }
 
@@ -4348,6 +4359,49 @@ fn remove_and_capture(
             }
             Err(OperationError::NodeNotFound(node.clone()))
         }
+        // S-03 — remove a `<Table>` from its host story. Backs the undo
+        // of an `InsertTable` (and a future table-delete op). Captures
+        // the table's STRUCTURE into a `NodeSpec::Table` so the inverse
+        // `InsertNode` re-creates the same shape (rows × cols, bands,
+        // line sizing). Cell TEXT content is not round-tripped — empty
+        // cells are minted on re-insert, matching the `NodeSpec`
+        // "minimal supported field set" precedent (the same limitation
+        // `TableCellSpec` documents for delete-row undo). The host
+        // paragraph is dropped wholesale (a table paragraph carries
+        // nothing but the table — see `apply_insert_table`).
+        NodeId::Table { story_id, table_id } => {
+            let Some((si, pi)) = find_table_pos(doc, story_id, table_id) else {
+                return Err(OperationError::NodeNotFound(node.clone()));
+            };
+            let para = doc.stories[si].story.paragraphs.remove(pi);
+            let table = para
+                .table
+                .expect("find_table_pos guarantees the paragraph carries a table");
+            let column_widths: Vec<f32> = table
+                .columns
+                .iter()
+                .map(|c| c.single_column_width.unwrap_or(0.0))
+                .collect();
+            let row_heights: Vec<f32> = table
+                .rows
+                .iter()
+                .map(|r| r.single_row_height.unwrap_or(0.0))
+                .collect();
+            let spec = NodeSpec::Table {
+                self_id: table_id.clone(),
+                rows: table.rows.len() as u32,
+                cols: table.columns.len().max(table.column_count as usize) as u32,
+                header_rows: table.header_row_count,
+                footer_rows: table.footer_row_count,
+                column_widths,
+                row_heights,
+            };
+            // The parent is the host story; position is the dropped
+            // paragraph index (accepted but ignored by re-insert, which
+            // appends — see `apply_insert_table`). z_slot is N/A for a
+            // story-nested node.
+            Ok((NodeId::Story(story_id.clone()), pi, spec, None))
+        }
         _ => Err(OperationError::UnsupportedProperty {
             node: node.clone(),
             path: PropertyPath::FrameBounds, // unused; signals "this node kind isn't removable yet"
@@ -4401,6 +4455,22 @@ fn apply_move_node(
                     previous_z_slot,
                 );
                 return Err(OperationError::NodeNotFound(node.clone()));
+            }
+            // S-03 — a table is story-nested, never a spread page item;
+            // MoveNode (page-item z/spread reparent) doesn't apply. Roll
+            // back the capture and reject.
+            NodeSpec::Table { .. } => {
+                restore_capture(
+                    doc,
+                    &previous_parent,
+                    previous_position,
+                    captured,
+                    previous_z_slot,
+                );
+                return Err(OperationError::InvalidParent {
+                    parent: new_parent.clone(),
+                    child_kind: "Table".to_string(),
+                });
             }
         },
         None => {
@@ -4468,6 +4538,29 @@ fn insert_captured(
     spec: NodeSpec,
     z_slot: Option<usize>,
 ) -> Result<(), OperationError> {
+    // S-03 — a table re-attaches to its host STORY, not a spread.
+    // `parent_self_id` is the story id (`NodeId::Story::self_id()`).
+    // Re-create the table paragraph at the story end (same offset rule
+    // as `apply_insert_table`); `position` / `z_slot` are N/A here.
+    if let NodeSpec::Table { .. } = &spec {
+        let _ = (position, z_slot);
+        let si = doc
+            .stories
+            .iter()
+            .position(|s| s.self_id == parent_self_id)
+            .ok_or_else(|| {
+                OperationError::NodeNotFound(NodeId::Story(parent_self_id.to_string()))
+            })?;
+        let table = spec.to_parse_table();
+        doc.stories[si]
+            .story
+            .paragraphs
+            .push(paged_parse::Paragraph {
+                table: Some(table),
+                ..Default::default()
+            });
+        return Ok(());
+    }
     let spread = find_spread_mut(doc, parent_self_id)
         .ok_or_else(|| OperationError::NodeNotFound(NodeId::Spread(parent_self_id.to_string())))?;
     match spec {
@@ -4573,6 +4666,10 @@ fn insert_captured(
         // never re-inserted via this path.
         NodeSpec::CloneTranslate { source, .. } => {
             return Err(OperationError::NodeNotFound(source));
+        }
+        // S-03 — handled by the story-re-attach early-return above.
+        NodeSpec::Table { .. } => {
+            unreachable!("Table re-insert routed via the early-return");
         }
     }
     Ok(())
@@ -9136,6 +9233,82 @@ fn find_table_mut<'a>(
 ) -> Option<&'a mut paged_parse::Table> {
     let (si, pi) = find_table_pos(doc, story_id, table_id)?;
     doc.stories[si].story.paragraphs[pi].table.as_mut()
+}
+
+/// S-03 — create a `<Table>` inside a story. The table-CREATE op
+/// (`InsertNode { parent: NodeId::Story, node: NodeSpec::Table }`),
+/// mirror of `Mutation::InsertOval` but story-scoped.
+///
+/// **Offset decision:** a table hangs off `Paragraph::table` (one
+/// table per paragraph — see `find_table_pos`), and IDML has no story-
+/// character offset for a table the way it does for runs. So the new
+/// table is attached on a FRESH paragraph appended to the END of the
+/// story's paragraph list. This never disturbs existing content and
+/// matches "default to the story end" from the plan. The `position`
+/// argument is accepted for the `InsertNode` shape but ignored (a
+/// story is a single insert slot for a table); a future v2 could honour
+/// it as a paragraph index.
+///
+/// mutate-never-throws: an unknown story id, a non-Story parent, or a
+/// duplicate table id return an `OperationError` outcome (the channel /
+/// model layer surfaces it as a failed-mutation reply, never a panic).
+/// Inverse: `RemoveNode { NodeId::Table { story_id, table_id } }`.
+fn apply_insert_table(
+    doc: &mut Document,
+    parent: &NodeId,
+    _position: usize,
+    spec: &NodeSpec,
+) -> Result<AppliedOperation, OperationError> {
+    let NodeId::Story(story_id) = parent else {
+        return Err(OperationError::InvalidParent {
+            parent: parent.clone(),
+            child_kind: "Table".to_string(),
+        });
+    };
+    let NodeSpec::Table { self_id, .. } = spec else {
+        unreachable!("apply_insert_table dispatched on a non-Table NodeSpec");
+    };
+    let table_id = self_id.clone();
+    let node = NodeId::Table {
+        story_id: story_id.clone(),
+        table_id: table_id.clone(),
+    };
+
+    // Table ids must be unique within the document (the IDML `Self`
+    // invariant). Reject a collision rather than silently shadowing.
+    if find_table_pos(doc, story_id, &table_id).is_some() {
+        return Err(OperationError::DuplicateNodeId {
+            id: table_id.clone(),
+        });
+    }
+
+    let si = doc
+        .stories
+        .iter()
+        .position(|s| s.self_id == *story_id)
+        .ok_or_else(|| OperationError::NodeNotFound(parent.clone()))?;
+
+    let table = spec.to_parse_table();
+    // Append the table on a fresh paragraph at the END of the story.
+    doc.stories[si]
+        .story
+        .paragraphs
+        .push(paged_parse::Paragraph {
+            table: Some(table),
+            ..Default::default()
+        });
+
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::InsertNode {
+            parent: parent.clone(),
+            position: _position,
+            node: spec.clone(),
+            z_slot: None,
+        },
+        inverse: Operation::RemoveNode { node },
+        invalidation,
+    })
 }
 
 /// W3.A1 — `AppliedTableStyle` write on a `NodeId::Table`. The only

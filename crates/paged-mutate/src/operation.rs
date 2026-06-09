@@ -75,6 +75,13 @@ pub enum NodeId {
     // name where a node lands.
     Spread(String),
     Page(String),
+    /// S-03 — a `<Story>` addressed by its IDML `Self`. The only
+    /// structural parent an `InsertNode { node: NodeSpec::Table }`
+    /// targets: a table lives INSIDE a story (it hangs off
+    /// `Paragraph::table`), not on a spread. Unlike the page-item
+    /// kinds, a story is never itself inserted/removed by these ops —
+    /// it is purely the create-target container for `NodeSpec::Table`.
+    Story(String),
     /// Track M — `<Layer>` defined in the `designmap.xml`. The
     /// associated `String` is the layer's IDML `Self` id.
     Layer(String),
@@ -135,6 +142,7 @@ impl NodeId {
             | NodeId::Group(s)
             | NodeId::Spread(s)
             | NodeId::Page(s)
+            | NodeId::Story(s)
             | NodeId::Layer(s) => s,
             NodeId::StoryRange { story_id, .. } => story_id,
             // The story is the container that owns the table; table /
@@ -153,6 +161,7 @@ impl NodeId {
             NodeId::Group(_) => "Group",
             NodeId::Spread(_) => "Spread",
             NodeId::Page(_) => "Page",
+            NodeId::Story(_) => "Story",
             NodeId::Layer(_) => "Layer",
             NodeId::StoryRange { .. } => "StoryRange",
             NodeId::Table { .. } => "Table",
@@ -2107,9 +2116,43 @@ pub enum NodeSpec {
         #[serde(default)]
         destination_spread_id: Option<String>,
     },
+    /// S-03 — a `<Table>` created inside a story (parent
+    /// `NodeId::Story`). Unlike the frame arms there is NO
+    /// `item_transform`: a table is in-story content (it hangs off
+    /// `Paragraph::table`), not a page item with its own affine. The
+    /// apply layer builds a `paged_parse::Table` of `rows × cols` empty
+    /// `TableCell`s (coordinate `Name="col:row"`), sets the header /
+    /// footer band counts, and applies the per-column / per-row sizing.
+    /// `column_widths` / `row_heights` are pt; a short / empty vec leaves
+    /// the trailing lines unsized (`SingleColumnWidth` / `SingleRowHeight`
+    /// `None`). `self_id` becomes the table's IDML `Self` (the table_id).
+    Table {
+        self_id: String,
+        rows: u32,
+        cols: u32,
+        #[serde(default)]
+        header_rows: u32,
+        #[serde(default)]
+        footer_rows: u32,
+        #[serde(default)]
+        column_widths: Vec<f32>,
+        #[serde(default)]
+        row_heights: Vec<f32>,
+    },
 }
 
 impl NodeSpec {
+    /// The `NodeId` this spec will own once inserted.
+    ///
+    /// For the page-item kinds (frames, shapes, clone) the id is fully
+    /// determined by the spec. For `NodeSpec::Table` the id is NOT — a
+    /// table NodeId also needs the parent story id, which the spec
+    /// alone doesn't carry. Callers that need a table's full
+    /// `NodeId::Table` use [`NodeSpec::node_id_in_story`] with the
+    /// parent story; this bare accessor returns a placeholder
+    /// `NodeId::Table` whose `story_id` is empty (the apply layer never
+    /// routes a Table insert through the generic `invert_insert_node`
+    /// path — it builds the inverse from the parent story directly).
     pub fn node_id(&self) -> NodeId {
         match self {
             NodeSpec::TextFrame { self_id, .. } => NodeId::TextFrame(self_id.clone()),
@@ -2117,6 +2160,10 @@ impl NodeSpec {
             NodeSpec::Oval { self_id, .. } => NodeId::Oval(self_id.clone()),
             NodeSpec::GraphicLine { self_id, .. } => NodeId::GraphicLine(self_id.clone()),
             NodeSpec::Polygon { self_id, .. } => NodeId::Polygon(self_id.clone()),
+            NodeSpec::Table { self_id, .. } => NodeId::Table {
+                story_id: String::new(),
+                table_id: self_id.clone(),
+            },
             NodeSpec::CloneTranslate {
                 self_id, source, ..
             } => match source {
@@ -2126,6 +2173,85 @@ impl NodeSpec {
                 // raises UnsupportedProperty on them.
                 _ => source.clone(),
             },
+        }
+    }
+
+    /// S-03 — the full `NodeId::Table { story_id, table_id }` a
+    /// `NodeSpec::Table` owns once inserted into `story_id`. Returns the
+    /// bare [`NodeSpec::node_id`] for every non-table spec (they don't
+    /// nest in a story).
+    pub fn node_id_in_story(&self, story_id: &str) -> NodeId {
+        match self {
+            NodeSpec::Table { self_id, .. } => NodeId::Table {
+                story_id: story_id.to_string(),
+                table_id: self_id.clone(),
+            },
+            other => other.node_id(),
+        }
+    }
+
+    /// S-03 — build a `paged_parse::Table` of `rows × cols` empty cells
+    /// from a `NodeSpec::Table`. Cells are keyed `Name="col:row"` (the
+    /// IDML convention, column-major document order). Header / footer
+    /// band counts and per-line sizing are honoured; the body row count
+    /// is the rows not covered by a band. Panics if called on a
+    /// non-table spec (apply only calls it inside the Table arm).
+    pub fn to_parse_table(&self) -> paged_parse::Table {
+        let NodeSpec::Table {
+            self_id,
+            rows,
+            cols,
+            header_rows,
+            footer_rows,
+            column_widths,
+            row_heights,
+        } = self
+        else {
+            unreachable!("to_parse_table called on a non-Table NodeSpec");
+        };
+        let rows = *rows;
+        let cols = *cols;
+        // Bands can't exceed the row count; the body absorbs the rest.
+        let header = (*header_rows).min(rows);
+        let footer = (*footer_rows).min(rows.saturating_sub(header));
+        let body = rows.saturating_sub(header).saturating_sub(footer);
+
+        let parse_rows: Vec<paged_parse::TableRow> = (0..rows)
+            .map(|r| paged_parse::TableRow {
+                name: Some(r.to_string()),
+                single_row_height: row_heights.get(r as usize).copied(),
+                ..Default::default()
+            })
+            .collect();
+        let parse_columns: Vec<paged_parse::TableColumn> = (0..cols)
+            .map(|c| paged_parse::TableColumn {
+                name: Some(c.to_string()),
+                single_column_width: column_widths.get(c as usize).copied(),
+                ..Default::default()
+            })
+            .collect();
+        // Column-major document order: all cells in column 0, then 1, ….
+        let mut cells: Vec<paged_parse::TableCell> = Vec::with_capacity((rows * cols) as usize);
+        for c in 0..cols {
+            for r in 0..rows {
+                cells.push(paged_parse::TableCell {
+                    name: Some(format!("{c}:{r}")),
+                    row_span: 1,
+                    column_span: 1,
+                    ..Default::default()
+                });
+            }
+        }
+        paged_parse::Table {
+            self_id: Some(self_id.clone()),
+            header_row_count: header,
+            footer_row_count: footer,
+            body_row_count: body,
+            column_count: cols,
+            rows: parse_rows,
+            columns: parse_columns,
+            cells,
+            ..Default::default()
         }
     }
 }
