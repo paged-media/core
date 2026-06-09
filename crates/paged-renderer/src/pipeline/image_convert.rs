@@ -16,6 +16,13 @@
 //! and CMYK32 (ICC-managed via lcms2 when a profile is present,
 //! naive Adobe-style multiplicative fallback otherwise).
 
+// These conversions feed the native image-decode path; on wasm32 that path
+// is cfg'd out (the engine consumes pre-decoded rasters there), so the whole
+// module is dead code on wasm — allow it module-wide rather than cfg-gate
+// each `pub(super) fn` plus its imports in `pipeline/mod.rs`. The lint stays
+// active on native.
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
+
 pub(super) fn l8_to_rgba(src: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
     let expected = (w as usize).checked_mul(h as usize)?;
     if src.len() != expected {

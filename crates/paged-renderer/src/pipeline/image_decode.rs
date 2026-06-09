@@ -174,6 +174,10 @@ fn peek_image_dimensions(bytes: &[u8], max_px: u32) -> Option<(u32, u32)> {
 /// decoded via `jpeg-decoder` with DCT scaling chosen so the longest
 /// edge ends up ≤ `max_px`; other formats and small JPEGs fall
 /// through to `image::load_from_memory`.
+// Native-only: the wasm32 build cfg's out the raster-decode path (the
+// engine receives pre-decoded images), so this and `decode_jpeg_scaled`
+// are dead there. The lint stays active on native.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(super) fn decode_image_bytes_with_target_max(
     bytes: &[u8],
     max_px: u32,
@@ -316,6 +320,7 @@ fn peek_jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 /// to land the longest edge ≤ `max_px`. Scaling is restricted to the
 /// JPEG-native factors (1, 1/2, 1/4, 1/8); the decoder picks the
 /// smallest factor whose output is ≥ the requested target.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn decode_jpeg_scaled(bytes: &[u8], max_px: u32) -> Option<paged_compose::DecodedImage> {
     use jpeg_decoder::{Decoder, PixelFormat};
     let mut decoder = Decoder::new(bytes);
