@@ -47,6 +47,13 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # Several tests read the gitignored corpus/generated/*.idml fixtures
+      # (inspector_wire, round-trip, conformance) and panic with "read
+      # fixture: NotFound" if they're absent — CI must regenerate them, the
+      # same `paged-gen emit` dance local dev does before running tests.
+      - name: regenerate fixtures
+        run: bash scripts/regen-fixtures.sh
+
       - name: test
         run: cargo test --workspace
 
@@ -73,6 +80,11 @@ jobs:
 
       - name: install cargo-nextest
         uses: taiki-e/install-action@nextest
+
+      # Same fixture dependency as the `test` job above — the nextest run
+      # reads the gitignored generated IDMLs, so regenerate first.
+      - name: regenerate fixtures
+        run: bash scripts/regen-fixtures.sh
 
       - name: nextest (workspace) → JUnit
         # Red results must still publish (the state matrix wants the ✗),
