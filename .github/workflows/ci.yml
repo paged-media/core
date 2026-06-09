@@ -155,10 +155,18 @@ jobs:
           toolchain: ${{ needs.toolchain.outputs.channel }}
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - name: install binaryen + brotli
+      # Pin binaryen (NOT apt's — ubuntu ships v108, too old to validate
+      # wasm-bindgen's reference-types output: "error validating input").
+      # Same pin publish-wasm.yml uses. brotli from apt is fine.
+      - name: install binaryen (pinned) + brotli
         run: |
-          sudo apt-get update
-          sudo apt-get install -y binaryen brotli
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y brotli
+          BINARYEN=126
+          curl -fsSL -o /tmp/binaryen.tgz \
+            "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN}/binaryen-version_${BINARYEN}-x86_64-linux.tar.gz"
+          tar -xzf /tmp/binaryen.tgz -C /tmp
+          echo "/tmp/binaryen-version_${BINARYEN}/bin" >> "$GITHUB_PATH"
       - name: measure
         run: ./spikes/wasm-size/measure.sh
       - name: enforce 3.5 MB budget

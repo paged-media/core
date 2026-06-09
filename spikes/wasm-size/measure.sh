@@ -29,8 +29,18 @@ mkdir -p "$OUT_DIR"
 echo "==> cargo build --release --target wasm32-unknown-unknown -p spike-wasm-size"
 (
     cd "$WORKSPACE_ROOT"
-    RUSTFLAGS="-C opt-level=z -C lto=fat -C codegen-units=1 -C panic=abort -C strip=symbols" \
+    # LTO + panic MUST go through the Cargo PROFILE, not RUSTFLAGS. Setting
+    # `-C lto=fat` in RUSTFLAGS applies it to every crate including rlib deps
+    # (paged-sdk), which rustc rejects ("lto can only be run for executables,
+    # cdylibs and static library outputs"); it also makes Cargo inject
+    # `-C embed-bitcode=no`, incompatible with lto on rustc 1.94. Driving LTO
+    # through the profile lets Cargo apply it only at the final cdylib link
+    # and handle bitcode correctly. opt-level/codegen-units/strip stay in
+    # RUSTFLAGS (no such conflict).
+    RUSTFLAGS="-C opt-level=z -C codegen-units=1 -C strip=symbols" \
         cargo build --release \
+        --config 'profile.release.lto="fat"' \
+        --config 'profile.release.panic="abort"' \
         --target wasm32-unknown-unknown \
         -p spike-wasm-size
 )
@@ -44,7 +54,10 @@ if ! command -v wasm-opt >/dev/null 2>&1; then
     echo "wasm-opt not found; install binaryen to run the full pipeline." >&2
     cp "$RAW" "$OPT"
 else
-    wasm-opt -Oz "$RAW" -o "$OPT"
+    # --all-features: wasm-bindgen emits reference-types/bulk-memory; a bare
+    # `wasm-opt -Oz` fails to validate them ("error validating input"). Needs
+    # a recent binaryen (the CI job pins one; apt's is too old).
+    wasm-opt -Oz --all-features "$RAW" -o "$OPT"
 fi
 
 echo "==> brotli --best"
