@@ -188,7 +188,30 @@ export type WorkerToMain = WorkerToMainKind & {
 ///     on the canvas-wasm surface (a READ, no wire change of its own,
 ///     ships in the same artifact). The new `Mutation` variant earns
 ///     the bump.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(37);
+///   - v38 (Wave 2 — paged.sheet live pagination + font-metrics RPC):
+///     three additive wire surfaces, each a new message kind, so the
+///     bump.
+///     - `RequestFrameChain { story_id }` → `FrameChainResult { links }`
+///       (C-2 / S-05): read the `NextTextFrame` thread topology of a
+///       story as `FrameChainLink { frame_id, next, overflow }`. Pure
+///       READ over `paged_scene::Document::frame_chain`.
+///     - `FrameReflow { frame_id, content_box }` (C-2 / S-05): a
+///       content-box-geometry notification fired ONLY when a frame's
+///       content box changes (`Mutation::ResizeFrame`), NEVER on a pure
+///       transform (`MoveFrame` / `SetGroupTransform`). The §8.5
+///       resize-vs-transform distinction: pagination reacts to a
+///       content-box resize but not to scale/rotate/translate. Carried
+///       additively on `MutationApplied.reflow` (the reply the editor
+///       already correlates by seq) AND defined as a standalone
+///       `WorkerToMainKind` so the worker glue can post it unsolicited.
+///     - `RequestMeasureText { family, style, text, size_pt }` →
+///       `MeasureTextResult { advance, ascender, descender }` (K-7 /
+///       S-13): the wire round-trip for the v37 `measureText` method, so
+///       the editor can route `host.text.measureString`. Reuses the
+///       inner `CanvasModel::measure_text`; zero/None metrics when the
+///       face can't resolve (but `measure_text` already falls back to
+///       the default registered face).
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(38);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -507,6 +530,27 @@ pub enum MainToWorkerKind {
     /// `documentCollection:<name>` ReadSpec it declared). Unknown /
     /// unimplemented collections come back with an empty array.
     RequestCollection { name: CollectionName },
+    /// v38 (Wave 2, C-2 / S-05) — read the frame-chain topology of a
+    /// story: the ordered `NextTextFrame` thread starting at the chain
+    /// head. Pure READ over `paged_scene::Document::frame_chain`. Backs
+    /// the paged.sheet plugin's live-pagination view (which frame a
+    /// table/row lands in, where it overflows). Reply: `FrameChainResult`
+    /// whose `links` is empty when the story doesn't resolve or hosts no
+    /// frame.
+    RequestFrameChain { story_id: String },
+    /// v38 (Wave 2, K-7 / S-13) — font-metrics RPC: the wire round-trip
+    /// for the v37 `measureText` method, so the editor can route
+    /// `host.text.measureString` across the worker boundary. `style` is
+    /// IDML's `FontStyle` ("Bold" / "Italic" / …) or omitted; face
+    /// resolution uses the renderer's styled → bare-family →
+    /// document-default fallback. Reply: `MeasureTextResult`.
+    RequestMeasureText {
+        family: String,
+        #[serde(default)]
+        style: Option<String>,
+        text: String,
+        size_pt: f32,
+    },
     /// SDK Phase 5 (D1) — singleton document meta read per
     /// `panel-catalog-and-sdk-extension.md` §5.6. Backs the
     /// `documentMeta:<key>` ReadSpec form. The reply carries every
@@ -842,6 +886,17 @@ pub enum WorkerToMainKind {
         /// `page_ids`).
         #[serde(default)]
         page_sizes_pt: Option<Vec<(f32, f32)>>,
+        /// v38 (Wave 2, C-2 / S-05) — content-box reflow, populated ONLY
+        /// when the applied mutation was a `Mutation::ResizeFrame` (a
+        /// content-box change). `None` for every other mutation kind —
+        /// crucially including `MoveFrame` / `SetGroupTransform` and any
+        /// transform-only edit, which change display geometry but must
+        /// NOT re-paginate (the §8.5 resize-vs-transform distinction).
+        /// The editor's paged.sheet pagination listens on this; the same
+        /// data is also available as a standalone `FrameReflow`
+        /// notification.
+        #[serde(default)]
+        reflow: Option<FrameReflowInfo>,
     },
     /// Phase 3 Item 4 — rect-per-line geometry for a selection range.
     SelectionGeometry { rects: Vec<crate::SelectionRect> },
@@ -961,6 +1016,38 @@ pub enum WorkerToMainKind {
         name: CollectionName,
         #[tsify(type = "any")]
         items: serde_json::Value,
+    },
+    /// v38 (Wave 2, C-2 / S-05) — `RequestFrameChain` reply. `links` is
+    /// the ordered `NextTextFrame` thread, head-first; empty when the
+    /// story doesn't resolve or hosts no frame.
+    FrameChainResult { links: Vec<FrameChainLink> },
+    /// v38 (Wave 2, K-7 / S-13) — `RequestMeasureText` reply. Advance /
+    /// ascender / descender in POINTS (`descender` negative per the
+    /// OpenType convention). All zero when no document is loaded or the
+    /// face can't resolve — but `CanvasModel::measure_text` already
+    /// falls back to the default registered face, so a zero advance with
+    /// a loaded document means the run shaped to nothing (empty text) or
+    /// no face is registered at all.
+    MeasureTextResult {
+        advance: f32,
+        ascender: f32,
+        descender: f32,
+    },
+    /// v38 (Wave 2, C-2 / S-05) — content-box reflow notification. Fired
+    /// ONLY when a frame's CONTENT BOX changes (a `Mutation::ResizeFrame`
+    /// settles), NEVER on a pure transform (`MoveFrame` /
+    /// `SetGroupTransform` / scale / rotate). The §8.5 resize-vs-transform
+    /// ruling: pagination must react to a content-box resize but must NOT
+    /// re-paginate on display-geometry transforms. `content_box` is the
+    /// frame's post-resize `GeometricBounds` `[top, left, bottom, right]`
+    /// in spread coords. Also carried additively on
+    /// `MutationApplied.reflow` so it rides the reply the editor
+    /// correlates by seq; this standalone variant lets the worker glue
+    /// post it as an unsolicited notification (mirrors `PagesDirty`).
+    FrameReflow {
+        frame_id: String,
+        /// `[top, left, bottom, right]`.
+        content_box: [f32; 4],
     },
     /// SDK Phase 5 (D1) — `RequestDocumentMeta` reply. Per
     /// `panel-catalog-and-sdk-extension.md` §5.6.
@@ -1196,6 +1283,38 @@ pub struct LayerSummary {
     pub locked: bool,
     pub printable: bool,
     pub z: u32,
+}
+
+/// v38 (Wave 2, C-2 / S-05) — one link in a story's `NextTextFrame`
+/// thread, as `RequestFrameChain` reports it (head-first). `frame_id` is
+/// the frame's `Self` id; `next` is its `NextTextFrame` target (`None`
+/// at end-of-chain). `overflow` is `true` only on the LAST link when the
+/// story's text overflowed the chain — InDesign drops overset past the
+/// final frame, so the overset flag (derived from the build's
+/// story-level `overset_story_ids`) lands on the tail. Interior links
+/// always carry `overflow: false`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameChainLink {
+    pub frame_id: String,
+    pub next: Option<String>,
+    pub overflow: bool,
+}
+
+/// v38 (Wave 2, C-2 / S-05) — content-box reflow payload. Carried on
+/// `MutationApplied.reflow` (and mirrored by the standalone
+/// `WorkerToMainKind::FrameReflow`). `content_box` is the frame's
+/// post-resize `GeometricBounds` `[top, left, bottom, right]` in spread
+/// coords. Emitted ONLY for a `Mutation::ResizeFrame` — never for a
+/// transform-only edit (the §8.5 resize-vs-transform distinction).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameReflowInfo {
+    pub frame_id: String,
+    /// `[top, left, bottom, right]`.
+    pub content_box: [f32; 4],
 }
 
 /// Inspector P1 — typed property snapshot for one element. The
@@ -3290,8 +3409,155 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v37() {
-        assert_eq!(PROTOCOL_VERSION.0, 37);
+    fn protocol_version_is_v38() {
+        assert_eq!(PROTOCOL_VERSION.0, 38);
+    }
+
+    /// v38 — `RequestFrameChain` serialises with its camelCase tag and
+    /// round-trips its `storyId`; `FrameChainResult` round-trips the
+    /// `FrameChainLink` rows (incl. the `overflow` tail flag).
+    #[test]
+    fn v38_frame_chain_request_and_reply_round_trip() {
+        let env = MainToWorker {
+            seq: 3,
+            protocol: PROTOCOL_VERSION,
+            kind: MainToWorkerKind::RequestFrameChain {
+                story_id: "story1".into(),
+            },
+        };
+        let json = serde_json::to_string(&env).unwrap();
+        assert!(
+            json.contains("\"kind\":\"requestFrameChain\""),
+            "tag missing: {json}"
+        );
+        assert!(json.contains("\"storyId\":\"story1\""), "{json}");
+        let back: MainToWorker = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            back.kind,
+            MainToWorkerKind::RequestFrameChain { story_id } if story_id == "story1"
+        ));
+
+        let reply = WorkerToMain {
+            seq: Some(3),
+            protocol: PROTOCOL_VERSION,
+            kind: WorkerToMainKind::FrameChainResult {
+                links: vec![
+                    FrameChainLink {
+                        frame_id: "tf1".into(),
+                        next: Some("tf2".into()),
+                        overflow: false,
+                    },
+                    FrameChainLink {
+                        frame_id: "tf2".into(),
+                        next: None,
+                        overflow: true,
+                    },
+                ],
+            },
+        };
+        let json = serde_json::to_string(&reply).unwrap();
+        assert!(
+            json.contains("\"kind\":\"frameChainResult\""),
+            "tag missing: {json}"
+        );
+        assert!(json.contains("\"frameId\":\"tf1\""), "{json}");
+        let back: WorkerToMain = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            WorkerToMainKind::FrameChainResult { links } => {
+                assert_eq!(links.len(), 2);
+                assert_eq!(links[0].next.as_deref(), Some("tf2"));
+                assert!(!links[0].overflow);
+                assert!(links[1].overflow, "tail link carries the overset flag");
+            }
+            other => panic!("expected FrameChainResult, got {other:?}"),
+        }
+    }
+
+    /// v38 — `RequestMeasureText` serialises with its camelCase tag +
+    /// payload (incl. the optional `style`), and `MeasureTextResult`
+    /// round-trips the metric triple.
+    #[test]
+    fn v38_measure_text_request_and_reply_round_trip() {
+        let env = MainToWorker {
+            seq: 4,
+            protocol: PROTOCOL_VERSION,
+            kind: MainToWorkerKind::RequestMeasureText {
+                family: "Inter".into(),
+                style: Some("Bold".into()),
+                text: "Hi".into(),
+                size_pt: 12.0,
+            },
+        };
+        let json = serde_json::to_string(&env).unwrap();
+        assert!(
+            json.contains("\"kind\":\"requestMeasureText\""),
+            "tag missing: {json}"
+        );
+        assert!(json.contains("\"sizePt\":12"), "{json}");
+        let back: MainToWorker = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            back.kind,
+            MainToWorkerKind::RequestMeasureText { ref family, .. } if family == "Inter"
+        ));
+
+        let reply = WorkerToMain {
+            seq: Some(4),
+            protocol: PROTOCOL_VERSION,
+            kind: WorkerToMainKind::MeasureTextResult {
+                advance: 14.5,
+                ascender: 9.6,
+                descender: -2.4,
+            },
+        };
+        let json = serde_json::to_string(&reply).unwrap();
+        assert!(
+            json.contains("\"kind\":\"measureTextResult\""),
+            "tag missing: {json}"
+        );
+        let back: WorkerToMain = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            WorkerToMainKind::MeasureTextResult {
+                advance,
+                ascender,
+                descender,
+            } => {
+                assert!((advance - 14.5).abs() < 1e-4);
+                assert!((ascender - 9.6).abs() < 1e-4);
+                assert!((descender + 2.4).abs() < 1e-4);
+            }
+            other => panic!("expected MeasureTextResult, got {other:?}"),
+        }
+    }
+
+    /// v38 — the standalone `FrameReflow` notification serialises with
+    /// its camelCase tag + `[t,l,b,r]` content box and round-trips.
+    #[test]
+    fn v38_frame_reflow_notification_round_trips() {
+        let reply = WorkerToMain {
+            seq: None,
+            protocol: PROTOCOL_VERSION,
+            kind: WorkerToMainKind::FrameReflow {
+                frame_id: "tf1".into(),
+                content_box: [100.0, 100.0, 500.0, 400.0],
+            },
+        };
+        let json = serde_json::to_string(&reply).unwrap();
+        assert!(
+            json.contains("\"kind\":\"frameReflow\""),
+            "tag missing: {json}"
+        );
+        assert!(json.contains("\"contentBox\":[100"), "{json}");
+        let back: WorkerToMain = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            WorkerToMainKind::FrameReflow {
+                frame_id,
+                content_box,
+            } => {
+                assert_eq!(frame_id, "tf1");
+                assert_eq!(content_box, [100.0, 100.0, 500.0, 400.0]);
+            }
+            other => panic!("expected FrameReflow, got {other:?}"),
+        }
     }
 
     /// W1.23 — the new `RequestParagraphBounds` request kind serialises

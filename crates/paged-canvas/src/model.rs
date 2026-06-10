@@ -224,6 +224,14 @@ pub struct MutationOutcome {
     /// delete / resize page); the reply then carries the refreshed
     /// per-page sizes.
     pub page_structure_changed: bool,
+    /// v38 (Wave 2, C-2 / S-05) — content-box reflow, populated ONLY
+    /// when the applied mutation was a `Mutation::ResizeFrame` (a
+    /// content-box change). `None` for every other mutation kind —
+    /// crucially including `MoveFrame` / `SetGroupTransform` and any
+    /// transform-only edit, which change display geometry but must NOT
+    /// re-paginate (the §8.5 resize-vs-transform distinction). The
+    /// dispatch threads this onto `MutationApplied.reflow`.
+    pub reflow: Option<crate::channel::FrameReflowInfo>,
 }
 
 /// S-13 — result of [`CanvasModel::measure_text`]. All fields in
@@ -1502,6 +1510,7 @@ impl CanvasModel {
                 },
                 created_id: None,
                 page_structure_changed: false,
+                reflow: None,
             });
         }
         // Concept 2 — colour-management settings: whole-state app
@@ -1562,6 +1571,7 @@ impl CanvasModel {
                 },
                 created_id: None,
                 page_structure_changed: false,
+                reflow: None,
             });
         }
         // Concept 2 — soft-proof toggle/setup: swap the display
@@ -1613,6 +1623,7 @@ impl CanvasModel {
                 },
                 created_id: None,
                 page_structure_changed: false,
+                reflow: None,
             });
         }
         // Concept 2 (Ink Manager) — output-time ink settings.
@@ -1653,6 +1664,7 @@ impl CanvasModel {
                 },
                 created_id: None,
                 page_structure_changed: false,
+                reflow: None,
             });
         }
         if let Mutation::SetUseStandardLabForSpots { enabled } = mutation {
@@ -1673,6 +1685,7 @@ impl CanvasModel {
                 },
                 created_id: None,
                 page_structure_changed: false,
+                reflow: None,
             });
         }
         // Phase B — route frame-shape mutations through the canonical
@@ -1696,6 +1709,29 @@ impl CanvasModel {
                     // count, so they don't force a grid rebuild.
                     | Mutation::DuplicatePage { .. }
             );
+            // v38 (Wave 2, C-2 / S-05) — §8.5 resize-vs-transform ruling.
+            // A reflow notification fires ONLY when a frame's CONTENT BOX
+            // changes — i.e. a `ResizeFrame`, which translates to a
+            // `SetProperty { FrameBounds }` write. A `MoveFrame` (and
+            // every `SetGroupTransform` / scale / rotate) translates to a
+            // `FrameTransform`/group-transform write: that's pure DISPLAY
+            // geometry and must NOT re-paginate, so it carries no reflow.
+            // We match on the source `Mutation::ResizeFrame` (not the
+            // translated op) so the distinction is explicit and can't
+            // drift if more mutations ever map to a FrameBounds write.
+            // The content box is read back from the now-mutated scene
+            // (`apply_operation` wrote the new bounds in place).
+            let reflow = match mutation {
+                Mutation::ResizeFrame { frame_id, .. } => {
+                    self.frame_content_box(frame_id).map(|content_box| {
+                        crate::channel::FrameReflowInfo {
+                            frame_id: frame_id.clone(),
+                            content_box,
+                        }
+                    })
+                }
+                _ => None,
+            };
             return Ok(MutationOutcome {
                 applied_seq: outcome.applied_seq,
                 page_ids: outcome.page_ids,
@@ -1709,6 +1745,7 @@ impl CanvasModel {
                 },
                 created_id,
                 page_structure_changed,
+                reflow,
             });
         }
         let text_op: crate::mutate::TextOp = match mutation {
@@ -1803,6 +1840,7 @@ impl CanvasModel {
             inverse: applied.inverse,
             created_id: None,
             page_structure_changed: false,
+            reflow: None,
         })
     }
 
@@ -2867,6 +2905,56 @@ impl CanvasModel {
         None
     }
 
+    /// v38 (Wave 2, C-2 / S-05) — the content box (`GeometricBounds`) of
+    /// a page item by `Self` id, as `[top, left, bottom, right]` in
+    /// spread coords. Reads whichever spread-item kind carries the id
+    /// (mirrors `resolve_frame_node_id`'s lookup). Backs the reflow
+    /// notification: after a `ResizeFrame` settles, the post-resize box
+    /// is read from the now-mutated scene. `None` when the id doesn't
+    /// resolve.
+    pub(crate) fn frame_content_box(&self, frame_id: &str) -> Option<[f32; 4]> {
+        let to_arr = |b: &paged_parse::spread::Bounds| [b.top, b.left, b.bottom, b.right];
+        for parsed in &self.scene.spreads {
+            let s = &parsed.spread;
+            if let Some(f) = s
+                .text_frames
+                .iter()
+                .find(|f| f.self_id.as_deref() == Some(frame_id))
+            {
+                return Some(to_arr(&f.bounds));
+            }
+            if let Some(f) = s
+                .rectangles
+                .iter()
+                .find(|f| f.self_id.as_deref() == Some(frame_id))
+            {
+                return Some(to_arr(&f.bounds));
+            }
+            if let Some(f) = s
+                .ovals
+                .iter()
+                .find(|f| f.self_id.as_deref() == Some(frame_id))
+            {
+                return Some(to_arr(&f.bounds));
+            }
+            if let Some(f) = s
+                .polygons
+                .iter()
+                .find(|f| f.self_id.as_deref() == Some(frame_id))
+            {
+                return Some(to_arr(&f.bounds));
+            }
+            if let Some(f) = s
+                .graphic_lines
+                .iter()
+                .find(|f| f.self_id.as_deref() == Some(frame_id))
+            {
+                return Some(to_arr(&f.bounds));
+            }
+        }
+        None
+    }
+
     /// Phase B — apply a canonical `paged_mutate::Operation` (frame
     /// mutation, fill, etc.), rebuild, push to the unified undo log.
     /// The bridge from `Mutation::MoveFrame` / `ResizeFrame` (channel
@@ -3032,6 +3120,43 @@ impl CanvasModel {
     /// canvas painting stale pixels.
     pub fn scene_mut(&mut self) -> &mut Document {
         &mut self.scene
+    }
+
+    /// v38 (Wave 2, C-2 / S-05) — the frame-chain topology of a story as
+    /// the wire reports it: the ordered `NextTextFrame` thread,
+    /// head-first. Wraps `paged_scene::Document::frame_chain` (which
+    /// already finds the chain head + bounds cycles) and decorates each
+    /// link with its `next` target and an `overflow` flag. Overset is
+    /// tracked at the STORY level by the build (`overset_story_ids`), so
+    /// the flag lands on the LAST link only when the story overflowed its
+    /// chain — InDesign drops overset past the final frame. Interior
+    /// links always carry `overflow: false`. Returns an empty Vec when
+    /// the story doesn't resolve or hosts no frame. Pure READ.
+    pub fn frame_chain(&self, story_id: &str) -> Vec<crate::channel::FrameChainLink> {
+        use crate::channel::FrameChainLink;
+        let frames = self.scene.frame_chain(story_id);
+        if frames.is_empty() {
+            return Vec::new();
+        }
+        let story_overset = self
+            .built
+            .diagnostics
+            .overset_story_ids()
+            .contains(story_id);
+        let last = frames.len() - 1;
+        frames
+            .iter()
+            .enumerate()
+            .map(|(i, f)| FrameChainLink {
+                // A frame with no `Self` id can't be addressed; emit the
+                // empty string so the link still counts positionally.
+                frame_id: f.self_id.clone().unwrap_or_default(),
+                next: f.next_text_frame.clone(),
+                // Overset lands on the tail frame only (InDesign drops
+                // overflow past the last frame in the thread).
+                overflow: i == last && story_overset,
+            })
+            .collect()
     }
 
     /// W3.B2 — re-serialize the (possibly-mutated) scene back into an
@@ -7415,6 +7540,105 @@ mod tests {
         assert!(
             model.measure_text("Inter", None, "x", 12.0).is_none(),
             "no registry + no default font ⇒ None, not a panic"
+        );
+    }
+
+    // ── v38 (Wave 2) — frame-chain read + resize-vs-transform reflow ──
+
+    /// One-rectangle IDML so `ResizeFrame` / `MoveFrame` have a real
+    /// page item to act on. Rectangle `r1` at `[100,100,300,300]` on the
+    /// single page.
+    fn one_rect_idml_bytes() -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file("mimetype", opts).unwrap();
+            zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+                .unwrap();
+            zip.start_file("META-INF/container.xml", opts).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="designmap.xml" media-type="text/xml"/></rootfiles></container>"#).unwrap();
+            zip.start_file("designmap.xml", opts).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Document Self="d1"><idPkg:Spread src="Spreads/Spread_s1.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/></Document>"#).unwrap();
+            zip.start_file("Spreads/Spread_s1.xml", opts).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Spread Self="s1" PageCount="1"><Page Self="p1" GeometricBounds="0 0 792 612" ItemTransform="1 0 0 1 0 0"/><Rectangle Self="r1" GeometricBounds="100 100 300 300" ItemTransform="1 0 0 1 0 0"/></Spread></idPkg:Spread>"#).unwrap();
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    /// Two text frames threaded by `NextTextFrame`, both hosting the same
+    /// short story — no overset (so the tail flag stays `false`).
+    fn threaded_idml_bytes() -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("mimetype", opts).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+        zip.start_file("META-INF/container.xml", opts).unwrap();
+        zip.write_all(br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="designmap.xml" media-type="text/xml"/></rootfiles></container>"#).unwrap();
+        zip.start_file("designmap.xml", opts).unwrap();
+        zip.write_all(br#"<?xml version="1.0"?><Document Self="d1"><idPkg:Spread src="Spreads/Spread_s1.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/><idPkg:Story src="Stories/Story_u10.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/></Document>"#).unwrap();
+        // f1 --NextTextFrame--> f2, both ParentStory=u10.
+        zip.start_file("Spreads/Spread_s1.xml", opts).unwrap();
+        zip.write_all(br#"<?xml version="1.0"?><idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Spread Self="s1" PageCount="1"><Page Self="p1" GeometricBounds="0 0 792 612"/><TextFrame Self="f1" ParentStory="u10" NextTextFrame="f2" GeometricBounds="40 40 200 300"/><TextFrame Self="f2" ParentStory="u10" GeometricBounds="220 40 400 300"/></Spread></idPkg:Spread>"#).unwrap();
+        zip.start_file("Stories/Story_u10.xml", opts).unwrap();
+        zip.write_all(br#"<?xml version="1.0"?><idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Story Self="u10"><ParagraphStyleRange><CharacterStyleRange PointSize="10"><Content>Hi</Content></CharacterStyleRange></ParagraphStyleRange></Story></idPkg:Story>"#).unwrap();
+        zip.finish().unwrap();
+        buf
+    }
+
+    #[test]
+    fn frame_chain_reports_thread_topology_head_first() {
+        let bytes = threaded_idml_bytes();
+        let model = CanvasModel::load("doc-thread", &bytes, CanvasOptions::default()).unwrap();
+        let links = model.frame_chain("u10");
+        assert_eq!(links.len(), 2, "two threaded frames");
+        // Head first: f1 then its NextTextFrame target f2.
+        assert_eq!(links[0].frame_id, "f1");
+        assert_eq!(links[0].next.as_deref(), Some("f2"));
+        assert_eq!(links[1].frame_id, "f2");
+        assert_eq!(links[1].next, None);
+        // Short story fits → no overset on the tail.
+        assert!(!links[1].overflow, "tail not overset for a fitting story");
+        // Unknown story ⇒ empty chain.
+        assert!(model.frame_chain("nope").is_empty());
+    }
+
+    #[test]
+    fn resize_frame_fires_reflow_but_move_frame_does_not() {
+        // §8.5 resize-vs-transform: a ResizeFrame (content-box change)
+        // emits a reflow carrying the new content box; a MoveFrame
+        // (display transform only) must NOT — pagination reacts to a
+        // resize but never to a pure move/scale/rotate.
+        let bytes = one_rect_idml_bytes();
+        let mut model = CanvasModel::load("doc-rect", &bytes, CanvasOptions::default()).unwrap();
+
+        // Resize r1 to a new content box → reflow present, with the new
+        // [t,l,b,r] read back from the mutated scene.
+        let resize = Mutation::ResizeFrame {
+            frame_id: "r1".into(),
+            bounds: (100.0, 100.0, 500.0, 400.0),
+        };
+        let outcome = model.apply_mutation(&resize).expect("resize applies");
+        let reflow = outcome.reflow.expect("ResizeFrame must emit a reflow");
+        assert_eq!(reflow.frame_id, "r1");
+        assert_eq!(reflow.content_box, [100.0, 100.0, 500.0, 400.0]);
+
+        // Move r1 (whole ItemTransform write) → no reflow.
+        let mv = Mutation::MoveFrame {
+            frame_id: "r1".into(),
+            transform: [1.0, 0.0, 0.0, 1.0, 25.0, -10.0],
+        };
+        let outcome = model.apply_mutation(&mv).expect("move applies");
+        assert!(
+            outcome.reflow.is_none(),
+            "MoveFrame is display geometry — must NOT re-paginate"
         );
     }
 }

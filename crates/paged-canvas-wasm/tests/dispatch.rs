@@ -623,14 +623,14 @@ fn export_idml_without_document_replies_failed() {
 
 #[test]
 fn every_reply_stamps_the_current_protocol_version() {
-    // v36 sentinel — every reply must carry the build's PROTOCOL_VERSION
+    // v38 sentinel — every reply must carry the build's PROTOCOL_VERSION
     // so the client can detect a stale worker. We assert the constant is
-    // 36 (the documented current version) AND that an arbitrary reply
+    // 38 (the documented current version) AND that an arbitrary reply
     // stamps it.
     assert_eq!(
         protocol(),
-        36,
-        "PROTOCOL_VERSION drifted from documented v36"
+        38,
+        "PROTOCOL_VERSION drifted from documented v38"
     );
     let mut core = loaded_core();
     let reply = roundtrip(
@@ -641,7 +641,7 @@ fn every_reply_stamps_the_current_protocol_version() {
             "kind": "requestDocumentMeta"
         }),
     );
-    assert_eq!(reply["protocol"].as_u64().unwrap(), 36);
+    assert_eq!(reply["protocol"].as_u64().unwrap(), 38);
     assert_eq!(reply["kind"], "documentMetaReply");
 }
 
@@ -787,4 +787,109 @@ fn read_only_query_produces_no_cache_effect() {
         }),
     );
     assert_eq!(effect, CacheEffect::None);
+}
+
+// ---------------------------------------------------------------------
+// 11. v38 (Wave 2) — frame-chain read, measureText RPC, resize reflow
+// ---------------------------------------------------------------------
+
+#[test]
+fn v38_request_frame_chain_returns_links() {
+    let mut core = loaded_core();
+    let reply = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 90,
+            "protocol": protocol(),
+            "kind": "requestFrameChain",
+            "payload": { "storyId": "story1" }
+        }),
+    );
+    assert_eq!(reply["kind"], "frameChainResult", "{reply}");
+    let links = reply["payload"]["links"].as_array().unwrap();
+    assert_eq!(links.len(), 1, "story1 hosts the single frame tf1");
+    assert_eq!(links[0]["frameId"].as_str().unwrap(), "tf1");
+    assert!(links[0]["next"].is_null(), "single frame ⇒ no next");
+    assert!(!links[0]["overflow"].as_bool().unwrap());
+}
+
+#[test]
+fn v38_request_frame_chain_with_no_document_is_empty() {
+    let mut core = WorkerCore::new();
+    let reply = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 91,
+            "protocol": protocol(),
+            "kind": "requestFrameChain",
+            "payload": { "storyId": "story1" }
+        }),
+    );
+    assert_eq!(reply["kind"], "frameChainResult");
+    assert!(reply["payload"]["links"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn v38_request_measure_text_round_trips_metrics() {
+    let mut core = loaded_core();
+    let reply = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 92,
+            "protocol": protocol(),
+            "kind": "requestMeasureText",
+            "payload": { "family": "Inter", "text": "Hi", "sizePt": 12.0 }
+        }),
+    );
+    assert_eq!(reply["kind"], "measureTextResult", "{reply}");
+    // The fixture registers no font; measure_text falls back to None ⇒
+    // the dispatch reports zero metrics rather than failing. The wire
+    // shape (the three numeric fields) is the contract under test.
+    assert!(reply["payload"]["advance"].is_number());
+    assert!(reply["payload"]["ascender"].is_number());
+    assert!(reply["payload"]["descender"].is_number());
+}
+
+#[test]
+fn v38_resize_frame_reply_carries_reflow_but_move_does_not() {
+    let mut core = loaded_core();
+    // ResizeFrame tf1 → MutationApplied carries the reflow content box.
+    let reply = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 93,
+            "protocol": protocol(),
+            "kind": "mutate",
+            "payload": {
+                "op": "resizeFrame",
+                "args": { "frameId": "tf1", "bounds": [100.0, 100.0, 500.0, 450.0] }
+            }
+        }),
+    );
+    assert_eq!(reply["kind"], "mutationApplied", "{reply}");
+    let reflow = &reply["payload"]["reflow"];
+    assert!(!reflow.is_null(), "ResizeFrame must carry reflow: {reply}");
+    assert_eq!(reflow["frameId"].as_str().unwrap(), "tf1");
+    let cb = reflow["contentBox"].as_array().unwrap();
+    assert_eq!(cb[0].as_f64().unwrap(), 100.0);
+    assert_eq!(cb[2].as_f64().unwrap(), 500.0);
+
+    // MoveFrame tf1 → no reflow (display geometry only; §8.5).
+    let reply = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 94,
+            "protocol": protocol(),
+            "kind": "mutate",
+            "payload": {
+                "op": "moveFrame",
+                "args": { "frameId": "tf1", "transform": [1.0, 0.0, 0.0, 1.0, 20.0, -5.0] }
+            }
+        }),
+    );
+    assert_eq!(reply["kind"], "mutationApplied", "{reply}");
+    assert!(
+        reply["payload"]["reflow"].is_null(),
+        "MoveFrame must NOT re-paginate: {reply}"
+    );
 }

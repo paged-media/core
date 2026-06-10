@@ -298,6 +298,11 @@ impl WorkerCore {
                             created_id: outcome.created_id,
                             page_structure_changed: outcome.page_structure_changed,
                             page_sizes_pt,
+                            // v38 (Wave 2, C-2 / S-05) — content-box reflow,
+                            // populated by the model ONLY for a ResizeFrame
+                            // (§8.5 resize-vs-transform: never for a
+                            // MoveFrame / transform-only edit).
+                            reflow: outcome.reflow,
                         }
                     }
                     Err(error) => WorkerToMainKind::MutationFailed { error },
@@ -594,6 +599,42 @@ impl WorkerCore {
                     .map(|m| m.collection(name))
                     .unwrap_or(serde_json::Value::Array(Vec::new()));
                 WorkerToMainKind::CollectionReply { name, items }
+            }
+            MainToWorkerKind::RequestFrameChain { story_id } => {
+                // v38 (Wave 2, C-2 / S-05) — pure READ. No document ⇒
+                // empty chain (same posture as RequestCollection).
+                let links = self
+                    .model
+                    .as_ref()
+                    .map(|m| m.frame_chain(&story_id))
+                    .unwrap_or_default();
+                WorkerToMainKind::FrameChainResult { links }
+            }
+            MainToWorkerKind::RequestMeasureText {
+                family,
+                style,
+                text,
+                size_pt,
+            } => {
+                // v38 (Wave 2, K-7 / S-13) — the wire round-trip for the
+                // v37 `measureText` method. Reuse the inner
+                // `CanvasModel::measure_text` (don't duplicate the shaping
+                // logic). No document / unresolvable face ⇒ zero metrics;
+                // measure_text itself already falls back to the default
+                // registered face when the family is unknown.
+                let metrics = self
+                    .model
+                    .as_ref()
+                    .and_then(|m| m.measure_text(&family, style.as_deref(), &text, size_pt));
+                let (advance, ascender, descender) = match metrics {
+                    Some(m) => (m.advance, m.ascender, m.descender),
+                    None => (0.0, 0.0, 0.0),
+                };
+                WorkerToMainKind::MeasureTextResult {
+                    advance,
+                    ascender,
+                    descender,
+                }
             }
             MainToWorkerKind::RequestDocumentMeta => {
                 let meta = self.model.as_ref().map(|m| m.document_meta()).unwrap_or(
