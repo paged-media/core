@@ -63,6 +63,34 @@ pub enum SceneItem {
         paint: ScenePaint,
         width: f32,
     },
+    /// Draw a single-line text run (C-1.1). Glyphs are shaped + emitted by
+    /// the RENDERER (it owns the fonts); `paged-compose` routes this item
+    /// to the caller's text emitter (see [`emit_scene_layer`]). v1 renders
+    /// in the document's DEFAULT font (the `family`/`style` hints are
+    /// reserved for per-run face selection) and positions glyphs at the
+    /// transformed baseline; full per-glyph affine (rotated-frame text)
+    /// is a follow-on.
+    Text(SceneTextItem),
+}
+
+/// A single-line text run in frame-content coordinates (C-1.1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneTextItem {
+    /// Baseline origin x in frame-content points.
+    pub x: f32,
+    /// Baseline origin y in frame-content points (the text baseline).
+    pub y: f32,
+    /// The run's text (single line — newlines are not laid out).
+    pub text: String,
+    /// Point size.
+    pub size: f32,
+    pub paint: ScenePaint,
+    /// Reserved face hints (v1 renders in the document default font).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
 }
 
 /// A bezier path segment in frame-content coordinates (points).
@@ -112,13 +140,21 @@ fn srgb_to_linear(c: f32) -> f32 {
     }
 }
 
-fn paint_to_color(p: ScenePaint) -> Color {
+/// Convert a plugin sRGB [`ScenePaint`] to the display list's linear-light
+/// [`Color`]. Public so the renderer's text emitter (which lowers
+/// [`SceneItem::Text`]) paints glyphs with the same colour treatment as
+/// the path items.
+pub fn scene_paint_to_color(p: ScenePaint) -> Color {
     Color::rgba(
         srgb_to_linear(p.r),
         srgb_to_linear(p.g),
         srgb_to_linear(p.b),
         p.a.clamp(0.0, 1.0),
     )
+}
+
+fn paint_to_color(p: ScenePaint) -> Color {
+    scene_paint_to_color(p)
 }
 
 fn build_path(segs: &[ScenePathSeg]) -> PathData {
@@ -163,12 +199,21 @@ fn build_path(segs: &[ScenePathSeg]) -> PathData {
 /// (the plugin layer is the frontmost content of its frame). A `PushClip`
 /// / `PopClip` pair brackets them so nothing escapes the (possibly
 /// rotated) content box.
-pub fn emit_scene_layer(
+///
+/// `emit_text` lowers a [`SceneItem::Text`] (C-1.1): `paged-compose` has no
+/// fonts, so the RENDERER passes a closure that resolves a face, shapes the
+/// run, and emits glyph `FillPath`s into `list` — within the same clip
+/// bracket. Callers with no text (or no fonts) pass a no-op
+/// `|_, _, _| {}`; the converter's path/fill items need no font.
+pub fn emit_scene_layer<T>(
     list: &mut DisplayList,
     layer: &SceneLayer,
     content_outer: Transform,
     content_size: (f32, f32),
-) {
+    mut emit_text: T,
+) where
+    T: FnMut(&mut DisplayList, &SceneTextItem, Transform),
+{
     if layer.items.is_empty() {
         return;
     }
@@ -218,6 +263,12 @@ pub fn emit_scene_layer(
                     transform: content_outer,
                 });
             }
+            SceneItem::Text(t) => {
+                if t.text.is_empty() {
+                    continue;
+                }
+                emit_text(list, t, content_outer);
+            }
         }
     }
 
@@ -254,6 +305,7 @@ mod tests {
             &SceneLayer::default(),
             Transform::IDENTITY,
             (10.0, 10.0),
+            |_, _, _| {},
         );
         assert!(list.commands.is_empty());
         assert_eq!(list.paths.len(), 0);
@@ -280,7 +332,13 @@ mod tests {
                 },
             ],
         };
-        emit_scene_layer(&mut list, &layer, Transform::IDENTITY, (200.0, 100.0));
+        emit_scene_layer(
+            &mut list,
+            &layer,
+            Transform::IDENTITY,
+            (200.0, 100.0),
+            |_, _, _| {},
+        );
         // PushClip, StrokePath, FillPath, PopClip.
         assert_eq!(list.commands.len(), 4);
         assert!(matches!(list.commands[0], DisplayCommand::PushClip { .. }));
@@ -311,8 +369,8 @@ mod tests {
                 paint: black(),
             }],
         };
-        emit_scene_layer(&mut list, &layer, outer, (0.0, 0.0)); // no clip
-                                                                // No clip (size 0) → exactly one FillPath, transform == content_outer.
+        emit_scene_layer(&mut list, &layer, outer, (0.0, 0.0), |_, _, _| {}); // no clip
+                                                                              // No clip (size 0) → exactly one FillPath, transform == content_outer.
         assert_eq!(list.commands.len(), 1);
         let DisplayCommand::FillPath { transform, .. } = &list.commands[0] else {
             panic!("expected FillPath");
@@ -337,7 +395,7 @@ mod tests {
                 paint: black(),
             }],
         };
-        emit_scene_layer(&mut list, &layer, outer, (40.0, 20.0));
+        emit_scene_layer(&mut list, &layer, outer, (40.0, 20.0), |_, _, _| {});
         let DisplayCommand::PushClip { transform, .. } = &list.commands[0] else {
             panic!("expected PushClip first");
         };
@@ -367,7 +425,13 @@ mod tests {
                 },
             }],
         };
-        emit_scene_layer(&mut list, &layer, Transform::IDENTITY, (0.0, 0.0));
+        emit_scene_layer(
+            &mut list,
+            &layer,
+            Transform::IDENTITY,
+            (0.0, 0.0),
+            |_, _, _| {},
+        );
         let DisplayCommand::FillPath {
             paint: Paint::Solid(c),
             ..
@@ -377,5 +441,61 @@ mod tests {
         };
         assert!((c.r - 0.214).abs() < 0.01, "linearised, got {}", c.r);
         assert_eq!(c.a, 1.0, "alpha stays linear");
+    }
+
+    #[test]
+    fn text_item_routes_to_the_emit_text_callback_with_content_transform() {
+        // A Text item is NOT lowered by paged-compose (no fonts) — it is
+        // handed to the renderer's text emitter, inside the clip bracket,
+        // carrying the content transform so the renderer positions glyphs
+        // at the transformed baseline.
+        let outer = Transform::translate(50.0, 80.0);
+        let mut list = DisplayList::new();
+        let layer = SceneLayer {
+            items: vec![SceneItem::Text(SceneTextItem {
+                x: 10.0,
+                y: 20.0,
+                text: "42".to_string(),
+                size: 12.0,
+                paint: black(),
+                family: None,
+                style: None,
+            })],
+        };
+        let mut seen: Vec<(String, (f32, f32))> = Vec::new();
+        emit_scene_layer(&mut list, &layer, outer, (0.0, 0.0), |_list, t, xf| {
+            seen.push((t.text.clone(), xf.apply(t.x, t.y)));
+        });
+        // The callback saw the run + the transformed baseline (60, 100).
+        assert_eq!(seen, vec![("42".to_string(), (60.0, 100.0))]);
+        // paged-compose emitted no glyph commands itself (renderer's job).
+        assert!(list.commands.is_empty());
+    }
+
+    #[test]
+    fn empty_text_run_is_skipped() {
+        let mut list = DisplayList::new();
+        let layer = SceneLayer {
+            items: vec![SceneItem::Text(SceneTextItem {
+                x: 0.0,
+                y: 0.0,
+                text: String::new(),
+                size: 12.0,
+                paint: black(),
+                family: None,
+                style: None,
+            })],
+        };
+        let mut called = false;
+        emit_scene_layer(
+            &mut list,
+            &layer,
+            Transform::IDENTITY,
+            (0.0, 0.0),
+            |_, _, _| {
+                called = true;
+            },
+        );
+        assert!(!called, "an empty text run does not call the emitter");
     }
 }

@@ -1810,6 +1810,7 @@ fn build_document_inner(
                             frame.inset_spacing,
                             frame.item_transform,
                             options.scene_layers,
+                            options.font,
                         );
                     }
                 }
@@ -1882,6 +1883,7 @@ fn build_document_inner(
                             None,
                             rect.item_transform,
                             options.scene_layers,
+                            options.font,
                         );
                     }
                 }
@@ -1935,6 +1937,7 @@ fn build_document_inner(
                             None,
                             oval.item_transform,
                             options.scene_layers,
+                            options.font,
                         );
                     }
                 }
@@ -1974,6 +1977,7 @@ fn build_document_inner(
                             None,
                             line.item_transform,
                             options.scene_layers,
+                            options.font,
                         );
                     }
                 }
@@ -2027,6 +2031,7 @@ fn build_document_inner(
                             None,
                             poly.item_transform,
                             options.scene_layers,
+                            options.font,
                         );
                     }
                 }
@@ -8684,6 +8689,7 @@ fn emit_frame_scene_layer(
     inset: Option<[f32; 4]>,
     item_transform: Option<[f32; 6]>,
     registry: Option<&std::collections::HashMap<String, paged_compose::SceneLayer>>,
+    font_bytes: Option<&[u8]>,
 ) {
     let Some(registry) = registry else { return };
     let Some(id) = self_id else { return };
@@ -8700,7 +8706,72 @@ fn emit_frame_scene_layer(
     let content_w = (bounds.right - bounds.left - ins[1] - ins[3]).max(0.0);
     let content_h = (bounds.bottom - bounds.top - ins[0] - ins[2]).max(0.0);
     let content_outer = outer.compose(&Transform::translate(content_left, content_top));
-    paged_compose::emit_scene_layer(&mut page.list, layer, content_outer, (content_w, content_h));
+
+    // C-1.1 — the default-font shaping face + outliner for `SceneItem::Text`,
+    // built once per layer. `None` when the build has no font (text items
+    // are then skipped, like the renderer's own no-font text path). v1
+    // renders every text run in this default face (the run's `family`/
+    // `style` hints are reserved for per-run selection).
+    let text_faces = font_bytes.and_then(|b| {
+        let rb = rustybuzz::Face::from_slice(b, 0)?;
+        let ttf = ttf_parser::Face::parse(b, 0).ok()?;
+        Some((rb, ttf))
+    });
+    let text_outliner = text_faces.as_ref().map(|(_, ttf)| TtfOutliner::new(ttf));
+
+    paged_compose::emit_scene_layer(
+        &mut page.list,
+        layer,
+        content_outer,
+        (content_w, content_h),
+        |list, t, xf| {
+            // Lower a text run: shape with the default face, position glyphs
+            // at the transformed baseline (`xf.apply(x, y)`), and emit glyph
+            // FillPaths through the standard glyph slice (upright in page
+            // space — full per-glyph affine for rotated frames is a
+            // follow-on, §8.5).
+            let (Some((rb, _)), Some(outliner)) = (text_faces.as_ref(), text_outliner.as_ref())
+            else {
+                return;
+            };
+            let shaped = paged_text::shape_run(rb, &t.text, t.size);
+            if shaped.glyphs.is_empty() {
+                return;
+            }
+            let mut positioned: Vec<paged_text::PositionedGlyph> =
+                Vec::with_capacity(shaped.glyphs.len());
+            let mut cursor = 0i32;
+            for g in &shaped.glyphs {
+                positioned.push(paged_text::PositionedGlyph {
+                    glyph_id: g.glyph_id,
+                    cluster: g.cluster,
+                    x: cursor + g.x_offset,
+                    y: g.y_offset,
+                    x_advance: g.x_advance,
+                    font_id: u32::MAX,
+                    point_size: t.size,
+                    underline: false,
+                    strikethru: false,
+                    x_scale: 1.0,
+                    y_scale: 1.0,
+                    skew_deg: 0.0,
+                    ch: None,
+                });
+                cursor = cursor.saturating_add(g.x_advance);
+            }
+            let origin = xf.apply(t.x, t.y);
+            let paint = Paint::Solid(paged_compose::scene_paint_to_color(t.paint));
+            emit_glyph_slice(
+                &positioned,
+                u32::MAX,
+                t.size,
+                |_| paint,
+                origin,
+                outliner,
+                list,
+            );
+        },
+    );
 }
 
 /// Axis-aligned bounding box of `rect` after `outer` is applied to its

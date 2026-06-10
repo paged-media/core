@@ -221,7 +221,11 @@ export type WorkerToMain = WorkerToMainKind & {
 ///     across gestures/undo, NOT a document mutation; it does not survive
 ///     a document reload (the plugin re-submits). Clearing or submitting
 ///     invalidates the page caches (`CacheEffect::ClearAll`).
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(39);
+///   - v40 (C-1.1 — scene-layer text): `SceneItem` gains a `Text` variant
+///     (a single-line run in frame-content coords); the renderer shapes +
+///     emits glyphs in the document default font. Additive to the
+///     `SubmitSceneLayer` payload's `SceneLayer` — no new messages.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(40);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -3437,8 +3441,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v39() {
-        assert_eq!(PROTOCOL_VERSION.0, 39);
+    fn protocol_version_is_v40() {
+        assert_eq!(PROTOCOL_VERSION.0, 40);
     }
 
     /// v38 — `RequestFrameChain` serialises with its camelCase tag and

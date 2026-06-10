@@ -43,7 +43,10 @@ pub use primitives::{
     emit_stroke_ellipse_transformed, emit_stroke_rect, emit_stroke_rect_transformed, unit_ellipse,
     UNIT_ELLIPSE_KEY, UNIT_RECT_KEY,
 };
-pub use scene_layer::{emit_scene_layer, SceneItem, SceneLayer, ScenePaint, ScenePathSeg};
+pub use scene_layer::{
+    emit_scene_layer, scene_paint_to_color, SceneItem, SceneLayer, ScenePaint, ScenePathSeg,
+    SceneTextItem,
+};
 pub use text::{
     emit_glyph_slice, emit_glyph_slice_blend, emit_glyph_slice_stroke, emit_paragraph,
     emit_paragraph_blend,

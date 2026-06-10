@@ -19,8 +19,11 @@
 //! frame's display list.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
-use paged_compose::{DisplayCommand, SceneItem, SceneLayer, ScenePaint, ScenePathSeg};
+use paged_compose::{
+    DisplayCommand, SceneItem, SceneLayer, ScenePaint, ScenePathSeg, SceneTextItem,
+};
 use paged_renderer::{pipeline, Document, PipelineOptions};
 
 fn total_commands(built: &pipeline::BuiltDocument) -> usize {
@@ -118,6 +121,87 @@ fn unmatched_id_splices_nothing() {
         base_n,
         "a registry whose ids match no frame leaves the render untouched"
     );
+}
+
+fn fill_count(built: &pipeline::BuiltDocument) -> usize {
+    built
+        .pages
+        .iter()
+        .map(|p| {
+            p.list
+                .commands
+                .iter()
+                .filter(|c| matches!(c, DisplayCommand::FillPath { .. }))
+                .count()
+        })
+        .sum()
+}
+
+#[test]
+fn text_item_emits_glyph_fills_with_a_font() {
+    // Corpus-optional (mirrors the other render tests): skip if the test
+    // font isn't in this checkout.
+    let font_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts/Inter.ttf");
+    let Ok(font) = std::fs::read(&font_path) else {
+        eprintln!("skipping: {} not present", font_path.display());
+        return;
+    };
+    let doc = sample_doc();
+    let id = first_text_frame_id(&doc);
+
+    // Baseline: same default font, no scene layer.
+    let base = pipeline::build_document(
+        &doc,
+        &PipelineOptions {
+            font: Some(&font),
+            ..PipelineOptions::default()
+        },
+    )
+    .unwrap();
+
+    // A text run "42" → two glyph FillPaths, inside the content-box clip.
+    let mut reg = HashMap::new();
+    reg.insert(
+        id.clone(),
+        SceneLayer {
+            items: vec![SceneItem::Text(SceneTextItem {
+                x: 5.0,
+                y: 12.0,
+                text: "42".to_string(),
+                size: 12.0,
+                paint: ScenePaint {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+                family: None,
+                style: None,
+            })],
+        },
+    );
+    let withed = pipeline::build_document(
+        &doc,
+        &PipelineOptions {
+            font: Some(&font),
+            scene_layers: Some(&reg),
+            ..PipelineOptions::default()
+        },
+    )
+    .unwrap();
+
+    // The two glyphs of "42" added two FillPaths over the baseline.
+    assert_eq!(
+        fill_count(&withed),
+        fill_count(&base) + 2,
+        "a two-glyph text run emits two glyph fills"
+    );
+    // ...bracketed by a content-box clip.
+    assert!(withed.pages.iter().any(|p| p
+        .list
+        .commands
+        .iter()
+        .any(|c| matches!(c, DisplayCommand::PushClip { .. }))));
 }
 
 #[test]
