@@ -85,20 +85,29 @@ fn scene_layer_splices_into_a_frame_by_self_id() {
     );
 
     // The spliced commands are present somewhere in the document.
-    let has_clip = withed
-        .pages
-        .iter()
-        .any(|p| p.list.commands.iter().any(|c| matches!(c, DisplayCommand::PushClip { .. })));
-    assert!(has_clip, "the layer brackets its content in a content-box clip");
+    let has_clip = withed.pages.iter().any(|p| {
+        p.list
+            .commands
+            .iter()
+            .any(|c| matches!(c, DisplayCommand::PushClip { .. }))
+    });
+    assert!(
+        has_clip,
+        "the layer brackets its content in a content-box clip"
+    );
 }
 
 #[test]
 fn unmatched_id_splices_nothing() {
     let doc = sample_doc();
-    let base_n = total_commands(&pipeline::build_document(&doc, &PipelineOptions::default()).unwrap());
+    let base_n =
+        total_commands(&pipeline::build_document(&doc, &PipelineOptions::default()).unwrap());
 
     let mut reg = HashMap::new();
-    reg.insert("media.paged.sheet.no-such-frame".to_string(), one_fill_layer());
+    reg.insert(
+        "media.paged.sheet.no-such-frame".to_string(),
+        one_fill_layer(),
+    );
     let opts = PipelineOptions {
         scene_layers: Some(&reg),
         ..PipelineOptions::default()

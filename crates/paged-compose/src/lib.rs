@@ -36,7 +36,6 @@ pub use display_list::{
     Satin, SpotInk, SpotInkId, Stroke, Transform,
 };
 pub use glyph::{GlyphOutliner, TtfOutliner, UnitSquareOutliner};
-pub use scene_layer::{emit_scene_layer, SceneItem, SceneLayer, ScenePaint, ScenePathSeg};
 pub use primitives::{
     emit_drop_shadow_rect, emit_drop_shadow_rect_transformed, emit_ellipse,
     emit_ellipse_transformed, emit_ellipse_transformed_blend, emit_image_at, emit_line, emit_rect,
@@ -44,6 +43,7 @@ pub use primitives::{
     emit_stroke_ellipse_transformed, emit_stroke_rect, emit_stroke_rect_transformed, unit_ellipse,
     UNIT_ELLIPSE_KEY, UNIT_RECT_KEY,
 };
+pub use scene_layer::{emit_scene_layer, SceneItem, SceneLayer, ScenePaint, ScenePathSeg};
 pub use text::{
     emit_glyph_slice, emit_glyph_slice_blend, emit_glyph_slice_stroke, emit_paragraph,
     emit_paragraph_blend,

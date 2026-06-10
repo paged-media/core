@@ -66,5 +66,6 @@ fn set_then_clear_scene_layer_round_trips_through_a_rebuild() {
     assert!(m.scene_layer_ids().is_empty(), "layer cleared");
 
     // Clearing an absent id is a no-op (no rebuild, no error).
-    m.clear_scene_layer("nope").expect("clear absent is a no-op");
+    m.clear_scene_layer("nope")
+        .expect("clear absent is a no-op");
 }

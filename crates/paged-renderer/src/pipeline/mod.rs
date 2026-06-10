@@ -8687,7 +8687,9 @@ fn emit_frame_scene_layer(
 ) {
     let Some(registry) = registry else { return };
     let Some(id) = self_id else { return };
-    let Some(layer) = registry.get(id) else { return };
+    let Some(layer) = registry.get(id) else {
+        return;
+    };
     if layer.items.is_empty() {
         return;
     }

@@ -69,8 +69,14 @@ pub enum SceneItem {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Tsify)]
 #[serde(tag = "op", rename_all = "camelCase")]
 pub enum ScenePathSeg {
-    MoveTo { x: f32, y: f32 },
-    LineTo { x: f32, y: f32 },
+    MoveTo {
+        x: f32,
+        y: f32,
+    },
+    LineTo {
+        x: f32,
+        y: f32,
+    },
     CubicTo {
         cx1: f32,
         cy1: f32,
@@ -243,7 +249,12 @@ mod tests {
     #[test]
     fn empty_layer_emits_nothing() {
         let mut list = DisplayList::new();
-        emit_scene_layer(&mut list, &SceneLayer::default(), Transform::IDENTITY, (10.0, 10.0));
+        emit_scene_layer(
+            &mut list,
+            &SceneLayer::default(),
+            Transform::IDENTITY,
+            (10.0, 10.0),
+        );
         assert!(list.commands.is_empty());
         assert_eq!(list.paths.len(), 0);
     }
@@ -273,7 +284,10 @@ mod tests {
         // PushClip, StrokePath, FillPath, PopClip.
         assert_eq!(list.commands.len(), 4);
         assert!(matches!(list.commands[0], DisplayCommand::PushClip { .. }));
-        assert!(matches!(list.commands[1], DisplayCommand::StrokePath { .. }));
+        assert!(matches!(
+            list.commands[1],
+            DisplayCommand::StrokePath { .. }
+        ));
         assert!(matches!(list.commands[2], DisplayCommand::FillPath { .. }));
         assert!(matches!(list.commands[3], DisplayCommand::PopClip(_)));
         // clip rect + 2 item paths.
@@ -298,7 +312,7 @@ mod tests {
             }],
         };
         emit_scene_layer(&mut list, &layer, outer, (0.0, 0.0)); // no clip
-        // No clip (size 0) → exactly one FillPath, transform == content_outer.
+                                                                // No clip (size 0) → exactly one FillPath, transform == content_outer.
         assert_eq!(list.commands.len(), 1);
         let DisplayCommand::FillPath { transform, .. } = &list.commands[0] else {
             panic!("expected FillPath");

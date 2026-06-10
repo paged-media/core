@@ -6462,10 +6462,7 @@ impl CanvasModel {
 
     /// C-1 — drop the scene layer for `element_id` (no-op if none) and
     /// rebuild so the frame returns to its native content.
-    pub fn clear_scene_layer(
-        &mut self,
-        element_id: &str,
-    ) -> Result<(), crate::channel::LoadError> {
+    pub fn clear_scene_layer(&mut self, element_id: &str) -> Result<(), crate::channel::LoadError> {
         if self.scene_layers.remove(element_id).is_some() {
             self.rebuild_after_mutation()?;
         }
