@@ -636,6 +636,41 @@ impl WorkerCore {
                     descender,
                 }
             }
+            MainToWorkerKind::SubmitSceneLayer { element_id, layer } => {
+                // v39 (C-1) — store the plugin scene layer + rebuild so the
+                // next snapshot lowers it inside the frame. Invalidate ALL
+                // page caches: the layer's frame may sit on any page and we
+                // don't (yet) scope it.
+                let applied = match self.model.as_mut() {
+                    Some(m) => {
+                        // A rebuild failure must not poison the worker; the
+                        // layer is stored and the next successful rebuild
+                        // picks it up. Treat a build error as "not applied".
+                        m.set_scene_layer(element_id.clone(), layer).is_ok()
+                    }
+                    None => false,
+                };
+                if applied {
+                    effect = CacheEffect::ClearAll;
+                }
+                WorkerToMainKind::SceneLayerApplied {
+                    element_id,
+                    applied,
+                }
+            }
+            MainToWorkerKind::ClearSceneLayer { element_id } => {
+                let applied = match self.model.as_mut() {
+                    Some(m) => m.clear_scene_layer(&element_id).is_ok(),
+                    None => false,
+                };
+                if applied {
+                    effect = CacheEffect::ClearAll;
+                }
+                WorkerToMainKind::SceneLayerApplied {
+                    element_id,
+                    applied,
+                }
+            }
             MainToWorkerKind::RequestDocumentMeta => {
                 let meta = self.model.as_ref().map(|m| m.document_meta()).unwrap_or(
                     paged_canvas::channel::DocumentMeta {

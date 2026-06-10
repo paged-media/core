@@ -211,7 +211,17 @@ export type WorkerToMain = WorkerToMainKind & {
 ///       inner `CanvasModel::measure_text`; zero/None metrics when the
 ///       face can't resolve (but `measure_text` already falls back to
 ///       the default registered face).
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(38);
+///   - v39 (C-1 — plugin scene layers): `SubmitSceneLayer { element_id,
+///     layer }` / `ClearSceneLayer { element_id }` requests +
+///     `SceneLayerApplied { element_id }` reply. A plugin submits a vector
+///     `paged_compose::SceneLayer` (display-list subset in frame-content
+///     coords); the worker stores it keyed by frame `Self` id and rebuilds
+///     so compose lowers it INSIDE that frame (transformed by the frame's
+///     ItemTransform, clipped to the content box — §8.5). EPHEMERAL: kept
+///     across gestures/undo, NOT a document mutation; it does not survive
+///     a document reload (the plugin re-submits). Clearing or submitting
+///     invalidates the page caches (`CacheEffect::ClearAll`).
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(39);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -551,6 +561,19 @@ pub enum MainToWorkerKind {
         text: String,
         size_pt: f32,
     },
+    /// v39 (C-1) — submit a plugin vector scene layer to render INSIDE the
+    /// frame whose `Self` id is `element_id`. The worker stores it and
+    /// rebuilds so compose lowers it inside that frame (clipped to the
+    /// content box, transformed by the frame's ItemTransform). Ephemeral
+    /// (re-submitted each session; not a document mutation). Reply:
+    /// `SceneLayerApplied`.
+    SubmitSceneLayer {
+        element_id: String,
+        layer: paged_compose::SceneLayer,
+    },
+    /// v39 (C-1) — drop the scene layer previously submitted for
+    /// `element_id` (no-op if none). Reply: `SceneLayerApplied`.
+    ClearSceneLayer { element_id: String },
     /// SDK Phase 5 (D1) — singleton document meta read per
     /// `panel-catalog-and-sdk-extension.md` §5.6. Backs the
     /// `documentMeta:<key>` ReadSpec form. The reply carries every
@@ -1033,6 +1056,11 @@ pub enum WorkerToMainKind {
         ascender: f32,
         descender: f32,
     },
+    /// v39 (C-1) — ack for `SubmitSceneLayer` / `ClearSceneLayer`. Echoes
+    /// the `element_id`; the page caches are invalidated so the next
+    /// snapshot reflects the layer. `applied` is false only when there was
+    /// no document loaded.
+    SceneLayerApplied { element_id: String, applied: bool },
     /// v38 (Wave 2, C-2 / S-05) — content-box reflow notification. Fired
     /// ONLY when a frame's CONTENT BOX changes (a `Mutation::ResizeFrame`
     /// settles), NEVER on a pure transform (`MoveFrame` /
@@ -3409,8 +3437,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v38() {
-        assert_eq!(PROTOCOL_VERSION.0, 38);
+    fn protocol_version_is_v39() {
+        assert_eq!(PROTOCOL_VERSION.0, 39);
     }
 
     /// v38 — `RequestFrameChain` serialises with its camelCase tag and

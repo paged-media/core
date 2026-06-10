@@ -956,6 +956,12 @@ pub struct CanvasModel {
     /// by id; the linear-scan fallback on `BuiltDocument::page` is
     /// fine in absolute terms but salsa-shaped lookups should be O(1).
     page_index: HashMap<PageId, usize>,
+    /// C-1 — plugin scene layers keyed by frame `Self` id. Ephemeral
+    /// render-time content (not part of the document / not in `source_idml`):
+    /// a plugin submits a vector `SceneLayer` via `SubmitSceneLayer` and the
+    /// next rebuild lowers it inside the matching frame. Survives gestures /
+    /// undo (it's outside the mutation channel) but not a document reload.
+    scene_layers: HashMap<String, paged_compose::SceneLayer>,
     /// Owned option inputs. `PipelineOptions` borrows from these on
     /// every rebuild; storing them owned keeps the worker self-contained.
     font_bytes: Option<Vec<u8>>,
@@ -1311,6 +1317,7 @@ impl CanvasModel {
             source_idml: bytes.to_vec(),
             built,
             page_index,
+            scene_layers: HashMap::new(),
             font_bytes,
             font_registry,
             initial_icc_bytes: icc_bytes.clone(),
@@ -6309,6 +6316,9 @@ impl CanvasModel {
             // DecodedImage), not positional — safe to share.
             image_decode_cache: Some(&self.image_decode_cache),
             pre_built_font_table: Some(&self.font_table),
+            // C-1 — a printed/exported sheet includes its in-frame plugin
+            // content (the scene layer is document-grade vector output).
+            scene_layers: Some(&self.scene_layers),
             ..PipelineOptions::default()
         };
         pipeline::build_document(&self.scene, &options)
@@ -6394,6 +6404,9 @@ impl CanvasModel {
             // build_document; ~613ms ceiling on a multi-spread
             // fixture.
             body_story_emit_cache: Some(&self.body_story_emit_cache),
+            // C-1 — plugin scene layers render inside their frames on every
+            // rebuild (gesture, mutation, scene-layer submit).
+            scene_layers: Some(&self.scene_layers),
             ..PipelineOptions::default()
         };
         let mut cache = std::mem::take(&mut self.layout_cache);
@@ -6431,6 +6444,38 @@ impl CanvasModel {
         };
         self.built = built;
         Ok(())
+    }
+
+    /// C-1 — register (or replace) the plugin scene layer for the frame
+    /// `element_id` (its IDML `Self` id) and rebuild so the next snapshot
+    /// renders it inside that frame. Ephemeral — not a document mutation,
+    /// not written to `source_idml`. A layer whose id matches no frame is
+    /// stored harmlessly (it lowers the day that frame exists).
+    pub fn set_scene_layer(
+        &mut self,
+        element_id: String,
+        layer: paged_compose::SceneLayer,
+    ) -> Result<(), crate::channel::LoadError> {
+        self.scene_layers.insert(element_id, layer);
+        self.rebuild_after_mutation()
+    }
+
+    /// C-1 — drop the scene layer for `element_id` (no-op if none) and
+    /// rebuild so the frame returns to its native content.
+    pub fn clear_scene_layer(
+        &mut self,
+        element_id: &str,
+    ) -> Result<(), crate::channel::LoadError> {
+        if self.scene_layers.remove(element_id).is_some() {
+            self.rebuild_after_mutation()?;
+        }
+        Ok(())
+    }
+
+    /// C-1 — the frame ids that currently carry a plugin scene layer
+    /// (test/introspection aid).
+    pub fn scene_layer_ids(&self) -> Vec<&str> {
+        self.scene_layers.keys().map(String::as_str).collect()
     }
 
     /// W1.24 (audit B18) — stats for the most recent rebuild (or the
