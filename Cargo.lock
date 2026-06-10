@@ -2418,9 +2418,12 @@ dependencies = [
  "paged-color",
  "paged-scene",
  "paged-text",
+ "serde",
  "thiserror 2.0.18",
  "tracing",
+ "tsify-next",
  "ttf-parser 0.24.1",
+ "wasm-bindgen",
 ]
 
 [[package]]

@@ -311,6 +311,14 @@ pub struct PipelineOptions<'a> {
     /// ([`DocumentClock::EPOCH`]) renders a stable constant rather than
     /// "today".
     pub document_clock: DocumentClock,
+    /// C-1 — plugin scene layers keyed by frame element id (`Self`). When
+    /// a body frame's id has an entry, its vector [`SceneLayer`] is lowered
+    /// into the frame's content box (transformed by the frame's
+    /// `ItemTransform`, clipped to the content box) right after the frame's
+    /// own content, so a plugin renders inside a frame through the same
+    /// display-list → Vello/tiny-skia path. `None` (the default) is the
+    /// no-plugin path and costs nothing.
+    pub scene_layers: Option<&'a std::collections::HashMap<String, paged_compose::SceneLayer>>,
 }
 
 /// Perf-BodyStory — captured multi-page emission delta from one
@@ -400,6 +408,7 @@ impl Default for PipelineOptions<'_> {
             master_text_emit_cache: None,
             body_story_emit_cache: None,
             document_clock: DocumentClock::default(),
+            scene_layers: None,
         }
     }
 }
@@ -1793,6 +1802,15 @@ fn build_document_inner(
                                 end: after,
                             });
                         }
+                        // C-1: a plugin scene layer renders inside this frame.
+                        emit_frame_scene_layer(
+                            &mut pages[page_idx],
+                            frame.self_id.as_deref(),
+                            frame.bounds,
+                            frame.inset_spacing,
+                            frame.item_transform,
+                            options.scene_layers,
+                        );
                     }
                 }
                 paged_parse::FrameRef::Rectangle(idx) => {
@@ -1855,6 +1873,16 @@ fn build_document_inner(
                                 end: after,
                             });
                         }
+                        // C-1: a plugin scene layer renders inside this frame
+                        // (a rectangle's content box is its bounds — no inset).
+                        emit_frame_scene_layer(
+                            &mut pages[page_idx],
+                            rect.self_id.as_deref(),
+                            rect.bounds,
+                            None,
+                            rect.item_transform,
+                            options.scene_layers,
+                        );
                     }
                 }
                 paged_parse::FrameRef::Oval(idx) => {
@@ -1899,6 +1927,15 @@ fn build_document_inner(
                                 end: after,
                             });
                         }
+                        // C-1: a plugin scene layer renders inside this frame.
+                        emit_frame_scene_layer(
+                            &mut pages[page_idx],
+                            oval.self_id.as_deref(),
+                            oval.bounds,
+                            None,
+                            oval.item_transform,
+                            options.scene_layers,
+                        );
                     }
                 }
                 paged_parse::FrameRef::GraphicLine(idx) => {
@@ -1929,6 +1966,15 @@ fn build_document_inner(
                                 end: after,
                             });
                         }
+                        // C-1: a plugin scene layer renders inside this frame.
+                        emit_frame_scene_layer(
+                            &mut pages[page_idx],
+                            line.self_id.as_deref(),
+                            line.bounds,
+                            None,
+                            line.item_transform,
+                            options.scene_layers,
+                        );
                     }
                 }
                 paged_parse::FrameRef::Polygon(idx) => {
@@ -1973,6 +2019,15 @@ fn build_document_inner(
                                 end: after,
                             });
                         }
+                        // C-1: a plugin scene layer renders inside this frame.
+                        emit_frame_scene_layer(
+                            &mut pages[page_idx],
+                            poly.self_id.as_deref(),
+                            poly.bounds,
+                            None,
+                            poly.item_transform,
+                            options.scene_layers,
+                        );
                     }
                 }
                 paged_parse::FrameRef::Group(gi) => {
@@ -8611,6 +8666,39 @@ fn frame_outer_transform(page: &BuiltPage, item_transform: Option<[f32; 6]>) -> 
     } else {
         page.spread_transform.compose(&local)
     }
+}
+
+/// C-1 — splice a plugin [`paged_compose::SceneLayer`] into a frame, right
+/// after the frame's own content. Looks the frame's `Self` id up in the
+/// registry; on a hit, builds the content-origin → page transform (the
+/// frame's `frame_outer_transform` composed with the content-box offset)
+/// and lowers the layer clipped to the content box. A no-op when no
+/// registry is wired, the frame has no id, or no layer is registered —
+/// so the no-plugin render path is untouched. `inset` is the text-frame
+/// content inset `[top,left,bottom,right]`; pass `None` for shapes (whose
+/// content box is the bounds).
+fn emit_frame_scene_layer(
+    page: &mut BuiltPage,
+    self_id: Option<&str>,
+    bounds: paged_parse::Bounds,
+    inset: Option<[f32; 4]>,
+    item_transform: Option<[f32; 6]>,
+    registry: Option<&std::collections::HashMap<String, paged_compose::SceneLayer>>,
+) {
+    let Some(registry) = registry else { return };
+    let Some(id) = self_id else { return };
+    let Some(layer) = registry.get(id) else { return };
+    if layer.items.is_empty() {
+        return;
+    }
+    let outer = frame_outer_transform(page, item_transform);
+    let ins = inset.unwrap_or([0.0; 4]);
+    let content_left = bounds.left + ins[1];
+    let content_top = bounds.top + ins[0];
+    let content_w = (bounds.right - bounds.left - ins[1] - ins[3]).max(0.0);
+    let content_h = (bounds.bottom - bounds.top - ins[0] - ins[2]).max(0.0);
+    let content_outer = outer.compose(&Transform::translate(content_left, content_top));
+    paged_compose::emit_scene_layer(&mut page.list, layer, content_outer, (content_w, content_h));
 }
 
 /// Axis-aligned bounding box of `rect` after `outer` is applied to its

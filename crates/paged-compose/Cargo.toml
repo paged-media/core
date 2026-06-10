@@ -18,3 +18,8 @@ ttf-parser = "0.24"
 thiserror = { workspace = true }
 tracing = { workspace = true }
 bytes = { workspace = true }
+# Plugin scene-layer IR (C-1) crosses the wire as serde/tsify; the IR +
+# converter live here so paged-renderer can splice it at compose time.
+serde = { workspace = true }
+tsify-next = { workspace = true }
+wasm-bindgen = { workspace = true }
