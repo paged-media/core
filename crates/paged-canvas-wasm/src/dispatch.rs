@@ -649,6 +649,33 @@ impl WorkerCore {
                     },
                 }
             }
+            MainToWorkerKind::RequestFontFaceBytes { family, style } => {
+                // v43 (W-06) — pure READ over the WORKER's font registry
+                // (not the model's load-time copy: the worker list is the
+                // superset — it persists across loads and includes faces
+                // registered after LoadDocument). IDML packages carry no
+                // font binaries, so registered faces are the only bytes
+                // the engine can honestly serve.
+                match paged_canvas::font_face_lookup(&self.font_registry, &family, style.as_deref())
+                {
+                    Some(entry) => WorkerToMainKind::FontFaceBytes {
+                        found: true,
+                        family: entry.family.clone(),
+                        style: entry.style.clone(),
+                        postscript_name: paged_canvas::font_postscript_name(&entry.bytes),
+                        format: paged_canvas::sniff_font_format(&entry.bytes).to_string(),
+                        bytes: paged_canvas::channel::ByteBuf(entry.bytes.clone()),
+                    },
+                    None => WorkerToMainKind::FontFaceBytes {
+                        found: false,
+                        family,
+                        style,
+                        postscript_name: None,
+                        format: String::new(),
+                        bytes: paged_canvas::channel::ByteBuf(Vec::new()),
+                    },
+                }
+            }
             MainToWorkerKind::RequestMeasureText {
                 family,
                 style,

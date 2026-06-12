@@ -4322,6 +4322,24 @@ impl CanvasModel {
                                 path: PropertyPath::FrameStrokeDashArray,
                                 value: Some(Value::Lengths(l.stroke_dash.clone())),
                             },
+                            // v43 — line ends. `None` reads as "" (the
+                            // same cleared spelling the mutation takes);
+                            // an out-of-vocabulary `Other` also reads ""
+                            // (its source token was discarded at parse).
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeStartArrowhead,
+                                value: Some(Value::Text(match l.start_arrow {
+                                    paged_parse::ArrowheadType::None => String::new(),
+                                    t => t.as_idml().to_string(),
+                                })),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeEndArrowhead,
+                                value: Some(Value::Text(match l.end_arrow {
+                                    paged_parse::ArrowheadType::None => String::new(),
+                                    t => t.as_idml().to_string(),
+                                })),
+                            },
                             PropertyEntry {
                                 path: PropertyPath::AppliedObjectStyle,
                                 value: Some(Value::Text(
@@ -6930,6 +6948,57 @@ fn build_font_resolver(
     Some(r)
 }
 
+/// v43 (W-06) — pick the registry face serving `family` (+ optional
+/// `style`). `style: None` is style-agnostic: the family's FIRST
+/// registered face wins (registration order). A styled request prefers
+/// the exact style, then falls back to a bare / `"Regular"` entry —
+/// the same fall-through `BytesResolver::resolve_font` applies, but
+/// WITHOUT the default-font catch-all: an unknown family is honestly
+/// "not found" rather than the substitute face's bytes.
+pub fn font_face_lookup<'a>(
+    registry: &'a [FontEntry],
+    family: &str,
+    style: Option<&str>,
+) -> Option<&'a FontEntry> {
+    match style {
+        None => registry.iter().find(|e| e.family == family),
+        Some(s) => registry
+            .iter()
+            .find(|e| e.family == family && e.style.as_deref() == Some(s))
+            .or_else(|| {
+                registry.iter().find(|e| {
+                    e.family == family
+                        && matches!(e.style.as_deref(), None | Some("") | Some("Regular"))
+                })
+            }),
+    }
+}
+
+/// v43 (W-06) — sniff a font payload's container format from its magic
+/// bytes. `"truetype"` covers the sfnt 1.0 / `true` / `ttcf` magics;
+/// empty string when unrecognised.
+pub fn sniff_font_format(bytes: &[u8]) -> &'static str {
+    match bytes.get(..4) {
+        Some([0x00, 0x01, 0x00, 0x00]) | Some(b"true") | Some(b"ttcf") => "truetype",
+        Some(b"OTTO") => "opentype",
+        Some(b"wOFF") => "woff",
+        Some(b"wOF2") => "woff2",
+        _ => "",
+    }
+}
+
+/// v43 (W-06) — the face's PostScript name (`name` table ID 6). `None`
+/// when the payload doesn't parse as sfnt (woff/woff2 containers) or
+/// carries no Unicode-decodable entry.
+pub fn font_postscript_name(bytes: &[u8]) -> Option<String> {
+    use rustybuzz::ttf_parser;
+    let face = ttf_parser::Face::parse(bytes, 0).ok()?;
+    face.names()
+        .into_iter()
+        .filter(|n| n.name_id == ttf_parser::name_id::POST_SCRIPT_NAME)
+        .find_map(|n| n.to_string())
+}
+
 fn compute_story_pages(built: &BuiltDocument) -> HashMap<String, Vec<PageId>> {
     let mut out: HashMap<String, Vec<PageId>> = HashMap::new();
     for page in &built.pages {
@@ -7718,6 +7787,80 @@ mod tests {
             model.measure_text("Inter", None, "x", 12.0).is_none(),
             "no registry + no default font ⇒ None, not a panic"
         );
+    }
+
+    // ── v43 (W-06) — font-face bytes read ──
+
+    /// Registered face round-trips through the lookup byte-identically,
+    /// with format sniffed and the PostScript name read from the real
+    /// TTF; an unknown family honestly misses (no default-font
+    /// substitution).
+    #[test]
+    fn font_face_lookup_serves_registered_bytes_and_misses_unknown() {
+        let font_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/fonts/Inter.ttf");
+        let Ok(bytes) = std::fs::read(&font_path) else {
+            eprintln!("skip: Inter.ttf not present");
+            return;
+        };
+        let registry = vec![FontEntry {
+            family: "Inter".to_string(),
+            style: Some("Regular".to_string()),
+            bytes: bytes.clone(),
+        }];
+        let hit = font_face_lookup(&registry, "Inter", None).expect("style-agnostic hit");
+        assert_eq!(hit.bytes, bytes, "bytes serve exactly as registered");
+        assert_eq!(sniff_font_format(&hit.bytes), "truetype");
+        let ps = font_postscript_name(&hit.bytes).expect("Inter carries a name table");
+        assert!(
+            ps.starts_with("Inter"),
+            "PostScript name should be the face's, got {ps:?}"
+        );
+        assert!(font_face_lookup(&registry, "Nope", None).is_none());
+        // Styled request falls through to the "Regular" entry; an
+        // unknown style on a known family still serves the family.
+        assert!(font_face_lookup(&registry, "Inter", Some("Bold")).is_some());
+    }
+
+    /// Style-exact match wins over the bare-family entry, and `None`
+    /// picks the family's FIRST registered face.
+    #[test]
+    fn font_face_lookup_prefers_exact_style_then_first_face() {
+        let registry = vec![
+            FontEntry {
+                family: "Demo".to_string(),
+                style: None,
+                bytes: b"REGULAR".to_vec(),
+            },
+            FontEntry {
+                family: "Demo".to_string(),
+                style: Some("Bold".to_string()),
+                bytes: b"BOLD".to_vec(),
+            },
+        ];
+        assert_eq!(
+            font_face_lookup(&registry, "Demo", Some("Bold"))
+                .unwrap()
+                .bytes,
+            b"BOLD"
+        );
+        assert_eq!(
+            font_face_lookup(&registry, "Demo", None).unwrap().bytes,
+            b"REGULAR"
+        );
+    }
+
+    #[test]
+    fn sniff_font_format_recognises_the_four_container_magics() {
+        assert_eq!(
+            sniff_font_format(&[0x00, 0x01, 0x00, 0x00, 0x00]),
+            "truetype"
+        );
+        assert_eq!(sniff_font_format(b"OTTO...."), "opentype");
+        assert_eq!(sniff_font_format(b"wOFF...."), "woff");
+        assert_eq!(sniff_font_format(b"wOF2...."), "woff2");
+        assert_eq!(sniff_font_format(b"xx"), "");
+        assert_eq!(font_postscript_name(b"wOFF...."), None);
     }
 
     // ── v38 (Wave 2) — frame-chain read + resize-vs-transform reflow ──

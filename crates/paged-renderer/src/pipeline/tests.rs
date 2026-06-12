@@ -2463,6 +2463,16 @@
         let without = count_fills("");
         assert_eq!(without, 0, "plain line draws no fill");
         assert_eq!(with_arrow, 1, "arrowhead should add one FillPath");
+        // v43 — the canonical InDesign enumeration tokens parse and
+        // draw too, including the hollow kinds (one FillPath each: the
+        // ring is two contours in one path) and one marker per end.
+        assert_eq!(count_fills(r#" RightLineEnd="TriangleArrowHead""#), 1);
+        assert_eq!(count_fills(r#" RightLineEnd="CircleArrowHead""#), 1);
+        assert_eq!(
+            count_fills(r#" LeftLineEnd="BarbedArrowHead" RightLineEnd="SquareSolidArrowHead""#),
+            2,
+            "one marker per line end"
+        );
     }
 
     #[test]

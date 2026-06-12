@@ -172,6 +172,89 @@ fn path_end_outward_dir(
     }
 }
 
+/// Append a square contour centred at `c`, edges aligned to the
+/// arrow's `axis`/`perp` frame, half-side `half`. `reverse` flips the
+/// winding — under the nonzero fill rule a reversed inner contour cuts
+/// a hole, which is how the hollow line-end kinds stay plain FillPaths.
+fn push_square_contour(
+    segs: &mut Vec<paged_compose::PathSegment>,
+    c: (f32, f32),
+    axis: (f32, f32),
+    perp: (f32, f32),
+    half: f32,
+    reverse: bool,
+) {
+    use paged_compose::PathSegment::*;
+    let (ax, ay) = (axis.0 * half, axis.1 * half);
+    let (bx, by) = (perp.0 * half, perp.1 * half);
+    let mut pts = [
+        (c.0 + ax + bx, c.1 + ay + by),
+        (c.0 + ax - bx, c.1 + ay - by),
+        (c.0 - ax - bx, c.1 - ay - by),
+        (c.0 - ax + bx, c.1 - ay + by),
+    ];
+    if reverse {
+        pts.reverse();
+    }
+    segs.push(MoveTo {
+        x: pts[0].0,
+        y: pts[0].1,
+    });
+    for p in &pts[1..] {
+        segs.push(LineTo { x: p.0, y: p.1 });
+    }
+    segs.push(Close);
+}
+
+/// Append a circle contour (four cubic arcs) centred at `c` with
+/// radius `r`. `reverse` mirrors the arcs across the x-axis, which
+/// flips the winding without re-deriving the Bezier reversal by hand.
+fn push_circle_contour(
+    segs: &mut Vec<paged_compose::PathSegment>,
+    c: (f32, f32),
+    r: f32,
+    reverse: bool,
+) {
+    use paged_compose::PathSegment::*;
+    const KAPPA: f32 = 0.552_284_8;
+    let k = r * KAPPA;
+    let sy = if reverse { -1.0 } else { 1.0 };
+    segs.push(MoveTo { x: c.0 + r, y: c.1 });
+    segs.push(CubicTo {
+        cx1: c.0 + r,
+        cy1: c.1 + k * sy,
+        cx2: c.0 + k,
+        cy2: c.1 + r * sy,
+        x: c.0,
+        y: c.1 + r * sy,
+    });
+    segs.push(CubicTo {
+        cx1: c.0 - k,
+        cy1: c.1 + r * sy,
+        cx2: c.0 - r,
+        cy2: c.1 + k * sy,
+        x: c.0 - r,
+        y: c.1,
+    });
+    segs.push(CubicTo {
+        cx1: c.0 - r,
+        cy1: c.1 - k * sy,
+        cx2: c.0 - k,
+        cy2: c.1 - r * sy,
+        x: c.0,
+        y: c.1 - r * sy,
+    });
+    segs.push(CubicTo {
+        cx1: c.0 + k,
+        cy1: c.1 - r * sy,
+        cx2: c.0 + r,
+        cy2: c.1 - k * sy,
+        x: c.0 + r,
+        y: c.1,
+    });
+    segs.push(Close);
+}
+
 /// Emit a filled arrowhead of `kind` at `tip`, pointing along the
 /// outward direction `dir` at that line end. Size derives from the
 /// stroke weight × `scale_pct`, matching InDesign's stroke-relative
@@ -206,8 +289,10 @@ fn emit_arrowhead(
     let s = stroke_width * 4.0 * scale;
     let mut segs: Vec<paged_compose::PathSegment> = Vec::new();
     match kind {
-        A::Triangle | A::TriangleWide | A::Simple | A::Other => {
-            let half_w = if matches!(kind, A::TriangleWide) {
+        // `Curved` sweeps its barbs in InDesign; the plain triangle is
+        // the documented approximation (see `ArrowheadType::Curved`).
+        A::Triangle | A::TriangleWide | A::Simple | A::SimpleWide | A::Curved | A::Other => {
+            let half_w = if matches!(kind, A::TriangleWide | A::SimpleWide) {
                 s * 0.8
             } else {
                 s * 0.5
@@ -217,6 +302,27 @@ fn emit_arrowhead(
             segs.push(LineTo {
                 x: back.0 + px * half_w,
                 y: back.1 + py * half_w,
+            });
+            segs.push(LineTo {
+                x: back.0 - px * half_w,
+                y: back.1 - py * half_w,
+            });
+            segs.push(Close);
+        }
+        A::Barbed => {
+            // Swallow-tail: the triangle's back edge notched toward the
+            // tip, leaving two swept barbs.
+            let half_w = s * 0.5;
+            let back = (tip.0 - dx * s, tip.1 - dy * s);
+            let notch = (tip.0 - dx * s * 0.6, tip.1 - dy * s * 0.6);
+            segs.push(MoveTo { x: tip.0, y: tip.1 });
+            segs.push(LineTo {
+                x: back.0 + px * half_w,
+                y: back.1 + py * half_w,
+            });
+            segs.push(LineTo {
+                x: notch.0,
+                y: notch.1,
             });
             segs.push(LineTo {
                 x: back.0 - px * half_w,
@@ -247,46 +353,37 @@ fn emit_arrowhead(
             });
             segs.push(Close);
         }
+        A::SquareSolid => {
+            // Filled square capping the line end (centred half a side
+            // back so the leading edge sits on the endpoint).
+            let half = s * 0.5;
+            let c = (tip.0 - dx * half, tip.1 - dy * half);
+            push_square_contour(&mut segs, c, (dx, dy), (px, py), half, false);
+        }
+        A::Square => {
+            // Hollow square: outer contour + reversed inner contour.
+            // Both rasterizer backends fill nonzero, so the opposite
+            // windings cut the hole — the marker stays one plain
+            // FillPath on either backend.
+            let half = s * 0.5;
+            let c = (tip.0 - dx * half, tip.1 - dy * half);
+            let t = (stroke_width * 0.5).clamp(0.25, half * 0.6);
+            push_square_contour(&mut segs, c, (dx, dy), (px, py), half, false);
+            push_square_contour(&mut segs, c, (dx, dy), (px, py), half - t, true);
+        }
         A::CircleSolid => {
             let r = s * 0.5;
             // Cap the line end: centre the disc one radius back.
             let c = (tip.0 - dx * r, tip.1 - dy * r);
-            const KAPPA: f32 = 0.552_284_8;
-            let k = r * KAPPA;
-            segs.push(MoveTo { x: c.0 + r, y: c.1 });
-            segs.push(CubicTo {
-                cx1: c.0 + r,
-                cy1: c.1 + k,
-                cx2: c.0 + k,
-                cy2: c.1 + r,
-                x: c.0,
-                y: c.1 + r,
-            });
-            segs.push(CubicTo {
-                cx1: c.0 - k,
-                cy1: c.1 + r,
-                cx2: c.0 - r,
-                cy2: c.1 + k,
-                x: c.0 - r,
-                y: c.1,
-            });
-            segs.push(CubicTo {
-                cx1: c.0 - r,
-                cy1: c.1 - k,
-                cx2: c.0 - k,
-                cy2: c.1 - r,
-                x: c.0,
-                y: c.1 - r,
-            });
-            segs.push(CubicTo {
-                cx1: c.0 + k,
-                cy1: c.1 - r,
-                cx2: c.0 + r,
-                cy2: c.1 - k,
-                x: c.0 + r,
-                y: c.1,
-            });
-            segs.push(Close);
+            push_circle_contour(&mut segs, c, r, false);
+        }
+        A::Circle => {
+            // Ring — same reversed-inner-contour trick as `Square`.
+            let r = s * 0.5;
+            let c = (tip.0 - dx * r, tip.1 - dy * r);
+            let t = (stroke_width * 0.5).clamp(0.25, r * 0.6);
+            push_circle_contour(&mut segs, c, r, false);
+            push_circle_contour(&mut segs, c, r - t, true);
         }
         A::None => return,
     }

@@ -4008,6 +4008,153 @@ mod tests {
         );
     }
 
+    /// v43 — stroke line ends on a GraphicLine: set, clear and undo,
+    /// plus the out-of-vocabulary rejection. The fixture line comes in
+    /// through `InsertNode` (default arrows = `None`).
+    #[test]
+    fn frame_stroke_arrowheads_round_trip_on_graphic_line() {
+        let mut project = Project::new(Document {
+            container: Container {
+                mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
+                designmap_raw: Bytes::new(),
+                designmap: DesignMap::default(),
+                entries: BTreeMap::new(),
+            },
+            palette: Graphic::default(),
+            spreads: vec![ParsedSpread {
+                src: "Spreads/syn.xml".to_string(),
+                spread: {
+                    paged_parse::Spread {
+                        self_id: Some("Spread/u_main".to_string()),
+                        ..Default::default()
+                    }
+                },
+            }],
+            stories: Vec::new(),
+            master_spreads: HashMap::new(),
+            frame_for_story: HashMap::new(),
+            text_frame_index: HashMap::new(),
+            styles: StyleSheet::default(),
+            anchors: Vec::new(),
+        });
+        project
+            .apply(Operation::InsertNode {
+                z_slot: None,
+                parent: NodeId::Spread("Spread/u_main".to_string()),
+                position: 0,
+                node: NodeSpec::GraphicLine {
+                    self_id: "GraphicLine/u1".to_string(),
+                    bounds: [0.0, 0.0, 100.0, 100.0],
+                    anchors: Vec::new(),
+                    subpath_starts: Vec::new(),
+                    subpath_open: Vec::new(),
+                    stroke_color: None,
+                    stroke_weight: Some(2.0),
+                    item_transform: None,
+                },
+            })
+            .expect("insert");
+        let node = NodeId::GraphicLine("GraphicLine/u1".to_string());
+
+        // Set the end arrowhead with the canonical IDML token.
+        let applied = project
+            .apply(Operation::SetProperty {
+                node: node.clone(),
+                path: PropertyPath::FrameStrokeEndArrowhead,
+                value: Value::Text("TriangleArrowHead".to_string()),
+            })
+            .expect("apply");
+        assert_eq!(
+            project.document().spreads[0].spread.graphic_lines[0].end_arrow,
+            paged_parse::ArrowheadType::Triangle
+        );
+        // Undo restores None via the empty-Text inverse.
+        assert!(matches!(
+            &applied.inverse,
+            Operation::SetProperty {
+                value: Value::Text(s),
+                ..
+            } if s.is_empty()
+        ));
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        assert_eq!(
+            project.document().spreads[0].spread.graphic_lines[0].end_arrow,
+            paged_parse::ArrowheadType::None
+        );
+
+        // Start arrowhead: set then clear with "" — the inverse of the
+        // clear carries the previous token so redo/undo stay faithful.
+        project
+            .apply(Operation::SetProperty {
+                node: node.clone(),
+                path: PropertyPath::FrameStrokeStartArrowhead,
+                value: Value::Text("CircleSolidArrowHead".to_string()),
+            })
+            .expect("set start");
+        let cleared = project
+            .apply(Operation::SetProperty {
+                node: node.clone(),
+                path: PropertyPath::FrameStrokeStartArrowhead,
+                value: Value::Text(String::new()),
+            })
+            .expect("clear start");
+        assert_eq!(
+            project.document().spreads[0].spread.graphic_lines[0].start_arrow,
+            paged_parse::ArrowheadType::None
+        );
+        assert!(matches!(
+            &cleared.inverse,
+            Operation::SetProperty {
+                value: Value::Text(s),
+                ..
+            } if s == "CircleSolidArrowHead"
+        ));
+
+        // Out-of-vocabulary tokens are rejected, not stored as Other.
+        let err = project
+            .apply(Operation::SetProperty {
+                node: node.clone(),
+                path: PropertyPath::FrameStrokeEndArrowhead,
+                value: Value::Text("FancyMysteryHead".to_string()),
+            })
+            .expect_err("unknown token must be rejected");
+        assert!(matches!(
+            err,
+            crate::OperationError::InvalidValue {
+                path: PropertyPath::FrameStrokeEndArrowhead,
+                ..
+            }
+        ));
+
+        // A non-line kind doesn't carry the property.
+        project
+            .apply(Operation::InsertNode {
+                z_slot: None,
+                parent: NodeId::Spread("Spread/u_main".to_string()),
+                position: 0,
+                node: NodeSpec::Rectangle {
+                    item_transform: None,
+                    stroke_color: None,
+                    stroke_weight: None,
+                    self_id: "Rectangle/u2".to_string(),
+                    bounds: [0.0, 0.0, 50.0, 50.0],
+                    fill_color: None,
+                },
+            })
+            .expect("insert rect");
+        let err = project
+            .apply(Operation::SetProperty {
+                node: NodeId::Rectangle("Rectangle/u2".to_string()),
+                path: PropertyPath::FrameStrokeStartArrowhead,
+                value: Value::Text("TriangleArrowHead".to_string()),
+            })
+            .expect_err("rectangle has no line ends");
+        assert!(matches!(
+            err,
+            crate::OperationError::UnsupportedProperty { .. }
+        ));
+    }
+
     /// SDK Phase 5 (v1 sweep) — TextFrame inset spacing apply +
     /// undo. Wire shape: Value::Bounds([top, left, bottom, right])
     /// in pt. The renderer's text-frame composer reads the field

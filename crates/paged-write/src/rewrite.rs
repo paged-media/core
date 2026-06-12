@@ -888,6 +888,7 @@ fn write_new_path_item(
     anchors: &[PathAnchor],
     subpath_starts: &[usize],
     subpath_open: &[bool],
+    extra_attrs: &[(&'static str, String)],
 ) -> Result<(), quick_xml::Error> {
     let mut attrs: Vec<(&str, String)> = vec![("Self", self_id.to_string())];
     push_common_item_attrs(
@@ -899,6 +900,9 @@ fn write_new_path_item(
     );
     if nonprinting {
         attrs.push(("Nonprinting", "true".to_string()));
+    }
+    for (k, v) in extra_attrs {
+        attrs.push((k, v.clone()));
     }
     emit_start_with_attrs(writer, kind, &attrs)?;
     writer.write_event(Event::Start(BytesStart::new("Properties")))?;
@@ -984,6 +988,7 @@ pub(crate) fn write_inserted_items(
                     &p.anchors,
                     &p.subpath_starts,
                     &p.subpath_open,
+                    &[],
                 )?;
             }
         }
@@ -991,6 +996,18 @@ pub(crate) fn write_inserted_items(
     for l in &spread.graphic_lines {
         if let Some(id) = l.self_id.as_deref() {
             if !seen.contains(id) && !grouped.contains(id) {
+                // v43 — an inserted line that was given arrowheads
+                // before save keeps them (the patch lane only covers
+                // items that exist in the source XML).
+                let mut extra: Vec<(&'static str, String)> = Vec::new();
+                for (k, t) in [
+                    ("LeftLineEnd", l.start_arrow),
+                    ("RightLineEnd", l.end_arrow),
+                ] {
+                    if t.draws() && !t.as_idml().is_empty() {
+                        extra.push((k, t.as_idml().to_string()));
+                    }
+                }
                 write_new_path_item(
                     writer,
                     "GraphicLine",
@@ -1004,6 +1021,7 @@ pub(crate) fn write_inserted_items(
                     &l.anchors,
                     &l.subpath_starts,
                     &l.subpath_open,
+                    &extra,
                 )?;
             }
         }
@@ -1665,6 +1683,8 @@ fn patch_spread_item(
                         Some(&next),
                         nonprinting,
                         bounds,
+                        None,
+                        None,
                     )
                 },
                 &frame_attr_extras(
@@ -1675,6 +1695,8 @@ fn patch_spread_item(
                     stroke_weight,
                     next.as_deref(),
                     nonprinting,
+                    None,
+                    None,
                 ),
             )?;
             Ok(Some(start.into_owned()))
@@ -1696,6 +1718,8 @@ fn patch_spread_item(
                     stroke_weight: r.stroke_weight,
                     nonprinting: r.nonprinting,
                     bounds: r.bounds,
+                    start_arrow: None,
+                    end_arrow: None,
                 }),
             )
         }
@@ -1716,6 +1740,8 @@ fn patch_spread_item(
                     stroke_weight: r.stroke_weight,
                     nonprinting: r.nonprinting,
                     bounds: r.bounds,
+                    start_arrow: None,
+                    end_arrow: None,
                 }),
             )
         }
@@ -1736,6 +1762,8 @@ fn patch_spread_item(
                     stroke_weight: r.stroke_weight,
                     nonprinting: r.nonprinting,
                     bounds: r.bounds,
+                    start_arrow: None,
+                    end_arrow: None,
                 }),
             )
         }
@@ -1756,6 +1784,8 @@ fn patch_spread_item(
                     stroke_weight: r.stroke_weight,
                     nonprinting: r.nonprinting,
                     bounds: r.bounds,
+                    start_arrow: Some(r.start_arrow),
+                    end_arrow: Some(r.end_arrow),
                 }),
             )
         }
@@ -1774,6 +1804,11 @@ struct VectorItem {
     stroke_weight: Option<f32>,
     nonprinting: bool,
     bounds: paged_parse::Bounds,
+    /// v43 — `LeftLineEnd` / `RightLineEnd`. `None` for the kinds that
+    /// don't carry the fields (Rectangle / Oval / Polygon), so their
+    /// source attributes pass through verbatim.
+    start_arrow: Option<paged_parse::ArrowheadType>,
+    end_arrow: Option<paged_parse::ArrowheadType>,
 }
 
 fn patch_vector_item(
@@ -1798,6 +1833,8 @@ fn patch_vector_item(
                 None,
                 item.nonprinting,
                 item.bounds,
+                item.start_arrow,
+                item.end_arrow,
             )
         },
         &frame_attr_extras(
@@ -1808,6 +1845,8 @@ fn patch_vector_item(
             item.stroke_weight,
             None,
             item.nonprinting,
+            item.start_arrow,
+            item.end_arrow,
         ),
     )?;
     Ok(Some(start.into_owned()))
@@ -1831,6 +1870,8 @@ fn frame_attr_patch(
     next: Option<&Option<String>>,
     nonprinting: bool,
     bounds: paged_parse::Bounds,
+    start_arrow: Option<paged_parse::ArrowheadType>,
+    end_arrow: Option<paged_parse::ArrowheadType>,
 ) -> Option<Patch> {
     match key {
         b"ItemTransform" if !patch_tx => None,
@@ -1850,6 +1891,8 @@ fn frame_attr_patch(
             Patch::Remove
         }),
         b"NextTextFrame" => next.map(opt_string_patch),
+        b"LeftLineEnd" => arrow_patch(start_arrow),
+        b"RightLineEnd" => arrow_patch(end_arrow),
         b"GeometricBounds" => Some(Patch::Set(format!(
             "{} {} {} {}",
             format_f32(bounds.top),
@@ -1868,6 +1911,7 @@ fn frame_attr_patch(
 /// frame's bounds are saved by rewriting its `<PathPointArray>` anchors
 /// (see [`ModelGeometry`]), not by inventing a `GeometricBounds`
 /// attribute the source never had.
+#[allow(clippy::too_many_arguments)]
 fn frame_attr_extras(
     patch_tx: bool,
     item_transform: Option<[f32; 6]>,
@@ -1876,6 +1920,8 @@ fn frame_attr_extras(
     stroke_weight: Option<f32>,
     next: Option<&str>,
     nonprinting: bool,
+    start_arrow: Option<paged_parse::ArrowheadType>,
+    end_arrow: Option<paged_parse::ArrowheadType>,
 ) -> Vec<(&'static str, String)> {
     let mut out = Vec::new();
     if patch_tx {
@@ -1898,7 +1944,31 @@ fn frame_attr_extras(
     if nonprinting {
         out.push(("Nonprinting", "true".to_string()));
     }
+    for (key, arrow) in [("LeftLineEnd", start_arrow), ("RightLineEnd", end_arrow)] {
+        // `None` (the variant) is IDML's implicit default — absence of
+        // the attribute restores it, so only drawable, representable
+        // ends are appended.
+        if let Some(t) = arrow {
+            if t.draws() && !t.as_idml().is_empty() {
+                out.push((key, t.as_idml().to_string()));
+            }
+        }
+    }
     out
+}
+
+/// Patch decision for a `LeftLineEnd` / `RightLineEnd` attribute. The
+/// kinds that don't carry the model fields pass `None` — their source
+/// attribute survives verbatim. So does `Other` (an out-of-vocabulary
+/// source token the parse layer couldn't keep): patching it would
+/// clobber a spelling we can't reproduce.
+fn arrow_patch(v: Option<paged_parse::ArrowheadType>) -> Option<Patch> {
+    use paged_parse::ArrowheadType as A;
+    match v {
+        None | Some(A::Other) => None,
+        Some(A::None) => Some(Patch::Remove),
+        Some(t) => Some(Patch::Set(t.as_idml().to_string())),
+    }
 }
 
 fn opt_string_patch(v: &Option<String>) -> Patch {
