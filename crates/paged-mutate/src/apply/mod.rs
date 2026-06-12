@@ -224,12 +224,17 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             story_id,
             offset,
             field,
-        } => apply_insert_field(doc, story_id, *offset, *field),
+        } => apply_insert_field(doc, story_id, *offset, field),
         Operation::DeleteField {
             story_id,
             offset,
             field,
-        } => apply_delete_field(doc, story_id, *offset, *field),
+        } => apply_delete_field(doc, story_id, *offset, field),
+        Operation::SetFieldValue {
+            story_id,
+            offset,
+            value,
+        } => apply_set_field_value(doc, story_id, *offset, value.as_deref()),
         Operation::InsertGuide {
             spread_id,
             orientation,

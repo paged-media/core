@@ -242,6 +242,11 @@ export type WorkerToMain = WorkerToMainKind & {
 ///     composite back via the v41 image scene layer). The worker resolves
 ///     the frame's `image_link` URI and returns the bytes the build
 ///     already decoded + cached. Pure READ, no mutation.
+///   - v43 (pending batch — the constant bumps once for the whole batch):
+///     D-01 tagged placeholders: `FieldKind` gains the plugin
+///     `placeholder` kind on `InsertField`, new `setFieldValue`
+///     mutation, new `RequestDocumentPlaceholders` request +
+///     `DocumentPlaceholders { items }` reply.
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(42);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
@@ -609,6 +614,12 @@ pub enum MainToWorkerKind {
     /// Volume is trivial so paging per-key isn't worth the round-
     /// trip cost. Reply: `DocumentMetaReply`.
     RequestDocumentMeta,
+    /// v43 (D-01) — enumerate every plugin placeholder field in the
+    /// document: the read door a data plugin's refresh loop walks to
+    /// re-find its anchors (offsets are only valid until the next
+    /// edit; re-read before each `SetFieldValue` pass). Pure READ.
+    /// Reply: `DocumentPlaceholders`.
+    RequestDocumentPlaceholders,
     /// SDK Phase 5 (v1 sweep) — resolved CMYK + RGB readout for a
     /// named swatch. Powers the Color panel's CMYK/RGB display.
     /// Editor sliders (which would mutate the swatch's channel
@@ -1072,6 +1083,9 @@ pub enum WorkerToMainKind {
     /// the ordered `NextTextFrame` thread, head-first; empty when the
     /// story doesn't resolve or hosts no frame.
     FrameChainResult { links: Vec<FrameChainLink> },
+    /// v43 (D-01) — `RequestDocumentPlaceholders` reply: every
+    /// placeholder field in the document, in story order.
+    DocumentPlaceholders { items: Vec<PlaceholderItem> },
     /// v42 (C-5 / I-04) — `RequestPlacedAssetBytes` reply. `encoded` is the
     /// placed image's ORIGINAL file bytes (PSD / JPEG / PNG) with its
     /// natural pixel `width`/`height`; `found:false` (empty fields) when
@@ -1370,6 +1384,23 @@ pub struct FrameChainLink {
     pub frame_id: String,
     pub next: Option<String>,
     pub overflow: bool,
+}
+
+/// v43 (D-01) — one plugin placeholder field, as
+/// `RequestDocumentPlaceholders` reports it. `offset` is the char
+/// offset of the field's run START in its story (the address
+/// `SetFieldValue` / `DeleteField` take); it is only valid until the
+/// next edit — re-enumerate, don't cache. `value` is the cached
+/// resolved display (`null` = unresolved; the run shows `<key>`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaceholderItem {
+    pub story_id: String,
+    pub offset: u32,
+    pub plugin: String,
+    pub key: String,
+    pub value: Option<String>,
 }
 
 /// v38 (Wave 2, C-2 / S-05) — content-box reflow payload. Carried on
@@ -2377,11 +2408,27 @@ pub enum Mutation {
         scope: paged_mutate::operation::StyleScope,
     },
     /// W0.5 — insert a field marker (page-number etc.) at a story
-    /// offset. Routes to `Operation::InsertField`.
+    /// offset. Routes to `Operation::InsertField`. v43 (D-01): `field`
+    /// additionally accepts the plugin `placeholder` kind
+    /// (`{ placeholder: { plugin, key, value? } }`) — a tagged,
+    /// edit-surviving anchor run displaying its cached value (or the
+    /// `<key>` token while unresolved).
     InsertField {
         story_id: String,
         offset: u32,
         field: paged_mutate::operation::FieldKind,
+    },
+    /// v43 (D-01) — update the cached display value of the placeholder
+    /// field containing the story char `offset` (offsets come fresh
+    /// from `RequestDocumentPlaceholders`). `value: null` returns the
+    /// field to its unresolved `<key>` display. ONE undoable step;
+    /// the hosting story reflows. Routes to
+    /// `Operation::SetFieldValue`.
+    SetFieldValue {
+        story_id: String,
+        offset: u32,
+        #[serde(default)]
+        value: Option<String>,
     },
     MoveFrame {
         frame_id: String,
@@ -3053,6 +3100,7 @@ impl Mutation {
             Self::DeleteRange { .. } => "DeleteRange",
             Self::ApplyStyle { .. } => "ApplyStyle",
             Self::InsertField { .. } => "InsertField",
+            Self::SetFieldValue { .. } => "SetFieldValue",
             Self::MoveFrame { .. } => "MoveFrame",
             Self::ResizeFrame { .. } => "ResizeFrame",
             Self::LinkFrames { .. } => "LinkFrames",

@@ -2533,7 +2533,7 @@ pub(super) fn apply_insert_field(
     doc: &mut Document,
     story_id: &str,
     offset: u32,
-    field: FieldKind,
+    field: &FieldKind,
 ) -> Result<AppliedOperation, OperationError> {
     let story_idx = doc
         .stories
@@ -2546,7 +2546,14 @@ pub(super) fn apply_insert_field(
                 end: offset,
             })
         })?;
-    let marker = field.marker_char();
+    // v43 (D-01) — plugin placeholders insert a TAGGED RUN (display
+    // text + identity), not a single marker char; separate lane.
+    if let FieldKind::Placeholder { plugin, key, value } = field {
+        return insert_placeholder_run(doc, story_idx, story_id, offset, plugin, key, value);
+    }
+    let marker = field
+        .marker_char()
+        .expect("non-placeholder FieldKind has a marker char");
     let story = &mut doc.stories[story_idx].story;
 
     // Walk to the offset and insert the marker char into the run that
@@ -2616,9 +2623,132 @@ pub(super) fn apply_insert_field(
         op: Operation::InsertField {
             story_id: story_id.to_string(),
             offset,
-            field,
+            field: field.clone(),
         },
         // Undo removes the one marker char we inserted at `offset`.
+        inverse: Operation::DeleteField {
+            story_id: story_id.to_string(),
+            offset,
+            field: field.clone(),
+        },
+        invalidation,
+    })
+}
+
+/// v43 (D-01) — insert a `FieldKind::Placeholder` as its own tagged
+/// run at the story char `offset`, splitting the host run when the
+/// offset falls inside one. The new run clones the surrounding run's
+/// formatting (the field takes the character style at the insertion
+/// point, like the page-number marker) and displays the cached value
+/// (or the `<key>` token while unresolved).
+fn insert_placeholder_run(
+    doc: &mut Document,
+    story_idx: usize,
+    story_id: &str,
+    offset: u32,
+    plugin: &str,
+    key: &str,
+    value: &Option<String>,
+) -> Result<AppliedOperation, OperationError> {
+    let story = &mut doc.stories[story_idx].story;
+    let tag = paged_parse::PlaceholderField {
+        plugin: plugin.to_string(),
+        key: key.to_string(),
+        value: value.clone(),
+    };
+    let display = tag.display_text();
+
+    let total: u32 = story
+        .paragraphs
+        .iter()
+        .flat_map(|p| p.runs.iter())
+        .map(|r| r.text.chars().count() as u32)
+        .sum();
+    if offset > total {
+        return Err(OperationError::InvalidValue {
+            node: NodeId::StoryRange {
+                story_id: story_id.to_string(),
+                start: offset,
+                end: offset,
+            },
+            path: PropertyPath::AppliedCharacterStyle,
+            reason: format!("offset {offset} past end of story (len {total})"),
+        });
+    }
+
+    // Locate the run hosting the offset (inclusive of its trailing
+    // boundary — same convention as the marker-char lane).
+    let mut char_cursor: u32 = 0;
+    let mut target: Option<(usize, usize, usize)> = None;
+    'outer: for (pi, para) in story.paragraphs.iter().enumerate() {
+        for (ri, run) in para.runs.iter().enumerate() {
+            let run_len = run.text.chars().count() as u32;
+            if offset <= char_cursor + run_len {
+                target = Some((pi, ri, (offset - char_cursor) as usize));
+                break 'outer;
+            }
+            char_cursor += run_len;
+        }
+    }
+
+    match target {
+        Some((pi, ri, local)) => {
+            let runs = &mut story.paragraphs[pi].runs;
+            // Clone formatting from the host run; a clone of an
+            // ordinary run carries no variable/placeholder tags of its
+            // own to scrub except these two.
+            let mut ph_run = runs[ri].clone();
+            ph_run.text = display;
+            ph_run.text_variable = None;
+            ph_run.placeholder = Some(tag);
+            let host_len = runs[ri].text.chars().count();
+            if local == 0 {
+                runs.insert(ri, ph_run);
+            } else if local == host_len {
+                runs.insert(ri + 1, ph_run);
+            } else {
+                // Split the host run around the insertion point.
+                let byte = runs[ri]
+                    .text
+                    .char_indices()
+                    .nth(local)
+                    .map(|(b, _)| b)
+                    .expect("local < host_len");
+                let mut tail = runs[ri].clone();
+                tail.text = runs[ri].text[byte..].to_string();
+                runs[ri].text.truncate(byte);
+                runs.insert(ri + 1, ph_run);
+                runs.insert(ri + 2, tail);
+            }
+        }
+        // Story with no runs at all: append a fresh run to the last
+        // (or a new) paragraph.
+        None => {
+            if story.paragraphs.is_empty() {
+                story.paragraphs.push(paged_parse::Paragraph::default());
+            }
+            let para = story.paragraphs.last_mut().expect("ensured above");
+            para.runs.push(paged_parse::CharacterRun {
+                text: display,
+                placeholder: Some(tag),
+                ..Default::default()
+            });
+        }
+    }
+
+    let field = FieldKind::Placeholder {
+        plugin: plugin.to_string(),
+        key: key.to_string(),
+        value: value.clone(),
+    };
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::InsertField {
+            story_id: story_id.to_string(),
+            offset,
+            field: field.clone(),
+        },
+        // Undo removes the whole tagged run starting at `offset`.
         inverse: Operation::DeleteField {
             story_id: story_id.to_string(),
             offset,
@@ -2632,7 +2762,7 @@ pub(super) fn apply_delete_field(
     doc: &mut Document,
     story_id: &str,
     offset: u32,
-    field: FieldKind,
+    field: &FieldKind,
 ) -> Result<AppliedOperation, OperationError> {
     let story_idx = doc
         .stories
@@ -2645,7 +2775,12 @@ pub(super) fn apply_delete_field(
                 end: offset,
             })
         })?;
-    let marker = field.marker_char();
+    if let FieldKind::Placeholder { plugin, key, .. } = field {
+        return delete_placeholder_run(doc, story_idx, story_id, offset, plugin, key);
+    }
+    let marker = field
+        .marker_char()
+        .expect("non-placeholder FieldKind has a marker char");
     let story = &mut doc.stories[story_idx].story;
 
     let mut char_cursor: u32 = 0;
@@ -2696,12 +2831,165 @@ pub(super) fn apply_delete_field(
         op: Operation::DeleteField {
             story_id: story_id.to_string(),
             offset,
-            field,
+            field: field.clone(),
         },
         inverse: Operation::InsertField {
             story_id: story_id.to_string(),
             offset,
-            field,
+            field: field.clone(),
+        },
+        invalidation,
+    })
+}
+
+/// v43 (D-01) — remove the placeholder run with identity
+/// `(plugin, key)` starting at the story char `offset`. The inverse
+/// re-inserts with the run's CURRENT cached value (which may differ
+/// from the op's `field.value` after `SetFieldValue` re-resolutions),
+/// so delete-then-undo restores what was actually displayed.
+fn delete_placeholder_run(
+    doc: &mut Document,
+    story_idx: usize,
+    story_id: &str,
+    offset: u32,
+    plugin: &str,
+    key: &str,
+) -> Result<AppliedOperation, OperationError> {
+    let story = &mut doc.stories[story_idx].story;
+    let mut char_cursor: u32 = 0;
+    let mut removed: Option<paged_parse::PlaceholderField> = None;
+    'outer: for para in story.paragraphs.iter_mut() {
+        let mut ri = 0;
+        while ri < para.runs.len() {
+            let run = &para.runs[ri];
+            let run_len = run.text.chars().count() as u32;
+            let is_match = char_cursor == offset
+                && run
+                    .placeholder
+                    .as_ref()
+                    .is_some_and(|tag| tag.plugin == plugin && tag.key == key);
+            if is_match {
+                removed = para.runs.remove(ri).placeholder;
+                break 'outer;
+            }
+            if char_cursor > offset {
+                break 'outer;
+            }
+            char_cursor += run_len;
+            ri += 1;
+        }
+    }
+    let Some(tag) = removed else {
+        return Err(OperationError::InvalidValue {
+            node: NodeId::StoryRange {
+                story_id: story_id.to_string(),
+                start: offset,
+                end: offset,
+            },
+            path: PropertyPath::AppliedCharacterStyle,
+            reason: format!("no placeholder field ({plugin}, {key}) starting at offset {offset}"),
+        });
+    };
+
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::DeleteField {
+            story_id: story_id.to_string(),
+            offset,
+            field: FieldKind::Placeholder {
+                plugin: plugin.to_string(),
+                key: key.to_string(),
+                value: tag.value.clone(),
+            },
+        },
+        inverse: Operation::InsertField {
+            story_id: story_id.to_string(),
+            offset,
+            field: FieldKind::Placeholder {
+                plugin: tag.plugin,
+                key: tag.key,
+                value: tag.value,
+            },
+        },
+        invalidation,
+    })
+}
+
+/// v43 (D-01) — `Operation::SetFieldValue`: update the cached display
+/// value of the placeholder run containing `offset`. One undoable
+/// step; the inverse carries the prior value and the run-start offset
+/// (re-applying the inverse re-finds the run regardless of how the
+/// new display's length shifted downstream offsets).
+pub(super) fn apply_set_field_value(
+    doc: &mut Document,
+    story_id: &str,
+    offset: u32,
+    value: Option<&str>,
+) -> Result<AppliedOperation, OperationError> {
+    let story_idx = doc
+        .stories
+        .iter()
+        .position(|s| s.self_id == story_id)
+        .ok_or_else(|| {
+            OperationError::NodeNotFound(NodeId::StoryRange {
+                story_id: story_id.to_string(),
+                start: offset,
+                end: offset,
+            })
+        })?;
+    let story = &mut doc.stories[story_idx].story;
+
+    let mut char_cursor: u32 = 0;
+    let mut hit: Option<(u32, Option<String>)> = None;
+    'outer: for para in story.paragraphs.iter_mut() {
+        for run in para.runs.iter_mut() {
+            let run_len = run.text.chars().count() as u32;
+            if let Some(tag) = run.placeholder.as_mut() {
+                // The placeholder owning `offset`: starting exactly
+                // here (run-start addressing — what the enumerate door
+                // reports, and matches even a zero-length empty-value
+                // run) or strictly inside its display span.
+                if offset == char_cursor || (offset > char_cursor && offset < char_cursor + run_len)
+                {
+                    let prior = tag.value.clone();
+                    tag.value = value.map(|v| v.to_string());
+                    run.text = tag.display_text();
+                    hit = Some((char_cursor, prior));
+                    break 'outer;
+                }
+            } else if offset < char_cursor + run_len {
+                // Strictly inside ordinary text — no field here. (An
+                // offset AT a run boundary falls through to the next
+                // run, so a placeholder starting right after plain
+                // text is addressable by its start.)
+                break 'outer;
+            }
+            char_cursor += run_len;
+        }
+    }
+    let Some((run_start, prior)) = hit else {
+        return Err(OperationError::InvalidValue {
+            node: NodeId::StoryRange {
+                story_id: story_id.to_string(),
+                start: offset,
+                end: offset,
+            },
+            path: PropertyPath::AppliedCharacterStyle,
+            reason: format!("no placeholder field at offset {offset}"),
+        });
+    };
+
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::SetFieldValue {
+            story_id: story_id.to_string(),
+            offset: run_start,
+            value: value.map(|v| v.to_string()),
+        },
+        inverse: Operation::SetFieldValue {
+            story_id: story_id.to_string(),
+            offset: run_start,
+            value: prior,
         },
         invalidation,
     })

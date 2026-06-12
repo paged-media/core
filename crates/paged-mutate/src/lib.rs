@@ -1574,6 +1574,21 @@ mod tests {
                 offset: 3,
                 field: crate::operation::FieldKind::PageNumber,
             },
+            // v43 (D-01) — plugin placeholder field + value update.
+            Operation::InsertField {
+                story_id: "Story/u1".to_string(),
+                offset: 3,
+                field: crate::operation::FieldKind::Placeholder {
+                    plugin: "media.paged.data".to_string(),
+                    key: "price".to_string(),
+                    value: Some("€ 9,99".to_string()),
+                },
+            },
+            Operation::SetFieldValue {
+                story_id: "Story/u1".to_string(),
+                offset: 3,
+                value: None,
+            },
             Operation::InsertGuide {
                 spread_id: "Spread/u_main".to_string(),
                 orientation: crate::operation::GuideOrientationSpec::Vertical,

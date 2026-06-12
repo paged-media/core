@@ -2819,12 +2819,29 @@ pub enum Operation {
         field: FieldKind,
     },
     /// W0.5 — inverse-only companion to `InsertField`: remove the
-    /// single field-marker character at `offset`. Inverse re-inserts
-    /// it via `InsertField`.
+    /// single field-marker character at `offset` (for a
+    /// `FieldKind::Placeholder`, remove the whole tagged run starting
+    /// at `offset`). Inverse re-inserts it via `InsertField`; for a
+    /// placeholder the inverse captures the run's CURRENT value so a
+    /// delete after re-resolution undoes faithfully.
     DeleteField {
         story_id: String,
         offset: u32,
         field: FieldKind,
+    },
+    /// v43 (D-01) — update the cached display value of the
+    /// `FieldKind::Placeholder` run containing the story char
+    /// `offset` (offsets come fresh from the
+    /// `RequestDocumentPlaceholders` read door; the echoed op and its
+    /// inverse are normalised to the run's START offset). `value:
+    /// None` returns the field to its unresolved `<key>` display.
+    /// Re-resolving is ONE undoable step: the inverse carries the
+    /// prior value. The hosting story reflows.
+    SetFieldValue {
+        story_id: String,
+        offset: u32,
+        #[serde(default)]
+        value: Option<String>,
     },
     /// W0.5 — insert a ruler guide on the spread `spread_id`.
     /// `position` is the page-local coordinate on the perpendicular
@@ -3076,26 +3093,43 @@ pub enum StyleScope {
 }
 
 /// W0.5 — the kind of field marker inserted by
-/// [`Operation::InsertField`]. Extensible; v1 implements `PageNumber`
-/// (the IDML auto current-page-number marker, U+E018).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+/// [`Operation::InsertField`]. v1 implemented the two page-number
+/// built-ins (single private-use marker chars the renderer
+/// substitutes); v43 (D-01) adds the plugin `Placeholder` — a tagged,
+/// edit-surviving anchor run whose text is the field's cached display
+/// value (see `paged_parse::PlaceholderField`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(rename_all = "camelCase")]
 pub enum FieldKind {
     PageNumber,
     NextPageNumber,
+    /// v43 (D-01) — a plugin-owned tagged placeholder. Inserts a
+    /// dedicated run tagged `(plugin, key)` whose text displays
+    /// `value` (or the `<key>` token while `value` is `None`); the
+    /// engine never re-resolves it — `Operation::SetFieldValue`
+    /// updates the cached display.
+    Placeholder {
+        plugin: String,
+        key: String,
+        #[serde(default)]
+        value: Option<String>,
+    },
 }
 
 impl FieldKind {
     /// The Unicode marker char the parser uses to represent this field
     /// in a story's flattened text (mirrors
-    /// `paged_parse::story::AUTO_PAGE_NUMBER_MARKER` etc.).
-    pub fn marker_char(self) -> char {
+    /// `paged_parse::story::AUTO_PAGE_NUMBER_MARKER` etc.). `None` for
+    /// `Placeholder` — that field is a tagged run carrying its display
+    /// text, not a single substituted marker char.
+    pub fn marker_char(&self) -> Option<char> {
         match self {
             // U+E018 — IDML `<?ACE 18?>` auto current-page-number.
-            FieldKind::PageNumber => '\u{E018}',
+            FieldKind::PageNumber => Some('\u{E018}'),
             // U+E019 — IDML `<?ACE 19?>` next-page-number marker.
-            FieldKind::NextPageNumber => '\u{E019}',
+            FieldKind::NextPageNumber => Some('\u{E019}'),
+            FieldKind::Placeholder { .. } => None,
         }
     }
 }
