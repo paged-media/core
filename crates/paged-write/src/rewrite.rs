@@ -102,21 +102,14 @@
 //!
 //! # Known losses (documented, not silent)
 //!
-//! * **Inserted / removed PAGES (and their spread wrapping).** An
-//!   `InsertPage` op adds a new `ParsedSpread` (with a fresh
-//!   `Spreads/Spread_*.xml` src) and a `RemovePage` drops one, but the
-//!   writer only patches / copies the SOURCE archive's existing entries
-//!   — it has no machinery to ADD a new ZIP entry, edit `designmap.xml`'s
-//!   `<idPkg:Spread>` manifest, or drop a removed spread's entry, and no
-//!   from-scratch full-`<Spread>` serialiser. An inserted spread is
-//!   therefore silently skipped (its src isn't in the source ZIP →
-//!   `entry_bytes` returns `None`); a removed spread's entry survives
-//!   (orphaned, no longer referenced once designmap is also patched).
-//!   DEFERRED 2026-06-07 (W1.15): needs (a) a full-spread emitter, (b)
-//!   designmap.xml `<idPkg:Spread>` add/remove, (c) ZIP add/drop in
-//!   `write_idml`'s container assembly + the master-spread interaction —
-//!   roughly the size of the four landed lanes combined. Page-item
-//!   inserts WITHIN an existing spread (above) are fully handled.
+//! * **Removed PAGES leave an orphaned entry.** A `RemovePage` drops
+//!   the `ParsedSpread` from the model, but the writer doesn't delete
+//!   the spread's ZIP entry or its `designmap.xml` `<idPkg:Spread>` ref
+//!   — the page survives on reopen. (INSERTED pages/spreads — and
+//!   stories minted by InsertTextFrame — DO save since C-8: the `emit`
+//!   module serialises a full part for any model spread/story with no
+//!   source entry and references it from designmap.) Master-spread
+//!   inserts and the removal manifest-drop remain deferred.
 //! * **Singular group transform.** A group whose `ItemTransform` linear
 //!   part is non-invertible can't have its member transforms de-composed;
 //!   such a member keeps its `ItemTransform` verbatim (degenerate case;
@@ -170,7 +163,7 @@ pub(crate) fn format_f32(v: f32) -> String {
 
 /// Format a `[a b c d tx ty]` matrix the IDML way (space-separated,
 /// fixed precision).
-fn format_matrix(m: &[f32; 6]) -> String {
+pub(crate) fn format_matrix(m: &[f32; 6]) -> String {
     let parts: Vec<String> = m.iter().map(|v| format_f32(*v)).collect();
     parts.join(" ")
 }
@@ -753,13 +746,12 @@ fn push_common_item_attrs(
     attrs.push(("StrokeWeight", format_f32(stroke_weight.unwrap_or(0.0))));
 }
 
-/// Emit a start tag from `(key, value)` pairs (values escaped). Element
-/// name is taken verbatim.
-fn emit_start_with_attrs(
-    writer: &mut Writer<Cursor<Vec<u8>>>,
+/// Build a start/empty tag's `BytesStart` from `(key, value)` pairs
+/// (values escaped). Element name is taken verbatim.
+fn tag_with_attrs(
     name: &str,
     attrs: &[(&str, String)],
-) -> Result<(), quick_xml::Error> {
+) -> Result<BytesStart<'static>, quick_xml::Error> {
     let mut content = name.as_bytes().to_vec();
     for (k, v) in attrs {
         content.push(b' ');
@@ -774,7 +766,26 @@ fn emit_start_with_attrs(
             e,
         )))
     })?;
-    writer.write_event(Event::Start(BytesStart::from_content(content, name.len())))?;
+    Ok(BytesStart::from_content(content, name.len()).into_owned())
+}
+
+/// Emit a start tag from `(key, value)` pairs (values escaped).
+pub(crate) fn emit_start_with_attrs(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    name: &str,
+    attrs: &[(&str, String)],
+) -> Result<(), quick_xml::Error> {
+    writer.write_event(Event::Start(tag_with_attrs(name, attrs)?))?;
+    Ok(())
+}
+
+/// Emit a self-closing tag from `(key, value)` pairs (values escaped).
+pub(crate) fn emit_empty_with_attrs(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    name: &str,
+    attrs: &[(&str, String)],
+) -> Result<(), quick_xml::Error> {
+    writer.write_event(Event::Empty(tag_with_attrs(name, attrs)?))?;
     Ok(())
 }
 
@@ -792,9 +803,16 @@ fn write_new_text_frame(
         return Ok(());
     };
     let mut attrs: Vec<(&str, String)> = vec![("Self", self_id.to_string())];
+    // A wire-minted story id (`Story/u<n>`) is written SANITIZED (`/` →
+    // `_`) so the reference matches the id `derive_story_id` re-derives
+    // from the emitted `Stories/Story_<sanitized>.xml` entry on reopen
+    // (C-8). Parsed story ids carry no slash and pass through unchanged.
     attrs.push((
         "ParentStory",
-        f.parent_story.clone().unwrap_or_else(|| "n".to_string()),
+        f.parent_story
+            .as_deref()
+            .map(crate::emit::sanitize_id)
+            .unwrap_or_else(|| "n".to_string()),
     ));
     attrs.push(("PreviousTextFrame", "n".to_string()));
     attrs.push((
@@ -898,7 +916,7 @@ fn write_new_path_item(
 /// source XML — the inserted nodes. Emitted at the spread's close in
 /// the model's per-kind vec order. Group members are skipped (a group's
 /// own insertion is a separate, deferred lane — see Known losses).
-fn write_inserted_items(
+pub(crate) fn write_inserted_items(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     spread: &Spread,
     seen: &std::collections::HashSet<String>,
@@ -2331,7 +2349,7 @@ fn flush_run_body(
 /// `<Tab/>` structure, byte-for-byte matching `paged_gen`'s emitter so
 /// a saved edit re-parses to the same model. Empty text emits an empty
 /// `<Content></Content>` (the IDML form for a zero-length run).
-fn write_run_content(
+pub(crate) fn write_run_content(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     text: &str,
 ) -> Result<(), quick_xml::Error> {

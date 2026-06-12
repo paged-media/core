@@ -390,18 +390,18 @@ fn mutate_roundtrip_property_mutations_survive_on_text() {
 }
 
 #[test]
-fn mutate_roundtrip_insert_page_is_known_loss_but_exits_zero() {
-    // insertPage applies but pages don't yet write back (the W3.B2
-    // defer): survived=false, but the structure is otherwise untouched
-    // and the loss is documented, so the process still exits 0.
+fn mutate_roundtrip_insert_page_survives() {
+    // insertPage fully round-trips since C-8: the writer emits the
+    // minted spread as a new entry + designmap ref, so the page count
+    // grows on reparse and the rest of the structure matches the
+    // mutated model.
     let idml = paged_gen::write_idml(&paged_gen::samples::text::build()).unwrap();
     let (json, success) = run_mutate_roundtrip(&idml, "insertPage");
     assert_eq!(json["applied"], true, "applied: {json}");
-    assert_eq!(json["survived"], false, "survived: {json}");
+    assert_eq!(json["survived"], true, "survived: {json}");
     assert_eq!(json["untouched_ok"], true, "untouched_ok: {json}");
-    assert_eq!(json["ok"], false, "ok: {json}");
-    assert_eq!(json["note"], "KNOWN_LOSS W3.B2", "note: {json}");
-    assert!(success, "insertPage is a documented loss → exit 0: {json}");
+    assert_eq!(json["ok"], true, "ok: {json}");
+    assert!(success, "insertPage round-trips → exit 0: {json}");
 }
 
 #[test]

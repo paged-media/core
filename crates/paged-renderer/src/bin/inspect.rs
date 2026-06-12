@@ -92,13 +92,14 @@ struct Args {
     /// document (first TextFrame else first Rectangle / first non-empty
     /// story / a non-`[None]` palette swatch), re-serialise through
     /// `paged_write::write_idml`, re-open, and verify (a) the mutated
-    /// value SURVIVED the round-trip and (b) the untouched structure
-    /// (spread / story / frame counts, run text) is unchanged. Prints a
-    /// single JSON line `{"applied","survived","untouched_ok","ok",
-    /// "note"}` and exits 0 iff `ok` OR the document has no target for the
-    /// mutation (n/a) OR the loss is a documented defer (`insertPage`
-    /// noted KNOWN_LOSS W3.B2); exits 1 only on a genuine apply / write
-    /// failure. The conformance harness's mutate-round-trips lane calls
+    /// value SURVIVED the round-trip and (b) the rest of the structure
+    /// (spread / story / frame counts, run text) matches the mutated
+    /// model. Prints a single JSON line `{"applied","survived",
+    /// "untouched_ok","ok","note"}` and exits 0 iff `ok` OR the document
+    /// has no target for the mutation (n/a); exits 1 on a genuine apply /
+    /// write / round-trip failure. (`insertPage` fully round-trips since
+    /// C-8 emitted new spread entries — the old KNOWN_LOSS W3.B2 lane is
+    /// retired.) The conformance harness's mutate-round-trips lane calls
     /// this. Variants:
     /// `setFrameStrokeWeight|setFrameFill|setFrameTransform|setCharFontSize|insertPage`.
     /// All other rendering / reporting flags are ignored in this mode.
@@ -864,13 +865,13 @@ fn first_run_point_size(doc: &Document, story_id: &str) -> Option<f32> {
 /// `apply` ⇒ the Operation applied cleanly to the model. `survived` ⇒ the
 /// mutated value re-parsed equal after `write_idml`. `untouched_ok` ⇒ the
 /// document's structural fingerprint (spread / story / frame counts + run
-/// text) is unchanged. `ok = apply && survived && untouched_ok`.
+/// text) matches the mutated model. `ok = apply && survived &&
+/// untouched_ok`.
 fn run_mutate_roundtrip(original: &[u8], mutation: &str) -> Result<MutateRoundtripReport> {
     use paged_mutate::{NodeId, Operation, Project, PropertyPath, Value};
     use serde_json::json;
 
     let doc = Document::open(original).context("open input IDML")?;
-    let before = ModelStats::of(&doc);
 
     // Each arm yields (op, target_self_id, verify-closure, note). `target`
     // being `None` is the n/a path: no target for this mutation → exit 0
@@ -996,13 +997,16 @@ fn run_mutate_roundtrip(original: &[u8], mutation: &str) -> Result<MutateRoundtr
             }
         }),
         "insertPage" => {
-            // Insert a page after the first page. Pages do NOT yet write
-            // back through `paged_write` (documented defer), so the page
-            // count is unchanged on reparse — a KNOWN_LOSS, not a failure.
+            // Insert a page after the first page. C-8: the writer emits
+            // the minted spread as a full new entry + designmap ref, so
+            // the page must SURVIVE the round-trip (page count grows).
             let after_page_id = doc
                 .spreads
                 .iter()
                 .find_map(|s| s.spread.pages.iter().find_map(|p| p.self_id.clone()));
+            let pages =
+                |d: &Document| -> usize { d.spreads.iter().map(|s| s.spread.pages.len()).sum() };
+            let pages_before = pages(&doc);
             Some(Plan {
                 op: Operation::InsertPage {
                     after_page_id,
@@ -1011,11 +1015,8 @@ fn run_mutate_roundtrip(original: &[u8], mutation: &str) -> Result<MutateRoundtr
                     page_self_id: None,
                     restore_spread_json: None,
                 },
-                // The written package never grows the page; survival is
-                // measured as the documented loss, so verify is `false`
-                // and the note records why exit stays 0.
-                verify: Box::new(|_re: &Document| false),
-                note: Some("KNOWN_LOSS W3.B2"),
+                verify: Box::new(move |re: &Document| pages(re) == pages_before + 1),
+                note: None,
             })
         }
         other => {
@@ -1042,8 +1043,6 @@ fn run_mutate_roundtrip(original: &[u8], mutation: &str) -> Result<MutateRoundtr
             exit_ok: true,
         });
     };
-
-    let is_insert_page = mutation == "insertPage";
 
     // Apply the Operation. A genuine apply failure is the one case that
     // exits 1 (the model rejected a valid Op — a real bug).
@@ -1103,11 +1102,11 @@ fn run_mutate_roundtrip(original: &[u8], mutation: &str) -> Result<MutateRoundtr
     };
 
     let survived = (plan.verify)(&reparsed);
-    // Structure: the untouched fingerprint must match. insertPage is the
-    // exception — it is EXPECTED to leave the written stats unchanged
-    // (the page never lands), which is exactly what "untouched" measures,
-    // so the structural check is the same comparison.
-    let untouched_ok = before == ModelStats::of(&reparsed);
+    // Structure: the reparse must reproduce the MUTATED model's
+    // fingerprint. For the property mutations that equals the pre-apply
+    // stats; for insertPage it includes the minted spread (C-8), so the
+    // comparison is against the post-apply model, not `before`.
+    let untouched_ok = ModelStats::of(project.document()) == ModelStats::of(&reparsed);
     let ok = survived && untouched_ok;
 
     let note: String = match plan.note {
@@ -1117,8 +1116,7 @@ fn run_mutate_roundtrip(original: &[u8], mutation: &str) -> Result<MutateRoundtr
         None => "untouched structure diverged".to_string(),
     };
 
-    // Exit code: ok, OR the documented insertPage known-loss, exits 0.
-    let exit_ok = ok || (is_insert_page && untouched_ok);
+    let exit_ok = ok;
 
     let report = json!({
         "mutation": mutation,

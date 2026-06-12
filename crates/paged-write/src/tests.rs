@@ -1570,19 +1570,19 @@ fn group_member_transform_unchanged_round_trips_byte_identical() {
 }
 
 // ---------------------------------------------------------------------
-// 9. W1.15 — inserted PAGES (DEFERRED 2026-06-07). This guards the
-//    documented defer: an `InsertPage` must not crash the writer, and
-//    the existing spreads must still round-trip cleanly. Serialising the
-//    NEW spread (new ZIP entry + designmap manifest patch) is the
-//    deferred work — see the loss list in `rewrite.rs`.
+// 9. W1.15 lane 5 / C-8 — a page inserted MID-DOCUMENT. The minted
+//    spread is serialised as a new entry and its designmap ref lands
+//    right after its host's, so the page order survives the round-trip
+//    while every existing entry stays byte-identical.
 // ---------------------------------------------------------------------
 
 #[test]
-fn inserted_page_does_not_break_existing_entries() {
+fn inserted_page_mid_document_keeps_order_and_existing_entries() {
     let original = build_sample("geometry");
     let doc = Document::open(&original).unwrap();
     let before_spreads = doc.spreads.len();
-    // Address the first page so InsertPage has a valid `after_page_id`.
+    // Address the first page so InsertPage has a valid `after_page_id`
+    // (the minted spread then lands at index 1 — between existing ones).
     let page_id = doc
         .spreads
         .iter()
@@ -1599,31 +1599,42 @@ fn inserted_page_does_not_break_existing_entries() {
             restore_spread_json: None,
         })
         .expect("insert page");
-    // The model grew a spread...
     assert_eq!(
         project.document().spreads.len(),
         before_spreads + 1,
         "model gained a spread"
     );
+    let minted_sid = project.document().spreads[1]
+        .spread
+        .self_id
+        .clone()
+        .expect("minted spread id");
 
-    // ...but the writer (which only patches source entries) produces a
-    // valid package whose EXISTING entries are unchanged. The new spread
-    // is NOT yet serialised (deferred): the entry set is the source's.
-    let out = write_idml(project.document(), &original).expect("write must not crash");
+    let out = write_idml(project.document(), &original).expect("write");
     let src = entries(&original);
     let dst = entries(&out);
-    assert_eq!(
-        src.keys().collect::<Vec<_>>(),
-        dst.keys().collect::<Vec<_>>(),
-        "entry set unchanged (new spread not yet serialised — deferred)"
-    );
-    // Re-open: the output is a valid, parseable IDML with the original
-    // spread count (the inserted page is the documented loss).
+    // Every existing entry except designmap.xml is byte-identical; the
+    // minted spread is the only addition.
+    for (path, bytes) in &src {
+        if path == "designmap.xml" {
+            continue;
+        }
+        assert_eq!(
+            dst.get(path),
+            Some(bytes),
+            "existing entry {path} unchanged"
+        );
+    }
+    let added: Vec<&String> = dst.keys().filter(|k| !src.contains_key(*k)).collect();
+    assert_eq!(added.len(), 1, "one added entry: {added:?}");
+
+    // Re-open: the inserted page survives AT ITS POSITION (index 1).
     let re = Document::open(&out).expect("output re-parses");
+    assert_eq!(re.spreads.len(), before_spreads + 1, "spread count");
     assert_eq!(
-        re.spreads.len(),
-        before_spreads,
-        "inserted page not yet in the written package (deferred lane 5)"
+        re.spreads[1].spread.self_id.as_deref(),
+        Some(minted_sid.as_str()),
+        "minted spread kept its mid-document position"
     );
 }
 
@@ -1708,4 +1719,245 @@ fn footnote_story_round_trips_without_losing_pages() {
             "entry {path} not byte-identical on unmutated footnotes round-trip"
         );
     }
+}
+
+// ---------------------------------------------------------------------
+// C-8 — new-entry emission: minted stories + InsertPage spreads.
+// ---------------------------------------------------------------------
+
+/// The K-1 live-validation gap: a text frame inserted via the
+/// wire-shaped Operation MINTS its story (`Story/u<n>`, `src: ""`).
+/// Text poured into that story must survive an IDML export: the writer
+/// emits a full `Stories/Story_*.xml` part, references it from
+/// designmap.xml, and the frame's `ParentStory` resolves on reopen.
+#[test]
+fn inserted_text_frame_with_minted_story_survives_export() {
+    let original = build_sample("text");
+    let doc = Document::open(&original).unwrap();
+    let spread_id = doc.spreads[0].spread.self_id.clone().expect("spread id");
+    let position = doc.spreads[0].spread.text_frames.len();
+    let n_stories = doc.stories.len();
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::InsertNode {
+            parent: NodeId::Spread(spread_id),
+            position,
+            node: paged_mutate::NodeSpec::TextFrame {
+                self_id: "u9001".to_string(),
+                bounds: [100.0, 100.0, 200.0, 300.0],
+                fill_color: None,
+                stroke_color: None,
+                stroke_weight: None,
+                item_transform: None,
+                parent_story: Some("Story/unew".to_string()),
+            },
+            z_slot: None,
+        })
+        .expect("insert text frame");
+
+    // Pour text into the minted story. The canvas TextOp lane lives in
+    // `paged-canvas` (not a dev-dep here), so mutate the parsed story
+    // model directly — the same state the ops produce.
+    {
+        let doc = project.document_mut();
+        let story = doc
+            .stories
+            .iter_mut()
+            .find(|s| s.self_id == "Story/unew")
+            .expect("minted story attached");
+        assert_eq!(story.src, "", "minted story has no source entry");
+        story.story.paragraphs[0].runs[0].text = "Poured into a fresh frame.".to_string();
+    }
+
+    let out = write_idml(project.document(), &original).expect("write");
+    let re = Document::open(&out).expect("reparse");
+
+    // The story survived — under the sanitized id the entry stem
+    // re-derives (`Story/unew` → `Story_unew`).
+    assert_eq!(re.stories.len(), n_stories + 1, "story count");
+    let story = re
+        .stories
+        .iter()
+        .find(|s| s.self_id == "Story_unew")
+        .expect("minted story present after reopen");
+    assert_eq!(story.src, "Stories/Story_Story_unew.xml");
+    let text: String = story
+        .story
+        .paragraphs
+        .iter()
+        .flat_map(|p| p.runs.iter())
+        .map(|r| r.text.clone())
+        .collect();
+    assert_eq!(text, "Poured into a fresh frame.");
+
+    // The frame survived and its ParentStory resolves.
+    let frame = re
+        .spreads
+        .iter()
+        .flat_map(|s| s.spread.text_frames.iter())
+        .find(|f| f.self_id.as_deref() == Some("u9001"))
+        .expect("inserted frame survived");
+    assert_eq!(frame.parent_story.as_deref(), Some("Story_unew"));
+    assert!(
+        re.frame_for_story.contains_key("Story_unew"),
+        "ParentStory resolves through frame_for_story"
+    );
+
+    // Container deltas: exactly one ADDED entry (the story part), and
+    // only the host spread + designmap changed.
+    let src_e = entries(&original);
+    let dst_e = entries(&out);
+    let added: Vec<&String> = dst_e.keys().filter(|k| !src_e.contains_key(*k)).collect();
+    assert_eq!(added, ["Stories/Story_Story_unew.xml"], "added entries");
+    let mut changed: Vec<&String> = src_e
+        .iter()
+        .filter(|(k, v)| dst_e.get(*k) != Some(v))
+        .map(|(k, _)| k)
+        .collect();
+    changed.sort();
+    assert_eq!(changed.len(), 2, "changed entries: {changed:?}");
+    assert!(changed.iter().any(|k| *k == "designmap.xml"));
+    assert!(changed.iter().any(|k| k.starts_with("Spreads/")));
+
+    // The designmap gained exactly one idPkg:Story element.
+    let dm_src = String::from_utf8(src_e["designmap.xml"].clone()).unwrap();
+    let dm_dst = String::from_utf8(dst_e["designmap.xml"].clone()).unwrap();
+    let count = |s: &str| s.matches("<idPkg:Story ").count();
+    assert_eq!(count(&dm_dst), count(&dm_src) + 1, "one new idPkg:Story");
+    assert!(
+        dm_dst.contains(r#"<idPkg:Story src="Stories/Story_Story_unew.xml"/>"#),
+        "new ref present: {dm_dst}"
+    );
+
+    // Idempotence: re-saving the reopened package (the story is now a
+    // real, referenced entry) is a byte-identical round-trip.
+    let out2 = write_idml(&re, &out).expect("write 2");
+    assert_eq!(out, out2, "second save is byte-identical");
+}
+
+/// `InsertPage` mints a `ParsedSpread` whose `Spreads/Spread_*.xml` src
+/// has no source entry — the same hole, spread-shaped. The writer emits
+/// a full spread part (page + any items inserted onto it) and adds the
+/// `<idPkg:Spread>` ref after its host so page order survives.
+#[test]
+fn inserted_page_spread_survives_export() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+    let n_spreads = doc.spreads.len();
+    let ref_bounds = doc.spreads.last().unwrap().spread.pages[0].bounds;
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::InsertPage {
+            after_page_id: None,
+            master_id: None,
+            spread_self_id: None,
+            page_self_id: None,
+            restore_spread_json: None,
+        })
+        .expect("insert page");
+    let (sid, pid, minted_src) = {
+        let parsed = project.document().spreads.last().expect("minted spread");
+        (
+            parsed.spread.self_id.clone().expect("spread id"),
+            parsed.spread.pages[0].self_id.clone().expect("page id"),
+            parsed.src.clone(),
+        )
+    };
+    // Put a page item on the fresh page — the realistic insert-then-draw
+    // flow; it must ride along inside the emitted part.
+    project
+        .apply(Operation::InsertNode {
+            parent: NodeId::Spread(sid.clone()),
+            position: 0,
+            node: paged_mutate::NodeSpec::Rectangle {
+                self_id: "u9100".to_string(),
+                bounds: [10.0, 10.0, 60.0, 90.0],
+                fill_color: Some("Color/Black".to_string()),
+                stroke_color: None,
+                stroke_weight: None,
+                item_transform: None,
+            },
+            z_slot: None,
+        })
+        .expect("insert rectangle on new page");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    let re = Document::open(&out).expect("reparse");
+
+    assert_eq!(re.spreads.len(), n_spreads + 1, "spread count");
+    // The minted spread is still LAST (designmap order = page order).
+    let minted = re.spreads.last().unwrap();
+    assert_eq!(minted.spread.self_id.as_deref(), Some(sid.as_str()));
+    assert_eq!(minted.src, minted_src);
+    let page = &minted.spread.pages[0];
+    assert_eq!(page.self_id.as_deref(), Some(pid.as_str()));
+    assert_eq!(
+        (
+            page.bounds.top,
+            page.bounds.left,
+            page.bounds.bottom,
+            page.bounds.right
+        ),
+        (
+            ref_bounds.top,
+            ref_bounds.left,
+            ref_bounds.bottom,
+            ref_bounds.right
+        ),
+        "page size cloned from the host"
+    );
+    let rect = minted
+        .spread
+        .rectangles
+        .iter()
+        .find(|r| r.self_id.as_deref() == Some("u9100"))
+        .expect("rectangle on the minted page survived");
+    assert_eq!(rect.fill_color.as_deref(), Some("Color/Black"));
+
+    // Container deltas: one added entry, only designmap changed.
+    let src_e = entries(&original);
+    let dst_e = entries(&out);
+    let added: Vec<&String> = dst_e.keys().filter(|k| !src_e.contains_key(*k)).collect();
+    assert_eq!(added, [&minted_src], "added entries");
+    let changed: Vec<&String> = src_e
+        .iter()
+        .filter(|(k, v)| dst_e.get(*k) != Some(v))
+        .map(|(k, _)| k)
+        .collect();
+    assert_eq!(changed, ["designmap.xml"], "changed entries");
+    let dm_src = String::from_utf8(src_e["designmap.xml"].clone()).unwrap();
+    let dm_dst = String::from_utf8(dst_e["designmap.xml"].clone()).unwrap();
+    let count = |s: &str| s.matches("<idPkg:Spread ").count();
+    assert_eq!(count(&dm_dst), count(&dm_src) + 1, "one new idPkg:Spread");
+
+    // Idempotence: a re-save of the reopened package round-trips
+    // byte-identically (the minted spread is now patched in place).
+    let out2 = write_idml(&re, &out).expect("write 2");
+    assert_eq!(out, out2, "second save is byte-identical");
+}
+
+/// A page inserted and then REMOVED before saving must leave no trace:
+/// the minted spread had no source entry, so the package round-trips
+/// byte-identically (the insert-then-undo invariant, spread-shaped).
+#[test]
+fn inserted_then_removed_page_round_trips_byte_identical() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+
+    let mut project = Project::new(doc);
+    let applied = project
+        .apply(Operation::InsertPage {
+            after_page_id: None,
+            master_id: None,
+            spread_self_id: None,
+            page_self_id: None,
+            restore_spread_json: None,
+        })
+        .expect("insert page");
+    project.apply(applied.inverse).expect("remove page");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    assert_eq!(original, out, "insert+remove page is a byte-identical save");
 }

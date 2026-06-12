@@ -59,14 +59,18 @@
 //! of that property-patch foundation, W1.15 adds STRUCTURAL save-back:
 //! page-item inserts / removes within a spread, new swatches / gradients
 //! / styles injected into the Resources entries (see [`resources`]),
-//! table-cell text + style edits, and group-member transforms. See
-//! [`rewrite`] for the per-element inventory and the documented losses
-//! (inserted / removed PAGES are the precise remaining defer).
+//! table-cell text + style edits, and group-member transforms. C-8 adds
+//! NEW-ENTRY emission: a story minted post-parse (InsertTextFrame's
+//! `parent_story`, `src: ""`) and a spread minted by `InsertPage` are
+//! serialised as full parts and referenced from `designmap.xml` (see
+//! [`emit`]). See [`rewrite`] for the per-element inventory and the
+//! documented losses (removed PAGES still leave an orphaned entry).
 
 use std::io::{Cursor, Read, Write};
 
 use paged_scene::Document;
 
+mod emit;
 pub mod resources;
 pub mod rewrite;
 
@@ -109,7 +113,27 @@ pub fn write_idml(doc: &Document, original: &[u8]) -> Result<Vec<u8>, WriteError
     // below (preserving byte-identity + original compression).
     let mut patched: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
 
-    for spread in &doc.spreads {
+    // C-8 — new-entry emission. A spread / story the model carries but
+    // the source archive doesn't (a spread minted by `InsertPage`, a
+    // story minted by InsertTextFrame's `parent_story` with `src: ""`)
+    // is serialised as a FULL part and appended to the package, then
+    // referenced from `designmap.xml`. An unmutated document mints
+    // nothing, so none of this fires and the round-trip stays
+    // byte-identical.
+    let dom_version = doc
+        .container
+        .designmap
+        .dom_version
+        .clone()
+        .unwrap_or_else(|| "20.0".to_string());
+    let mut new_entries: Vec<(String, Vec<u8>)> = Vec::new();
+    // `(anchor src, new src)` — the anchor is the nearest PRECEDING
+    // spread with a source entry, so the designmap ref (whose order is
+    // page order) lands next to its host.
+    let mut new_spread_refs: Vec<(Option<String>, String)> = Vec::new();
+    let mut new_story_srcs: Vec<String> = Vec::new();
+
+    for (i, spread) in doc.spreads.iter().enumerate() {
         if let Some(orig) = entry_bytes(&mut src, &spread.src)? {
             let new = rewrite::rewrite_spread(&orig, &spread.spread).map_err(|source| {
                 WriteError::Rewrite {
@@ -120,6 +144,20 @@ pub fn write_idml(doc: &Document, original: &[u8]) -> Result<Vec<u8>, WriteError
             if new != orig.as_slice() {
                 patched.insert(spread.src.clone(), new);
             }
+        } else if !spread.src.is_empty() {
+            let body = emit::spread_part(&spread.spread, &dom_version).map_err(|source| {
+                WriteError::Rewrite {
+                    entry: spread.src.clone(),
+                    source,
+                }
+            })?;
+            let anchor = doc.spreads[..i]
+                .iter()
+                .rev()
+                .find(|prev| src.by_name(&prev.src).is_ok())
+                .map(|prev| prev.src.clone());
+            new_spread_refs.push((anchor, spread.src.clone()));
+            new_entries.push((spread.src.clone(), body));
         }
     }
     for story in &doc.stories {
@@ -132,6 +170,49 @@ pub fn write_idml(doc: &Document, original: &[u8]) -> Result<Vec<u8>, WriteError
             })?;
             if new != orig.as_slice() {
                 patched.insert(story.src.clone(), new);
+            }
+        } else {
+            // Minted post-parse (`src: ""`); derive the entry name from
+            // the `Self` id (`/` → `_` — `derive_story_id` re-derives the
+            // sanitized id from this stem on reopen).
+            let entry_src = if story.src.is_empty() {
+                emit::story_src_for(&story.self_id)
+            } else {
+                story.src.clone()
+            };
+            if src.by_name(&entry_src).is_ok() {
+                // Derived name collides with an existing entry — leave
+                // that entry alone rather than clobber it.
+                continue;
+            }
+            let body = emit::story_part(
+                &emit::sanitize_id(&story.self_id),
+                &story.story,
+                &dom_version,
+            )
+            .map_err(|source| WriteError::Rewrite {
+                entry: entry_src.clone(),
+                source,
+            })?;
+            new_entries.push((entry_src.clone(), body));
+            new_story_srcs.push(entry_src);
+        }
+    }
+
+    // Reference the new parts: a minimal designmap.xml insertion next to
+    // the existing `<idPkg:Spread>` / `<idPkg:Story>` elements. Only
+    // documents that minted something get a designmap diff.
+    const DESIGNMAP_SRC: &str = "designmap.xml";
+    if !(new_spread_refs.is_empty() && new_story_srcs.is_empty()) {
+        if let Some(orig) = entry_bytes(&mut src, DESIGNMAP_SRC)? {
+            let new = emit::patch_designmap(&orig, &new_spread_refs, &new_story_srcs).map_err(
+                |source| WriteError::Rewrite {
+                    entry: DESIGNMAP_SRC.to_string(),
+                    source,
+                },
+            )?;
+            if new != orig.as_slice() {
+                patched.insert(DESIGNMAP_SRC.to_string(), new);
             }
         }
     }
@@ -191,6 +272,14 @@ pub fn write_idml(doc: &Document, original: &[u8]) -> Result<Vec<u8>, WriteError
             let entry = src.by_index_raw(i)?;
             zip.raw_copy_file(entry)?;
         }
+    }
+
+    // C-8 — the minted parts are appended after every source entry
+    // (entry order within the ZIP is irrelevant to the parser; the
+    // designmap drives discovery, and `mimetype` stays first).
+    for (name, body) in &new_entries {
+        zip.start_file(name.as_str(), deflated)?;
+        zip.write_all(body)?;
     }
 
     let cursor = zip.finish()?;
