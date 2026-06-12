@@ -225,7 +225,16 @@ export type WorkerToMain = WorkerToMainKind & {
 ///     (a single-line run in frame-content coords); the renderer shapes +
 ///     emits glyphs in the document default font. Additive to the
 ///     `SubmitSceneLayer` payload's `SceneLayer` — no new messages.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(40);
+///   - v41 (C-1.2 — scene-layer image, the GPU-texture door's Stage A):
+///     `SceneItem` gains an `Image` variant carrying tightly-packed RGBA8
+///     pixels plus a destination rect in frame-content coords. The renderer
+///     interns the pixels into the display-list image pool and lowers to same
+///     `DisplayCommand::Image` lane placed assets use (rasterises through
+///     tiny-skia/Vello), inside the content-box clip. Additive to the
+///     `SubmitSceneLayer` payload's `SceneLayer` — no new messages. This
+///     is what lets paged.image composite in-frame (image M4); the
+///     shared-`GPUDevice` zero-copy stage (Stage B) is a follow-on.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(41);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -3441,8 +3450,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v40() {
-        assert_eq!(PROTOCOL_VERSION.0, 40);
+    fn protocol_version_is_v41() {
+        assert_eq!(PROTOCOL_VERSION.0, 41);
     }
 
     /// v38 — `RequestFrameChain` serialises with its camelCase tag and

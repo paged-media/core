@@ -35,7 +35,8 @@ use serde::{Deserialize, Serialize};
 use tsify_next::Tsify;
 
 use crate::display_list::{
-    Color, DisplayCommand, DisplayList, Paint, PathData, PathSegment, Stroke, Transform,
+    Color, DecodedImage, DisplayCommand, DisplayList, Paint, PathData, PathSegment, Rect, Stroke,
+    Transform,
 };
 
 /// A plugin-submitted vector layer in frame-content coordinates. Keyed
@@ -71,6 +72,34 @@ pub enum SceneItem {
     /// transformed baseline; full per-glyph affine (rotated-frame text)
     /// is a follow-on.
     Text(SceneTextItem),
+    /// Composite a pre-decoded RGBA8 image into the frame (C-1.2 — the
+    /// GPU-texture door's bytes/CPU stage, "Stage A"). `rgba` is tightly
+    /// packed RGBA8 (`width * height * 4` bytes, row-major); the image is
+    /// placed at the `dest` rect (top-left `x`/`y`, size `w`/`h`) in
+    /// frame-content points and clipped to the content box like every
+    /// scene item. The RENDERER interns the pixels into the display-list
+    /// image pool and emits the same [`DisplayCommand::Image`] lane placed
+    /// assets use, so it rasterises through tiny-skia (CPU) / Vello (GPU)
+    /// with no new path. The shared-`GPUDevice` zero-copy stage (Stage B)
+    /// is a follow-on. A malformed buffer (length ≠ `w*h*4`, or a
+    /// zero-area image/dest) is skipped, never panicked.
+    Image {
+        /// Tightly packed RGBA8, row-major. Length must be `width*height*4`.
+        #[tsify(type = "number[]")]
+        rgba: Vec<u8>,
+        /// Pixel width of the buffer.
+        width: u32,
+        /// Pixel height of the buffer.
+        height: u32,
+        /// Destination top-left x in frame-content points.
+        x: f32,
+        /// Destination top-left y in frame-content points.
+        y: f32,
+        /// Destination width in frame-content points.
+        w: f32,
+        /// Destination height in frame-content points.
+        h: f32,
+    },
 }
 
 /// A single-line text run in frame-content coordinates (C-1.1).
@@ -269,6 +298,46 @@ pub fn emit_scene_layer<T>(
                 }
                 emit_text(list, t, content_outer);
             }
+            SceneItem::Image {
+                rgba,
+                width,
+                height,
+                x,
+                y,
+                w,
+                h,
+            } => {
+                // Skip a malformed buffer or a zero-area image/dest rather
+                // than panic the whole render (a plugin owns these bytes).
+                if *width == 0
+                    || *height == 0
+                    || *w <= 0.0
+                    || *h <= 0.0
+                    || rgba.len() != (*width as usize) * (*height as usize) * 4
+                {
+                    continue;
+                }
+                let image_id = list.push_image(DecodedImage {
+                    width: *width,
+                    height: *height,
+                    encoded: bytes::Bytes::new(),
+                    rgba: bytes::Bytes::from(rgba.clone()),
+                    icc: None,
+                });
+                // `for_rect_in` maps the image's unit square into `dest`
+                // (content coords) then `content_outer` carries it to page
+                // space — the same transform placed assets use.
+                let dest = Rect {
+                    x: *x,
+                    y: *y,
+                    w: *w,
+                    h: *h,
+                };
+                list.push(DisplayCommand::Image {
+                    image_id,
+                    transform: Transform::for_rect_in(dest, content_outer),
+                });
+            }
         }
     }
 
@@ -350,6 +419,73 @@ mod tests {
         assert!(matches!(list.commands[3], DisplayCommand::PopClip(_)));
         // clip rect + 2 item paths.
         assert_eq!(list.paths.len(), 3);
+    }
+
+    #[test]
+    fn image_item_interns_pixels_and_emits_clipped_image() {
+        // A 2×2 red block placed at content rect (10,20,40,30) inside a
+        // 200×100 content box, the frame translated to page (50,80).
+        let outer = Transform::translate(50.0, 80.0);
+        let mut list = DisplayList::new();
+        #[rustfmt::skip]
+        let red2x2: Vec<u8> = vec![
+            255, 0, 0, 255,  255, 0, 0, 255,
+            255, 0, 0, 255,  255, 0, 0, 255,
+        ];
+        let layer = SceneLayer {
+            items: vec![SceneItem::Image {
+                rgba: red2x2.clone(),
+                width: 2,
+                height: 2,
+                x: 10.0,
+                y: 20.0,
+                w: 40.0,
+                h: 30.0,
+            }],
+        };
+        emit_scene_layer(&mut list, &layer, outer, (200.0, 100.0), |_, _, _| {});
+        // PushClip, Image, PopClip — bracketed in the content-box clip.
+        assert_eq!(list.commands.len(), 3);
+        assert!(matches!(list.commands[0], DisplayCommand::PushClip { .. }));
+        assert!(matches!(list.commands[2], DisplayCommand::PopClip(_)));
+        // Pixels interned into the display-list image pool, intact.
+        assert_eq!(list.images.len(), 1);
+        assert_eq!(list.images[0].width, 2);
+        assert_eq!(list.images[0].height, 2);
+        assert_eq!(&list.images[0].rgba[..], &red2x2[..]);
+        // The Image command maps the image's unit square onto the dest
+        // rect AND carries the frame's page translation: (0,0) -> dest
+        // top-left (10,20) -> page (60,100); (1,1) -> (50,50) -> (100,130).
+        let DisplayCommand::Image { transform, .. } = list.commands[1] else {
+            panic!("expected an Image command");
+        };
+        let (tlx, tly) = transform.apply(0.0, 0.0);
+        let (brx, bry) = transform.apply(1.0, 1.0);
+        assert!((tlx - 60.0).abs() < 1e-4 && (tly - 100.0).abs() < 1e-4, "tl=({tlx},{tly})");
+        assert!((brx - 100.0).abs() < 1e-4 && (bry - 130.0).abs() < 1e-4, "br=({brx},{bry})");
+    }
+
+    #[test]
+    fn image_item_with_a_malformed_buffer_is_skipped_not_panicked() {
+        let mut list = DisplayList::new();
+        let layer = SceneLayer {
+            items: vec![SceneItem::Image {
+                rgba: vec![255, 0, 0], // 3 bytes, not 2*2*4 = 16
+                width: 2,
+                height: 2,
+                x: 0.0,
+                y: 0.0,
+                w: 10.0,
+                h: 10.0,
+            }],
+        };
+        emit_scene_layer(&mut list, &layer, Transform::IDENTITY, (50.0, 50.0), |_, _, _| {});
+        // Nothing interned, no Image command (the malformed item is skipped).
+        assert!(list.images.is_empty());
+        assert!(!list
+            .commands
+            .iter()
+            .any(|c| matches!(c, DisplayCommand::Image { .. })));
     }
 
     #[test]
