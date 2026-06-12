@@ -2663,6 +2663,21 @@ impl CanvasModel {
                 offset: *offset,
                 value: value.clone(),
             }),
+            // v43 (D-14) — asset placement. Resolves the element id to
+            // its frame kind; the apply layer rejects non-graphic
+            // frames (TextFrame / GraphicLine).
+            Mutation::PlaceImage {
+                element_id,
+                uri,
+                fit,
+            } => {
+                let node = self.resolve_frame_node_id(element_id)?;
+                Some(Operation::PlaceImage {
+                    frame: node,
+                    image_uri: Some(uri.clone()),
+                    fit: fit.clone(),
+                })
+            }
             Mutation::InsertGuide {
                 spread_id,
                 orientation,

@@ -246,7 +246,8 @@ export type WorkerToMain = WorkerToMainKind & {
 ///     D-01 tagged placeholders: `FieldKind` gains the plugin
 ///     `placeholder` kind on `InsertField`, new `setFieldValue`
 ///     mutation, new `RequestDocumentPlaceholders` request +
-///     `DocumentPlaceholders { items }` reply.
+///     `DocumentPlaceholders { items }` reply. D-14 asset placement:
+///     new `placeImage` mutation (`{ elementId, uri, fit? }`).
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(42);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
@@ -2430,6 +2431,20 @@ pub enum Mutation {
         #[serde(default)]
         value: Option<String>,
     },
+    /// v43 (D-14) — place an image asset on a graphic frame
+    /// (Rectangle / Oval / Polygon): sets the frame's image link (the
+    /// parsed `LinkResourceURI` lane). The renderer shows the image
+    /// iff the asset resolver serves `uri`; an unreachable uri leaves
+    /// the frame rendering as before (honest miss, no badge). `fit`
+    /// takes the IDML `FittingOnEmptyFrame` vocabulary (the same
+    /// strings as the `frame.fittingType` property; Rectangle-only).
+    /// Routes to `Operation::PlaceImage`.
+    PlaceImage {
+        element_id: String,
+        uri: String,
+        #[serde(default)]
+        fit: Option<String>,
+    },
     MoveFrame {
         frame_id: String,
         transform: [f32; 6],
@@ -3101,6 +3116,7 @@ impl Mutation {
             Self::ApplyStyle { .. } => "ApplyStyle",
             Self::InsertField { .. } => "InsertField",
             Self::SetFieldValue { .. } => "SetFieldValue",
+            Self::PlaceImage { .. } => "PlaceImage",
             Self::MoveFrame { .. } => "MoveFrame",
             Self::ResizeFrame { .. } => "ResizeFrame",
             Self::LinkFrames { .. } => "LinkFrames",

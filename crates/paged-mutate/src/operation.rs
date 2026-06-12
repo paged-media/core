@@ -2843,6 +2843,27 @@ pub enum Operation {
         #[serde(default)]
         value: Option<String>,
     },
+    /// v43 (D-14) — place (or clear) an image asset on a graphic
+    /// frame. `frame` must be a Rectangle / Oval / Polygon. Sets the
+    /// frame's `image_link` (the same `LinkResourceURI` lane parsed
+    /// placed images use — the renderer resolves it through
+    /// `AssetResolver::resolve_image` and renders the image iff the
+    /// resolver serves the uri; an unreachable uri leaves the frame
+    /// rendering exactly as before). `image_uri: None` clears the
+    /// link (the inverse lane for place-onto-empty). `fit` writes the
+    /// IDML `FittingOnEmptyFrame` vocabulary (`Proportionally` |
+    /// `FillProportionally` | `FitContentToFrame` | `ContentAwareFit`;
+    /// the same strings `PropertyPath::FrameFittingType` reads/writes,
+    /// Rectangle-only — IDML nests `<FrameFittingOption>` only there):
+    /// `Some("")` clears, `None` leaves the fitting untouched. Inverse
+    /// restores the prior link/fit.
+    PlaceImage {
+        frame: NodeId,
+        #[serde(default)]
+        image_uri: Option<String>,
+        #[serde(default)]
+        fit: Option<String>,
+    },
     /// W0.5 — insert a ruler guide on the spread `spread_id`.
     /// `position` is the page-local coordinate on the perpendicular
     /// axis (x for Vertical, y for Horizontal); `page_index` is the

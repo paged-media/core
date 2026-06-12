@@ -1589,6 +1589,12 @@ mod tests {
                 offset: 3,
                 value: None,
             },
+            // v43 (D-14) — asset placement.
+            Operation::PlaceImage {
+                frame: NodeId::Rectangle("Rectangle/u1".to_string()),
+                image_uri: Some("file:///assets/cover.png".to_string()),
+                fit: Some("FillProportionally".to_string()),
+            },
             Operation::InsertGuide {
                 spread_id: "Spread/u_main".to_string(),
                 orientation: crate::operation::GuideOrientationSpec::Vertical,
