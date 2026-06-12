@@ -242,13 +242,20 @@ export type WorkerToMain = WorkerToMainKind & {
 ///     composite back via the v41 image scene layer). The worker resolves
 ///     the frame's `image_link` URI and returns the bytes the build
 ///     already decoded + cached. Pure READ, no mutation.
-///   - v43 (pending batch — the constant bumps once for the whole batch):
+///   - v43 (the campaign's Wire Batch 1 — one bump for the batch):
 ///     D-01 tagged placeholders: `FieldKind` gains the plugin
 ///     `placeholder` kind on `InsertField`, new `setFieldValue`
 ///     mutation, new `RequestDocumentPlaceholders` request +
 ///     `DocumentPlaceholders { items }` reply. D-14 asset placement:
-///     new `placeImage` mutation (`{ elementId, uri, fit? }`).
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(42);
+///     new `placeImage` mutation (`{ elementId, uri, fit? }`). W-06
+///     font bytes: `RequestFontFaceBytes { family, style? }` →
+///     `FontFaceBytes { found, family, style, postscript_name, format,
+///     bytes }`. Arrowheads: `frame.strokeStartArrowhead` /
+///     `frame.strokeEndArrowhead` SetProperty paths (GraphicLine,
+///     InDesign ArrowHead vocabulary). Writer-side (no wire): C-8
+///     new-entry emission (minted stories + InsertPage spreads survive
+///     IDML export, designmap patched).
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(43);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -3574,8 +3581,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v42() {
-        assert_eq!(PROTOCOL_VERSION.0, 42);
+    fn protocol_version_is_v43() {
+        assert_eq!(PROTOCOL_VERSION.0, 43);
     }
 
     /// v38 — `RequestFrameChain` serialises with its camelCase tag and
