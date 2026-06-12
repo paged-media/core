@@ -753,6 +753,73 @@ fn register_then_clear_font_registry_round_trips() {
     assert!(core.font_registry.is_empty());
 }
 
+/// v43 (W-06) — register a real TTF, then read its face bytes back over
+/// the wire. The reply must carry the bytes EXACTLY as registered plus
+/// the sniffed format and the face's PostScript name; an unknown family
+/// comes back `found:false` with empty payload fields. Works with no
+/// document loaded — the registry is worker state, not model state.
+#[test]
+fn request_font_face_bytes_round_trips_registered_face() {
+    let font_path =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts/Inter.ttf");
+    let Ok(font) = std::fs::read(&font_path) else {
+        eprintln!("skip: Inter.ttf not present");
+        return;
+    };
+    let mut core = WorkerCore::new();
+    let reg = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 72,
+            "protocol": protocol(),
+            "kind": "registerFont",
+            "payload": { "family": "Inter", "style": "Regular", "bytes": font }
+        }),
+    );
+    assert_eq!(reg["kind"], "fontRegistered");
+
+    // Style-agnostic query (style omitted) hits the family's face.
+    let hit = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 73,
+            "protocol": protocol(),
+            "kind": "requestFontFaceBytes",
+            "payload": { "family": "Inter" }
+        }),
+    );
+    assert_eq!(hit["kind"], "fontFaceBytes");
+    assert_eq!(hit["payload"]["found"], true);
+    assert_eq!(hit["payload"]["family"], "Inter");
+    assert_eq!(hit["payload"]["style"], "Regular");
+    assert_eq!(hit["payload"]["format"], "truetype");
+    assert!(hit["payload"]["postscriptName"]
+        .as_str()
+        .unwrap()
+        .starts_with("Inter"));
+    assert_eq!(
+        hit["payload"]["bytes"].as_array().unwrap().len(),
+        font.len(),
+        "bytes serve at their registered length"
+    );
+
+    let miss = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 74,
+            "protocol": protocol(),
+            "kind": "requestFontFaceBytes",
+            "payload": { "family": "Nope", "style": "Bold" }
+        }),
+    );
+    assert_eq!(miss["kind"], "fontFaceBytes");
+    assert_eq!(miss["payload"]["found"], false);
+    assert_eq!(miss["payload"]["family"], "Nope");
+    assert_eq!(miss["payload"]["format"], "");
+    assert!(miss["payload"]["postscriptName"].is_null());
+    assert!(miss["payload"]["bytes"].as_array().unwrap().is_empty());
+}
+
 // ---------------------------------------------------------------------
 // 10. Stateless query with no document degrades gracefully
 // ---------------------------------------------------------------------

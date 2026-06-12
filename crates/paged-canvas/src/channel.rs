@@ -576,6 +576,20 @@ pub enum MainToWorkerKind {
     /// (`found:false` when the element isn't an image frame, its link
     /// doesn't resolve, or the image hasn't rendered yet).
     RequestPlacedAssetBytes { element_id: String },
+    /// v43 (W-06) — read the raw face bytes of a font the worker can
+    /// serve, so a plugin (`host.assets.getFontFace`) can ingest the
+    /// face into its own pipeline. The engine holds bytes ONLY for
+    /// faces registered over the wire (`RegisterFont`) — IDML packages
+    /// reference fonts by name and carry no font binaries, so a
+    /// document-declared face resolves here only when the editor has
+    /// registered it. `style: None` matches the family's first
+    /// registered face. Pure READ. Reply: `FontFaceBytes`
+    /// (`found:false` when no registered face matches).
+    RequestFontFaceBytes {
+        family: String,
+        #[serde(default)]
+        style: Option<String>,
+    },
     /// v38 (Wave 2, K-7 / S-13) — font-metrics RPC: the wire round-trip
     /// for the v37 `measureText` method, so the editor can route
     /// `host.text.measureString` across the worker boundary. `style` is
@@ -1085,6 +1099,23 @@ pub enum WorkerToMainKind {
         height: u32,
         #[tsify(type = "number[]")]
         encoded: ByteBuf,
+    },
+    /// v43 (W-06) — `RequestFontFaceBytes` reply. `bytes` is the face's
+    /// raw file exactly as registered; `format` is sniffed from its
+    /// magic bytes (`"truetype"` / `"opentype"` / `"woff"` / `"woff2"`,
+    /// empty when unrecognised); `postscript_name` comes from the
+    /// face's `name` table (`None` for woff/woff2 payloads, which the
+    /// sfnt parser doesn't read). On a hit `family`/`style` echo the
+    /// MATCHED registry entry; `found:false` echoes the REQUESTED
+    /// family/style with the remaining fields empty.
+    FontFaceBytes {
+        found: bool,
+        family: String,
+        style: Option<String>,
+        postscript_name: Option<String>,
+        format: String,
+        #[tsify(type = "number[]")]
+        bytes: ByteBuf,
     },
     /// v38 (Wave 2, K-7 / S-13) — `RequestMeasureText` reply. Advance /
     /// ascender / descender in POINTS (`descender` negative per the
