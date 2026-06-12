@@ -2651,8 +2651,33 @@ impl CanvasModel {
             } => Some(Operation::InsertField {
                 story_id: story_id.clone(),
                 offset: *offset,
-                field: *field,
+                field: field.clone(),
             }),
+            // v43 (D-01) — re-resolve a placeholder's cached display.
+            Mutation::SetFieldValue {
+                story_id,
+                offset,
+                value,
+            } => Some(Operation::SetFieldValue {
+                story_id: story_id.clone(),
+                offset: *offset,
+                value: value.clone(),
+            }),
+            // v43 (D-14) — asset placement. Resolves the element id to
+            // its frame kind; the apply layer rejects non-graphic
+            // frames (TextFrame / GraphicLine).
+            Mutation::PlaceImage {
+                element_id,
+                uri,
+                fit,
+            } => {
+                let node = self.resolve_frame_node_id(element_id)?;
+                Some(Operation::PlaceImage {
+                    frame: node,
+                    image_uri: Some(uri.clone()),
+                    fit: fit.clone(),
+                })
+            }
             Mutation::InsertGuide {
                 spread_id,
                 orientation,
@@ -3177,6 +3202,32 @@ impl CanvasModel {
                 overflow: i == last && story_overset,
             })
             .collect()
+    }
+
+    /// v43 (D-01) — enumerate every plugin placeholder field, in story
+    /// order. `offset` is the field run's START in the story's char
+    /// space (the same "sum of run chars, no paragraph separators"
+    /// convention the field/character ops address by). Pure READ.
+    pub fn document_placeholders(&self) -> Vec<crate::channel::PlaceholderItem> {
+        let mut items = Vec::new();
+        for parsed in &self.scene.stories {
+            let mut cursor: u32 = 0;
+            for para in &parsed.story.paragraphs {
+                for run in &para.runs {
+                    if let Some(tag) = &run.placeholder {
+                        items.push(crate::channel::PlaceholderItem {
+                            story_id: parsed.self_id.clone(),
+                            offset: cursor,
+                            plugin: tag.plugin.clone(),
+                            key: tag.key.clone(),
+                            value: tag.value.clone(),
+                        });
+                    }
+                    cursor += run.text.chars().count() as u32;
+                }
+            }
+        }
+        items
     }
 
     /// W3.B2 — re-serialize the (possibly-mutated) scene back into an

@@ -927,7 +927,45 @@ pub struct CharacterRun {
     /// can do better than the baked string, and falls back to
     /// `ResultText` otherwise. `None` for ordinary text runs.
     pub text_variable: Option<String>,
+    /// v43 (D-01) — plugin placeholder tag when this run IS a tagged
+    /// placeholder field (the paged.data anchor model). The run's
+    /// `text` always carries the field's *display* string (the cached
+    /// resolved value, or the visible `<key>` token while unresolved),
+    /// so layout/shaping treats it as ordinary run text — the same
+    /// "baked result text" posture as [`Self::text_variable`], except
+    /// nothing ever re-resolves it at emit time (the offline-forever
+    /// rule: the engine never calls the owning plugin to render).
+    /// `None` for ordinary text runs. The parser never sets this today;
+    /// placeholders enter via the mutate API (`InsertField`).
+    pub placeholder: Option<PlaceholderField>,
     pub text: String,
+}
+
+/// v43 (D-01) — a plugin-owned tagged placeholder: a named,
+/// edit-surviving anchor inside a story's run list. `(plugin, key)` is
+/// the identity the owning plugin re-finds it by; `value` is the
+/// cached resolved display (`None` = not yet resolved → the run shows
+/// the `<key>` token).
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
+pub struct PlaceholderField {
+    /// The owning bundle's manifest id (host-stamped; e.g.
+    /// `media.paged.data`).
+    pub plugin: String,
+    /// Bundle-unique placeholder name (the binding's anchor).
+    pub key: String,
+    /// Last-resolved display value. `None` ⇒ unresolved.
+    pub value: Option<String>,
+}
+
+impl PlaceholderField {
+    /// The string the run renders: the cached value, or the visible
+    /// `<key>` token while unresolved.
+    pub fn display_text(&self) -> String {
+        match &self.value {
+            Some(v) => v.clone(),
+            None => format!("<{}>", self.key),
+        }
+    }
 }
 
 /// Phase 5 — one stack frame of in-progress footnote parsing. Holds
@@ -1593,6 +1631,7 @@ impl Story {
                                 // id the designmap's <Hyperlink> references.
                                 hyperlink_source: source_stack.last().cloned(),
                                 text_variable: None,
+                                placeholder: None,
                                 text: String::new(),
                             });
                         }

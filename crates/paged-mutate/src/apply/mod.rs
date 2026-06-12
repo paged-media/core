@@ -224,12 +224,22 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             story_id,
             offset,
             field,
-        } => apply_insert_field(doc, story_id, *offset, *field),
+        } => apply_insert_field(doc, story_id, *offset, field),
         Operation::DeleteField {
             story_id,
             offset,
             field,
-        } => apply_delete_field(doc, story_id, *offset, *field),
+        } => apply_delete_field(doc, story_id, *offset, field),
+        Operation::SetFieldValue {
+            story_id,
+            offset,
+            value,
+        } => apply_set_field_value(doc, story_id, *offset, value.as_deref()),
+        Operation::PlaceImage {
+            frame,
+            image_uri,
+            fit,
+        } => place_image::apply_place_image(doc, frame, image_uri.as_deref(), fit.as_deref()),
         Operation::InsertGuide {
             spread_id,
             orientation,
@@ -595,6 +605,7 @@ mod guides;
 mod conditions;
 mod master;
 mod duplicate_page;
+mod place_image;
 mod sections;
 
 use set_property::*;

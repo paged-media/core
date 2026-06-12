@@ -600,6 +600,16 @@ impl WorkerCore {
                     .unwrap_or(serde_json::Value::Array(Vec::new()));
                 WorkerToMainKind::CollectionReply { name, items }
             }
+            MainToWorkerKind::RequestDocumentPlaceholders => {
+                // v43 (D-01) — pure READ. No document ⇒ empty list
+                // (same posture as RequestCollection).
+                let items = self
+                    .model
+                    .as_ref()
+                    .map(|m| m.document_placeholders())
+                    .unwrap_or_default();
+                WorkerToMainKind::DocumentPlaceholders { items }
+            }
             MainToWorkerKind::RequestFrameChain { story_id } => {
                 // v38 (Wave 2, C-2 / S-05) — pure READ. No document ⇒
                 // empty chain (same posture as RequestCollection).
