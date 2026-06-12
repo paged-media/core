@@ -952,6 +952,7 @@ fn inserted_text_frame_saves_as_text_frame() {
                 stroke_color: None,
                 stroke_weight: None,
                 item_transform: None,
+                parent_story: None,
             },
             z_slot: None,
         })

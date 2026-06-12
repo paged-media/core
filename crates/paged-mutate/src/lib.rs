@@ -1384,6 +1384,7 @@ mod tests {
                 self_id: "TextFrame/u_new".to_string(),
                 bounds: [10.0, 20.0, 30.0, 40.0],
                 fill_color: None,
+                parent_story: None,
             },
         };
         project.apply(op).unwrap();
@@ -1410,6 +1411,7 @@ mod tests {
                 self_id: "TextFrame/u1".to_string(),
                 bounds: [0.0, 0.0, 1.0, 1.0],
                 fill_color: None,
+                parent_story: None,
             },
         };
         let err = project.apply(op).unwrap_err();
@@ -1454,7 +1456,8 @@ mod tests {
                     self_id: "TextFrame/u2".to_string(),
                     bounds: [0.0, 0.0, 1.0, 1.0],
                     fill_color: None,
-                },
+                    parent_story: None,
+            },
             })
             .unwrap();
 
@@ -1504,7 +1507,8 @@ mod tests {
                     self_id: "TextFrame/u_new".to_string(),
                     bounds: [10.0, 20.0, 30.0, 40.0],
                     fill_color: Some("Color/Blue".to_string()),
-                },
+                    parent_story: None,
+            },
             },
             Operation::RemoveNode {
                 node: NodeId::TextFrame("TextFrame/u_new".to_string()),

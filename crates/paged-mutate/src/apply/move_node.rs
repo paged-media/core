@@ -184,8 +184,10 @@ pub(super) fn insert_captured(
             stroke_color,
             stroke_weight,
             item_transform,
+            parent_story,
         } => {
             let mut frame = new_text_frame(self_id, bounds_from_array(bounds), fill_color);
+            frame.parent_story = parent_story;
             frame.stroke_color = stroke_color;
             frame.stroke_weight = stroke_weight;
             frame.item_transform = item_transform;

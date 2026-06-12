@@ -2012,6 +2012,15 @@ pub enum NodeSpec {
         /// RemoveNode → undo so the frame re-inserts in place.
         #[serde(default)]
         item_transform: Option<[f32; 6]>,
+        /// `ParentStory` id. `None` on a FRESH insert ⇒ the apply layer
+        /// MINTS an empty story (`Story/u<n>`) and attaches it — every
+        /// text frame carries a story, InDesign's model (a fresh frame
+        /// used to carry none, so `hitTest` answered `storyId: null`
+        /// and no caller could ever pour text into it — found live by
+        /// the sheets K-1 e2e). `Some` on the RemoveNode-built spec ⇒
+        /// undo of a delete REATTACHES the original story.
+        #[serde(default)]
+        parent_story: Option<String>,
     },
     Rectangle {
         self_id: String,

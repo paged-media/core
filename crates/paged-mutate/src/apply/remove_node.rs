@@ -70,6 +70,9 @@ pub(super) fn remove_and_capture(
                         stroke_color: frame.stroke_color,
                         stroke_weight: frame.stroke_weight,
                         item_transform: frame.item_transform,
+                        // Captured so undo-of-delete REATTACHES the
+                        // story (the text comes back with the frame).
+                        parent_story: frame.parent_story,
                     };
                     return Ok((parent, pos, spec, z_slot));
                 }

@@ -155,6 +155,44 @@ pub(super) fn apply_insert_node(
         });
     }
 
+    // A TextFrame spec may name a `ParentStory` (InDesign's model — the
+    // wire's InsertTextFrame mapping MINTS one so a fresh frame's story
+    // is immediately addressable: `hitTest` resolved `storyId: null`
+    // and no caller could pour text into a new frame, found live by the
+    // sheets K-1 e2e). `Some(id)` attaches; an id with no parsed story
+    // yet CREATES the empty story (the fresh-insert case, and the redo
+    // of an undone insert). `None` attaches nothing — the legacy
+    // story-less shape stays byte-identical across remove → undo (the
+    // kernel invariant). Runs BEFORE the spread borrow (`doc.stories`).
+    let text_frame_story: Option<String> = match spec {
+        NodeSpec::TextFrame {
+            parent_story: Some(id),
+            ..
+        } => {
+            if !doc.stories.iter().any(|s| s.self_id == *id) {
+                let mut story = paged_parse::Story::default();
+                // One empty paragraph + run — the shape an empty parsed
+                // story has; the text ops' `locate()` needs ≥1 paragraph.
+                story.paragraphs.push(paged_parse::Paragraph {
+                    runs: vec![paged_parse::CharacterRun::default()],
+                    ..Default::default()
+                });
+                doc.stories.push(paged_scene::ParsedStory {
+                    // No source entry — minted post-parse. NOTE (honest
+                    // gap, RFI'd): `paged-write` only PATCHES existing
+                    // entries, so a minted story does not survive IDML
+                    // export yet — new-entry emission is the v43 batch's
+                    // write-side companion.
+                    src: String::new(),
+                    self_id: id.clone(),
+                    story,
+                });
+            }
+            Some(id.clone())
+        }
+        _ => None,
+    };
+
     let spread = find_spread_mut(doc, parent_id)
         .ok_or_else(|| OperationError::NodeNotFound(parent.clone()))?;
 
@@ -171,6 +209,7 @@ pub(super) fn apply_insert_node(
             stroke_color,
             stroke_weight,
             item_transform,
+            parent_story: _,
         } => {
             let len = spread.spread.text_frames.len();
             if position > len {
@@ -188,6 +227,8 @@ pub(super) fn apply_insert_node(
             frame.stroke_color = stroke_color.clone();
             frame.stroke_weight = *stroke_weight;
             frame.item_transform = *item_transform;
+            // Minted or reattached above (before the spread borrow).
+            frame.parent_story = text_frame_story.clone();
             spread.spread.text_frames.insert(position, frame);
             register_frame_ref(&mut spread.spread, FrameRef::TextFrame(0), position, z_slot);
         }

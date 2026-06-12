@@ -1922,6 +1922,18 @@ impl CanvasModel {
             Mutation::InsertTextFrame { page_id, bounds } => {
                 let (spread_id, (ox, oy), idx) = self.page_insert_context(page_id)?;
                 let position = self.scene.spreads[idx].spread.text_frames.len();
+                // Mint the frame's ParentStory id here (the apply layer
+                // creates the story for an unknown id) — every wire-
+                // inserted text frame is immediately pour-able/hit-able.
+                let story_id = {
+                    let mut n = self.scene.stories.len();
+                    let mut id = format!("Story/u{n}");
+                    while self.scene.stories.iter().any(|s| s.self_id == id) {
+                        n += 1;
+                        id = format!("Story/u{n}");
+                    }
+                    id
+                };
                 Some(Operation::InsertNode {
                     parent: NodeId::Spread(spread_id),
                     position,
@@ -1934,6 +1946,7 @@ impl CanvasModel {
                         stroke_color: None,
                         stroke_weight: None,
                         item_transform: None,
+                        parent_story: Some(story_id),
                     },
                     z_slot: None,
                 })

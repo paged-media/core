@@ -111,7 +111,8 @@ mod tests {
             bounds: [0.0, 0.0, 10.0, 10.0],
             fill_color: None,
             item_transform: None,
-        };
+            parent_story: None,
+            };
         assert_eq!(
             invert_insert_node(&spec),
             Operation::RemoveNode {
