@@ -610,6 +610,35 @@ impl WorkerCore {
                     .unwrap_or_default();
                 WorkerToMainKind::FrameChainResult { links }
             }
+            MainToWorkerKind::RequestPlacedAssetBytes { element_id } => {
+                // v42 (C-5 / I-04) — pure READ. found:false when the
+                // element isn't an image frame, the link doesn't resolve,
+                // or the image hasn't rendered (no cache entry yet).
+                match self
+                    .model
+                    .as_ref()
+                    .and_then(|m| m.placed_asset_bytes(&element_id))
+                {
+                    Some((uri, width, height, bytes)) => {
+                        WorkerToMainKind::PlacedAssetBytes {
+                            element_id,
+                            found: true,
+                            uri,
+                            width,
+                            height,
+                            encoded: paged_canvas::channel::ByteBuf(bytes),
+                        }
+                    }
+                    None => WorkerToMainKind::PlacedAssetBytes {
+                        element_id,
+                        found: false,
+                        uri: String::new(),
+                        width: 0,
+                        height: 0,
+                        encoded: paged_canvas::channel::ByteBuf(Vec::new()),
+                    },
+                }
+            }
             MainToWorkerKind::RequestMeasureText {
                 family,
                 style,

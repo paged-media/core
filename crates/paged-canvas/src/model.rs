@@ -5482,6 +5482,47 @@ impl CanvasModel {
         out
     }
 
+    /// C-5 / I-04 — the placed image's ORIGINAL encoded bytes (the
+    /// PSD / JPEG / PNG file) for the image frame `element_id`, plus its
+    /// natural pixel dimensions. Finds the frame's `image_link` URI (the
+    /// same Rectangle / Oval / Polygon fields [`Self::links`] reads) and
+    /// returns the bytes the build already decoded + cached
+    /// (`image_decode_cache`, populated when the image rendered). Returns
+    /// `None` when the element isn't an image frame, its link doesn't
+    /// resolve, or it hasn't rendered yet (no cache entry). The bytes are
+    /// the ENCODED file so a plugin (paged.image) can parse it with its
+    /// own codecs — e.g. read PSD layers, which the flattened RGBA loses.
+    pub fn placed_asset_bytes(&self, element_id: &str) -> Option<(String, u32, u32, Vec<u8>)> {
+        let mut uri: Option<String> = None;
+        for parsed in &self.scene.spreads {
+            for r in &parsed.spread.rectangles {
+                if r.self_id.as_deref() == Some(element_id) {
+                    uri = r.image_link.clone();
+                }
+            }
+            for o in &parsed.spread.ovals {
+                if o.self_id.as_deref() == Some(element_id) {
+                    uri = o.image_link.clone();
+                }
+            }
+            for p in &parsed.spread.polygons {
+                if p.self_id.as_deref() == Some(element_id) {
+                    uri = p.image_link.clone();
+                }
+            }
+        }
+        let uri = uri?;
+        let cache = self.image_decode_cache.borrow();
+        let img = cache.get(&uri)?;
+        if img.encoded.is_empty() {
+            // Decoded-only image (e.g. a synthetic buffer) — no original
+            // file to hand back; the door returns "not found" rather than
+            // a re-encoded surrogate.
+            return None;
+        }
+        Some((uri.clone(), img.width, img.height, img.encoded.to_vec()))
+    }
+
     /// SDK Phase 5 (v1 sweep) — list every object style in the
     /// document. Backs `documentCollection:objectStyles` per
     /// `panel-catalog-and-sdk-extension.md` §5.1. The Object Styles
@@ -7155,6 +7196,36 @@ mod tests {
         // The link points at a non-existent asset and no resolver was
         // configured, so the build drew the placeholder → "missing".
         assert_eq!(l.status, "missing");
+    }
+
+    #[test]
+    fn placed_asset_bytes_resolves_element_to_cached_encoded_file() {
+        let bytes = panels_idml_bytes();
+        let model = CanvasModel::load("doc-1", &bytes, CanvasOptions::default()).unwrap();
+        // r1 is the placed-image frame (per the links() test); grab its URI.
+        let uri = model.links()[0].uri.clone();
+        // No resolver was configured, so the build cached no bytes → the
+        // door reports not-found even though the link resolves.
+        assert!(model.placed_asset_bytes("r1").is_none());
+        // Simulate the render having decoded + cached the original file.
+        let file = vec![0x89u8, b'P', b'N', b'G', 1, 2, 3, 4];
+        model.image_decode_cache.borrow_mut().insert(
+            uri.clone(),
+            paged_compose::DecodedImage {
+                width: 4,
+                height: 2,
+                encoded: bytes::Bytes::from(file.clone()),
+                rgba: bytes::Bytes::new(),
+                icc: None,
+            },
+        );
+        // Now the door hands back the ORIGINAL encoded bytes + natural dims.
+        let (got_uri, w, h, got) = model.placed_asset_bytes("r1").expect("cached now");
+        assert_eq!(got_uri, uri);
+        assert_eq!((w, h), (4, 2));
+        assert_eq!(got, file);
+        // An unknown / non-image element resolves to None, never panics.
+        assert!(model.placed_asset_bytes("not-a-frame").is_none());
     }
 
     /// SDK Phase 5 (D1) — the generic `collection(name)` dispatcher

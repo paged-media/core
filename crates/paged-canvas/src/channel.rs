@@ -234,7 +234,15 @@ export type WorkerToMain = WorkerToMainKind & {
 ///     `SubmitSceneLayer` payload's `SceneLayer` — no new messages. This
 ///     is what lets paged.image composite in-frame (image M4); the
 ///     shared-`GPUDevice` zero-copy stage (Stage B) is a follow-on.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(41);
+///   - v42 (C-5 / I-04 — placed-asset bytes read door): new
+///     `RequestPlacedAssetBytes { element_id }` request +
+///     `PlacedAssetBytes { found, uri, width, height, encoded }` reply. A
+///     plugin reads the ORIGINAL encoded bytes of a document's placed
+///     image (the input side of image M4 — read placed → process →
+///     composite back via the v41 image scene layer). The worker resolves
+///     the frame's `image_link` URI and returns the bytes the build
+///     already decoded + cached. Pure READ, no mutation.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(42);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -561,6 +569,13 @@ pub enum MainToWorkerKind {
     /// whose `links` is empty when the story doesn't resolve or hosts no
     /// frame.
     RequestFrameChain { story_id: String },
+    /// v42 (C-5 / I-04) — read the ORIGINAL encoded bytes (PSD / JPEG /
+    /// PNG file) of the placed image hosted by the frame `element_id`, so
+    /// a plugin (paged.image) can ingest a document's placed asset into
+    /// its own pipeline. Pure READ. Reply: `PlacedAssetBytes`
+    /// (`found:false` when the element isn't an image frame, its link
+    /// doesn't resolve, or the image hasn't rendered yet).
+    RequestPlacedAssetBytes { element_id: String },
     /// v38 (Wave 2, K-7 / S-13) — font-metrics RPC: the wire round-trip
     /// for the v37 `measureText` method, so the editor can route
     /// `host.text.measureString` across the worker boundary. `style` is
@@ -1057,6 +1072,20 @@ pub enum WorkerToMainKind {
     /// the ordered `NextTextFrame` thread, head-first; empty when the
     /// story doesn't resolve or hosts no frame.
     FrameChainResult { links: Vec<FrameChainLink> },
+    /// v42 (C-5 / I-04) — `RequestPlacedAssetBytes` reply. `encoded` is the
+    /// placed image's ORIGINAL file bytes (PSD / JPEG / PNG) with its
+    /// natural pixel `width`/`height`; `found:false` (empty fields) when
+    /// the element isn't an image frame, the link doesn't resolve, or the
+    /// image has not rendered (so the worker hasn't decoded + cached it).
+    PlacedAssetBytes {
+        element_id: String,
+        found: bool,
+        uri: String,
+        width: u32,
+        height: u32,
+        #[tsify(type = "number[]")]
+        encoded: ByteBuf,
+    },
     /// v38 (Wave 2, K-7 / S-13) — `RequestMeasureText` reply. Advance /
     /// ascender / descender in POINTS (`descender` negative per the
     /// OpenType convention). All zero when no document is loaded or the
@@ -3450,8 +3479,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v41() {
-        assert_eq!(PROTOCOL_VERSION.0, 41);
+    fn protocol_version_is_v42() {
+        assert_eq!(PROTOCOL_VERSION.0, 42);
     }
 
     /// v38 — `RequestFrameChain` serialises with its camelCase tag and

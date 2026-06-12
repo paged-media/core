@@ -247,8 +247,7 @@ fn mutate_insert_text_replies_mutation_applied() {
     assert_eq!(reply["kind"], "mutationApplied", "{reply}");
     assert_eq!(reply["payload"]["clientSeq"].as_u64().unwrap(), 10);
     // rebuild_ms is the frozen-clock delta: exactly 0.
-    assert_eq!(
-        reply["payload"]["cacheStats"]["rebuildMs"]
+    assert_eq!(        reply["payload"]["cacheStats"]["rebuildMs"]
             .as_f64()
             .unwrap(),
         0.0
@@ -566,8 +565,7 @@ fn request_page_unknown_replies_unknown_page() {
     );
     assert_eq!(reply["kind"], "mutationFailed");
     assert_eq!(reply["payload"]["error"]["kind"], "unknownPage");
-    assert_eq!(
-        reply["payload"]["error"]["details"]["pageId"]
+    assert_eq!(        reply["payload"]["error"]["details"]["pageId"]
             .as_str()
             .unwrap(),
         "does-not-exist"
@@ -623,14 +621,14 @@ fn export_idml_without_document_replies_failed() {
 
 #[test]
 fn every_reply_stamps_the_current_protocol_version() {
-    // v41 sentinel — every reply must carry the build's PROTOCOL_VERSION
+    // v42 sentinel — every reply must carry the build's PROTOCOL_VERSION
     // so the client can detect a stale worker. We assert the constant is
-    // 41 (the documented current version) AND that an arbitrary reply
+    // 42 (the documented current version) AND that an arbitrary reply
     // stamps it.
     assert_eq!(
         protocol(),
-        41,
-        "PROTOCOL_VERSION drifted from documented v41"
+        42,
+        "PROTOCOL_VERSION drifted from documented v42"
     );
     let mut core = loaded_core();
     let reply = roundtrip(
@@ -641,7 +639,7 @@ fn every_reply_stamps_the_current_protocol_version() {
             "kind": "requestDocumentMeta"
         }),
     );
-    assert_eq!(reply["protocol"].as_u64().unwrap(), 41);
+    assert_eq!(reply["protocol"].as_u64().unwrap(), 42);
     assert_eq!(reply["kind"], "documentMetaReply");
 }
 
