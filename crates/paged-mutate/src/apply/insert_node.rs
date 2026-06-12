@@ -94,7 +94,11 @@ pub(super) fn register_frame_ref(
 /// Unregister a page item removed from `vec_pos` of its kind vec;
 /// returns the z slot it occupied so the `RemoveNode` inverse can
 /// restore the exact stacking position.
-pub(super) fn unregister_frame_ref(spread: &mut Spread, template: FrameRef, vec_pos: usize) -> Option<usize> {
+pub(super) fn unregister_frame_ref(
+    spread: &mut Spread,
+    template: FrameRef,
+    vec_pos: usize,
+) -> Option<usize> {
     if spread.frames_in_order.is_empty() {
         return None;
     }
@@ -178,11 +182,10 @@ pub(super) fn apply_insert_node(
                     ..Default::default()
                 });
                 doc.stories.push(paged_scene::ParsedStory {
-                    // No source entry — minted post-parse. NOTE (honest
-                    // gap, RFI'd): `paged-write` only PATCHES existing
-                    // entries, so a minted story does not survive IDML
-                    // export yet — new-entry emission is the v43 batch's
-                    // write-side companion.
+                    // No source entry — minted post-parse. The empty src
+                    // is the writer's mint signal: `paged-write` (C-8)
+                    // emits a full `Stories/Story_<sanitized-id>.xml`
+                    // part + designmap ref for it on export.
                     src: String::new(),
                     self_id: id.clone(),
                     story,
@@ -378,4 +381,3 @@ pub(super) fn apply_insert_node(
         invalidation,
     })
 }
-
