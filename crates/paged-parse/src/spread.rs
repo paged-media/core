@@ -82,32 +82,78 @@ impl CornerOption {
 }
 
 /// IDML `<GraphicLine>` arrowhead style (`LeftLineEnd` / `RightLineEnd`).
-/// The renderer maps the rich IDML vocabulary onto a pragmatic set of
-/// drawable shapes; unrecognised-but-present names become `Other`
-/// (drawn as a triangle and counted as approximated).
+/// One variant per token of InDesign's `ArrowHead` enumeration (the 11
+/// stroke-panel line ends + `None` — the XML attribute carries the
+/// enumeration's CamelCase name, `"TriangleArrowHead"` etc.);
+/// unrecognised-but-present names become `Other` (drawn as a triangle
+/// and counted as approximated; [`Self::as_idml`] can't reproduce the
+/// source token for it, so writers leave `Other` untouched).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ArrowheadType {
     None,
     /// Open / simple arrow — drawn as a filled triangle.
     Simple,
+    /// Wide open arrow — drawn as a wide filled triangle.
+    SimpleWide,
     Triangle,
     TriangleWide,
+    /// Swallow-tail arrow (notched back edge).
+    Barbed,
+    /// Curved swept arrow — approximated as a filled triangle.
+    Curved,
+    /// Open (outlined) circle — drawn as a ring.
+    Circle,
     CircleSolid,
+    /// Open (outlined) square — drawn as a hollow square.
+    Square,
+    SquareSolid,
+    /// Thin perpendicular bar across the line end.
     Bar,
     /// A recognised-but-unmapped end style; drawn as a triangle.
     Other,
 }
 
 impl ArrowheadType {
+    /// The short aliases double as the mutate/wire-friendly spellings;
+    /// `*Head` forms are kept for fixtures written before the
+    /// vocabulary was verified against InDesign's enumeration.
     pub fn from_idml(s: &str) -> Self {
         match s {
-            "None" => Self::None,
-            "SimpleArrowHead" | "SimpleWideArrowHead" | "Simple" => Self::Simple,
-            "TriangleHead" | "Triangle" => Self::Triangle,
-            "TriangleWideHead" | "TriangleWide" => Self::TriangleWide,
-            "CircleSolidHead" | "CircleHead" | "Circle" => Self::CircleSolid,
-            "BarHead" | "Bar" | "SquareSolidHead" => Self::Bar,
+            "None" | "" => Self::None,
+            "SimpleArrowHead" | "Simple" => Self::Simple,
+            "SimpleWideArrowHead" | "SimpleWide" => Self::SimpleWide,
+            "TriangleArrowHead" | "TriangleHead" | "Triangle" => Self::Triangle,
+            "TriangleWideArrowHead" | "TriangleWideHead" | "TriangleWide" => Self::TriangleWide,
+            "BarbedArrowHead" | "Barbed" => Self::Barbed,
+            "CurvedArrowHead" | "Curved" => Self::Curved,
+            "CircleArrowHead" | "CircleHead" | "Circle" => Self::Circle,
+            "CircleSolidArrowHead" | "CircleSolidHead" | "CircleSolid" => Self::CircleSolid,
+            "SquareArrowHead" | "Square" => Self::Square,
+            "SquareSolidArrowHead" | "SquareSolidHead" | "SquareSolid" => Self::SquareSolid,
+            "BarArrowHead" | "BarHead" | "Bar" => Self::Bar,
             _ => Self::Other,
+        }
+    }
+
+    /// The canonical IDML attribute token. `Other` yields `""` — the
+    /// original source spelling was discarded at parse time, so callers
+    /// that serialise (paged-write, mutate inverses) must treat `Other`
+    /// as not-representable rather than write the empty string.
+    pub fn as_idml(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Simple => "SimpleArrowHead",
+            Self::SimpleWide => "SimpleWideArrowHead",
+            Self::Triangle => "TriangleArrowHead",
+            Self::TriangleWide => "TriangleWideArrowHead",
+            Self::Barbed => "BarbedArrowHead",
+            Self::Curved => "CurvedArrowHead",
+            Self::Circle => "CircleArrowHead",
+            Self::CircleSolid => "CircleSolidArrowHead",
+            Self::Square => "SquareArrowHead",
+            Self::SquareSolid => "SquareSolidArrowHead",
+            Self::Bar => "BarArrowHead",
+            Self::Other => "",
         }
     }
 
@@ -4063,6 +4109,70 @@ mod tests {
                GeometricBounds="100 700 300 1100"/>
   </Spread>
 </idPkg:Spread>"#;
+
+    #[test]
+    fn parses_graphic_line_line_ends() {
+        // v43 — `LeftLineEnd` / `RightLineEnd` carry InDesign's
+        // `ArrowHead` enumeration tokens; the scales ride alongside.
+        // Unknown-but-present names become `Other`; absent = `None`.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="spread1">
+    <Page Self="p1" GeometricBounds="0 0 792 612"/>
+    <GraphicLine Self="gl1" GeometricBounds="10 10 110 210" StrokeWeight="2"
+                 LeftLineEnd="CircleSolidArrowHead" RightLineEnd="TriangleArrowHead"
+                 LeftArrowHeadScale="150" RightArrowHeadScale="75"/>
+    <GraphicLine Self="gl2" GeometricBounds="10 220 110 420"
+                 RightLineEnd="NotARealHead"/>
+    <GraphicLine Self="gl3" GeometricBounds="10 430 110 630"/>
+  </Spread>
+</idPkg:Spread>"#;
+        let s = Spread::parse(xml.as_bytes()).unwrap();
+        assert_eq!(s.graphic_lines.len(), 3);
+        let gl1 = &s.graphic_lines[0];
+        assert_eq!(gl1.start_arrow, ArrowheadType::CircleSolid);
+        assert_eq!(gl1.end_arrow, ArrowheadType::Triangle);
+        assert!((gl1.start_arrow_scale - 150.0).abs() < 1e-3);
+        assert!((gl1.end_arrow_scale - 75.0).abs() < 1e-3);
+        // The typed value round-trips to the canonical token.
+        assert_eq!(gl1.end_arrow.as_idml(), "TriangleArrowHead");
+        assert_eq!(
+            ArrowheadType::from_idml(gl1.start_arrow.as_idml()),
+            gl1.start_arrow
+        );
+        let gl2 = &s.graphic_lines[1];
+        assert_eq!(gl2.start_arrow, ArrowheadType::None);
+        assert_eq!(gl2.end_arrow, ArrowheadType::Other);
+        let gl3 = &s.graphic_lines[2];
+        assert_eq!(gl3.start_arrow, ArrowheadType::None);
+        assert_eq!(gl3.end_arrow, ArrowheadType::None);
+    }
+
+    /// Every drawable variant's canonical token must survive
+    /// `as_idml` → `from_idml` unchanged — paged-write and the mutate
+    /// inverses rely on the bijection.
+    #[test]
+    fn arrowhead_vocabulary_round_trips() {
+        use ArrowheadType as A;
+        for t in [
+            A::None,
+            A::Simple,
+            A::SimpleWide,
+            A::Triangle,
+            A::TriangleWide,
+            A::Barbed,
+            A::Curved,
+            A::Circle,
+            A::CircleSolid,
+            A::Square,
+            A::SquareSolid,
+            A::Bar,
+        ] {
+            assert_eq!(A::from_idml(t.as_idml()), t, "{t:?}");
+        }
+        // `Other` is the one non-representable variant.
+        assert_eq!(A::Other.as_idml(), "");
+    }
 
     #[test]
     fn parses_ruler_guides() {

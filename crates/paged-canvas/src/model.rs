@@ -4271,6 +4271,24 @@ impl CanvasModel {
                                 path: PropertyPath::FrameStrokeDashArray,
                                 value: Some(Value::Lengths(l.stroke_dash.clone())),
                             },
+                            // v43 — line ends. `None` reads as "" (the
+                            // same cleared spelling the mutation takes);
+                            // an out-of-vocabulary `Other` also reads ""
+                            // (its source token was discarded at parse).
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeStartArrowhead,
+                                value: Some(Value::Text(match l.start_arrow {
+                                    paged_parse::ArrowheadType::None => String::new(),
+                                    t => t.as_idml().to_string(),
+                                })),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeEndArrowhead,
+                                value: Some(Value::Text(match l.end_arrow {
+                                    paged_parse::ArrowheadType::None => String::new(),
+                                    t => t.as_idml().to_string(),
+                                })),
+                            },
                             PropertyEntry {
                                 path: PropertyPath::AppliedObjectStyle,
                                 value: Some(Value::Text(

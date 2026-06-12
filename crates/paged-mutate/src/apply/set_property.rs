@@ -486,6 +486,55 @@ pub(super) fn apply_set_property(
                 },
             )
         }
+        // ---- v43 batch — stroke line ends (arrowheads) -------------
+        // GraphicLine-only: the kind that parses `LeftLineEnd` /
+        // `RightLineEnd` (InDesign draws line ends on open paths, and
+        // IDML serialises open paths as `<GraphicLine>`). The wire
+        // token is the IDML `ArrowHead` enumeration name; empty string
+        // clears (= `"None"`). Unknown tokens are REJECTED rather than
+        // stored as `ArrowheadType::Other` — `Other` has no faithful
+        // `as_idml` spelling, so accepting it would corrupt the
+        // inverse. A prior `Other` (out-of-vocabulary source token,
+        // unreachable from real InDesign exports) inverts to clear.
+        (
+            NodeId::GraphicLine(id),
+            PropertyPath::FrameStrokeStartArrowhead | PropertyPath::FrameStrokeEndArrowhead,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let parsed = if new_val.is_empty() {
+                paged_parse::ArrowheadType::None
+            } else {
+                match paged_parse::ArrowheadType::from_idml(&new_val) {
+                    paged_parse::ArrowheadType::Other => {
+                        return Err(OperationError::InvalidValue {
+                            node: node.clone(),
+                            path,
+                            reason: format!("unknown line-end token {new_val:?}"),
+                        });
+                    }
+                    t => t,
+                }
+            };
+            let line = find_graphic_line_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let slot = if matches!(path, PropertyPath::FrameStrokeStartArrowhead) {
+                &mut line.start_arrow
+            } else {
+                &mut line.end_arrow
+            };
+            let prev = match *slot {
+                paged_parse::ArrowheadType::None => String::new(),
+                t => t.as_idml().to_string(),
+            };
+            *slot = parsed;
+            (
+                Value::Text(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         // ---- SDK Phase 5 (v1 sweep) — text wrap mode + offsets ----
         // All five page-item kinds (TextFrame / Rectangle / Oval /
         // Polygon / GraphicLine) carry `text_wrap: Option<TextWrap>`.

@@ -907,6 +907,8 @@ fn parse_property_path(s: &str) -> Option<paged_mutate::PropertyPath> {
         "paragraphStyleNextStyle" => ParagraphStyleNextStyle,
         "paragraphAppliedNumberingList" => ParagraphAppliedNumberingList,
         "frameStrokeEndCap" => FrameStrokeEndCap,
+        "frameStrokeStartArrowhead" => FrameStrokeStartArrowhead,
+        "frameStrokeEndArrowhead" => FrameStrokeEndArrowhead,
         "frameTextWrapMode" => FrameTextWrapMode,
         "frameTextWrapOffsets" => FrameTextWrapOffsets,
         "frameTextWrapContourType" => FrameTextWrapContourType,
@@ -1099,6 +1101,8 @@ fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
         ParagraphStyleNextStyle => "paragraphStyleNextStyle",
         ParagraphAppliedNumberingList => "paragraphAppliedNumberingList",
         FrameStrokeEndCap => "frameStrokeEndCap",
+        FrameStrokeStartArrowhead => "frameStrokeStartArrowhead",
+        FrameStrokeEndArrowhead => "frameStrokeEndArrowhead",
         FrameTextWrapMode => "frameTextWrapMode",
         FrameTextWrapOffsets => "frameTextWrapOffsets",
         FrameTextWrapContourType => "frameTextWrapContourType",
@@ -1326,6 +1330,8 @@ fn js_value_to_wire(
             // Enum strings (v1 sweep).
             | P::ParagraphJustification
             | P::FrameStrokeEndCap
+            | P::FrameStrokeStartArrowhead
+            | P::FrameStrokeEndArrowhead
             | P::FrameTextWrapMode
             | P::FrameTextWrapContourType
             | P::FrameFittingType

@@ -1177,6 +1177,24 @@ pub enum PropertyPath {
     /// InvalidationHint is empty (no scene change). Plain `bool` parse
     /// field (default `false`); round-trips bytewise.
     ElementLocked,
+
+    // ---- v43 batch — stroke line ends (arrowheads) ---------------
+    /// v43 — `LeftLineEnd`: the arrowhead at the line's START anchor.
+    /// `Value::Text` carrying the IDML `ArrowHead` enumeration token
+    /// (`"SimpleArrowHead"`, `"TriangleArrowHead"`,
+    /// `"CircleSolidArrowHead"`, ... — `ArrowheadType::as_idml`'s
+    /// vocabulary); empty string clears (= `"None"`). GraphicLine-only
+    /// (the kind that parses the attribute; InDesign draws line ends
+    /// on open paths, which IDML serialises as `<GraphicLine>`).
+    /// Unknown tokens raise `InvalidValue`. Paint-only
+    /// (`frame_style`). Undo note: a prior out-of-vocabulary token
+    /// (`ArrowheadType::Other`, unreachable from real InDesign
+    /// exports) inverts to clear — the parse layer discarded the raw
+    /// spelling.
+    FrameStrokeStartArrowhead,
+    /// v43 — `RightLineEnd`: the arrowhead at the line's END anchor.
+    /// Same contract as `FrameStrokeStartArrowhead`.
+    FrameStrokeEndArrowhead,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -1436,6 +1454,9 @@ impl PropertyPath {
             // W2.5 — element-level visibility / lock.
             PropertyPath::ElementVisible => "element.visible",
             PropertyPath::ElementLocked => "element.locked",
+            // v43 batch — stroke line ends (arrowheads).
+            PropertyPath::FrameStrokeStartArrowhead => "frame.strokeStartArrowhead",
+            PropertyPath::FrameStrokeEndArrowhead => "frame.strokeEndArrowhead",
         }
     }
 }

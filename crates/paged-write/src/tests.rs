@@ -1709,3 +1709,133 @@ fn footnote_story_round_trips_without_losing_pages() {
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// v43 — stroke line ends (LeftLineEnd / RightLineEnd) write-back.
+// ---------------------------------------------------------------------
+
+/// Minimal hand-rolled package with one `<GraphicLine>` that carries a
+/// `LeftLineEnd` in the source XML (no generator sample emits lines).
+fn line_end_idml() -> Vec<u8> {
+    use std::io::Write;
+    let mut buf = Vec::new();
+    {
+        let mut zip = zip::ZipWriter::new(Cursor::new(&mut buf));
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("mimetype", opts).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+        zip.start_file("META-INF/container.xml", opts).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+<rootfiles><rootfile full-path="designmap.xml" media-type="text/xml"/></rootfiles></container>"#,
+        )
+        .unwrap();
+        zip.start_file("designmap.xml", opts).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document DOMVersion="13.1" Self="d1" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+<idPkg:Spread src="Spreads/Spread_s1.xml"/>
+</Document>"#,
+        )
+        .unwrap();
+        zip.start_file("Spreads/Spread_s1.xml", opts).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+<Spread Self="s1" PageCount="1">
+<Page Self="p1" Name="1" GeometricBounds="0 0 792 612" ItemTransform="1 0 0 1 0 0"/>
+<GraphicLine Self="gl1" GeometricBounds="100 100 300 300" ItemTransform="1 0 0 1 0 0" StrokeColor="Color/Black" StrokeWeight="2" LeftLineEnd="CircleSolidArrowHead"/>
+</Spread></idPkg:Spread>"#,
+        )
+        .unwrap();
+        zip.finish().unwrap();
+    }
+    buf
+}
+
+/// Set + clear line ends on an existing line (the patch lane: Set on a
+/// key the source lacks rides the extras append; clearing removes the
+/// attribute) and an inserted line keeps the arrowheads it was given
+/// before save (the inserted-item lane). Unmutated, the package
+/// round-trips byte-identically — the line-end patch is value-driven.
+#[test]
+fn graphic_line_line_ends_write_back() {
+    let original = line_end_idml();
+
+    // Unmutated: byte-identical (the CircleSolidArrowHead Set patch
+    // re-emits the exact source token).
+    let doc = Document::open(&original).expect("open");
+    assert_eq!(
+        doc.spreads[0].spread.graphic_lines[0].start_arrow,
+        paged_parse::ArrowheadType::CircleSolid
+    );
+    let out = write_idml(&doc, &original).expect("write unmutated");
+    assert_eq!(entries(&original), entries(&out), "unmutated round-trip");
+
+    // Mutate: add an end arrowhead (attr absent in source → extras
+    // lane), clear the start arrowhead (→ Patch::Remove), and insert a
+    // fresh line that gets arrowheads before save.
+    let mut project = Project::new(Document::open(&original).unwrap());
+    project
+        .apply(Operation::SetProperty {
+            node: NodeId::GraphicLine("gl1".to_string()),
+            path: PropertyPath::FrameStrokeEndArrowhead,
+            value: Value::Text("TriangleArrowHead".to_string()),
+        })
+        .expect("set end arrow");
+    project
+        .apply(Operation::SetProperty {
+            node: NodeId::GraphicLine("gl1".to_string()),
+            path: PropertyPath::FrameStrokeStartArrowhead,
+            value: Value::Text(String::new()),
+        })
+        .expect("clear start arrow");
+    project
+        .apply(Operation::InsertNode {
+            z_slot: None,
+            parent: NodeId::Spread("s1".to_string()),
+            position: 1,
+            node: paged_mutate::NodeSpec::GraphicLine {
+                self_id: "gl2".to_string(),
+                bounds: [400.0, 100.0, 500.0, 300.0],
+                anchors: Vec::new(),
+                subpath_starts: Vec::new(),
+                subpath_open: Vec::new(),
+                stroke_color: Some("Color/Black".to_string()),
+                stroke_weight: Some(1.0),
+                item_transform: None,
+            },
+        })
+        .expect("insert line");
+    project
+        .apply(Operation::SetProperty {
+            node: NodeId::GraphicLine("gl2".to_string()),
+            path: PropertyPath::FrameStrokeStartArrowhead,
+            value: Value::Text("BarbedArrowHead".to_string()),
+        })
+        .expect("set inserted arrow");
+
+    let out = write_idml(project.document(), &original).expect("write mutated");
+    let re = Document::open(&out).expect("reparse");
+    let lines = &re.spreads[0].spread.graphic_lines;
+    let gl1 = lines
+        .iter()
+        .find(|l| l.self_id.as_deref() == Some("gl1"))
+        .expect("gl1 present");
+    assert_eq!(gl1.start_arrow, paged_parse::ArrowheadType::None);
+    assert_eq!(gl1.end_arrow, paged_parse::ArrowheadType::Triangle);
+    assert_eq!(
+        gl1.stroke_weight,
+        Some(2.0),
+        "unrelated stroke attrs survive"
+    );
+    let gl2 = lines
+        .iter()
+        .find(|l| l.self_id.as_deref() == Some("gl2"))
+        .expect("inserted gl2 present");
+    assert_eq!(gl2.start_arrow, paged_parse::ArrowheadType::Barbed);
+    assert_eq!(gl2.end_arrow, paged_parse::ArrowheadType::None);
+}

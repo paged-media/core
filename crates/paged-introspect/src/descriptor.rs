@@ -88,6 +88,8 @@ pub enum PropertyPathJson {
     ParagraphStyleNextStyle,
     ParagraphAppliedNumberingList,
     FrameStrokeEndCap,
+    FrameStrokeStartArrowhead,
+    FrameStrokeEndArrowhead,
     FrameInsetSpacing,
     AppliedConditions,
     FrameGradientFillAngle,
@@ -320,6 +322,8 @@ impl From<PropertyPath> for PropertyPathJson {
                 PropertyPathJson::ParagraphAppliedNumberingList
             }
             PropertyPath::FrameStrokeEndCap => PropertyPathJson::FrameStrokeEndCap,
+            PropertyPath::FrameStrokeStartArrowhead => PropertyPathJson::FrameStrokeStartArrowhead,
+            PropertyPath::FrameStrokeEndArrowhead => PropertyPathJson::FrameStrokeEndArrowhead,
             PropertyPath::FrameInsetSpacing => PropertyPathJson::FrameInsetSpacing,
             PropertyPath::AppliedConditions => PropertyPathJson::AppliedConditions,
             PropertyPath::FrameGradientFillAngle => PropertyPathJson::FrameGradientFillAngle,
@@ -590,6 +594,8 @@ impl From<PropertyPathJson> for PropertyPath {
                 PropertyPath::ParagraphAppliedNumberingList
             }
             PropertyPathJson::FrameStrokeEndCap => PropertyPath::FrameStrokeEndCap,
+            PropertyPathJson::FrameStrokeStartArrowhead => PropertyPath::FrameStrokeStartArrowhead,
+            PropertyPathJson::FrameStrokeEndArrowhead => PropertyPath::FrameStrokeEndArrowhead,
             PropertyPathJson::FrameInsetSpacing => PropertyPath::FrameInsetSpacing,
             PropertyPathJson::AppliedConditions => PropertyPath::AppliedConditions,
             PropertyPathJson::FrameGradientFillAngle => PropertyPath::FrameGradientFillAngle,
