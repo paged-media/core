@@ -255,12 +255,9 @@ export type WorkerToMain = WorkerToMainKind & {
 ///     InDesign ArrowHead vocabulary). Writer-side (no wire): C-8
 ///     new-entry emission (minted stories + InsertPage spreads survive
 ///     IDML export, designmap patched).
-///   - v44 (PENDING BATCH — the orchestrator bumps PROTOCOL_VERSION once
-///     for the whole v44 wire batch; this entry reserves the number for
-///     the additions landing into it, so `PROTOCOL_VERSION` stays 43 until
-///     that single bump). C-6 (I-06) image resource provider — pyramid-
-///     tile pull. New message kinds (each a wire change, so the batch
-///     bump):
+///   - v44 (the campaign's Wire Batch 2 — one bump for the batch). C-6
+///     (I-06) image resource provider — pyramid-tile pull. New message
+///     kinds (each a wire change, so the batch bump):
 ///     - `ClaimImageResource { image_id, levels, tile_size, base_width,
 ///       base_height, revision }` / `ReleaseImageResource { image_id }`
 ///       (main→worker): register / drop a frame's claim. The worker keys
@@ -278,7 +275,7 @@ export type WorkerToMain = WorkerToMainKind & {
 ///       `ResourceTilesNeeded` it answers so a stale reply can be dropped.
 ///       Reply: `ResourceClaimApplied`. `ProviderTileWire` carries one
 ///       tile's RGBA8 bytes + level-space px origin + dims.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(43);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(44);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -3708,8 +3705,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v43() {
-        assert_eq!(PROTOCOL_VERSION.0, 43);
+    fn protocol_version_is_v44() {
+        assert_eq!(PROTOCOL_VERSION.0, 44);
     }
 
     /// v38 — `RequestFrameChain` serialises with its camelCase tag and

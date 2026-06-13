@@ -621,25 +621,23 @@ fn export_idml_without_document_replies_failed() {
 
 #[test]
 fn every_reply_stamps_the_current_protocol_version() {
-    // v42 sentinel — every reply must carry the build's PROTOCOL_VERSION
-    // so the client can detect a stale worker. We assert the constant is
-    // 42 (the documented current version) AND that an arbitrary reply
-    // stamps it.
-    assert_eq!(
-        protocol(),
-        42,
-        "PROTOCOL_VERSION drifted from documented v42"
-    );
+    // Version-agnostic (was a hardcoded-42 sentinel that silently went
+    // stale across the v43/v44 bumps): every reply must carry the
+    // build's `PROTOCOL_VERSION` so the client can detect a stale
+    // worker. We assert the reply stamps `protocol()` itself rather than
+    // a literal, so the pin tracks the constant automatically; the
+    // channel crate's `protocol_version_is_vNN` test guards the literal.
+    let p = protocol();
     let mut core = loaded_core();
     let reply = roundtrip(
         &mut core,
         &serde_json::json!({
             "seq": 50,
-            "protocol": protocol(),
+            "protocol": p,
             "kind": "requestDocumentMeta"
         }),
     );
-    assert_eq!(reply["protocol"].as_u64().unwrap(), 42);
+    assert_eq!(reply["protocol"].as_u64().unwrap(), p);
     assert_eq!(reply["kind"], "documentMetaReply");
 }
 
