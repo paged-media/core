@@ -180,6 +180,32 @@ pub enum SceneItem {
         b: f32,
         a: f32,
     },
+    /// Stroke a bezier path with a linear / radial / sweep gradient
+    /// (C-1.7). **Additive** — the gradient resolution of
+    /// [`SceneItem::FillPathGradient`] on the stroke lane. `width` is in
+    /// content points (the rasterizer scales it with the page-to-pixel
+    /// transform, like every stroke). Lowers to the existing
+    /// [`DisplayCommand::StrokePath`] with a gradient `Paint` (stroke and
+    /// fill share `paint_to_ts`, so no new render path) — a CSS gradient
+    /// border / paged.draw gradient stroke. An empty path or a degenerate
+    /// gradient (<2 stops, non-positive radial radius) is skipped.
+    StrokePathGradient {
+        path: Vec<ScenePathSeg>,
+        gradient: SceneGradient,
+        width: f32,
+    },
+    /// Fill a bezier path with a gradient under a non-`Normal` compositing
+    /// blend mode (C-1.8). **Additive** — the gradient of
+    /// [`SceneItem::FillPathGradient`] composited like
+    /// [`SceneItem::FillPathBlend`]. Lowers to the existing
+    /// [`DisplayCommand::FillPathBlend`] with a gradient `Paint` (it shares
+    /// `paint_to_ts`, so no new render path) — a CSS gradient with
+    /// `mix-blend-mode`. Empty path / degenerate gradient is skipped.
+    FillPathGradientBlend {
+        path: Vec<ScenePathSeg>,
+        gradient: SceneGradient,
+        blend: SceneBlendMode,
+    },
 }
 
 /// A compositing blend mode for [`SceneItem::FillPathBlend`] (C-1.4).
@@ -388,6 +414,69 @@ fn scene_stops_to_display(stops: &[SceneGradientStop]) -> Vec<GradientStop> {
     out
 }
 
+/// Build a display-list gradient [`Paint`] from a plugin [`SceneGradient`],
+/// pushing the gradient into the matching pool. Returns `None` for a
+/// degenerate gradient (<2 stops, or a non-positive radial radius) so the
+/// caller skips the item. Shared by every gradient-bearing scene item —
+/// fill ([`SceneItem::FillPathGradient`]), stroke
+/// ([`SceneItem::StrokePathGradient`]), and blended fill
+/// ([`SceneItem::FillPathGradientBlend`]) — so they all resolve gradients
+/// identically (and the rasterizer maps the gradient's content-point
+/// geometry through the same `content_outer` as the path).
+fn scene_gradient_to_paint(list: &mut DisplayList, gradient: &SceneGradient) -> Option<Paint> {
+    Some(match gradient {
+        SceneGradient::Linear {
+            x0,
+            y0,
+            x1,
+            y1,
+            stops,
+        } => {
+            if stops.len() < 2 {
+                return None;
+            }
+            let id = list.push_linear_gradient(LinearGradient {
+                start: (*x0, *y0),
+                end: (*x1, *y1),
+                stops: scene_stops_to_display(stops),
+            });
+            Paint::LinearGradient(id)
+        }
+        SceneGradient::Radial {
+            cx,
+            cy,
+            radius,
+            stops,
+        } => {
+            if stops.len() < 2 || *radius <= 0.0 {
+                return None;
+            }
+            let id = list.push_radial_gradient(RadialGradient {
+                center: (*cx, *cy),
+                radius: *radius,
+                stops: scene_stops_to_display(stops),
+            });
+            Paint::RadialGradient(id)
+        }
+        SceneGradient::Sweep {
+            cx,
+            cy,
+            start_angle,
+            stops,
+        } => {
+            if stops.len() < 2 {
+                return None;
+            }
+            let id = list.push_sweep_gradient(SweepGradient {
+                center: (*cx, *cy),
+                start_angle: *start_angle,
+                stops: scene_stops_to_display(stops),
+            });
+            Paint::SweepGradient(id)
+        }
+    })
+}
+
 fn build_path(segs: &[ScenePathSeg]) -> PathData {
     let mut out = Vec::with_capacity(segs.len());
     for s in segs {
@@ -541,61 +630,13 @@ pub fn emit_scene_layer<T>(
                 });
             }
             SceneItem::FillPathGradient { path, gradient } => {
-                // A gradient needs a path to fill and >=2 stops to ramp;
-                // skip degenerate input rather than emit an empty fill.
+                // A gradient needs a path to fill and a non-degenerate ramp;
+                // skip rather than emit an empty fill.
                 if path.is_empty() {
                     continue;
                 }
-                let paint = match gradient {
-                    SceneGradient::Linear {
-                        x0,
-                        y0,
-                        x1,
-                        y1,
-                        stops,
-                    } => {
-                        if stops.len() < 2 {
-                            continue;
-                        }
-                        let id = list.push_linear_gradient(LinearGradient {
-                            start: (*x0, *y0),
-                            end: (*x1, *y1),
-                            stops: scene_stops_to_display(stops),
-                        });
-                        Paint::LinearGradient(id)
-                    }
-                    SceneGradient::Radial {
-                        cx,
-                        cy,
-                        radius,
-                        stops,
-                    } => {
-                        if stops.len() < 2 || *radius <= 0.0 {
-                            continue;
-                        }
-                        let id = list.push_radial_gradient(RadialGradient {
-                            center: (*cx, *cy),
-                            radius: *radius,
-                            stops: scene_stops_to_display(stops),
-                        });
-                        Paint::RadialGradient(id)
-                    }
-                    SceneGradient::Sweep {
-                        cx,
-                        cy,
-                        start_angle,
-                        stops,
-                    } => {
-                        if stops.len() < 2 {
-                            continue;
-                        }
-                        let id = list.push_sweep_gradient(SweepGradient {
-                            center: (*cx, *cy),
-                            start_angle: *start_angle,
-                            stops: scene_stops_to_display(stops),
-                        });
-                        Paint::SweepGradient(id)
-                    }
+                let Some(paint) = scene_gradient_to_paint(list, gradient) else {
+                    continue;
                 };
                 let path_id = list.paths.push_anon(build_path(path));
                 // Same transform as the path (`content_outer`): the
@@ -606,6 +647,52 @@ pub fn emit_scene_layer<T>(
                     path_id,
                     paint,
                     transform: content_outer,
+                });
+            }
+            SceneItem::StrokePathGradient {
+                path,
+                gradient,
+                width,
+            } => {
+                // A gradient STROKE — the same paint resolution as the fill,
+                // emitted on the StrokePath lane (which shares `paint_to_ts`,
+                // so the rasterizer resolves the gradient shader for the
+                // stroke exactly as for a fill). CSS `border-image`-style
+                // gradient borders / paged.draw gradient strokes.
+                if path.is_empty() {
+                    continue;
+                }
+                let Some(paint) = scene_gradient_to_paint(list, gradient) else {
+                    continue;
+                };
+                let path_id = list.paths.push_anon(build_path(path));
+                list.push(DisplayCommand::StrokePath {
+                    path_id,
+                    paint,
+                    stroke: Stroke::new((*width).max(0.0)),
+                    transform: content_outer,
+                });
+            }
+            SceneItem::FillPathGradientBlend {
+                path,
+                gradient,
+                blend,
+            } => {
+                // A gradient fill under a non-Normal blend — the gradient
+                // paint of FillPathGradient on the FillPathBlend lane (both
+                // share `paint_to_ts`). A CSS gradient with `mix-blend-mode`.
+                if path.is_empty() {
+                    continue;
+                }
+                let Some(paint) = scene_gradient_to_paint(list, gradient) else {
+                    continue;
+                };
+                let path_id = list.paths.push_anon(build_path(path));
+                list.push(DisplayCommand::FillPathBlend {
+                    path_id,
+                    paint,
+                    transform: content_outer,
+                    blend_mode: blend.to_display(),
                 });
             }
             SceneItem::FillPathBlend { path, paint, blend } => {
@@ -881,6 +968,145 @@ mod tests {
                 .iter()
                 .any(|c| matches!(c, DisplayCommand::FillPath { .. })),
             "a 1-stop gradient is skipped"
+        );
+    }
+
+    fn two_stop_linear() -> SceneGradient {
+        SceneGradient::Linear {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 50.0,
+            y1: 0.0,
+            stops: vec![
+                SceneGradientStop {
+                    offset: 0.0,
+                    r: 1.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+                SceneGradientStop {
+                    offset: 1.0,
+                    r: 0.0,
+                    g: 0.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn stroke_path_gradient_lowers_to_a_stroke_with_a_pooled_gradient_paint() {
+        // C-1.7: a gradient STROKE lowers to DisplayCommand::StrokePath
+        // whose paint references a pooled gradient (stroke + fill share
+        // paint_to_ts), carrying the width.
+        let mut list = DisplayList::new();
+        let layer = SceneLayer {
+            items: vec![SceneItem::StrokePathGradient {
+                path: line(0.0, 0.0, 50.0, 0.0),
+                gradient: two_stop_linear(),
+                width: 4.0,
+            }],
+        };
+        emit_scene_layer(
+            &mut list,
+            &layer,
+            Transform::IDENTITY,
+            (0.0, 0.0),
+            |_, _, _| {},
+        );
+        assert_eq!(list.commands.len(), 1);
+        let DisplayCommand::StrokePath { paint, stroke, .. } = &list.commands[0] else {
+            panic!("expected a StrokePath, got {:?}", list.commands[0]);
+        };
+        assert!(
+            matches!(paint, Paint::LinearGradient(_)),
+            "stroke carries a gradient paint, got {paint:?}"
+        );
+        assert_eq!(stroke.width, 4.0);
+    }
+
+    #[test]
+    fn fill_path_gradient_blend_lowers_to_a_blend_with_a_pooled_gradient_paint() {
+        // C-1.8: a gradient fill under a non-Normal blend lowers to
+        // DisplayCommand::FillPathBlend carrying the gradient paint + the
+        // mapped blend mode.
+        let mut list = DisplayList::new();
+        let layer = SceneLayer {
+            items: vec![SceneItem::FillPathGradientBlend {
+                path: vec![
+                    ScenePathSeg::MoveTo { x: 0.0, y: 0.0 },
+                    ScenePathSeg::LineTo { x: 50.0, y: 0.0 },
+                    ScenePathSeg::LineTo { x: 50.0, y: 50.0 },
+                    ScenePathSeg::Close,
+                ],
+                gradient: two_stop_linear(),
+                blend: SceneBlendMode::Multiply,
+            }],
+        };
+        emit_scene_layer(
+            &mut list,
+            &layer,
+            Transform::IDENTITY,
+            (0.0, 0.0),
+            |_, _, _| {},
+        );
+        assert_eq!(list.commands.len(), 1);
+        let DisplayCommand::FillPathBlend {
+            paint, blend_mode, ..
+        } = &list.commands[0]
+        else {
+            panic!("expected a FillPathBlend, got {:?}", list.commands[0]);
+        };
+        assert!(
+            matches!(paint, Paint::LinearGradient(_)),
+            "blended fill carries a gradient paint, got {paint:?}"
+        );
+        assert_eq!(*blend_mode, BlendMode::Multiply);
+    }
+
+    #[test]
+    fn gradient_stroke_and_blend_skip_degenerate_gradients() {
+        let one_stop = SceneGradient::Linear {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 10.0,
+            y1: 0.0,
+            stops: vec![SceneGradientStop {
+                offset: 0.0,
+                r: 1.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            }],
+        };
+        let mut list = DisplayList::new();
+        let layer = SceneLayer {
+            items: vec![
+                SceneItem::StrokePathGradient {
+                    path: line(0.0, 0.0, 10.0, 10.0),
+                    gradient: one_stop.clone(),
+                    width: 2.0,
+                },
+                SceneItem::FillPathGradientBlend {
+                    path: line(0.0, 0.0, 10.0, 10.0),
+                    gradient: one_stop,
+                    blend: SceneBlendMode::Screen,
+                },
+            ],
+        };
+        emit_scene_layer(
+            &mut list,
+            &layer,
+            Transform::IDENTITY,
+            (0.0, 0.0),
+            |_, _, _| {},
+        );
+        assert!(
+            list.commands.is_empty(),
+            "1-stop gradients skipped on both lanes, got {:?}",
+            list.commands
         );
     }
 

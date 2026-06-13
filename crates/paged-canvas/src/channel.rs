@@ -297,7 +297,15 @@ export type WorkerToMain = WorkerToMainKind & {
 // `DisplayCommand::InnerShadow` lane, with a `choke` inset-spread control).
 // Payload-only addition on the existing channel; outset spread was already
 // handled (the lowering captures the spread-inflated shadow path).
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(47);
+//
+// v48 (2026-06-13): the `SubmitSceneLayer` payload gains
+// `SceneItem::StrokePathGradient` (gradient stroke) +
+// `SceneItem::FillPathGradientBlend` (gradient fill under a blend mode) —
+// both the gradient resolution of `FillPathGradient` on the existing
+// `StrokePath` / `FillPathBlend` lanes (stroke + blend share the rasterizer's
+// `paint_to_ts`, so no new render path). Payload-only. Unblocks paged.web CSS
+// gradient borders / gradient-with-`mix-blend-mode`.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(48);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -3727,8 +3735,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v47() {
-        assert_eq!(PROTOCOL_VERSION.0, 47);
+    fn protocol_version_is_v48() {
+        assert_eq!(PROTOCOL_VERSION.0, 48);
     }
 
     /// v38 — `RequestFrameChain` serialises with its camelCase tag and
