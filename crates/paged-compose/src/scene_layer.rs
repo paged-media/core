@@ -35,8 +35,9 @@ use serde::{Deserialize, Serialize};
 use tsify_next::Tsify;
 
 use crate::display_list::{
-    Color, DecodedImage, DisplayCommand, DisplayList, GradientStop, LinearGradient, Paint, PathData,
-    PathSegment, RadialGradient, Rect, Stroke, Transform,
+    BlendMode, Color, DecodedImage, DisplayCommand, DisplayList, DropShadow, GradientStop,
+    LinearGradient, Paint, PathData, PathSegment, RadialGradient, Rect, Stroke, SweepGradient,
+    Transform,
 };
 
 /// A plugin-submitted vector layer in frame-content coordinates. Keyed
@@ -116,6 +117,97 @@ pub enum SceneItem {
         path: Vec<ScenePathSeg>,
         gradient: SceneGradient,
     },
+    /// Fill a bezier path with a solid paint under a non-`Normal`
+    /// compositing blend mode (C-1.4 — per-fill blend). **Additive** to
+    /// [`SceneItem::FillPath`]: the path + paint are identical, plus a
+    /// [`SceneBlendMode`] that selects how the fill composites onto the
+    /// frame content already painted below it. Lowers to the existing
+    /// [`DisplayCommand::FillPathBlend`] lane (an offscreen-pixmap
+    /// composite that reads the page below), so a plugin lowering a CSS
+    /// `mix-blend-mode` (paged.web) or a layer blend (paged.draw)
+    /// tracks its box and rasterises through tiny-skia (CPU) / Vello
+    /// (GPU) with no new render path. An empty path is skipped, never
+    /// panicked.
+    FillPathBlend {
+        path: Vec<ScenePathSeg>,
+        paint: ScenePaint,
+        blend: SceneBlendMode,
+    },
+    /// Stamp a CSS-style drop shadow behind a path (C-1.5 — `box-shadow`
+    /// / `filter: drop-shadow`). The shadow is the path filled with the
+    /// shadow colour, offset by `(offset_x, offset_y)` content points
+    /// and softened by a Gaussian of `blur_radius` (pt). **Additive** —
+    /// it emits ONLY the shadow stamp for this item; emitting a
+    /// following fill on top is the caller's ordering choice (CSS draws
+    /// the shadow *behind* the element, so submit the shadow item
+    /// before the fill). Lowers to the existing
+    /// [`DisplayCommand::DropShadow`] lane, which already composites a
+    /// blurred offset stamp through both rasterizers. Colour is sRGB
+    /// (linearised at lowering like every other paint); `a` is the
+    /// shadow opacity. Inset shadows and the CSS `spread` radius are
+    /// honest follow-ons (not built here). An empty path is skipped,
+    /// never panicked.
+    DropShadow {
+        path: Vec<ScenePathSeg>,
+        offset_x: f32,
+        offset_y: f32,
+        blur_radius: f32,
+        r: f32,
+        g: f32,
+        b: f32,
+        a: f32,
+    },
+}
+
+/// A compositing blend mode for [`SceneItem::FillPathBlend`] (C-1.4).
+/// Mirrors the CSS-relevant subset of the display list's
+/// [`BlendMode`] — `Normal` is intentionally absent (a normal fill is
+/// just [`SceneItem::FillPath`]). Maps 1:1 to [`BlendMode`] at
+/// lowering, so a plugin's `mix-blend-mode` composites identically to
+/// a native IDML transparency blend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum SceneBlendMode {
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
+}
+
+impl SceneBlendMode {
+    /// Map to the display-list [`BlendMode`] (1:1). `Normal` is not
+    /// representable here — a normal fill lowers via
+    /// [`SceneItem::FillPath`].
+    fn to_display(self) -> BlendMode {
+        match self {
+            SceneBlendMode::Multiply => BlendMode::Multiply,
+            SceneBlendMode::Screen => BlendMode::Screen,
+            SceneBlendMode::Overlay => BlendMode::Overlay,
+            SceneBlendMode::Darken => BlendMode::Darken,
+            SceneBlendMode::Lighten => BlendMode::Lighten,
+            SceneBlendMode::ColorDodge => BlendMode::ColorDodge,
+            SceneBlendMode::ColorBurn => BlendMode::ColorBurn,
+            SceneBlendMode::HardLight => BlendMode::HardLight,
+            SceneBlendMode::SoftLight => BlendMode::SoftLight,
+            SceneBlendMode::Difference => BlendMode::Difference,
+            SceneBlendMode::Exclusion => BlendMode::Exclusion,
+            SceneBlendMode::Hue => BlendMode::Hue,
+            SceneBlendMode::Saturation => BlendMode::Saturation,
+            SceneBlendMode::Color => BlendMode::Color,
+            SceneBlendMode::Luminosity => BlendMode::Luminosity,
+        }
+    }
 }
 
 /// A plugin gradient paint for [`SceneItem::FillPathGradient`] (C-1.3).
@@ -139,6 +231,20 @@ pub enum SceneGradient {
         cx: f32,
         cy: f32,
         radius: f32,
+        stops: Vec<SceneGradientStop>,
+    },
+    /// Sweep (conic) gradient centred at `(cx,cy)` in content points,
+    /// with the colour ramp beginning at `start_angle` (radians,
+    /// measured from +x, turning clockwise in the y-down content space)
+    /// and wrapping once around the full turn. Lowers a CSS
+    /// `conic-gradient` (paged.web). The display list has its own sweep
+    /// pool ([`SweepGradient`]); the rasterizers map it to
+    /// `tiny_skia::SweepGradient` (CPU) and `peniko::Gradient::new_sweep`
+    /// (GPU).
+    Sweep {
+        cx: f32,
+        cy: f32,
+        start_angle: f32,
         stops: Vec<SceneGradientStop>,
     },
 }
@@ -451,6 +557,22 @@ pub fn emit_scene_layer<T>(
                         });
                         Paint::RadialGradient(id)
                     }
+                    SceneGradient::Sweep {
+                        cx,
+                        cy,
+                        start_angle,
+                        stops,
+                    } => {
+                        if stops.len() < 2 {
+                            continue;
+                        }
+                        let id = list.push_sweep_gradient(SweepGradient {
+                            center: (*cx, *cy),
+                            start_angle: *start_angle,
+                            stops: scene_stops_to_display(stops),
+                        });
+                        Paint::SweepGradient(id)
+                    }
                 };
                 let path_id = list.paths.push_anon(build_path(path));
                 // Same transform as the path (`content_outer`): the
@@ -461,6 +583,59 @@ pub fn emit_scene_layer<T>(
                     path_id,
                     paint,
                     transform: content_outer,
+                });
+            }
+            SceneItem::FillPathBlend { path, paint, blend } => {
+                if path.is_empty() {
+                    continue;
+                }
+                let id = list.paths.push_anon(build_path(path));
+                // Lowers to the offscreen-pixmap blend lane (the same
+                // FillPathBlend native IDML transparency blends use), so
+                // the fill composites onto the frame content below it
+                // under the chosen blend mode.
+                list.push(DisplayCommand::FillPathBlend {
+                    path_id: id,
+                    paint: Paint::Solid(paint_to_color(*paint)),
+                    transform: content_outer,
+                    blend_mode: blend.to_display(),
+                });
+            }
+            SceneItem::DropShadow {
+                path,
+                offset_x,
+                offset_y,
+                blur_radius,
+                r,
+                g,
+                b,
+                a,
+            } => {
+                if path.is_empty() {
+                    continue;
+                }
+                let id = list.paths.push_anon(build_path(path));
+                // Colour sRGB→linear like every other plugin paint; the
+                // alpha rides as the shadow opacity (the rasterizer
+                // multiplies `shadow.color.a * shadow.opacity`, so we
+                // keep the colour fully opaque and carry `a` in
+                // `opacity` to avoid squaring the alpha).
+                let color = scene_paint_to_color(ScenePaint {
+                    r: *r,
+                    g: *g,
+                    b: *b,
+                    a: 1.0,
+                });
+                list.push(DisplayCommand::DropShadow {
+                    path_id: id,
+                    transform: content_outer,
+                    shadow: DropShadow {
+                        offset_x: *offset_x,
+                        offset_y: *offset_y,
+                        blur_radius: (*blur_radius).max(0.0),
+                        color,
+                        opacity: a.clamp(0.0, 1.0),
+                    },
                 });
             }
         }
@@ -688,8 +863,14 @@ mod tests {
         };
         let (tlx, tly) = transform.apply(0.0, 0.0);
         let (brx, bry) = transform.apply(1.0, 1.0);
-        assert!((tlx - 60.0).abs() < 1e-4 && (tly - 100.0).abs() < 1e-4, "tl=({tlx},{tly})");
-        assert!((brx - 100.0).abs() < 1e-4 && (bry - 130.0).abs() < 1e-4, "br=({brx},{bry})");
+        assert!(
+            (tlx - 60.0).abs() < 1e-4 && (tly - 100.0).abs() < 1e-4,
+            "tl=({tlx},{tly})"
+        );
+        assert!(
+            (brx - 100.0).abs() < 1e-4 && (bry - 130.0).abs() < 1e-4,
+            "br=({brx},{bry})"
+        );
     }
 
     #[test]
@@ -706,7 +887,13 @@ mod tests {
                 h: 10.0,
             }],
         };
-        emit_scene_layer(&mut list, &layer, Transform::IDENTITY, (50.0, 50.0), |_, _, _| {});
+        emit_scene_layer(
+            &mut list,
+            &layer,
+            Transform::IDENTITY,
+            (50.0, 50.0),
+            |_, _, _| {},
+        );
         // Nothing interned, no Image command (the malformed item is skipped).
         assert!(list.images.is_empty());
         assert!(!list
@@ -860,5 +1047,248 @@ mod tests {
             },
         );
         assert!(!called, "an empty text run does not call the emitter");
+    }
+
+    #[test]
+    fn sweep_gradient_fill_lowers_to_a_pooled_sweep_paint() {
+        // FillPathGradient(Sweep) lowers to a DisplayCommand::FillPath
+        // whose paint references a pooled SweepGradient in the new
+        // sweep pool — additive to the linear/radial arms.
+        let mut list = DisplayList::new();
+        let layer = SceneLayer {
+            items: vec![SceneItem::FillPathGradient {
+                path: vec![
+                    ScenePathSeg::MoveTo { x: 0.0, y: 0.0 },
+                    ScenePathSeg::LineTo { x: 50.0, y: 0.0 },
+                    ScenePathSeg::LineTo { x: 50.0, y: 50.0 },
+                    ScenePathSeg::Close,
+                ],
+                gradient: SceneGradient::Sweep {
+                    cx: 25.0,
+                    cy: 25.0,
+                    start_angle: std::f32::consts::FRAC_PI_2,
+                    stops: vec![
+                        SceneGradientStop {
+                            offset: 0.0,
+                            r: 1.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 1.0,
+                        },
+                        SceneGradientStop {
+                            offset: 1.0,
+                            r: 0.0,
+                            g: 0.0,
+                            b: 1.0,
+                            a: 1.0,
+                        },
+                    ],
+                },
+            }],
+        };
+        emit_scene_layer(
+            &mut list,
+            &layer,
+            Transform::IDENTITY,
+            (200.0, 100.0),
+            |_, _, _| {},
+        );
+        // PushClip, FillPath(sweep), PopClip.
+        assert_eq!(list.commands.len(), 3);
+        let Some(DisplayCommand::FillPath { paint, .. }) = list.commands.get(1) else {
+            panic!("expected a sweep FillPath at [1]");
+        };
+        let Paint::SweepGradient(gid) = paint else {
+            panic!("expected a SweepGradient paint, got {paint:?}");
+        };
+        let grad = list.sweep_gradient(*gid).expect("sweep gradient pooled");
+        assert_eq!(grad.stops.len(), 2);
+        assert_eq!(grad.center, (25.0, 25.0));
+        assert!((grad.start_angle - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+        // The other gradient pools stay empty — this is the sweep pool.
+        assert!(list.gradients.is_empty() && list.radial_gradients.is_empty());
+    }
+
+    #[test]
+    fn fill_path_blend_lowers_to_a_blend_command_with_the_mapped_mode() {
+        // FillPathBlend lowers to DisplayCommand::FillPathBlend (the
+        // offscreen-composite lane), carrying the 1:1-mapped blend mode
+        // — NOT a plain FillPath.
+        let mut list = DisplayList::new();
+        let layer = SceneLayer {
+            items: vec![SceneItem::FillPathBlend {
+                path: vec![
+                    ScenePathSeg::MoveTo { x: 0.0, y: 0.0 },
+                    ScenePathSeg::LineTo { x: 10.0, y: 0.0 },
+                    ScenePathSeg::LineTo { x: 10.0, y: 10.0 },
+                    ScenePathSeg::Close,
+                ],
+                paint: ScenePaint {
+                    r: 1.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+                blend: SceneBlendMode::Multiply,
+            }],
+        };
+        emit_scene_layer(
+            &mut list,
+            &layer,
+            Transform::IDENTITY,
+            (0.0, 0.0), // no clip
+            |_, _, _| {},
+        );
+        assert_eq!(list.commands.len(), 1);
+        let DisplayCommand::FillPathBlend {
+            blend_mode, paint, ..
+        } = &list.commands[0]
+        else {
+            panic!("expected a FillPathBlend, got {:?}", list.commands[0]);
+        };
+        assert_eq!(*blend_mode, crate::display_list::BlendMode::Multiply);
+        // sRGB red linearises to (1,0,0); alpha stays linear.
+        let Paint::Solid(c) = paint else {
+            panic!("expected solid paint");
+        };
+        assert!((c.r - 1.0).abs() < 1e-6 && c.g < 1e-6 && c.b < 1e-6);
+    }
+
+    #[test]
+    fn fill_path_blend_maps_every_mode_one_to_one() {
+        use crate::display_list::BlendMode as B;
+        let cases = [
+            (SceneBlendMode::Multiply, B::Multiply),
+            (SceneBlendMode::Screen, B::Screen),
+            (SceneBlendMode::Overlay, B::Overlay),
+            (SceneBlendMode::Darken, B::Darken),
+            (SceneBlendMode::Lighten, B::Lighten),
+            (SceneBlendMode::ColorDodge, B::ColorDodge),
+            (SceneBlendMode::ColorBurn, B::ColorBurn),
+            (SceneBlendMode::HardLight, B::HardLight),
+            (SceneBlendMode::SoftLight, B::SoftLight),
+            (SceneBlendMode::Difference, B::Difference),
+            (SceneBlendMode::Exclusion, B::Exclusion),
+            (SceneBlendMode::Hue, B::Hue),
+            (SceneBlendMode::Saturation, B::Saturation),
+            (SceneBlendMode::Color, B::Color),
+            (SceneBlendMode::Luminosity, B::Luminosity),
+        ];
+        for (scene, want) in cases {
+            assert_eq!(scene.to_display(), want, "{scene:?} must map to {want:?}");
+        }
+    }
+
+    #[test]
+    fn drop_shadow_lowers_to_a_drop_shadow_stamp_with_offset_and_opacity() {
+        // DropShadow lowers to DisplayCommand::DropShadow carrying the
+        // offset, blur, sRGB→linear colour, and the alpha as opacity
+        // (colour alpha kept at 1.0 so the rasterizer's
+        // `color.a *= opacity` yields the requested alpha, not its
+        // square).
+        let mut list = DisplayList::new();
+        let layer = SceneLayer {
+            items: vec![SceneItem::DropShadow {
+                path: vec![
+                    ScenePathSeg::MoveTo { x: 0.0, y: 0.0 },
+                    ScenePathSeg::LineTo { x: 20.0, y: 0.0 },
+                    ScenePathSeg::LineTo { x: 20.0, y: 20.0 },
+                    ScenePathSeg::Close,
+                ],
+                offset_x: 4.0,
+                offset_y: 6.0,
+                blur_radius: 3.0,
+                r: 0.5, // mid-grey sRGB → ~0.214 linear
+                g: 0.5,
+                b: 0.5,
+                a: 0.6,
+            }],
+        };
+        emit_scene_layer(
+            &mut list,
+            &layer,
+            Transform::IDENTITY,
+            (0.0, 0.0), // no clip
+            |_, _, _| {},
+        );
+        assert_eq!(list.commands.len(), 1);
+        let DisplayCommand::DropShadow { shadow, .. } = &list.commands[0] else {
+            panic!("expected a DropShadow, got {:?}", list.commands[0]);
+        };
+        assert_eq!(shadow.offset_x, 4.0);
+        assert_eq!(shadow.offset_y, 6.0);
+        assert_eq!(shadow.blur_radius, 3.0);
+        assert!(
+            (shadow.opacity - 0.6).abs() < 1e-6,
+            "alpha rides as opacity"
+        );
+        assert_eq!(shadow.color.a, 1.0, "colour alpha kept at 1.0");
+        assert!(
+            (shadow.color.r - 0.214).abs() < 0.01,
+            "sRGB grey linearised, got {}",
+            shadow.color.r
+        );
+    }
+
+    #[test]
+    fn additive_items_with_empty_paths_are_skipped_not_panicked() {
+        // Each of the three new items skips an empty path rather than
+        // emitting a degenerate command.
+        let mut list = DisplayList::new();
+        let layer = SceneLayer {
+            items: vec![
+                SceneItem::FillPathBlend {
+                    path: vec![],
+                    paint: black(),
+                    blend: SceneBlendMode::Screen,
+                },
+                SceneItem::DropShadow {
+                    path: vec![],
+                    offset_x: 1.0,
+                    offset_y: 1.0,
+                    blur_radius: 1.0,
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+                SceneItem::FillPathGradient {
+                    path: vec![],
+                    gradient: SceneGradient::Sweep {
+                        cx: 0.0,
+                        cy: 0.0,
+                        start_angle: 0.0,
+                        stops: vec![
+                            SceneGradientStop {
+                                offset: 0.0,
+                                r: 1.0,
+                                g: 0.0,
+                                b: 0.0,
+                                a: 1.0,
+                            },
+                            SceneGradientStop {
+                                offset: 1.0,
+                                r: 0.0,
+                                g: 0.0,
+                                b: 1.0,
+                                a: 1.0,
+                            },
+                        ],
+                    },
+                },
+            ],
+        };
+        emit_scene_layer(
+            &mut list,
+            &layer,
+            Transform::IDENTITY,
+            (0.0, 0.0),
+            |_, _, _| {},
+        );
+        assert!(
+            list.commands.is_empty(),
+            "empty-path items emit nothing, got {:?}",
+            list.commands
+        );
     }
 }

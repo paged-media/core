@@ -33,7 +33,7 @@ pub use display_list::{
     GradientFeatherKind, GradientFeatherStop, GradientId, GradientStop, ImageId, InnerGlow,
     InnerShadow, LayerEffect, LineCap, LineJoin, LinearGradient, LinkRegion, LinkRegionTable,
     LinkTarget, OuterGlow, Paint, PathBuffer, PathData, PathId, PathSegment, RadialGradient, Rect,
-    Satin, SpotInk, SpotInkId, Stroke, Transform,
+    Satin, SpotInk, SpotInkId, Stroke, SweepGradient, Transform,
 };
 pub use glyph::{GlyphOutliner, TtfOutliner, UnitSquareOutliner};
 pub use primitives::{
@@ -44,8 +44,8 @@ pub use primitives::{
     UNIT_ELLIPSE_KEY, UNIT_RECT_KEY,
 };
 pub use scene_layer::{
-    emit_scene_layer, scene_paint_to_color, SceneItem, SceneLayer, ScenePaint, ScenePathSeg,
-    SceneTextItem,
+    emit_scene_layer, scene_paint_to_color, SceneBlendMode, SceneGradient, SceneGradientStop,
+    SceneItem, SceneLayer, ScenePaint, ScenePathSeg, SceneTextItem,
 };
 pub use text::{
     emit_glyph_slice, emit_glyph_slice_blend, emit_glyph_slice_stroke, emit_paragraph,

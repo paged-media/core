@@ -281,7 +281,17 @@ export type WorkerToMain = WorkerToMainKind & {
 // addition on the existing channel, exactly like v40's `SceneItem::Text`
 // and v41's `SceneItem::Image` — no new message. Unblocks paged.web's CSS
 // gradient fidelity (ADR-011) and paged.draw gradient sceneLayers.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(45);
+// v46 (2026-06-13): the `SubmitSceneLayer` payload grows three more
+// additive sceneItems/paints: `SceneGradient::Sweep` (conic gradient —
+// new display-list `sweep_gradients` pool + `Paint::SweepGradient`),
+// `SceneItem::FillPathBlend` (per-fill `SceneBlendMode` → the existing
+// `DisplayCommand::FillPathBlend` offscreen-composite lane), and
+// `SceneItem::DropShadow` (CSS box-shadow → the existing
+// `DisplayCommand::DropShadow` stamp). All three lower to render support
+// that already exists; like v40/v41/v45, payload-only on the existing
+// channel — no new message. Unblocks paged.web `conic-gradient` /
+// `mix-blend-mode` / `box-shadow` fidelity and paged.draw blend/shadow.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(46);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -3711,8 +3721,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v45() {
-        assert_eq!(PROTOCOL_VERSION.0, 45);
+    fn protocol_version_is_v46() {
+        assert_eq!(PROTOCOL_VERSION.0, 46);
     }
 
     /// v38 — `RequestFrameChain` serialises with its camelCase tag and

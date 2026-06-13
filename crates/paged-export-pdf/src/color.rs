@@ -119,7 +119,7 @@ pub fn set_fill_paint(
             }
             true
         }
-        Paint::LinearGradient(_) | Paint::RadialGradient(_) => false,
+        Paint::LinearGradient(_) | Paint::RadialGradient(_) | Paint::SweepGradient(_) => false,
     }
 }
 
@@ -163,7 +163,7 @@ pub fn set_stroke_paint(
             }
             true
         }
-        Paint::LinearGradient(_) | Paint::RadialGradient(_) => false,
+        Paint::LinearGradient(_) | Paint::RadialGradient(_) | Paint::SweepGradient(_) => false,
     }
 }
 

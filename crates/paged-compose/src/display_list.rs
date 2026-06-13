@@ -84,6 +84,10 @@ pub enum Paint {
     /// coords. Same id-space as linear gradients but resolved against
     /// `DisplayList::radial_gradients` instead of `gradients`.
     RadialGradient(GradientId),
+    /// Sweep (conic) gradient — colours ramp by polar angle around
+    /// `center`, starting at `start_angle`. Same id-space as the other
+    /// gradients but resolved against `DisplayList::sweep_gradients`.
+    SweepGradient(GradientId),
     /// Native CMYK paint preserved end to end. Channels are 0.0..=1.0
     /// (NOT percentages — the renderer scales IDML's 0..100 percent
     /// values to the unit range at compose time). `rgb` is the
@@ -108,8 +112,9 @@ pub enum Paint {
     },
 }
 
-/// Index into `DisplayList::gradients` *or* `DisplayList::radial_gradients`,
-/// depending on the [`Paint`] variant carrying it.
+/// Index into `DisplayList::gradients`, `DisplayList::radial_gradients`,
+/// *or* `DisplayList::sweep_gradients`, depending on the [`Paint`]
+/// variant carrying it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GradientId(pub u32);
 
@@ -164,6 +169,22 @@ pub struct LinearGradient {
 pub struct RadialGradient {
     pub center: (f32, f32),
     pub radius: f32,
+    pub stops: Vec<GradientStop>,
+}
+
+/// Sweep (conic) gradient definition. Colours ramp by polar angle
+/// around `center`, beginning at `start_angle` (radians, measured from
+/// the +x axis and turning clockwise in our y-down space) and wrapping
+/// once around the full turn. `center` is in the path's local
+/// coordinates — the fill's `transform` maps it into page space, so
+/// the same gradient reused on N paths places correctly on each, like
+/// [`LinearGradient`] / [`RadialGradient`]. This is the third gradient
+/// pool; the rasterizers map it to `tiny_skia::SweepGradient` (CPU,
+/// degrees) and `peniko::Gradient::new_sweep` (GPU, radians).
+#[derive(Debug, Clone)]
+pub struct SweepGradient {
+    pub center: (f32, f32),
+    pub start_angle: f32,
     pub stops: Vec<GradientStop>,
 }
 
@@ -1299,6 +1320,7 @@ pub struct DisplayList {
     pub commands: Vec<DisplayCommand>,
     pub gradients: Vec<LinearGradient>,
     pub radial_gradients: Vec<RadialGradient>,
+    pub sweep_gradients: Vec<SweepGradient>,
     pub images: Vec<DecodedImage>,
     /// Named spot inks the document references. Indexed by
     /// [`SpotInkId`]. Two `Paint::Cmyk` paints carrying the same spot
@@ -1347,6 +1369,17 @@ impl DisplayList {
 
     pub fn radial_gradient(&self, id: GradientId) -> Option<&RadialGradient> {
         self.radial_gradients.get(id.0 as usize)
+    }
+
+    /// Append a sweep gradient and return its id.
+    pub fn push_sweep_gradient(&mut self, g: SweepGradient) -> GradientId {
+        let id = GradientId(self.sweep_gradients.len() as u32);
+        self.sweep_gradients.push(g);
+        id
+    }
+
+    pub fn sweep_gradient(&self, id: GradientId) -> Option<&SweepGradient> {
+        self.sweep_gradients.get(id.0 as usize)
     }
 
     /// Append a decoded image and return its id. Callers are expected
@@ -1429,8 +1462,8 @@ impl DisplayList {
         }
         let _ = write!(
             h,
-            "g{:?}r{:?}s{:?}",
-            self.gradients, self.radial_gradients, self.spot_inks
+            "g{:?}r{:?}w{:?}s{:?}",
+            self.gradients, self.radial_gradients, self.sweep_gradients, self.spot_inks
         );
         for img in &self.images {
             let _ = write!(h, "i{}x{}", img.width, img.height);

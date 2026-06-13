@@ -39,7 +39,7 @@ use tiny_skia::{
     LineJoin as TsLineJoin, LinearGradient as TsLinearGradient, Mask as TsMask, Paint as TsPaint,
     PathBuilder, Pixmap, PixmapPaint, PixmapRef, Point as TsPoint, PremultipliedColorU8,
     RadialGradient as TsRadialGradient, Shader, SpreadMode, Stroke as TsStroke,
-    Transform as TsTransform,
+    SweepGradient as TsSweepGradient, Transform as TsTransform,
 };
 
 use crate::{PathRasterizer, RasterOptions};
@@ -2560,6 +2560,18 @@ fn paint_to_ts(
                 p.set_color(tiny_skia::Color::BLACK);
             }
         }
+        Paint::SweepGradient(id) => {
+            if let Some(grad) = list.sweep_gradient(*id) {
+                if let Some(shader) = build_sweep_gradient_shader(grad, path_transform, page_to_px)
+                {
+                    p.shader = shader;
+                } else {
+                    p.set_color(tiny_skia::Color::BLACK);
+                }
+            } else {
+                p.set_color(tiny_skia::Color::BLACK);
+            }
+        }
         Paint::Cmyk { rgb, .. } => {
             // The pipeline baked the ICC-resolved display RGB onto
             // the paint at compose time — use it directly so ordinary
@@ -2644,6 +2656,45 @@ fn build_radial_gradient_shader(
         0.0,
         center,
         radius,
+        stops,
+        SpreadMode::Pad,
+        TsTransform::identity(),
+    )
+}
+
+fn build_sweep_gradient_shader(
+    grad: &paged_compose::SweepGradient,
+    path_transform: &CTransform,
+    page_to_px: TsTransform,
+) -> Option<Shader<'static>> {
+    if grad.stops.len() < 2 {
+        return None;
+    }
+    let [a, b, c, d, tx, ty] = path_transform.0;
+    let to_page =
+        |x: f32, y: f32| -> TsPoint { TsPoint::from_xy(a * x + c * y + tx, b * x + d * y + ty) };
+    let center = to_page(grad.center.0, grad.center.1);
+
+    let stops: Vec<TsGradientStop> = grad
+        .stops
+        .iter()
+        .map(|s| TsGradientStop::new(s.offset.clamp(0.0, 1.0), linear_color_to_ts(s.color)))
+        .collect();
+
+    let _ = page_to_px;
+    // tiny-skia's SweepGradient takes start/end angles in DEGREES (it
+    // divides by 360 internally) and requires start <= end. Our IR
+    // stores `start_angle` in radians; convert and wrap one full turn
+    // so the ramp covers the whole circle (matching CSS conic-gradient
+    // / peniko's radian sweep on the GPU lane). Endpoints already live
+    // in page space, so an identity shader transform is correct (the
+    // same reasoning as build_linear/radial_gradient_shader).
+    let start_deg = grad.start_angle.to_degrees();
+    let end_deg = start_deg + 360.0;
+    TsSweepGradient::new(
+        center,
+        start_deg,
+        end_deg,
         stops,
         SpreadMode::Pad,
         TsTransform::identity(),
@@ -5956,5 +6007,165 @@ mod tests {
             outside[0] > 240 && outside[3] == 255,
             "outside should be paper white; got {outside:?}"
         );
+    }
+
+    #[test]
+    fn scene_sweep_gradient_fill_rasterises_angular_colour_variation() {
+        // C-1.4 SWEEP: a conic gradient red→green→blue→red around the
+        // centre of a square must paint DIFFERENT colours at different
+        // polar angles. We lower a SceneItem::FillPathGradient(Sweep)
+        // through emit_scene_layer (the real plugin path) and sample
+        // four cardinal directions from the centre.
+        use paged_compose::{
+            emit_scene_layer, SceneGradient, SceneGradientStop, SceneItem, SceneLayer,
+            ScenePathSeg, Transform as CTransform,
+        };
+
+        let stop = |offset: f32, r: f32, g: f32, b: f32| SceneGradientStop {
+            offset,
+            r,
+            g,
+            b,
+            a: 1.0,
+        };
+        // 60×60 square centred at (30,30); sweep starts at angle 0 (+x).
+        let square = vec![
+            ScenePathSeg::MoveTo { x: 0.0, y: 0.0 },
+            ScenePathSeg::LineTo { x: 60.0, y: 0.0 },
+            ScenePathSeg::LineTo { x: 60.0, y: 60.0 },
+            ScenePathSeg::LineTo { x: 0.0, y: 60.0 },
+            ScenePathSeg::Close,
+        ];
+        let layer = SceneLayer {
+            items: vec![SceneItem::FillPathGradient {
+                path: square,
+                gradient: SceneGradient::Sweep {
+                    cx: 30.0,
+                    cy: 30.0,
+                    start_angle: 0.0,
+                    stops: vec![
+                        stop(0.0, 1.0, 0.0, 0.0),
+                        stop(0.33, 0.0, 1.0, 0.0),
+                        stop(0.66, 0.0, 0.0, 1.0),
+                        stop(1.0, 1.0, 0.0, 0.0),
+                    ],
+                },
+            }],
+        };
+        let mut list = DisplayList::new();
+        // No clip (size 0) so the fill isn't bracketed; geometry already
+        // in page space.
+        emit_scene_layer(
+            &mut list,
+            &layer,
+            CTransform::IDENTITY,
+            (0.0, 0.0),
+            |_, _, _| {},
+        );
+
+        let mut opts = RasterOptions::new(60.0, 60.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+
+        // Sample points a few px out from the centre along +x, +y, -x.
+        // A sweep gradient must give these distinct hues — assert the
+        // dominant channel differs between at least two of them.
+        let east = at(&img, 50, 30); // angle ≈ 0  → near red stop
+        let south = at(&img, 30, 50); // angle ≈ 90° → into the ramp
+        let west = at(&img, 10, 30); // angle ≈ 180° → further along
+        let dominant = |p: [u8; 4]| -> usize {
+            let (mut idx, mut best) = (0usize, p[0]);
+            for (i, &v) in p[..3].iter().enumerate() {
+                if v > best {
+                    best = v;
+                    idx = i;
+                }
+            }
+            idx
+        };
+        // Angular variation: not all three samples share one dominant
+        // channel (a solid/linear fill would, a sweep won't).
+        let de = dominant(east);
+        let ds = dominant(south);
+        let dw = dominant(west);
+        assert!(
+            !(de == ds && ds == dw),
+            "sweep gradient must vary by angle; east={east:?} south={south:?} west={west:?}"
+        );
+        // And the raw pixels differ around the ring.
+        assert!(
+            east != south || south != west,
+            "expected angular colour variation; east={east:?} south={south:?} west={west:?}"
+        );
+    }
+
+    #[test]
+    fn scene_drop_shadow_rasterises_blurred_offset_stamp() {
+        // C-1.5 DROP SHADOW: a SceneItem::DropShadow lowered through
+        // emit_scene_layer must paint a soft, OFFSET stamp — pixels at
+        // the shadow's offset position are darkened (non-paper), and the
+        // blur leaves a soft tail just outside the offset rect.
+        use paged_compose::{
+            emit_scene_layer, SceneItem, SceneLayer, ScenePathSeg, Transform as CTransform,
+        };
+
+        // A 20×20 box at (10,10); shadow offset (+12,+12), blur 3pt.
+        let box_path = vec![
+            ScenePathSeg::MoveTo { x: 10.0, y: 10.0 },
+            ScenePathSeg::LineTo { x: 30.0, y: 10.0 },
+            ScenePathSeg::LineTo { x: 30.0, y: 30.0 },
+            ScenePathSeg::LineTo { x: 10.0, y: 30.0 },
+            ScenePathSeg::Close,
+        ];
+        let layer = SceneLayer {
+            items: vec![SceneItem::DropShadow {
+                path: box_path,
+                offset_x: 12.0,
+                offset_y: 12.0,
+                blur_radius: 3.0,
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            }],
+        };
+        let mut list = DisplayList::new();
+        emit_scene_layer(
+            &mut list,
+            &layer,
+            CTransform::IDENTITY,
+            (0.0, 0.0),
+            |_, _, _| {},
+        );
+
+        let mut opts = RasterOptions::new(80.0, 80.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+
+        // Centre of the offset shadow rect: box (10..30) + offset 12 =>
+        // (22..42); sample (32,32) sits inside the offset stamp and must
+        // be darkened from paper white.
+        let in_shadow = at(&img, 32, 32);
+        assert!(
+            in_shadow[0] < 220 && in_shadow[1] < 220 && in_shadow[2] < 220,
+            "offset shadow stamp should darken the page; got {in_shadow:?}"
+        );
+        // The ORIGINAL (un-offset) box position is NOT stamped (this item
+        // emits only the shadow, not a fill) — paper-ish white there.
+        let at_origin = at(&img, 20, 20);
+        assert!(
+            at_origin[0] > 230,
+            "no fill at the un-offset box position; got {at_origin:?}"
+        );
+        // Blur tail: a few px outside the hard offset rect (x≈45) is
+        // softer than dead centre but still darkened below paper.
+        let tail = at(&img, 45, 32);
+        assert!(
+            tail[0] < 250,
+            "blur should leave a soft tail outside the offset rect; got {tail:?}"
+        );
+        // Far from everything: untouched paper.
+        let far = at(&img, 70, 5);
+        assert!(far[0] > 240, "far corner should be paper; got {far:?}");
     }
 }

@@ -848,5 +848,6 @@ fn paint_key(p: &Paint) -> u64 {
         }
         Paint::LinearGradient(id) => 3 << 60 | id.0 as u64,
         Paint::RadialGradient(id) => 4 << 60 | id.0 as u64,
+        Paint::SweepGradient(id) => 5 << 60 | id.0 as u64,
     }
 }

@@ -2346,6 +2346,30 @@ fn resolve_paint(
                 .with_stops(stops.as_slice());
             Some(VelloBrush::Gradient(pg))
         }
+        Paint::SweepGradient(id) => {
+            let g = list.sweep_gradient(*id)?;
+            if g.stops.len() < 2 {
+                return None;
+            }
+            let (cx, cy) = transform.apply(g.center.0, g.center.1);
+            // peniko's new_sweep takes start/end angles in RADIANS,
+            // clockwise in a y-down space — exactly our IR convention.
+            // Wrap one full turn so the ramp covers the whole circle
+            // (matches the CPU lane's 360°-degree sweep).
+            let start = g.start_angle;
+            let end = g.start_angle + std::f32::consts::TAU;
+            let stops: Vec<PenikoColorStop> = g
+                .stops
+                .iter()
+                .map(|s| PenikoColorStop {
+                    offset: s.offset,
+                    color: linear_to_peniko(s.color).into(),
+                })
+                .collect();
+            let pg = PenikoGradient::new_sweep(kurbo::Point::new(cx as f64, cy as f64), start, end)
+                .with_stops(stops.as_slice());
+            Some(VelloBrush::Gradient(pg))
+        }
     }
 }
 
