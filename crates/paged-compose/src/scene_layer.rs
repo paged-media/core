@@ -1331,7 +1331,10 @@ mod tests {
         assert_eq!(params.offset_y, 3.0);
         assert_eq!(params.blur_radius, 5.0);
         assert_eq!(params.choke, 1.5, "inset-spread choke carried");
-        assert!((params.opacity - 0.5).abs() < 1e-6, "alpha rides as opacity");
+        assert!(
+            (params.opacity - 0.5).abs() < 1e-6,
+            "alpha rides as opacity"
+        );
         assert_eq!(params.color.a, 1.0, "colour alpha kept at 1.0");
         assert_eq!(
             params.blend_mode,
@@ -1356,7 +1359,13 @@ mod tests {
                 a: 1.0,
             }],
         };
-        emit_scene_layer(&mut list, &layer, Transform::IDENTITY, (0.0, 0.0), |_, _, _| {});
+        emit_scene_layer(
+            &mut list,
+            &layer,
+            Transform::IDENTITY,
+            (0.0, 0.0),
+            |_, _, _| {},
+        );
         assert!(list.commands.is_empty(), "empty-path inner shadow skipped");
     }
 
