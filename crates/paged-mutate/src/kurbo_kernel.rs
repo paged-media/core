@@ -397,6 +397,105 @@ pub fn variable_width_outline_stroke(
     Some((out, vec![0], vec![false]))
 }
 
+/// Perpendicular distance from `p` to the segment `a`→`b` (the
+/// infinite-line distance; a degenerate segment falls back to the
+/// point distance). Used by the RDP decimation pass.
+fn perp_distance(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f64 {
+    let (px, py) = (f64::from(p.0), f64::from(p.1));
+    let (ax, ay) = (f64::from(a.0), f64::from(a.1));
+    let (bx, by) = (f64::from(b.0), f64::from(b.1));
+    let dx = bx - ax;
+    let dy = by - ay;
+    let len = dx.hypot(dy);
+    if len < EPS {
+        return (px - ax).hypot(py - ay);
+    }
+    ((dx * (ay - py) - (ax - px) * dy) / len).abs()
+}
+
+/// Ramer–Douglas–Peucker over a slice of anchor INDICES (positions
+/// read from `anchors[idx].anchor`). Keeps the endpoints and every
+/// interior index whose perpendicular deviation exceeds `tol`. Returns
+/// the kept indices in order.
+fn rdp_indices(anchors: &[PathAnchor], idx: &[usize], tol: f64) -> Vec<usize> {
+    if idx.len() < 3 {
+        return idx.to_vec();
+    }
+    let first = idx[0];
+    let last = idx[idx.len() - 1];
+    let mut max_d = 0.0_f64;
+    let mut max_i = 0usize;
+    for (k, &i) in idx.iter().enumerate().take(idx.len() - 1).skip(1) {
+        let d = perp_distance(
+            anchors[i].anchor,
+            anchors[first].anchor,
+            anchors[last].anchor,
+        );
+        if d > max_d {
+            max_d = d;
+            max_i = k;
+        }
+    }
+    if max_d <= tol {
+        // Every interior point collapses onto the chord — drop them all.
+        return vec![first, last];
+    }
+    let mut left = rdp_indices(anchors, &idx[..=max_i], tol);
+    let right = rdp_indices(anchors, &idx[max_i..], tol);
+    left.pop(); // the split index is shared between halves
+    left.extend(right);
+    left
+}
+
+/// Decimate near-collinear interior anchors per subpath (RDP over the
+/// anchor positions), preserving each survivor's handles. This is the
+/// point-reduction lane the curve-fit below CANNOT do on a corner
+/// polyline (kurbo's `simplify_bezpath` re-fits curves but keeps every
+/// corner — the v0.43 "simplify is a no-op on corner runs" finding,
+/// RFI B-20). Closed subpaths keep their first anchor as the fixed
+/// chord endpoint and RDP the loop back to it.
+fn rdp_decimate(
+    anchors: &[PathAnchor],
+    subpath_starts: &[usize],
+    subpath_open: &[bool],
+    tol: f64,
+) -> (Vec<PathAnchor>, Vec<usize>, Vec<bool>) {
+    let n = anchors.len();
+    let starts: Vec<usize> = if subpath_starts.is_empty() {
+        vec![0]
+    } else {
+        subpath_starts.to_vec()
+    };
+    let mut out_anchors: Vec<PathAnchor> = Vec::new();
+    let mut out_starts: Vec<usize> = Vec::new();
+    let mut out_open: Vec<bool> = Vec::new();
+    for (si, &sub_start) in starts.iter().enumerate() {
+        let sub_end = starts.get(si + 1).copied().unwrap_or(n);
+        let open = subpath_open.get(si).copied().unwrap_or(false);
+        out_starts.push(out_anchors.len());
+        out_open.push(open);
+        let span: Vec<usize> = (sub_start..sub_end).collect();
+        let kept: Vec<usize> = if open {
+            rdp_indices(anchors, &span, tol)
+        } else if span.len() >= 3 {
+            // Closed: anchor the chord at the first point + a duplicate
+            // tail so RDP treats the loop as an open run start→…→start,
+            // then drop the synthetic tail.
+            let mut loop_idx = span.clone();
+            loop_idx.push(span[0]);
+            let mut r = rdp_indices(anchors, &loop_idx, tol);
+            r.pop(); // remove the synthetic duplicate of the first point
+            r
+        } else {
+            span
+        };
+        for i in kept {
+            out_anchors.push(anchors[i]);
+        }
+    }
+    (out_anchors, out_starts, out_open)
+}
+
 /// Simplify (§13.1): re-express the path within `tolerance` pt of the
 /// original with (typically far) fewer anchors.
 pub fn simplify_path(
@@ -408,7 +507,11 @@ pub fn simplify_path(
     if anchors.len() < 3 || tolerance <= 0.0 {
         return None;
     }
-    let path = anchors_to_bezpath(anchors, subpath_starts, subpath_open);
+    // RDP point-decimation FIRST (drops near-collinear interior anchors —
+    // the corner-polyline case kurbo's curve-fit leaves untouched, B-20),
+    // then the curve-fit smooths the survivors.
+    let (da, ds, doo) = rdp_decimate(anchors, subpath_starts, subpath_open, f64::from(tolerance));
+    let path = anchors_to_bezpath(&da, &ds, &doo);
     let simplified = simplify_bezpath(path, f64::from(tolerance), &SimplifyOptions::default());
     let (a, s, o) = bezpath_to_anchors(&simplified);
     if a.len() < 2 {
@@ -748,6 +851,32 @@ mod tests {
         );
         assert!((pt(a[0].anchor) - Point::new(0.0, 0.0)).hypot() < 1e-3);
         assert!((pt(a.last().unwrap().anchor) - Point::new(100.0, 0.0)).hypot() < 1e-3);
+    }
+
+    #[test]
+    fn simplify_decimates_within_tolerance_corner_polyline() {
+        // RFI B-20 fix: an interior corner anchor deviating 2 pt from the
+        // chord is WITHIN a 30 pt tolerance, so simplify must DROP it
+        // (kurbo's curve-fit alone kept every corner — the no-op finding).
+        let anchors = vec![corner(0.0, 0.0), corner(50.0, 2.0), corner(100.0, 0.0)];
+        let (a, ..) = simplify_path(&anchors, &[0], &[true], 30.0).expect("simplify");
+        assert!(
+            a.len() < 3,
+            "near-collinear interior anchor should drop, got {}",
+            a.len()
+        );
+
+        // A dense 9-point jittery run collapses to far fewer anchors.
+        let dense: Vec<PathAnchor> = (0..9)
+            .map(|i| corner(i as f32 * 20.0, if i % 2 == 0 { 0.0 } else { 1.0 }))
+            .collect();
+        let (b, ..) = simplify_path(&dense, &[0], &[true], 10.0).expect("simplify dense");
+        assert!(b.len() < dense.len(), "dense run should reduce, got {}", b.len());
+
+        // A genuine corner (deviation FAR past tolerance) is PRESERVED.
+        let sharp = vec![corner(0.0, 0.0), corner(50.0, 80.0), corner(100.0, 0.0)];
+        let (c, ..) = simplify_path(&sharp, &[0], &[true], 5.0).expect("simplify sharp");
+        assert_eq!(c.len(), 3, "a real corner past tolerance is kept");
     }
 
     #[test]
