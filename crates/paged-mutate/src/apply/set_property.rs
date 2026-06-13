@@ -357,6 +357,153 @@ pub(super) fn apply_set_property(
                 },
             )
         }
+        // ---- B-22: fill/stroke/opacity for the path kinds --------
+        // Polygon/Oval/GraphicLine carry the same style fields as
+        // Rectangle but had only joined the transform + path-point
+        // arms. A draw plugin that inserts a path (→ Polygon) could
+        // not style it via SetProperty and had to abuse
+        // setDocumentDefaults; these arms close that. GraphicLine is a
+        // stroke-only line (no fill_color / opacity field).
+        (NodeId::Polygon(id), PropertyPath::FrameFillColor) => {
+            let new_color = expect_color_ref(path, value)?;
+            let poly = find_polygon_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = poly.fill_color.clone();
+            poly.fill_color = new_color;
+            (
+                Value::ColorRef(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Oval(id), PropertyPath::FrameFillColor) => {
+            let new_color = expect_color_ref(path, value)?;
+            let oval =
+                find_oval_mut(doc, id).ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = oval.fill_color.clone();
+            oval.fill_color = new_color;
+            (
+                Value::ColorRef(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Polygon(id), PropertyPath::FrameStrokeColor) => {
+            let new_color = expect_color_ref(path, value)?;
+            let poly = find_polygon_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = poly.stroke_color.clone();
+            poly.stroke_color = new_color;
+            (
+                Value::ColorRef(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Oval(id), PropertyPath::FrameStrokeColor) => {
+            let new_color = expect_color_ref(path, value)?;
+            let oval =
+                find_oval_mut(doc, id).ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = oval.stroke_color.clone();
+            oval.stroke_color = new_color;
+            (
+                Value::ColorRef(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::GraphicLine(id), PropertyPath::FrameStrokeColor) => {
+            let new_color = expect_color_ref(path, value)?;
+            let line = find_graphic_line_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = line.stroke_color.clone();
+            line.stroke_color = new_color;
+            (
+                Value::ColorRef(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Polygon(id), PropertyPath::FrameStrokeWeight) => {
+            let new_weight = expect_length(path, value)?;
+            let poly = find_polygon_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = poly.stroke_weight;
+            poly.stroke_weight = new_weight;
+            (
+                Value::Length(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Oval(id), PropertyPath::FrameStrokeWeight) => {
+            let new_weight = expect_length(path, value)?;
+            let oval =
+                find_oval_mut(doc, id).ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = oval.stroke_weight;
+            oval.stroke_weight = new_weight;
+            (
+                Value::Length(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::GraphicLine(id), PropertyPath::FrameStrokeWeight) => {
+            let new_weight = expect_length(path, value)?;
+            let line = find_graphic_line_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = line.stroke_weight;
+            line.stroke_weight = new_weight;
+            (
+                Value::Length(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Polygon(id), PropertyPath::FrameOpacity) => {
+            let new_opacity = expect_length(path, value)?;
+            let poly = find_polygon_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = poly.opacity;
+            poly.opacity = new_opacity;
+            (
+                Value::Length(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Oval(id), PropertyPath::FrameOpacity) => {
+            let new_opacity = expect_length(path, value)?;
+            let oval =
+                find_oval_mut(doc, id).ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = oval.opacity;
+            oval.opacity = new_opacity;
+            (
+                Value::Length(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         // ---- Phase H: FramePathPoint (any path-bearing kind) -----
         // Track J fan-out — accepts Polygon, TextFrame, Rectangle,
         // GraphicLine. All four kinds share the anchor field shape.

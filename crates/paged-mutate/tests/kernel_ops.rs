@@ -264,3 +264,59 @@ fn unknown_join_is_a_clean_invalid_value() {
     .expect_err("unknown join must be rejected");
     assert!(format!("{err:?}").contains("zigzag"));
 }
+
+/// B-22 — a Polygon (what `insertPath` mints) accepts fill/stroke
+/// SetProperty writes instead of rejecting them as "not supported",
+/// so a draw plugin no longer has to abuse `setDocumentDefaults` to
+/// colour the path it just inserted. Forward changes the field;
+/// inverse restores the previous value exactly.
+#[test]
+fn polygon_fill_and_stroke_set_property_round_trips() {
+    fn polygon_fill(doc: &Document, id: &str) -> Option<String> {
+        doc.spreads
+            .iter()
+            .flat_map(|s| s.spread.polygons.iter())
+            .find(|p| p.self_id.as_deref() == Some(id))
+            .expect("polygon present")
+            .fill_color
+            .clone()
+    }
+
+    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    let id = first_polygon(&doc);
+    let before = polygon_fill(&doc, &id);
+
+    let applied = apply(
+        &mut doc,
+        &Operation::SetProperty {
+            node: NodeId::Polygon(id.clone()),
+            path: PropertyPath::FrameFillColor,
+            value: Value::ColorRef(Some("Color/PagedDrawTest".to_string())),
+        },
+    )
+    .expect("Polygon must accept FrameFillColor (B-22), not reject it");
+    assert_eq!(
+        polygon_fill(&doc, &id),
+        Some("Color/PagedDrawTest".to_string()),
+        "forward write lands on the polygon's own fill_color"
+    );
+    assert_ne!(polygon_fill(&doc, &id), before, "the op changed the fill");
+
+    apply(&mut doc, &applied.inverse).expect("inverse apply");
+    assert_eq!(
+        polygon_fill(&doc, &id),
+        before,
+        "inverse restores the previous fill exactly"
+    );
+
+    // Stroke colour + weight dispatch on the same kind, too.
+    apply(
+        &mut doc,
+        &Operation::SetProperty {
+            node: NodeId::Polygon(id.clone()),
+            path: PropertyPath::FrameStrokeWeight,
+            value: Value::Length(Some(3.5)),
+        },
+    )
+    .expect("Polygon must accept FrameStrokeWeight (B-22)");
+}
