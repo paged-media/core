@@ -291,7 +291,13 @@ export type WorkerToMain = WorkerToMainKind & {
 // that already exists; like v40/v41/v45, payload-only on the existing
 // channel — no new message. Unblocks paged.web `conic-gradient` /
 // `mix-blend-mode` / `box-shadow` fidelity and paged.draw blend/shadow.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(46);
+//
+// v47 (2026-06-13): the `SubmitSceneLayer` payload gains
+// `SceneItem::InnerShadow` (CSS `box-shadow: inset` → the existing
+// `DisplayCommand::InnerShadow` lane, with a `choke` inset-spread control).
+// Payload-only addition on the existing channel; outset spread was already
+// handled (the lowering captures the spread-inflated shadow path).
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(47);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -3721,8 +3727,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v46() {
-        assert_eq!(PROTOCOL_VERSION.0, 46);
+    fn protocol_version_is_v47() {
+        assert_eq!(PROTOCOL_VERSION.0, 47);
     }
 
     /// v38 — `RequestFrameChain` serialises with its camelCase tag and

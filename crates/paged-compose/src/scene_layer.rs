@@ -36,8 +36,8 @@ use tsify_next::Tsify;
 
 use crate::display_list::{
     BlendMode, Color, DecodedImage, DisplayCommand, DisplayList, DropShadow, GradientStop,
-    LinearGradient, Paint, PathData, PathSegment, RadialGradient, Rect, Stroke, SweepGradient,
-    Transform,
+    InnerShadow, LinearGradient, Paint, PathData, PathSegment, RadialGradient, Rect, Stroke,
+    SweepGradient, Transform,
 };
 
 /// A plugin-submitted vector layer in frame-content coordinates. Keyed
@@ -152,6 +152,29 @@ pub enum SceneItem {
         offset_x: f32,
         offset_y: f32,
         blur_radius: f32,
+        r: f32,
+        g: f32,
+        b: f32,
+        a: f32,
+    },
+    /// Stamp an INSET (inner) shadow inside a bezier path (C-1.6 — the
+    /// CSS `box-shadow: inset` case). **Additive** — mirrors
+    /// [`SceneItem::DropShadow`] but composites the offset + Gaussian-
+    /// blurred shadow colour INSIDE the path edge (CSS inset semantics),
+    /// via the existing [`DisplayCommand::InnerShadow`] lane the renderer
+    /// already rasterises (no new render path). `choke` (pt) expands the
+    /// shadow's hard edge before blurring — the inset-spread control; a
+    /// plugin may instead bake CSS spread into the path geometry and pass
+    /// `choke: 0`. Colour is sRGB (linearised at lowering); `a` rides as
+    /// the shadow opacity. Composited Normal (the shadow colour over the
+    /// content, CSS-faithful — not InDesign's Multiply default). An empty
+    /// path is skipped, never panicked.
+    InnerShadow {
+        path: Vec<ScenePathSeg>,
+        offset_x: f32,
+        offset_y: f32,
+        blur_radius: f32,
+        choke: f32,
         r: f32,
         g: f32,
         b: f32,
@@ -635,6 +658,44 @@ pub fn emit_scene_layer<T>(
                         blur_radius: (*blur_radius).max(0.0),
                         color,
                         opacity: a.clamp(0.0, 1.0),
+                    },
+                });
+            }
+            SceneItem::InnerShadow {
+                path,
+                offset_x,
+                offset_y,
+                blur_radius,
+                choke,
+                r,
+                g,
+                b,
+                a,
+            } => {
+                if path.is_empty() {
+                    continue;
+                }
+                let id = list.paths.push_anon(build_path(path));
+                // Same colour/alpha handling as DropShadow (carry `a` as
+                // opacity, keep the colour opaque so the rasterizer doesn't
+                // square the alpha). Composited Normal for CSS fidelity.
+                let color = scene_paint_to_color(ScenePaint {
+                    r: *r,
+                    g: *g,
+                    b: *b,
+                    a: 1.0,
+                });
+                list.push(DisplayCommand::InnerShadow {
+                    path_id: id,
+                    transform: content_outer,
+                    params: InnerShadow {
+                        offset_x: *offset_x,
+                        offset_y: *offset_y,
+                        blur_radius: (*blur_radius).max(0.0),
+                        color,
+                        opacity: a.clamp(0.0, 1.0),
+                        choke: (*choke).max(0.0),
+                        blend_mode: BlendMode::Normal,
                     },
                 });
             }
@@ -1228,6 +1289,75 @@ mod tests {
             "sRGB grey linearised, got {}",
             shadow.color.r
         );
+    }
+
+    #[test]
+    fn inner_shadow_lowers_to_an_inner_shadow_stamp_with_choke_and_normal_blend() {
+        // InnerShadow (CSS `box-shadow: inset`) lowers to
+        // DisplayCommand::InnerShadow carrying offset/blur/choke + the
+        // alpha-as-opacity colour handling (mirrors DropShadow), composited
+        // Normal for CSS fidelity (not InDesign's Multiply default).
+        let mut list = DisplayList::new();
+        let layer = SceneLayer {
+            items: vec![SceneItem::InnerShadow {
+                path: vec![
+                    ScenePathSeg::MoveTo { x: 0.0, y: 0.0 },
+                    ScenePathSeg::LineTo { x: 20.0, y: 0.0 },
+                    ScenePathSeg::LineTo { x: 20.0, y: 20.0 },
+                    ScenePathSeg::Close,
+                ],
+                offset_x: 2.0,
+                offset_y: 3.0,
+                blur_radius: 5.0,
+                choke: 1.5,
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.5,
+            }],
+        };
+        emit_scene_layer(
+            &mut list,
+            &layer,
+            Transform::IDENTITY,
+            (0.0, 0.0),
+            |_, _, _| {},
+        );
+        assert_eq!(list.commands.len(), 1);
+        let DisplayCommand::InnerShadow { params, .. } = &list.commands[0] else {
+            panic!("expected an InnerShadow, got {:?}", list.commands[0]);
+        };
+        assert_eq!(params.offset_x, 2.0);
+        assert_eq!(params.offset_y, 3.0);
+        assert_eq!(params.blur_radius, 5.0);
+        assert_eq!(params.choke, 1.5, "inset-spread choke carried");
+        assert!((params.opacity - 0.5).abs() < 1e-6, "alpha rides as opacity");
+        assert_eq!(params.color.a, 1.0, "colour alpha kept at 1.0");
+        assert_eq!(
+            params.blend_mode,
+            BlendMode::Normal,
+            "CSS inset shadow composites Normal, not Multiply"
+        );
+    }
+
+    #[test]
+    fn inner_shadow_empty_path_is_skipped() {
+        let mut list = DisplayList::new();
+        let layer = SceneLayer {
+            items: vec![SceneItem::InnerShadow {
+                path: vec![],
+                offset_x: 1.0,
+                offset_y: 1.0,
+                blur_radius: 2.0,
+                choke: 0.0,
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            }],
+        };
+        emit_scene_layer(&mut list, &layer, Transform::IDENTITY, (0.0, 0.0), |_, _, _| {});
+        assert!(list.commands.is_empty(), "empty-path inner shadow skipped");
     }
 
     #[test]
