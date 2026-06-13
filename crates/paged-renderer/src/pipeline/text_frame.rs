@@ -16,16 +16,11 @@
 
 use super::*;
 
-use paged_compose::{
-    emit_glyph_slice, Color, DropShadow, Paint, Rect, Transform, TtfOutliner,
-};
-use paged_parse::{
-    Graphic, TextFrame,
-};
+use paged_compose::{emit_glyph_slice, Color, DropShadow, Paint, Rect, Transform, TtfOutliner};
+use paged_parse::{Graphic, TextFrame};
 use paged_scene::Document;
 
 use crate::module::{Geometry, ResolvedFrame};
-
 
 pub(super) struct WrapPlan {
     /// Per-line x-shifts in 1/64 pt. Index `i` = shift for line i.
@@ -763,7 +758,10 @@ pub(super) fn auto_sizing_line_height_pt(document: &Document, frame: &TextFrame)
     lh.max(1.0)
 }
 
-pub(super) fn pages_overlapping_frame(frame: &paged_parse::Bounds, pages: &[PageGeom]) -> Vec<usize> {
+pub(super) fn pages_overlapping_frame(
+    frame: &paged_parse::Bounds,
+    pages: &[PageGeom],
+) -> Vec<usize> {
     let mut out: Vec<usize> = Vec::new();
     for (i, p) in pages.iter().enumerate() {
         let b = p.bounds_in_spread;
@@ -1112,7 +1110,12 @@ pub(super) fn apply_vertical_writing_rotation(
     }
 }
 
-pub(super) fn rotate_transform_around(xf: &mut Transform, linear: [f32; 4], pivot_x: f32, pivot_y: f32) {
+pub(super) fn rotate_transform_around(
+    xf: &mut Transform,
+    linear: [f32; 4],
+    pivot_x: f32,
+    pivot_y: f32,
+) {
     let [a, b, c, d] = linear;
     // The pivoted rotation is:
     //   M = [a c (pivot_x - a*pivot_x - c*pivot_y);
@@ -1131,7 +1134,10 @@ pub(super) fn rotate_transform_around(xf: &mut Transform, linear: [f32; 4], pivo
     xf.0 = [new_a, new_b, new_c, new_d, new_tx, new_ty];
 }
 
-pub(super) fn frame_outer_transform(page: &BuiltPage, item_transform: Option<[f32; 6]>) -> Transform {
+pub(super) fn frame_outer_transform(
+    page: &BuiltPage,
+    item_transform: Option<[f32; 6]>,
+) -> Transform {
     let (ox, oy) = page.spread_origin;
     let page_origin = Transform::translate(-ox, -oy);
     // W1.9 — the spread-level `<Spread ItemTransform>` rotation/scale
@@ -1255,11 +1261,76 @@ pub(super) fn emit_frame_scene_layer(
     );
 }
 
+/// C-6 (I-06) — assemble a claimed image resource's pyramid tiles into a
+/// frame, mirroring [`emit_frame_scene_layer`]'s seam. Looks the frame's
+/// `Self` id up in the provider registry; on a hit, picks the mip level
+/// matching `render_scale`, assembles the cached tiles into the frame's
+/// content box (the same content-origin → page transform the scene layer
+/// uses), and records any tiles the provider lacked at that level onto
+/// `page.resource_tiles_needed` for the host to fill asynchronously.
+/// Compose never blocks: cold tiles simply don't paint (the native
+/// whole-image lane already drew first paint). A no-op when no registry is
+/// wired, the frame has no id, or no provider claimed it — so the
+/// no-plugin path is untouched. `inset`/`item_transform` carry the same
+/// meaning as in [`emit_frame_scene_layer`].
+#[allow(clippy::too_many_arguments)]
+pub(super) fn emit_frame_resource_tiles(
+    page: &mut BuiltPage,
+    self_id: Option<&str>,
+    bounds: paged_parse::Bounds,
+    inset: Option<[f32; 4]>,
+    item_transform: Option<[f32; 6]>,
+    registry: Option<
+        &std::collections::HashMap<String, crate::pipeline::ResourceProviderEntry<'_>>,
+    >,
+    render_scale: f32,
+) {
+    let Some(registry) = registry else { return };
+    let Some(id) = self_id else { return };
+    let Some(entry) = registry.get(id) else {
+        return;
+    };
+    let outer = frame_outer_transform(page, item_transform);
+    let ins = inset.unwrap_or([0.0; 4]);
+    let content_left = bounds.left + ins[1];
+    let content_top = bounds.top + ins[0];
+    let content_w = (bounds.right - bounds.left - ins[1] - ins[3]).max(0.0);
+    let content_h = (bounds.bottom - bounds.top - ins[0] - ins[2]).max(0.0);
+    if content_w <= 0.0 || content_h <= 0.0 {
+        return;
+    }
+    let content_outer = outer.compose(&Transform::translate(content_left, content_top));
+
+    let level =
+        crate::resource_provider::mip_level_for_scale(render_scale, entry.pyramid.max_level());
+    let missing = crate::resource_provider::assemble_resource_tiles(
+        &mut page.list,
+        entry.provider,
+        entry.image_id,
+        &entry.pyramid,
+        level,
+        content_outer,
+        (content_w, content_h),
+    );
+    if !missing.is_empty() {
+        page.resource_tiles_needed
+            .push(crate::resource_provider::ResourceTilesNeeded {
+                image_id: entry.image_id.to_string(),
+                level,
+                tiles: missing,
+                generation: entry.provider.revision(entry.image_id),
+            });
+    }
+}
+
 /// Axis-aligned bounding box of `rect` after `outer` is applied to its
 /// four corners. The corners may rotate / shear under non-uniform
 /// transforms, so we union all four projections rather than just the
 /// top-left + bottom-right.
-pub(super) fn rect_bounds_in_page(rect: paged_compose::Rect, outer: Transform) -> paged_compose::Rect {
+pub(super) fn rect_bounds_in_page(
+    rect: paged_compose::Rect,
+    outer: Transform,
+) -> paged_compose::Rect {
     let pts = [
         outer.apply(rect.x, rect.y),
         outer.apply(rect.x + rect.w, rect.y),
@@ -1283,7 +1354,6 @@ pub(super) fn rect_bounds_in_page(rect: paged_compose::Rect, outer: Transform) -
         h: (maxy - miny).max(0.0),
     }
 }
-
 
 /// Pull the inner `Color` out of a solid (or CMYK) paint, returning
 /// `None` for gradient paints. Used wherever a context can only

@@ -20,6 +20,7 @@
 pub mod asset;
 pub mod diagnostics;
 pub mod pipeline;
+pub mod resource_provider;
 
 mod module;
 
@@ -30,6 +31,10 @@ pub use pipeline::{
     BodyStoryEmissionDelta, BodyStoryPageDelta, BuiltDocument, BuiltPage, CellAddr, CellRect,
     ClusterPos, DateParts, DocumentClock, FontMetricsOverride, FontTable, LineLayout,
     MasterTextEmitDelta, PageId, PipelineOptions, PipelineStats, RunPaintPicker,
+};
+pub use resource_provider::{
+    assemble_resource_tiles, mip_level_for_scale, ImageResourceProvider, ProviderTile,
+    ResourcePyramid, ResourceTilesNeeded,
 };
 
 #[cfg(feature = "cpu")]

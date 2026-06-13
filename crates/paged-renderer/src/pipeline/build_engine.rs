@@ -20,16 +20,14 @@ use super::*;
 use std::collections::HashMap;
 
 use paged_compose::{
-    emit_glyph_slice, emit_glyph_slice_stroke, DisplayList, DropShadow, Paint, PathData, PathSegment, Rect, Transform, TtfOutliner,
+    emit_glyph_slice, emit_glyph_slice_stroke, DisplayList, DropShadow, Paint, PathData,
+    PathSegment, Rect, Transform, TtfOutliner,
 };
-use paged_parse::{
-    Graphic, PathAnchor, TextFrame,
-};
+use paged_parse::{Graphic, PathAnchor, TextFrame};
 use paged_scene::Document;
 
 use crate::diagnostics::{Diagnostic, DiagnosticCode, RenderDiagnostics};
 use crate::module::geometry::rewrite_tail_for_overprint;
-
 
 pub(super) fn build_document_inner(
     document: &Document,
@@ -171,6 +169,7 @@ pub(super) fn build_document_inner(
                 footnotes: Vec::new(),
                 diagnostics: Vec::new(),
                 cell_rects: Vec::new(),
+                resource_tiles_needed: Vec::new(),
             });
         }
         spread_page_ranges.push(start..pages.len());
@@ -207,6 +206,7 @@ pub(super) fn build_document_inner(
             footnotes: Vec::new(),
             diagnostics: Vec::new(),
             cell_rects: Vec::new(),
+            resource_tiles_needed: Vec::new(),
         });
         page_geometries.push(PageGeom {
             bounds_in_spread: paged_parse::Bounds {
@@ -790,6 +790,17 @@ pub(super) fn build_document_inner(
                             options.scene_layers,
                             options.font,
                         );
+                        // C-6: a claimed image provider assembles pyramid
+                        // tiles inside this frame.
+                        emit_frame_resource_tiles(
+                            &mut pages[page_idx],
+                            frame.self_id.as_deref(),
+                            frame.bounds,
+                            frame.inset_spacing,
+                            frame.item_transform,
+                            options.resource_providers,
+                            options.render_scale,
+                        );
                     }
                 }
                 paged_parse::FrameRef::Rectangle(idx) => {
@@ -863,6 +874,17 @@ pub(super) fn build_document_inner(
                             options.scene_layers,
                             options.font,
                         );
+                        // C-6: a claimed image provider assembles pyramid
+                        // tiles inside this frame.
+                        emit_frame_resource_tiles(
+                            &mut pages[page_idx],
+                            rect.self_id.as_deref(),
+                            rect.bounds,
+                            None,
+                            rect.item_transform,
+                            options.resource_providers,
+                            options.render_scale,
+                        );
                     }
                 }
                 paged_parse::FrameRef::Oval(idx) => {
@@ -917,6 +939,17 @@ pub(super) fn build_document_inner(
                             options.scene_layers,
                             options.font,
                         );
+                        // C-6: a claimed image provider assembles pyramid
+                        // tiles inside this frame.
+                        emit_frame_resource_tiles(
+                            &mut pages[page_idx],
+                            oval.self_id.as_deref(),
+                            oval.bounds,
+                            None,
+                            oval.item_transform,
+                            options.resource_providers,
+                            options.render_scale,
+                        );
                     }
                 }
                 paged_parse::FrameRef::GraphicLine(idx) => {
@@ -956,6 +989,17 @@ pub(super) fn build_document_inner(
                             line.item_transform,
                             options.scene_layers,
                             options.font,
+                        );
+                        // C-6: a claimed image provider assembles pyramid
+                        // tiles inside this frame.
+                        emit_frame_resource_tiles(
+                            &mut pages[page_idx],
+                            line.self_id.as_deref(),
+                            line.bounds,
+                            None,
+                            line.item_transform,
+                            options.resource_providers,
+                            options.render_scale,
                         );
                     }
                 }
@@ -1010,6 +1054,17 @@ pub(super) fn build_document_inner(
                             poly.item_transform,
                             options.scene_layers,
                             options.font,
+                        );
+                        // C-6: a claimed image provider assembles pyramid
+                        // tiles inside this frame.
+                        emit_frame_resource_tiles(
+                            &mut pages[page_idx],
+                            poly.self_id.as_deref(),
+                            poly.bounds,
+                            None,
+                            poly.item_transform,
+                            options.resource_providers,
+                            options.render_scale,
                         );
                     }
                 }
@@ -1812,11 +1867,19 @@ pub(super) fn build_document_inner(
         }
     }
 
+    // C-6 — aggregate each page's tile-miss requests verbatim (they carry
+    // their own image_id; no page backfill needed).
+    let resource_tiles_needed: Vec<_> = pages
+        .iter()
+        .flat_map(|p| p.resource_tiles_needed.iter().cloned())
+        .collect();
+
     Ok(BuiltDocument {
         pages,
         stats: total_stats,
         breaks,
         diagnostics,
+        resource_tiles_needed,
     })
 }
 
