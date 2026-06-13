@@ -144,9 +144,10 @@ pub enum SceneItem {
     /// [`DisplayCommand::DropShadow`] lane, which already composites a
     /// blurred offset stamp through both rasterizers. Colour is sRGB
     /// (linearised at lowering like every other paint); `a` is the
-    /// shadow opacity. Inset shadows and the CSS `spread` radius are
-    /// honest follow-ons (not built here). An empty path is skipped,
-    /// never panicked.
+    /// shadow opacity. Inset shadows are [`SceneItem::InnerShadow`] (C-1.6);
+    /// the CSS `spread` radius is applied plugin-side (the lowering inflates
+    /// the path before submitting), so it needs no field here. An empty path
+    /// is skipped, never panicked.
     DropShadow {
         path: Vec<ScenePathSeg>,
         offset_x: f32,
