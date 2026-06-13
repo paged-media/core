@@ -913,6 +913,27 @@ mod tests {
     }
 
     #[test]
+    fn open_path_offset_delegates_to_a_closed_outline_band() {
+        // B-21: the apply layer routes an OPEN-path offset to
+        // `outline_stroke(2·|δ|)` — a both-sides band. Here we prove the
+        // delegation target: outlining an open 2-point line yields a
+        // CLOSED contour (the band) with more than the 2 input anchors.
+        let line = vec![corner(0.0, 0.0), corner(100.0, 0.0)];
+        let (a, _s, o) = outline_stroke(
+            &line,
+            &[0],
+            &[true],
+            2.0 * 3.0_f32.abs(),
+            StrokeCap::Butt,
+            StrokeJoin::Miter,
+            4.0,
+        )
+        .expect("open line outlines to a band");
+        assert!(a.len() >= 4, "a band has at least 4 anchors, got {}", a.len());
+        assert!(!o.iter().any(|open| *open), "the offset band is closed");
+    }
+
+    #[test]
     fn nearest_point_projects_onto_the_curve() {
         let (a, s, o) = square();
         // Query right of the right edge midpoint.

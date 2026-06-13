@@ -399,14 +399,38 @@ pub(super) fn apply_path_kernel_op(
                 join,
                 miter_limit,
                 ..
-            } => kurbo_kernel::offset_closed_path(
-                anchors,
-                subpath_starts,
-                subpath_open,
-                *delta,
-                parse_join(join).ok_or_else(|| invalid(format!("unknown join \"{join}\"")))?,
-                *miter_limit,
-            ),
+            } => {
+                let join_k =
+                    parse_join(join).ok_or_else(|| invalid(format!("unknown join \"{join}\"")))?;
+                let is_open = subpath_open.iter().any(|o| *o) || subpath_starts.len() > 1;
+                if is_open {
+                    // B-21: an OPEN path has no inside/outside, so its
+                    // offset is the both-sides band of width 2·|δ|
+                    // (Illustrator's Offset Path closes an open path into
+                    // an outline). Delegate to the stroke-outline kernel
+                    // with a butt cap (the band ends square at the path
+                    // endpoints). Closed single contours keep the
+                    // single-contour offset below.
+                    kurbo_kernel::outline_stroke(
+                        anchors,
+                        subpath_starts,
+                        subpath_open,
+                        2.0 * delta.abs(),
+                        StrokeCap::Butt,
+                        join_k,
+                        *miter_limit,
+                    )
+                } else {
+                    kurbo_kernel::offset_closed_path(
+                        anchors,
+                        subpath_starts,
+                        subpath_open,
+                        *delta,
+                        join_k,
+                        *miter_limit,
+                    )
+                }
+            }
             Value::SimplifyPath { tolerance, .. } => {
                 kurbo_kernel::simplify_path(anchors, subpath_starts, subpath_open, *tolerance)
             }
