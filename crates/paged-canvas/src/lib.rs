@@ -54,6 +54,7 @@ pub mod hit;
 pub mod model;
 pub mod mutate;
 pub mod resolve;
+pub mod resource_tiles;
 pub mod selection;
 pub mod snap;
 pub mod snapshot;

@@ -629,16 +629,14 @@ impl WorkerCore {
                     .as_ref()
                     .and_then(|m| m.placed_asset_bytes(&element_id))
                 {
-                    Some((uri, width, height, bytes)) => {
-                        WorkerToMainKind::PlacedAssetBytes {
-                            element_id,
-                            found: true,
-                            uri,
-                            width,
-                            height,
-                            encoded: paged_canvas::channel::ByteBuf(bytes),
-                        }
-                    }
+                    Some((uri, width, height, bytes)) => WorkerToMainKind::PlacedAssetBytes {
+                        element_id,
+                        found: true,
+                        uri,
+                        width,
+                        height,
+                        encoded: paged_canvas::channel::ByteBuf(bytes),
+                    },
                     None => WorkerToMainKind::PlacedAssetBytes {
                         element_id,
                         found: false,
@@ -735,6 +733,100 @@ impl WorkerCore {
                 WorkerToMainKind::SceneLayerApplied {
                     element_id,
                     applied,
+                }
+            }
+            MainToWorkerKind::ClaimImageResource {
+                image_id,
+                levels,
+                tile_size,
+                base_width,
+                base_height,
+                revision,
+            } => {
+                // v44 (C-6) — register the claim + rebuild. A cold claim
+                // emits ResourceTilesNeeded (carried additively on the ack);
+                // the whole-image lane paints meanwhile. ClearAll: the
+                // claimed frame may sit on any page.
+                let (applied, needed) = match self.model.as_mut() {
+                    Some(m) => {
+                        let ok = m
+                            .claim_image_resource(
+                                image_id.clone(),
+                                levels,
+                                tile_size,
+                                base_width,
+                                base_height,
+                                revision,
+                            )
+                            .is_ok();
+                        let needed = if ok {
+                            m.resource_tiles_needed()
+                                .into_iter()
+                                .map(Into::into)
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        (ok, needed)
+                    }
+                    None => (false, Vec::new()),
+                };
+                if applied {
+                    effect = CacheEffect::ClearAll;
+                }
+                WorkerToMainKind::ResourceClaimApplied {
+                    image_id,
+                    applied,
+                    needed,
+                }
+            }
+            MainToWorkerKind::ReleaseImageResource { image_id } => {
+                let applied = match self.model.as_mut() {
+                    Some(m) => m.release_image_resource(&image_id).is_ok(),
+                    None => false,
+                };
+                if applied {
+                    effect = CacheEffect::ClearAll;
+                }
+                WorkerToMainKind::ResourceClaimApplied {
+                    image_id,
+                    applied,
+                    needed: Vec::new(),
+                }
+            }
+            MainToWorkerKind::SubmitResourceTiles {
+                image_id,
+                level,
+                tiles,
+                generation,
+            } => {
+                // v44 (C-6) — fill the LRU cache + rebuild so the next
+                // snapshot consumes the tiles. Re-emit any STILL-missing
+                // tiles (e.g. the host filled a partial set) on the ack.
+                let (applied, needed) = match self.model.as_mut() {
+                    Some(m) => {
+                        let accepted = m
+                            .submit_resource_tiles(&image_id, level, tiles, generation)
+                            .unwrap_or(false);
+                        let needed = if accepted {
+                            m.resource_tiles_needed()
+                                .into_iter()
+                                .map(Into::into)
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        (accepted, needed)
+                    }
+                    None => (false, Vec::new()),
+                };
+                if applied {
+                    effect = CacheEffect::ClearAll;
+                }
+                WorkerToMainKind::ResourceClaimApplied {
+                    image_id,
+                    applied,
+                    needed,
                 }
             }
             MainToWorkerKind::RequestDocumentMeta => {

@@ -26,8 +26,8 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use paged_compose::{
     emit_ellipse, emit_glyph_slice, emit_glyph_slice_stroke, emit_line, emit_paragraph, emit_rect,
-    emit_stroke_rect, emit_stroke_rect_transformed, Color, DisplayList, DropShadow,
-    GlyphOutliner, Paint, PathData, PathSegment, Rect, Stroke, Transform, TtfOutliner,
+    emit_stroke_rect, emit_stroke_rect_transformed, Color, DisplayList, DropShadow, GlyphOutliner,
+    Paint, PathData, PathSegment, Rect, Stroke, Transform, TtfOutliner,
 };
 use paged_parse::{
     graphic, Graphic, GraphicLine, Oval, PathAnchor, Polygon, Rectangle, TextFrame, TextPath,
@@ -39,28 +39,28 @@ use crate::module::{Geometry, ResolvedFrame};
 use crate::AssetResolver;
 
 mod anchored;
+mod blend_shadow;
+mod build_engine;
 mod color_paint;
+mod compose_opts;
 mod datefmt;
+mod decorations;
+mod deltas;
+mod font_table;
+mod footnotes;
+mod geom;
 mod image_convert;
 mod image_decode;
 mod images;
 mod links;
+mod metrics;
+mod nested_styles;
 mod numbering;
 mod shapes;
 mod stroke_geom;
 mod tables;
-mod text_path;
-mod footnotes;
-mod decorations;
-mod nested_styles;
-mod metrics;
-mod blend_shadow;
-mod build_engine;
-mod geom;
-mod deltas;
 mod text_frame;
-mod compose_opts;
-mod font_table;
+mod text_path;
 
 pub use anchored::AnchoredImageEmit;
 use anchored::{emit_anchored_frames_for_paragraph, emit_anchored_rect_image};
@@ -86,6 +86,12 @@ use shapes::{
 #[cfg(test)]
 use shapes::{PLACEHOLDER_FILL_RGB, PLACEHOLDER_X_RGB, PLACEHOLDER_X_STROKE_PT};
 
+pub(crate) use blend_shadow::{
+    frame_group_opacity, frame_needs_blend_group, pop_blend_group, push_blend_group,
+    resolve_frame_shadow,
+};
+pub use build_engine::build_index_paragraphs;
+use build_engine::*;
 pub(crate) use color_paint::{apply_fill_tint, stroke_for};
 use color_paint::{
     build_footnote_paint_picker, build_run_paint_picker_resolved, build_run_stroke_picker,
@@ -98,32 +104,32 @@ pub use color_paint::{
 };
 #[cfg(test)]
 use color_paint::{color_lerp, linear_gradient_endpoints, midpoint_blend};
+use compose_opts::*;
+use decorations::*;
+use deltas::*;
+pub use font_table::FontTable;
+use font_table::*;
+use footnotes::*;
+use geom::*;
+pub(crate) use geom::{
+    fnv_1a_u64, frame_fill_is_transparent, frame_stroke_is_visible, path_signature,
+    transform_bounds,
+};
 use image_convert::{cmyk32_to_rgba, l16_to_rgba, l8_to_rgba, rgb24_to_rgba};
 use image_decode::decode_image_bytes;
 #[cfg(test)]
 use image_decode::decode_image_bytes_with_target_max;
+use metrics::map_tab_alignment;
+pub use metrics::*;
+pub use nested_styles::*;
 use numbering::{bullet_marker_character_style, list_prefix};
 #[cfg(test)]
 use numbering::{format_number, substitute_numbering_expression};
+use text_frame::*;
 #[cfg(test)]
 use text_path::polygon_path_from_anchors;
 pub(crate) use text_path::polygon_path_from_anchors_with_open;
 use text_path::{emit_polygon_into, emit_text_path_into};
-use footnotes::*;
-use decorations::*;
-pub use nested_styles::*;
-pub use metrics::*;
-use metrics::map_tab_alignment;
-pub(crate) use blend_shadow::{frame_group_opacity, frame_needs_blend_group, pop_blend_group, push_blend_group, resolve_frame_shadow};
-use build_engine::*;
-use geom::*;
-use deltas::*;
-use text_frame::*;
-use compose_opts::*;
-use font_table::*;
-pub use font_table::FontTable;
-pub(crate) use geom::{frame_fill_is_transparent, frame_stroke_is_visible, fnv_1a_u64, path_signature, transform_bounds};
-pub use build_engine::build_index_paragraphs;
 
 /// Per-family override of the metrics the renderer uses for
 /// baseline-placement math. Glyph outlines still come from whichever
@@ -344,6 +350,43 @@ pub struct PipelineOptions<'a> {
     /// display-list → Vello/tiny-skia path. `None` (the default) is the
     /// no-plugin path and costs nothing.
     pub scene_layers: Option<&'a std::collections::HashMap<String, paged_compose::SceneLayer>>,
+    /// C-6 (I-06) — image resource providers keyed by frame element id
+    /// (`Self`). When a body frame's id has an entry, the renderer pulls
+    /// pyramid tiles from the provider at the mip level matching
+    /// [`Self::render_scale`] and assembles them into the frame's content
+    /// box as ordinary `DisplayCommand::Image` entries (the same lane the
+    /// C-1 image scene layer + placed assets use). Missing tiles are
+    /// recorded on `BuiltPage::resource_tiles_needed` for the host to fill
+    /// asynchronously — compose never blocks. `None` (the default) keeps
+    /// the existing whole-image lane and costs nothing. Keyed by frame id
+    /// (the worker maps the `x-paged-image:<frame>` claim id back to the
+    /// frame before building); the entry's `image_id` is what the
+    /// emitted `ResourceTilesNeeded` carries.
+    pub resource_providers:
+        Option<&'a std::collections::HashMap<String, ResourceProviderEntry<'a>>>,
+    /// C-6 — the rasteriser scale (px-per-content-pt) the assembled tiles
+    /// will be drawn at, used only to pick the pyramid mip level
+    /// ([`crate::resource_provider::mip_level_for_scale`]). Default `1.0`
+    /// (full resolution). The display list itself stays
+    /// resolution-independent: this is a *hint* for which level of detail
+    /// to assemble, not a geometry scale.
+    pub render_scale: f32,
+}
+
+/// C-6 — one frame's claimed image-resource entry on [`PipelineOptions`]:
+/// the provider to pull tiles from, the pyramid geometry, and the
+/// provider-claimed `image_id` the [`crate::resource_provider::
+/// ResourceTilesNeeded`] signal carries. Borrowed (not owned) so the
+/// worker's cache stays the single source of truth across rebuilds.
+#[derive(Clone, Copy)]
+pub struct ResourceProviderEntry<'a> {
+    /// Provider-claimed id (`x-paged-image:<frame>`); echoed in the
+    /// `ResourceTilesNeeded` request so the host knows which claim to fill.
+    pub image_id: &'a str,
+    /// Pyramid geometry (base extent, level count, tile size).
+    pub pyramid: crate::resource_provider::ResourcePyramid,
+    /// The tile source. One provider may back many claimed images.
+    pub provider: &'a dyn crate::resource_provider::ImageResourceProvider,
 }
 
 /// Perf-BodyStory — captured multi-page emission delta from one
@@ -434,6 +477,8 @@ impl Default for PipelineOptions<'_> {
             body_story_emit_cache: None,
             document_clock: DocumentClock::default(),
             scene_layers: None,
+            resource_providers: None,
+            render_scale: 1.0,
         }
     }
 }
@@ -558,6 +603,14 @@ pub struct BuiltPage {
     /// carries the template row index), so a click on a replayed header
     /// resolves to the source row.
     pub cell_rects: Vec<CellRect>,
+    /// C-6 (I-06) — tiles a claimed image resource lacked at the chosen
+    /// mip level while emitting this page. The whole-image lane (or a
+    /// coarser cached level) painted in their place; the host fills the
+    /// gaps asynchronously and the next build sharpens the frame. Empty
+    /// unless `PipelineOptions::resource_providers` is wired and a claimed
+    /// frame on this page had a cache miss. Aggregated verbatim into
+    /// `BuiltDocument::resource_tiles_needed`.
+    pub resource_tiles_needed: Vec<crate::resource_provider::ResourceTilesNeeded>,
 }
 
 /// W3.A1 — one table cell's page-local rect plus its addressing keys.
@@ -728,6 +781,12 @@ pub struct BuiltDocument {
     /// per-page collectors plus the per-story emit channel; the
     /// underlying `tracing::warn!` calls still fire too.
     pub diagnostics: RenderDiagnostics,
+    /// C-6 (I-06) — every page's tile-miss requests, aggregated. The
+    /// worker turns these into `ResourceTilesNeeded` wire messages so the
+    /// host fetches + submits the missing tiles. Empty when no resource
+    /// provider was wired (the default) or every claimed image was fully
+    /// cached at the chosen level.
+    pub resource_tiles_needed: Vec<crate::resource_provider::ResourceTilesNeeded>,
 }
 
 impl BuiltDocument {
@@ -1220,6 +1279,7 @@ pub fn build(document: &Document, options: &PipelineOptions) -> anyhow::Result<B
         footnotes: Vec::new(),
         diagnostics: Vec::new(),
         cell_rects: Vec::new(),
+        resource_tiles_needed: Vec::new(),
     })
 }
 
@@ -1270,7 +1330,6 @@ pub fn render(
     let image = paged_gpu::rasterize(&built.list, &raster_opts);
     Ok((built, image))
 }
-
 
 #[cfg(test)]
 mod tests;

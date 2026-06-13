@@ -255,6 +255,29 @@ export type WorkerToMain = WorkerToMainKind & {
 ///     InDesign ArrowHead vocabulary). Writer-side (no wire): C-8
 ///     new-entry emission (minted stories + InsertPage spreads survive
 ///     IDML export, designmap patched).
+///   - v44 (PENDING BATCH — the orchestrator bumps PROTOCOL_VERSION once
+///     for the whole v44 wire batch; this entry reserves the number for
+///     the additions landing into it, so `PROTOCOL_VERSION` stays 43 until
+///     that single bump). C-6 (I-06) image resource provider — pyramid-
+///     tile pull. New message kinds (each a wire change, so the batch
+///     bump):
+///     - `ClaimImageResource { image_id, levels, tile_size, base_width,
+///       base_height, revision }` / `ReleaseImageResource { image_id }`
+///       (main→worker): register / drop a frame's claim. The worker keys
+///       the claim by the frame `Self` id parsed from the claim id's
+///       `x-paged-image:<frame>` namespace and pulls tiles from its LRU
+///       cache at build time. Reply: `ResourceClaimApplied`.
+///     - `ResourceTilesNeeded { image_id, level, tiles, generation }`
+///       (worker→main, UNSOLICITED): emitted during compose when a claimed
+///       image lacked tiles at the chosen mip level — compose painted the
+///       best cached level (or the whole-image fallback) and never blocked.
+///       The host fetches the listed tile origins and submits them.
+///     - `SubmitResourceTiles { image_id, level, tiles, generation }`
+///       (main→worker): fill the worker-side budgeted LRU tile cache and
+///       dirty the claimed image's pages. `generation` echoes the
+///       `ResourceTilesNeeded` it answers so a stale reply can be dropped.
+///       Reply: `ResourceClaimApplied`. `ProviderTileWire` carries one
+///       tile's RGBA8 bytes + level-space px origin + dims.
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(43);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
@@ -330,6 +353,54 @@ pub struct PreflightFinding {
     pub message: String,
     #[serde(default)]
     pub page_index: Option<u32>,
+}
+
+/// v44 (C-6 / I-06) — one pyramid tile on the wire. `rgba` is tightly
+/// packed RGBA8 (`width*height*4` bytes, row-major); `[x, y]` is the
+/// tile's origin in level-space px (the provider's grid origin). The
+/// worker interns these into its budgeted LRU tile cache; the renderer's
+/// resource provider serves them back as `paged_renderer::ProviderTile`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderTileWire {
+    /// Tile origin x in level-space px.
+    pub x: u32,
+    /// Tile origin y in level-space px.
+    pub y: u32,
+    /// Pixel width of the buffer.
+    pub width: u32,
+    /// Pixel height of the buffer.
+    pub height: u32,
+    /// Tightly packed RGBA8, row-major. Length must be `width*height*4`.
+    #[tsify(type = "number[]")]
+    pub rgba: ByteBuf,
+}
+
+/// v44 (C-6 / I-06) — one image's tile-miss request: the tiles a claimed
+/// image lacked at `level` during the last build. `tiles` are grid origins
+/// `[x, y]` in level-space px; `generation` is the pyramid revision the
+/// request was computed against (the host echoes it on submit so a stale
+/// reply is dropped).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceTilesNeededWire {
+    pub image_id: String,
+    pub level: u8,
+    pub tiles: Vec<[u32; 2]>,
+    pub generation: u64,
+}
+
+impl From<paged_renderer::ResourceTilesNeeded> for ResourceTilesNeededWire {
+    fn from(n: paged_renderer::ResourceTilesNeeded) -> Self {
+        Self {
+            image_id: n.image_id,
+            level: n.level,
+            tiles: n.tiles,
+            generation: n.generation,
+        }
+    }
 }
 
 /// One message from main → worker. (Tsify derive intentionally
@@ -629,6 +700,39 @@ pub enum MainToWorkerKind {
     /// v39 (C-1) — drop the scene layer previously submitted for
     /// `element_id` (no-op if none). Reply: `SceneLayerApplied`.
     ClearSceneLayer { element_id: String },
+    /// v44 (C-6 / I-06) — register an image-resource claim for the frame
+    /// whose `Self` id is encoded in `image_id`'s `x-paged-image:<frame>`
+    /// namespace. The worker records the claim's pyramid geometry
+    /// (`levels`, `tile_size`, base extent) and, on the next build, pulls
+    /// tiles from its LRU cache to assemble inside that frame at the mip
+    /// level matching the camera scale. A claimed image with no cached
+    /// tiles emits `ResourceTilesNeeded` (the whole-image lane paints
+    /// meanwhile). `revision` seeds the damage etag. Reply:
+    /// `ResourceClaimApplied`.
+    ClaimImageResource {
+        image_id: String,
+        levels: u8,
+        tile_size: u32,
+        base_width: u32,
+        base_height: u32,
+        revision: u64,
+    },
+    /// v44 (C-6 / I-06) — drop the claim for `image_id` (no-op if none):
+    /// frees its cached tiles + restores the native whole-image fallback
+    /// lane for the frame. Reply: `ResourceClaimApplied`.
+    ReleaseImageResource { image_id: String },
+    /// v44 (C-6 / I-06) — fill the worker-side LRU tile cache for
+    /// `image_id` at `level` with `tiles` (the host's reply to a
+    /// `ResourceTilesNeeded`). `generation` echoes the request's pyramid
+    /// revision so a stale reply (the image moved on) is dropped. Dirties
+    /// the claimed image's pages so the next snapshot consumes the new
+    /// tiles. Reply: `ResourceClaimApplied`.
+    SubmitResourceTiles {
+        image_id: String,
+        level: u8,
+        tiles: Vec<ProviderTileWire>,
+        generation: u64,
+    },
     /// SDK Phase 5 (D1) — singleton document meta read per
     /// `panel-catalog-and-sdk-extension.md` §5.6. Backs the
     /// `documentMeta:<key>` ReadSpec form. The reply carries every
@@ -1156,6 +1260,29 @@ pub enum WorkerToMainKind {
     /// snapshot reflects the layer. `applied` is false only when there was
     /// no document loaded.
     SceneLayerApplied { element_id: String, applied: bool },
+    /// v44 (C-6 / I-06) — ack for `ClaimImageResource` /
+    /// `ReleaseImageResource` / `SubmitResourceTiles`. Echoes `image_id`;
+    /// `applied` is false only when no document was loaded. The page caches
+    /// are invalidated when tiles changed so the next snapshot consumes
+    /// them. `needed` carries the tile-miss requests the rebuild produced
+    /// (additively, so a single-reply transport delivers them alongside the
+    /// ack the way `MutationApplied.reflow` rides its reply); the host
+    /// fetches + submits them. The standalone `ResourceTilesNeeded` variant
+    /// exists for worker glue that posts unsolicited.
+    ResourceClaimApplied {
+        image_id: String,
+        applied: bool,
+        #[serde(default)]
+        needed: Vec<ResourceTilesNeededWire>,
+    },
+    /// v44 (C-6 / I-06) — UNSOLICITED: a claimed image lacked tiles at the
+    /// chosen mip level during the last build. The host fetches the listed
+    /// tile origins from the plugin's pyramid and replies with
+    /// `SubmitResourceTiles`. Compose did NOT block: the frame painted the
+    /// best cached level (or the native whole-image fallback) meanwhile.
+    /// Mirrors `PagesDirty`'s unsolicited-post pattern. The same payload is
+    /// also delivered additively on `ResourceClaimApplied.needed`.
+    ResourceTilesNeeded(ResourceTilesNeededWire),
     /// v38 (Wave 2, C-2 / S-05) — content-box reflow notification. Fired
     /// ONLY when a frame's CONTENT BOX changes (a `Mutation::ResizeFrame`
     /// settles), NEVER on a pure transform (`MoveFrame` /
@@ -4038,6 +4165,135 @@ mod tests {
             WorkerToMainKind::PagesDirty { page_ids } => {
                 assert_eq!(page_ids.len(), 2);
                 assert_eq!(page_ids[0].as_str(), "p1");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn c6_claim_image_resource_roundtrips_with_camelcase_tag() {
+        // v44 (C-6) — the claim message marshals through JSON with the
+        // camelCase kind/field contract the TS protocol mirror locks.
+        let msg = MainToWorker {
+            seq: 11,
+            protocol: PROTOCOL_VERSION,
+            kind: MainToWorkerKind::ClaimImageResource {
+                image_id: "x-paged-image:f1".into(),
+                levels: 3,
+                tile_size: 256,
+                base_width: 4096,
+                base_height: 4096,
+                revision: 7,
+            },
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"kind\":\"claimImageResource\""), "{json}");
+        assert!(json.contains("\"tileSize\":256"), "{json}");
+        assert!(json.contains("\"baseWidth\":4096"), "{json}");
+        let back: MainToWorker = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            MainToWorkerKind::ClaimImageResource {
+                image_id,
+                levels,
+                revision,
+                ..
+            } => {
+                assert_eq!(image_id, "x-paged-image:f1");
+                assert_eq!(levels, 3);
+                assert_eq!(revision, 7);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn c6_submit_resource_tiles_roundtrips() {
+        let msg = MainToWorker {
+            seq: 12,
+            protocol: PROTOCOL_VERSION,
+            kind: MainToWorkerKind::SubmitResourceTiles {
+                image_id: "x-paged-image:f1".into(),
+                level: 1,
+                tiles: vec![ProviderTileWire {
+                    x: 0,
+                    y: 256,
+                    width: 2,
+                    height: 1,
+                    rgba: vec![1, 2, 3, 4, 5, 6, 7, 8].into(),
+                }],
+                generation: 7,
+            },
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"kind\":\"submitResourceTiles\""), "{json}");
+        let back: MainToWorker = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            MainToWorkerKind::SubmitResourceTiles {
+                level,
+                tiles,
+                generation,
+                ..
+            } => {
+                assert_eq!(level, 1);
+                assert_eq!(generation, 7);
+                assert_eq!(tiles.len(), 1);
+                assert_eq!((tiles[0].width, tiles[0].height), (2, 1));
+                assert_eq!(tiles[0].rgba.as_slice().len(), 8);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn c6_resource_tiles_needed_and_ack_roundtrip() {
+        // The ack carries the misses additively; the standalone variant is
+        // the same payload posted unsolicited.
+        let ack = WorkerToMain {
+            seq: Some(11),
+            protocol: PROTOCOL_VERSION,
+            kind: WorkerToMainKind::ResourceClaimApplied {
+                image_id: "x-paged-image:f1".into(),
+                applied: true,
+                needed: vec![ResourceTilesNeededWire {
+                    image_id: "x-paged-image:f1".into(),
+                    level: 0,
+                    tiles: vec![[0, 0], [256, 0]],
+                    generation: 7,
+                }],
+            },
+        };
+        let json = serde_json::to_string(&ack).unwrap();
+        assert!(json.contains("\"kind\":\"resourceClaimApplied\""), "{json}");
+        let back: WorkerToMain = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            WorkerToMainKind::ResourceClaimApplied {
+                applied, needed, ..
+            } => {
+                assert!(applied);
+                assert_eq!(needed.len(), 1);
+                assert_eq!(needed[0].tiles, vec![[0, 0], [256, 0]]);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let unsolicited = WorkerToMain {
+            seq: None,
+            protocol: PROTOCOL_VERSION,
+            kind: WorkerToMainKind::ResourceTilesNeeded(ResourceTilesNeededWire {
+                image_id: "x-paged-image:f1".into(),
+                level: 2,
+                tiles: vec![[0, 0]],
+                generation: 7,
+            }),
+        };
+        let json = serde_json::to_string(&unsolicited).unwrap();
+        assert!(json.contains("\"kind\":\"resourceTilesNeeded\""), "{json}");
+        let back: WorkerToMain = serde_json::from_str(&json).unwrap();
+        assert!(back.seq.is_none());
+        match back.kind {
+            WorkerToMainKind::ResourceTilesNeeded(n) => {
+                assert_eq!(n.level, 2);
+                assert_eq!(n.tiles, vec![[0, 0]]);
             }
             other => panic!("unexpected: {other:?}"),
         }

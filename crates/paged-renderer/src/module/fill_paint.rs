@@ -161,6 +161,7 @@ mod tests {
             footnotes: Vec::new(),
             diagnostics: Vec::new(),
             cell_rects: Vec::new(),
+            resource_tiles_needed: Vec::new(),
         }
     }
 
