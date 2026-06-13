@@ -275,7 +275,13 @@ export type WorkerToMain = WorkerToMainKind & {
 ///       `ResourceTilesNeeded` it answers so a stale reply can be dropped.
 ///       Reply: `ResourceClaimApplied`. `ProviderTileWire` carries one
 ///       tile's RGBA8 bytes + level-space px origin + dims.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(44);
+// v45 (2026-06-13): the `SubmitSceneLayer` payload gains a
+// `SceneItem::FillPathGradient` variant (C-1.3 — linear/radial gradient
+// paints over the existing display-list gradient pool). A payload-only
+// addition on the existing channel, exactly like v40's `SceneItem::Text`
+// and v41's `SceneItem::Image` — no new message. Unblocks paged.web's CSS
+// gradient fidelity (ADR-011) and paged.draw gradient sceneLayers.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(45);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -3705,8 +3711,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v44() {
-        assert_eq!(PROTOCOL_VERSION.0, 44);
+    fn protocol_version_is_v45() {
+        assert_eq!(PROTOCOL_VERSION.0, 45);
     }
 
     /// v38 — `RequestFrameChain` serialises with its camelCase tag and

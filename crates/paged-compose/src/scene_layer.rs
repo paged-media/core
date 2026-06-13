@@ -35,8 +35,8 @@ use serde::{Deserialize, Serialize};
 use tsify_next::Tsify;
 
 use crate::display_list::{
-    Color, DecodedImage, DisplayCommand, DisplayList, Paint, PathData, PathSegment, Rect, Stroke,
-    Transform,
+    Color, DecodedImage, DisplayCommand, DisplayList, GradientStop, LinearGradient, Paint, PathData,
+    PathSegment, RadialGradient, Rect, Stroke, Transform,
 };
 
 /// A plugin-submitted vector layer in frame-content coordinates. Keyed
@@ -100,6 +100,59 @@ pub enum SceneItem {
         /// Destination height in frame-content points.
         h: f32,
     },
+    /// Fill a bezier path with a linear or radial gradient (C-1.3).
+    /// **Additive** to [`SceneItem::FillPath`] — existing solid-fill
+    /// consumers are untouched. The gradient geometry is authored in
+    /// frame-content points (the same space as the path) and is carried to
+    /// page space by the frame transform exactly like the path, so a
+    /// plugin lowering a CSS `linear-gradient`/`radial-gradient` (paged.web,
+    /// ADR-011) tracks its box. Lowers to the **same** gradient fill lane
+    /// IDML placed gradients use (`Paint::LinearGradient`/`RadialGradient`
+    /// over the display-list gradient pool), so it rasterises through
+    /// tiny-skia (CPU) / Vello (GPU) with no new render path and is
+    /// CPU-testable. An empty path or a gradient with <2 stops is skipped,
+    /// never panicked.
+    FillPathGradient {
+        path: Vec<ScenePathSeg>,
+        gradient: SceneGradient,
+    },
+}
+
+/// A plugin gradient paint for [`SceneItem::FillPathGradient`] (C-1.3).
+/// Coordinates are frame-content points (mapped by the frame transform
+/// like the filled path). Colours are sRGB, linearised at lowering to
+/// composite identically to document colours.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum SceneGradient {
+    /// Linear gradient from `(x0,y0)` to `(x1,y1)` in content points.
+    Linear {
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        stops: Vec<SceneGradientStop>,
+    },
+    /// Radial gradient centred at `(cx,cy)` with `radius`, in content
+    /// points.
+    Radial {
+        cx: f32,
+        cy: f32,
+        radius: f32,
+        stops: Vec<SceneGradientStop>,
+    },
+}
+
+/// One colour stop in a [`SceneGradient`]. `offset` is `0.0..=1.0` along
+/// the gradient axis; the colour is sRGB (linearised at lowering).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneGradientStop {
+    pub offset: f32,
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+    pub a: f32,
 }
 
 /// A single-line text run in frame-content coordinates (C-1.1).
@@ -184,6 +237,26 @@ pub fn scene_paint_to_color(p: ScenePaint) -> Color {
 
 fn paint_to_color(p: ScenePaint) -> Color {
     scene_paint_to_color(p)
+}
+
+/// Convert plugin gradient stops (sRGB) to display-list stops
+/// (linear-light), clamping offsets to `0.0..=1.0` and sorting by offset
+/// so the rasterizer gets a monotone ramp.
+fn scene_stops_to_display(stops: &[SceneGradientStop]) -> Vec<GradientStop> {
+    let mut out: Vec<GradientStop> = stops
+        .iter()
+        .map(|s| GradientStop {
+            offset: s.offset.clamp(0.0, 1.0),
+            color: scene_paint_to_color(ScenePaint {
+                r: s.r,
+                g: s.g,
+                b: s.b,
+                a: s.a,
+            }),
+        })
+        .collect();
+    out.sort_by(|a, b| a.offset.total_cmp(&b.offset));
+    out
 }
 
 fn build_path(segs: &[ScenePathSeg]) -> PathData {
@@ -338,6 +411,58 @@ pub fn emit_scene_layer<T>(
                     transform: Transform::for_rect_in(dest, content_outer),
                 });
             }
+            SceneItem::FillPathGradient { path, gradient } => {
+                // A gradient needs a path to fill and >=2 stops to ramp;
+                // skip degenerate input rather than emit an empty fill.
+                if path.is_empty() {
+                    continue;
+                }
+                let paint = match gradient {
+                    SceneGradient::Linear {
+                        x0,
+                        y0,
+                        x1,
+                        y1,
+                        stops,
+                    } => {
+                        if stops.len() < 2 {
+                            continue;
+                        }
+                        let id = list.push_linear_gradient(LinearGradient {
+                            start: (*x0, *y0),
+                            end: (*x1, *y1),
+                            stops: scene_stops_to_display(stops),
+                        });
+                        Paint::LinearGradient(id)
+                    }
+                    SceneGradient::Radial {
+                        cx,
+                        cy,
+                        radius,
+                        stops,
+                    } => {
+                        if stops.len() < 2 || *radius <= 0.0 {
+                            continue;
+                        }
+                        let id = list.push_radial_gradient(RadialGradient {
+                            center: (*cx, *cy),
+                            radius: *radius,
+                            stops: scene_stops_to_display(stops),
+                        });
+                        Paint::RadialGradient(id)
+                    }
+                };
+                let path_id = list.paths.push_anon(build_path(path));
+                // Same transform as the path (`content_outer`): the
+                // rasterizer maps the gradient's content-point endpoints
+                // through it exactly as it maps the path geometry, so the
+                // gradient tracks the box (cpu.rs build_*_gradient_shader).
+                list.push(DisplayCommand::FillPath {
+                    path_id,
+                    paint,
+                    transform: content_outer,
+                });
+            }
         }
     }
 
@@ -419,6 +544,108 @@ mod tests {
         assert!(matches!(list.commands[3], DisplayCommand::PopClip(_)));
         // clip rect + 2 item paths.
         assert_eq!(list.paths.len(), 3);
+    }
+
+    #[test]
+    fn linear_gradient_fill_lowers_to_a_pooled_gradient_paint() {
+        // FillPathGradient lowers to a DisplayCommand::FillPath whose paint
+        // references a pooled LinearGradient — the SAME lane IDML placed
+        // gradients use, additive to the solid FillPath path. Out-of-order
+        // stops are normalised to a monotone ramp.
+        let mut list = DisplayList::new();
+        let layer = SceneLayer {
+            items: vec![SceneItem::FillPathGradient {
+                path: vec![
+                    ScenePathSeg::MoveTo { x: 0.0, y: 0.0 },
+                    ScenePathSeg::LineTo { x: 50.0, y: 0.0 },
+                    ScenePathSeg::LineTo { x: 50.0, y: 50.0 },
+                    ScenePathSeg::Close,
+                ],
+                gradient: SceneGradient::Linear {
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 50.0,
+                    y1: 0.0,
+                    stops: vec![
+                        SceneGradientStop {
+                            offset: 1.0,
+                            r: 1.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 1.0,
+                        },
+                        SceneGradientStop {
+                            offset: 0.0,
+                            r: 0.0,
+                            g: 0.0,
+                            b: 1.0,
+                            a: 1.0,
+                        },
+                    ],
+                },
+            }],
+        };
+        emit_scene_layer(
+            &mut list,
+            &layer,
+            Transform::IDENTITY,
+            (200.0, 100.0),
+            |_, _, _| {},
+        );
+        // PushClip, FillPath(gradient), PopClip.
+        assert_eq!(list.commands.len(), 3);
+        let Some(DisplayCommand::FillPath { paint, .. }) = list.commands.get(1) else {
+            panic!("expected a gradient FillPath at [1]");
+        };
+        let Paint::LinearGradient(gid) = paint else {
+            panic!("expected a LinearGradient paint, got {paint:?}");
+        };
+        let grad = list.linear_gradient(*gid).expect("gradient pooled");
+        assert_eq!(grad.stops.len(), 2);
+        assert!(
+            grad.stops[0].offset < grad.stops[1].offset,
+            "stops sorted by offset"
+        );
+        assert_eq!(grad.start, (0.0, 0.0));
+        assert_eq!(grad.end, (50.0, 0.0));
+    }
+
+    #[test]
+    fn degenerate_gradient_is_skipped_not_panicked() {
+        // <2 stops (and, for radial, a non-positive radius) emit no fill.
+        let mut list = DisplayList::new();
+        let layer = SceneLayer {
+            items: vec![SceneItem::FillPathGradient {
+                path: line(0.0, 0.0, 10.0, 10.0),
+                gradient: SceneGradient::Linear {
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 10.0,
+                    y1: 0.0,
+                    stops: vec![SceneGradientStop {
+                        offset: 0.0,
+                        r: 1.0,
+                        g: 0.0,
+                        b: 0.0,
+                        a: 1.0,
+                    }],
+                },
+            }],
+        };
+        emit_scene_layer(
+            &mut list,
+            &layer,
+            Transform::IDENTITY,
+            (100.0, 100.0),
+            |_, _, _| {},
+        );
+        assert!(
+            !list
+                .commands
+                .iter()
+                .any(|c| matches!(c, DisplayCommand::FillPath { .. })),
+            "a 1-stop gradient is skipped"
+        );
     }
 
     #[test]
