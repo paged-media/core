@@ -962,6 +962,19 @@ pub struct CanvasModel {
     /// next rebuild lowers it inside the matching frame. Survives gestures /
     /// undo (it's outside the mutation channel) but not a document reload.
     scene_layers: HashMap<String, paged_compose::SceneLayer>,
+    /// C-6 (I-06) — image-resource claims + budgeted LRU tile cache.
+    /// Ephemeral render-time content like `scene_layers`: a plugin claims
+    /// a frame's image (`ClaimImageResource`), submits pyramid tiles
+    /// (`SubmitResourceTiles`), and the next rebuild assembles the cached
+    /// tiles inside the frame at the mip level matching the camera scale.
+    /// Survives gestures / undo (outside the mutation channel) but not a
+    /// document reload (the plugin re-claims).
+    resource_tiles: crate::resource_tiles::ResourceTileStore,
+    /// C-6 — the camera scale (px-per-pt) the next rebuild assembles
+    /// resource tiles at, used only to pick the pyramid mip level. The
+    /// editor pushes its live camera scale here before a build; `1.0`
+    /// (full resolution) until set.
+    resource_render_scale: f32,
     /// Owned option inputs. `PipelineOptions` borrows from these on
     /// every rebuild; storing them owned keeps the worker self-contained.
     font_bytes: Option<Vec<u8>>,
@@ -1318,6 +1331,8 @@ impl CanvasModel {
             built,
             page_index,
             scene_layers: HashMap::new(),
+            resource_tiles: crate::resource_tiles::ResourceTileStore::default(),
+            resource_render_scale: 1.0,
             font_bytes,
             font_registry,
             initial_icc_bytes: icc_bytes.clone(),
@@ -6426,6 +6441,7 @@ impl CanvasModel {
         &self,
     ) -> Result<paged_renderer::BuiltDocument, crate::channel::LoadError> {
         let resolver = build_font_resolver(&self.font_registry, self.font_bytes.as_deref());
+        let resource_providers = self.resource_tiles.provider_entries();
         let options = PipelineOptions {
             font: self.font_bytes.as_deref(),
             assets: resolver
@@ -6442,6 +6458,11 @@ impl CanvasModel {
             // C-1 — a printed/exported sheet includes its in-frame plugin
             // content (the scene layer is document-grade vector output).
             scene_layers: Some(&self.scene_layers),
+            // C-6 — an export pulls the FULL-resolution tiles (level 0):
+            // a printed sheet wants the sharpest available pyramid level,
+            // not the viewport's coarse LOD.
+            resource_providers: Some(&resource_providers),
+            render_scale: 1.0,
             ..PipelineOptions::default()
         };
         pipeline::build_document(&self.scene, &options)
@@ -6483,6 +6504,10 @@ impl CanvasModel {
 
     pub fn rebuild_after_mutation(&mut self) -> Result<(), crate::channel::LoadError> {
         let resolver = build_font_resolver(&self.font_registry, self.font_bytes.as_deref());
+        // C-6 — build the per-frame provider entry map, borrowing the tile
+        // store as the shared provider. Built before `options` so it lives
+        // through the build.
+        let resource_providers = self.resource_tiles.provider_entries();
         let options = PipelineOptions {
             font: self.font_bytes.as_deref(),
             assets: resolver
@@ -6530,6 +6555,11 @@ impl CanvasModel {
             // C-1 — plugin scene layers render inside their frames on every
             // rebuild (gesture, mutation, scene-layer submit).
             scene_layers: Some(&self.scene_layers),
+            // C-6 — claimed image providers assemble pyramid tiles inside
+            // their frames at the camera-scale mip level; missing tiles
+            // land on `BuiltDocument::resource_tiles_needed`.
+            resource_providers: Some(&resource_providers),
+            render_scale: self.resource_render_scale,
             ..PipelineOptions::default()
         };
         let mut cache = std::mem::take(&mut self.layout_cache);
@@ -6596,6 +6626,111 @@ impl CanvasModel {
     /// (test/introspection aid).
     pub fn scene_layer_ids(&self) -> Vec<&str> {
         self.scene_layers.keys().map(String::as_str).collect()
+    }
+
+    /// C-6 — parse the frame `Self` id out of a claim's
+    /// `x-paged-image:<frame>` namespace. A bare id (no namespace prefix)
+    /// is treated as the frame id itself, so a caller may claim by frame
+    /// id directly. Returns the frame id slice.
+    fn frame_id_from_image_id(image_id: &str) -> &str {
+        image_id.strip_prefix("x-paged-image:").unwrap_or(image_id)
+    }
+
+    /// C-6 — register (or replace) an image-resource claim for the frame
+    /// encoded in `image_id`'s `x-paged-image:<frame>` namespace, then
+    /// rebuild so the next snapshot assembles whatever tiles are cached. A
+    /// fresh claim has no tiles, so the rebuild emits `ResourceTilesNeeded`
+    /// (read via [`Self::take_resource_tiles_needed`]); the whole-image
+    /// lane paints meanwhile. Ephemeral — not a document mutation.
+    pub fn claim_image_resource(
+        &mut self,
+        image_id: String,
+        levels: u8,
+        tile_size: u32,
+        base_width: u32,
+        base_height: u32,
+        revision: u64,
+    ) -> Result<(), crate::channel::LoadError> {
+        let frame_id = Self::frame_id_from_image_id(&image_id).to_string();
+        let pyramid = paged_renderer::ResourcePyramid {
+            base_width,
+            base_height,
+            levels: levels.max(1),
+            tile_size: tile_size.max(1),
+        };
+        self.resource_tiles
+            .claim(frame_id, image_id, pyramid, revision);
+        self.rebuild_after_mutation()
+    }
+
+    /// C-6 — drop the claim for `image_id` (frees its cached tiles) and
+    /// rebuild so the frame returns to its native whole-image lane. No-op
+    /// (no rebuild) when nothing was claimed.
+    pub fn release_image_resource(
+        &mut self,
+        image_id: &str,
+    ) -> Result<(), crate::channel::LoadError> {
+        let frame_id = Self::frame_id_from_image_id(image_id).to_string();
+        if self.resource_tiles.release(&frame_id) {
+            self.rebuild_after_mutation()?;
+        }
+        Ok(())
+    }
+
+    /// C-6 — fill the LRU tile cache for `image_id` at `level` and rebuild
+    /// so the next snapshot consumes the new tiles at that level. A stale
+    /// `generation` (the pyramid moved on) is dropped without a rebuild.
+    /// Returns `true` when the claim matched (tiles accepted, rebuilt).
+    pub fn submit_resource_tiles(
+        &mut self,
+        image_id: &str,
+        level: u8,
+        tiles: Vec<crate::channel::ProviderTileWire>,
+        generation: u64,
+    ) -> Result<bool, crate::channel::LoadError> {
+        let accepted = self
+            .resource_tiles
+            .submit(image_id, level, tiles, generation);
+        if accepted {
+            self.rebuild_after_mutation()?;
+        }
+        Ok(accepted)
+    }
+
+    /// C-6 — set the camera scale (px-per-pt) the next rebuild assembles
+    /// resource tiles at. Changing it rebuilds (a coarser/finer level may
+    /// now be wanted). The dispatch pushes the live camera scale here so
+    /// pan/zoom re-picks the mip level. No-op (no rebuild) when unchanged.
+    pub fn set_resource_render_scale(
+        &mut self,
+        scale: f32,
+    ) -> Result<(), crate::channel::LoadError> {
+        if (self.resource_render_scale - scale).abs() > f32::EPSILON {
+            self.resource_render_scale = scale;
+            self.rebuild_after_mutation()?;
+        }
+        Ok(())
+    }
+
+    /// C-6 — the tile-miss requests the most recent build produced (the
+    /// `ResourceTilesNeeded` the worker emits over the wire). Read after a
+    /// claim / submit / camera-scale rebuild. Returns a clone (the build's
+    /// side-channel is retained until the next rebuild overwrites it).
+    pub fn resource_tiles_needed(&self) -> Vec<paged_renderer::ResourceTilesNeeded> {
+        self.built.resource_tiles_needed.clone()
+    }
+
+    /// C-6 — whether the frame encoded in `image_id` (or a bare frame id)
+    /// currently carries an image-resource claim (test/introspection aid).
+    pub fn is_resource_claimed(&self, image_id: &str) -> bool {
+        let frame_id = Self::frame_id_from_image_id(image_id);
+        self.resource_tiles.is_claimed(frame_id)
+    }
+
+    /// C-6 — the cached-tile footprint in bytes (test/introspection aid
+    /// for the LRU budget).
+    pub fn resource_tile_bytes(&self) -> usize {
+        self.resource_tiles.used_bytes()
     }
 
     /// W1.24 (audit B18) — stats for the most recent rebuild (or the
