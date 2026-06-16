@@ -77,8 +77,8 @@ fn fresh_insert_mints_a_parent_story() {
     let op = insert_frame_op(&doc);
     apply(&mut doc, &op).expect("insert");
 
-    let sid = frame_story(&doc, "TextFrame/mint-test")
-        .expect("fresh frame carries its ParentStory");
+    let sid =
+        frame_story(&doc, "TextFrame/mint-test").expect("fresh frame carries its ParentStory");
     assert_eq!(sid, "Story/umint");
     assert_eq!(doc.stories.len(), stories_before + 1, "one new story");
     let story = doc

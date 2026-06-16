@@ -15,9 +15,7 @@
 use paged_scene::Document;
 
 use crate::error::OperationError;
-use crate::operation::{
-    AppliedOperation, InvalidationHint, Operation,
-};
+use crate::operation::{AppliedOperation, InvalidationHint, Operation};
 
 // ---------------------------------------------------------------------------
 // W0.5 — conditions
@@ -116,4 +114,3 @@ pub(super) fn apply_restore_condition_visibility(
         },
     })
 }
-

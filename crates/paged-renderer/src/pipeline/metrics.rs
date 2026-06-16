@@ -14,10 +14,6 @@
 
 //! Sub/superscript position metrics, shaping features, justification + tab-alignment mapping — extracted from pipeline/mod.rs (1.6b).
 
-
-
-
-
 /// Phase 4 typography — translate a `ResolvedRunAttrs`'s `Ligatures` /
 /// `KerningMethod` into the shaper's [`paged_text::ShapingFeatures`].
 /// Inputs are `None`-tolerant: missing `ligatures_on` defaults to true

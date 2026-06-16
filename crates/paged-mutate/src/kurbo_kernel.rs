@@ -871,7 +871,11 @@ mod tests {
             .map(|i| corner(i as f32 * 20.0, if i % 2 == 0 { 0.0 } else { 1.0 }))
             .collect();
         let (b, ..) = simplify_path(&dense, &[0], &[true], 10.0).expect("simplify dense");
-        assert!(b.len() < dense.len(), "dense run should reduce, got {}", b.len());
+        assert!(
+            b.len() < dense.len(),
+            "dense run should reduce, got {}",
+            b.len()
+        );
 
         // A genuine corner (deviation FAR past tolerance) is PRESERVED.
         let sharp = vec![corner(0.0, 0.0), corner(50.0, 80.0), corner(100.0, 0.0)];
@@ -929,7 +933,11 @@ mod tests {
             4.0,
         )
         .expect("open line outlines to a band");
-        assert!(a.len() >= 4, "a band has at least 4 anchors, got {}", a.len());
+        assert!(
+            a.len() >= 4,
+            "a band has at least 4 anchors, got {}",
+            a.len()
+        );
         assert!(!o.iter().any(|open| *open), "the offset band is closed");
     }
 

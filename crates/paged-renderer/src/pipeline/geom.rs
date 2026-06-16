@@ -17,14 +17,9 @@
 use super::*;
 use std::collections::HashMap;
 
-use paged_compose::{
-    DisplayList, GlyphCacheKey,
-    GlyphOutliner, Transform,
-};
+use paged_compose::{DisplayList, GlyphCacheKey, GlyphOutliner, Transform};
 use paged_parse::PathAnchor;
 use paged_scene::Document;
-
-
 
 /// Resolve the host page's `<MarginPreference>` margin box into a
 /// page-local pt rectangle for the anchored `PageMargins` reference
@@ -233,7 +228,11 @@ impl WrapShape {
     /// offsets inflate the unrotated source rect *before* the
     /// transform applies so the polygon stays aligned with the host's
     /// rotation (offset is in inner-coord points, same as InDesign).
-    pub(super) fn from_inner(b: paged_parse::Bounds, m: Option<[f32; 6]>, offsets: [f32; 4]) -> Self {
+    pub(super) fn from_inner(
+        b: paged_parse::Bounds,
+        m: Option<[f32; 6]>,
+        offsets: [f32; 4],
+    ) -> Self {
         let inner = paged_parse::Bounds {
             top: b.top - offsets[0],
             left: b.left - offsets[1],
@@ -555,7 +554,9 @@ pub(super) fn wght_for_font_style(style: Option<&str>) -> f32 {
 /// first so consecutive lines in the same logical paragraph don't
 /// accumulate extra leading. `tab_list` and other paragraph
 /// metadata copy through unchanged.
-pub(super) fn split_paragraph_at_breaks(paragraph: &paged_parse::Paragraph) -> Vec<paged_parse::Paragraph> {
+pub(super) fn split_paragraph_at_breaks(
+    paragraph: &paged_parse::Paragraph,
+) -> Vec<paged_parse::Paragraph> {
     // Walk runs in order; for each run, split text at '\n' and
     // emit the leading segment into the in-progress sub-paragraph,
     // then close the sub-paragraph and start a new one.

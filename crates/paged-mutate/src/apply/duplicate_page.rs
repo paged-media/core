@@ -16,9 +16,7 @@ use super::*;
 use paged_scene::Document;
 
 use crate::error::OperationError;
-use crate::operation::{
-    AppliedOperation, InvalidationHint, NodeId, Operation, PropertyPath,
-};
+use crate::operation::{AppliedOperation, InvalidationHint, NodeId, Operation, PropertyPath};
 
 // ---------------------------------------------------------------------------
 // W0.5 — duplicate page
@@ -211,4 +209,3 @@ pub(super) fn next_id_seed(doc: &Document) -> u64 {
     }
     max + 1
 }
-

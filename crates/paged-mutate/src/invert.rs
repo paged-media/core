@@ -112,7 +112,7 @@ mod tests {
             fill_color: None,
             item_transform: None,
             parent_story: None,
-            };
+        };
         assert_eq!(
             invert_insert_node(&spec),
             Operation::RemoveNode {

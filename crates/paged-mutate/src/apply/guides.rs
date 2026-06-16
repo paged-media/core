@@ -148,4 +148,3 @@ pub(super) fn apply_delete_guide(
         },
     })
 }
-

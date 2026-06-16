@@ -17,9 +17,7 @@ use paged_parse::Spread;
 use paged_scene::Document;
 
 use crate::error::OperationError;
-use crate::operation::{
-    AppliedOperation, InvalidationHint, NodeId, Operation, PropertyPath,
-};
+use crate::operation::{AppliedOperation, InvalidationHint, NodeId, Operation, PropertyPath};
 
 // ---------------------------------------------------------------------------
 // Batch
@@ -92,7 +90,10 @@ pub(super) fn mint_spread_page_ids(doc: &Document) -> (String, String) {
     (format!("u{:x}", max + 1), format!("u{:x}", max + 2))
 }
 
-pub(super) fn find_page_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mut paged_parse::Page> {
+pub(super) fn find_page_mut<'a>(
+    doc: &'a mut Document,
+    self_id: &str,
+) -> Option<&'a mut paged_parse::Page> {
     for parsed in &mut doc.spreads {
         if let Some(p) = parsed
             .spread
@@ -312,4 +313,3 @@ pub(super) fn apply_remove_page(
         },
     })
 }
-

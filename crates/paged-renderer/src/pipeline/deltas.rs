@@ -18,8 +18,6 @@ use super::*;
 
 use paged_parse::TextFrame;
 
-
-
 /// Measure-only pass for one cell paragraph: shapes + lays out at
 /// `column_width_pt` and returns the vertical extent the paragraph
 /// would consume, without emitting glyphs. Mirrors
@@ -118,7 +116,10 @@ pub(super) fn body_story_signature(
 /// wastes a few path slots and not correctness), then pushes the
 /// cached commands with their relative path-ids rebased to the
 /// page's NEW path-buffer base.
-pub(super) fn splice_master_text_delta(list: &mut paged_compose::DisplayList, delta: &MasterTextEmitDelta) {
+pub(super) fn splice_master_text_delta(
+    list: &mut paged_compose::DisplayList,
+    delta: &MasterTextEmitDelta,
+) {
     let new_base = list.paths.len() as i64;
     for path in &delta.paths {
         list.paths.push_anon(path.clone());

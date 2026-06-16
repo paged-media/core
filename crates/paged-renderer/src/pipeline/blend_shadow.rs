@@ -17,9 +17,7 @@
 
 use super::*;
 
-use paged_compose::{
-    Color, DropShadow, Transform,
-};
+use paged_compose::{Color, DropShadow, Transform};
 use paged_parse::Graphic;
 
 use crate::module::ResolvedFrame;

@@ -2570,4 +2570,3 @@ pub(super) fn apply_set_property(
         invalidation,
     })
 }
-

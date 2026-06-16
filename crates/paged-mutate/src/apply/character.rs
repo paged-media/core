@@ -284,4 +284,3 @@ pub(super) fn apply_character_property(
         invalidation,
     })
 }
-

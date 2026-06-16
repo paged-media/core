@@ -14,10 +14,6 @@
 
 //! apply_paragraph_compose_options — per-paragraph compose-option resolution. Extracted from pipeline/mod.rs (1.6b).
 
-
-
-
-
 /// Apply IDML paragraph-style attributes that drive the line breaker
 /// onto a fresh `LayoutOptions`. Hyphenation defaults to *on* (IDML's
 /// own default) when the cascade leaves the field unset; explicit

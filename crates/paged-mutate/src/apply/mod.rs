@@ -591,37 +591,37 @@ mod tests {
 // calls every other helper) — purely a file-layout change, net-zero
 // behaviour. The named re-export keeps `crate::apply::new_*` stable for
 // lib.rs's callers.
-mod set_property;
-mod character;
-mod paragraph;
-mod insert_node;
-mod remove_node;
-mod move_node;
 mod batch_page;
-mod layer;
-mod helpers;
-mod path_topology;
-mod guides;
+mod character;
 mod conditions;
-mod master;
 mod duplicate_page;
+mod guides;
+mod helpers;
+mod insert_node;
+mod layer;
+mod master;
+mod move_node;
+mod paragraph;
+mod path_topology;
 mod place_image;
+mod remove_node;
 mod sections;
+mod set_property;
 
-use set_property::*;
-use character::*;
-use paragraph::*;
-use insert_node::*;
-use remove_node::*;
-use move_node::*;
 use batch_page::*;
-use layer::*;
-use helpers::*;
-use path_topology::*;
-use guides::*;
+use character::*;
 use conditions::*;
-use master::*;
 use duplicate_page::*;
+use guides::*;
+use helpers::*;
+use insert_node::*;
+use layer::*;
+use master::*;
+use move_node::*;
+use paragraph::*;
+use path_topology::*;
+use remove_node::*;
 use sections::*;
+use set_property::*;
 
 pub(crate) use path_topology::{new_oval, new_rectangle, new_text_frame};

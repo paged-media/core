@@ -740,4 +740,3 @@ pub(super) fn apply_character_field_on_run(
         }),
     }
 }
-

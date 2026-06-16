@@ -16,15 +16,16 @@ use paged_parse::{GraphicLine, Polygon, Rectangle, TextFrame};
 use paged_scene::Document;
 
 use crate::error::OperationError;
-use crate::operation::{
-    GradientFeatherSpec, InvalidationHint, NodeId, PropertyPath, Value,
-};
+use crate::operation::{GradientFeatherSpec, InvalidationHint, NodeId, PropertyPath, Value};
 
 // ---------------------------------------------------------------------------
 // Helpers — finders + converters + constructors
 // ---------------------------------------------------------------------------
 
-pub(super) fn find_text_frame_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mut TextFrame> {
+pub(super) fn find_text_frame_mut<'a>(
+    doc: &'a mut Document,
+    self_id: &str,
+) -> Option<&'a mut TextFrame> {
     for parsed in &mut doc.spreads {
         for frame in &mut parsed.spread.text_frames {
             if frame.self_id.as_deref() == Some(self_id) {
@@ -35,7 +36,10 @@ pub(super) fn find_text_frame_mut<'a>(doc: &'a mut Document, self_id: &str) -> O
     None
 }
 
-pub(super) fn find_polygon_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mut Polygon> {
+pub(super) fn find_polygon_mut<'a>(
+    doc: &'a mut Document,
+    self_id: &str,
+) -> Option<&'a mut Polygon> {
     for parsed in &mut doc.spreads {
         if let Some(p) = parsed
             .spread
@@ -49,7 +53,10 @@ pub(super) fn find_polygon_mut<'a>(doc: &'a mut Document, self_id: &str) -> Opti
     None
 }
 
-pub(super) fn find_graphic_line_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mut GraphicLine> {
+pub(super) fn find_graphic_line_mut<'a>(
+    doc: &'a mut Document,
+    self_id: &str,
+) -> Option<&'a mut GraphicLine> {
     for parsed in &mut doc.spreads {
         if let Some(l) = parsed
             .spread
@@ -63,7 +70,10 @@ pub(super) fn find_graphic_line_mut<'a>(doc: &'a mut Document, self_id: &str) ->
     None
 }
 
-pub(super) fn find_oval_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mut paged_parse::Oval> {
+pub(super) fn find_oval_mut<'a>(
+    doc: &'a mut Document,
+    self_id: &str,
+) -> Option<&'a mut paged_parse::Oval> {
     for parsed in &mut doc.spreads {
         if let Some(o) = parsed
             .spread
@@ -104,7 +114,10 @@ pub(super) fn find_gradient_field_mut<'a>(
     }
 }
 
-pub(super) fn find_rectangle_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mut Rectangle> {
+pub(super) fn find_rectangle_mut<'a>(
+    doc: &'a mut Document,
+    self_id: &str,
+) -> Option<&'a mut Rectangle> {
     for parsed in &mut doc.spreads {
         for rect in &mut parsed.spread.rectangles {
             if rect.self_id.as_deref() == Some(self_id) {
@@ -269,7 +282,10 @@ pub(super) fn find_stroke_gap_tint_mut<'a>(
 /// (multi-segment / curved joins). Oval has no corners and TextFrame's
 /// stroke is the rectangular frame, which keeps the legacy Rectangle-only
 /// mutation surface.
-pub(super) fn find_miter_limit_mut<'a>(doc: &'a mut Document, node: &NodeId) -> Option<&'a mut Option<f32>> {
+pub(super) fn find_miter_limit_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut Option<f32>> {
     match node {
         NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.miter_limit),
         NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.miter_limit),
@@ -280,7 +296,10 @@ pub(super) fn find_miter_limit_mut<'a>(doc: &'a mut Document, node: &NodeId) -> 
 
 /// Punch-list (rides v35) — locate the `end_join: Option<String>` field.
 /// Same kinds as [`find_miter_limit_mut`] (the two are an IDML pair).
-pub(super) fn find_end_join_mut<'a>(doc: &'a mut Document, node: &NodeId) -> Option<&'a mut Option<String>> {
+pub(super) fn find_end_join_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut Option<String>> {
     match node {
         NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.end_join),
         NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.end_join),
@@ -291,7 +310,10 @@ pub(super) fn find_end_join_mut<'a>(doc: &'a mut Document, node: &NodeId) -> Opt
 
 /// W1.1 — locate the `stroke_dash: Vec<f32>` field (per-frame
 /// `StrokeDashAndGap` override) on any stroked page-item kind.
-pub(super) fn find_stroke_dash_mut<'a>(doc: &'a mut Document, node: &NodeId) -> Option<&'a mut Vec<f32>> {
+pub(super) fn find_stroke_dash_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut Vec<f32>> {
     match node {
         NodeId::TextFrame(id) => find_text_frame_mut(doc, id).map(|f| &mut f.stroke_dash),
         NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.stroke_dash),
@@ -321,7 +343,10 @@ pub(super) fn find_item_transform_mut<'a>(
 
 /// W0.3 — locate the `overprint_fill: bool` field (fill-bearing kinds;
 /// GraphicLine has no fill, so it's excluded).
-pub(super) fn find_overprint_fill_mut<'a>(doc: &'a mut Document, node: &NodeId) -> Option<&'a mut bool> {
+pub(super) fn find_overprint_fill_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut bool> {
     match node {
         NodeId::TextFrame(id) => find_text_frame_mut(doc, id).map(|f| &mut f.overprint_fill),
         NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.overprint_fill),
@@ -333,7 +358,10 @@ pub(super) fn find_overprint_fill_mut<'a>(doc: &'a mut Document, node: &NodeId) 
 
 /// W0.3 — locate the `overprint_stroke: bool` field (every stroked
 /// kind, including GraphicLine).
-pub(super) fn find_overprint_stroke_mut<'a>(doc: &'a mut Document, node: &NodeId) -> Option<&'a mut bool> {
+pub(super) fn find_overprint_stroke_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut bool> {
     match node {
         NodeId::TextFrame(id) => find_text_frame_mut(doc, id).map(|f| &mut f.overprint_stroke),
         NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.overprint_stroke),
@@ -344,7 +372,10 @@ pub(super) fn find_overprint_stroke_mut<'a>(doc: &'a mut Document, node: &NodeId
     }
 }
 
-pub(super) fn find_group_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mut paged_parse::Group> {
+pub(super) fn find_group_mut<'a>(
+    doc: &'a mut Document,
+    self_id: &str,
+) -> Option<&'a mut paged_parse::Group> {
     for parsed in &mut doc.spreads {
         for group in &mut parsed.spread.groups {
             if group.self_id.as_deref() == Some(self_id) {
@@ -738,7 +769,10 @@ pub(super) fn find_applied_object_style_mut<'a>(
     None
 }
 
-pub(super) fn find_spread<'a>(doc: &'a Document, self_id: &str) -> Option<&'a paged_scene::ParsedSpread> {
+pub(super) fn find_spread<'a>(
+    doc: &'a Document,
+    self_id: &str,
+) -> Option<&'a paged_scene::ParsedSpread> {
     doc.spreads
         .iter()
         .find(|p| p.spread.self_id.as_deref() == Some(self_id))
@@ -830,7 +864,10 @@ pub(super) fn node_exists(doc: &Document, node: &NodeId) -> bool {
 /// Track M — locate a `<Layer>` by its `Self` id in the document's
 /// designmap. The designmap is the only place layers live; spread /
 /// page items only carry an `ItemLayer` reference back into it.
-pub(super) fn find_layer_mut<'a>(doc: &'a mut Document, self_id: &str) -> Option<&'a mut paged_parse::Layer> {
+pub(super) fn find_layer_mut<'a>(
+    doc: &'a mut Document,
+    self_id: &str,
+) -> Option<&'a mut paged_parse::Layer> {
     doc.container
         .designmap
         .layers
@@ -965,7 +1002,10 @@ pub(super) fn find_directional_feather_mut<'a>(
 // `blend_mode: Option<String>` slot on the kinds that parse it
 // (TextFrame / Rectangle). The `<BlendingSetting Opacity>` half is
 // already wired as `FrameOpacity`.
-pub(super) fn find_blend_mode_mut<'a>(doc: &'a mut Document, node: &NodeId) -> Option<&'a mut Option<String>> {
+pub(super) fn find_blend_mode_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut Option<String>> {
     match node {
         NodeId::TextFrame(id) => find_text_frame_mut(doc, id).map(|f| &mut f.blend_mode),
         NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.blend_mode),
@@ -983,7 +1023,10 @@ pub(super) fn expect_bounds(path: PropertyPath, value: &Value) -> Result<[f32; 4
     }
 }
 
-pub(super) fn expect_color_ref(path: PropertyPath, value: &Value) -> Result<Option<String>, OperationError> {
+pub(super) fn expect_color_ref(
+    path: PropertyPath,
+    value: &Value,
+) -> Result<Option<String>, OperationError> {
     match value {
         Value::ColorRef(c) => Ok(c.clone()),
         _ => Err(OperationError::TypeMismatch {
@@ -993,7 +1036,10 @@ pub(super) fn expect_color_ref(path: PropertyPath, value: &Value) -> Result<Opti
     }
 }
 
-pub(super) fn expect_length(path: PropertyPath, value: &Value) -> Result<Option<f32>, OperationError> {
+pub(super) fn expect_length(
+    path: PropertyPath,
+    value: &Value,
+) -> Result<Option<f32>, OperationError> {
     match value {
         Value::Length(v) => Ok(*v),
         _ => Err(OperationError::TypeMismatch {
@@ -1003,7 +1049,10 @@ pub(super) fn expect_length(path: PropertyPath, value: &Value) -> Result<Option<
     }
 }
 
-pub(super) fn expect_transform(path: PropertyPath, value: &Value) -> Result<Option<[f32; 6]>, OperationError> {
+pub(super) fn expect_transform(
+    path: PropertyPath,
+    value: &Value,
+) -> Result<Option<[f32; 6]>, OperationError> {
     match value {
         Value::Transform(m) => Ok(*m),
         _ => Err(OperationError::TypeMismatch {
@@ -1025,4 +1074,3 @@ pub(super) fn expect_path_point(
         }),
     }
 }
-
