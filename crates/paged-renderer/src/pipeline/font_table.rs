@@ -20,8 +20,6 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use paged_scene::Document;
 
-
-
 /// Per-render font cache. Pre-resolves every distinct (family, style)
 /// pair referenced anywhere in the document via the configured
 /// `AssetResolver`. Falls back to `options.font` when nothing

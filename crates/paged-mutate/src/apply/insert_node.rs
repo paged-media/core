@@ -63,6 +63,39 @@ pub(super) fn fr_same_kind(a: &FrameRef, b: &FrameRef) -> bool {
     std::mem::discriminant(a) == std::mem::discriminant(b)
 }
 
+/// Materialise a spread's `frames_in_order` z-table from the per-kind
+/// vecs when it is EMPTY (the legacy fallback order the renderer,
+/// hit-tester, and scene-tree synthesise on the fly — see
+/// `build_engine`'s `frames_ordered`). Ops that need an *authoritative*
+/// z-table (e.g. `CreateGroup`, whose top-level membership check and
+/// z-slot lookups index into the table) call this first.
+///
+/// Why it's needed: a spread built up entirely via `InsertNode` — most
+/// notably a synthesised blank document — keeps an empty table, because
+/// [`register_frame_ref`] deliberately no-ops on an empty one (a single
+/// partial entry would hide every other frame). A COMPLETE
+/// materialisation is render-neutral: the order equals the synthesised
+/// fallback, so nothing moves; it just makes the implicit order explicit
+/// so order-dependent mutations can run.
+///
+/// Order mirrors `build_engine`'s legacy concatenation
+/// (text → rect → oval → line → polygon) and additionally appends any
+/// existing groups, so a group member that is itself a group still
+/// resolves.
+pub(super) fn ensure_frames_in_order(spread: &mut Spread) {
+    if !spread.frames_in_order.is_empty() {
+        return;
+    }
+    let mut v: Vec<FrameRef> = Vec::new();
+    v.extend((0..spread.text_frames.len()).map(FrameRef::TextFrame));
+    v.extend((0..spread.rectangles.len()).map(FrameRef::Rectangle));
+    v.extend((0..spread.ovals.len()).map(FrameRef::Oval));
+    v.extend((0..spread.graphic_lines.len()).map(FrameRef::GraphicLine));
+    v.extend((0..spread.polygons.len()).map(FrameRef::Polygon));
+    v.extend((0..spread.groups.len()).map(FrameRef::Group));
+    spread.frames_in_order = v;
+}
+
 /// Register a page item inserted at `vec_pos` of its kind vec:
 /// same-kind refs at `>= vec_pos` shift up by one, then the new ref
 /// lands at `z_slot` (or on top when `None` — new creations stack
@@ -147,7 +180,7 @@ pub(super) fn apply_insert_node(
             return Err(OperationError::InvalidParent {
                 parent: parent.clone(),
                 child_kind: spec.node_id().kind().to_string(),
-            })
+            });
         }
     };
 

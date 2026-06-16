@@ -1457,7 +1457,7 @@ mod tests {
                     bounds: [0.0, 0.0, 1.0, 1.0],
                     fill_color: None,
                     parent_story: None,
-            },
+                },
             })
             .unwrap();
 
@@ -1508,7 +1508,7 @@ mod tests {
                     bounds: [10.0, 20.0, 30.0, 40.0],
                     fill_color: Some("Color/Blue".to_string()),
                     parent_story: None,
-            },
+                },
             },
             Operation::RemoveNode {
                 node: NodeId::TextFrame("TextFrame/u_new".to_string()),

@@ -6,7 +6,16 @@
 version = 2
 # RUSTSEC advisories: fail on vulnerabilities; add IDs here to ignore
 # with a justification once triaged.
-ignore = []
+# All three below are UNMAINTAINED advisories (not vulnerabilities) — no
+# known issue, the crates work. They're allow-listed until the upstream
+# tree drops them (the first two are transitive proc-macro deps via the
+# wgpu/Vello lineage; tsify-next is the wire-type generator — migrating
+# to `tsify` is a tracked follow-up, not a CI blocker).
+ignore = [
+    "RUSTSEC-2024-0436", # paste — unmaintained
+    "RUSTSEC-2024-0370", # proc-macro-error — unmaintained
+    "RUSTSEC-2025-0048", # tsify-next — unmaintained (use tsify)
+]
 
 [licenses]
 version = 2
@@ -46,3 +55,6 @@ wildcards = "warn"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# Vello (the GPU/wgpu rasteriser backend) is consumed as a pinned git
+# tag — the pinned revision has no crates.io release.
+allow-git = ["https://github.com/linebender/vello.git"]

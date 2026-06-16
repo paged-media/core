@@ -87,6 +87,50 @@ fn place_image_applies_and_undoes_through_the_worker_log() {
     m.undo().expect("undo oval place");
 }
 
+/// PlaceImage must flip the editor-side `has_image` geometry flag (which
+/// drives the Properties panel's Image inspector / Frame Fitting), for
+/// both Rectangles and Ovals — even though it sets only `image_link`
+/// (not the parse-time `has_image_element`). Without this a from-scratch
+/// placed image never surfaces the Image context.
+#[test]
+fn place_image_makes_geometry_report_has_image() {
+    use paged_canvas::element_selection::ElementId;
+
+    let mut m = model();
+    let rect = ElementId::Rectangle("plainR".to_string());
+    let oval = ElementId::Oval("oval1".to_string());
+
+    // Before: neither frame carries a placed image.
+    let before = m.element_geometry(&[rect.clone(), oval.clone()]);
+    assert_eq!(before.len(), 2, "both frames resolve geometry");
+    assert!(
+        before.iter().all(|g| !g.has_image),
+        "no image before PlaceImage"
+    );
+
+    // Place an image link on each (the link path — no resolver needed).
+    m.apply_mutation(&Mutation::PlaceImage {
+        element_id: "plainR".into(),
+        uri: "file:///cover.png".into(),
+        fit: Some("FillProportionally".into()),
+    })
+    .expect("place on rect");
+    m.apply_mutation(&Mutation::PlaceImage {
+        element_id: "oval1".into(),
+        uri: "file:///o.png".into(),
+        fit: None,
+    })
+    .expect("place on oval");
+
+    // After: both report has_image — the Image inspector lights up.
+    let after = m.element_geometry(&[rect, oval]);
+    assert_eq!(after.len(), 2);
+    assert!(
+        after.iter().all(|g| g.has_image),
+        "PlaceImage flips has_image for the Image inspector"
+    );
+}
+
 #[test]
 fn bad_targets_fail_cleanly() {
     let mut m = model();

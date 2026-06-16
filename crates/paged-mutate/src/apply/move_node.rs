@@ -289,4 +289,3 @@ pub(super) fn insert_captured(
     }
     Ok(())
 }
-

@@ -16,9 +16,7 @@ use super::*;
 use paged_scene::Document;
 
 use crate::error::OperationError;
-use crate::operation::{
-    AppliedOperation, InvalidationHint, NodeId, Operation,
-};
+use crate::operation::{AppliedOperation, InvalidationHint, NodeId, Operation};
 
 // ---------------------------------------------------------------------------
 // W0.5 — sections
@@ -183,4 +181,3 @@ pub(super) fn apply_delete_section(
         },
     })
 }
-

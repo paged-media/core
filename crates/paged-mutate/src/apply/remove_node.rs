@@ -240,4 +240,3 @@ pub(super) fn remove_and_capture(
         }),
     }
 }
-

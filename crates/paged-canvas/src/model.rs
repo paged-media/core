@@ -1383,6 +1383,23 @@ impl CanvasModel {
         })
     }
 
+    /// Build an empty single-page document sized `width_pt` × `height_pt`
+    /// (points) and run the pipeline, exactly like [`CanvasModel::load`].
+    ///
+    /// Backs the editor's File ▸ New. The blank IDML package is
+    /// synthesised in-engine ([`crate::blank::blank_idml`]) and loaded
+    /// through the normal parse path, so the document is well-formed and
+    /// carries `source_idml` for save-back — no hand-built scene graph.
+    pub fn new_blank(
+        doc_id: impl Into<String>,
+        width_pt: f32,
+        height_pt: f32,
+        opts: CanvasOptions,
+    ) -> Result<Self, LoadError> {
+        let bytes = crate::blank::blank_idml(width_pt, height_pt);
+        Self::load(doc_id, &bytes, opts)
+    }
+
     /// Initial canonical hash captured at load. Phase 3 Item 6 —
     /// determinism tests assert that replaying the mutation log
     /// against the same `initial_state_hash` reproduces a known
@@ -1797,7 +1814,7 @@ impl CanvasModel {
             other => {
                 return Err(crate::channel::WorkerError::NotImplemented {
                     what: format!("Mutation::{}", other.discriminant()),
-                })
+                });
             }
         };
         // W1.24 (audit B18) — time the scene edit; the next rebuild
@@ -6173,17 +6190,45 @@ impl CanvasModel {
                         .rectangles
                         .iter()
                         .find(|f| f.self_id.as_deref() == Some(raw))
-                        .map(|f| (f.bounds, f.item_transform, f.has_image_element)),
+                        // `has_image` drives the editor's Image inspector
+                        // (Frame Fitting): a frame "has an image" when it
+                        // carries parsed image bytes OR a placed
+                        // `image_link` (PlaceImage). The link path lets a
+                        // from-scratch placed image surface the Image
+                        // context without an IDML-embedded `<Image>`.
+                        .map(|f| {
+                            (
+                                f.bounds,
+                                f.item_transform,
+                                f.has_image_element || f.image_link.is_some(),
+                            )
+                        }),
                     ElementId::Oval(_) => spread
                         .ovals
                         .iter()
                         .find(|f| f.self_id.as_deref() == Some(raw))
-                        .map(|f| (f.bounds, f.item_transform, false)),
+                        // Same image semantics as Rectangle (ovals host
+                        // images too); previously hardcoded `false`.
+                        .map(|f| {
+                            (
+                                f.bounds,
+                                f.item_transform,
+                                f.has_image_element || f.image_link.is_some(),
+                            )
+                        }),
                     ElementId::Polygon(_) => spread
                         .polygons
                         .iter()
                         .find(|f| f.self_id.as_deref() == Some(raw))
-                        .map(|f| (f.bounds, f.item_transform, false)),
+                        // Same image semantics as Rectangle (polygons host
+                        // images too); previously hardcoded `false`.
+                        .map(|f| {
+                            (
+                                f.bounds,
+                                f.item_transform,
+                                f.has_image_element || f.image_link.is_some(),
+                            )
+                        }),
                     ElementId::GraphicLine(_) => spread
                         .graphic_lines
                         .iter()

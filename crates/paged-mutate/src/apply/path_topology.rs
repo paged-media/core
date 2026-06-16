@@ -19,8 +19,8 @@ use paged_scene::Document;
 use crate::error::OperationError;
 use crate::invert::invert_insert_node;
 use crate::operation::{
-    AppliedOperation, FieldKind, InvalidationHint, NodeId, NodeSpec, Operation, PathAnchorSpec, PropertyPath,
-    StyleScope, Value,
+    AppliedOperation, FieldKind, InvalidationHint, NodeId, NodeSpec, Operation, PathAnchorSpec,
+    PropertyPath, StyleScope, Value,
 };
 
 // ---------------------------------------------------------------------------
@@ -734,7 +734,11 @@ pub(super) fn apply_path_point_curve_type(
 /// containing `index`. The end is either the next subpath's start or
 /// `anchors_len` for the last subpath. An empty `subpath_starts`
 /// represents a single implicit subpath covering all anchors.
-pub(super) fn subpath_bounds_for(starts: &[usize], anchors_len: usize, index: usize) -> (usize, usize) {
+pub(super) fn subpath_bounds_for(
+    starts: &[usize],
+    anchors_len: usize,
+    index: usize,
+) -> (usize, usize) {
     if starts.is_empty() {
         return (0, anchors_len);
     }
@@ -1247,7 +1251,11 @@ use crate::operation::{RemovedTableLine, TableCellSpec, TableColumnSpec, TableRo
 /// Returns the story index + the host paragraph index. Tables hang off
 /// `Paragraph::table`, so the table lives at
 /// `doc.stories[si].story.paragraphs[pi].table`.
-pub(super) fn find_table_pos(doc: &Document, story_id: &str, table_id: &str) -> Option<(usize, usize)> {
+pub(super) fn find_table_pos(
+    doc: &Document,
+    story_id: &str,
+    table_id: &str,
+) -> Option<(usize, usize)> {
     let si = doc.stories.iter().position(|s| s.self_id == story_id)?;
     let pi = doc.stories[si]
         .story
@@ -3018,4 +3026,3 @@ pub(super) fn apply_set_field_value(
         invalidation,
     })
 }
-

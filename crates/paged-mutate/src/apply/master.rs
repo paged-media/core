@@ -16,9 +16,7 @@ use super::*;
 use paged_scene::Document;
 
 use crate::error::OperationError;
-use crate::operation::{
-    AppliedOperation, InvalidationHint, NodeId, Operation,
-};
+use crate::operation::{AppliedOperation, InvalidationHint, NodeId, Operation};
 
 // ---------------------------------------------------------------------------
 // W0.5 — master application
@@ -48,4 +46,3 @@ pub(super) fn apply_master_to_page(
         },
     })
 }
-

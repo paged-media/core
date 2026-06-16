@@ -14,11 +14,6 @@
 
 //! Nested-style overlay computation + run splitting — extracted from pipeline/mod.rs (1.6b).
 
-
-
-
-
-
 /// Map an IDML `Justification` enum value to `paged_text::Alignment`.
 /// `None` (no attribute on the cascade) falls back to `Left`, the
 /// IDML default.

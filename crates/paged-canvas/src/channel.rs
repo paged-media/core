@@ -305,7 +305,13 @@ export type WorkerToMain = WorkerToMainKind & {
 // `StrokePath` / `FillPathBlend` lanes (stroke + blend share the rasterizer's
 // `paint_to_ts`, so no new render path). Payload-only. Unblocks paged.web CSS
 // gradient borders / gradient-with-`mix-blend-mode`.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(48);
+//
+// v49 (2026-06-15): new `MainToWorkerKind::NewBlankDocument { width_pt,
+// height_pt, font }` request — the engine-owned File ▸ New. Additive
+// (no existing payload changed), but a new editor SENDS a message an
+// older worker can't deserialise, so the minor bumps to keep the
+// editor/wasm pair in lockstep (the handshake catches the mismatch).
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(49);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -469,6 +475,23 @@ pub enum MainToWorkerKind {
         #[serde(default)]
         #[tsify(type = "number[] | null")]
         cmyk_icc_profile: Option<ByteBuf>,
+    },
+    /// Replace the active document with a freshly-minted EMPTY one: a
+    /// single page sized `width_pt` × `height_pt` (points), seeded with
+    /// the default master / styles / swatches a parsed IDML carries.
+    /// Backs the editor's File ▸ New — the engine synthesises the blank
+    /// IDML package and loads it through the normal parse path, so the
+    /// result is identical in shape to `LoadDocument` (and `source_idml`
+    /// is populated for save-back). `font` is the optional default-font
+    /// fallback (the editor's auto-loaded Inter) so text the user then
+    /// types has glyph metrics, mirroring `LoadDocument`. Returns
+    /// `DocumentLoaded` (success) or `LoadFailed`.
+    NewBlankDocument {
+        width_pt: f32,
+        height_pt: f32,
+        #[serde(default)]
+        #[tsify(type = "number[] | null")]
+        font: Option<ByteBuf>,
     },
     /// Register a named font with the worker's family resolver. Sent
     /// any time before `LoadDocument` (and persists across loads so a
@@ -3735,8 +3758,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v48() {
-        assert_eq!(PROTOCOL_VERSION.0, 48);
+    fn protocol_version_is_v49() {
+        assert_eq!(PROTOCOL_VERSION.0, 49);
     }
 
     /// v38 — `RequestFrameChain` serialises with its camelCase tag and

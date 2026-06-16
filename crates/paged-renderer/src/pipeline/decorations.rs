@@ -22,7 +22,6 @@ use paged_compose::{
     emit_ellipse, emit_glyph_slice, Color, DisplayList, Paint, Rect, Stroke, TtfOutliner,
 };
 
-
 /// Phase 7 — emit Kenten emphasis marks above glyphs whose source
 /// run carries a `KentenKind` other than `"None"`. The mark is a
 /// small filled black circle stamped above the base glyph's centre
