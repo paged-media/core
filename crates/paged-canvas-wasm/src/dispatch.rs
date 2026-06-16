@@ -251,6 +251,32 @@ impl WorkerCore {
                     Err(e) => WorkerToMainKind::LoadFailed { error: e },
                 }
             }
+            MainToWorkerKind::NewBlankDocument {
+                width_pt,
+                height_pt,
+                font,
+            } => {
+                // Same install+reply contract as LoadDocument; only the
+                // source differs (an engine-minted blank package vs the
+                // caller's bytes).
+                let opts = CanvasOptions {
+                    fonts: font.map(|b| vec![b.into_vec()]).unwrap_or_default(),
+                    font_registry: self.font_registry.clone(),
+                    cmyk_icc_profile: None,
+                    color_profiles: self.color_profiles.clone(),
+                };
+                let doc_id = format!("doc-{}", msg.seq);
+                match CanvasModel::new_blank(doc_id, width_pt, height_pt, opts) {
+                    Ok(model) => {
+                        let handle = model.handle();
+                        self.model = Some(model);
+                        self.export_sessions.clear();
+                        effect = CacheEffect::ClearAll;
+                        WorkerToMainKind::DocumentLoaded(handle)
+                    }
+                    Err(e) => WorkerToMainKind::LoadFailed { error: e },
+                }
+            }
             MainToWorkerKind::Mutate(m) => {
                 if self.model.is_none() {
                     reply!(WorkerToMainKind::MutationFailed {

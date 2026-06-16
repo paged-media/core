@@ -893,3 +893,60 @@ fn renderer_paints_group_members_at_the_composed_transform() {
         "undo repaints the members at their original positions"
     );
 }
+
+/// Regression — grouping must work on a spread whose `frames_in_order`
+/// z-table is EMPTY, the state a synthesised blank document is in after
+/// building it up via `InsertNode` (`register_frame_ref` no-ops on an
+/// empty table, so it never materialises). Pre-fix, `CreateGroup` here
+/// failed with "member is not a top-level spread item"; the op now
+/// materialises the table from the kind vecs first.
+#[test]
+fn create_group_on_empty_frames_in_order_materialises_and_succeeds() {
+    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    // Capture members BEFORE clearing — the helper reads frames_in_order.
+    let (si, members) = two_ungrouped_leaves(&doc);
+    let groups_before = doc.spreads[si].spread.groups.len();
+
+    // Drop the z-table to mimic the never-materialised (blank-doc) state.
+    doc.spreads[si].spread.frames_in_order.clear();
+
+    let applied = apply(
+        &mut doc,
+        &Operation::CreateGroup {
+            spec: GroupSpec {
+                self_id: None,
+                members: members.clone(),
+                parent: None,
+                item_transform: None,
+            },
+        },
+    )
+    .expect("create group on an empty-frames_in_order spread");
+    let group_id = match &applied.op {
+        Operation::CreateGroup { spec } => spec.self_id.clone().expect("minted id"),
+        other => panic!("unexpected echoed op: {other:?}"),
+    };
+
+    let spread = &doc.spreads[si].spread;
+    assert!(
+        !spread.frames_in_order.is_empty(),
+        "the op materialised the z-table"
+    );
+    assert_eq!(spread.groups.len(), groups_before + 1);
+    let group = spread
+        .groups
+        .iter()
+        .find(|g| g.self_id.as_deref() == Some(group_id.as_str()))
+        .expect("group present");
+    assert_eq!(group.members.len(), members.len());
+    for m in &group.members {
+        assert!(
+            !spread.frames_in_order.contains(m),
+            "grouped member must leave frames_in_order"
+        );
+    }
+
+    // Dissolve (undo) round-trips the group count back.
+    apply(&mut doc, &applied.inverse).expect("dissolve (undo)");
+    assert_eq!(doc.spreads[si].spread.groups.len(), groups_before);
+}

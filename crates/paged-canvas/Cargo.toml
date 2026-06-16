@@ -50,13 +50,16 @@ unicode-segmentation = "1"
 # run via `paged_text::shape_run`. Already in the lockfile via
 # paged-text; wasm-clean.
 rustybuzz = "0.18"
+# File ▸ New — synthesise a blank IDML package (see `blank.rs`). Same
+# zip writer paged-parse reads + paged-write emits; wasm-clean (both
+# already ship it into the wasm worker), so this adds no new wasm dep.
+zip = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["console"] }
 
 [dev-dependencies]
-zip = { workspace = true }
 # W1.24 (audit B17) — perf bench lane. `paged-gen` regenerates the bench
 # fixtures in setup (same path the fidelity corpus uses), so no fixture
 # bytes are committed. criterion drives the measurements.

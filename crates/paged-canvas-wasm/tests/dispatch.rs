@@ -188,6 +188,49 @@ fn load_document_replies_document_loaded_with_handle() {
 }
 
 #[test]
+fn new_blank_document_replies_document_loaded_with_one_letter_page() {
+    let mut core = WorkerCore::new();
+    let reply = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 4,
+            "protocol": protocol(),
+            "kind": "newBlankDocument",
+            "payload": { "widthPt": 612.0, "heightPt": 792.0 }
+        }),
+    );
+    // Same wire contract as loadDocument — the editor correlates on it.
+    assert_eq!(reply["kind"], "documentLoaded", "blank must load: {reply}");
+    assert_eq!(reply["seq"].as_u64().unwrap(), 4);
+    let handle = &reply["payload"];
+    assert_eq!(handle["pageCount"].as_u64().unwrap(), 1);
+    let (w, h) = (
+        handle["pageSizesPt"][0][0].as_f64().unwrap(),
+        handle["pageSizesPt"][0][1].as_f64().unwrap(),
+    );
+    assert!((w - 612.0).abs() < 0.1, "blank width {w}");
+    assert!((h - 792.0).abs() < 0.1, "blank height {h}");
+}
+
+#[test]
+fn new_blank_document_clears_the_gpu_scene_cache() {
+    // Mirrors load: installing a new document must drop the previous
+    // model's per-page Vello scene cache.
+    let mut core = loaded_core();
+    let (reply, effect) = roundtrip_with_effect(
+        &mut core,
+        &serde_json::json!({
+            "seq": 9,
+            "protocol": protocol(),
+            "kind": "newBlankDocument",
+            "payload": { "widthPt": 595.28, "heightPt": 841.89 }
+        }),
+    );
+    assert_eq!(reply["kind"], "documentLoaded");
+    assert!(matches!(effect, CacheEffect::ClearAll));
+}
+
+#[test]
 fn load_document_clears_the_gpu_scene_cache() {
     let mut core = WorkerCore::new();
     let (_reply, effect) = roundtrip_with_effect(&mut core, &load_msg(1));
@@ -247,7 +290,8 @@ fn mutate_insert_text_replies_mutation_applied() {
     assert_eq!(reply["kind"], "mutationApplied", "{reply}");
     assert_eq!(reply["payload"]["clientSeq"].as_u64().unwrap(), 10);
     // rebuild_ms is the frozen-clock delta: exactly 0.
-    assert_eq!(        reply["payload"]["cacheStats"]["rebuildMs"]
+    assert_eq!(
+        reply["payload"]["cacheStats"]["rebuildMs"]
             .as_f64()
             .unwrap(),
         0.0
@@ -565,7 +609,8 @@ fn request_page_unknown_replies_unknown_page() {
     );
     assert_eq!(reply["kind"], "mutationFailed");
     assert_eq!(reply["payload"]["error"]["kind"], "unknownPage");
-    assert_eq!(        reply["payload"]["error"]["details"]["pageId"]
+    assert_eq!(
+        reply["payload"]["error"]["details"]["pageId"]
             .as_str()
             .unwrap(),
         "does-not-exist"

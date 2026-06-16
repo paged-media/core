@@ -18,9 +18,8 @@ use paged_scene::Document;
 use crate::error::OperationError;
 use crate::invert::invert_batch;
 use crate::operation::{
-    AppliedOperation, ColorGroupSpec, GradientSpec,
-    GradientStopSpec, GroupSpec, InvalidationHint, NodeId,
-    NumberingListSpec, Operation, PropertyPath, StyleCollection, SwatchSpec, Value,
+    AppliedOperation, ColorGroupSpec, GradientSpec, GradientStopSpec, GroupSpec, InvalidationHint,
+    NodeId, NumberingListSpec, Operation, PropertyPath, StyleCollection, SwatchSpec, Value,
 };
 
 // ---------------------------------------------------------------------------
@@ -353,7 +352,10 @@ pub(super) fn gradient_kind_as_attr(k: paged_parse::GradientKind) -> &'static st
     }
 }
 
-pub(super) fn gradient_entry_from_spec(self_id: String, spec: &GradientSpec) -> paged_parse::GradientEntry {
+pub(super) fn gradient_entry_from_spec(
+    self_id: String,
+    spec: &GradientSpec,
+) -> paged_parse::GradientEntry {
     paged_parse::GradientEntry {
         self_id,
         name: spec.name.clone(),
@@ -424,7 +426,10 @@ pub(super) fn mint_group_id(doc: &paged_scene::Document) -> String {
 }
 
 /// Resolve a leaf-member NodeId to its `FrameRef` within `spread`.
-pub(super) fn leaf_frame_ref(spread: &paged_parse::Spread, node: &NodeId) -> Option<paged_parse::FrameRef> {
+pub(super) fn leaf_frame_ref(
+    spread: &paged_parse::Spread,
+    node: &NodeId,
+) -> Option<paged_parse::FrameRef> {
     use paged_parse::FrameRef;
     let find = |id: &str, ids: Vec<Option<&str>>| -> Option<usize> {
         ids.iter().position(|s| *s == Some(id))
@@ -478,7 +483,10 @@ pub(super) fn leaf_frame_ref(spread: &paged_parse::Spread, node: &NodeId) -> Opt
 /// W1.20 (groups v2) — resolve a member NodeId to its `FrameRef`,
 /// extending `leaf_frame_ref` with `NodeId::Group` so `createGroup`
 /// can nest an existing group (group-of-groups).
-pub(super) fn member_frame_ref(spread: &paged_parse::Spread, node: &NodeId) -> Option<paged_parse::FrameRef> {
+pub(super) fn member_frame_ref(
+    spread: &paged_parse::Spread,
+    node: &NodeId,
+) -> Option<paged_parse::FrameRef> {
     use paged_parse::FrameRef;
     match node {
         NodeId::Group(id) => spread
@@ -494,7 +502,10 @@ pub(super) fn member_frame_ref(spread: &paged_parse::Spread, node: &NodeId) -> O
 /// addresses (leaf shapes AND `Group`s, unlike the leaf-only inline
 /// resolver `apply_dissolve_group` used in v1). Returns `None` for an
 /// id-less frame.
-pub(super) fn node_for_frame_ref(spread: &paged_parse::Spread, r: paged_parse::FrameRef) -> Option<NodeId> {
+pub(super) fn node_for_frame_ref(
+    spread: &paged_parse::Spread,
+    r: paged_parse::FrameRef,
+) -> Option<NodeId> {
     use paged_parse::FrameRef;
     Some(match r {
         FrameRef::TextFrame(i) => NodeId::TextFrame(spread.text_frames.get(i)?.self_id.clone()?),
@@ -712,6 +723,14 @@ pub(super) fn apply_create_group(
     let Some((spread_idx, member_refs)) = located else {
         return Err(invalid("member not found in any spread".into()));
     };
+    // Materialise the z-table when this spread never carried one (a
+    // synthesised blank document built up via InsertNode keeps an empty
+    // `frames_in_order` — register_frame_ref no-ops on the empty table).
+    // The top-level membership check + z-slot lookups below require an
+    // authoritative order; a COMPLETE materialisation equals the
+    // renderer's legacy fallback, so it's render-neutral. `member_refs`
+    // are kind+index FrameRefs, unaffected by this.
+    super::insert_node::ensure_frames_in_order(&mut doc.spreads[spread_idx].spread);
     let spread = &doc.spreads[spread_idx].spread;
     // W1.20 — nested re-create (inverse-only): the new group nests
     // inside `parent` at a captured slot. Its members are expected to
@@ -730,7 +749,7 @@ pub(super) fn apply_create_group(
                 return Err(invalid(format!(
                     "parent group \"{}\" not found",
                     p.group_id
-                )))
+                )));
             }
         },
         None => None,
@@ -1486,7 +1505,9 @@ pub(super) fn numbering_list_def_from_spec(
     }
 }
 
-pub(super) fn numbering_list_spec_from_def(def: &paged_parse::styles::NumberingListDef) -> NumberingListSpec {
+pub(super) fn numbering_list_spec_from_def(
+    def: &paged_parse::styles::NumberingListDef,
+) -> NumberingListSpec {
     NumberingListSpec {
         self_id: Some(def.self_id.clone()),
         name: def.name.clone(),
@@ -2063,4 +2084,3 @@ pub(super) fn apply_batch(
         invalidation: combined_invalidation,
     })
 }
-
