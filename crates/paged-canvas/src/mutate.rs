@@ -193,6 +193,16 @@ fn apply_insert_text(
         });
     }
 
+    // A freshly-created table cell (and any other empty paragraph stream)
+    // carries ZERO paragraphs. `locate` pins an empty stream to
+    // `paragraph_idx 0` (via `saturating_sub(1)`), and `insert_one_segment`
+    // would then index an empty slice — the `index out of bounds: len is 0
+    // but the index is 0` panic the sheet cell-pour hit. Seed one empty
+    // paragraph so the first write into a new cell has a stream to land in.
+    if paragraphs.is_empty() {
+        paragraphs.push(paged_parse::Paragraph::default());
+    }
+
     // Phase 3 Gap-D: split text on `\n`. Each segment becomes a
     // contiguous insert within a (possibly new) paragraph. Multiple
     // `\n`s in the source split into multiple paragraphs.

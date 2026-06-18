@@ -245,6 +245,45 @@ fn insert_text_into_cell_then_read_back() {
 }
 
 #[test]
+fn pour_text_into_a_freshly_inserted_empty_table_cell_does_not_panic() {
+    // Regression (the sheet cell-pour panic): a cell created by `insertTable`
+    // carries ZERO paragraphs. The first text pour into it located the end of
+    // an empty stream and indexed `paragraphs[0]` on an empty slice —
+    // `index out of bounds: the len is 0 but the index is 0` in
+    // `insert_one_segment`. `apply_insert_text` now seeds one empty paragraph
+    // when the cell stream is empty, so the first write lands cleanly.
+    let mut model = load_model();
+    let out = model
+        .apply_mutation(&Mutation::InsertTable {
+            story_id: "u10".into(),
+            rows: 2,
+            cols: 2,
+            header_rows: 0,
+            footer_rows: 0,
+            column_widths: vec![],
+            row_heights: vec![],
+        })
+        .expect("insert a 2x2 table into the story");
+    let table_id = match out.created_id {
+        Some(paged_canvas::ElementId::Table { table_id, .. }) => table_id,
+        other => panic!("insertTable must report a Table createdId, got {other:?}"),
+    };
+    // The brand-new cell (0,0) has no paragraphs; pouring text MUST NOT panic.
+    model
+        .apply_mutation(&Mutation::InsertText {
+            story_id: "u10".into(),
+            offset: 0,
+            text: "Hi".into(),
+            cell: Some(TextCellAddr {
+                table_id,
+                row: 0,
+                col: 0,
+            }),
+        })
+        .expect("pour text into the fresh empty cell");
+}
+
+#[test]
 fn insert_into_cell_undo_restores_exact_prior_content() {
     let mut model = load_model();
     let before = cell_text(&model, 1, 1);
