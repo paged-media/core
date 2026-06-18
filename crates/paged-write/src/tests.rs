@@ -283,7 +283,8 @@ fn write_paged_appends_new_parts_and_manifest() {
         &br#"{"v":1,"data":{}}"#.to_vec()
     );
     assert_eq!(
-        dst.get("paged/media.paged.sheet/obj1/values.parquet").unwrap(),
+        dst.get("paged/media.paged.sheet/obj1/values.parquet")
+            .unwrap(),
         &vec![1u8, 2, 3, 4]
     );
     // mimetype is still first + the package re-opens as valid IDML.
@@ -358,8 +359,16 @@ fn write_paged_preserves_unknown_third_party_data_and_manifest_fields() {
     // plugins' data parts (multi-tenant namespace).
     let foreign_manifest = br#"{"v":1,"format":"paged-container","pagedProtocol":48,"plugins":{"com.acme.widget":{"parts":["paged/com.acme.widget/9/data.bin"]}},"x-future-field":42}"#;
     let mut seeded = inject_entry(&original, "manifest.json", foreign_manifest);
-    seeded = inject_entry(&seeded, "paged/com.acme.widget/9/data.bin", &[9u8, 8, 7, 6, 5]);
-    seeded = inject_entry(&seeded, "paged/io.other.tool/3/notes.json", br#"{"hello":"world"}"#);
+    seeded = inject_entry(
+        &seeded,
+        "paged/com.acme.widget/9/data.bin",
+        &[9u8, 8, 7, 6, 5],
+    );
+    seeded = inject_entry(
+        &seeded,
+        "paged/io.other.tool/3/notes.json",
+        br#"{"hello":"world"}"#,
+    );
 
     let doc = Document::open(&seeded).expect("open multi-plugin .paged");
 
@@ -387,11 +396,12 @@ fn write_paged_preserves_unknown_third_party_data_and_manifest_fields() {
     //     plugin's metadata + the unknown future field preserved.
     let m: serde_json::Value =
         serde_json::from_slice(dst.get("manifest.json").unwrap()).expect("manifest json");
-    assert_eq!(m["pagedProtocol"], serde_json::json!(50), "core field updated");
-    assert!(m["idmlPartsHash"]
-        .as_str()
-        .unwrap()
-        .starts_with("fnv1a64:"));
+    assert_eq!(
+        m["pagedProtocol"],
+        serde_json::json!(50),
+        "core field updated"
+    );
+    assert!(m["idmlPartsHash"].as_str().unwrap().starts_with("fnv1a64:"));
     assert_eq!(
         m["plugins"]["com.acme.widget"]["parts"][0],
         serde_json::json!("paged/com.acme.widget/9/data.bin"),
@@ -403,6 +413,77 @@ fn write_paged_preserves_unknown_third_party_data_and_manifest_fields() {
         "unknown future field preserved"
     );
     Document::open(&out).expect("written multi-plugin .paged re-opens");
+}
+
+/// The manifest carries a `parts` INDEX (§7/§8): one entry per `paged/`
+/// part — path, owning plugin (the namespace segment), byte length, and a
+/// content hash. It mirrors the ACTUAL container contents (existing
+/// carried-through parts + new ones), is sorted by path, and the hash
+/// changes with the bytes (the staleness/integrity substrate).
+#[test]
+fn write_paged_records_a_parts_index_with_plugin_and_hash() {
+    let original = build_sample("geometry");
+    // Seed an existing third-party part so the index covers BOTH the
+    // carried-through part and this build's new one.
+    let seeded = inject_entry(&original, "paged/com.acme.widget/9/data.bin", &[1u8, 2, 3]);
+    let doc = Document::open(&seeded).unwrap();
+
+    let mut parts: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    parts.insert(
+        "paged/media.paged.sheet/obj1/spec.json".to_string(),
+        br#"{"v":1,"data":{}}"#.to_vec(),
+    );
+    let out = write_paged(&doc, &seeded, &parts, 51).expect("write_paged");
+
+    let dst = entries(&out);
+    let m: serde_json::Value =
+        serde_json::from_slice(dst.get("manifest.json").unwrap()).expect("manifest json");
+    let index = m["parts"].as_array().expect("parts is an array");
+
+    // Both parts are indexed, sorted by path (acme < media...).
+    let paths: Vec<&str> = index.iter().map(|e| e["path"].as_str().unwrap()).collect();
+    assert_eq!(
+        paths,
+        vec![
+            "paged/com.acme.widget/9/data.bin",
+            "paged/media.paged.sheet/obj1/spec.json",
+        ],
+        "index covers carried-through + new parts, sorted by path"
+    );
+
+    // Plugin attribution comes from the namespace segment; bytes + hash match.
+    let acme = &index[0];
+    assert_eq!(acme["plugin"], serde_json::json!("com.acme.widget"));
+    assert_eq!(acme["bytes"], serde_json::json!(3));
+    assert!(acme["hash"].as_str().unwrap().starts_with("fnv1a64:"));
+    let sheet = &index[1];
+    assert_eq!(sheet["plugin"], serde_json::json!("media.paged.sheet"));
+    assert_eq!(
+        sheet["bytes"],
+        serde_json::json!(br#"{"v":1,"data":{}}"#.len())
+    );
+
+    // The hash is content-sensitive: re-writing the same part with different
+    // bytes changes its index hash (the staleness signal).
+    let mut parts2 = parts.clone();
+    parts2.insert(
+        "paged/media.paged.sheet/obj1/spec.json".to_string(),
+        br#"{"v":1,"data":{"changed":true}}"#.to_vec(),
+    );
+    let out2 = write_paged(&Document::open(&seeded).unwrap(), &seeded, &parts2, 51)
+        .expect("write_paged 2");
+    let m2: serde_json::Value =
+        serde_json::from_slice(entries(&out2).get("manifest.json").unwrap()).unwrap();
+    let sheet2 = m2["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["path"] == serde_json::json!("paged/media.paged.sheet/obj1/spec.json"))
+        .unwrap();
+    assert_ne!(
+        sheet["hash"], sheet2["hash"],
+        "a part's index hash tracks its bytes"
+    );
 }
 
 // ---------------------------------------------------------------------

@@ -29,10 +29,15 @@
 //!      (the §3.1 data-loss guard: on reopen, if the IDML parts changed
 //!      but the `paged/` parts vanished, the file went through InDesign).
 //!
-//! `manifest.json` is hand-serialised (a fixed, tiny shape) so this crate
-//! stays dependency-light + wasm-friendly. The object↔page-item bindings
-//! and per-derived producer stamps (file-format.md §7/§8) layer on here in
-//! a later phase.
+//! `manifest.json` is built with `serde_json` (the existing dep) and also
+//! carries a `parts` INDEX — a faithful, recomputed-each-save record of every
+//! `paged/` part the container holds: its path, the owning plugin (the first
+//! namespace segment), its byte length, and a content hash (file-format.md
+//! §7/§8). That index is the staleness/integrity substrate: a reader can spot
+//! a truncated/corrupted part by its hash, attribute parts to plugins without
+//! unzipping, and (with a future per-plugin version passed at write time)
+//! decide trust/recompute on open. The object↔page-item bindings layer on the
+//! same way in a later phase.
 
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Write};
@@ -90,6 +95,34 @@ pub fn idml_parts_hash(package: &[u8]) -> Result<String, WriteError> {
     Ok(format!("fnv1a64:{h:016x}"))
 }
 
+/// The owning plugin of a `paged/<plugin>/…` part path — the first namespace
+/// segment after the `paged/` prefix. `""` for a malformed/prefix-less path
+/// (defensive; callers only pass `paged/` entries here).
+fn plugin_of(path: &str) -> &str {
+    path.strip_prefix(PAGED_PREFIX)
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("")
+}
+
+/// Build the manifest's `parts` index: one entry per `paged/` part, sorted by
+/// path (the `BTreeMap` order), each carrying its owning plugin, byte length,
+/// and content hash. A pure description of data that is definitely in the
+/// container — the integrity/staleness record, NOT a new write surface.
+fn parts_index(final_parts: &BTreeMap<String, Vec<u8>>) -> serde_json::Value {
+    let arr: Vec<serde_json::Value> = final_parts
+        .iter()
+        .map(|(path, body)| {
+            serde_json::json!({
+                "path": path,
+                "plugin": plugin_of(path),
+                "bytes": body.len(),
+                "hash": format!("fnv1a64:{:016x}", fnv1a(FNV_OFFSET, body)),
+            })
+        })
+        .collect();
+    serde_json::Value::Array(arr)
+}
+
 /// Read one entry's decompressed bytes from a package, or `None` if absent.
 fn read_entry(package: &[u8], name: &str) -> Result<Option<Vec<u8>>, WriteError> {
     let mut zip = zip::ZipArchive::new(Cursor::new(package))?;
@@ -121,6 +154,7 @@ fn build_manifest(
     paged_protocol: u32,
     idml_hash: &str,
     dom_version: &str,
+    parts: serde_json::Value,
 ) -> Vec<u8> {
     let mut obj: serde_json::Map<String, serde_json::Value> = existing
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok())
@@ -131,12 +165,18 @@ fn build_manifest(
         .unwrap_or_default();
     obj.insert("v".to_string(), serde_json::json!(1));
     obj.insert("format".to_string(), serde_json::json!("paged-container"));
-    obj.insert("pagedProtocol".to_string(), serde_json::json!(paged_protocol));
+    obj.insert(
+        "pagedProtocol".to_string(),
+        serde_json::json!(paged_protocol),
+    );
     obj.insert("idmlPartsHash".to_string(), serde_json::json!(idml_hash));
     obj.insert("domVersion".to_string(), serde_json::json!(dom_version));
+    // The `parts` index is core-owned and recomputed each save (it must mirror
+    // the actual container contents), so it is REPLACED, not merged — unlike a
+    // third party's own `plugins`/`x-*` keys, which round-trip untouched.
+    obj.insert("parts".to_string(), parts);
     // Serialising a plain object Value is infallible.
-    serde_json::to_vec_pretty(&serde_json::Value::Object(obj))
-        .unwrap_or_else(|_| b"{}".to_vec())
+    serde_json::to_vec_pretty(&serde_json::Value::Object(obj)).unwrap_or_else(|_| b"{}".to_vec())
 }
 
 /// Write `doc` as a `.paged` container: a valid IDML package (via
@@ -168,12 +208,38 @@ pub fn write_paged(
         .dom_version
         .clone()
         .unwrap_or_else(|| "20.0".to_string());
+
+    // The FINAL set of `paged/` parts the output will hold — existing ones
+    // carried through `idml` (minus those `new_parts` replaces) plus the new
+    // ones — folded into the manifest's content index.
+    let mut final_parts: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    {
+        let mut zip = zip::ZipArchive::new(Cursor::new(&idml))?;
+        for i in 0..zip.len() {
+            let mut e = zip.by_index(i)?;
+            if e.is_dir() {
+                continue;
+            }
+            let name = e.name().to_string();
+            if !name.starts_with(PAGED_PREFIX) || new_parts.contains_key(&name) {
+                continue; // not a plugin part, or about to be replaced by a new one
+            }
+            let mut buf = Vec::with_capacity(e.size() as usize);
+            e.read_to_end(&mut buf)?;
+            final_parts.insert(name, buf);
+        }
+    }
+    for (name, body) in new_parts {
+        final_parts.insert(name.clone(), body.clone());
+    }
+
     let existing_manifest = read_entry(&idml, MANIFEST_NAME)?;
     let manifest = build_manifest(
         existing_manifest.as_deref(),
         paged_protocol,
         &idml_hash,
         &dom_version,
+        parts_index(&final_parts),
     );
 
     // 3. Re-zip: copy every entry except those we are (re)writing, then
