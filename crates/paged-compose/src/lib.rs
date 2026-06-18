@@ -22,6 +22,7 @@
 
 pub mod display_list;
 pub mod glyph;
+pub mod pixel_layer;
 pub mod primitives;
 pub mod scene_layer;
 pub mod text;
@@ -43,6 +44,7 @@ pub use primitives::{
     emit_stroke_ellipse_transformed, emit_stroke_rect, emit_stroke_rect_transformed, unit_ellipse,
     UNIT_ELLIPSE_KEY, UNIT_RECT_KEY,
 };
+pub use pixel_layer::{PixelLayer, PixelTile};
 pub use scene_layer::{
     emit_scene_layer, scene_paint_to_color, SceneBlendMode, SceneGradient, SceneGradientStop,
     SceneItem, SceneLayer, ScenePaint, ScenePathSeg, SceneTextItem,
