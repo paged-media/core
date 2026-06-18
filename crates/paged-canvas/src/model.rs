@@ -2710,6 +2710,18 @@ impl CanvasModel {
                     fit: fit.clone(),
                 })
             }
+            // v50 (C-1 Stage B) — pixel save-back. Resolves the element id
+            // to its frame kind; the apply layer rejects non-graphic frames
+            // and captures the prior bytes/flag for the inverse.
+            Mutation::ReplaceImageBytes { element_id, bytes } => {
+                let node = self.resolve_frame_node_id(element_id)?;
+                Some(Operation::ReplaceImageBytes {
+                    frame: node,
+                    bytes: bytes.as_ref().map(|b| b.0.clone()),
+                    // Forward op — the apply layer captures the prior flag.
+                    prior_has_image_element: None,
+                })
+            }
             Mutation::InsertGuide {
                 spread_id,
                 orientation,
@@ -6671,6 +6683,30 @@ impl CanvasModel {
     /// (test/introspection aid).
     pub fn scene_layer_ids(&self) -> Vec<&str> {
         self.scene_layers.keys().map(String::as_str).collect()
+    }
+
+    /// C-1 Stage B — register (or replace) a plugin PIXEL layer for the
+    /// frame `element_id`. A `PixelLayer` IS a `SceneLayer` once lowered (a
+    /// set of `SceneItem::Image` tiles), so it stores in the SAME
+    /// `scene_layers` registry and composites through the EXISTING Stage-A
+    /// image lane — no new storage, no new rasterizer path. Malformed tiles
+    /// are dropped by `into_scene_layer`. Ephemeral like `set_scene_layer`:
+    /// re-streamed per drag, not a document mutation, not written to
+    /// `source_idml`.
+    pub fn set_pixel_layer(
+        &mut self,
+        element_id: String,
+        layer: paged_compose::PixelLayer,
+    ) -> Result<(), crate::channel::LoadError> {
+        self.set_scene_layer(element_id, layer.into_scene_layer())
+    }
+
+    /// C-1 Stage B — drop the pixel (or scene) layer for `element_id`
+    /// (no-op if none) and rebuild. A pixel layer lowers into the same
+    /// registry as a scene layer, so this is an alias of
+    /// [`Self::clear_scene_layer`].
+    pub fn clear_pixel_layer(&mut self, element_id: &str) -> Result<(), crate::channel::LoadError> {
+        self.clear_scene_layer(element_id)
     }
 
     /// C-6 — parse the frame `Self` id out of a claim's

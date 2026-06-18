@@ -761,6 +761,37 @@ impl WorkerCore {
                     applied,
                 }
             }
+            MainToWorkerKind::SubmitPixelLayer { element_id, layer } => {
+                // v50 (C-1 Stage B) — lower the pixel layer to a scene layer
+                // (`set_pixel_layer` calls `into_scene_layer` for us) and
+                // store it in the SAME registry SubmitSceneLayer uses, then
+                // rebuild. Identical ack + ClearAll contract as
+                // SubmitSceneLayer: the frame may sit on any page.
+                let applied = match self.model.as_mut() {
+                    Some(m) => m.set_pixel_layer(element_id.clone(), layer).is_ok(),
+                    None => false,
+                };
+                if applied {
+                    effect = CacheEffect::ClearAll;
+                }
+                WorkerToMainKind::SceneLayerApplied {
+                    element_id,
+                    applied,
+                }
+            }
+            MainToWorkerKind::ClearPixelLayer { element_id } => {
+                let applied = match self.model.as_mut() {
+                    Some(m) => m.clear_pixel_layer(&element_id).is_ok(),
+                    None => false,
+                };
+                if applied {
+                    effect = CacheEffect::ClearAll;
+                }
+                WorkerToMainKind::SceneLayerApplied {
+                    element_id,
+                    applied,
+                }
+            }
             MainToWorkerKind::ClaimImageResource {
                 image_id,
                 levels,

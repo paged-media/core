@@ -1001,3 +1001,103 @@ fn v38_resize_frame_reply_carries_reflow_but_move_does_not() {
         "MoveFrame must NOT re-paginate: {reply}"
     );
 }
+
+// ---------------------------------------------------------------------
+// C-1 Stage B — pixel layer (the streaming sibling of submitSceneLayer)
+// ---------------------------------------------------------------------
+
+#[test]
+fn submit_pixel_layer_acks_and_clears_the_gpu_scene_cache() {
+    // v50 — the streaming sibling of submitSceneLayer. A pixel layer of
+    // RGBA8 tiles lowers to image scene items and replies on the SAME
+    // `sceneLayerApplied` ack with the same ClearAll cache effect.
+    let mut core = loaded_core();
+    let (reply, effect) = roundtrip_with_effect(
+        &mut core,
+        &serde_json::json!({
+            "seq": 70,
+            "protocol": protocol(),
+            "kind": "submitPixelLayer",
+            "payload": {
+                "elementId": "tf1",
+                "layer": {
+                    "tiles": [
+                        {
+                            "rgba": vec![255u8; 2 * 2 * 4],
+                            "width": 2,
+                            "height": 2,
+                            "x": 0.0,
+                            "y": 0.0,
+                            "w": 10.0,
+                            "h": 10.0
+                        }
+                    ]
+                }
+            }
+        }),
+    );
+    assert_eq!(reply["kind"], "sceneLayerApplied", "{reply}");
+    assert_eq!(reply["seq"].as_u64().unwrap(), 70);
+    assert_eq!(reply["payload"]["elementId"].as_str().unwrap(), "tf1");
+    assert!(
+        reply["payload"]["applied"].as_bool().unwrap(),
+        "pixel layer applied on a loaded doc: {reply}"
+    );
+    assert!(matches!(effect, CacheEffect::ClearAll));
+}
+
+#[test]
+fn clear_pixel_layer_acks_after_a_submit() {
+    let mut core = loaded_core();
+    // Submit first so there's something to clear (ClearAll on success).
+    roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 71,
+            "protocol": protocol(),
+            "kind": "submitPixelLayer",
+            "payload": {
+                "elementId": "tf1",
+                "layer": { "tiles": [
+                    { "rgba": vec![255u8; 2 * 2 * 4], "width": 2, "height": 2,
+                      "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0 }
+                ] }
+            }
+        }),
+    );
+    let (reply, effect) = roundtrip_with_effect(
+        &mut core,
+        &serde_json::json!({
+            "seq": 72,
+            "protocol": protocol(),
+            "kind": "clearPixelLayer",
+            "payload": { "elementId": "tf1" }
+        }),
+    );
+    assert_eq!(reply["kind"], "sceneLayerApplied", "{reply}");
+    assert_eq!(reply["payload"]["elementId"].as_str().unwrap(), "tf1");
+    assert!(reply["payload"]["applied"].as_bool().unwrap(), "{reply}");
+    assert!(matches!(effect, CacheEffect::ClearAll));
+}
+
+#[test]
+fn submit_pixel_layer_with_no_document_replies_not_applied() {
+    // Mirrors submitSceneLayer's no-document behaviour: ack with
+    // applied:false, no cache effect.
+    let mut core = WorkerCore::new();
+    let (reply, effect) = roundtrip_with_effect(
+        &mut core,
+        &serde_json::json!({
+            "seq": 73,
+            "protocol": protocol(),
+            "kind": "submitPixelLayer",
+            "payload": { "elementId": "tf1", "layer": { "tiles": [] } }
+        }),
+    );
+    assert_eq!(reply["kind"], "sceneLayerApplied", "{reply}");
+    assert!(
+        !reply["payload"]["applied"].as_bool().unwrap(),
+        "no document ⇒ not applied: {reply}"
+    );
+    assert_eq!(effect, CacheEffect::None);
+}

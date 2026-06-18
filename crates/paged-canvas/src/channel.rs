@@ -311,7 +311,19 @@ export type WorkerToMain = WorkerToMainKind & {
 // (no existing payload changed), but a new editor SENDS a message an
 // older worker can't deserialise, so the minor bumps to keep the
 // editor/wasm pair in lockstep (the handshake catches the mismatch).
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(49);
+//
+// v50 (C-1 Stage B — per-drag pixel layer + pixel save-back): two new
+// `MainToWorkerKind`s, `SubmitPixelLayer { element_id, layer }` /
+// `ClearPixelLayer { element_id }` (the STREAMING sibling of
+// `SubmitSceneLayer` — a set of independently-positioned RGBA8 tiles a
+// drag re-streams, lowered to the SAME `SceneItem::Image` scene-layer lane
+// via `PixelLayer::into_scene_layer`, so no new render path), plus the new
+// `Mutation::ReplaceImageBytes` → `Operation::ReplaceImageBytes` (commit a
+// processed result as a frame's inline `image_bytes` — one undoable
+// document mutation, the save-back companion to the ephemeral preview). A
+// new editor SENDS messages an older worker can't deserialise, so the
+// minor bumps; the handshake catches a stale pair.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(50);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -750,6 +762,27 @@ pub enum MainToWorkerKind {
     /// v39 (C-1) — drop the scene layer previously submitted for
     /// `element_id` (no-op if none). Reply: `SceneLayerApplied`.
     ClearSceneLayer { element_id: String },
+    /// v50 (C-1 Stage B) — submit a plugin PIXEL layer to composite INSIDE
+    /// the frame whose `Self` id is `element_id`. The streaming sibling of
+    /// `SubmitSceneLayer`: where that carries one whole-frame buffer, a
+    /// `PixelLayer` carries a SET OF independently-positioned RGBA8 tiles —
+    /// the granularity an interactive *drag* re-streams (only the dirtied
+    /// tiles, every frame). The worker LOWERS it to an ordinary
+    /// `SceneLayer` of `SceneItem::Image` tiles (`into_scene_layer`) and
+    /// stores it in the SAME per-frame registry `SubmitSceneLayer` uses, so
+    /// it composites through the EXISTING Stage-A image lane (CPU/GPU) with
+    /// no new rasterizer path. Ephemeral (re-submitted each gesture; not a
+    /// document mutation; does not survive a reload). Submitting invalidates
+    /// the page caches (`CacheEffect::ClearAll`). Reply: `SceneLayerApplied`.
+    SubmitPixelLayer {
+        element_id: String,
+        layer: paged_compose::PixelLayer,
+    },
+    /// v50 (C-1 Stage B) — drop the pixel (or scene) layer previously
+    /// submitted for `element_id` (no-op if none). A pixel layer lowers into
+    /// the same registry as a scene layer, so this clears either. Reply:
+    /// `SceneLayerApplied`.
+    ClearPixelLayer { element_id: String },
     /// v44 (C-6 / I-06) — register an image-resource claim for the frame
     /// whose `Self` id is encoded in `image_id`'s `x-paged-image:<frame>`
     /// namespace. The worker records the claim's pyramid geometry
@@ -2660,6 +2693,20 @@ pub enum Mutation {
         #[serde(default)]
         fit: Option<String>,
     },
+    /// v50 (C-1 Stage B — pixel save-back) — commit processed pixels as the
+    /// frame's INLINE image bytes (the decoded `image_bytes` lane the
+    /// renderer prefers over a `<Link>` uri). The undoable companion to the
+    /// ephemeral per-drag `SubmitPixelLayer` preview: that composites tiles
+    /// over the frame DURING a gesture; this writes the result into the
+    /// document as ONE undoable mutation. `element_id` resolves to a
+    /// Rectangle / Oval / Polygon. `bytes: None` clears the inline payload.
+    /// Routes to `Operation::ReplaceImageBytes`.
+    ReplaceImageBytes {
+        element_id: String,
+        #[serde(default)]
+        #[tsify(type = "number[] | null")]
+        bytes: Option<ByteBuf>,
+    },
     MoveFrame {
         frame_id: String,
         transform: [f32; 6],
@@ -3332,6 +3379,7 @@ impl Mutation {
             Self::InsertField { .. } => "InsertField",
             Self::SetFieldValue { .. } => "SetFieldValue",
             Self::PlaceImage { .. } => "PlaceImage",
+            Self::ReplaceImageBytes { .. } => "ReplaceImageBytes",
             Self::MoveFrame { .. } => "MoveFrame",
             Self::ResizeFrame { .. } => "ResizeFrame",
             Self::LinkFrames { .. } => "LinkFrames",
@@ -3615,6 +3663,98 @@ mod tests {
         assert!(json.contains("\"op\":\"insertText\""), "tag drift: {json}");
     }
 
+    /// v50 (C-1 Stage B) — the `SubmitPixelLayer` / `ClearPixelLayer`
+    /// messages round-trip through the MainToWorker envelope with their
+    /// camelCase tags and the `PixelLayer` tile payload intact.
+    #[test]
+    fn v50_pixel_layer_messages_round_trip() {
+        let layer = paged_compose::PixelLayer {
+            tiles: vec![paged_compose::PixelTile {
+                rgba: vec![255, 0, 0, 255],
+                width: 1,
+                height: 1,
+                x: 2.0,
+                y: 3.0,
+                w: 4.0,
+                h: 5.0,
+            }],
+        };
+        let env = MainToWorker {
+            seq: 7,
+            protocol: PROTOCOL_VERSION,
+            kind: MainToWorkerKind::SubmitPixelLayer {
+                element_id: "Rectangle/u1".into(),
+                layer: layer.clone(),
+            },
+        };
+        let json = serde_json::to_string(&env).unwrap();
+        assert!(
+            json.contains("\"kind\":\"submitPixelLayer\""),
+            "tag drift: {json}"
+        );
+        assert!(json.contains("\"elementId\":\"Rectangle/u1\""), "{json}");
+        let back: MainToWorker = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            MainToWorkerKind::SubmitPixelLayer {
+                element_id,
+                layer: l,
+            } => {
+                assert_eq!(element_id, "Rectangle/u1");
+                assert_eq!(l, layer);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let env = MainToWorker {
+            seq: 8,
+            protocol: PROTOCOL_VERSION,
+            kind: MainToWorkerKind::ClearPixelLayer {
+                element_id: "Rectangle/u1".into(),
+            },
+        };
+        let json = serde_json::to_string(&env).unwrap();
+        assert!(
+            json.contains("\"kind\":\"clearPixelLayer\""),
+            "tag drift: {json}"
+        );
+        let back: MainToWorker = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            back.kind,
+            MainToWorkerKind::ClearPixelLayer { .. }
+        ));
+    }
+
+    /// v50 (C-1 Stage B) — the `ReplaceImageBytes` mutation survives the
+    /// mutate envelope with its camelCase tag, `elementId`, and the inline
+    /// bytes payload (a JSON number array).
+    #[test]
+    fn v50_replace_image_bytes_mutation_round_trips() {
+        let m = Mutation::ReplaceImageBytes {
+            element_id: "Rectangle/u1".into(),
+            bytes: Some(ByteBuf(vec![9, 8, 7, 6])),
+        };
+        assert_eq!(m.discriminant(), "ReplaceImageBytes");
+        let env = MainToWorker {
+            seq: 9,
+            protocol: PROTOCOL_VERSION,
+            kind: MainToWorkerKind::Mutate(m),
+        };
+        let json = serde_json::to_string(&env).unwrap();
+        assert!(
+            json.contains("\"op\":\"replaceImageBytes\""),
+            "tag drift: {json}"
+        );
+        assert!(json.contains("\"elementId\":\"Rectangle/u1\""), "{json}");
+        let back: MainToWorker = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            MainToWorkerKind::Mutate(Mutation::ReplaceImageBytes { element_id, bytes }) => {
+                assert_eq!(element_id, "Rectangle/u1");
+                assert_eq!(bytes.map(|b| b.0), Some(vec![9, 8, 7, 6]));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
     #[test]
     fn w05_mutations_round_trip_through_the_mutate_envelope() {
         // Every W0.5 Mutation variant survives the JSON envelope the
@@ -3758,8 +3898,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v49() {
-        assert_eq!(PROTOCOL_VERSION.0, 49);
+    fn protocol_version_is_v50() {
+        assert_eq!(PROTOCOL_VERSION.0, 50);
     }
 
     /// v38 — `RequestFrameChain` serialises with its camelCase tag and
