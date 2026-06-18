@@ -14,13 +14,15 @@
 
 //! Plugin PIXEL-layer IR (C-1 Stage B — the per-drag GPU preview door).
 //!
-//! PROTOCOL STATUS — PROTOTYPE, REVIEW-GATED. This type is the wire shape
-//! for a NEW canvas message (`MainToWorkerKind::SubmitPixelLayer`); landing
-//! that message is a `PROTOCOL_VERSION` bump (an old worker cannot
-//! deserialize it). It is implemented + unit-tested on a branch but the
-//! version bump / canvas-wasm publish / editor pin sync are deliberately
-//! NOT done here — see the channel.rs `SubmitPixelLayer` doc and the work
-//! report. Do not publish until reviewed.
+//! PROTOCOL STATUS — LANDED IN CORE at `PROTOCOL_VERSION` v50. This type
+//! is the wire shape for the canvas messages
+//! `MainToWorkerKind::SubmitPixelLayer` / `ClearPixelLayer` (the streaming
+//! sibling of `SubmitSceneLayer`); the worker routes it through
+//! `CanvasModel::set_pixel_layer`, which lowers it via
+//! [`PixelLayer::into_scene_layer`] into the SAME per-frame scene-layer
+//! registry. The save-back side is `Mutation::ReplaceImageBytes` →
+//! `Operation::ReplaceImageBytes`. The canvas-wasm publish + editor pin
+//! sync are still downstream (consumer side, not this repo).
 //!
 //! Where [`crate::SceneLayer`]'s `SceneItem::Image` (Stage A, v41) carries
 //! ONE whole-frame RGBA8 buffer re-sent on every adjust commit, a
