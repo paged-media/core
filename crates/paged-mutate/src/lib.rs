@@ -1595,6 +1595,12 @@ mod tests {
                 image_uri: Some("file:///assets/cover.png".to_string()),
                 fit: Some("FillProportionally".to_string()),
             },
+            // C-1 Stage B — pixel save-back.
+            Operation::ReplaceImageBytes {
+                frame: NodeId::Rectangle("Rectangle/u1".to_string()),
+                bytes: Some(vec![1, 2, 3, 4]),
+                prior_has_image_element: Some(false),
+            },
             Operation::InsertGuide {
                 spread_id: "Spread/u_main".to_string(),
                 orientation: crate::operation::GuideOrientationSpec::Vertical,

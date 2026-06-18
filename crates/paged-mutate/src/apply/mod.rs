@@ -240,6 +240,16 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             image_uri,
             fit,
         } => place_image::apply_place_image(doc, frame, image_uri.as_deref(), fit.as_deref()),
+        Operation::ReplaceImageBytes {
+            frame,
+            bytes,
+            prior_has_image_element,
+        } => replace_image_bytes::apply_replace_image_bytes(
+            doc,
+            frame,
+            bytes.as_deref(),
+            *prior_has_image_element,
+        ),
         Operation::InsertGuide {
             spread_id,
             orientation,
@@ -605,6 +615,7 @@ mod paragraph;
 mod path_topology;
 mod place_image;
 mod remove_node;
+mod replace_image_bytes;
 mod sections;
 mod set_property;
 

@@ -2885,6 +2885,36 @@ pub enum Operation {
         #[serde(default)]
         fit: Option<String>,
     },
+    /// C-1 Stage B (pixel save-back) — replace a placed graphic frame's
+    /// INLINE image bytes (the decoded `image_bytes` lane the renderer
+    /// prefers over a `<Link>` uri). The companion to the per-drag
+    /// `SubmitPixelLayer` preview: where that ephemerally composites tiles
+    /// over the frame during a gesture, this COMMITS the processed result
+    /// as a single undoable document mutation. `frame` must be a Rectangle
+    /// / Oval / Polygon. `bytes: Some(_)` installs the new inline payload
+    /// (typically a freshly-encoded PNG/JPEG from the plugin pipeline) and
+    /// marks the frame an image element (`has_image_element = true`) so it
+    /// renders even when no `<Image>` was parsed; `bytes: None` clears the
+    /// inline payload (the save-back-of-a-delete lane). The apply layer
+    /// captures the prior bytes + prior `has_image_element` so the inverse
+    /// (another `ReplaceImageBytes`, carrying `prior_has_image_element`)
+    /// restores them losslessly — was-absent restores to absent. Does NOT
+    /// touch `image_link` / `image_item_transform`: bytes outrank the link
+    /// in the renderer (the same precedence parsed inline-CDATA images
+    /// get), and the transform stays so the bytes land in the same place.
+    ReplaceImageBytes {
+        frame: NodeId,
+        #[serde(default)]
+        #[tsify(type = "number[] | null")]
+        bytes: Option<Vec<u8>>,
+        /// Inverse-only: the frame's `has_image_element` flag BEFORE the
+        /// op, restored by the inverse. `None` on a forward op (the apply
+        /// layer always sets it true; the inverse carries the captured
+        /// prior). A forward op MAY also set it explicitly — the apply
+        /// layer treats `None` as "true" for the forward direction.
+        #[serde(default)]
+        prior_has_image_element: Option<bool>,
+    },
     /// W0.5 — insert a ruler guide on the spread `spread_id`.
     /// `position` is the page-local coordinate on the perpendicular
     /// axis (x for Vertical, y for Horizontal); `page_index` is the
