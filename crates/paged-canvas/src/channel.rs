@@ -323,7 +323,17 @@ export type WorkerToMain = WorkerToMainKind & {
 // document mutation, the save-back companion to the ephemeral preview). A
 // new editor SENDS messages an older worker can't deserialise, so the
 // minor bumps; the handshake catches a stale pair.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(50);
+//
+// v51 (.paged container — the host.parts door): four new
+// `MainToWorkerKind`s — `WritePagedPart { path, bytes }` / `ReadPagedPart
+// { path }` / `ListPagedParts { prefix }` / `ExportPaged {}` — the engine
+// side of the SDK `host.parts` surface. A plugin persists namespaced
+// `paged/<plugin>/<id>/…` parts INTO the document container (they travel
+// with the `.paged` file, unlike per-browser OPFS blob storage); `ExportPaged`
+// serialises the document as a `.paged` package (valid IDML + the paged/ parts
+// + manifest.json). Additive — a new editor SENDS messages an older worker
+// can't deserialise, so the minor bumps; the handshake catches a stale pair.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(51);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -897,6 +907,26 @@ pub enum MainToWorkerKind {
     /// verbatim), so there's no session/progress loop. Reply:
     /// `IdmlExported` (or `ExportIdmlFailed`).
     ExportIdml {},
+    /// v51 (.paged container — the host.parts door) — write/overwrite a
+    /// plugin-namespaced container part. `path` MUST be under `paged/`
+    /// (the IDML parts + manifest are off-limits); the bytes are persisted
+    /// INTO the document on the next `ExportPaged` (they travel with the
+    /// file). Reply: `PagedPartWritten` / `PagedPartFailed`.
+    WritePagedPart {
+        path: String,
+        #[tsify(type = "number[]")]
+        bytes: ByteBuf,
+    },
+    /// v51 — read a `.paged` part's bytes (the live overlay, else the loaded
+    /// container). Reply: `PagedPartRead` (or `PagedPartFailed`).
+    ReadPagedPart { path: String },
+    /// v51 — list `.paged` part paths under `prefix` (the `paged/` namespace
+    /// only). Reply: `PagedPartList` (or `PagedPartFailed`).
+    ListPagedParts { prefix: String },
+    /// v51 — serialise the document as a `.paged` container: a valid IDML
+    /// package + the plugin `paged/` parts + a refreshed `manifest.json`.
+    /// Reply: `PagedExported` / `PagedPartFailed`.
+    ExportPaged {},
     /// Inspector P1 — return a property snapshot for one element so
     /// the Inspector panel can render typed editors. Reply:
     /// `ElementProperties`. Each entry carries the property path +
@@ -1436,6 +1466,26 @@ pub enum WorkerToMainKind {
     /// failed (no document loaded, or the carry-through writer errored).
     /// Mirrors `ExportPdfFailed`'s flat-string error shape.
     ExportIdmlFailed { error: String },
+    /// v51 — `WritePagedPart` ack.
+    PagedPartWritten {},
+    /// v51 — `ReadPagedPart` reply. `found: false` + empty `bytes` when the
+    /// part is absent (mirrors the placed-asset-bytes found/empty shape).
+    PagedPartRead {
+        found: bool,
+        #[tsify(type = "number[]")]
+        bytes: ByteBuf,
+    },
+    /// v51 — `ListPagedParts` reply (paths under the requested prefix).
+    PagedPartList { paths: Vec<String> },
+    /// v51 — `ExportPaged` reply: the `.paged` container bytes (mirrors how
+    /// `IdmlExported` carries `idml_bytes` as a `number[]` on the wire).
+    PagedExported {
+        #[tsify(type = "number[]")]
+        bytes: ByteBuf,
+    },
+    /// v51 — any `.paged` parts op failed (no document loaded, a path outside
+    /// the `paged/` namespace, or the container writer errored).
+    PagedPartFailed { error: String },
     /// Inspector P1 — `RequestElementProperties` reply. `None` when
     /// the id doesn't resolve.
     ElementProperties { result: Option<ElementProperties> },
@@ -4508,6 +4558,58 @@ mod tests {
         );
         let json = serde_json::to_string(&CollectionName::Sections).unwrap();
         assert_eq!(json, "\"sections\"");
+    }
+
+    #[test]
+    fn paged_part_messages_round_trip_through_json() {
+        // v51 (.paged container — the host.parts door): the request + reply
+        // variants survive the JSON envelope the worker (de)serialises.
+        let msg = MainToWorker {
+            seq: 51,
+            protocol: PROTOCOL_VERSION,
+            kind: MainToWorkerKind::WritePagedPart {
+                path: "paged/media.paged.sheet/o1/spec.json".into(),
+                bytes: ByteBuf::from(vec![1u8, 2, 3]),
+            },
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"kind\":\"writePagedPart\""), "{json}");
+        match serde_json::from_str::<MainToWorker>(&json).unwrap().kind {
+            MainToWorkerKind::WritePagedPart { path, bytes } => {
+                assert_eq!(path, "paged/media.paged.sheet/o1/spec.json");
+                assert_eq!(bytes.into_vec(), vec![1, 2, 3]);
+            }
+            other => panic!("wrong request variant: {other:?}"),
+        }
+
+        // The export reply carries the container bytes as number[] on the wire.
+        let reply = WorkerToMain {
+            seq: Some(51),
+            protocol: PROTOCOL_VERSION,
+            kind: WorkerToMainKind::PagedExported {
+                bytes: ByteBuf::from(vec![9u8, 8, 7]),
+            },
+        };
+        let rj = serde_json::to_string(&reply).unwrap();
+        assert!(rj.contains("\"kind\":\"pagedExported\""), "{rj}");
+        match serde_json::from_str::<WorkerToMain>(&rj).unwrap().kind {
+            WorkerToMainKind::PagedExported { bytes } => {
+                assert_eq!(bytes.into_vec(), vec![9, 8, 7]);
+            }
+            other => panic!("wrong reply variant: {other:?}"),
+        }
+
+        // The read + list replies tag camelCase + carry their payloads.
+        let list = WorkerToMain {
+            seq: Some(1),
+            protocol: PROTOCOL_VERSION,
+            kind: WorkerToMainKind::PagedPartList {
+                paths: vec!["paged/x/1/spec.json".into()],
+            },
+        };
+        let lj = serde_json::to_string(&list).unwrap();
+        assert!(lj.contains("\"kind\":\"pagedPartList\""), "{lj}");
+        assert!(lj.contains("paged/x/1/spec.json"), "{lj}");
     }
 
     #[test]

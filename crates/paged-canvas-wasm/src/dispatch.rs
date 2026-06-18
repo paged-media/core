@@ -1006,6 +1006,52 @@ impl WorkerCore {
                     error: "no document loaded".into(),
                 },
             },
+            // v51 — the `.paged` container parts door (host.parts engine side).
+            MainToWorkerKind::WritePagedPart { path, bytes } => match self.model.as_mut() {
+                Some(m) => match m.set_paged_part(path, bytes.into_vec()) {
+                    Ok(()) => WorkerToMainKind::PagedPartWritten {},
+                    Err(e) => WorkerToMainKind::PagedPartFailed { error: e },
+                },
+                None => WorkerToMainKind::PagedPartFailed {
+                    error: "no document loaded".into(),
+                },
+            },
+            MainToWorkerKind::ReadPagedPart { path } => match self.model.as_ref() {
+                Some(m) => match m.get_paged_part(&path) {
+                    Some(b) => WorkerToMainKind::PagedPartRead {
+                        found: true,
+                        bytes: b.into(),
+                    },
+                    None => WorkerToMainKind::PagedPartRead {
+                        found: false,
+                        bytes: Vec::new().into(),
+                    },
+                },
+                None => WorkerToMainKind::PagedPartFailed {
+                    error: "no document loaded".into(),
+                },
+            },
+            MainToWorkerKind::ListPagedParts { prefix } => match self.model.as_ref() {
+                Some(m) => WorkerToMainKind::PagedPartList {
+                    paths: m.list_paged_parts(&prefix),
+                },
+                None => WorkerToMainKind::PagedPartFailed {
+                    error: "no document loaded".into(),
+                },
+            },
+            MainToWorkerKind::ExportPaged {} => match self.model.as_ref() {
+                Some(m) => match m.export_paged(PROTOCOL_VERSION.0) {
+                    Ok(bytes) => WorkerToMainKind::PagedExported {
+                        bytes: bytes.into(),
+                    },
+                    Err(e) => WorkerToMainKind::PagedPartFailed {
+                        error: e.to_string(),
+                    },
+                },
+                None => WorkerToMainKind::PagedPartFailed {
+                    error: "no document loaded".into(),
+                },
+            },
             MainToWorkerKind::RequestGradientDetail { gradient_id } => {
                 let result = self
                     .model
