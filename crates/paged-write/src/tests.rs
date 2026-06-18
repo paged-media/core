@@ -32,7 +32,7 @@ use std::io::{Cursor, Read};
 use paged_mutate::{NodeId, Operation, Project, PropertyPath, Value};
 use paged_scene::Document;
 
-use crate::write_idml;
+use crate::{idml_parts_hash, write_idml, write_paged};
 
 /// Every generator sample the writer is exercised against. Spans
 /// geometry-only, text, mixed, effects, tables, images, masters, etc. —
@@ -169,6 +169,240 @@ fn unmutated_round_trip_whole_package_is_byte_identical() {
             "{name}: whole-package bytes diverged on unmutated round-trip"
         );
     }
+}
+
+// ---------------------------------------------------------------------
+// 1b. `.paged` namespace: plugin-owned parts round-trip through a write.
+// ---------------------------------------------------------------------
+
+/// Re-zip `idml` with one extra entry appended (the `.paged` container's
+/// plugin-namespaced parts ride alongside the IDML as ordinary ZIP entries
+/// unreferenced by `designmap.xml`). Existing entries copy through raw so
+/// `mimetype` stays first + stored and the package re-opens.
+fn inject_entry(idml: &[u8], name: &str, body: &[u8]) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut src = zip::ZipArchive::new(Cursor::new(idml)).expect("zip");
+    let out = Cursor::new(Vec::<u8>::new());
+    let mut zip = zip::write::ZipWriter::new(out);
+    for i in 0..src.len() {
+        let entry = src.by_index_raw(i).expect("raw entry");
+        zip.raw_copy_file(entry).expect("copy");
+    }
+    let deflated = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    zip.start_file(name, deflated).expect("start");
+    zip.write_all(body).expect("write");
+    zip.finish().expect("finish").into_inner()
+}
+
+/// The `.paged` guarantee: a plugin-owned part (`paged/<plugin>/<id>/…`),
+/// unreferenced by `designmap.xml`, survives a MUTATED write byte-identically
+/// and the package stays valid IDML. This is the foundation the container
+/// format builds on — the carry-through writer preserves foreign entries.
+#[test]
+fn paged_namespace_part_survives_a_mutated_write() {
+    let name = "geometry";
+    let original = build_sample(name);
+    let part_path = "paged/media.paged.sheet/obj1/spec.json";
+    let part_body = br#"{"v":1,"data":{"formulas":["=A1+B1"]}}"#.to_vec();
+    let injected = inject_entry(&original, part_path, &part_body);
+
+    // The injected package still parses (the paged/ part is ignored by the
+    // IDML reader — not referenced from designmap.xml).
+    let doc = Document::open(&injected).expect("open .paged-shaped package");
+
+    // Apply a REAL mutation so the writer takes the patch path for a spread
+    // (not the trivial byte-identical short-circuit).
+    let (rect_id, orig_fill) = doc
+        .spreads
+        .iter()
+        .find_map(|s| {
+            s.spread
+                .rectangles
+                .iter()
+                .find(|r| r.self_id.is_some())
+                .map(|r| (r.self_id.clone().unwrap(), r.fill_color.clone()))
+        })
+        .expect("a rectangle with a Self id");
+    let new_fill = doc
+        .palette
+        .colors
+        .keys()
+        .find(|id| Some(id.as_str()) != orig_fill.as_deref())
+        .cloned()
+        .expect("a second swatch");
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::SetProperty {
+            node: NodeId::Rectangle(rect_id),
+            path: PropertyPath::FrameFillColor,
+            value: Value::ColorRef(Some(new_fill)),
+        })
+        .expect("apply fill");
+    let out = write_idml(project.document(), &injected).expect("write");
+
+    // The plugin part round-tripped untouched, and the package re-opens.
+    let dst = entries(&out);
+    let survived = dst
+        .get(part_path)
+        .expect("paged/ part dropped by the writer");
+    assert_eq!(survived, &part_body, "paged/ part bytes diverged on write");
+    Document::open(&out).expect("written .paged re-opens");
+}
+
+/// `write_paged` appends the model-held `paged/` parts + a `manifest.json`
+/// carrying the Paged identity, the wire protocol, and the IDML-parts hash.
+#[test]
+fn write_paged_appends_new_parts_and_manifest() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+
+    let mut parts: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    parts.insert(
+        "paged/media.paged.sheet/obj1/spec.json".to_string(),
+        br#"{"v":1,"data":{}}"#.to_vec(),
+    );
+    parts.insert(
+        "paged/media.paged.sheet/obj1/values.parquet".to_string(),
+        vec![1u8, 2, 3, 4],
+    );
+    let out = write_paged(&doc, &original, &parts, 50).expect("write_paged");
+
+    let dst = entries(&out);
+    let m: serde_json::Value =
+        serde_json::from_slice(dst.get("manifest.json").expect("manifest present"))
+            .expect("manifest is valid json");
+    assert_eq!(m["format"], serde_json::json!("paged-container"));
+    assert_eq!(m["pagedProtocol"], serde_json::json!(50));
+    assert!(m["idmlPartsHash"]
+        .as_str()
+        .expect("hash field")
+        .starts_with("fnv1a64:"));
+    assert_eq!(
+        dst.get("paged/media.paged.sheet/obj1/spec.json").unwrap(),
+        &br#"{"v":1,"data":{}}"#.to_vec()
+    );
+    assert_eq!(
+        dst.get("paged/media.paged.sheet/obj1/values.parquet").unwrap(),
+        &vec![1u8, 2, 3, 4]
+    );
+    // mimetype is still first + the package re-opens as valid IDML.
+    Document::open(&out).expect("written .paged re-opens");
+}
+
+/// The IDML-parts hash IGNORES `paged/` parts (so editing plugin data does
+/// not trip the data-loss guard) but DOES change when an IDML part changes
+/// (so an InDesign round-trip that rewrote the IDML is detectable).
+#[test]
+fn write_paged_idml_hash_excludes_paged_parts_but_tracks_idml_changes() {
+    let original = build_sample("geometry");
+    let doc = Document::open(&original).unwrap();
+
+    let mut a: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    a.insert("paged/x/1/spec.json".to_string(), b"AAA".to_vec());
+    let mut b: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    b.insert("paged/x/1/spec.json".to_string(), b"BBBBBBBBB".to_vec());
+    let out_a = write_paged(&doc, &original, &a, 50).unwrap();
+    let out_b = write_paged(&Document::open(&original).unwrap(), &original, &b, 50).unwrap();
+    assert_eq!(
+        idml_parts_hash(&out_a).unwrap(),
+        idml_parts_hash(&out_b).unwrap(),
+        "IDML-parts hash must ignore differing paged/ parts"
+    );
+
+    // A real IDML mutation changes the hash.
+    let (rect_id, orig_fill) = doc
+        .spreads
+        .iter()
+        .find_map(|s| {
+            s.spread
+                .rectangles
+                .iter()
+                .find(|r| r.self_id.is_some())
+                .map(|r| (r.self_id.clone().unwrap(), r.fill_color.clone()))
+        })
+        .expect("a rectangle");
+    let new_fill = doc
+        .palette
+        .colors
+        .keys()
+        .find(|id| Some(id.as_str()) != orig_fill.as_deref())
+        .cloned()
+        .expect("a second swatch");
+    let mut project = Project::new(Document::open(&original).unwrap());
+    project
+        .apply(Operation::SetProperty {
+            node: NodeId::Rectangle(rect_id),
+            path: PropertyPath::FrameFillColor,
+            value: Value::ColorRef(Some(new_fill)),
+        })
+        .expect("apply");
+    let mutated = write_idml(project.document(), &original).unwrap();
+    assert_ne!(
+        idml_parts_hash(&original).unwrap(),
+        idml_parts_hash(&mutated).unwrap(),
+        "IDML-parts hash must change when an IDML part changes"
+    );
+}
+
+/// FORWARD COMPATIBILITY: a build that knows only its OWN plugin must, on
+/// save, preserve every OTHER plugin's data parts (including third-party
+/// plugins it has never heard of) AND the unknown fields + other-plugin
+/// metadata inside `manifest.json`. Nothing third-party is dropped because
+/// the current build cannot interpret it.
+#[test]
+fn write_paged_preserves_unknown_third_party_data_and_manifest_fields() {
+    let original = build_sample("geometry");
+    // A `.paged` as authored by OTHER builds: a manifest carrying a foreign
+    // plugin's metadata + an unknown future field, plus two third-party
+    // plugins' data parts (multi-tenant namespace).
+    let foreign_manifest = br#"{"v":1,"format":"paged-container","pagedProtocol":48,"plugins":{"com.acme.widget":{"parts":["paged/com.acme.widget/9/data.bin"]}},"x-future-field":42}"#;
+    let mut seeded = inject_entry(&original, "manifest.json", foreign_manifest);
+    seeded = inject_entry(&seeded, "paged/com.acme.widget/9/data.bin", &[9u8, 8, 7, 6, 5]);
+    seeded = inject_entry(&seeded, "paged/io.other.tool/3/notes.json", br#"{"hello":"world"}"#);
+
+    let doc = Document::open(&seeded).expect("open multi-plugin .paged");
+
+    // THIS build knows only its own plugin: it writes one part, protocol 50.
+    let mut mine: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    mine.insert(
+        "paged/media.paged.sheet/1/spec.json".to_string(),
+        br#"{"v":1,"data":{}}"#.to_vec(),
+    );
+    let out = write_paged(&doc, &seeded, &mine, 50).expect("write_paged");
+
+    let dst = entries(&out);
+    // (a) Both third-party plugins' data parts survived byte-identically.
+    assert_eq!(
+        dst.get("paged/com.acme.widget/9/data.bin").unwrap(),
+        &vec![9u8, 8, 7, 6, 5]
+    );
+    assert_eq!(
+        dst.get("paged/io.other.tool/3/notes.json").unwrap(),
+        &br#"{"hello":"world"}"#.to_vec()
+    );
+    assert!(dst.contains_key("paged/media.paged.sheet/1/spec.json"));
+
+    // (b) The manifest MERGED: this build's fields updated, the foreign
+    //     plugin's metadata + the unknown future field preserved.
+    let m: serde_json::Value =
+        serde_json::from_slice(dst.get("manifest.json").unwrap()).expect("manifest json");
+    assert_eq!(m["pagedProtocol"], serde_json::json!(50), "core field updated");
+    assert!(m["idmlPartsHash"]
+        .as_str()
+        .unwrap()
+        .starts_with("fnv1a64:"));
+    assert_eq!(
+        m["plugins"]["com.acme.widget"]["parts"][0],
+        serde_json::json!("paged/com.acme.widget/9/data.bin"),
+        "foreign plugin metadata preserved"
+    );
+    assert_eq!(
+        m["x-future-field"],
+        serde_json::json!(42),
+        "unknown future field preserved"
+    );
+    Document::open(&out).expect("written multi-plugin .paged re-opens");
 }
 
 // ---------------------------------------------------------------------

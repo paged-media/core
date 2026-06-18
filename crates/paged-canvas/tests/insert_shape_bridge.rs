@@ -441,3 +441,61 @@ fn batch_sentinel_without_create_rejects() {
     });
     assert!(result.is_err(), "got {result:?}");
 }
+
+/// `.paged` container parts: a plugin sets a spec + a binary source part,
+/// `export_paged` writes them into the container, and a reload reads them
+/// back — the engine side of the `host.parts` door, end to end.
+#[test]
+fn paged_container_parts_round_trip_through_export() {
+    let mut model = load();
+    let spec = br#"{"v":1,"data":{}}"#;
+    model
+        .set_paged_part(
+            "paged/media.paged.sheet/o1/spec.json".into(),
+            spec.to_vec(),
+        )
+        .expect("set spec part");
+    model
+        .set_paged_part(
+            "paged/media.paged.sheet/o1/values.parquet".into(),
+            vec![1u8, 2, 3, 4],
+        )
+        .expect("set source part");
+
+    // Reads see the live overlay; listing is namespaced.
+    assert_eq!(
+        model
+            .get_paged_part("paged/media.paged.sheet/o1/spec.json")
+            .as_deref(),
+        Some(&spec[..])
+    );
+    assert_eq!(model.list_paged_parts("paged/media.paged.sheet/").len(), 2);
+    // The parts door never touches the IDML or the manifest.
+    assert!(
+        model.set_paged_part("designmap.xml".into(), vec![]).is_err(),
+        "a non-paged path must be rejected"
+    );
+    assert!(
+        model.get_paged_part("manifest.json").is_none(),
+        "the parts door does not serve manifest.json"
+    );
+
+    // Export → reload: the parts survive in the container.
+    let out = model.export_paged(50).expect("export_paged");
+    let re = CanvasModel::load("doc-paged", &out, CanvasOptions::default()).expect("reload .paged");
+    assert_eq!(
+        re.get_paged_part("paged/media.paged.sheet/o1/spec.json")
+            .as_deref(),
+        Some(&spec[..])
+    );
+    assert_eq!(
+        re.get_paged_part("paged/media.paged.sheet/o1/values.parquet")
+            .as_deref(),
+        Some(&[1u8, 2, 3, 4][..])
+    );
+
+    // A re-save (no plugin changes) preserves them — round-trip stable.
+    let out2 = re.export_paged(50).expect("re-export");
+    let re2 = CanvasModel::load("doc-paged-2", &out2, CanvasOptions::default()).expect("reload twice");
+    assert_eq!(re2.list_paged_parts("paged/").len(), 2);
+}

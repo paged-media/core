@@ -19,6 +19,9 @@ thiserror = { workspace = true }
 # builds for wasm32 too (the save-back path runs in the editor/SDK).
 zip = { workspace = true }
 quick-xml = { workspace = true }
+# `.paged` manifest.json — parsed + MERGE-rewritten so unknown fields and
+# third-party plugin metadata round-trip untouched (pure Rust, wasm-safe).
+serde_json = "1"
 
 [dev-dependencies]
 paged-gen = { path = "../paged-gen" }
