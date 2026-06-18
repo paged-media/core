@@ -949,6 +949,14 @@ pub struct CanvasModel {
     /// few MB at most. Cleared/replaced on every `load` (a fresh
     /// `CanvasModel` ⇒ fresh bytes), so it never accumulates.
     pub(crate) source_idml: Vec<u8>,
+    /// `.paged` container — plugin-owned parts (`paged/<plugin>/<id>/…`)
+    /// ADDED or UPDATED since load. The parts present in the loaded file
+    /// already ride in `source_idml` and round-trip via the carry-through
+    /// writer; this map is the new/updated overlay `export_paged` appends.
+    /// Survives gestures/undo (outside the mutation channel); a reload
+    /// re-seeds from the freshly-loaded container. The `host.parts` SDK
+    /// door gates writes to a plugin's own `paged/<plugin-id>/…` namespace.
+    paged_parts: std::collections::BTreeMap<String, Vec<u8>>,
     pub(crate) built: BuiltDocument,
     /// Index from `PageId` to `BuiltDocument::pages` position. Built
     /// once at load and refreshed after every rebuild. Worker callers
@@ -1328,6 +1336,7 @@ impl CanvasModel {
             // W3.B2 — retain the source package for save-back. One
             // compressed copy; replaced wholesale on the next load.
             source_idml: bytes.to_vec(),
+            paged_parts: std::collections::BTreeMap::new(),
             built,
             page_index,
             scene_layers: HashMap::new(),
@@ -3284,6 +3293,69 @@ impl CanvasModel {
     /// which is exactly the `&Document` the writer takes.
     pub fn export_idml(&self) -> Result<Vec<u8>, paged_write::WriteError> {
         paged_write::write_idml(&self.scene, &self.source_idml)
+    }
+
+    // ---- `.paged` container parts (the `host.parts` SDK door, engine side) ----
+
+    /// Set/overwrite a `.paged` container part. The path MUST be under the
+    /// `paged/` namespace — the IDML parts, `mimetype`, and `manifest.json`
+    /// are off-limits, so a plugin can never clobber the IDML or the
+    /// container metadata. `export_paged` emits the overlay alongside the
+    /// IDML parts. (Namespace OWNERSHIP — a plugin writing only its own
+    /// `paged/<plugin-id>/…` subtree — is gated at the SDK door, where the
+    /// caller identity is known; this engine method enforces only the
+    /// `paged/` boundary.)
+    pub fn set_paged_part(&mut self, path: String, bytes: Vec<u8>) -> Result<(), String> {
+        if !path.starts_with(paged_write::PAGED_PREFIX) {
+            return Err(format!(
+                "paged part path must start with `{}` (got {path:?})",
+                paged_write::PAGED_PREFIX
+            ));
+        }
+        self.paged_parts.insert(path, bytes);
+        Ok(())
+    }
+
+    /// Read a `.paged` part — the live overlay first, else the loaded
+    /// container. Restricted to the `paged/` namespace (the parts door never
+    /// serves IDML parts or `manifest.json`).
+    pub fn get_paged_part(&self, path: &str) -> Option<Vec<u8>> {
+        if !path.starts_with(paged_write::PAGED_PREFIX) {
+            return None;
+        }
+        if let Some(b) = self.paged_parts.get(path) {
+            return Some(b.clone());
+        }
+        self.scene.container.entries.get(path).map(|b| b.to_vec())
+    }
+
+    /// List `.paged` part paths under `prefix` (the union of the loaded
+    /// container and the live overlay), restricted to the `paged/` namespace.
+    pub fn list_paged_parts(&self, prefix: &str) -> Vec<String> {
+        let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for k in self.scene.container.entries.keys() {
+            if k.starts_with(paged_write::PAGED_PREFIX) && k.starts_with(prefix) {
+                names.insert(k.clone());
+            }
+        }
+        for k in self.paged_parts.keys() {
+            if k.starts_with(prefix) {
+                names.insert(k.clone());
+            }
+        }
+        names.into_iter().collect()
+    }
+
+    /// Export the document as a `.paged` container (valid IDML + the plugin
+    /// `paged/` parts + a refreshed `manifest.json`). `paged_protocol` stamps
+    /// the manifest for the data-loss guard / reader-version checks.
+    pub fn export_paged(&self, paged_protocol: u32) -> Result<Vec<u8>, paged_write::WriteError> {
+        paged_write::write_paged(
+            &self.scene,
+            &self.source_idml,
+            &self.paged_parts,
+            paged_protocol,
+        )
     }
 
     /// Phase 4 Step 3 — return the pages whose frame chains touch

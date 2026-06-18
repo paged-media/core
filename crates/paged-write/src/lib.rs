@@ -71,8 +71,11 @@ use std::io::{Cursor, Read, Write};
 use paged_scene::Document;
 
 mod emit;
+mod paged;
 pub mod resources;
 pub mod rewrite;
+
+pub use paged::{idml_parts_hash, write_paged, MANIFEST_NAME, PAGED_PREFIX};
 
 /// Errors raised while re-serializing a document.
 #[derive(Debug, thiserror::Error)]
