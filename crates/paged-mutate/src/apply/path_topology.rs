@@ -89,6 +89,61 @@ pub(super) fn find_path_anchors_mut<'a>(
     None
 }
 
+/// The frame `bounds` of any path-bearing page item (the four kinds
+/// `find_path_anchors_mut` serves). Read-only companion used to
+/// synthesize a rectangle path for a PRIMITIVE frame whose `anchors`
+/// are empty — the renderer draws such a frame straight from its bounds
+/// (`Geometry::Rect`), and the path kernels need real anchors.
+pub(super) fn find_path_bounds(doc: &paged_scene::Document, node: &NodeId) -> Option<Bounds> {
+    let raw = node.self_id();
+    for parsed in doc.spreads.iter() {
+        match node {
+            NodeId::Polygon(_) => {
+                if let Some(p) = parsed.spread.polygons.iter().find(|p| p.self_id.as_deref() == Some(raw)) {
+                    return Some(p.bounds);
+                }
+            }
+            NodeId::TextFrame(_) => {
+                if let Some(p) = parsed.spread.text_frames.iter().find(|p| p.self_id.as_deref() == Some(raw)) {
+                    return Some(p.bounds);
+                }
+            }
+            NodeId::Rectangle(_) => {
+                if let Some(p) = parsed.spread.rectangles.iter().find(|p| p.self_id.as_deref() == Some(raw)) {
+                    return Some(p.bounds);
+                }
+            }
+            NodeId::GraphicLine(_) => {
+                if let Some(p) = parsed.spread.graphic_lines.iter().find(|p| p.self_id.as_deref() == Some(raw)) {
+                    return Some(p.bounds);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Build the closed 4-corner anchor table of the rectangle described by
+/// `bounds` (clockwise from the top-left; each anchor's control handles
+/// sit ON the anchor → straight 90° edges, the IDML rect representation).
+/// Geometrically identical to the renderer's empty-anchor fallback
+/// (`Geometry::Rect { rect: bbox }`), so a stroked/offset primitive frame
+/// matches how core already draws it.
+pub(super) fn bounds_to_rectangle_anchors(b: Bounds) -> Vec<paged_parse::PathAnchor> {
+    let corner = |x: f32, y: f32| paged_parse::PathAnchor {
+        anchor: (x, y),
+        left: (x, y),
+        right: (x, y),
+    };
+    vec![
+        corner(b.left, b.top),
+        corner(b.right, b.top),
+        corner(b.right, b.bottom),
+        corner(b.left, b.bottom),
+    ]
+}
+
 /// Apply rule for `subpath_starts` on Insert at flat index `n`. Each
 /// entry strictly greater than `n` increments by one — entries equal
 /// to or below `n` stay put, so the inserted anchor naturally joins
@@ -342,6 +397,12 @@ pub(super) fn apply_path_kernel_op(
         }
     };
 
+    // A primitive frame (plain Rectangle / unanchored Polygon or TextFrame)
+    // carries NO explicit anchors — the renderer draws it from its bounds.
+    // Read the bounds now (immutable) so the apply branch below can
+    // synthesize the rectangle path the kernels operate on.
+    let node_bounds = find_path_bounds(doc, node);
+
     let (anchors, subpath_starts, subpath_open) = find_path_anchors_mut(doc, node)
         .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
 
@@ -356,6 +417,16 @@ pub(super) fn apply_path_kernel_op(
         *subpath_starts = rs;
         *subpath_open = ro;
     } else {
+        // Primitive frame (empty anchors): synthesize the closed rectangle
+        // from the frame bounds so outlineStroke / offsetPath operate on the
+        // real shape (the renderer's `Geometry::Rect` equivalent). The
+        // snapshot above captured the empty anchors, so undo restores the
+        // primitive frame verbatim.
+        if anchors.is_empty() {
+            if let Some(b) = node_bounds {
+                *anchors = bounds_to_rectangle_anchors(b);
+            }
+        }
         // Normalise parallel tables (one closed contour by default).
         if subpath_starts.is_empty() {
             subpath_starts.push(0);

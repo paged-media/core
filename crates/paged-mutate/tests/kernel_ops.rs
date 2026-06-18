@@ -320,3 +320,132 @@ fn polygon_fill_and_stroke_set_property_round_trips() {
     )
     .expect("Polygon must accept FrameStrokeWeight (B-22)");
 }
+
+// ---------------------------------------------------------------------------
+// REGRESSION (open finding) — outlineStroke / offsetPath on a PRIMITIVE
+// rectangle. An editor-created rectangle (insertFrame) carries bounds but
+// EMPTY anchors (the renderer draws it straight from bounds); the path
+// kernels used to reject that ("kernel produced no result"). The apply
+// layer now synthesizes the rectangle path from the frame bounds, so the
+// op succeeds; undo restores the primitive (empty-anchor) rectangle.
+// ---------------------------------------------------------------------------
+
+fn strokes_fills_bytes() -> Vec<u8> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("corpus")
+        .join("generated")
+        .join("strokes-fills.idml");
+    std::fs::read(path).expect("read strokes-fills fixture")
+}
+
+fn first_rectangle(doc: &Document) -> String {
+    doc.spreads
+        .iter()
+        .flat_map(|s| s.spread.rectangles.iter())
+        .filter_map(|r| r.self_id.clone())
+        .next()
+        .expect("fixture has a rectangle")
+}
+
+fn rect_anchors_of(doc: &Document, id: &str) -> Vec<AnchorKey> {
+    doc.spreads
+        .iter()
+        .flat_map(|s| s.spread.rectangles.iter())
+        .find(|r| r.self_id.as_deref() == Some(id))
+        .expect("rectangle present")
+        .anchors
+        .iter()
+        .map(|a| (a.anchor, a.left, a.right))
+        .collect()
+}
+
+/// Strip a rectangle's anchors in place, leaving only its bounds — the
+/// exact shape an editor-created (insertFrame) rectangle parses to.
+fn make_primitive_rect(doc: &mut Document, id: &str) {
+    for s in doc.spreads.iter_mut() {
+        if let Some(r) = s
+            .spread
+            .rectangles
+            .iter_mut()
+            .find(|r| r.self_id.as_deref() == Some(id))
+        {
+            r.anchors.clear();
+            r.subpath_starts.clear();
+            r.subpath_open.clear();
+            return;
+        }
+    }
+    panic!("rectangle {id} not found");
+}
+
+#[test]
+fn outline_stroke_synthesizes_rect_from_bounds_for_a_primitive_rectangle() {
+    let mut doc = Document::open(&strokes_fills_bytes()).expect("open");
+    let id = first_rectangle(&doc);
+    make_primitive_rect(&mut doc, &id);
+    assert!(
+        rect_anchors_of(&doc, &id).is_empty(),
+        "primitive rectangle starts with empty anchors"
+    );
+
+    let op = Operation::SetProperty {
+        node: NodeId::Rectangle(id.clone()),
+        path: PropertyPath::OutlineStroke,
+        value: Value::OutlineStroke {
+            width: 4.0,
+            cap: "butt".to_string(),
+            join: "miter".to_string(),
+            miter_limit: 4.0,
+            prev_anchors: None,
+            prev_subpath_starts: None,
+            prev_subpath_open: None,
+        },
+    };
+    // Previously rejected; now applies by synthesizing the rect from bounds.
+    let applied = apply(&mut doc, &op).expect("outlineStroke on a primitive rectangle applies");
+    let after = rect_anchors_of(&doc, &id);
+    assert!(!after.is_empty(), "stroke outline produced geometry");
+
+    // Undo restores the primitive rectangle (empty anchors), not a 4-corner path.
+    let undone = apply(&mut doc, &applied.inverse).expect("inverse apply");
+    assert!(
+        rect_anchors_of(&doc, &id).is_empty(),
+        "inverse restores the primitive rectangle verbatim"
+    );
+    // Redo reproduces the outlined result.
+    apply(&mut doc, &undone.inverse).expect("redo apply");
+    assert_eq!(rect_anchors_of(&doc, &id), after, "redo reproduces the outline");
+}
+
+#[test]
+fn offset_path_synthesizes_rect_from_bounds_for_a_primitive_rectangle() {
+    let mut doc = Document::open(&strokes_fills_bytes()).expect("open");
+    let id = first_rectangle(&doc);
+    make_primitive_rect(&mut doc, &id);
+    assert!(rect_anchors_of(&doc, &id).is_empty());
+
+    let op = Operation::SetProperty {
+        node: NodeId::Rectangle(id.clone()),
+        path: PropertyPath::OffsetPath,
+        value: Value::OffsetPath {
+            delta: 6.0,
+            join: "miter".to_string(),
+            miter_limit: 4.0,
+            prev_anchors: None,
+            prev_subpath_starts: None,
+            prev_subpath_open: None,
+        },
+    };
+    let applied = apply(&mut doc, &op).expect("offsetPath on a primitive rectangle applies");
+    assert!(
+        !rect_anchors_of(&doc, &id).is_empty(),
+        "the closed-rect offset produced geometry"
+    );
+    apply(&mut doc, &applied.inverse).expect("inverse apply");
+    assert!(
+        rect_anchors_of(&doc, &id).is_empty(),
+        "inverse restores the primitive rectangle"
+    );
+}
