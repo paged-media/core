@@ -161,6 +161,7 @@ fn variants() -> Vec<Variant> {
                 desired_letter_spacing: None,
                 maximum_letter_spacing: None,
                 runs: vec![Run {
+                    extra_char_attrs: Vec::new(),
                     text: lorem.to_string(),
                     point_size: Some(12.0),
                     fill_color: None,
@@ -199,6 +200,7 @@ fn variants() -> Vec<Variant> {
                     desired_letter_spacing: None,
                     maximum_letter_spacing: None,
                     runs: vec![Run {
+                        extra_char_attrs: Vec::new(),
                         text: format!("Paragraph {} of three", i + 1),
                         point_size: Some(14.0),
                         fill_color: None,
@@ -238,6 +240,7 @@ fn variants() -> Vec<Variant> {
                 maximum_letter_spacing: None,
                 runs: vec![
                     Run {
+                        extra_char_attrs: Vec::new(),
                         text: "Black ".to_string(),
                         point_size: Some(18.0),
                         fill_color: Some("Color/Black".to_string()),
@@ -249,6 +252,7 @@ fn variants() -> Vec<Variant> {
                         anchored_frame: None,
                     },
                     Run {
+                        extra_char_attrs: Vec::new(),
                         text: "cyan ".to_string(),
                         point_size: Some(18.0),
                         fill_color: Some("Color/RGBCyan".to_string()),
@@ -260,6 +264,7 @@ fn variants() -> Vec<Variant> {
                         anchored_frame: None,
                     },
                     Run {
+                        extra_char_attrs: Vec::new(),
                         text: "again black".to_string(),
                         point_size: Some(18.0),
                         fill_color: Some("Color/Black".to_string()),
@@ -296,6 +301,7 @@ fn variants() -> Vec<Variant> {
                 desired_letter_spacing: None,
                 maximum_letter_spacing: None,
                 runs: vec![Run {
+                    extra_char_attrs: Vec::new(),
                     text: "wide-tracked headline".to_string(),
                     point_size: Some(18.0),
                     fill_color: None,
@@ -331,6 +337,7 @@ fn variants() -> Vec<Variant> {
                 desired_letter_spacing: None,
                 maximum_letter_spacing: None,
                 runs: vec![Run {
+                    extra_char_attrs: Vec::new(),
                     text: "underlined run".to_string(),
                     point_size: Some(18.0),
                     fill_color: None,
@@ -367,6 +374,7 @@ fn variants() -> Vec<Variant> {
                 maximum_letter_spacing: None,
                 runs: vec![
                     Run {
+                        extra_char_attrs: Vec::new(),
                         text: "x".to_string(),
                         point_size: Some(20.0),
                         fill_color: None,
@@ -378,6 +386,7 @@ fn variants() -> Vec<Variant> {
                         anchored_frame: None,
                     },
                     Run {
+                        extra_char_attrs: Vec::new(),
                         text: "2".to_string(),
                         point_size: Some(12.0),
                         fill_color: None,
@@ -417,6 +426,7 @@ fn variants() -> Vec<Variant> {
                 desired_letter_spacing: None,
                 maximum_letter_spacing: None,
                 runs: vec![Run {
+                    extra_char_attrs: Vec::new(),
                     text: "italic Open Sans run".to_string(),
                     point_size: Some(18.0),
                     fill_color: None,
@@ -502,11 +512,13 @@ fn variants() -> Vec<Variant> {
                 extra_paragraph_attrs: Vec::new(),
                 runs: vec![
                     Run {
+                        extra_char_attrs: Vec::new(),
                         text: "Default ".to_string(),
                         point_size: Some(24.0),
                         ..plain_run()
                     },
                     Run {
+                        extra_char_attrs: Vec::new(),
                         text: "OpenSans".to_string(),
                         point_size: Some(24.0),
                         applied_font: Some("Open Sans"),
@@ -523,6 +535,7 @@ fn variants() -> Vec<Variant> {
 /// W2.1 multi-run variants.
 fn plain_run() -> Run {
     Run {
+        extra_char_attrs: Vec::new(),
         text: String::new(),
         point_size: None,
         fill_color: None,
@@ -562,6 +575,7 @@ fn one_run(
         desired_letter_spacing: None,
         maximum_letter_spacing: None,
         runs: vec![Run {
+            extra_char_attrs: Vec::new(),
             text: text.to_string(),
             point_size: Some(point_size),
             fill_color: fill_color.map(str::to_string),
@@ -653,6 +667,7 @@ pub fn build() -> Sample {
                             .runs
                             .iter()
                             .map(|r| Run {
+                                extra_char_attrs: Vec::new(),
                                 text: r.text.clone(),
                                 point_size: r.point_size,
                                 fill_color: r.fill_color.clone(),

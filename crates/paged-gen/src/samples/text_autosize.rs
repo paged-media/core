@@ -95,6 +95,7 @@ fn inter_paragraph(text: &str, point_size: f32) -> Paragraph {
         desired_letter_spacing: None,
         maximum_letter_spacing: None,
         runs: vec![Run {
+            extra_char_attrs: Vec::new(),
             text: text.to_string(),
             point_size: Some(point_size),
             fill_color: Some("Color/Black".to_string()),

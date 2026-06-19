@@ -110,6 +110,7 @@ fn body_paragraph(ls: Option<(f32, f32, f32)>) -> Paragraph {
         desired_letter_spacing: ls.map(|(_, b, _)| b),
         maximum_letter_spacing: ls.map(|(_, _, c)| c),
         runs: vec![Run {
+            extra_char_attrs: Vec::new(),
             text: BODY_TEXT.to_string(),
             point_size: Some(12.0),
             fill_color: None,

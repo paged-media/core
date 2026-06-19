@@ -65,6 +65,7 @@ const KAPPA: f32 = 0.552_284_8;
 /// One styled run pinned to the body font so shaping is deterministic.
 fn run(text: &str) -> Run {
     Run {
+        extra_char_attrs: Vec::new(),
         text: text.to_string(),
         point_size: Some(TEXT_PT),
         fill_color: Some("Color/Black".to_string()),

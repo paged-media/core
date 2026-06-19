@@ -411,6 +411,7 @@ fn host_paragraphs(anchor_frame: Rect) -> Vec<Paragraph> {
         bullet_character: None,
         runs: vec![
             Run {
+                extra_char_attrs: Vec::new(),
                 text: "Duis aute irure dolor in reprehenderit ".to_string(),
                 point_size: None,
                 fill_color: None,
@@ -422,6 +423,7 @@ fn host_paragraphs(anchor_frame: Rect) -> Vec<Paragraph> {
                 anchored_frame: None,
             },
             Run {
+                extra_char_attrs: Vec::new(),
                 // U+FEFF (BOM-ZWNBSP) is what real InDesign emits as
                 // the anchor placeholder. Plain space works for the
                 // parser; we use a non-breaking space so the placeholder
@@ -437,6 +439,7 @@ fn host_paragraphs(anchor_frame: Rect) -> Vec<Paragraph> {
                 anchored_frame: Some(anchor_frame),
             },
             Run {
+                extra_char_attrs: Vec::new(),
                 text: " in voluptate velit esse cillum dolore eu fugiat nulla pariatur."
                     .to_string(),
                 point_size: None,

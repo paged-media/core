@@ -81,6 +81,7 @@ fn variants() -> Vec<Variant> {
                 applied_numbering_list: None,
                 bullet_character: None,
                 runs: vec![Run {
+                    extra_char_attrs: Vec::new(),
                     text: drop_cap_body.to_string(),
                     point_size: Some(12.0),
                     fill_color: None,
@@ -116,6 +117,7 @@ fn variants() -> Vec<Variant> {
                 applied_numbering_list: None,
                 bullet_character: None,
                 runs: vec![Run {
+                    extra_char_attrs: Vec::new(),
                     text: lorem_long.to_string(),
                     point_size: Some(12.0),
                     fill_color: None,
@@ -153,6 +155,7 @@ fn variants() -> Vec<Variant> {
                 applied_numbering_list: None,
                 bullet_character: None,
                 runs: vec![Run {
+                    extra_char_attrs: Vec::new(),
                     text: lorem_long.to_string(),
                     point_size: Some(12.0),
                     fill_color: None,
@@ -188,6 +191,7 @@ fn variants() -> Vec<Variant> {
                 applied_numbering_list: None,
                 bullet_character: None,
                 runs: vec![Run {
+                    extra_char_attrs: Vec::new(),
                     text: lorem_long.to_string(),
                     point_size: Some(12.0),
                     fill_color: None,
@@ -243,6 +247,7 @@ fn variants() -> Vec<Variant> {
                     applied_numbering_list: None,
                     bullet_character: None,
                     runs: vec![Run {
+                        extra_char_attrs: Vec::new(),
                         text: "Apples\t1.20\t10\t12.00".to_string(),
                         point_size: Some(12.0),
                         fill_color: None,
@@ -290,6 +295,7 @@ fn variants() -> Vec<Variant> {
                     applied_numbering_list: None,
                     bullet_character: None,
                     runs: vec![Run {
+                        extra_char_attrs: Vec::new(),
                         text: "Bread\t3.50\t2\t7.00".to_string(),
                         point_size: Some(12.0),
                         fill_color: None,
@@ -337,6 +343,7 @@ fn variants() -> Vec<Variant> {
                     applied_numbering_list: None,
                     bullet_character: None,
                     runs: vec![Run {
+                        extra_char_attrs: Vec::new(),
                         text: "Cheese\t8.99\t1\t8.99".to_string(),
                         point_size: Some(12.0),
                         fill_color: None,
@@ -376,6 +383,7 @@ fn variants() -> Vec<Variant> {
                     applied_numbering_list: None,
                     bullet_character: None,
                     runs: vec![Run {
+                        extra_char_attrs: Vec::new(),
                         text: format!("Bulleted item {}", i + 1),
                         point_size: Some(12.0),
                         fill_color: None,
@@ -413,6 +421,7 @@ fn variants() -> Vec<Variant> {
                     applied_numbering_list: None,
                     bullet_character: Some(0x00BB),
                     runs: vec![Run {
+                        extra_char_attrs: Vec::new(),
                         text: format!("Arrow-bullet item {}", i + 1),
                         point_size: Some(12.0),
                         fill_color: None,
@@ -450,6 +459,7 @@ fn variants() -> Vec<Variant> {
                     applied_numbering_list: None,
                     bullet_character: None,
                     runs: vec![Run {
+                        extra_char_attrs: Vec::new(),
                         text: format!("Numbered item {}", i + 1),
                         point_size: Some(12.0),
                         fill_color: None,
@@ -488,6 +498,7 @@ fn variants() -> Vec<Variant> {
                 applied_numbering_list: None,
                 bullet_character: None,
                 runs: vec![Run {
+                    extra_char_attrs: Vec::new(),
                     text: lorem_long.to_string(),
                     point_size: Some(12.0),
                     fill_color: None,
@@ -545,6 +556,35 @@ fn variants() -> Vec<Variant> {
                 ("ParagraphBorderWeight", "1"),
                 ("ParagraphBorderTopLeftCornerRadius", "3"),
             ])],
+        },
+        // 11. Vertical scale — a run stretched vertically (the char-level
+        // escape hatch; VerticalScale is modeled by the parser).
+        Variant {
+            name: "text-adv · vertical-scale-150",
+            paragraphs: vec![Paragraph {
+                extra_paragraph_attrs: Vec::new(),
+                justification: None,
+                space_before: None,
+                space_after: None,
+                leading: None,
+                first_line_indent: None,
+                left_indent: None,
+                right_indent: None,
+                drop_cap_characters: None,
+                drop_cap_lines: None,
+                tab_list: Vec::new(),
+                bullets_list_type: None,
+                applied_numbering_list: None,
+                bullet_character: None,
+                runs: vec![Run::with_char_attrs(
+                    "This text is stretched to 150% vertical scale.",
+                    vec![("VerticalScale", "150")],
+                )],
+                table: None,
+                minimum_letter_spacing: None,
+                desired_letter_spacing: None,
+                maximum_letter_spacing: None,
+            }],
         },
     ]
 }
@@ -625,6 +665,7 @@ pub fn build() -> Sample {
                     .runs
                     .iter()
                     .map(|r| Run {
+                        extra_char_attrs: r.extra_char_attrs.clone(),
                         text: r.text.clone(),
                         point_size: r.point_size,
                         fill_color: r.fill_color.clone(),

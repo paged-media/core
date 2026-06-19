@@ -86,6 +86,7 @@ fn inter_paragraph(text: &str, point_size: f32) -> Paragraph {
     Paragraph {
         extra_paragraph_attrs: Vec::new(),
         runs: vec![Run {
+            extra_char_attrs: Vec::new(),
             text: text.to_string(),
             point_size: Some(point_size),
             fill_color: Some("Color/Black".to_string()),

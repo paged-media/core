@@ -87,6 +87,7 @@ fn overset_body() -> Paragraph {
     Paragraph {
         extra_paragraph_attrs: Vec::new(),
         runs: vec![Run {
+            extra_char_attrs: Vec::new(),
             text: long.to_string(),
             point_size: Some(14.0),
             fill_color: Some("Color/Black".to_string()),
@@ -106,6 +107,7 @@ fn missing_font_body() -> Paragraph {
     Paragraph {
         extra_paragraph_attrs: Vec::new(),
         runs: vec![Run {
+            extra_char_attrs: Vec::new(),
             text: "Set in a font this document declares but no host provides.".to_string(),
             point_size: Some(16.0),
             fill_color: Some("Color/Black".to_string()),
@@ -124,6 +126,7 @@ fn label_paragraph(text: &str) -> Paragraph {
     Paragraph {
         extra_paragraph_attrs: Vec::new(),
         runs: vec![Run {
+            extra_char_attrs: Vec::new(),
             text: text.to_string(),
             point_size: Some(11.0),
             fill_color: Some("Color/Black".to_string()),

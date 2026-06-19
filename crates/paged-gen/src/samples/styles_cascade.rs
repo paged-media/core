@@ -165,6 +165,7 @@ fn styled_paragraph(text: &str) -> Paragraph {
     Paragraph {
         extra_paragraph_attrs: Vec::new(),
         runs: vec![Run {
+            extra_char_attrs: Vec::new(),
             text: text.to_string(),
             point_size: None,
             fill_color: None,

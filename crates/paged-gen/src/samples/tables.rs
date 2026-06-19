@@ -294,6 +294,7 @@ fn variants() -> Vec<Variant> {
                             desired_letter_spacing: None,
                             maximum_letter_spacing: None,
                             runs: vec![Run {
+                                extra_char_attrs: Vec::new(),
                                 text: s.to_string(),
                                 point_size: None,
                                 fill_color: None,

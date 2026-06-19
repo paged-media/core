@@ -146,6 +146,7 @@ fn body_paragraph() -> Paragraph {
         extra_paragraph_attrs: Vec::new(),
         justification: Some("CenterAlign"),
         runs: vec![Run {
+            extra_char_attrs: Vec::new(),
             text: body_text(),
             point_size: Some(11.0),
             fill_color: Some("Color/Black".to_string()),

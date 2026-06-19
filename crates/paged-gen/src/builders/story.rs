@@ -274,6 +274,33 @@ pub struct Run {
     /// anchored object — the storey emitter just provides the
     /// nesting site.
     pub anchored_frame: Option<crate::builders::page_item::Rect>,
+    /// Escape hatch for character-level attributes the typed fields don't
+    /// cover (e.g. `VerticalScale`, `HorizontalScale`, ruby/kenten flags).
+    /// Emitted verbatim onto `<CharacterStyleRange>` after the typed attrs;
+    /// carried through the round-trip by paged-write.
+    pub extra_char_attrs: Vec<(&'static str, &'static str)>,
+}
+
+impl Run {
+    /// A plain text run carrying only the given extra character attributes
+    /// (the escape hatch for VerticalScale, ruby, …). All typed fields default.
+    pub fn with_char_attrs(
+        text: impl Into<String>,
+        attrs: Vec<(&'static str, &'static str)>,
+    ) -> Self {
+        Run {
+            text: text.into(),
+            point_size: None,
+            fill_color: None,
+            font_style: None,
+            tracking: None,
+            baseline_shift: None,
+            underline: None,
+            applied_font: None,
+            anchored_frame: None,
+            extra_char_attrs: attrs,
+        }
+    }
 }
 
 impl Paragraph {
@@ -304,6 +331,7 @@ impl Paragraph {
                 underline: None,
                 applied_font: None,
                 anchored_frame: None,
+                extra_char_attrs: Vec::new(),
             }],
             table: None,
             minimum_letter_spacing: None,
@@ -479,6 +507,10 @@ pub fn write_story(s: &Story) -> Vec<u8> {
             }
             if let Some(true) = run.underline {
                 r_attrs.push(("Underline", "true"));
+            }
+            // Escape-hatch character attributes (VerticalScale, ruby, …).
+            for (k, v) in &run.extra_char_attrs {
+                r_attrs.push((*k, *v));
             }
             b.start("CharacterStyleRange", &r_attrs);
             // AppliedFont + Leading land as typed children of

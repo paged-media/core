@@ -86,6 +86,7 @@ fn numbered_item(text: &str) -> Paragraph {
         applied_numbering_list: Some("NumberingList/Shared"),
         bullet_character: None,
         runs: vec![Run {
+            extra_char_attrs: Vec::new(),
             text: text.to_string(),
             point_size: Some(18.0),
             fill_color: None,
