@@ -1991,22 +1991,38 @@ fn opt_f32_patch(v: Option<f32>) -> Patch {
 
 /// Index every `<Table>` cell in the story by its `Self` id so a `<Cell
 /// Self="...">` start tag in the XML can find its model counterpart
-/// (W1.15 lane 3). Cells hang off `Paragraph::table.cells`; IDML can't
-/// nest a table inside a table, so one flat pass over the story's
-/// top-level paragraphs covers them all. A cell with no `Self` id (rare)
-/// is skipped — its content keeps passing through verbatim.
+/// (W1.15 lane 3). Cells hang off `Paragraph::table.cells`. IDML DOES
+/// allow a table nested inside a cell's paragraph, so this recurses into
+/// every cell's nested table — otherwise the inner cells aren't matched
+/// and their `AppliedParagraphStyle`/`AppliedCharacterStyle` drop on a
+/// rewrite. A cell with no `Self` id (rare) is skipped — its content
+/// keeps passing through verbatim.
 fn collect_story_cells(story: &Story) -> std::collections::HashMap<&str, &TableCell> {
     let mut out: std::collections::HashMap<&str, &TableCell> = std::collections::HashMap::new();
     for p in &story.paragraphs {
         if let Some(table) = &p.table {
-            for cell in &table.cells {
-                if let Some(id) = cell.self_id.as_deref() {
-                    out.insert(id, cell);
-                }
-            }
+            collect_table_cells(table, &mut out);
         }
     }
     out
+}
+
+/// Collect a table's cells (by `Self`) and recurse into any table nested
+/// in a cell's paragraph.
+fn collect_table_cells<'a>(
+    table: &'a paged_parse::Table,
+    out: &mut std::collections::HashMap<&'a str, &'a TableCell>,
+) {
+    for cell in &table.cells {
+        if let Some(id) = cell.self_id.as_deref() {
+            out.insert(id, cell);
+        }
+        for cp in &cell.paragraphs {
+            if let Some(inner) = &cp.table {
+                collect_table_cells(inner, out);
+            }
+        }
+    }
 }
 
 /// Rewrite a `Story_*.xml` body so its `<ParagraphStyleRange>` /
@@ -2075,6 +2091,11 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
     let mut cell_depth: usize = 0; // depth of the open `<Cell>`, or 0
     let mut cell_para_idx: isize = -1;
     let mut cell_run_idx: isize = -1;
+    // Nested tables (a table in a cell's paragraph) nest `<Cell>`s, so the
+    // cell-local cursor state is a stack: each `<Cell>` open parks the
+    // enclosing cell's state, each `</Cell>` restores it.
+    type CellFrame<'a> = (Option<&'a TableCell>, usize, isize, isize);
+    let mut cell_stack: Vec<CellFrame> = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf)? {
@@ -2107,11 +2128,13 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                         table_depth += 1;
                         writer.write_event(Event::Start(e.into_owned()))?;
                     }
-                    b"Cell" if table_depth > 0 && cell_depth == 0 => {
-                        // Enter a cell — bind its model counterpart (by
-                        // `Self`) + reset the cell-local cursors. The
-                        // start tag passes through verbatim (cell-level
-                        // attributes are patched elsewhere / not here).
+                    b"Cell" if table_depth > 0 => {
+                        // Enter a cell — park the enclosing cell's cursors
+                        // (nested tables nest cells) then bind this cell's
+                        // model counterpart (by `Self`) + reset the
+                        // cell-local cursors. The start tag passes through
+                        // verbatim (cell-level attributes patched elsewhere).
+                        cell_stack.push((current_cell, cell_depth, cell_para_idx, cell_run_idx));
                         cell_depth = table_depth;
                         cell_para_idx = -1;
                         cell_run_idx = -1;
@@ -2319,11 +2342,16 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                 match e.name().as_ref() {
                     b"Table" => table_depth = table_depth.saturating_sub(1),
                     b"Cell" if cell_depth != 0 && table_depth == cell_depth => {
-                        // Leave the cell — unbind so sibling cells (and
-                        // any markup after the table) don't keep patching
-                        // against this cell's paragraphs.
-                        current_cell = None;
-                        cell_depth = 0;
+                        // Leave the cell — restore the enclosing cell's
+                        // cursors (a nested table's cell pops back to its
+                        // host cell; a top-level cell pops back to None) so
+                        // siblings + post-table markup patch correctly.
+                        let (cc, cd, cp, cr) =
+                            cell_stack.pop().unwrap_or((None, 0, -1, -1));
+                        current_cell = cc;
+                        cell_depth = cd;
+                        cell_para_idx = cp;
+                        cell_run_idx = cr;
                     }
                     b"Content" if body.active => {
                         body.in_content = false;

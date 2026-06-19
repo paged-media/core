@@ -88,7 +88,9 @@ fn variants() -> Vec<Variant> {
             }),
         },
         // Nested table — a 1×2 outer table whose second cell hosts a 2×1
-        // inner table (a cell paragraph carries its own <Table>).
+        // inner table (a cell paragraph carries its own <Table>). Exercises
+        // the rewrite path's nested-cell stack (collect_table_cells recursion
+        // + the cell_stack in rewrite_story).
         Variant {
             name: "tables · nested · table-in-cell",
             table: Box::new(|id| Table {
