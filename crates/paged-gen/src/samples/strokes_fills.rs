@@ -238,6 +238,17 @@ fn variants() -> Vec<Variant> {
             stroke_weight_pt: Some(8.0),
             fill_color: None,
         },
+        // Stroke overprint — the `StrokeOverprint` separation flag. A
+        // print-intent attribute (the inked stroke knocks nothing out
+        // beneath it); parsed + carried through, a no-op on the RGB
+        // compose path. Appended after the W1.2 style pages so it stays
+        // beyond the capped reference-PDF range.
+        Variant {
+            name: "strokes · overprint",
+            overrides: vec![("StrokeOverprint", "true")],
+            stroke_weight_pt: Some(8.0),
+            fill_color: None,
+        },
     ]
 }
 
