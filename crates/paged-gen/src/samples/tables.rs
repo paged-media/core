@@ -87,6 +87,36 @@ fn variants() -> Vec<Variant> {
                 ],
             }),
         },
+        // Nested table — a 1×2 outer table whose second cell hosts a 2×1
+        // inner table (a cell paragraph carries its own <Table>).
+        Variant {
+            name: "tables · nested · table-in-cell",
+            table: Box::new(|id| Table {
+                self_id: id.to_string(),
+                applied_table_style: None,
+                header_row_count: 0,
+                footer_row_count: 0,
+                body_row_count: 1,
+                column_count: 2,
+                row_heights_pt: vec![ROW_H_PT * 2.0],
+                column_widths_pt: vec![COL_W_PT; 2],
+                cells: vec![Cell::plain("outer"), {
+                    let mut c = Cell::plain("");
+                    c.paragraphs = vec![Paragraph::plain("").with_table(Table {
+                        self_id: format!("{id}Inner"),
+                        applied_table_style: None,
+                        header_row_count: 0,
+                        footer_row_count: 0,
+                        body_row_count: 2,
+                        column_count: 1,
+                        row_heights_pt: vec![ROW_H_PT; 2],
+                        column_widths_pt: vec![COL_W_PT],
+                        cells: vec![Cell::plain("inner1"), Cell::plain("inner2")],
+                    })];
+                    c
+                }],
+            }),
+        },
         Variant {
             name: "tables · 3x3 · header-row",
             table: Box::new(|id| Table {

@@ -350,6 +350,14 @@ impl Paragraph {
         self.extra_paragraph_attrs = attrs;
         self
     }
+
+    /// Nest a `<Table>` inside this paragraph's first CharacterStyleRange —
+    /// the IDML "table host paragraph" shape. A table whose cell paragraphs
+    /// carry their own table is a NESTED table.
+    pub fn with_table(mut self, table: Table) -> Self {
+        self.table = Some(table);
+        self
+    }
 }
 
 pub fn write_story(s: &Story) -> Vec<u8> {
@@ -787,6 +795,20 @@ fn write_cell_paragraph(b: &mut XmlBuilder, paragraph: &Paragraph) {
         p_attrs.push(("Justification", j));
     }
     b.start("ParagraphStyleRange", &p_attrs);
+    // A cell paragraph can itself host a table — the nested-table shape.
+    if let Some(t) = &paragraph.table {
+        b.start(
+            "CharacterStyleRange",
+            &[(
+                "AppliedCharacterStyle",
+                "CharacterStyle/$ID/[No character style]",
+            )],
+        );
+        write_table(b, t);
+        b.end("CharacterStyleRange");
+        b.end("ParagraphStyleRange");
+        return;
+    }
     for run in &paragraph.runs {
         let point_size_str: String;
         let mut r_attrs: Vec<(&str, &str)> = vec![(

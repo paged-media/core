@@ -586,6 +586,15 @@ fn variants() -> Vec<Variant> {
                 maximum_letter_spacing: None,
             }],
         },
+        // 12. Bidirectional text — a Hebrew (RTL) run mixed with Latin
+        // (LTR) digits, exercising the Unicode bidi reordering path. The
+        // content drives the algorithm; no attribute needed.
+        Variant {
+            name: "text-adv · bidi · hebrew-latin-mix",
+            paragraphs: vec![Paragraph::plain(
+                "Order 2024 \u{05E9}\u{05DC}\u{05D5}\u{05DD} \u{05E2}\u{05D5}\u{05DC}\u{05DD} total 42.",
+            )],
+        },
     ]
 }
 
