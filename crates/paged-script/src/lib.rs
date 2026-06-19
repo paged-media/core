@@ -58,8 +58,10 @@ use paged_canvas::CanvasModel;
 use paged_canvas::PageId;
 use serde::{Deserialize, Serialize};
 
-pub mod catalog;
-pub use catalog::{api_catalog, ApiCatalog};
+// The capability catalog is owned by `paged-introspect` (the neutral, published
+// home — ADR 019); re-exported here so existing consumers (`paged-run`) and the
+// Boa bridge keep referencing it as before.
+pub use paged_introspect::catalog::{api_catalog, ApiCatalog};
 
 /// Which runtime budget a script exhausted. Surfaced as the typed
 /// half of a `ScriptResult` so the host (editor REPL, plugin runner,
@@ -1116,9 +1118,10 @@ fn parse_element_id(s: &str) -> Option<paged_canvas::element_selection::ElementI
 }
 
 fn parse_property_path(s: &str) -> Option<paged_mutate::PropertyPath> {
-    // Single source of truth: the JS-name -> PropertyPath table in `catalog`,
-    // which also backs `api_catalog().settable_paths` (ADR 019). No second list.
-    catalog::lookup_path(s)
+    // Single source of truth: the JS-name -> PropertyPath table owned by
+    // `paged-introspect`, which also backs `api_catalog().settable_paths`
+    // (ADR 019). No second list.
+    paged_introspect::lookup_path(s)
 }
 
 fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
@@ -1578,12 +1581,12 @@ fn format_error(err: &boa_engine::JsError, ctx: &mut Context) -> String {
 mod tests {
     use super::*;
 
-    /// `parse_property_path` now delegates to the single `catalog::PROPERTY_PATHS`
+    /// `parse_property_path` now delegates to the single `paged_introspect::catalog::PROPERTY_PATHS`
     /// table, so every table entry resolves through the public parser to the
     /// table's own variant — the parser and the catalog cannot disagree.
     #[test]
     fn parser_matches_the_catalog_table() {
-        for (name, path) in catalog::PROPERTY_PATHS {
+        for (name, path) in paged_introspect::catalog::PROPERTY_PATHS {
             assert_eq!(
                 parse_property_path(name),
                 Some(*path),
@@ -1596,7 +1599,7 @@ mod tests {
     #[test]
     fn settable_paths_are_unique() {
         let mut seen = std::collections::HashSet::new();
-        for (name, _) in catalog::PROPERTY_PATHS {
+        for (name, _) in paged_introspect::catalog::PROPERTY_PATHS {
             assert!(seen.insert(*name), "duplicate catalog path {name:?}");
         }
     }

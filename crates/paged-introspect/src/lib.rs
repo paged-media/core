@@ -26,6 +26,7 @@
 //!    the render pane. Behind the `render` feature so non-render
 //!    consumers stay light.
 
+pub mod catalog;
 pub mod descriptor;
 pub mod tree;
 
@@ -35,6 +36,7 @@ pub mod render;
 #[cfg(test)]
 mod testutil;
 
+pub use catalog::{api_catalog, lookup_path, ApiCatalog};
 pub use descriptor::{
     describe, AuthoredValue, ComputedValue, PropertyDescriptor, PropertyKind, PropertySource,
 };

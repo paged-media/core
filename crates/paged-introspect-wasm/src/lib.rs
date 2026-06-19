@@ -17,8 +17,9 @@
 //! Single exported object [`Inspector`]. JS side:
 //!
 //! ```ts
-//! import init, { Inspector } from 'paged-introspect-wasm';
+//! import init, { Inspector, describeCatalog } from 'paged-introspect-wasm';
 //! await init();
+//! const catalog = JSON.parse(describeCatalog());   // engine capability catalog (no document needed)
 //! const insp = new Inspector(idmlBytes);
 //! const tree = JSON.parse(insp.tree());            // hierarchical tree
 //! const props = JSON.parse(insp.properties(nodeJson));
@@ -51,6 +52,17 @@ mod wasm {
     pub fn on_start() {
         console_error_panic_hook::set_once();
         web_sys::console::log_1(&"paged-introspect-wasm: init".into());
+    }
+
+    /// The engine capability catalog (host fns, id grammar, the settable
+    /// property paths, constraints) as a JSON string — the published
+    /// single-source contract every surface projects (ADR 019). Static: needs
+    /// no open document. The headless `paged-run describe` emits the same
+    /// `paged_introspect::api_catalog()`.
+    #[wasm_bindgen(js_name = describeCatalog)]
+    pub fn describe_catalog() -> Result<String, JsError> {
+        serde_json::to_string(&paged_introspect::api_catalog())
+            .map_err(|e| JsError::new(&format!("catalog json: {e}")))
     }
 
     #[wasm_bindgen]
