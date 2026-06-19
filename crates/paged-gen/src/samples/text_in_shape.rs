@@ -143,6 +143,7 @@ fn variants() -> Vec<Variant> {
 /// gaps, and every glyph stays inside the outline.
 fn body_paragraph() -> Paragraph {
     Paragraph {
+        extra_paragraph_attrs: Vec::new(),
         justification: Some("CenterAlign"),
         runs: vec![Run {
             text: body_text(),

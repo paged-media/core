@@ -71,6 +71,7 @@ fn variants() -> Vec<Variant> {
 /// One numbered paragraph bound to the shared list.
 fn numbered_item(text: &str) -> Paragraph {
     Paragraph {
+        extra_paragraph_attrs: Vec::new(),
         justification: None,
         space_before: None,
         space_after: None,

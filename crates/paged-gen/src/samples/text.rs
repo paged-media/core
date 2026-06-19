@@ -142,6 +142,7 @@ fn variants() -> Vec<Variant> {
         Variant {
             name: "text · leading · 24pt-on-12pt",
             paragraphs: vec![Paragraph {
+                extra_paragraph_attrs: Vec::new(),
                 justification: None,
                 space_before: None,
                 space_after: None,
@@ -179,6 +180,7 @@ fn variants() -> Vec<Variant> {
             name: "text · paragraphs · space-after-18",
             paragraphs: (0..3)
                 .map(|i| Paragraph {
+                    extra_paragraph_attrs: Vec::new(),
                     justification: None,
                     space_before: None,
                     space_after: Some(18.0),
@@ -216,6 +218,7 @@ fn variants() -> Vec<Variant> {
         Variant {
             name: "text · runs · mixed-color",
             paragraphs: vec![Paragraph {
+                extra_paragraph_attrs: Vec::new(),
                 justification: None,
                 space_before: None,
                 space_after: None,
@@ -274,6 +277,7 @@ fn variants() -> Vec<Variant> {
         Variant {
             name: "text · tracking · 200",
             paragraphs: vec![Paragraph {
+                extra_paragraph_attrs: Vec::new(),
                 justification: None,
                 space_before: None,
                 space_after: None,
@@ -308,6 +312,7 @@ fn variants() -> Vec<Variant> {
         Variant {
             name: "text · underline · single",
             paragraphs: vec![Paragraph {
+                extra_paragraph_attrs: Vec::new(),
                 justification: None,
                 space_before: None,
                 space_after: None,
@@ -342,6 +347,7 @@ fn variants() -> Vec<Variant> {
         Variant {
             name: "text · baseline-shift · superscript",
             paragraphs: vec![Paragraph {
+                extra_paragraph_attrs: Vec::new(),
                 justification: None,
                 space_before: None,
                 space_after: None,
@@ -392,6 +398,7 @@ fn variants() -> Vec<Variant> {
         Variant {
             name: "text · italic · open-sans",
             paragraphs: vec![Paragraph {
+                extra_paragraph_attrs: Vec::new(),
                 justification: None,
                 space_before: None,
                 space_after: None,
@@ -465,6 +472,7 @@ fn variants() -> Vec<Variant> {
             name: "text · para · multi-trailing",
             paragraphs: vec![
                 Paragraph {
+                    extra_paragraph_attrs: Vec::new(),
                     space_after: Some(18.0),
                     ..one_run("First paragraph with a rule below it. ", 16.0, None, None)
                 },
@@ -491,6 +499,7 @@ fn variants() -> Vec<Variant> {
         Variant {
             name: "text · family · second",
             paragraphs: vec![Paragraph {
+                extra_paragraph_attrs: Vec::new(),
                 runs: vec![
                     Run {
                         text: "Default ".to_string(),
@@ -534,6 +543,7 @@ fn one_run(
     justification: Option<&'static str>,
 ) -> Paragraph {
     Paragraph {
+        extra_paragraph_attrs: Vec::new(),
         justification,
         space_before: None,
         space_after: None,
@@ -613,6 +623,7 @@ pub fn build() -> Sample {
                     .paragraphs
                     .iter()
                     .map(|p| Paragraph {
+                        extra_paragraph_attrs: Vec::new(),
                         justification: p.justification,
                         space_before: p.space_before,
                         space_after: p.space_after,

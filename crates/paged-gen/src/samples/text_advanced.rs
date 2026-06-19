@@ -66,6 +66,7 @@ fn variants() -> Vec<Variant> {
         Variant {
             name: "text-adv · drop-cap · 2-chars-3-lines",
             paragraphs: vec![Paragraph {
+                extra_paragraph_attrs: Vec::new(),
                 justification: None,
                 space_before: None,
                 space_after: None,
@@ -100,6 +101,7 @@ fn variants() -> Vec<Variant> {
         Variant {
             name: "text-adv · first-line-indent · 36pt",
             paragraphs: vec![Paragraph {
+                extra_paragraph_attrs: Vec::new(),
                 justification: None,
                 space_before: None,
                 space_after: None,
@@ -136,6 +138,7 @@ fn variants() -> Vec<Variant> {
         Variant {
             name: "text-adv · hanging-indent · -18+18",
             paragraphs: vec![Paragraph {
+                extra_paragraph_attrs: Vec::new(),
                 justification: None,
                 space_before: None,
                 space_after: None,
@@ -170,6 +173,7 @@ fn variants() -> Vec<Variant> {
         Variant {
             name: "text-adv · indents · L36-R36",
             paragraphs: vec![Paragraph {
+                extra_paragraph_attrs: Vec::new(),
                 justification: None,
                 space_before: None,
                 space_after: None,
@@ -208,6 +212,7 @@ fn variants() -> Vec<Variant> {
             name: "text-adv · tabs · leaders-dotted",
             paragraphs: vec![
                 Paragraph {
+                    extra_paragraph_attrs: Vec::new(),
                     justification: None,
                     space_before: None,
                     space_after: Some(6.0),
@@ -254,6 +259,7 @@ fn variants() -> Vec<Variant> {
                     maximum_letter_spacing: None,
                 },
                 Paragraph {
+                    extra_paragraph_attrs: Vec::new(),
                     justification: None,
                     space_before: None,
                     space_after: Some(6.0),
@@ -300,6 +306,7 @@ fn variants() -> Vec<Variant> {
                     maximum_letter_spacing: None,
                 },
                 Paragraph {
+                    extra_paragraph_attrs: Vec::new(),
                     justification: None,
                     space_before: None,
                     space_after: None,
@@ -354,6 +361,7 @@ fn variants() -> Vec<Variant> {
             name: "text-adv · bullets · default-bullet",
             paragraphs: (0..3)
                 .map(|i| Paragraph {
+                    extra_paragraph_attrs: Vec::new(),
                     justification: None,
                     space_before: None,
                     space_after: None,
@@ -390,6 +398,7 @@ fn variants() -> Vec<Variant> {
             name: "text-adv · bullets · arrow-override",
             paragraphs: (0..2)
                 .map(|i| Paragraph {
+                    extra_paragraph_attrs: Vec::new(),
                     justification: None,
                     space_before: None,
                     space_after: None,
@@ -426,6 +435,7 @@ fn variants() -> Vec<Variant> {
             name: "text-adv · numbered · arabic",
             paragraphs: (0..3)
                 .map(|i| Paragraph {
+                    extra_paragraph_attrs: Vec::new(),
                     justification: None,
                     space_before: None,
                     space_after: None,
@@ -463,6 +473,7 @@ fn variants() -> Vec<Variant> {
         Variant {
             name: "text-adv · justified · left-justified",
             paragraphs: vec![Paragraph {
+                extra_paragraph_attrs: Vec::new(),
                 justification: Some("LeftJustified"),
                 space_before: None,
                 space_after: None,
@@ -492,6 +503,48 @@ fn variants() -> Vec<Variant> {
                 desired_letter_spacing: None,
                 maximum_letter_spacing: None,
             }],
+        },
+        // 8. Paragraph rules above + below — the escape-hatch attrs
+        // (RuleAbove*/RuleBelow*) the parser models on the Paragraph.
+        Variant {
+            name: "text-adv · paragraph-rule-above-below",
+            paragraphs: vec![Paragraph::plain(
+                "A paragraph with a rule line above and below it.",
+            )
+            .with_para_attrs(vec![
+                ("RuleAbove", "true"),
+                ("RuleAboveLineWeight", "1.5"),
+                ("RuleAboveColor", "Color/Black"),
+                ("RuleBelow", "true"),
+                ("RuleBelowLineWeight", "1"),
+                ("RuleBelowColor", "Color/Black"),
+            ])],
+        },
+        // 9. Paragraph shading — a tinted background band behind the text.
+        Variant {
+            name: "text-adv · paragraph-shading",
+            paragraphs: vec![Paragraph::plain(
+                "A paragraph with a tinted shading band behind the text.",
+            )
+            .with_para_attrs(vec![
+                ("ParagraphShadingOn", "true"),
+                ("ParagraphShadingColor", "Color/Black"),
+                ("ParagraphShadingTint", "20"),
+                ("ParagraphShadingWidth", "ColumnWidth"),
+            ])],
+        },
+        // 10. Paragraph border — a stroked box around the paragraph.
+        Variant {
+            name: "text-adv · paragraph-border",
+            paragraphs: vec![Paragraph::plain(
+                "A paragraph framed by a rectangular border.",
+            )
+            .with_para_attrs(vec![
+                ("ParagraphBorderOn", "true"),
+                ("ParagraphBorderColor", "Color/Black"),
+                ("ParagraphBorderWeight", "1"),
+                ("ParagraphBorderTopLeftCornerRadius", "3"),
+            ])],
         },
     ]
 }
@@ -546,6 +599,7 @@ pub fn build() -> Sample {
             .paragraphs
             .iter()
             .map(|p| Paragraph {
+                extra_paragraph_attrs: p.extra_paragraph_attrs.clone(),
                 justification: p.justification,
                 space_before: p.space_before,
                 space_after: p.space_after,

@@ -88,6 +88,7 @@ fn body_paragraphs() -> Vec<&'static str> {
 /// One body paragraph pinned to Inter at `BODY_PT`.
 fn inter_paragraph(text: &str) -> Paragraph {
     Paragraph {
+        extra_paragraph_attrs: Vec::new(),
         justification: None,
         space_before: None,
         space_after: None,

@@ -91,6 +91,7 @@ fn variants() -> Vec<Variant> {
 
 fn body_paragraph(ls: Option<(f32, f32, f32)>) -> Paragraph {
     Paragraph {
+        extra_paragraph_attrs: Vec::new(),
         justification: Some("LeftAlign"),
         space_before: None,
         space_after: None,

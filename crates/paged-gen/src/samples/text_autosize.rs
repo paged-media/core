@@ -76,6 +76,7 @@ const B_H_PT: f32 = 560.0;
 /// One body paragraph pinned to Inter.
 fn inter_paragraph(text: &str, point_size: f32) -> Paragraph {
     Paragraph {
+        extra_paragraph_attrs: Vec::new(),
         justification: None,
         applied_numbering_list: None,
         space_before: None,

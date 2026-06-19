@@ -79,6 +79,7 @@ fn variants() -> Vec<Variant> {
 
 fn label_paragraph(text: &str) -> Paragraph {
     Paragraph {
+        extra_paragraph_attrs: Vec::new(),
         justification: None,
         space_before: None,
         space_after: None,

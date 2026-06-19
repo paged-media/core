@@ -395,6 +395,7 @@ fn host_paragraphs(anchor_frame: Rect) -> Vec<Paragraph> {
     // across runs keeps the anchored frame inside its own
     // CharacterStyleRange — the IDML shape parsers expect.
     let host = Paragraph {
+        extra_paragraph_attrs: Vec::new(),
         justification: None,
         space_before: None,
         space_after: None,

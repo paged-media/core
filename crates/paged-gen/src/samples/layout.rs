@@ -84,6 +84,7 @@ const COLUMN_GUTTER: f32 = 18.0;
 /// One body paragraph pinned to Inter at `point_size`.
 fn inter_paragraph(text: &str, point_size: f32) -> Paragraph {
     Paragraph {
+        extra_paragraph_attrs: Vec::new(),
         runs: vec![Run {
             text: text.to_string(),
             point_size: Some(point_size),

@@ -163,6 +163,7 @@ fn list_cascade_story(story_id: &str) -> Vec<u8> {
 /// the typed `Story` builder pins `[No paragraph style]`.
 fn styled_paragraph(text: &str) -> Paragraph {
     Paragraph {
+        extra_paragraph_attrs: Vec::new(),
         runs: vec![Run {
             text: text.to_string(),
             point_size: None,
@@ -202,6 +203,7 @@ fn table_cascade_story(story_id: &str) -> Vec<u8> {
     let story = Story {
         self_id: story_id.to_string(),
         paragraphs: vec![Paragraph {
+            extra_paragraph_attrs: Vec::new(),
             table: Some(table),
             ..Paragraph::plain("")
         }],

@@ -80,6 +80,7 @@ fn run(text: &str) -> Run {
 /// One single-run paragraph carrying `text`.
 fn para(text: &str) -> Paragraph {
     Paragraph {
+        extra_paragraph_attrs: Vec::new(),
         justification: None,
         applied_numbering_list: None,
         space_before: None,

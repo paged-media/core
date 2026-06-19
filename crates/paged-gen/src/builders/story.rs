@@ -91,6 +91,12 @@ pub struct Paragraph {
     pub desired_letter_spacing: Option<f32>,
     /// `MaximumLetterSpacing` (pt). `None` ⇒ omit.
     pub maximum_letter_spacing: Option<f32>,
+    /// Escape hatch for paragraph-level attributes the typed fields don't
+    /// cover (e.g. `RuleAbove*`, `ParagraphShading*`, `ParagraphBorder*`).
+    /// Emitted verbatim onto `<ParagraphStyleRange>` after the typed attrs.
+    /// `paged-write` carries these through the round-trip untouched, so a
+    /// fixture using them reaches the conformance round-trips level.
+    pub extra_paragraph_attrs: Vec<(&'static str, &'static str)>,
 }
 
 /// One stop in a paragraph's `<TabList>`. Position is in pt from
@@ -303,7 +309,18 @@ impl Paragraph {
             minimum_letter_spacing: None,
             desired_letter_spacing: None,
             maximum_letter_spacing: None,
+            extra_paragraph_attrs: Vec::new(),
         }
+    }
+
+    /// Attach extra `<ParagraphStyleRange>` attributes (the escape hatch
+    /// for rules/shading/border). Returns `self` for chaining off `plain`.
+    pub fn with_para_attrs(
+        mut self,
+        attrs: Vec<(&'static str, &'static str)>,
+    ) -> Self {
+        self.extra_paragraph_attrs = attrs;
+        self
     }
 }
 
@@ -363,6 +380,10 @@ pub fn write_story(s: &Story) -> Vec<u8> {
         }
         if let Some(anl) = paragraph.applied_numbering_list {
             p_attrs.push(("AppliedNumberingList", anl));
+        }
+        // Escape-hatch attributes (rules/shading/border, …) emitted verbatim.
+        for (k, v) in &paragraph.extra_paragraph_attrs {
+            p_attrs.push((*k, *v));
         }
         if let Some(v) = paragraph.minimum_letter_spacing {
             min_ls_str = crate::xml::format_f32(v);

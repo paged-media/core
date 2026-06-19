@@ -85,6 +85,7 @@ fn overset_body() -> Paragraph {
         Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do \
         eiusmod tempor incididunt ut labore et dolore magna aliqua.";
     Paragraph {
+        extra_paragraph_attrs: Vec::new(),
         runs: vec![Run {
             text: long.to_string(),
             point_size: Some(14.0),
@@ -103,6 +104,7 @@ fn overset_body() -> Paragraph {
 /// A short paragraph pinned to the missing family.
 fn missing_font_body() -> Paragraph {
     Paragraph {
+        extra_paragraph_attrs: Vec::new(),
         runs: vec![Run {
             text: "Set in a font this document declares but no host provides.".to_string(),
             point_size: Some(16.0),
@@ -120,6 +122,7 @@ fn missing_font_body() -> Paragraph {
 
 fn label_paragraph(text: &str) -> Paragraph {
     Paragraph {
+        extra_paragraph_attrs: Vec::new(),
         runs: vec![Run {
             text: text.to_string(),
             point_size: Some(11.0),
@@ -139,6 +142,7 @@ fn label_paragraph(text: &str) -> Paragraph {
 /// caller via struct-update).
 fn plain_paragraph() -> Paragraph {
     Paragraph {
+        extra_paragraph_attrs: Vec::new(),
         justification: None,
         space_before: None,
         space_after: None,

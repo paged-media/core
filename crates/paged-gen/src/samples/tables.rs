@@ -275,6 +275,7 @@ fn variants() -> Vec<Variant> {
                 cells: {
                     let right_aligned = |s: &str| Cell {
                         paragraphs: vec![Paragraph {
+                            extra_paragraph_attrs: Vec::new(),
                             justification: Some("RightAlign"),
                             space_before: None,
                             space_after: None,
@@ -649,6 +650,7 @@ pub fn build() -> Sample {
         // Body story containing the table host paragraph.
         let table = (variant.table)(&table_self_id);
         let host_paragraph = Paragraph {
+            extra_paragraph_attrs: Vec::new(),
             justification: None,
             space_before: None,
             space_after: None,
