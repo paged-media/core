@@ -173,3 +173,40 @@ fn commands_before_load_error_cleanly() {
     drop(stdin);
     assert!(child.wait().unwrap().success());
 }
+
+#[test]
+fn describe_emits_the_capability_catalog() {
+    let mut child = spawn();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+
+    let _ = recv(&mut stdout); // greeting
+
+    // describe needs no loaded document — it's static engine introspection.
+    send(&mut stdin, json!({"cmd": "describe"}));
+    let resp = recv(&mut stdout);
+    assert_eq!(resp["ok"], json!(true), "describe: {resp}");
+    assert!(resp["protocol"].is_number(), "carries the engine protocol: {resp}");
+
+    let cat = &resp["catalog"];
+    let host_fns = cat["hostFunctions"].as_array().expect("hostFunctions array");
+    assert!(host_fns.len() >= 20, "expected the full host-fn surface");
+    // The authoring fns the agent needs are advertised.
+    for needle in ["paged.insertText", "paged.insertTextFrame", "paged.applyStyle", "paged.set"] {
+        assert!(
+            host_fns.iter().any(|f| f["name"] == needle),
+            "missing host fn {needle} in catalog"
+        );
+    }
+    // The full settable-path vocabulary (179) is present.
+    let paths = cat["settablePaths"].as_array().expect("settablePaths array");
+    assert_eq!(paths.len(), 179, "settable path count drifted: {}", paths.len());
+    assert!(paths.iter().any(|p| p == "characterFontSize"));
+    // Id grammar + constraints are non-empty.
+    assert!(!cat["idGrammar"].as_array().unwrap().is_empty());
+    assert!(!cat["constraints"].as_array().unwrap().is_empty());
+
+    send(&mut stdin, json!({"cmd": "quit"}));
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}

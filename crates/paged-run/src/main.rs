@@ -38,6 +38,8 @@
 //! - `{"cmd":"inspect"}` → `{ok, meta, pages, sceneTree}`
 //! - `{"cmd":"pages"}` → `{ok, pages}`
 //! - `{"cmd":"digest"}` → `{ok, pageDigests, combined, stateHash}`
+//! - `{"cmd":"describe"}` → `{ok, protocol, catalog}` (capability catalog for a
+//!   consumer/LLM — host fns, id grammar, settable paths, constraints; no doc needed)
 //! - `{"cmd":"render","page":<index|id>,"dpi":96,"out":"<file.png>"}`
 //! - `{"cmd":"export","format":"idml|paged","out":"<file>"}`
 //! - `{"cmd":"quit"}`
@@ -81,6 +83,7 @@ enum Request {
     Inspect,
     Pages,
     Digest,
+    Describe,
     Render {
         page: Value,
         #[serde(default = "default_dpi")]
@@ -180,6 +183,17 @@ fn handle(model: &mut Option<CanvasModel>, req: Request) -> Result<Value> {
             // 2s wall-clock) are enforced by `execute_script`'s default.
             let result = paged_script::execute_script(m, &source);
             Ok(json!({ "ok": result.error.is_none(), "result": result }))
+        }
+        Request::Describe => {
+            // The capability catalog for a consumer/LLM: host fns, the id
+            // grammar, the settable property paths, and the constraints —
+            // generated from the engine's own definitions (no loaded doc
+            // needed). `protocol` lets a consumer detect a stale catalog.
+            Ok(json!({
+                "ok": true,
+                "protocol": paged_canvas::channel::PROTOCOL_VERSION.0,
+                "catalog": paged_script::api_catalog(),
+            }))
         }
         Request::Inspect => {
             let m = doc_ref(model)?;

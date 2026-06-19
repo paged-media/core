@@ -58,6 +58,9 @@ use paged_canvas::CanvasModel;
 use paged_canvas::PageId;
 use serde::{Deserialize, Serialize};
 
+pub mod catalog;
+pub use catalog::{api_catalog, ApiCatalog};
+
 /// Which runtime budget a script exhausted. Surfaced as the typed
 /// half of a `ScriptResult` so the host (editor REPL, plugin runner,
 /// headless conformance) can distinguish a *budget* abort from an
@@ -1113,197 +1116,9 @@ fn parse_element_id(s: &str) -> Option<paged_canvas::element_selection::ElementI
 }
 
 fn parse_property_path(s: &str) -> Option<paged_mutate::PropertyPath> {
-    use paged_mutate::PropertyPath::*;
-    Some(match s {
-        "frameBounds" => FrameBounds,
-        "frameFillColor" => FrameFillColor,
-        "frameStrokeColor" => FrameStrokeColor,
-        "frameStrokeWeight" => FrameStrokeWeight,
-        "frameOpacity" => FrameOpacity,
-        "frameTransform" => FrameTransform,
-        "imageContentTransform" => ImageContentTransform,
-        "framePathPoint" => FramePathPoint,
-        "pathPointInsert" => PathPointInsert,
-        "pathPointRemove" => PathPointRemove,
-        "pathPointCurveType" => PathPointCurveType,
-        "layerVisible" => LayerVisible,
-        "layerLocked" => LayerLocked,
-        "layerPrintable" => LayerPrintable,
-        "layerName" => LayerName,
-        "characterFontSize" => CharacterFontSize,
-        "characterLeading" => CharacterLeading,
-        "characterTracking" => CharacterTracking,
-        "characterFillColor" => CharacterFillColor,
-        "paragraphSpaceBefore" => ParagraphSpaceBefore,
-        "paragraphSpaceAfter" => ParagraphSpaceAfter,
-        "paragraphFirstLineIndent" => ParagraphFirstLineIndent,
-        "appliedParagraphStyle" => AppliedParagraphStyle,
-        "appliedCharacterStyle" => AppliedCharacterStyle,
-        "appliedObjectStyle" => AppliedObjectStyle,
-        "appliedCellStyle" => AppliedCellStyle,
-        "appliedTableStyle" => AppliedTableStyle,
-        "appliedConditions" => AppliedConditions,
-        "frameInsetSpacing" => FrameInsetSpacing,
-        "paragraphJustification" => ParagraphJustification,
-        "paragraphStyleNextStyle" => ParagraphStyleNextStyle,
-        "paragraphAppliedNumberingList" => ParagraphAppliedNumberingList,
-        "frameStrokeEndCap" => FrameStrokeEndCap,
-        "frameStrokeStartArrowhead" => FrameStrokeStartArrowhead,
-        "frameStrokeEndArrowhead" => FrameStrokeEndArrowhead,
-        "frameTextWrapMode" => FrameTextWrapMode,
-        "frameTextWrapOffsets" => FrameTextWrapOffsets,
-        "frameTextWrapContourType" => FrameTextWrapContourType,
-        "frameTextWrapContourIncludeInside" => FrameTextWrapContourIncludeInside,
-        "frameFittingCrops" => FrameFittingCrops,
-        "frameFittingType" => FrameFittingType,
-        "frameDropShadow" => FrameDropShadow,
-        "frameDropShadowMode" => FrameDropShadowMode,
-        "frameDropShadowXOffset" => FrameDropShadowXOffset,
-        "frameDropShadowYOffset" => FrameDropShadowYOffset,
-        "frameDropShadowSize" => FrameDropShadowSize,
-        "frameDropShadowOpacity" => FrameDropShadowOpacity,
-        "frameDropShadowColor" => FrameDropShadowColor,
-        "framePath" => FramePath,
-        "frameFillTint" => FrameFillTint,
-        "frameNonprinting" => FrameNonprinting,
-        "frameGradientFillAngle" => FrameGradientFillAngle,
-        "frameGradientFillLength" => FrameGradientFillLength,
-        "frameGradientStrokeAngle" => FrameGradientStrokeAngle,
-        "frameGradientStrokeLength" => FrameGradientStrokeLength,
-        // W0.3.
-        "textFrameColumnCount" => TextFrameColumnCount,
-        "textFrameColumnGutter" => TextFrameColumnGutter,
-        "textFrameColumnBalance" => TextFrameColumnBalance,
-        "textFrameVerticalJustification" => TextFrameVerticalJustification,
-        "textFrameAutoSizing" => TextFrameAutoSizing,
-        "textFrameFirstBaseline" => TextFrameFirstBaseline,
-        "frameTextWrapInvert" => TextWrapInvert,
-        "frameFittingReferencePoint" => FrameFittingReferencePoint,
-        "frameAutoFit" => FrameAutoFit,
-        "frameStrokeType" => FrameStrokeType,
-        "frameStrokeJoin" => FrameStrokeJoin,
-        "frameStrokeMiterLimit" => FrameStrokeMiterLimit,
-        "frameStrokeAlignment" => FrameStrokeAlignment,
-        "frameStrokeGapColor" => FrameStrokeGapColor,
-        "frameStrokeGapTint" => FrameStrokeGapTint,
-        "frameStrokeDashArray" => FrameStrokeDashArray,
-        "frameCornerOptionTopLeft" => FrameCornerOptionTopLeft,
-        "frameCornerOptionTopRight" => FrameCornerOptionTopRight,
-        "frameCornerOptionBottomLeft" => FrameCornerOptionBottomLeft,
-        "frameCornerOptionBottomRight" => FrameCornerOptionBottomRight,
-        "frameCornerRadiusTopLeft" => FrameCornerRadiusTopLeft,
-        "frameCornerRadiusTopRight" => FrameCornerRadiusTopRight,
-        "frameCornerRadiusBottomLeft" => FrameCornerRadiusBottomLeft,
-        "frameCornerRadiusBottomRight" => FrameCornerRadiusBottomRight,
-        "frameRotationAngle" => FrameRotationAngle,
-        "frameScaleX" => FrameScaleX,
-        "frameScaleY" => FrameScaleY,
-        "frameFlipH" => FrameFlipH,
-        "frameFlipV" => FrameFlipV,
-        "frameOverprintFill" => FrameOverprintFill,
-        "frameOverprintStroke" => FrameOverprintStroke,
-        // W0.4 — transparency effects.
-        "frameInnerShadow" => FrameInnerShadowEnabled,
-        "frameInnerShadowBlendMode" => FrameInnerShadowBlendMode,
-        "frameInnerShadowColor" => FrameInnerShadowColor,
-        "frameInnerShadowOpacity" => FrameInnerShadowOpacity,
-        "frameInnerShadowAngle" => FrameInnerShadowAngle,
-        "frameInnerShadowDistance" => FrameInnerShadowDistance,
-        "frameInnerShadowSize" => FrameInnerShadowSize,
-        "frameInnerShadowChoke" => FrameInnerShadowChoke,
-        "frameInnerShadowNoise" => FrameInnerShadowNoise,
-        "frameOuterGlow" => FrameOuterGlowEnabled,
-        "frameOuterGlowBlendMode" => FrameOuterGlowBlendMode,
-        "frameOuterGlowColor" => FrameOuterGlowColor,
-        "frameOuterGlowOpacity" => FrameOuterGlowOpacity,
-        "frameOuterGlowSpread" => FrameOuterGlowSpread,
-        "frameOuterGlowSize" => FrameOuterGlowSize,
-        "frameOuterGlowNoise" => FrameOuterGlowNoise,
-        "frameInnerGlow" => FrameInnerGlowEnabled,
-        "frameInnerGlowBlendMode" => FrameInnerGlowBlendMode,
-        "frameInnerGlowColor" => FrameInnerGlowColor,
-        "frameInnerGlowOpacity" => FrameInnerGlowOpacity,
-        "frameInnerGlowChoke" => FrameInnerGlowChoke,
-        "frameInnerGlowSize" => FrameInnerGlowSize,
-        "frameInnerGlowSource" => FrameInnerGlowSource,
-        "frameInnerGlowNoise" => FrameInnerGlowNoise,
-        "frameBevel" => FrameBevelEnabled,
-        "frameBevelStyle" => FrameBevelStyle,
-        "frameBevelTechnique" => FrameBevelTechnique,
-        "frameBevelDepth" => FrameBevelDepth,
-        "frameBevelDirection" => FrameBevelDirection,
-        "frameBevelSize" => FrameBevelSize,
-        "frameBevelSoften" => FrameBevelSoften,
-        "frameBevelAngle" => FrameBevelAngle,
-        "frameBevelAltitude" => FrameBevelAltitude,
-        "frameBevelHighlightColor" => FrameBevelHighlightColor,
-        "frameBevelShadowColor" => FrameBevelShadowColor,
-        "frameBevelHighlightOpacity" => FrameBevelHighlightOpacity,
-        "frameBevelShadowOpacity" => FrameBevelShadowOpacity,
-        "frameSatin" => FrameSatinEnabled,
-        "frameSatinBlendMode" => FrameSatinBlendMode,
-        "frameSatinColor" => FrameSatinColor,
-        "frameSatinOpacity" => FrameSatinOpacity,
-        "frameSatinAngle" => FrameSatinAngle,
-        "frameSatinDistance" => FrameSatinDistance,
-        "frameSatinSize" => FrameSatinSize,
-        "frameSatinInvert" => FrameSatinInvert,
-        "frameFeather" => FrameFeatherEnabled,
-        "frameFeatherWidth" => FrameFeatherWidth,
-        "frameFeatherCornerType" => FrameFeatherCornerType,
-        "frameFeatherNoise" => FrameFeatherNoise,
-        "frameFeatherChoke" => FrameFeatherChoke,
-        "frameDirectionalFeather" => FrameDirectionalFeatherEnabled,
-        "frameDirectionalFeatherLeftWidth" => FrameDirectionalFeatherLeftWidth,
-        "frameDirectionalFeatherRightWidth" => FrameDirectionalFeatherRightWidth,
-        "frameDirectionalFeatherTopWidth" => FrameDirectionalFeatherTopWidth,
-        "frameDirectionalFeatherBottomWidth" => FrameDirectionalFeatherBottomWidth,
-        "frameDirectionalFeatherAngle" => FrameDirectionalFeatherAngle,
-        "frameDirectionalFeatherNoise" => FrameDirectionalFeatherNoise,
-        "frameDirectionalFeatherChoke" => FrameDirectionalFeatherChoke,
-        "frameBlendMode" => FrameBlendMode,
-        // W3.A1 — table cell properties (writable).
-        "cellFillColor" => CellFillColor,
-        "cellFillTint" => CellFillTint,
-        "cellInsetTop" => CellInsetTop,
-        "cellInsetLeft" => CellInsetLeft,
-        "cellInsetBottom" => CellInsetBottom,
-        "cellInsetRight" => CellInsetRight,
-        "cellVerticalJustification" => CellVerticalJustification,
-        // W1.11b — per-cell edge strokes (writable).
-        "cellTopEdgeStrokeColor" => CellTopEdgeStrokeColor,
-        "cellTopEdgeStrokeWeight" => CellTopEdgeStrokeWeight,
-        "cellTopEdgeStrokeTint" => CellTopEdgeStrokeTint,
-        "cellBottomEdgeStrokeColor" => CellBottomEdgeStrokeColor,
-        "cellBottomEdgeStrokeWeight" => CellBottomEdgeStrokeWeight,
-        "cellBottomEdgeStrokeTint" => CellBottomEdgeStrokeTint,
-        "cellLeftEdgeStrokeColor" => CellLeftEdgeStrokeColor,
-        "cellLeftEdgeStrokeWeight" => CellLeftEdgeStrokeWeight,
-        "cellLeftEdgeStrokeTint" => CellLeftEdgeStrokeTint,
-        "cellRightEdgeStrokeColor" => CellRightEdgeStrokeColor,
-        "cellRightEdgeStrokeWeight" => CellRightEdgeStrokeWeight,
-        "cellRightEdgeStrokeTint" => CellRightEdgeStrokeTint,
-        // Aftercare-A — table dimensions (read-only; resolvable by name
-        // so scripts can read them, rejected on write by the apply layer).
-        "tableRowCount" => TableRowCount,
-        "tableColumnCount" => TableColumnCount,
-        "pluginMetadata" => PluginMetadata,
-        // W1.16 — anchored-object settings.
-        "anchoredPosition" => AnchoredPosition,
-        "anchorPoint" => AnchorPoint,
-        "anchoredXOffset" => AnchoredXOffset,
-        "anchoredYOffset" => AnchoredYOffset,
-        "anchoredHorizontalReference" => AnchoredHorizontalReference,
-        "anchoredVerticalReference" => AnchoredVerticalReference,
-        "anchoredHorizontalAlignment" => AnchoredHorizontalAlignment,
-        "anchoredVerticalAlignment" => AnchoredVerticalAlignment,
-        "anchoredSpineRelative" => AnchoredSpineRelative,
-        "anchoredLockPosition" => AnchoredLockPosition,
-        // W2.5 — element-level visibility / lock.
-        "elementVisible" => ElementVisible,
-        "elementLocked" => ElementLocked,
-        _ => return None,
-    })
+    // Single source of truth: the JS-name -> PropertyPath table in `catalog`,
+    // which also backs `api_catalog().settable_paths` (ADR 019). No second list.
+    catalog::lookup_path(s)
 }
 
 fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
@@ -1757,4 +1572,45 @@ fn format_error(err: &boa_engine::JsError, ctx: &mut Context) -> String {
     // value formatter so Error objects come out as "Name: message".
     let opaque = err.to_opaque(ctx);
     format_value(&opaque, ctx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `parse_property_path` now delegates to the single `catalog::PROPERTY_PATHS`
+    /// table, so every table entry resolves through the public parser to the
+    /// table's own variant — the parser and the catalog cannot disagree.
+    #[test]
+    fn parser_matches_the_catalog_table() {
+        for (name, path) in catalog::PROPERTY_PATHS {
+            assert_eq!(
+                parse_property_path(name),
+                Some(*path),
+                "parse_property_path({name:?}) disagreed with the catalog table"
+            );
+        }
+    }
+
+    /// The single table lists no duplicate JS names.
+    #[test]
+    fn settable_paths_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for (name, _) in catalog::PROPERTY_PATHS {
+            assert!(seen.insert(*name), "duplicate catalog path {name:?}");
+        }
+    }
+
+    /// Spot-check the non-obvious short-name → `*Enabled` (and renamed) mappings
+    /// the table transcription had to get right — a guard against a future
+    /// hand-edit silently breaking them.
+    #[test]
+    fn known_mappings_are_stable() {
+        use paged_mutate::PropertyPath as P;
+        assert_eq!(parse_property_path("characterFontSize"), Some(P::CharacterFontSize));
+        assert_eq!(parse_property_path("frameBevel"), Some(P::FrameBevelEnabled));
+        assert_eq!(parse_property_path("frameTextWrapInvert"), Some(P::TextWrapInvert));
+        assert_eq!(parse_property_path("frameInnerGlow"), Some(P::FrameInnerGlowEnabled));
+        assert_eq!(parse_property_path("notARealPath"), None);
+    }
 }
