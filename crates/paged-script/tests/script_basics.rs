@@ -784,3 +784,158 @@ fn paged_set_group_transform_moves_the_group_as_a_unit() {
         "the group member's effective transform must follow the group move"
     );
 }
+
+// ----------------------------------------------------------------- Stage 1
+// Text authoring host fns: paged.insertText / deleteRange / insertTextFrame.
+
+#[test]
+fn paged_insert_text_adds_characters_to_a_story() {
+    let mut model = load();
+    let result = execute_script(
+        &mut model,
+        r#"
+            const stories = JSON.parse(paged.stories());
+            const sid = stories[0].selfId;
+            const before = stories[0].characterCount;
+            const ok = paged.insertText(sid, 0, "HELLO");
+            const after = JSON.parse(paged.stories()).find(s => s.selfId === sid).characterCount;
+            console.log("inserted", ok, after - before);
+        "#,
+    );
+    assert!(result.error.is_none(), "{:?}", result.error);
+    assert!(
+        result
+            .output
+            .iter()
+            .any(|l| l.contains("[log] inserted true 5")),
+        "expected insertText to add 5 chars; got {:?}",
+        result.output
+    );
+}
+
+#[test]
+fn paged_delete_range_removes_characters_from_a_story() {
+    let mut model = load();
+    let result = execute_script(
+        &mut model,
+        r#"
+            const sid = JSON.parse(paged.stories())[0].selfId;
+            paged.insertText(sid, 0, "ABCDE");
+            const mid = JSON.parse(paged.stories()).find(s => s.selfId === sid).characterCount;
+            const ok = paged.deleteRange(sid, 0, 3);
+            const after = JSON.parse(paged.stories()).find(s => s.selfId === sid).characterCount;
+            console.log("deleted", ok, mid - after);
+        "#,
+    );
+    assert!(result.error.is_none(), "{:?}", result.error);
+    assert!(
+        result
+            .output
+            .iter()
+            .any(|l| l.contains("[log] deleted true 3")),
+        "expected deleteRange to remove 3 chars; got {:?}",
+        result.output
+    );
+}
+
+#[test]
+fn paged_insert_text_frame_mutates_the_scene() {
+    let mut model = load();
+    let page_id = model.page_ids().next().expect("a page").0.clone();
+    let before = model.current_state_hash();
+    let source = format!(
+        r#"
+            const ok = paged.insertTextFrame({page_id:?}, [10, 10, 120, 200]);
+            console.log("frame", ok);
+        "#
+    );
+    let result = execute_script(&mut model, &source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    assert!(
+        result.output.iter().any(|l| l.contains("[log] frame true")),
+        "insertTextFrame should return true; got {:?}",
+        result.output
+    );
+    // The new frame changes the canonical scene state.
+    assert_ne!(
+        before,
+        model.current_state_hash(),
+        "inserting a text frame must change the scene state hash"
+    );
+}
+
+// ----------------------------------------------------------------- Stage 2
+// Structural authoring: insertFrame / insertPage / placeImage / applyStyle /
+// createGroup.
+
+#[test]
+fn paged_insert_frame_and_page_author_structure() {
+    let mut model = load();
+    let page_id = model.page_ids().next().expect("a page").0.clone();
+    let pages_before = model.page_ids().count();
+    let hash_before = model.current_state_hash();
+    let source = format!(
+        r#"
+            const f = paged.insertFrame({page_id:?}, [20, 20, 80, 120]);
+            const p = paged.insertPage();
+            console.log("frame", f, "page", p);
+        "#
+    );
+    let result = execute_script(&mut model, &source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    assert!(
+        result
+            .output
+            .iter()
+            .any(|l| l.contains("[log] frame true page true")),
+        "insertFrame + insertPage should both succeed; got {:?}",
+        result.output
+    );
+    assert_ne!(
+        hash_before,
+        model.current_state_hash(),
+        "structural edits must change the scene state hash"
+    );
+    assert!(
+        model.page_ids().count() > pages_before,
+        "insertPage must grow the page count"
+    );
+}
+
+#[test]
+fn paged_stage2_authoring_fns_are_registered_and_callable() {
+    let mut model = load();
+    let result = execute_script(
+        &mut model,
+        r#"
+            // Each call returns a boolean; best-effort args exercise the
+            // registration + argument handling without depending on fixture
+            // specifics (a real apply may or may not match a style).
+            const sid = JSON.parse(paged.stories())[0].selfId;
+            const ps = JSON.parse(paged.paragraphStyles());
+            const styleRef = ps.length ? ps[0].selfId : "ParagraphStyle/none";
+            const a = paged.applyStyle(sid, 0, 1, styleRef);
+            const b = paged.placeImage("frame:does-not-exist", "file:///x.png");
+            const c = paged.createGroup([]);          // <2 members → false, no throw
+            console.log("types", typeof a, typeof b, typeof c);
+            console.log("group-empty", c);
+        "#,
+    );
+    assert!(result.error.is_none(), "{:?}", result.error);
+    assert!(
+        result
+            .output
+            .iter()
+            .any(|l| l.contains("[log] types boolean boolean boolean")),
+        "all three host fns must return booleans: {:?}",
+        result.output
+    );
+    assert!(
+        result
+            .output
+            .iter()
+            .any(|l| l.contains("[log] group-empty false")),
+        "createGroup([]) must return false: {:?}",
+        result.output
+    );
+}

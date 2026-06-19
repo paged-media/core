@@ -28,6 +28,14 @@
 //! v1 surface (function-style + Proxy sugar via the bootstrap JS):
 //!   paged.set(idStr, pathStr, value)
 //!   paged.get(idStr, pathStr) -> value | null
+//!   paged.insertText(storyId, offset, text) -> bool       (Stage 1 authoring)
+//!   paged.deleteRange(storyId, start, end) -> bool
+//!   paged.insertTextFrame(pageId, [t,l,b,r]) -> bool
+//!   paged.insertFrame(pageId, [t,l,b,r]) -> bool           (Stage 2 authoring)
+//!   paged.insertPage(afterPageId?) -> bool
+//!   paged.placeImage(frameId, uri, fit?) -> bool
+//!   paged.applyStyle(storyId, start, end, styleRef) -> bool
+//!   paged.createGroup([id, ...]) -> bool
 //!   paged.inspect(idStr) -> ElementProperties JSON
 //!   paged.layers() -> LayerSummary[]
 //!   paged.tree() -> SceneTreeNode[]
@@ -47,6 +55,7 @@ use boa_engine::{
 };
 use paged_canvas::channel::Mutation;
 use paged_canvas::CanvasModel;
+use paged_canvas::PageId;
 use serde::{Deserialize, Serialize};
 
 /// Which runtime budget a script exhausted. Surfaced as the typed
@@ -471,6 +480,18 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
     let paged = ObjectInitializer::new(ctx)
         .function(guarded(paged_set), js_string!("set"), 3)
         .function(guarded(paged_get), js_string!("get"), 2)
+        .function(guarded(paged_insert_text), js_string!("insertText"), 3)
+        .function(guarded(paged_delete_range), js_string!("deleteRange"), 3)
+        .function(
+            guarded(paged_insert_text_frame),
+            js_string!("insertTextFrame"),
+            2,
+        )
+        .function(guarded(paged_insert_frame), js_string!("insertFrame"), 2)
+        .function(guarded(paged_insert_page), js_string!("insertPage"), 1)
+        .function(guarded(paged_place_image), js_string!("placeImage"), 3)
+        .function(guarded(paged_apply_style), js_string!("applyStyle"), 4)
+        .function(guarded(paged_create_group), js_string!("createGroup"), 1)
         .function(guarded(paged_undo), js_string!("undo"), 0)
         .function(guarded(paged_redo), js_string!("redo"), 0)
         .function(guarded(paged_inspect), js_string!("inspect"), 1)
@@ -578,6 +599,226 @@ fn paged_set(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
         path: wire_path,
         value: wire_value,
     };
+    Ok(JsValue::from(with_model(|m| {
+        m.apply_mutation(&mutation).is_ok()
+    })))
+}
+
+/// `paged.insertText(storyId, offset, text)` — insert plain text at a
+/// story-local body offset (Stage 1 text authoring). `\n` splits into
+/// paragraphs. Lands as `Mutation::InsertText` through the same apply
+/// layer as the UI Type tool, so undo/redo work identically. Returns
+/// `true` iff the insert applied. (Cell-local insertion is `None` for
+/// now — the body-offset form covers ordinary story authoring.)
+fn paged_insert_text(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let offset = args.get_or_undefined(1).to_number(ctx)? as u32;
+    let text = args
+        .get_or_undefined(2)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let mutation = Mutation::InsertText {
+        story_id,
+        offset,
+        text,
+        cell: None,
+    };
+    Ok(JsValue::from(with_model(|m| {
+        m.apply_mutation(&mutation).is_ok()
+    })))
+}
+
+/// `paged.deleteRange(storyId, start, end)` — delete the `[start, end)`
+/// story-local body range (`Mutation::DeleteRange`). The complement of
+/// `insertText`, for re-merge / replace flows. Returns `true` iff applied.
+fn paged_delete_range(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let start = args.get_or_undefined(1).to_number(ctx)? as u32;
+    let end = args.get_or_undefined(2).to_number(ctx)? as u32;
+    let mutation = Mutation::DeleteRange {
+        story_id,
+        start,
+        end,
+        cell: None,
+    };
+    Ok(JsValue::from(with_model(|m| {
+        m.apply_mutation(&mutation).is_ok()
+    })))
+}
+
+/// `paged.insertTextFrame(pageId, [top, left, bottom, right])` — create
+/// an empty, text-pourable frame on a page at page-local point bounds
+/// (`Mutation::InsertTextFrame`; the model mints the ParentStory).
+/// Returns `true` iff applied, `false` if `bounds` is not a 4-number array.
+fn paged_insert_text_frame(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let page = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(bounds) = read_quad(args.get_or_undefined(1), ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    let mutation = Mutation::InsertTextFrame {
+        page_id: PageId(page),
+        bounds,
+    };
+    Ok(JsValue::from(with_model(|m| {
+        m.apply_mutation(&mutation).is_ok()
+    })))
+}
+
+/// Read a JS 4-number array `[a, b, c, d]` into a tuple. Mirrors the
+/// array-length idiom `js_value_to_wire` uses for `FrameBounds`.
+fn read_quad(value: &JsValue, ctx: &mut Context) -> Option<(f32, f32, f32, f32)> {
+    let obj = value.as_object()?;
+    let len = obj.get(js_string!("length"), ctx).ok()?.as_number()? as usize;
+    if len != 4 {
+        return None;
+    }
+    let mut out = [0.0f32; 4];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = obj.get(i as u32, ctx).ok()?.as_number()? as f32;
+    }
+    Some((out[0], out[1], out[2], out[3]))
+}
+
+// ------------------------------------------------- Stage 2: structural authoring
+
+/// `paged.insertFrame(pageId, [t,l,b,r])` — create an empty graphic
+/// (non-text) frame on a page (`Mutation::InsertFrame`); the usual
+/// target for `placeImage`. Sibling of `insertTextFrame`.
+fn paged_insert_frame(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let page = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(bounds) = read_quad(args.get_or_undefined(1), ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    let mutation = Mutation::InsertFrame {
+        page_id: PageId(page),
+        bounds,
+    };
+    Ok(JsValue::from(with_model(|m| {
+        m.apply_mutation(&mutation).is_ok()
+    })))
+}
+
+/// `paged.insertPage(afterPageId?)` — append a page after `afterPageId`
+/// (or at the document end when omitted), inheriting the default master
+/// (`Mutation::InsertPage`).
+fn paged_insert_page(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let after = args.get_or_undefined(0);
+    let after_page_id = if after.is_undefined() || after.is_null() {
+        None
+    } else {
+        let s = after.to_string(ctx)?.to_std_string_escaped();
+        (!s.is_empty()).then_some(PageId(s))
+    };
+    let mutation = Mutation::InsertPage {
+        after_page_id,
+        master_id: None,
+    };
+    Ok(JsValue::from(with_model(|m| {
+        m.apply_mutation(&mutation).is_ok()
+    })))
+}
+
+/// `paged.placeImage(frameId, uri, fit?)` — place an image into a frame
+/// (`Mutation::PlaceImage`). `fit` is an optional InDesign fitting mode.
+fn paged_place_image(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let element_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let uri = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let fit_arg = args.get_or_undefined(2);
+    let fit = if fit_arg.is_undefined() || fit_arg.is_null() {
+        None
+    } else {
+        Some(fit_arg.to_string(ctx)?.to_std_string_escaped())
+    };
+    let mutation = Mutation::PlaceImage {
+        element_id,
+        uri,
+        fit,
+    };
+    Ok(JsValue::from(with_model(|m| {
+        m.apply_mutation(&mutation).is_ok()
+    })))
+}
+
+/// `paged.applyStyle(storyId, start, end, styleRef)` — apply a named
+/// paragraph/character style to a story range (`Mutation::ApplyStyle`).
+/// Scope is inferred from the ref prefix (`CharacterStyle/…` →
+/// Character, else Paragraph).
+fn paged_apply_style(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let start = args.get_or_undefined(1).to_number(ctx)? as u32;
+    let end = args.get_or_undefined(2).to_number(ctx)? as u32;
+    let style = args
+        .get_or_undefined(3)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let scope = if style.starts_with("CharacterStyle") {
+        paged_mutate::operation::StyleScope::Character
+    } else {
+        paged_mutate::operation::StyleScope::Paragraph
+    };
+    let mutation = Mutation::ApplyStyle {
+        story_id,
+        start,
+        end,
+        style,
+        scope,
+    };
+    Ok(JsValue::from(with_model(|m| {
+        m.apply_mutation(&mutation).is_ok()
+    })))
+}
+
+/// `paged.createGroup([id, ...])` — group two-or-more elements
+/// (`Mutation::CreateGroup`). Ids are parsed with the same resolver as
+/// `paged.set`; unparseable entries are dropped, and fewer than two
+/// valid members returns `false`.
+fn paged_create_group(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let value = args.get_or_undefined(0);
+    let Some(obj) = value.as_object() else {
+        return Ok(JsValue::from(false));
+    };
+    let len = obj
+        .get(js_string!("length"), ctx)
+        .ok()
+        .and_then(|v| v.as_number())
+        .unwrap_or(0.0) as usize;
+    let mut member_ids = Vec::with_capacity(len);
+    for i in 0..len {
+        let item = obj.get(i as u32, ctx)?;
+        let s = item.to_string(ctx)?.to_std_string_escaped();
+        if let Some(id) = parse_element_id(&s) {
+            member_ids.push(id);
+        }
+    }
+    if member_ids.len() < 2 {
+        return Ok(JsValue::from(false));
+    }
+    let mutation = Mutation::CreateGroup { member_ids };
     Ok(JsValue::from(with_model(|m| {
         m.apply_mutation(&mutation).is_ok()
     })))
