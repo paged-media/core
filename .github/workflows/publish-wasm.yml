@@ -112,13 +112,17 @@ jobs:
             --target web --out-dir "$OUT"
           wasm-opt -Oz "$OUT/paged_introspect_wasm_bg.wasm" -o "$OUT/paged_introspect_wasm_bg.wasm.opt" \
             && mv "$OUT/paged_introspect_wasm_bg.wasm.opt" "$OUT/paged_introspect_wasm_bg.wasm"
+          # The static capability catalog (ADR 019) ships alongside the wasm so
+          # build-time consumers (plugin SDK sync, state ingest) read it without
+          # booting wasm; describeCatalog() returns the same data at runtime.
+          cp crates/paged-introspect/catalog.json "$OUT/catalog.json"
           node -e "require('fs').writeFileSync('$OUT/package.json', JSON.stringify({
             name: '@paged-media/introspect-wasm',
             version: '${{ steps.ver.outputs.version }}',
             type: 'module',
             main: 'paged_introspect_wasm.js',
             types: 'paged_introspect_wasm.d.ts',
-            files: ['paged_introspect_wasm.js','paged_introspect_wasm_bg.wasm','paged_introspect_wasm.d.ts'],
+            files: ['paged_introspect_wasm.js','paged_introspect_wasm_bg.wasm','paged_introspect_wasm.d.ts','catalog.json'],
             license: 'MPL-2.0 OR LicenseRef-PMEL'
           }, null, 2))"
 

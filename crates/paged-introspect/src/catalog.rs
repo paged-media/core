@@ -16,11 +16,14 @@
 //! **single source** for the JS-name → `PropertyPath` mapping.
 //!
 //! [`PROPERTY_PATHS`] is the one table that both [`lookup_path`] (which backs
-//! `parse_property_path` in `lib.rs`) and [`api_catalog`] read from. There is
-//! no second hand-list to drift: the parser and the catalog cannot disagree
-//! about which paths are settable, by construction. This realizes ADR 005's
-//! "one descriptor source feeds introspect + script" for the property surface
-//! (see `thoughts/docs/paged/adr/019-capability-catalog-one-contract.md`).
+//! `paged-script`'s `parse_property_path`, across the crate boundary) and
+//! [`api_catalog`] read from. There is no second hand-list to drift: the parser
+//! and the catalog cannot disagree about which paths are settable, by
+//! construction. Lives here (the neutral, published introspection crate) rather
+//! than in `paged-script` so every surface — the Boa bridge, the published
+//! `introspect-wasm` `describeCatalog`, the plugin SDK, `state` — projects the
+//! one contract. This realizes ADR 005's "one descriptor source feeds introspect
+//! + script" for the property surface (ADR 019).
 //!
 //! This is the API *vocabulary* (layer 1). The conceptual mental model + DTP
 //! recipes (layers 2/3) live in the consumer's authoring guide, which refers
@@ -76,7 +79,7 @@ pub fn api_catalog() -> ApiCatalog {
 /// Resolve a JS property-path name to its `PropertyPath`. The single lookup
 /// behind `parse_property_path`; the linear scan is fine for a 179-entry table
 /// called at human cadence (one per `paged.set`/`get`).
-pub(crate) fn lookup_path(name: &str) -> Option<P> {
+pub fn lookup_path(name: &str) -> Option<P> {
     PROPERTY_PATHS
         .iter()
         .find(|(candidate, _)| *candidate == name)
@@ -190,7 +193,7 @@ fn constraints() -> Vec<&'static str> {
 /// both read this — there is no second list. Order is the engine's own
 /// grouping (frame geometry/effects, then text/cell/anchored); the catalog
 /// preserves it.
-pub(crate) const PROPERTY_PATHS: &[(&str, P)] = &[
+pub const PROPERTY_PATHS: &[(&str, P)] = &[
     ("frameBounds", P::FrameBounds),
     ("frameFillColor", P::FrameFillColor),
     ("frameStrokeColor", P::FrameStrokeColor),
@@ -371,3 +374,45 @@ pub(crate) const PROPERTY_PATHS: &[(&str, P)] = &[
     ("elementVisible", P::ElementVisible),
     ("elementLocked", P::ElementLocked),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_resolves_and_is_complete() {
+        let cat = api_catalog();
+        assert_eq!(cat.settable_paths.len(), 179, "settable path count drifted");
+        assert!(cat.host_functions.len() >= 20);
+        // representative + alias mappings
+        assert_eq!(lookup_path("characterFontSize"), Some(P::CharacterFontSize));
+        assert_eq!(lookup_path("frameBevel"), Some(P::FrameBevelEnabled));
+        assert_eq!(lookup_path("notARealPath"), None);
+    }
+
+    /// Consistency with the wire enum: every catalog path is a real `PropertyPath`
+    /// that has a `PropertyPathJson` mirror (the catalog can't list a phantom).
+    /// The catalog uses ergonomic JS aliases (`frameBevel`) while `PropertyPathJson`
+    /// uses the wire variant name (`frameBevelEnabled`) — distinct by design — but
+    /// they project the *same* underlying variant set.
+    #[test]
+    fn every_catalog_path_has_a_wire_mirror() {
+        for (_, path) in PROPERTY_PATHS {
+            let _mirror: crate::descriptor::PropertyPathJson = (*path).into();
+        }
+    }
+
+    /// The committed `catalog.json` build-time artifact (read by the plugin SDK
+    /// sync, `state`'s catalog ingest, and docs) must match `api_catalog()`.
+    #[test]
+    fn catalog_json_artifact_is_current() {
+        let generated = serde_json::to_string_pretty(&api_catalog()).unwrap();
+        let committed = include_str!("../catalog.json");
+        assert_eq!(
+            committed.trim_end(),
+            generated.trim_end(),
+            "catalog.json is stale — regenerate: \
+             cargo run -p paged-introspect --example emit-catalog > crates/paged-introspect/catalog.json"
+        );
+    }
+}
