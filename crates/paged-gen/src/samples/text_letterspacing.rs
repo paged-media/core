@@ -157,6 +157,7 @@ pub fn build() -> Sample {
         stories.push((
             body_story_id.clone(),
             write_story(&Story {
+                extra_story_attrs: Vec::new(),
                 self_id: body_story_id.clone(),
                 paragraphs: vec![body_paragraph(variant.letter_spacing)],
             }),

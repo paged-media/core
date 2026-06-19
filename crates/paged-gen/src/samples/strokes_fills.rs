@@ -347,6 +347,7 @@ pub fn build() -> Sample {
         stories.push((
             story_id.clone(),
             write_story(&Story {
+                extra_story_attrs: Vec::new(),
                 self_id: story_id.clone(),
                 paragraphs: vec![Paragraph::plain(variant.name)],
             }),
@@ -499,6 +500,7 @@ fn w15_alignment_pages(base_seq: u32) -> Vec<(String, Vec<u8>, String, Vec<u8>, 
             page_items: Vec::new(),
         });
         let story_xml = write_story(&Story {
+            extra_story_attrs: Vec::new(),
             self_id: story_id.clone(),
             paragraphs: vec![Paragraph::plain(*label)],
         });

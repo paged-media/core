@@ -29,6 +29,10 @@ const DOM_VERSION: (&str, &str) = ("DOMVersion", "20.0");
 pub struct Story {
     pub self_id: String,
     pub paragraphs: Vec<Paragraph>,
+    /// Escape-hatch `<Story>` attributes (e.g. `StoryDirection=
+    /// "VerticalWritingDirection"` for CJK tategaki). Emitted verbatim
+    /// after `Self`; empty keeps every sample's story byte-identical.
+    pub extra_story_attrs: Vec<(&'static str, &'static str)>,
 }
 
 pub struct Paragraph {
@@ -364,7 +368,11 @@ pub fn write_story(s: &Story) -> Vec<u8> {
     let mut b = XmlBuilder::new();
     b.write_decl();
     b.start("idPkg:Story", &[PKG_NS, DOM_VERSION]);
-    b.start("Story", &[("Self", s.self_id.as_str())]);
+    let mut story_attrs: Vec<(&str, &str)> = vec![("Self", s.self_id.as_str())];
+    for (k, v) in &s.extra_story_attrs {
+        story_attrs.push((*k, *v));
+    }
+    b.start("Story", &story_attrs);
     for paragraph in &s.paragraphs {
         let space_before_str: String;
         let space_after_str: String;

@@ -124,6 +124,7 @@ fn inter_paragraph(text: &str) -> Paragraph {
 /// A label text frame + its backing story. Returns `(frame, story)`.
 fn label(page_name: &str, story_id: &str, frame_id: String) -> (Rect, Story) {
     let story = Story {
+        extra_story_attrs: Vec::new(),
         self_id: story_id.to_string(),
         paragraphs: vec![inter_paragraph_label(page_name)],
     };
@@ -192,6 +193,7 @@ pub fn build() -> Sample {
 
         // The overset story: 10 paragraphs of body copy in a 40 pt frame.
         let body_story = Story {
+            extra_story_attrs: Vec::new(),
             self_id: body_story_id.clone(),
             paragraphs: body_paragraphs().into_iter().map(inter_paragraph).collect(),
         };
@@ -258,6 +260,7 @@ pub fn build() -> Sample {
         // together hold ~4-6 lines; the story is 10 paragraphs, so the
         // chain still oversets past frame B.
         let chain_story = Story {
+            extra_story_attrs: Vec::new(),
             self_id: chain_story_id.clone(),
             paragraphs: body_paragraphs().into_iter().map(inter_paragraph).collect(),
         };

@@ -31,7 +31,7 @@ use crate::builders::{
     page_item::Rect,
     resources::{
         container_xml, fonts_xml, graphic_xml_with_extras, preferences_xml,
-        styles_xml_with_paragraph_styles, ExtraColor, ParagraphStyleSpec,
+        styles_xml_with_paragraph_styles, ExtraColor, NestedStyleSpec, ParagraphStyleSpec,
     },
     spread::{write_spread, Spread},
     story::{write_story, Paragraph, Run, Story},
@@ -67,6 +67,34 @@ fn emphasis_style() -> ParagraphStyleSpec {
         applied_font: "Open Sans",
         point_size: 28.0,
         fill_color: "Color/RGBCyan",
+        nested_styles: Vec::new(),
+    }
+}
+
+/// A paragraph style carrying two `<NestedStyle>` runs (the first word, then
+/// up to the first colon) — the per-delimiter nested-style construct the
+/// parser reads onto the style def (stories-text.nested-styles).
+fn nested_style_demo() -> ParagraphStyleSpec {
+    ParagraphStyleSpec {
+        self_id: "ParagraphStyle/NestedDemo",
+        name: "Nested Demo",
+        applied_font: "Open Sans",
+        point_size: 12.0,
+        fill_color: "Color/Black",
+        nested_styles: vec![
+            NestedStyleSpec {
+                applied_character_style: "CharacterStyle/$ID/[No character style]",
+                delimiter: "1",
+                repetition: 1,
+                inclusive: true,
+            },
+            NestedStyleSpec {
+                applied_character_style: "CharacterStyle/$ID/[No character style]",
+                delimiter: ":",
+                repetition: 1,
+                inclusive: false,
+            },
+        ],
     }
 }
 
@@ -632,6 +660,7 @@ pub fn build() -> Sample {
         stories.push((
             story_id.clone(),
             write_story(&Story {
+                extra_story_attrs: Vec::new(),
                 self_id: story_id.clone(),
                 paragraphs: variant
                     .paragraphs
@@ -752,7 +781,7 @@ pub fn build() -> Sample {
         // the editor's applyStyle render-contrast fixme has a visually-
         // distinct named style to attribute. Emitted in the canonical
         // group so the fixture round-trips byte-identically.
-        styles_xml: styles_xml_with_paragraph_styles(&[emphasis_style()]),
+        styles_xml: styles_xml_with_paragraph_styles(&[emphasis_style(), nested_style_demo()]),
         preferences_xml: preferences_xml(),
         backing_story_xml: backing_story_xml(),
         tags_xml: tags_xml(),

@@ -574,6 +574,20 @@ pub struct ParagraphStyleSpec {
     pub applied_font: &'static str,
     pub point_size: f32,
     pub fill_color: &'static str,
+    /// `<NestedStyle>` children — per-delimiter character-style runs. Empty
+    /// emits the style as a leaf (byte-identical to the prior shape).
+    pub nested_styles: Vec<NestedStyleSpec>,
+}
+
+/// One `<NestedStyle>` inside a [`ParagraphStyleSpec`]: a character style
+/// applied to a leading portion of the paragraph, bounded by a delimiter.
+pub struct NestedStyleSpec {
+    pub applied_character_style: &'static str,
+    /// `Delimiter` — e.g. a literal char, or a count token like
+    /// `"1"` (words). Emitted verbatim.
+    pub delimiter: &'static str,
+    pub repetition: i32,
+    pub inclusive: bool,
 }
 
 /// Combined builder behind the [`styles_xml`] family — table styles
@@ -635,16 +649,31 @@ fn styles_xml_full_with(
     // attribute order so the byte round-trip gate stays green.
     for ps in extra_paragraph_styles {
         let point_size = crate::xml::format_f32(ps.point_size);
-        b.empty(
-            "ParagraphStyle",
-            &[
-                ("Self", ps.self_id),
-                ("Name", ps.name),
-                ("AppliedFont", ps.applied_font),
-                ("PointSize", point_size.as_str()),
-                ("FillColor", ps.fill_color),
-            ],
-        );
+        let attrs = [
+            ("Self", ps.self_id),
+            ("Name", ps.name),
+            ("AppliedFont", ps.applied_font),
+            ("PointSize", point_size.as_str()),
+            ("FillColor", ps.fill_color),
+        ];
+        if ps.nested_styles.is_empty() {
+            b.empty("ParagraphStyle", &attrs);
+        } else {
+            b.start("ParagraphStyle", &attrs);
+            for ns in &ps.nested_styles {
+                let rep = ns.repetition.to_string();
+                b.empty(
+                    "NestedStyle",
+                    &[
+                        ("AppliedCharacterStyle", ns.applied_character_style),
+                        ("Delimiter", ns.delimiter),
+                        ("Repetition", rep.as_str()),
+                        ("Inclusive", if ns.inclusive { "true" } else { "false" }),
+                    ],
+                );
+            }
+            b.end("ParagraphStyle");
+        }
     }
     b.end("RootParagraphStyleGroup");
     // ObjectStyle root — declares `[None]` with the no-stroke /

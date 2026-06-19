@@ -77,6 +77,32 @@ fn flate(data: &[u8]) -> Vec<u8> {
 /// Write one image (+ optional alpha SMask) and return its XObject
 /// ref. Returns `None` when neither encoded nor decoded pixels are
 /// available (a diagnostic is pushed).
+/// Decide the PDF image-downsampling target. When the image's effective
+/// placed resolution exceeds `target_ppi` by more than 25%, return the
+/// `(w, h)` that lands the longest edge AT `target_ppi`; otherwise `None`
+/// (passthrough — never upsample, never resample near/below target).
+pub(crate) fn downsample_target(
+    width: u32,
+    height: u32,
+    placed_size_pt: Option<(f32, f32)>,
+    target_ppi: Option<f32>,
+) -> Option<(u32, u32)> {
+    let target = target_ppi?;
+    let (pw, ph) = placed_size_pt?;
+    if pw <= 0.0 || ph <= 0.0 {
+        return None;
+    }
+    let eff = (width as f32 / (pw / 72.0)).max(height as f32 / (ph / 72.0));
+    if eff > target * 1.25 {
+        let scale = target / eff;
+        let w = ((width as f32 * scale).round() as u32).max(1);
+        let h = ((height as f32 * scale).round() as u32).max(1);
+        Some((w, h))
+    } else {
+        None
+    }
+}
+
 pub fn write_image(
     state: &mut DocState,
     img: &DecodedImage,
@@ -88,22 +114,8 @@ pub fn write_image(
     // Downsampling (off by default): when the placed resolution
     // exceeds the target, resample and embed Flate — the DCT
     // passthrough is skipped for that image.
-    let downsample_to = options.downsample_ppi.and_then(|target| {
-        let (pw, ph) = placed_size_pt?;
-        if pw <= 0.0 || ph <= 0.0 {
-            return None;
-        }
-        let eff = (img.width as f32 / (pw / 72.0)).max(img.height as f32 / (ph / 72.0));
-        if eff > target * 1.25 {
-            // Cap the longest edge so the result lands AT target ppi.
-            let scale = target / eff;
-            let w = ((img.width as f32 * scale).round() as u32).max(1);
-            let h = ((img.height as f32 * scale).round() as u32).max(1);
-            Some((w, h))
-        } else {
-            None
-        }
-    });
+    let downsample_to =
+        downsample_target(img.width, img.height, placed_size_pt, options.downsample_ppi);
 
     // DCT passthrough — the original bytes, verbatim.
     if downsample_to.is_none() && !img.encoded.is_empty() && is_jpeg(&img.encoded) {
@@ -249,3 +261,37 @@ pub fn image_resource_name(index: u32) -> String {
 
 #[allow(unused)]
 fn _name_check(_: Name) {}
+
+#[cfg(test)]
+mod tests {
+    use super::downsample_target;
+
+    // the-renderer.pdf-image-downsampling: bicubic resample of over-resolution
+    // placed images down to the target ppi on PDF export.
+    #[test]
+    fn pdf_image_downsampling_caps_longest_edge_to_target_ppi() {
+        // 400×400 px placed at 72×72 pt (1 inch) = 400 ppi; target 150 →
+        // cap to 150×150 (the result lands AT 150 ppi).
+        assert_eq!(
+            downsample_target(400, 400, Some((72.0, 72.0)), Some(150.0)),
+            Some((150, 150)),
+        );
+        // Non-square: 800×400 at 72×72 pt → longest edge (800) drives eff=800,
+        // scale 150/800 → 150×75.
+        assert_eq!(
+            downsample_target(800, 400, Some((72.0, 72.0)), Some(150.0)),
+            Some((150, 75)),
+        );
+        // Within 1.25× of target (160 ppi vs 150) → passthrough, never resample.
+        assert_eq!(
+            downsample_target(160, 160, Some((72.0, 72.0)), Some(150.0)),
+            None,
+        );
+        // No target ppi, or zero placement → never resample.
+        assert_eq!(downsample_target(400, 400, Some((72.0, 72.0)), None), None);
+        assert_eq!(
+            downsample_target(400, 400, Some((0.0, 72.0)), Some(150.0)),
+            None,
+        );
+    }
+}

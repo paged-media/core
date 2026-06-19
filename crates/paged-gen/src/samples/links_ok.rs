@@ -114,6 +114,7 @@ fn label_paragraph(text: &str) -> Paragraph {
 
 fn label(story_id: &str, frame_id: String, text: &str, y_pt: f32) -> (Rect, Story) {
     let story = Story {
+        extra_story_attrs: Vec::new(),
         self_id: story_id.to_string(),
         paragraphs: vec![label_paragraph(text)],
     };

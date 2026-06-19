@@ -647,6 +647,15 @@ fn variants() -> Vec<Variant> {
                 maximum_letter_spacing: None,
             }],
         },
+        // 15. CJK vertical writing (tategaki) — the whole story flips to
+        // StoryDirection="VerticalWritingDirection" (wired in build() off the
+        // variant name); the parser reads it onto the Story.
+        Variant {
+            name: "text-adv · cjk · vertical-writing",
+            paragraphs: vec![Paragraph::plain(
+                "\u{7E26}\u{66F8}\u{304D}\u{306E}\u{65E5}\u{672C}\u{8A9E}\u{30C6}\u{30AD}\u{30B9}\u{30C8}\u{3002}",
+            )],
+        },
     ]
 }
 
@@ -745,9 +754,16 @@ pub fn build() -> Sample {
             })
             .collect();
 
+        // The vertical-writing variant flips the whole story to tategaki.
+        let extra_story_attrs = if variant.name.contains("· vertical") {
+            vec![("StoryDirection", "VerticalWritingDirection")]
+        } else {
+            Vec::new()
+        };
         stories.push((
             story_id.clone(),
             write_story(&Story {
+                extra_story_attrs,
                 self_id: story_id.clone(),
                 paragraphs,
             }),

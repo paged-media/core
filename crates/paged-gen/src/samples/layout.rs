@@ -148,6 +148,7 @@ pub fn build() -> Sample {
         stories.push((
             label_story_id.clone(),
             write_story(&Story {
+                extra_story_attrs: Vec::new(),
                 self_id: label_story_id.clone(),
                 paragraphs: vec![Paragraph::plain(*name)],
             }),
@@ -198,6 +199,7 @@ pub fn build() -> Sample {
                 stories.push((
                     body_story_id.clone(),
                     write_story(&Story {
+                        extra_story_attrs: Vec::new(),
                         self_id: body_story_id.clone(),
                         paragraphs: vec![inter_paragraph(BODY_FILLER, 9.0)],
                     }),
@@ -233,6 +235,7 @@ pub fn build() -> Sample {
                 stories.push((
                     body_story_id.clone(),
                     write_story(&Story {
+                        extra_story_attrs: Vec::new(),
                         self_id: body_story_id.clone(),
                         paragraphs: vec![inter_paragraph(BODY_FILLER, 10.0)],
                     }),
@@ -272,6 +275,7 @@ pub fn build() -> Sample {
                 stories.push((
                     body_story_id.clone(),
                     write_story(&Story {
+                        extra_story_attrs: Vec::new(),
                         self_id: body_story_id.clone(),
                         paragraphs: (0..10)
                             .map(|n| inter_paragraph(&format!("Headline line {n}"), 12.0))
@@ -300,6 +304,7 @@ pub fn build() -> Sample {
                 stories.push((
                     body_story_id.clone(),
                     write_story(&Story {
+                        extra_story_attrs: Vec::new(),
                         self_id: body_story_id.clone(),
                         paragraphs: grow_lines(),
                     }),
@@ -308,6 +313,7 @@ pub fn build() -> Sample {
                 stories.push((
                     alt_story_id.clone(),
                     write_story(&Story {
+                        extra_story_attrs: Vec::new(),
                         self_id: alt_story_id.clone(),
                         paragraphs: grow_lines(),
                     }),

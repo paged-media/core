@@ -135,6 +135,7 @@ ContinueNumbersAcrossStories=\"false\" ContinueNumbersAcrossDocuments=\"false\"/
 /// renderer lays out whatever style each paragraph carries.)
 fn next_style_story(story_id: &str) -> Vec<u8> {
     let story = Story {
+        extra_story_attrs: Vec::new(),
         self_id: story_id.to_string(),
         paragraphs: vec![
             styled_paragraph("Annual Report"),
@@ -149,6 +150,7 @@ fn next_style_story(story_id: &str) -> Vec<u8> {
 /// `<NumberingList>` through the cascade.
 fn list_cascade_story(story_id: &str) -> Vec<u8> {
     let story = Story {
+        extra_story_attrs: Vec::new(),
         self_id: story_id.to_string(),
         paragraphs: vec![
             styled_paragraph("Base-styled step"),
@@ -202,6 +204,7 @@ fn table_cascade_story(story_id: &str) -> Vec<u8> {
         cells,
     };
     let story = Story {
+        extra_story_attrs: Vec::new(),
         self_id: story_id.to_string(),
         paragraphs: vec![Paragraph {
             extra_paragraph_attrs: Vec::new(),
@@ -271,6 +274,7 @@ fn hyphenation_story(story_id: &str) -> Vec<u8> {
         overarching presentation of multisyllabic terminology across \
         narrow measures.";
     let story = Story {
+        extra_story_attrs: Vec::new(),
         self_id: story_id.to_string(),
         paragraphs: vec![styled_paragraph(body)],
     };

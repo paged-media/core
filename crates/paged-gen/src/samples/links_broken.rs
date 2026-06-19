@@ -160,6 +160,7 @@ fn variants() -> Vec<Variant> {
 /// A label text frame + its backing story. Returns `(frame, story)`.
 fn label(page_name: &str, story_id: &str, frame_id: String, y_pt: f32) -> (Rect, Story) {
     let story = Story {
+        extra_story_attrs: Vec::new(),
         self_id: story_id.to_string(),
         paragraphs: vec![label_paragraph(page_name)],
     };

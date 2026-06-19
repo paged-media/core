@@ -130,6 +130,7 @@ pub fn build() -> Sample {
     // Frame A's story: 12 short headline lines so the 40 pt box grows
     // several-fold.
     let head_story = Story {
+        extra_story_attrs: Vec::new(),
         self_id: head_story_id.clone(),
         paragraphs: (0..12)
             .map(|i| inter_paragraph(&format!("Headline line {i}"), 11.0))
@@ -141,6 +142,7 @@ pub fn build() -> Sample {
     // a few carved lines (so B itself never oversets — only its wrap
     // shifts).
     let body_story = Story {
+        extra_story_attrs: Vec::new(),
         self_id: body_story_id.clone(),
         paragraphs: vec![inter_paragraph(
             "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu \

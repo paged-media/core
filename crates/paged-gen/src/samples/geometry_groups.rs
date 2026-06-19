@@ -114,6 +114,7 @@ pub fn build() -> Sample {
         stories.push((
             story_id.clone(),
             write_story(&Story {
+                extra_story_attrs: Vec::new(),
                 self_id: story_id.clone(),
                 paragraphs: vec![Paragraph::plain(*name)],
             }),

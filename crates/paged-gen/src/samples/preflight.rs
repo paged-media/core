@@ -170,6 +170,7 @@ fn plain_paragraph() -> Paragraph {
 /// A label text frame + its backing story.
 fn label_frame(story_id: &str, frame_id: String, text: &str, y_pt: f32) -> (Rect, Story) {
     let story = Story {
+        extra_story_attrs: Vec::new(),
         self_id: story_id.to_string(),
         paragraphs: vec![label_paragraph(text)],
     };
@@ -225,6 +226,7 @@ pub fn build() -> Sample {
     stories.push((
         overset_story_id.clone(),
         write_story(&Story {
+            extra_story_attrs: Vec::new(),
             self_id: overset_story_id.clone(),
             paragraphs: vec![overset_body()],
         }),
@@ -239,6 +241,7 @@ pub fn build() -> Sample {
     stories.push((
         mf_story_id.clone(),
         write_story(&Story {
+            extra_story_attrs: Vec::new(),
             self_id: mf_story_id.clone(),
             paragraphs: vec![missing_font_body()],
         }),
