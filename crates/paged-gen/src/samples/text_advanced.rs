@@ -595,6 +595,58 @@ fn variants() -> Vec<Variant> {
                 "Order 2024 \u{05E9}\u{05DC}\u{05D5}\u{05DD} \u{05E2}\u{05D5}\u{05DC}\u{05DD} total 42.",
             )],
         },
+        // 13. CJK line composition — a Japanese paragraph carrying KinsokuType
+        // (line-break rules) + Mojikumi (inter-character spacing table), both
+        // paragraph-level escape-hatch attrs the parser keys on.
+        Variant {
+            name: "text-adv · cjk · kinsoku-mojikumi",
+            paragraphs: vec![Paragraph::plain(
+                "\u{65E5}\u{672C}\u{8A9E}\u{306E}\u{6587}\u{7AE0}\u{3002}\u{884C}\u{982D}\u{7981}\u{5247}\u{3068}\u{6587}\u{5B57}\u{7D44}\u{307F}\u{3002}",
+            )
+            .with_para_attrs(vec![
+                ("KinsokuType", "KinsokuPushInFirst"),
+                ("Mojikumi", "YakumonoHankaku"),
+            ])],
+        },
+        // 14. CJK character emphasis — a kenten (emphasis-dot) run plus a
+        // ruby (furigana) run, both character-level escape-hatch attrs.
+        Variant {
+            name: "text-adv · cjk · kenten-ruby",
+            paragraphs: vec![Paragraph {
+                extra_paragraph_attrs: Vec::new(),
+                justification: None,
+                space_before: None,
+                space_after: None,
+                leading: None,
+                first_line_indent: None,
+                left_indent: None,
+                right_indent: None,
+                drop_cap_characters: None,
+                drop_cap_lines: None,
+                tab_list: Vec::new(),
+                bullets_list_type: None,
+                applied_numbering_list: None,
+                bullet_character: None,
+                runs: vec![
+                    Run::with_char_attrs(
+                        "\u{91CD}\u{8981}",
+                        vec![("KentenKind", "KentenSesameDot")],
+                    ),
+                    Run::with_char_attrs(
+                        "\u{6F22}\u{5B57}",
+                        vec![
+                            ("Ruby", "true"),
+                            ("RubyString", "\u{304B}\u{3093}\u{3058}"),
+                            ("RubyType", "PerCharacter"),
+                        ],
+                    ),
+                ],
+                table: None,
+                minimum_letter_spacing: None,
+                desired_letter_spacing: None,
+                maximum_letter_spacing: None,
+            }],
+        },
     ]
 }
 
