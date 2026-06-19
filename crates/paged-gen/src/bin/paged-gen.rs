@@ -81,9 +81,10 @@ fn emit_sample(name: &str, out_dir: &std::path::Path) -> Result<()> {
         "styles-cascade" => paged_gen::samples::styles_cascade::build(),
         "layout" => paged_gen::samples::layout::build(),
         "nested-groups" => paged_gen::samples::nested_groups::build(),
+        "layers-z" => paged_gen::samples::layers_z::build(),
         other => {
             anyhow::bail!(
-                "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, text-autosize, text-letterspacing, text-on-path, text-overset, text-in-shape, text-wrap, effects, footnotes, gradients, tables, images, image-clipping, anchored, transparency, markers, masters, corners, links-broken, links-ok, preflight, numbering, variables, conditions, swatches, navigation, styles-cascade, layout, nested-groups"
+                "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, text-autosize, text-letterspacing, text-on-path, text-overset, text-in-shape, text-wrap, effects, footnotes, gradients, tables, images, image-clipping, anchored, transparency, markers, masters, corners, links-broken, links-ok, preflight, numbering, variables, conditions, swatches, navigation, styles-cascade, layout, nested-groups, layers-z"
             )
         }
     };

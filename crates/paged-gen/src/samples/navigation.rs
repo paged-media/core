@@ -247,6 +247,7 @@ pub fn build() -> Sample {
     });
 
     let markers = MarkerResources {
+        layers: Vec::new(),
         // The xref + bookmark destinations are text anchors targeting
         // the body story.
         hyperlink_destinations: vec![

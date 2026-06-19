@@ -245,6 +245,7 @@ pub fn build() -> Sample {
         ..FootnoteOptionDef::default()
     };
     let markers = MarkerResources {
+        layers: Vec::new(),
         footnote_option: Some(footnote_option),
         ..MarkerResources::default()
     };

@@ -106,6 +106,23 @@ fn text_advanced_round_trips_through_parser() {
 }
 
 #[test]
+fn layers_z_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::layers_z::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::layers_z::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+#[test]
+fn layers_z_round_trips_through_parser() {
+    let sample = paged_gen::samples::layers_z::build();
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let container = paged_parse::Container::open(&bytes).expect("Container::open");
+    assert_eq!(container.designmap.spreads.len(), sample.spreads.len());
+    // The two <Layer> definitions parse onto the document.
+    assert_eq!(container.designmap.layers.len(), 2);
+}
+
+#[test]
 fn effects_emit_is_byte_deterministic() {
     let a = paged_gen::write_idml(&paged_gen::samples::effects::build()).unwrap();
     let b = paged_gen::write_idml(&paged_gen::samples::effects::build()).unwrap();

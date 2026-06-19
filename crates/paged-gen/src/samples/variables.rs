@@ -257,6 +257,7 @@ fn build_with(move_destination: bool) -> Sample {
     );
 
     let markers = MarkerResources {
+        layers: Vec::new(),
         text_variables: vec![
             TextVariableDef {
                 self_id: creation_var.clone(),

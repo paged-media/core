@@ -26,6 +26,7 @@ pub mod gradients;
 pub mod image_clipping;
 pub mod images;
 pub mod layout;
+pub mod layers_z;
 pub mod links_broken;
 pub mod links_ok;
 pub mod markers;

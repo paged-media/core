@@ -53,6 +53,17 @@ pub struct MarkerResources {
     /// W4.8 — `<Topic>` definitions for the document index. Empty for
     /// samples without an index.
     pub index_topics: Vec<IndexTopicDef>,
+    /// `<Layer>` definitions for cross-shape z-ordering. Page items bind to
+    /// a layer via `ItemLayer="<self_id>"`; the renderer z-sorts by layer
+    /// order then XML order. Empty for samples without explicit layers.
+    pub layers: Vec<LayerDef>,
+}
+
+/// A document-level `<Layer>` (z-order band). Mirrors
+/// `paged_parse::designmap::Layer`.
+pub struct LayerDef {
+    pub self_id: String,
+    pub name: String,
 }
 
 /// W4.8 — a document-level `<Bookmark>` (a named anchor pointing at a
@@ -192,6 +203,20 @@ pub fn write_designmap_with_markers(dm: &DesignMap, markers: &MarkerResources) -
             ("DefaultImageIntent", "UseColorSettings"),
         ],
     );
+    // <Layer> definitions come first inside <Document> (InDesign order).
+    // Empty for every existing sample, so their designmaps stay identical.
+    for l in &markers.layers {
+        b.start(
+            "Layer",
+            &[
+                ("Self", l.self_id.as_str()),
+                ("Name", l.name.as_str()),
+                ("Visible", "true"),
+                ("Locked", "false"),
+            ],
+        );
+        b.end("Layer");
+    }
     // W1.4 — marker resources (text variables, hyperlinks,
     // destinations). Emitted before the idPkg refs, matching where
     // InDesign serialises document-level resources. Skipped entirely

@@ -180,6 +180,7 @@ pub fn build() -> Sample {
     );
 
     let markers = MarkerResources {
+        layers: Vec::new(),
         text_variables: vec![
             TextVariableDef {
                 self_id: custom_var.clone(),
