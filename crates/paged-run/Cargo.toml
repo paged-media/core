@@ -1,0 +1,25 @@
+[package]
+name = "paged-run"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "paged-run"
+path = "src/main.rs"
+
+[dependencies]
+# Headless engine substrate: load/new-blank a document, run a Boa script
+# against it, introspect, render (CPU), and export — driven over a
+# line-delimited stdio session. `paged-canvas` brings the CPU rasterizer
+# (its default `cpu` feature) so `render` works without a GPU.
+paged-canvas = { path = "../paged-canvas" }
+paged-script = { path = "../paged-script" }
+serde = { workspace = true }
+serde_json = "1"
+anyhow = { workspace = true }
+
+[lints]
+workspace = true

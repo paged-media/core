@@ -2597,6 +2597,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "paged-run"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "paged-canvas",
+ "paged-script",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "paged-scene"
 version = "0.0.0"
 dependencies = [
