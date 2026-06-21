@@ -1,0 +1,35 @@
+name: notify-docs
+
+# When the engine CATALOG (paged-introspect/catalog.json — the source docs.paged.media
+# generates its scripting reference from) changes on main, ping the docs site to
+# rebuild (repository_dispatch: source-updated). Path-filtered so it fires ONLY on a
+# real catalog change, not every core push. The nightly docs rebuild is the backstop.
+#
+# Needs DOCS_DISPATCH_TOKEN (a PAT with Contents:write on paged-media/docs; an ORG
+# secret covers every sender repo at once). Unset → the step skips (no failure).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/paged-introspect/catalog.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: ping docs to rebuild (catalog changed)
+        env:
+          DOCS_DISPATCH_TOKEN: ${{ secrets.DOCS_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$DOCS_DISPATCH_TOKEN" ]; then
+            echo "DOCS_DISPATCH_TOKEN unset — skipping the docs rebuild ping."; exit 0
+          fi
+          curl -sS -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $DOCS_DISPATCH_TOKEN" \
+            https://api.github.com/repos/paged-media/docs/dispatches \
+            -d "{\"event_type\":\"source-updated\",\"client_payload\":{\"repo\":\"core\",\"reason\":\"catalog\",\"sha\":\"${GITHUB_SHA}\"}}"
