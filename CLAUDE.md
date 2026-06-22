@@ -17,12 +17,13 @@ paged-parse → paged-scene → paged-text → paged-compose → paged-gpu
                                                    ↘ paged-fidelity (diff)
 ```
 
-**Open/closed split.** This repo is the open engine, dual-licensed
+**Engine/app split.** This repo is the open engine, dual-licensed
 **MPL-2.0 OR PMEL** (every source file carries the MPL header; new files
-must too — copy from any `crates/**/*.rs`). The commercial editor is a
-*separate, private* repo (`paged-media/editor`) that consumes the published
-`@paged-media` SDK/wasm packages across a package boundary — there is **no
-Cargo path dependency** from the editor into this code. Internal planning
+must too — copy from any `crates/**/*.rs`). The editor is a *separate* repo
+(`paged-media/editor`, public, **AGPL-3.0 OR PMEL** — apps are AGPL, the
+engine is MPL) that consumes the published `@paged-media` SDK/wasm packages
+across a package boundary — there is **no Cargo path dependency** from the
+editor into this code. Internal planning
 docs live in the private `paged-media/thoughts` repo; the full Envato
 fidelity corpus lives in the private `paged-media/corpus` repo.
 

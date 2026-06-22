@@ -19,9 +19,10 @@ The standard, **unmodified** MPL-2.0 governs — see [`LICENSE`](./LICENSE),
 or obtain a copy at <https://mozilla.org/MPL/2.0/>. MPL's copyleft is
 file-level: a larger work may combine these files with files under other
 licenses, and only modifications to the MPL-covered files themselves must
-be shared back. This is why the closed editor (`paged-media/editor`) can
-consume the published `@paged-media` packages without inheriting MPL
-obligations on its own files.
+be shared back. This is why a separate application — the paged editor
+(`paged-media/editor`, itself AGPL-3.0 OR PMEL) or any third-party
+integration — can consume the published `@paged-media` packages without its
+own files inheriting MPL obligations.
 
 ## Paged Media Enterprise License (commercial)
 

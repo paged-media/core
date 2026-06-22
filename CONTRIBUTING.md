@@ -1,8 +1,9 @@
 # Contributing to paged
 
 Thanks for your interest in the **paged** engine. This repository is the
-**open** render pipeline; the commercial editor is closed and lives in a
-separate, private repository.
+**open** render pipeline (MPL-2.0 OR PMEL); the editor and plugins live in
+separate, also-open repositories — the editor (`paged-media/editor`) is
+AGPL-3.0 OR PMEL.
 
 ## License of contributions
 
