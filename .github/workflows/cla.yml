@@ -1,0 +1,49 @@
+name: CLA
+
+# Contributor License Agreement gate (CLA Assistant — no external service). On a
+# PR, the contributor is asked to sign by commenting the sign phrase; the PR check
+# stays red until they do. Signatures are recorded ONCE for the whole org in
+# paged-media/cla-signatures, so a contributor signs a single time across every
+# paged repository (one canonical document + one shared signatures file).
+#
+# ── ONE-TIME ORG SETUP (required, or this fails on the first PR) ───────────────
+#   1. Create a PRIVATE repo `paged-media/cla-signatures` (with a `main` branch).
+#   2. Add an org Actions secret `CLA_SIGN_TOKEN` — a PAT that can write to
+#      cla-signatures (classic: `repo` scope; or fine-grained: Contents read/write
+#      on cla-signatures). It records signatures + manages the PR status.
+#   3. (Optional) add maintainer GitHub usernames to `allowlist` below so they
+#      aren't prompted on their own PRs.
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, synchronize]
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  cla:
+    runs-on: ubuntu-latest
+    # Act only on the sign/recheck comment or on PR events (ignore other comments).
+    if: ${{ (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target' }}
+    steps:
+      - uses: contributor-assistant/github-action@v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PAT with write access to paged-media/cla-signatures (the shared store).
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_SIGN_TOKEN }}
+        with:
+          # One canonical document + one shared signatures file = sign once, org-wide.
+          path-to-document: "https://github.com/paged-media/core/blob/main/CLA.md"
+          path-to-signatures: "signatures/cla.json"
+          remote-organization-name: "paged-media"
+          remote-repository-name: "cla-signatures"
+          branch: "main"
+          allowlist: "*[bot]"
+          custom-pr-sign-comment: "I have read the CLA Document and I hereby sign the CLA"
+          custom-notsigned-prcomment: "Thanks for your contribution! Before we can merge it, please sign the paged [Contributor License Agreement](https://github.com/paged-media/core/blob/main/CLA.md) by posting the comment below. You sign once and it covers every paged repository."
+          custom-allsigned-prcomment: "All contributors have signed the CLA — thank you."
