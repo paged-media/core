@@ -52,6 +52,32 @@ pub struct IdForm {
     pub note: &'static str,
 }
 
+/// One attribute of an IDML element. `settable_path`, when `Some`, is the
+/// `paged.set` JS path that writes it (and MUST exist in [`PROPERTY_PATHS`] — a
+/// test enforces this), so the docs can cross-link an IDML attribute to the
+/// scripting surface that mutates it. `None` = read-only/structural.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElementAttr {
+    pub name: &'static str,
+    /// Human type hint, e.g. `"swatch ref"`, `"[t,l,b,r] points"`, `"boolean"`.
+    pub type_hint: &'static str,
+    pub settable_path: Option<&'static str>,
+    pub summary: &'static str,
+}
+
+/// One IDML element the parser recognises, with its notable attributes. The
+/// `chapter` is the docs IDML-reference section slug (e.g. `"frames-paths"`) so
+/// the generated attribute table can sit under, and link back to, its chapter.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElementType {
+    pub name: &'static str,
+    pub chapter: &'static str,
+    pub summary: &'static str,
+    pub attributes: Vec<ElementAttr>,
+}
+
 /// The full capability catalog.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,6 +89,9 @@ pub struct ApiCatalog {
     /// sync with the parser.
     pub settable_paths: Vec<&'static str>,
     pub constraints: Vec<&'static str>,
+    /// IDML elements + their attributes (with the scripting path that mutates
+    /// each, where settable). Drives the docs' generated attribute tables.
+    pub elements: Vec<ElementType>,
 }
 
 /// Assemble the catalog. Cheap; called per `describe`.
@@ -73,6 +102,7 @@ pub fn api_catalog() -> ApiCatalog {
         id_grammar: id_grammar(),
         settable_paths: settable_path_names(),
         constraints: constraints(),
+        elements: elements(),
     }
 }
 
@@ -375,6 +405,149 @@ pub const PROPERTY_PATHS: &[(&str, P)] = &[
     ("elementLocked", P::ElementLocked),
 ];
 
+/// The IDML elements the parser recognises, with their notable attributes. Hand
+/// curated against `paged-parse` (spread.rs page items, plus structural Page /
+/// Spread / Layer / Story and text-range styling) and cross-referenced to
+/// [`PROPERTY_PATHS`] for the `settable_path` that mutates each — a test asserts
+/// every cited path resolves, so the IDML⇄scripting cross-links can't dangle.
+fn elements() -> Vec<ElementType> {
+    const fn attr(name: &'static str, type_hint: &'static str, settable_path: Option<&'static str>, summary: &'static str) -> ElementAttr {
+        ElementAttr { name, type_hint, settable_path, summary }
+    }
+    vec![
+        ElementType {
+            name: "TextFrame",
+            chapter: "frames-paths",
+            summary: "A frame that pours a story. Geometry + fill/stroke like any page item, plus text-frame preferences (columns, inset, vertical justification).",
+            attributes: vec![
+                attr("Self", "id", None, "The element's IDML id; how everything references it."),
+                attr("ParentStory", "story ref", None, "The story this frame pours; the threading link, not a settable property."),
+                attr("GeometricBounds", "[t,l,b,r] points", Some("frameBounds"), "Page-local bounds in points."),
+                attr("ItemTransform", "affine [a,b,c,d,e,f]", Some("frameTransform"), "The frame's affine placement transform."),
+                attr("FillColor", "swatch ref", Some("frameFillColor"), "Fill swatch (e.g. Color/Red)."),
+                attr("StrokeColor", "swatch ref", Some("frameStrokeColor"), "Stroke swatch."),
+                attr("StrokeWeight", "points", Some("frameStrokeWeight"), "Stroke weight in points."),
+            ],
+        },
+        ElementType {
+            name: "Rectangle",
+            chapter: "frames-paths",
+            summary: "A rectangular graphic frame — a vector shape that can also hold a placed image.",
+            attributes: vec![
+                attr("Self", "id", None, "Element id."),
+                attr("GeometricBounds", "[t,l,b,r] points", Some("frameBounds"), "Page-local bounds in points."),
+                attr("ItemTransform", "affine", Some("frameTransform"), "Affine placement transform."),
+                attr("FillColor", "swatch ref", Some("frameFillColor"), "Fill swatch."),
+                attr("FillTint", "0–100", Some("frameFillTint"), "Fill tint percentage."),
+                attr("StrokeColor", "swatch ref", Some("frameStrokeColor"), "Stroke swatch."),
+                attr("StrokeWeight", "points", Some("frameStrokeWeight"), "Stroke weight."),
+            ],
+        },
+        ElementType {
+            name: "Oval",
+            chapter: "frames-paths",
+            summary: "An elliptical graphic frame.",
+            attributes: vec![
+                attr("GeometricBounds", "[t,l,b,r] points", Some("frameBounds"), "Bounding box of the ellipse."),
+                attr("ItemTransform", "affine", Some("frameTransform"), "Affine placement transform."),
+                attr("FillColor", "swatch ref", Some("frameFillColor"), "Fill swatch."),
+                attr("StrokeColor", "swatch ref", Some("frameStrokeColor"), "Stroke swatch."),
+            ],
+        },
+        ElementType {
+            name: "Polygon",
+            chapter: "frames-paths",
+            summary: "An arbitrary closed vector shape; may carry multiple GeometryPathType contours (compound paths).",
+            attributes: vec![
+                attr("GeometricBounds", "[t,l,b,r] points", Some("frameBounds"), "Bounding box."),
+                attr("ItemTransform", "affine", Some("frameTransform"), "Affine placement transform."),
+                attr("FillColor", "swatch ref", Some("frameFillColor"), "Fill swatch."),
+                attr("StrokeColor", "swatch ref", Some("frameStrokeColor"), "Stroke swatch."),
+            ],
+        },
+        ElementType {
+            name: "GraphicLine",
+            chapter: "frames-paths",
+            summary: "A straight or curved open path.",
+            attributes: vec![
+                attr("GeometricBounds", "[t,l,b,r] points", Some("frameBounds"), "Bounding box of the line."),
+                attr("ItemTransform", "affine", Some("frameTransform"), "Affine placement transform."),
+                attr("StrokeColor", "swatch ref", Some("frameStrokeColor"), "Stroke swatch."),
+                attr("StrokeWeight", "points", Some("frameStrokeWeight"), "Stroke weight."),
+            ],
+        },
+        ElementType {
+            name: "Group",
+            chapter: "frames-paths",
+            summary: "A grouping container that transforms its children as a unit.",
+            attributes: vec![
+                attr("Self", "id", None, "Element id."),
+                attr("ItemTransform", "affine", Some("frameTransform"), "The group's affine transform, applied to all children."),
+            ],
+        },
+        ElementType {
+            name: "Layer",
+            chapter: "layers",
+            summary: "A document layer; controls visibility, lock, and print state for the items assigned to it.",
+            attributes: vec![
+                attr("Name", "string", Some("layerName"), "Layer name."),
+                attr("Visible", "boolean", Some("layerVisible"), "Whether the layer's items render."),
+                attr("Locked", "boolean", Some("layerLocked"), "Whether the layer's items are editable."),
+                attr("Printable", "boolean", Some("layerPrintable"), "Whether the layer prints/exports."),
+            ],
+        },
+        ElementType {
+            name: "Page",
+            chapter: "layout-model",
+            summary: "A single page within a spread.",
+            attributes: vec![
+                attr("Self", "id", None, "Element id; the target for paged.insertTextFrame / insertFrame."),
+                attr("GeometricBounds", "[t,l,b,r] points", None, "Page bounds in the spread's coordinate space."),
+            ],
+        },
+        ElementType {
+            name: "Spread",
+            chapter: "layout-model",
+            summary: "A spread: one or more pages laid out together, with its own page-item stacking order.",
+            attributes: vec![
+                attr("Self", "id", None, "Element id."),
+                attr("ItemTransform", "affine", None, "The spread's transform in pasteboard space."),
+            ],
+        },
+        ElementType {
+            name: "Story",
+            chapter: "stories-text",
+            summary: "A flow of text, independent of the frame(s) that pour it. Edited by character offset, not by frame.",
+            attributes: vec![
+                attr("Self", "id", None, "Story id; the target for paged.insertText / deleteRange / applyStyle."),
+            ],
+        },
+        ElementType {
+            name: "ParagraphStyleRange",
+            chapter: "styles",
+            summary: "A run of paragraphs sharing a paragraph style and overrides, inside a story.",
+            attributes: vec![
+                attr("AppliedParagraphStyle", "style ref", Some("appliedParagraphStyle"), "The paragraph style applied to the range."),
+                attr("Justification", "enum", Some("paragraphJustification"), "Paragraph alignment/justification."),
+                attr("SpaceBefore", "points", Some("paragraphSpaceBefore"), "Space above the paragraph."),
+                attr("SpaceAfter", "points", Some("paragraphSpaceAfter"), "Space below the paragraph."),
+            ],
+        },
+        ElementType {
+            name: "CharacterStyleRange",
+            chapter: "styles",
+            summary: "A run of characters sharing a character style and overrides, inside a paragraph.",
+            attributes: vec![
+                attr("AppliedCharacterStyle", "style ref", Some("appliedCharacterStyle"), "The character style applied to the range."),
+                attr("PointSize", "points", Some("characterFontSize"), "Font size in points."),
+                attr("Leading", "points | Auto", Some("characterLeading"), "Line leading."),
+                attr("Tracking", "1/1000 em", Some("characterTracking"), "Letter tracking."),
+                attr("FillColor", "swatch ref", Some("characterFillColor"), "Text fill swatch."),
+            ],
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,10 +557,24 @@ mod tests {
         let cat = api_catalog();
         assert_eq!(cat.settable_paths.len(), 179, "settable path count drifted");
         assert!(cat.host_functions.len() >= 20);
+        assert!(!cat.elements.is_empty(), "elements section is empty");
         // representative + alias mappings
         assert_eq!(lookup_path("characterFontSize"), Some(P::CharacterFontSize));
         assert_eq!(lookup_path("frameBevel"), Some(P::FrameBevelEnabled));
         assert_eq!(lookup_path("notARealPath"), None);
+    }
+
+    /// Every `settable_path` cited by an element attribute must be a real
+    /// `paged.set` path — otherwise the docs' IDML⇄scripting cross-link dangles.
+    #[test]
+    fn element_settable_paths_resolve() {
+        for el in elements() {
+            for a in &el.attributes {
+                if let Some(path) = a.settable_path {
+                    assert!(lookup_path(path).is_some(), "{}.{} cites unknown settable path '{path}'", el.name, a.name);
+                }
+            }
+        }
     }
 
     /// Consistency with the wire enum: every catalog path is a real `PropertyPath`

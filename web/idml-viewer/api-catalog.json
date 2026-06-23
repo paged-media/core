@@ -1,0 +1,139 @@
+{
+  "$comment": "Canonical SDK API catalog for @paged-media/idml-viewer (plus the underlying paged-sdk ViewerSession and introspect-wasm Inspector). The docs site pulls this file (docs sources.pin → sdk-catalog) to render the SDK reference, so this is the source of truth that lives next to the API. The co-located vitest test (test/api-catalog.test.ts) asserts every export of src/index.ts appears here — update this file in the SAME PR as any public API change, or that test fails.",
+  "package": "@paged-media/idml-viewer",
+  "groups": [
+    {
+      "key": "lifecycle",
+      "title": "Lifecycle",
+      "summary": "Create and tear down a viewer over a canvas.",
+      "members": [
+        { "name": "createViewer", "kind": "function", "signature": "createViewer(options: CreateViewerOptions): Promise<Viewer>", "returns": "Promise<Viewer>", "summary": "Create a viewer bound to a canvas. Initialises the WebGPU device and the renderer-core session; rejects with a ViewerError if WebGPU is unavailable." },
+        { "name": "Viewer.load", "kind": "method", "signature": "load(source: ArrayBuffer | Uint8Array | Blob | string): Promise<void>", "returns": "Promise<void>", "summary": "Load an IDML document from bytes, a Blob, or a URL string. Emits `loaded` with the page count when layout is ready." },
+        { "name": "Viewer.dispose", "kind": "method", "signature": "dispose(): void", "returns": "void", "summary": "Destroy the viewer and release its WebGPU device. Always call on unmount; several viewers on one page each own a device." },
+        { "name": "createSessionFromBundledWasm", "kind": "function", "signature": "createSessionFromBundledWasm(): Promise<ViewerSessionLike>", "returns": "Promise<ViewerSessionLike>", "summary": "Boot a ViewerSession from the wasm bundled with the package — the default session factory createViewer uses. Call directly only to manage the session yourself." }
+      ]
+    },
+    {
+      "key": "camera",
+      "title": "Camera (zoom & scroll)",
+      "summary": "Drive the view transform. Zoom is clamped to [minZoom, maxZoom]; scroll is clamped to the content extent.",
+      "members": [
+        { "name": "Viewer.zoom", "kind": "property", "signature": "readonly zoom: number", "returns": "number", "summary": "The current zoom factor (1 = 100%)." },
+        { "name": "Viewer.setZoom", "kind": "method", "signature": "setZoom(zoom: number, opts?: { anchor?: { x: number; y: number } }): void", "returns": "void", "summary": "Set the zoom factor, optionally anchored about a viewport point so that point stays put." },
+        { "name": "Viewer.zoomIn", "kind": "method", "signature": "zoomIn(): void", "returns": "void", "summary": "Step zoom up by one notch (toward maxZoom)." },
+        { "name": "Viewer.zoomOut", "kind": "method", "signature": "zoomOut(): void", "returns": "void", "summary": "Step zoom down by one notch (toward minZoom)." },
+        { "name": "Viewer.minZoom", "kind": "property", "signature": "readonly minZoom: number", "returns": "number", "summary": "The smallest allowed zoom factor." },
+        { "name": "Viewer.maxZoom", "kind": "property", "signature": "readonly maxZoom: number", "returns": "number", "summary": "The largest allowed zoom factor." },
+        { "name": "Viewer.fit", "kind": "method", "signature": "fit(mode: 'page' | 'width'): void", "returns": "void", "summary": "Fit the current page to the viewport — whole page, or page width." },
+        { "name": "Viewer.scroll", "kind": "property", "signature": "readonly scroll: { x: number; y: number }", "returns": "{ x: number; y: number }", "summary": "The current scroll offset, in CSS pixels." },
+        { "name": "Viewer.scrollTo", "kind": "method", "signature": "scrollTo(x: number, y: number): void", "returns": "void", "summary": "Scroll to an absolute offset (clamped to the content extent)." },
+        { "name": "Viewer.scrollBy", "kind": "method", "signature": "scrollBy(dx: number, dy: number): void", "returns": "void", "summary": "Scroll by a relative delta." }
+      ]
+    },
+    {
+      "key": "navigation",
+      "title": "Page navigation & layout",
+      "summary": "Move between pages and switch how pages are laid out.",
+      "members": [
+        { "name": "Viewer.pageCount", "kind": "property", "signature": "readonly pageCount: number", "returns": "number", "summary": "Number of pages in the loaded document." },
+        { "name": "Viewer.currentPage", "kind": "property", "signature": "readonly currentPage: number", "returns": "number", "summary": "The zero-based index of the page currently in view." },
+        { "name": "Viewer.goToPage", "kind": "method", "signature": "goToPage(index: number): void", "returns": "void", "summary": "Scroll the given page into view and make it current. Emits `pageChanged`." },
+        { "name": "Viewer.layoutMode", "kind": "method", "signature": "layoutMode(mode?: LayoutMode): LayoutMode", "returns": "LayoutMode", "summary": "Get or set the layout mode — 'single' (one page) or 'continuous' (a scroll of stacked pages)." }
+      ]
+    },
+    {
+      "key": "rendering",
+      "title": "Rendering to pixels",
+      "summary": "Produce raster output independent of the on-screen canvas.",
+      "members": [
+        { "name": "Viewer.renderPageThumbnail", "kind": "method", "signature": "renderPageThumbnail(index: number, opts?: { width?: number }): Promise<SessionRaster>", "returns": "Promise<SessionRaster>", "summary": "Render one page to an off-screen RGBA raster at a target width — for page rails and thumbnails." }
+      ]
+    },
+    {
+      "key": "events",
+      "title": "Events",
+      "summary": "Subscribe with `viewer.on(event, listener)`; it returns an unsubscribe function.",
+      "members": [
+        { "name": "Viewer.on", "kind": "method", "signature": "on<K extends keyof ViewerEvents>(event: K, listener: (payload: ViewerEvents[K]) => void): () => void", "returns": "() => void", "summary": "Subscribe to a viewer event. Returns a disposer that removes the listener." },
+        { "name": "loaded", "kind": "event", "signature": "loaded: { pageCount: number }", "returns": "{ pageCount: number }", "summary": "Fired once a document has loaded and laid out." },
+        { "name": "pageChanged", "kind": "event", "signature": "pageChanged: { page: number }", "returns": "{ page: number }", "summary": "Fired when the current page changes (via goToPage or scrolling)." },
+        { "name": "zoomChanged", "kind": "event", "signature": "zoomChanged: { zoom: number }", "returns": "{ zoom: number }", "summary": "Fired when the zoom factor changes." },
+        { "name": "scrollChanged", "kind": "event", "signature": "scrollChanged: { x: number; y: number }", "returns": "{ x: number; y: number }", "summary": "Fired when the scroll offset changes." },
+        { "name": "error", "kind": "event", "signature": "error: ViewerError", "returns": "ViewerError", "summary": "Fired on a recoverable viewer error." }
+      ]
+    },
+    {
+      "key": "errors",
+      "title": "Errors",
+      "summary": "The viewer reports failures as a typed ViewerError with a stable code.",
+      "members": [
+        { "name": "ViewerError", "kind": "class", "signature": "class ViewerError extends Error { code: ViewerErrorCode }", "returns": "—", "summary": "Thrown by createViewer/load and emitted on `error`. Inspect `code` rather than the message." },
+        { "name": "ViewerErrorCode", "kind": "type", "signature": "type ViewerErrorCode = 'GPU_UNAVAILABLE' | 'LOAD_FAILED' | 'RENDER_FAILED' | …", "returns": "—", "summary": "Stable machine-readable error codes — branch on these (e.g. GPU_UNAVAILABLE → show a no-WebGPU fallback)." }
+      ]
+    },
+    {
+      "key": "camera-helpers",
+      "title": "Camera helpers (pure functions)",
+      "summary": "Stateless math exported for building custom navigation UIs — page rails, minimaps, fit buttons.",
+      "members": [
+        { "name": "clampZoom", "kind": "function", "signature": "clampZoom(zoom: number, limits: ZoomLimits): number", "returns": "number", "summary": "Clamp a zoom factor into [min, max]." },
+        { "name": "clampScroll", "kind": "function", "signature": "clampScroll(x: number, y: number, viewport: Viewport, extent: ContentExtent): { x: number; y: number }", "returns": "{ x: number; y: number }", "summary": "Clamp a scroll offset to the content extent for a viewport." },
+        { "name": "contentExtent", "kind": "function", "signature": "contentExtent(layout: SessionPagesLayout, zoom: number): ContentExtent", "returns": "ContentExtent", "summary": "Total scrollable content size at a given zoom." },
+        { "name": "currentPageAt", "kind": "function", "signature": "currentPageAt(layout: SessionPagesLayout, scrollY: number): number", "returns": "number", "summary": "Which page is in view at a scroll position (continuous mode)." },
+        { "name": "fitPage", "kind": "function", "signature": "fitPage(page: SessionPageRect, viewport: Viewport, mode: 'page' | 'width'): number", "returns": "number", "summary": "The zoom that fits a page to the viewport." },
+        { "name": "scrollToPage", "kind": "function", "signature": "scrollToPage(layout: SessionPagesLayout, pageIndex: number, viewport: Viewport): number", "returns": "number", "summary": "The scrollY that brings a page into view." },
+        { "name": "zoomAt", "kind": "function", "signature": "zoomAt(point, newZoom, currentZoom, scroll): { x: number; y: number }", "returns": "{ x: number; y: number }", "summary": "The scroll offset that keeps a point fixed while zooming about it." }
+      ]
+    },
+    {
+      "key": "types",
+      "title": "Types",
+      "summary": "The exported TypeScript types you compose against.",
+      "members": [
+        { "name": "CreateViewerOptions", "kind": "type", "signature": "interface CreateViewerOptions { canvas: HTMLCanvasElement | OffscreenCanvas; session?; layoutMode?: LayoutMode; input?: InputOptions }", "returns": "—", "summary": "Options for createViewer — the target canvas, an optional session factory, the initial layout mode, and input behaviour." },
+        { "name": "LayoutMode", "kind": "type", "signature": "type LayoutMode = 'single' | 'continuous'", "returns": "—", "summary": "Single-page or continuous-scroll page layout." },
+        { "name": "InputOptions", "kind": "type", "signature": "interface InputOptions { wheelZoom?: boolean; dragPan?: boolean; doubleClickZoom?: boolean; keyboard?: boolean }", "returns": "—", "summary": "Which built-in input gestures the viewer handles." },
+        { "name": "ViewerEvents", "kind": "type", "signature": "interface ViewerEvents { loaded; pageChanged; zoomChanged; scrollChanged; error }", "returns": "—", "summary": "The event map the `on` method is typed against." },
+        { "name": "Camera", "kind": "type", "signature": "interface Camera { zoom: number; scroll: { x: number; y: number } }", "returns": "—", "summary": "A view transform — zoom plus scroll offset." },
+        { "name": "Viewport", "kind": "type", "signature": "interface Viewport { width: number; height: number }", "returns": "—", "summary": "The size of the visible canvas region in CSS pixels." },
+        { "name": "ZoomLimits", "kind": "type", "signature": "interface ZoomLimits { min: number; max: number }", "returns": "—", "summary": "The clamp range for zoom." },
+        { "name": "SessionRaster", "kind": "type", "signature": "interface SessionRaster { width: number; height: number; rgba: Uint8Array }", "returns": "—", "summary": "A rendered raster — tightly-packed RGBA8 plus its dimensions." },
+        { "name": "SessionPagesLayout", "kind": "type", "signature": "interface SessionPagesLayout { gapPt: number; pages: SessionPageRect[] }", "returns": "—", "summary": "Page rectangles in point space, with the inter-page gap." },
+        { "name": "SessionPageRect", "kind": "type", "signature": "interface SessionPageRect { index: number; yPt: number; widthPt: number; heightPt: number }", "returns": "—", "summary": "One page's position and size in point space." },
+        { "name": "SessionDiagnostics", "kind": "type", "signature": "interface SessionDiagnostics { ok: boolean; messages: SessionDiagnostic[] }", "returns": "—", "summary": "The result of a load/present call — overall ok plus structured messages." },
+        { "name": "SessionDiagnostic", "kind": "type", "signature": "interface SessionDiagnostic { severity: 'error' | 'warning' | 'info'; code: string; message: string; part?: string; line?: number }", "returns": "—", "summary": "One diagnostic, with the originating IDML part where known." },
+        { "name": "ViewerSessionLike", "kind": "type", "signature": "interface ViewerSessionLike { load(...): SessionDiagnostics; present(...): SessionDiagnostics; … }", "returns": "—", "summary": "The structural contract createViewer expects of a session — implement it to supply a custom session." }
+      ]
+    },
+    {
+      "key": "session",
+      "title": "ViewerSession (low-level, @paged-media/sdk)",
+      "summary": "The wasm session `createViewer` wraps. Use it directly only when you need raw control — most apps use the Viewer wrapper above.",
+      "members": [
+        { "name": "ViewerSession.new", "kind": "method", "signature": "static new(): Promise<ViewerSession>", "returns": "Promise<ViewerSession>", "summary": "Construct a session (acquires a WebGPU adapter)." },
+        { "name": "ViewerSession.load", "kind": "method", "signature": "load(idml: Uint8Array, font?: Uint8Array): Diagnostics", "returns": "Diagnostics", "summary": "Parse and build a document; returns load diagnostics (errors/warnings with the originating IDML part)." },
+        { "name": "ViewerSession.register_font", "kind": "method", "signature": "register_font(family: string, style: string | undefined, bytes: Uint8Array): void", "returns": "void", "summary": "Register a font face for text layout before loading." },
+        { "name": "ViewerSession.page_count", "kind": "method", "signature": "page_count(): number", "returns": "number", "summary": "Number of pages in the loaded document." },
+        { "name": "ViewerSession.set_page", "kind": "method", "signature": "set_page(index: number): void", "returns": "void", "summary": "Select the page to render in single-page mode." },
+        { "name": "ViewerSession.page_layout", "kind": "method", "signature": "page_layout(): PagesLayout", "returns": "PagesLayout", "summary": "The page rectangles in point space — the basis for camera math." },
+        { "name": "ViewerSession.present", "kind": "method", "signature": "present(zoom: number, scrollX: number, scrollY: number, dpr: number, onlyPage?: number): Diagnostics", "returns": "Diagnostics", "summary": "Render the current camera to the bound canvas." },
+        { "name": "ViewerSession.render_to_canvas", "kind": "method", "signature": "render_to_canvas(canvas: OffscreenCanvas): Promise<Diagnostics>", "returns": "Promise<Diagnostics>", "summary": "Render to an OffscreenCanvas (worker path)." },
+        { "name": "ViewerSession.render_page_to_bytes", "kind": "method", "signature": "render_page_to_bytes(index: number, targetWidthPx: number): Promise<RenderedRaster>", "returns": "Promise<RenderedRaster>", "summary": "Render one page to RGBA bytes at a target width." },
+        { "name": "ViewerSession.render_to_bytes", "kind": "method", "signature": "render_to_bytes(dpi: number): Promise<RenderedRaster>", "returns": "Promise<RenderedRaster>", "summary": "Render the current page to RGBA bytes at a DPI." },
+        { "name": "ViewerSession.resize", "kind": "method", "signature": "resize(width: number, height: number, devicePixelRatio: number): void", "returns": "void", "summary": "Resize the render surface." }
+      ]
+    },
+    {
+      "key": "inspect",
+      "title": "Inspector (read-only, @paged-media/introspect-wasm)",
+      "summary": "Inspect a document's scene tree and properties, and render single pages, without a canvas — handy for tests and tooling.",
+      "members": [
+        { "name": "Inspector", "kind": "class", "signature": "new Inspector(idml: Uint8Array)", "returns": "Inspector", "summary": "Construct an inspector over a document's bytes." },
+        { "name": "Inspector.tree", "kind": "method", "signature": "tree(): string", "returns": "string (JSON)", "summary": "The scene tree as JSON." },
+        { "name": "Inspector.properties", "kind": "method", "signature": "properties(nodeJson: string): string", "returns": "string (JSON)", "summary": "Property descriptors for an addressed node." },
+        { "name": "Inspector.renderPage", "kind": "method", "signature": "renderPage(pageIndex: number, dpi: number): Uint8Array", "returns": "Uint8Array (PNG)", "summary": "Render one page to PNG bytes." },
+        { "name": "describeCatalog", "kind": "function", "signature": "describeCatalog(): string", "returns": "string (JSON)", "summary": "The engine capability catalog as JSON — no document required. The source the docs' generated reference tables read." }
+      ]
+    }
+  ]
+}

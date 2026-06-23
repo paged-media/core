@@ -416,5 +416,367 @@
     "Runtime budgets: ~10M loop iterations, recursion depth 512, and a ~2s wall-clock checked at every host call. Runaway scripts are aborted (non-catchable).",
     "insertTextFrame/insertFrame create a new frame (and insertTextFrame mints a story) but return only a boolean — NOT the new id. To fill a freshly-created frame you need its story id: prefer inserting into existing template stories, or re-read paged.stories()/paged.tree() after creating to discover the new id.",
     "Bounds are page-local points in [top, left, bottom, right] order. The document works in points (1/72 inch)."
+  ],
+  "elements": [
+    {
+      "name": "TextFrame",
+      "chapter": "frames-paths",
+      "summary": "A frame that pours a story. Geometry + fill/stroke like any page item, plus text-frame preferences (columns, inset, vertical justification).",
+      "attributes": [
+        {
+          "name": "Self",
+          "typeHint": "id",
+          "settablePath": null,
+          "summary": "The element's IDML id; how everything references it."
+        },
+        {
+          "name": "ParentStory",
+          "typeHint": "story ref",
+          "settablePath": null,
+          "summary": "The story this frame pours; the threading link, not a settable property."
+        },
+        {
+          "name": "GeometricBounds",
+          "typeHint": "[t,l,b,r] points",
+          "settablePath": "frameBounds",
+          "summary": "Page-local bounds in points."
+        },
+        {
+          "name": "ItemTransform",
+          "typeHint": "affine [a,b,c,d,e,f]",
+          "settablePath": "frameTransform",
+          "summary": "The frame's affine placement transform."
+        },
+        {
+          "name": "FillColor",
+          "typeHint": "swatch ref",
+          "settablePath": "frameFillColor",
+          "summary": "Fill swatch (e.g. Color/Red)."
+        },
+        {
+          "name": "StrokeColor",
+          "typeHint": "swatch ref",
+          "settablePath": "frameStrokeColor",
+          "summary": "Stroke swatch."
+        },
+        {
+          "name": "StrokeWeight",
+          "typeHint": "points",
+          "settablePath": "frameStrokeWeight",
+          "summary": "Stroke weight in points."
+        }
+      ]
+    },
+    {
+      "name": "Rectangle",
+      "chapter": "frames-paths",
+      "summary": "A rectangular graphic frame — a vector shape that can also hold a placed image.",
+      "attributes": [
+        {
+          "name": "Self",
+          "typeHint": "id",
+          "settablePath": null,
+          "summary": "Element id."
+        },
+        {
+          "name": "GeometricBounds",
+          "typeHint": "[t,l,b,r] points",
+          "settablePath": "frameBounds",
+          "summary": "Page-local bounds in points."
+        },
+        {
+          "name": "ItemTransform",
+          "typeHint": "affine",
+          "settablePath": "frameTransform",
+          "summary": "Affine placement transform."
+        },
+        {
+          "name": "FillColor",
+          "typeHint": "swatch ref",
+          "settablePath": "frameFillColor",
+          "summary": "Fill swatch."
+        },
+        {
+          "name": "FillTint",
+          "typeHint": "0–100",
+          "settablePath": "frameFillTint",
+          "summary": "Fill tint percentage."
+        },
+        {
+          "name": "StrokeColor",
+          "typeHint": "swatch ref",
+          "settablePath": "frameStrokeColor",
+          "summary": "Stroke swatch."
+        },
+        {
+          "name": "StrokeWeight",
+          "typeHint": "points",
+          "settablePath": "frameStrokeWeight",
+          "summary": "Stroke weight."
+        }
+      ]
+    },
+    {
+      "name": "Oval",
+      "chapter": "frames-paths",
+      "summary": "An elliptical graphic frame.",
+      "attributes": [
+        {
+          "name": "GeometricBounds",
+          "typeHint": "[t,l,b,r] points",
+          "settablePath": "frameBounds",
+          "summary": "Bounding box of the ellipse."
+        },
+        {
+          "name": "ItemTransform",
+          "typeHint": "affine",
+          "settablePath": "frameTransform",
+          "summary": "Affine placement transform."
+        },
+        {
+          "name": "FillColor",
+          "typeHint": "swatch ref",
+          "settablePath": "frameFillColor",
+          "summary": "Fill swatch."
+        },
+        {
+          "name": "StrokeColor",
+          "typeHint": "swatch ref",
+          "settablePath": "frameStrokeColor",
+          "summary": "Stroke swatch."
+        }
+      ]
+    },
+    {
+      "name": "Polygon",
+      "chapter": "frames-paths",
+      "summary": "An arbitrary closed vector shape; may carry multiple GeometryPathType contours (compound paths).",
+      "attributes": [
+        {
+          "name": "GeometricBounds",
+          "typeHint": "[t,l,b,r] points",
+          "settablePath": "frameBounds",
+          "summary": "Bounding box."
+        },
+        {
+          "name": "ItemTransform",
+          "typeHint": "affine",
+          "settablePath": "frameTransform",
+          "summary": "Affine placement transform."
+        },
+        {
+          "name": "FillColor",
+          "typeHint": "swatch ref",
+          "settablePath": "frameFillColor",
+          "summary": "Fill swatch."
+        },
+        {
+          "name": "StrokeColor",
+          "typeHint": "swatch ref",
+          "settablePath": "frameStrokeColor",
+          "summary": "Stroke swatch."
+        }
+      ]
+    },
+    {
+      "name": "GraphicLine",
+      "chapter": "frames-paths",
+      "summary": "A straight or curved open path.",
+      "attributes": [
+        {
+          "name": "GeometricBounds",
+          "typeHint": "[t,l,b,r] points",
+          "settablePath": "frameBounds",
+          "summary": "Bounding box of the line."
+        },
+        {
+          "name": "ItemTransform",
+          "typeHint": "affine",
+          "settablePath": "frameTransform",
+          "summary": "Affine placement transform."
+        },
+        {
+          "name": "StrokeColor",
+          "typeHint": "swatch ref",
+          "settablePath": "frameStrokeColor",
+          "summary": "Stroke swatch."
+        },
+        {
+          "name": "StrokeWeight",
+          "typeHint": "points",
+          "settablePath": "frameStrokeWeight",
+          "summary": "Stroke weight."
+        }
+      ]
+    },
+    {
+      "name": "Group",
+      "chapter": "frames-paths",
+      "summary": "A grouping container that transforms its children as a unit.",
+      "attributes": [
+        {
+          "name": "Self",
+          "typeHint": "id",
+          "settablePath": null,
+          "summary": "Element id."
+        },
+        {
+          "name": "ItemTransform",
+          "typeHint": "affine",
+          "settablePath": "frameTransform",
+          "summary": "The group's affine transform, applied to all children."
+        }
+      ]
+    },
+    {
+      "name": "Layer",
+      "chapter": "layers",
+      "summary": "A document layer; controls visibility, lock, and print state for the items assigned to it.",
+      "attributes": [
+        {
+          "name": "Name",
+          "typeHint": "string",
+          "settablePath": "layerName",
+          "summary": "Layer name."
+        },
+        {
+          "name": "Visible",
+          "typeHint": "boolean",
+          "settablePath": "layerVisible",
+          "summary": "Whether the layer's items render."
+        },
+        {
+          "name": "Locked",
+          "typeHint": "boolean",
+          "settablePath": "layerLocked",
+          "summary": "Whether the layer's items are editable."
+        },
+        {
+          "name": "Printable",
+          "typeHint": "boolean",
+          "settablePath": "layerPrintable",
+          "summary": "Whether the layer prints/exports."
+        }
+      ]
+    },
+    {
+      "name": "Page",
+      "chapter": "layout-model",
+      "summary": "A single page within a spread.",
+      "attributes": [
+        {
+          "name": "Self",
+          "typeHint": "id",
+          "settablePath": null,
+          "summary": "Element id; the target for paged.insertTextFrame / insertFrame."
+        },
+        {
+          "name": "GeometricBounds",
+          "typeHint": "[t,l,b,r] points",
+          "settablePath": null,
+          "summary": "Page bounds in the spread's coordinate space."
+        }
+      ]
+    },
+    {
+      "name": "Spread",
+      "chapter": "layout-model",
+      "summary": "A spread: one or more pages laid out together, with its own page-item stacking order.",
+      "attributes": [
+        {
+          "name": "Self",
+          "typeHint": "id",
+          "settablePath": null,
+          "summary": "Element id."
+        },
+        {
+          "name": "ItemTransform",
+          "typeHint": "affine",
+          "settablePath": null,
+          "summary": "The spread's transform in pasteboard space."
+        }
+      ]
+    },
+    {
+      "name": "Story",
+      "chapter": "stories-text",
+      "summary": "A flow of text, independent of the frame(s) that pour it. Edited by character offset, not by frame.",
+      "attributes": [
+        {
+          "name": "Self",
+          "typeHint": "id",
+          "settablePath": null,
+          "summary": "Story id; the target for paged.insertText / deleteRange / applyStyle."
+        }
+      ]
+    },
+    {
+      "name": "ParagraphStyleRange",
+      "chapter": "styles",
+      "summary": "A run of paragraphs sharing a paragraph style and overrides, inside a story.",
+      "attributes": [
+        {
+          "name": "AppliedParagraphStyle",
+          "typeHint": "style ref",
+          "settablePath": "appliedParagraphStyle",
+          "summary": "The paragraph style applied to the range."
+        },
+        {
+          "name": "Justification",
+          "typeHint": "enum",
+          "settablePath": "paragraphJustification",
+          "summary": "Paragraph alignment/justification."
+        },
+        {
+          "name": "SpaceBefore",
+          "typeHint": "points",
+          "settablePath": "paragraphSpaceBefore",
+          "summary": "Space above the paragraph."
+        },
+        {
+          "name": "SpaceAfter",
+          "typeHint": "points",
+          "settablePath": "paragraphSpaceAfter",
+          "summary": "Space below the paragraph."
+        }
+      ]
+    },
+    {
+      "name": "CharacterStyleRange",
+      "chapter": "styles",
+      "summary": "A run of characters sharing a character style and overrides, inside a paragraph.",
+      "attributes": [
+        {
+          "name": "AppliedCharacterStyle",
+          "typeHint": "style ref",
+          "settablePath": "appliedCharacterStyle",
+          "summary": "The character style applied to the range."
+        },
+        {
+          "name": "PointSize",
+          "typeHint": "points",
+          "settablePath": "characterFontSize",
+          "summary": "Font size in points."
+        },
+        {
+          "name": "Leading",
+          "typeHint": "points | Auto",
+          "settablePath": "characterLeading",
+          "summary": "Line leading."
+        },
+        {
+          "name": "Tracking",
+          "typeHint": "1/1000 em",
+          "settablePath": "characterTracking",
+          "summary": "Letter tracking."
+        },
+        {
+          "name": "FillColor",
+          "typeHint": "swatch ref",
+          "settablePath": "characterFillColor",
+          "summary": "Text fill swatch."
+        }
+      ]
+    }
   ]
 }
