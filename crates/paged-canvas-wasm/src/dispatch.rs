@@ -1119,6 +1119,14 @@ impl WorkerCore {
                     paged_script::ScriptBudget::default(),
                     clock,
                 );
+                // A script may touch any page or story (or none); paged-script
+                // doesn't report which. Clear the GPU scene cache wholesale so
+                // `present_frame` rebuilds the visible pages — otherwise a
+                // `paged.set`/insert mutation lands in the model but the stale
+                // index-keyed Vello scene is reused and the canvas never
+                // repaints. Visible pages rebuild lazily, so the cost is one
+                // cheap rebuild of what's on screen.
+                effect = CacheEffect::ClearAll;
                 WorkerToMainKind::ScriptResult {
                     output: result.output,
                     error: result.error,

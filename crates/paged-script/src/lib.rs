@@ -53,7 +53,7 @@ use boa_engine::{
     js_string, object::ObjectInitializer, property::Attribute, Context, JsArgs, JsNativeError,
     JsResult, JsValue, NativeFunction, Source,
 };
-use paged_canvas::channel::Mutation;
+use paged_canvas::channel::{CollectionName, Mutation};
 use paged_canvas::CanvasModel;
 use paged_canvas::PageId;
 use serde::{Deserialize, Serialize};
@@ -502,6 +502,7 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
         .function(guarded(paged_inspect), js_string!("inspect"), 1)
         .function(guarded(paged_layers), js_string!("layers"), 0)
         .function(guarded(paged_tree), js_string!("tree"), 0)
+        .function(guarded(paged_pages), js_string!("pages"), 0)
         .function(guarded(paged_stories), js_string!("stories"), 0)
         .function(guarded(paged_swatches), js_string!("swatches"), 0)
         .function(
@@ -531,6 +532,316 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             guarded(paged_content_selection),
             js_string!("contentSelection"),
             0,
+        )
+        // --- complete mutation surface (additive) ---
+        // pages & masters
+        .function(guarded(paged_delete_page), js_string!("deletePage"), 1)
+        .function(
+            guarded(paged_duplicate_page),
+            js_string!("duplicatePage"),
+            1,
+        )
+        .function(guarded(paged_resize_page), js_string!("resizePage"), 2)
+        .function(
+            guarded(paged_apply_master_to_page),
+            js_string!("applyMasterToPage"),
+            2,
+        )
+        // frames & groups
+        .function(
+            guarded(paged_delete_element),
+            js_string!("deleteElement"),
+            1,
+        )
+        .function(
+            guarded(paged_dissolve_group),
+            js_string!("dissolveGroup"),
+            1,
+        )
+        .function(guarded(paged_move_frame), js_string!("moveFrame"), 2)
+        .function(guarded(paged_resize_frame), js_string!("resizeFrame"), 2)
+        .function(guarded(paged_link_frames), js_string!("linkFrames"), 2)
+        .function(guarded(paged_unlink_frames), js_string!("unlinkFrames"), 1)
+        // shape inserts
+        .function(guarded(paged_insert_line), js_string!("insertLine"), 3)
+        .function(guarded(paged_insert_oval), js_string!("insertOval"), 2)
+        .function(guarded(paged_insert_path), js_string!("insertPath"), 4)
+        // path-point editing
+        .function(
+            guarded(paged_path_point_insert),
+            js_string!("pathPointInsert"),
+            4,
+        )
+        .function(
+            guarded(paged_path_point_remove),
+            js_string!("pathPointRemove"),
+            2,
+        )
+        .function(
+            guarded(paged_path_point_curve_type),
+            js_string!("pathPointCurveType"),
+            3,
+        )
+        .function(
+            guarded(paged_path_point_set),
+            js_string!("pathPointSet"),
+            4,
+        )
+        .function(guarded(paged_path_open_at), js_string!("pathOpenAt"), 2)
+        .function(
+            guarded(paged_outline_stroke),
+            js_string!("outlineStroke"),
+            5,
+        )
+        .function(guarded(paged_offset_path), js_string!("offsetPath"), 4)
+        .function(guarded(paged_simplify_path), js_string!("simplifyPath"), 2)
+        .function(
+            guarded(paged_pathfinder_boolean),
+            js_string!("pathfinderBoolean"),
+            3,
+        )
+        // fields & images
+        .function(guarded(paged_insert_field), js_string!("insertField"), 3)
+        .function(
+            guarded(paged_set_field_value),
+            js_string!("setFieldValue"),
+            3,
+        )
+        .function(
+            guarded(paged_replace_image_bytes),
+            js_string!("replaceImageBytes"),
+            2,
+        )
+        // tables
+        .function(guarded(paged_insert_table), js_string!("insertTable"), 2)
+        .function(guarded(paged_set_row_height), js_string!("setRowHeight"), 4)
+        .function(
+            guarded(paged_set_column_width),
+            js_string!("setColumnWidth"),
+            4,
+        )
+        .function(
+            guarded(paged_insert_table_row),
+            js_string!("insertTableRow"),
+            3,
+        )
+        .function(
+            guarded(paged_delete_table_row),
+            js_string!("deleteTableRow"),
+            3,
+        )
+        .function(
+            guarded(paged_insert_table_column),
+            js_string!("insertTableColumn"),
+            3,
+        )
+        .function(
+            guarded(paged_delete_table_column),
+            js_string!("deleteTableColumn"),
+            3,
+        )
+        .function(
+            guarded(paged_insert_header_row),
+            js_string!("insertHeaderRow"),
+            2,
+        )
+        .function(
+            guarded(paged_remove_header_row),
+            js_string!("removeHeaderRow"),
+            2,
+        )
+        .function(
+            guarded(paged_insert_footer_row),
+            js_string!("insertFooterRow"),
+            2,
+        )
+        .function(
+            guarded(paged_remove_footer_row),
+            js_string!("removeFooterRow"),
+            2,
+        )
+        .function(guarded(paged_set_cell_span), js_string!("setCellSpan"), 6)
+        // style CRUD
+        .function(
+            guarded(paged_create_paragraph_style),
+            js_string!("createParagraphStyle"),
+            1,
+        )
+        .function(
+            guarded(paged_rename_paragraph_style),
+            js_string!("renameParagraphStyle"),
+            2,
+        )
+        .function(
+            guarded(paged_delete_paragraph_style),
+            js_string!("deleteParagraphStyle"),
+            1,
+        )
+        .function(
+            guarded(paged_create_character_style),
+            js_string!("createCharacterStyle"),
+            1,
+        )
+        .function(
+            guarded(paged_rename_character_style),
+            js_string!("renameCharacterStyle"),
+            2,
+        )
+        .function(
+            guarded(paged_delete_character_style),
+            js_string!("deleteCharacterStyle"),
+            1,
+        )
+        .function(
+            guarded(paged_create_object_style),
+            js_string!("createObjectStyle"),
+            1,
+        )
+        .function(
+            guarded(paged_rename_object_style),
+            js_string!("renameObjectStyle"),
+            2,
+        )
+        .function(
+            guarded(paged_delete_object_style),
+            js_string!("deleteObjectStyle"),
+            1,
+        )
+        .function(
+            guarded(paged_create_cell_style),
+            js_string!("createCellStyle"),
+            1,
+        )
+        .function(
+            guarded(paged_rename_cell_style),
+            js_string!("renameCellStyle"),
+            2,
+        )
+        .function(
+            guarded(paged_delete_cell_style),
+            js_string!("deleteCellStyle"),
+            1,
+        )
+        .function(
+            guarded(paged_create_table_style),
+            js_string!("createTableStyle"),
+            1,
+        )
+        .function(
+            guarded(paged_rename_table_style),
+            js_string!("renameTableStyle"),
+            2,
+        )
+        .function(
+            guarded(paged_delete_table_style),
+            js_string!("deleteTableStyle"),
+            1,
+        )
+        .function(
+            guarded(paged_set_style_property),
+            js_string!("setStyleProperty"),
+            4,
+        )
+        // numbering lists
+        .function(
+            guarded(paged_create_numbering_list),
+            js_string!("createNumberingList"),
+            1,
+        )
+        .function(
+            guarded(paged_edit_numbering_list),
+            js_string!("editNumberingList"),
+            2,
+        )
+        .function(
+            guarded(paged_delete_numbering_list),
+            js_string!("deleteNumberingList"),
+            1,
+        )
+        // sections
+        .function(
+            guarded(paged_insert_section),
+            js_string!("insertSection"),
+            2,
+        )
+        .function(guarded(paged_edit_section), js_string!("editSection"), 2)
+        .function(
+            guarded(paged_delete_section),
+            js_string!("deleteSection"),
+            1,
+        )
+        // conditions
+        .function(
+            guarded(paged_set_condition_visible),
+            js_string!("setConditionVisible"),
+            2,
+        )
+        .function(
+            guarded(paged_activate_condition_set),
+            js_string!("activateConditionSet"),
+            1,
+        )
+        // layers
+        .function(guarded(paged_layer_insert), js_string!("layerInsert"), 2)
+        .function(guarded(paged_layer_remove), js_string!("layerRemove"), 1)
+        .function(guarded(paged_layer_move), js_string!("layerMove"), 2)
+        // guides
+        .function(guarded(paged_insert_guide), js_string!("insertGuide"), 4)
+        .function(guarded(paged_move_guide), js_string!("moveGuide"), 2)
+        .function(guarded(paged_delete_guide), js_string!("deleteGuide"), 1)
+        // document defaults & colour management
+        .function(
+            guarded(paged_set_document_defaults),
+            js_string!("setDocumentDefaults"),
+            1,
+        )
+        .function(
+            guarded(paged_set_color_settings),
+            js_string!("setColorSettings"),
+            1,
+        )
+        .function(
+            guarded(paged_set_proof_setup),
+            js_string!("setProofSetup"),
+            1,
+        )
+        .function(
+            guarded(paged_import_swatch_library),
+            js_string!("importSwatchLibrary"),
+            2,
+        )
+        .function(
+            guarded(paged_set_ink_setting),
+            js_string!("setInkSetting"),
+            2,
+        )
+        .function(
+            guarded(paged_set_use_standard_lab_for_spots),
+            js_string!("setUseStandardLabForSpots"),
+            1,
+        )
+        // plugin metadata & batch
+        .function(
+            guarded(paged_set_plugin_metadata),
+            js_string!("setPluginMetadata"),
+            4,
+        )
+        .function(guarded(paged_batch), js_string!("batch"), 1)
+        // selection setters
+        .function(
+            guarded(paged_set_element_selection),
+            js_string!("setElementSelection"),
+            1,
+        )
+        .function(
+            guarded(paged_clear_selection),
+            js_string!("clearSelection"),
+            0,
+        )
+        .function(
+            guarded(paged_set_content_selection),
+            js_string!("setContentSelection"),
+            1,
         )
         .build();
     ctx.register_global_property(js_string!("paged"), paged, Attribute::all())?;
@@ -657,10 +968,34 @@ fn paged_delete_range(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> J
     })))
 }
 
+/// Apply a structural insert, auto-select the freshly-created element
+/// (so a following `paged.selection()` / `paged.set` addresses it), and
+/// return its `kind:id` address as a JS string — or `null` on failure or
+/// when the mutation mints no addressable element. Selection is set on the
+/// worker model only (it doesn't push to the editor's React panels — a
+/// protocol-bumping follow-up).
+fn apply_insert(mutation: &Mutation) -> JsValue {
+    let created = with_model(|m| match m.apply_mutation(mutation) {
+        Ok(outcome) => {
+            if let Some(id) = &outcome.created_id {
+                m.element_selection.ids = vec![id.clone()];
+            }
+            outcome.created_id
+        }
+        Err(_) => None,
+    });
+    match created {
+        Some(id) => JsValue::from(js_string!(element_id_to_address(&id))),
+        None => JsValue::null(),
+    }
+}
+
 /// `paged.insertTextFrame(pageId, [top, left, bottom, right])` — create
 /// an empty, text-pourable frame on a page at page-local point bounds
-/// (`Mutation::InsertTextFrame`; the model mints the ParentStory).
-/// Returns `true` iff applied, `false` if `bounds` is not a 4-number array.
+/// (`Mutation::InsertTextFrame`; the model mints the ParentStory) and
+/// select it. Returns the new frame's `textFrame:<id>` address (pass it to
+/// `paged.insertText` / `paged.set`), or `null` if the insert failed or
+/// `bounds` is not a 4-number array.
 fn paged_insert_text_frame(
     _this: &JsValue,
     args: &[JsValue],
@@ -671,15 +1006,13 @@ fn paged_insert_text_frame(
         .to_string(ctx)?
         .to_std_string_escaped();
     let Some(bounds) = read_quad(args.get_or_undefined(1), ctx) else {
-        return Ok(JsValue::from(false));
+        return Ok(JsValue::null());
     };
     let mutation = Mutation::InsertTextFrame {
         page_id: PageId(page),
         bounds,
     };
-    Ok(JsValue::from(with_model(|m| {
-        m.apply_mutation(&mutation).is_ok()
-    })))
+    Ok(apply_insert(&mutation))
 }
 
 /// Read a JS 4-number array `[a, b, c, d]` into a tuple. Mirrors the
@@ -708,15 +1041,13 @@ fn paged_insert_frame(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> J
         .to_string(ctx)?
         .to_std_string_escaped();
     let Some(bounds) = read_quad(args.get_or_undefined(1), ctx) else {
-        return Ok(JsValue::from(false));
+        return Ok(JsValue::null());
     };
     let mutation = Mutation::InsertFrame {
         page_id: PageId(page),
         bounds,
     };
-    Ok(JsValue::from(with_model(|m| {
-        m.apply_mutation(&mutation).is_ok()
-    })))
+    Ok(apply_insert(&mutation))
 }
 
 /// `paged.insertPage(afterPageId?)` — append a page after `afterPageId`
@@ -734,9 +1065,22 @@ fn paged_insert_page(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
         after_page_id,
         master_id: None,
     };
-    Ok(JsValue::from(with_model(|m| {
-        m.apply_mutation(&mutation).is_ok()
-    })))
+    // A page has no `ElementId` variant (so `MutationOutcome.created_id` is
+    // None for InsertPage); recover the minted page id by diffing the page
+    // `selfId`s before/after. Pages are few, so the scan is free. The
+    // returned `selfId` is reusable as the next `afterPageId`.
+    let before: std::collections::HashSet<String> =
+        with_model(|m| m.pages().into_iter().map(|p| p.self_id).collect());
+    let ok = with_model(|m| m.apply_mutation(&mutation).is_ok());
+    if !ok {
+        return Ok(JsValue::null());
+    }
+    let new_id =
+        with_model(|m| m.pages().into_iter().find(|p| !before.contains(&p.self_id))).map(|p| p.self_id);
+    Ok(match new_id {
+        Some(s) => JsValue::from(js_string!(s)),
+        None => JsValue::null(),
+    })
 }
 
 /// `paged.placeImage(frameId, uri, fit?)` — place an image into a frame
@@ -829,6 +1173,1761 @@ fn paged_create_group(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> J
     })))
 }
 
+// ================================================================
+// Complete mutation surface — one `paged.<name>` host fn per remaining
+// `Mutation` variant. Additive over the Stage 1/2 authoring above.
+//
+// Three apply shapes recur, factored here:
+//   * `apply_bool`        — fire-and-forget; returns the success boolean.
+//   * `apply_insert`(above)— structural inserts that carry a `created_id`;
+//     auto-selects + returns the `kind:id` address.
+//   * `apply_new_self_id` — collection CRUD that mints an id the apply
+//     layer does NOT surface via `created_id` (styles, numbering lists);
+//     recovered by diffing the collection's `selfId`s — the same trick
+//     `insertPage`/`duplicatePage` use for pages.
+// ================================================================
+
+// ---------------------------------------------------- shared apply helpers
+
+/// Apply a mutation for its success boolean only.
+fn apply_bool(mutation: &Mutation) -> JsValue {
+    JsValue::from(with_model(|m| m.apply_mutation(mutation).is_ok()))
+}
+
+/// Resolve an element address (`kind:id`) — or an already-bare self id —
+/// to the bare `Self` id the typed frame mutations
+/// (`MoveFrame`/`ResizeFrame`/`DeleteFrame`/`LinkFrames`/`UnlinkFrames`/
+/// `DissolveGroup`/`PlaceImage`/`ReplaceImageBytes`) match against
+/// (`CanvasModel::resolve_frame_node_id` keys off the bare id).
+fn bare_id(s: &str) -> String {
+    parse_element_id(s)
+        .map(|id| id.raw_id().to_string())
+        .unwrap_or_else(|| s.to_string())
+}
+
+/// The `selfId` set of a typed document collection — the before/after
+/// snapshot used to recover a freshly-minted id the apply layer does not
+/// thread through `created_id`.
+fn collection_self_ids(name: CollectionName) -> std::collections::HashSet<String> {
+    with_model(|m| {
+        serde_json::to_value(m.collection(name))
+            .ok()
+            .and_then(|v| {
+                v.as_array().map(|a| {
+                    a.iter()
+                        .filter_map(|e| {
+                            e.get("selfId").and_then(|s| s.as_str()).map(String::from)
+                        })
+                        .collect()
+                })
+            })
+            .unwrap_or_default()
+    })
+}
+
+/// Apply a collection-CRUD create and return the newly-minted `selfId`
+/// (string) by diffing the collection, or `null` on failure / no new id.
+fn apply_new_self_id(name: CollectionName, mutation: &Mutation) -> JsValue {
+    let before = collection_self_ids(name);
+    if !with_model(|m| m.apply_mutation(mutation).is_ok()) {
+        return JsValue::null();
+    }
+    match collection_self_ids(name)
+        .into_iter()
+        .find(|id| !before.contains(id))
+    {
+        Some(id) => JsValue::from(js_string!(id)),
+        None => JsValue::null(),
+    }
+}
+
+/// Apply an `InsertTable` and return the minted `<Table>` `Self` id
+/// (the id the plugin addresses cells with) — or `null` on failure.
+fn apply_insert_table(mutation: &Mutation) -> JsValue {
+    use paged_canvas::element_selection::ElementId;
+    let created = with_model(|m| match m.apply_mutation(mutation) {
+        Ok(o) => {
+            if let Some(id) = &o.created_id {
+                m.element_selection.ids = vec![id.clone()];
+            }
+            o.created_id
+        }
+        Err(_) => None,
+    });
+    match created {
+        Some(ElementId::Table { table_id, .. }) => JsValue::from(js_string!(table_id)),
+        Some(other) => JsValue::from(js_string!(other.raw_id().to_string())),
+        None => JsValue::null(),
+    }
+}
+
+// ---------------------------------------------------- shared arg readers
+
+/// JS value → `serde_json::Value`, or `None` when it cannot be represented.
+fn to_json_value(value: &JsValue, ctx: &mut Context) -> Option<serde_json::Value> {
+    value.to_json(ctx).ok().flatten()
+}
+
+/// Deserialize a JS arg into a serde spec type (`PathAnchorSpec`,
+/// `FieldKind`, `NumberingListSpec`, `Vec<Mutation>`, …). `None` on any
+/// shape mismatch — callers translate that to `false`/`null`, never a
+/// throw (the user-input-never-panics rule).
+fn from_js<T: serde::de::DeserializeOwned>(value: &JsValue, ctx: &mut Context) -> Option<T> {
+    serde_json::from_value(to_json_value(value, ctx)?).ok()
+}
+
+/// Read a JS 2-number array `[x, y]` (line endpoints, path-point set).
+fn read_pair(value: &JsValue, ctx: &mut Context) -> Option<(f32, f32)> {
+    let obj = value.as_object()?;
+    let len = obj.get(js_string!("length"), ctx).ok()?.as_number()? as usize;
+    if len != 2 {
+        return None;
+    }
+    let x = obj.get(0u32, ctx).ok()?.as_number()? as f32;
+    let y = obj.get(1u32, ctx).ok()?.as_number()? as f32;
+    Some((x, y))
+}
+
+/// Read a fixed-length JS number array into `[f32; N]` (the 6-element
+/// `MoveFrame` transform). Generalises [`read_quad`].
+fn read_floats<const N: usize>(value: &JsValue, ctx: &mut Context) -> Option<[f32; N]> {
+    let obj = value.as_object()?;
+    let len = obj.get(js_string!("length"), ctx).ok()?.as_number()? as usize;
+    if len != N {
+        return None;
+    }
+    let mut out = [0.0f32; N];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = obj.get(i as u32, ctx).ok()?.as_number()? as f32;
+    }
+    Some(out)
+}
+
+/// An optional `f32` arg: `undefined`/`null`/non-number ⇒ `None`.
+fn opt_f32(value: &JsValue) -> Option<f32> {
+    value.as_number().map(|n| n as f32)
+}
+
+/// An optional non-empty `String` arg: `undefined`/`null`/empty ⇒ `None`.
+fn opt_string(value: &JsValue, ctx: &mut Context) -> Option<String> {
+    if value.is_undefined() || value.is_null() {
+        return None;
+    }
+    let s = value.to_string(ctx).ok()?.to_std_string_escaped();
+    (!s.is_empty()).then_some(s)
+}
+
+/// Optional non-empty string property of a JS object.
+fn prop_string(
+    obj: &boa_engine::object::JsObject,
+    key: &str,
+    ctx: &mut Context,
+) -> Option<String> {
+    let v = obj.get(js_string!(key), ctx).ok()?;
+    opt_string(&v, ctx)
+}
+
+/// Optional `f32` property of a JS object.
+fn prop_f32(obj: &boa_engine::object::JsObject, key: &str, ctx: &mut Context) -> Option<f32> {
+    obj.get(js_string!(key), ctx)
+        .ok()
+        .and_then(|v| v.as_number())
+        .map(|n| n as f32)
+}
+
+/// Optional `u32` property of a JS object.
+fn prop_u32(obj: &boa_engine::object::JsObject, key: &str, ctx: &mut Context) -> Option<u32> {
+    obj.get(js_string!(key), ctx)
+        .ok()
+        .and_then(|v| v.as_number())
+        .map(|n| n as u32)
+}
+
+/// Parse a JS array of element-id address strings into `ElementId`s,
+/// dropping unparseable entries (shared by `setElementSelection` +
+/// `pathfinderBoolean`).
+fn parse_element_id_array(
+    value: &JsValue,
+    ctx: &mut Context,
+) -> Vec<paged_canvas::element_selection::ElementId> {
+    let mut out = Vec::new();
+    let Some(obj) = value.as_object() else {
+        return out;
+    };
+    let len = obj
+        .get(js_string!("length"), ctx)
+        .ok()
+        .and_then(|v| v.as_number())
+        .unwrap_or(0.0) as usize;
+    for i in 0..len {
+        if let Ok(item) = obj.get(i as u32, ctx) {
+            if let Ok(s) = item.to_string(ctx) {
+                if let Some(id) = parse_element_id(&s.to_std_string_escaped()) {
+                    out.push(id);
+                }
+            }
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------- pages & masters
+
+/// `paged.deletePage(pageId)` — remove a page (`Mutation::DeletePage`).
+fn paged_delete_page(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let page = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeletePage {
+        page_id: PageId(page),
+    }))
+}
+
+/// `paged.duplicatePage(pageId)` — duplicate a single-page spread after
+/// the source (`Mutation::DuplicatePage`). Returns the new page `selfId`
+/// (recovered by diffing `pages()`, like `insertPage`), or `null`.
+fn paged_duplicate_page(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let page = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let mutation = Mutation::DuplicatePage {
+        page: PageId(page),
+    };
+    let before: std::collections::HashSet<String> =
+        with_model(|m| m.pages().into_iter().map(|p| p.self_id).collect());
+    if !with_model(|m| m.apply_mutation(&mutation).is_ok()) {
+        return Ok(JsValue::null());
+    }
+    let new_id = with_model(|m| m.pages().into_iter().find(|p| !before.contains(&p.self_id)))
+        .map(|p| p.self_id);
+    Ok(match new_id {
+        Some(s) => JsValue::from(js_string!(s)),
+        None => JsValue::null(),
+    })
+}
+
+/// `paged.resizePage(pageId, [t,l,b,r])` — set the page's
+/// `GeometricBounds` in page-inner points (`Mutation::ResizePage`).
+fn paged_resize_page(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let page = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(bounds) = read_quad(args.get_or_undefined(1), ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::ResizePage {
+        page_id: PageId(page),
+        bounds,
+    }))
+}
+
+/// `paged.applyMasterToPage(pageId, masterId?)` — set a page's applied
+/// master (`masterId` omitted/null detaches; `Mutation::ApplyMasterToPage`).
+fn paged_apply_master_to_page(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let page = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let master = opt_string(args.get_or_undefined(1), ctx);
+    Ok(apply_bool(&Mutation::ApplyMasterToPage {
+        page: PageId(page),
+        master,
+    }))
+}
+
+// ---------------------------------------------------- frames & groups
+
+/// `paged.deleteElement(id)` — delete a page item (`Mutation::DeleteFrame`).
+/// Accepts the `kind:id` address or a bare self id; groups are removed via
+/// `dissolveGroup`, not here.
+fn paged_delete_element(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteFrame {
+        frame_id: bare_id(&id),
+    }))
+}
+
+/// `paged.dissolveGroup(groupId)` — ungroup; members return to the
+/// group's paint slot (`Mutation::DissolveGroup`).
+fn paged_dissolve_group(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DissolveGroup {
+        group_id: bare_id(&id),
+    }))
+}
+
+/// `paged.moveFrame(frameId, [a,b,c,d,tx,ty])` — set a frame's affine
+/// placement transform (`Mutation::MoveFrame`).
+fn paged_move_frame(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(transform) = read_floats::<6>(args.get_or_undefined(1), ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::MoveFrame {
+        frame_id: bare_id(&id),
+        transform,
+    }))
+}
+
+/// `paged.resizeFrame(frameId, [t,l,b,r])` — set a frame's content-box
+/// bounds (`Mutation::ResizeFrame`; this is the re-paginating resize).
+fn paged_resize_frame(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(bounds) = read_quad(args.get_or_undefined(1), ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::ResizeFrame {
+        frame_id: bare_id(&id),
+        bounds,
+    }))
+}
+
+/// `paged.linkFrames(fromId, toId)` — thread `from`'s overflow into the
+/// empty frame `to` (`Mutation::LinkFrames`).
+fn paged_link_frames(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let from = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let to = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::LinkFrames {
+        from: bare_id(&from),
+        to: bare_id(&to),
+    }))
+}
+
+/// `paged.unlinkFrames(frameId)` — break the thread leaving `frame`
+/// (`Mutation::UnlinkFrames`).
+fn paged_unlink_frames(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let frame = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::UnlinkFrames {
+        frame: bare_id(&frame),
+    }))
+}
+
+// ---------------------------------------------------- shape inserts
+
+/// `paged.insertLine(pageId, [x1,y1], [x2,y2])` — insert a two-anchor
+/// open `GraphicLine` (`Mutation::InsertLine`). Returns the new
+/// `graphicLine:<id>` address.
+fn paged_insert_line(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let page = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(start) = read_pair(args.get_or_undefined(1), ctx) else {
+        return Ok(JsValue::null());
+    };
+    let Some(end) = read_pair(args.get_or_undefined(2), ctx) else {
+        return Ok(JsValue::null());
+    };
+    Ok(apply_insert(&Mutation::InsertLine {
+        page_id: PageId(page),
+        start,
+        end,
+    }))
+}
+
+/// `paged.insertOval(pageId, [t,l,b,r])` — insert an `Oval`
+/// (`Mutation::InsertOval`). Returns the new `oval:<id>` address.
+fn paged_insert_oval(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let page = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(bounds) = read_quad(args.get_or_undefined(1), ctx) else {
+        return Ok(JsValue::null());
+    };
+    Ok(apply_insert(&Mutation::InsertOval {
+        page_id: PageId(page),
+        bounds,
+    }))
+}
+
+/// `paged.insertPath(pageId, anchors, open, smooth?)` — insert an
+/// arbitrary path (`Mutation::InsertPath`). `anchors` is a JS array of
+/// `{ anchor:[x,y], left:[x,y], right:[x,y] }`. Returns the new address.
+fn paged_insert_path(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let page = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(anchors) =
+        from_js::<Vec<paged_mutate::operation::PathAnchorSpec>>(args.get_or_undefined(1), ctx)
+    else {
+        return Ok(JsValue::null());
+    };
+    let open = args.get_or_undefined(2).to_boolean();
+    let smooth = args.get_or_undefined(3).to_boolean();
+    Ok(apply_insert(&Mutation::InsertPath {
+        page_id: PageId(page),
+        anchors,
+        open,
+        smooth,
+    }))
+}
+
+// ---------------------------------------------------- path-point editing
+
+/// `paged.pathPointInsert(elemId, index, anchor, subpathStarts?)` — insert
+/// an anchor into a path element's flat `PathPointArray` at `index`.
+fn paged_path_point_insert(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(element_id) = parse_element_id(&id) else {
+        return Ok(JsValue::from(false));
+    };
+    let index = args.get_or_undefined(1).to_number(ctx)? as u32;
+    let Some(anchor) =
+        from_js::<paged_mutate::operation::PathAnchorSpec>(args.get_or_undefined(2), ctx)
+    else {
+        return Ok(JsValue::from(false));
+    };
+    let sub = args.get_or_undefined(3);
+    let prev_subpath_starts = if sub.is_undefined() || sub.is_null() {
+        None
+    } else {
+        from_js::<Vec<u32>>(sub, ctx)
+    };
+    Ok(apply_bool(&Mutation::PathPointInsert {
+        element_id,
+        index,
+        anchor,
+        prev_subpath_starts,
+    }))
+}
+
+/// `paged.pathPointRemove(elemId, index)` — remove the anchor at flat
+/// `index` (`Mutation::PathPointRemove`).
+fn paged_path_point_remove(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(element_id) = parse_element_id(&id) else {
+        return Ok(JsValue::from(false));
+    };
+    let index = args.get_or_undefined(1).to_number(ctx)? as u32;
+    Ok(apply_bool(&Mutation::PathPointRemove { element_id, index }))
+}
+
+/// `paged.pathPointCurveType(elemId, index, smooth)` — toggle an anchor
+/// between corner and smooth (`Mutation::PathPointCurveType`).
+fn paged_path_point_curve_type(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(element_id) = parse_element_id(&id) else {
+        return Ok(JsValue::from(false));
+    };
+    let index = args.get_or_undefined(1).to_number(ctx)? as u32;
+    let smooth = args.get_or_undefined(2).to_boolean();
+    Ok(apply_bool(&Mutation::PathPointCurveType {
+        element_id,
+        index,
+        smooth,
+    }))
+}
+
+/// `paged.pathPointSet(elemId, index, role, [x,y])` — write one Bezier
+/// handle (`role` = `"anchor"|"left"|"right"`; `Mutation::PathPointSet`).
+fn paged_path_point_set(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(element_id) = parse_element_id(&id) else {
+        return Ok(JsValue::from(false));
+    };
+    let index = args.get_or_undefined(1).to_number(ctx)? as u32;
+    let Some(role) = from_js::<paged_mutate::PathPointRole>(args.get_or_undefined(2), ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    let Some((x, y)) = read_pair(args.get_or_undefined(3), ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::PathPointSet {
+        element_id,
+        index,
+        role,
+        position: [x, y],
+    }))
+}
+
+/// `paged.pathOpenAt(elemId, index)` — cut the path at the anchor at flat
+/// `index` (`Mutation::PathOpenAt`).
+fn paged_path_open_at(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(element_id) = parse_element_id(&id) else {
+        return Ok(JsValue::from(false));
+    };
+    let index = args.get_or_undefined(1).to_number(ctx)? as u32;
+    Ok(apply_bool(&Mutation::PathOpenAt { element_id, index }))
+}
+
+/// `paged.outlineStroke(elemId, width, cap, join, miter)` — replace the
+/// path with its stroke-expansion outline (`Mutation::OutlineStroke`).
+fn paged_outline_stroke(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(element_id) = parse_element_id(&id) else {
+        return Ok(JsValue::from(false));
+    };
+    let width = args.get_or_undefined(1).to_number(ctx)? as f32;
+    let cap = args
+        .get_or_undefined(2)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let join = args
+        .get_or_undefined(3)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let miter_limit = args.get_or_undefined(4).to_number(ctx)? as f32;
+    Ok(apply_bool(&Mutation::OutlineStroke {
+        element_id,
+        width,
+        cap,
+        join,
+        miter_limit,
+    }))
+}
+
+/// `paged.offsetPath(elemId, delta, join, miter)` — inset/outset a single
+/// closed contour (`Mutation::OffsetPath`).
+fn paged_offset_path(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(element_id) = parse_element_id(&id) else {
+        return Ok(JsValue::from(false));
+    };
+    let delta = args.get_or_undefined(1).to_number(ctx)? as f32;
+    let join = args
+        .get_or_undefined(2)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let miter_limit = args.get_or_undefined(3).to_number(ctx)? as f32;
+    Ok(apply_bool(&Mutation::OffsetPath {
+        element_id,
+        delta,
+        join,
+        miter_limit,
+    }))
+}
+
+/// `paged.simplifyPath(elemId, tolerance)` — re-express the path with
+/// fewer anchors within `tolerance` pt (`Mutation::SimplifyPath`).
+fn paged_simplify_path(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(element_id) = parse_element_id(&id) else {
+        return Ok(JsValue::from(false));
+    };
+    let tolerance = args.get_or_undefined(1).to_number(ctx)? as f32;
+    Ok(apply_bool(&Mutation::SimplifyPath {
+        element_id,
+        tolerance,
+    }))
+}
+
+/// `paged.pathfinderBoolean(keptId, [otherIds], kind)` — Pathfinder
+/// boolean op (`kind` = `"union"|"intersect"|"subtract"|"exclude"`;
+/// `Mutation::PathfinderBoolean`).
+fn paged_pathfinder_boolean(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(kept) = parse_element_id(&id) else {
+        return Ok(JsValue::from(false));
+    };
+    let others = parse_element_id_array(args.get_or_undefined(1), ctx);
+    let Some(kind) = from_js::<paged_mutate::PathfinderKind>(args.get_or_undefined(2), ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::PathfinderBoolean { kept, others, kind }))
+}
+
+// ---------------------------------------------------- fields & images
+
+/// `paged.insertField(storyId, offset, fieldKind)` — insert a field marker
+/// at a story offset. `fieldKind` = `"pageNumber"` | `"nextPageNumber"` |
+/// `{ placeholder: { plugin, key, value? } }` (`Mutation::InsertField`).
+fn paged_insert_field(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let offset = args.get_or_undefined(1).to_number(ctx)? as u32;
+    let Some(field) = from_js::<paged_mutate::operation::FieldKind>(args.get_or_undefined(2), ctx)
+    else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::InsertField {
+        story_id,
+        offset,
+        field,
+    }))
+}
+
+/// `paged.setFieldValue(storyId, offset, value?)` — update a placeholder
+/// field's cached display value (`null` ⇒ unresolved `<key>`;
+/// `Mutation::SetFieldValue`).
+fn paged_set_field_value(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let offset = args.get_or_undefined(1).to_number(ctx)? as u32;
+    let value = opt_string(args.get_or_undefined(2), ctx);
+    Ok(apply_bool(&Mutation::SetFieldValue {
+        story_id,
+        offset,
+        value,
+    }))
+}
+
+/// `paged.replaceImageBytes(frameId, bytes?)` — commit inline image bytes
+/// on a graphic frame (`bytes` = a JS `number[]` of u8, or `null` to
+/// clear; `Mutation::ReplaceImageBytes`). The `ByteBuf` field is filled by
+/// deserializing the whole mutation so the bridge needs no `serde_bytes`
+/// dependency.
+fn paged_replace_image_bytes(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let bytes_arg = args.get_or_undefined(1);
+    let bytes_json = if bytes_arg.is_undefined() || bytes_arg.is_null() {
+        serde_json::Value::Null
+    } else {
+        match to_json_value(bytes_arg, ctx) {
+            Some(v) => v,
+            None => return Ok(JsValue::from(false)),
+        }
+    };
+    let m_json = serde_json::json!({
+        "op": "replaceImageBytes",
+        "args": { "elementId": bare_id(&id), "bytes": bytes_json },
+    });
+    match serde_json::from_value::<Mutation>(m_json) {
+        Ok(mutation) => Ok(apply_bool(&mutation)),
+        Err(_) => Ok(JsValue::from(false)),
+    }
+}
+
+// ---------------------------------------------------- tables
+
+/// `paged.insertTable(storyId, spec)` — create a `<Table>` at the end of a
+/// story (`Mutation::InsertTable`). `spec` = `{ rows, cols, headerRows?,
+/// footerRows?, columnWidths?, rowHeights? }`. Returns the minted table id.
+fn paged_insert_table(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    #[derive(Default, serde::Deserialize)]
+    #[serde(rename_all = "camelCase", default)]
+    struct Spec {
+        rows: u32,
+        cols: u32,
+        header_rows: u32,
+        footer_rows: u32,
+        column_widths: Vec<f32>,
+        row_heights: Vec<f32>,
+    }
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(spec) = from_js::<Spec>(args.get_or_undefined(1), ctx) else {
+        return Ok(JsValue::null());
+    };
+    Ok(apply_insert_table(&Mutation::InsertTable {
+        story_id,
+        rows: spec.rows,
+        cols: spec.cols,
+        header_rows: spec.header_rows,
+        footer_rows: spec.footer_rows,
+        column_widths: spec.column_widths,
+        row_heights: spec.row_heights,
+    }))
+}
+
+/// `paged.setRowHeight(storyId, tableId, row, height?)` — set/clear a row
+/// height in pt (`Mutation::SetRowHeight`).
+fn paged_set_row_height(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let table_id = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let row = args.get_or_undefined(2).to_number(ctx)? as u32;
+    let height = opt_f32(args.get_or_undefined(3));
+    Ok(apply_bool(&Mutation::SetRowHeight {
+        story_id,
+        table_id,
+        row,
+        height,
+    }))
+}
+
+/// `paged.setColumnWidth(storyId, tableId, col, width?)` — set/clear a
+/// column width in pt (`Mutation::SetColumnWidth`).
+fn paged_set_column_width(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let table_id = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let col = args.get_or_undefined(2).to_number(ctx)? as u32;
+    let width = opt_f32(args.get_or_undefined(3));
+    Ok(apply_bool(&Mutation::SetColumnWidth {
+        story_id,
+        table_id,
+        col,
+        width,
+    }))
+}
+
+/// `paged.insertTableRow(storyId, tableId, at)` — insert an empty body row
+/// (`Mutation::InsertTableRow`).
+fn paged_insert_table_row(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let table_id = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let at = args.get_or_undefined(2).to_number(ctx)? as u32;
+    Ok(apply_bool(&Mutation::InsertTableRow {
+        story_id,
+        table_id,
+        at,
+    }))
+}
+
+/// `paged.deleteTableRow(storyId, tableId, at)` — delete the row at `at`
+/// (`Mutation::DeleteTableRow`).
+fn paged_delete_table_row(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let table_id = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let at = args.get_or_undefined(2).to_number(ctx)? as u32;
+    Ok(apply_bool(&Mutation::DeleteTableRow {
+        story_id,
+        table_id,
+        at,
+    }))
+}
+
+/// `paged.insertTableColumn(storyId, tableId, at)` — insert an empty
+/// column (`Mutation::InsertTableColumn`).
+fn paged_insert_table_column(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let table_id = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let at = args.get_or_undefined(2).to_number(ctx)? as u32;
+    Ok(apply_bool(&Mutation::InsertTableColumn {
+        story_id,
+        table_id,
+        at,
+    }))
+}
+
+/// `paged.deleteTableColumn(storyId, tableId, at)` — delete the column at
+/// `at` (`Mutation::DeleteTableColumn`).
+fn paged_delete_table_column(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let table_id = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let at = args.get_or_undefined(2).to_number(ctx)? as u32;
+    Ok(apply_bool(&Mutation::DeleteTableColumn {
+        story_id,
+        table_id,
+        at,
+    }))
+}
+
+/// `paged.insertHeaderRow(storyId, tableId)` — insert a header-band row
+/// (`Mutation::InsertHeaderRow`).
+fn paged_insert_header_row(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let table_id = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::InsertHeaderRow { story_id, table_id }))
+}
+
+/// `paged.removeHeaderRow(storyId, tableId)` — remove the first header row
+/// (`Mutation::RemoveHeaderRow`).
+fn paged_remove_header_row(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let table_id = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::RemoveHeaderRow { story_id, table_id }))
+}
+
+/// `paged.insertFooterRow(storyId, tableId)` — insert a footer-band row
+/// (`Mutation::InsertFooterRow`).
+fn paged_insert_footer_row(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let table_id = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::InsertFooterRow { story_id, table_id }))
+}
+
+/// `paged.removeFooterRow(storyId, tableId)` — remove the last footer row
+/// (`Mutation::RemoveFooterRow`).
+fn paged_remove_footer_row(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let table_id = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::RemoveFooterRow { story_id, table_id }))
+}
+
+/// `paged.setCellSpan(storyId, tableId, row, col, rowSpan, columnSpan)` —
+/// set a cell's row/column span (`Mutation::SetCellSpan`).
+fn paged_set_cell_span(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let table_id = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let row = args.get_or_undefined(2).to_number(ctx)? as u32;
+    let col = args.get_or_undefined(3).to_number(ctx)? as u32;
+    let row_span = args.get_or_undefined(4).to_number(ctx)? as u32;
+    let column_span = args.get_or_undefined(5).to_number(ctx)? as u32;
+    Ok(apply_bool(&Mutation::SetCellSpan {
+        story_id,
+        table_id,
+        row,
+        col,
+        row_span,
+        column_span,
+    }))
+}
+
+// ---------------------------------------------------- style CRUD
+
+/// Read a `{ id?, name?, basedOn? }` style-create spec object.
+fn read_style_spec(
+    value: &JsValue,
+    ctx: &mut Context,
+) -> (Option<String>, Option<String>, Option<String>) {
+    match value.as_object() {
+        Some(obj) => (
+            prop_string(&obj, "id", ctx),
+            prop_string(&obj, "name", ctx),
+            prop_string(&obj, "basedOn", ctx),
+        ),
+        None => (None, None, None),
+    }
+}
+
+/// `paged.createParagraphStyle({id?,name?,basedOn?})` — returns the new
+/// style id (`Mutation::CreateParagraphStyle`).
+fn paged_create_paragraph_style(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let (self_id, name, based_on) = read_style_spec(args.get_or_undefined(0), ctx);
+    Ok(apply_new_self_id(
+        CollectionName::ParagraphStyles,
+        &Mutation::CreateParagraphStyle {
+            self_id,
+            name,
+            based_on,
+        },
+    ))
+}
+
+/// `paged.renameParagraphStyle(styleId, name)` (`Mutation::RenameParagraphStyle`).
+fn paged_rename_paragraph_style(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let style_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let name = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::RenameParagraphStyle { style_id, name }))
+}
+
+/// `paged.deleteParagraphStyle(styleId)` (`Mutation::DeleteParagraphStyle`).
+fn paged_delete_paragraph_style(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let style_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteParagraphStyle { style_id }))
+}
+
+/// `paged.createCharacterStyle({id?,name?,basedOn?})` — returns the new id.
+fn paged_create_character_style(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let (self_id, name, based_on) = read_style_spec(args.get_or_undefined(0), ctx);
+    Ok(apply_new_self_id(
+        CollectionName::CharacterStyles,
+        &Mutation::CreateCharacterStyle {
+            self_id,
+            name,
+            based_on,
+        },
+    ))
+}
+
+/// `paged.renameCharacterStyle(styleId, name)`.
+fn paged_rename_character_style(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let style_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let name = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::RenameCharacterStyle { style_id, name }))
+}
+
+/// `paged.deleteCharacterStyle(styleId)`.
+fn paged_delete_character_style(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let style_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteCharacterStyle { style_id }))
+}
+
+/// `paged.createObjectStyle({id?,name?,basedOn?})` — returns the new id.
+fn paged_create_object_style(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let (self_id, name, based_on) = read_style_spec(args.get_or_undefined(0), ctx);
+    Ok(apply_new_self_id(
+        CollectionName::ObjectStyles,
+        &Mutation::CreateObjectStyle {
+            self_id,
+            name,
+            based_on,
+        },
+    ))
+}
+
+/// `paged.renameObjectStyle(styleId, name)`.
+fn paged_rename_object_style(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let style_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let name = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::RenameObjectStyle { style_id, name }))
+}
+
+/// `paged.deleteObjectStyle(styleId)`.
+fn paged_delete_object_style(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let style_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteObjectStyle { style_id }))
+}
+
+/// `paged.createCellStyle({id?,name?,basedOn?})` — returns the new id.
+fn paged_create_cell_style(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let (self_id, name, based_on) = read_style_spec(args.get_or_undefined(0), ctx);
+    Ok(apply_new_self_id(
+        CollectionName::CellStyles,
+        &Mutation::CreateCellStyle {
+            self_id,
+            name,
+            based_on,
+        },
+    ))
+}
+
+/// `paged.renameCellStyle(styleId, name)`.
+fn paged_rename_cell_style(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let style_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let name = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::RenameCellStyle { style_id, name }))
+}
+
+/// `paged.deleteCellStyle(styleId)`.
+fn paged_delete_cell_style(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let style_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteCellStyle { style_id }))
+}
+
+/// `paged.createTableStyle({id?,name?,basedOn?})` — returns the new id.
+fn paged_create_table_style(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let (self_id, name, based_on) = read_style_spec(args.get_or_undefined(0), ctx);
+    Ok(apply_new_self_id(
+        CollectionName::TableStyles,
+        &Mutation::CreateTableStyle {
+            self_id,
+            name,
+            based_on,
+        },
+    ))
+}
+
+/// `paged.renameTableStyle(styleId, name)`.
+fn paged_rename_table_style(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let style_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let name = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::RenameTableStyle { style_id, name }))
+}
+
+/// `paged.deleteTableStyle(styleId)`.
+fn paged_delete_table_style(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let style_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteTableStyle { style_id }))
+}
+
+/// `paged.setStyleProperty(collection, styleId, path, value)` — set one
+/// property on a style definition (`collection` =
+/// `"paragraph"|"character"|"object"|"cell"|"table"`, `path` a settable
+/// path name; `Mutation::SetStyleProperty`).
+fn paged_set_style_property(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let Some(collection) =
+        from_js::<paged_mutate::StyleCollection>(args.get_or_undefined(0), ctx)
+    else {
+        return Ok(JsValue::from(false));
+    };
+    let style_id = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let path_str = args
+        .get_or_undefined(2)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(path) = parse_property_path(&path_str) else {
+        return Ok(JsValue::from(false));
+    };
+    let value_arg = args.get_or_undefined(3).clone();
+    let Some(value) = js_value_to_wire(&value_arg, path, ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::SetStyleProperty {
+        collection,
+        style_id,
+        path,
+        value,
+    }))
+}
+
+// ---------------------------------------------------- numbering lists
+
+/// `paged.createNumberingList(spec)` — create a `<NumberingList>`
+/// (`spec` = a `NumberingListSpec`; `Mutation::CreateNumberingList`).
+/// Returns the new list id.
+fn paged_create_numbering_list(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let Some(spec) =
+        from_js::<paged_mutate::NumberingListSpec>(args.get_or_undefined(0), ctx)
+    else {
+        return Ok(JsValue::null());
+    };
+    Ok(apply_new_self_id(
+        CollectionName::NumberingLists,
+        &Mutation::CreateNumberingList { spec },
+    ))
+}
+
+/// `paged.editNumberingList(listId, spec)` (`Mutation::EditNumberingList`).
+fn paged_edit_numbering_list(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let list_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(spec) =
+        from_js::<paged_mutate::NumberingListSpec>(args.get_or_undefined(1), ctx)
+    else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::EditNumberingList { list_id, spec }))
+}
+
+/// `paged.deleteNumberingList(listId)` (`Mutation::DeleteNumberingList`).
+fn paged_delete_numbering_list(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let list_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteNumberingList { list_id }))
+}
+
+// ---------------------------------------------------- sections
+
+/// `paged.insertSection(pageId, {prefix?,style?,start?})` — anchor a
+/// `<Section>` at a page (`Mutation::InsertSection`).
+fn paged_insert_section(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let page = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let (prefix, numbering_style, start_at) = match args.get_or_undefined(1).as_object() {
+        Some(obj) => (
+            prop_string(&obj, "prefix", ctx),
+            prop_string(&obj, "style", ctx),
+            prop_u32(&obj, "start", ctx),
+        ),
+        None => (None, None, None),
+    };
+    Ok(apply_bool(&Mutation::InsertSection {
+        at_page: PageId(page),
+        prefix,
+        numbering_style,
+        start_at,
+    }))
+}
+
+/// `paged.editSection(sectionId, {prefix?,style?,start?})` — edit a
+/// `<Section>`. `prefix`/`start` are tri-state: omit a key to leave it,
+/// pass `null` to clear it (`Mutation::EditSection`).
+fn paged_edit_section(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let section_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(obj) = args.get_or_undefined(1).as_object() else {
+        return Ok(JsValue::from(false));
+    };
+    // tri-state: absent ⇒ leave; null ⇒ clear; value ⇒ set.
+    let prefix = {
+        let v = obj.get(js_string!("prefix"), ctx)?;
+        if v.is_undefined() {
+            None
+        } else if v.is_null() {
+            Some(None)
+        } else {
+            Some(Some(v.to_string(ctx)?.to_std_string_escaped()))
+        }
+    };
+    let start_at = {
+        let v = obj.get(js_string!("start"), ctx)?;
+        if v.is_undefined() {
+            None
+        } else if v.is_null() {
+            Some(None)
+        } else {
+            Some(Some(v.to_number(ctx)? as u32))
+        }
+    };
+    let numbering_style = prop_string(&obj, "style", ctx);
+    Ok(apply_bool(&Mutation::EditSection {
+        section_id,
+        prefix,
+        numbering_style,
+        start_at,
+    }))
+}
+
+/// `paged.deleteSection(sectionId)` (`Mutation::DeleteSection`).
+fn paged_delete_section(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let section_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteSection { section_id }))
+}
+
+// ---------------------------------------------------- conditions
+
+/// `paged.setConditionVisible(conditionId, visible)`
+/// (`Mutation::SetConditionVisible`).
+fn paged_set_condition_visible(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let condition = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let visible = args.get_or_undefined(1).to_boolean();
+    Ok(apply_bool(&Mutation::SetConditionVisible { condition, visible }))
+}
+
+/// `paged.activateConditionSet(setId)` (`Mutation::ActivateConditionSet`).
+fn paged_activate_condition_set(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let set = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::ActivateConditionSet { set }))
+}
+
+// ---------------------------------------------------- layers
+
+/// `paged.layerInsert(position, name)` — append a layer at the given
+/// zero-based stacking index (`Mutation::LayerInsert`).
+fn paged_layer_insert(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let position = args.get_or_undefined(0).to_number(ctx)? as u32;
+    let name = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::LayerInsert { position, name }))
+}
+
+/// `paged.layerRemove(layerId)` (`Mutation::LayerRemove`).
+fn paged_layer_remove(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let layer_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::LayerRemove { layer_id }))
+}
+
+/// `paged.layerMove(layerId, newIndex)` — reorder a layer
+/// (`Mutation::LayerMove`).
+fn paged_layer_move(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let layer_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let new_index = args.get_or_undefined(1).to_number(ctx)? as u32;
+    Ok(apply_bool(&Mutation::LayerMove {
+        layer_id,
+        new_index,
+    }))
+}
+
+// ---------------------------------------------------- guides
+
+/// `paged.insertGuide(spreadId, orientation, position, pageIndex?)` —
+/// insert a ruler guide (`orientation` = `"vertical"|"horizontal"`;
+/// `Mutation::InsertGuide`).
+fn paged_insert_guide(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let spread_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(orientation) =
+        from_js::<paged_mutate::operation::GuideOrientationSpec>(args.get_or_undefined(1), ctx)
+    else {
+        return Ok(JsValue::from(false));
+    };
+    let position = args.get_or_undefined(2).to_number(ctx)? as f32;
+    let page_index = opt_f32(args.get_or_undefined(3)).map_or(0, |n| n as u32);
+    Ok(apply_bool(&Mutation::InsertGuide {
+        spread_id,
+        orientation,
+        position,
+        page_index,
+    }))
+}
+
+/// `paged.moveGuide(guideId, position)` (`Mutation::MoveGuide`).
+fn paged_move_guide(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let guide_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let position = args.get_or_undefined(1).to_number(ctx)? as f32;
+    Ok(apply_bool(&Mutation::MoveGuide { guide_id, position }))
+}
+
+/// `paged.deleteGuide(guideId)` (`Mutation::DeleteGuide`).
+fn paged_delete_guide(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let guide_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteGuide { guide_id }))
+}
+
+// ---------------------------------------------------- document defaults & colour
+
+/// `paged.setDocumentDefaults({fill?,stroke?,weight?})` — set the
+/// new-object fill/stroke/weight defaults (`Mutation::SetDocumentDefaults`;
+/// whole-triple semantics — omitted fields become "no fill"/"no stroke"/
+/// engine-default weight).
+fn paged_set_document_defaults(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let (fill_color, stroke_color, stroke_weight) = match args.get_or_undefined(0).as_object() {
+        Some(obj) => (
+            prop_string(&obj, "fill", ctx),
+            prop_string(&obj, "stroke", ctx),
+            prop_f32(&obj, "weight", ctx),
+        ),
+        None => (None, None, None),
+    };
+    Ok(apply_bool(&Mutation::SetDocumentDefaults {
+        fill_color,
+        stroke_color,
+        stroke_weight,
+    }))
+}
+
+/// `paged.setColorSettings({cmykProfileName?,rgbPolicy?,intent?,bpc?})` —
+/// replace the document colour-management settings
+/// (`Mutation::SetColorSettings`).
+fn paged_set_color_settings(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    #[derive(Default, serde::Deserialize)]
+    #[serde(rename_all = "camelCase", default)]
+    struct Spec {
+        cmyk_profile_name: Option<String>,
+        rgb_policy: Option<String>,
+        intent: Option<String>,
+        bpc: Option<bool>,
+    }
+    let Some(spec) = from_js::<Spec>(args.get_or_undefined(0), ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::SetColorSettings {
+        cmyk_profile_name: spec.cmyk_profile_name,
+        rgb_policy: spec.rgb_policy,
+        intent: spec.intent,
+        bpc: spec.bpc,
+    }))
+}
+
+/// `paged.setProofSetup({profileName?,simulatePaperWhite?,intent?})` —
+/// soft-proofing configuration (`Mutation::SetProofSetup`).
+fn paged_set_proof_setup(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    #[derive(Default, serde::Deserialize)]
+    #[serde(rename_all = "camelCase", default)]
+    struct Spec {
+        profile_name: Option<String>,
+        simulate_paper_white: bool,
+        intent: Option<String>,
+    }
+    let Some(spec) = from_js::<Spec>(args.get_or_undefined(0), ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::SetProofSetup {
+        profile_name: spec.profile_name,
+        simulate_paper_white: spec.simulate_paper_white,
+        intent: spec.intent,
+    }))
+}
+
+/// `paged.importSwatchLibrary(bytes, groupName?)` — import an `.ase`
+/// library (`bytes` = a JS `number[]`; `Mutation::ImportSwatchLibrary`).
+/// The `ByteBuf` field is filled by deserializing the whole mutation.
+fn paged_import_swatch_library(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let Some(bytes_json) = to_json_value(args.get_or_undefined(0), ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    let group_name = opt_string(args.get_or_undefined(1), ctx);
+    let m_json = serde_json::json!({
+        "op": "importSwatchLibrary",
+        "args": { "bytes": bytes_json, "groupName": group_name },
+    });
+    match serde_json::from_value::<Mutation>(m_json) {
+        Ok(mutation) => Ok(apply_bool(&mutation)),
+        Err(_) => Ok(JsValue::from(false)),
+    }
+}
+
+/// `paged.setInkSetting(spotId, {convertToProcess?,aliasTo?})` — replace
+/// one ink's output-time settings (`Mutation::SetInkSetting`).
+fn paged_set_ink_setting(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    #[derive(Default, serde::Deserialize)]
+    #[serde(rename_all = "camelCase", default)]
+    struct Spec {
+        convert_to_process: bool,
+        alias_to: Option<String>,
+    }
+    let spot_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let spec = from_js::<Spec>(args.get_or_undefined(1), ctx).unwrap_or_default();
+    Ok(apply_bool(&Mutation::SetInkSetting {
+        spot_id,
+        convert_to_process: spec.convert_to_process,
+        alias_to: spec.alias_to,
+    }))
+}
+
+/// `paged.setUseStandardLabForSpots(enabled)`
+/// (`Mutation::SetUseStandardLabForSpots`).
+fn paged_set_use_standard_lab_for_spots(
+    _this: &JsValue,
+    args: &[JsValue],
+    _ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let enabled = args.get_or_undefined(0).to_boolean();
+    Ok(apply_bool(&Mutation::SetUseStandardLabForSpots { enabled }))
+}
+
+// ---------------------------------------------------- plugin metadata & batch
+
+/// `paged.setPluginMetadata(elemId, key, value?, caller?)` — write one
+/// `Label` key/value pair on a leaf page item (`value` null deletes;
+/// `Mutation::SetPluginMetadata`).
+fn paged_set_plugin_metadata(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(element_id) = parse_element_id(&id) else {
+        return Ok(JsValue::from(false));
+    };
+    let key = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let value = opt_string(args.get_or_undefined(2), ctx);
+    let caller = opt_string(args.get_or_undefined(3), ctx);
+    Ok(apply_bool(&Mutation::SetPluginMetadata {
+        element_id,
+        key,
+        value,
+        caller,
+    }))
+}
+
+/// `paged.batch([mutations])` — apply an array of `{ op, args }` mutation
+/// objects as ONE undoable step (`Mutation::Batch`). An unparseable array
+/// returns `false`.
+fn paged_batch(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let Some(ops) = from_js::<Vec<Mutation>>(args.get_or_undefined(0), ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::Batch { ops }))
+}
+
+// ---------------------------------------------------- selection setters
+//
+// These set the worker model's selection state directly — they are
+// application state, NOT undoable document mutations, so they do not go
+// through `apply_mutation`.
+
+/// `paged.setElementSelection([id, ...])` — replace the element selection
+/// with the parseable ids. Always returns `true`.
+fn paged_set_element_selection(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let ids = parse_element_id_array(args.get_or_undefined(0), ctx);
+    with_model(|m| m.element_selection.ids = ids);
+    Ok(JsValue::from(true))
+}
+
+/// `paged.clearSelection()` — clear the element selection.
+fn paged_clear_selection(
+    _this: &JsValue,
+    _args: &[JsValue],
+    _ctx: &mut Context,
+) -> JsResult<JsValue> {
+    with_model(|m| m.element_selection.clear());
+    Ok(JsValue::from(true))
+}
+
+/// `paged.setContentSelection({storyId,start,end} | null)` — set or clear
+/// the text caret/range. Returns `false` if a non-null arg is not a valid
+/// `ContentSelection` shape.
+fn paged_set_content_selection(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let value = args.get_or_undefined(0);
+    if value.is_undefined() || value.is_null() {
+        with_model(|m| m.current_selection = None);
+        return Ok(JsValue::from(true));
+    }
+    let Some(sel) = from_js::<paged_canvas::selection::ContentSelection>(value, ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    with_model(|m| m.current_selection = Some(sel));
+    Ok(JsValue::from(true))
+}
+
 fn paged_get(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let id = args
         .get_or_undefined(0)
@@ -900,6 +2999,18 @@ fn paged_tree(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResul
 /// content selection programmatically.
 fn paged_stories(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let s = with_model(|m| serde_json::to_string(&m.stories()).unwrap_or_default());
+    Ok(JsValue::from(js_string!(s)))
+}
+
+/// `paged.pages()` — the loaded document's pages as a JSON-encoded
+/// `PageSummary[]` (each carries `selfId`, a 1-based `index`, and
+/// `sizePt`). `selfId` is the page id accepted by `insertFrame`,
+/// `insertTextFrame`, and `insertPage` (and the `afterPageId` of
+/// `insertPage`). Pages are not addressable elements (they carry
+/// `id:null` in `paged.tree()`), so this is the only way a script can
+/// obtain a usable page id.
+fn paged_pages(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let s = with_model(|m| serde_json::to_string(&m.pages()).unwrap_or_default());
     Ok(JsValue::from(js_string!(s)))
 }
 
@@ -1115,6 +3226,25 @@ fn parse_element_id(s: &str) -> Option<paged_canvas::element_selection::ElementI
         "group" => ElementId::Group(id),
         _ => return None,
     })
+}
+
+/// Inverse of `parse_element_id` for page-item variants: render an
+/// `ElementId` as the `kind:id` address a subsequent `paged.set` /
+/// `paged.inspect` accepts. The structural insert fns only ever mint a
+/// page item (TextFrame/Rectangle/Oval/Polygon/GraphicLine/Group), so the
+/// non-page-item variants fall back to the bare `raw_id` (not a round-trip
+/// address, but never produced here).
+fn element_id_to_address(id: &paged_canvas::element_selection::ElementId) -> String {
+    use paged_canvas::element_selection::ElementId::*;
+    match id {
+        TextFrame(i) => format!("textFrame:{i}"),
+        Rectangle(i) => format!("rectangle:{i}"),
+        Oval(i) => format!("oval:{i}"),
+        Polygon(i) => format!("polygon:{i}"),
+        GraphicLine(i) => format!("graphicLine:{i}"),
+        Group(i) => format!("group:{i}"),
+        other => other.raw_id().to_string(),
+    }
 }
 
 fn parse_property_path(s: &str) -> Option<paged_mutate::PropertyPath> {
@@ -1507,6 +3637,37 @@ fn js_value_to_wire(
 
 // ---------------------------------------------------------------- formatting
 
+/// If `obj` is an `ElementId`-shaped object (`{kind: string, id: string}`),
+/// return its `kind:id` address string. Used to pretty-print parsed element
+/// ids in `console.log`.
+fn element_id_address_of(obj: &boa_engine::object::JsObject, ctx: &mut Context) -> Option<String> {
+    let kind = obj.get(js_string!("kind"), ctx).ok()?;
+    let id = obj.get(js_string!("id"), ctx).ok()?;
+    let kind = kind.as_string()?.to_std_string_escaped();
+    let id = id.as_string()?.to_std_string_escaped();
+    if kind.is_empty() || id.is_empty() {
+        return None;
+    }
+    Some(format!("{kind}:{id}"))
+}
+
+/// Render a JS array as `[addr, addr, …]` iff every element is
+/// `ElementId`-shaped; otherwise `None` (so the caller falls back to JSON
+/// and non-element arrays keep their compact-JSON formatting).
+fn render_element_id_array(obj: &boa_engine::object::JsObject, ctx: &mut Context) -> Option<String> {
+    let len = obj.get(js_string!("length"), ctx).ok()?.as_number()? as usize;
+    if len == 0 {
+        return None;
+    }
+    let mut parts = Vec::with_capacity(len);
+    for i in 0..len {
+        let el = obj.get(i as u32, ctx).ok()?;
+        let el_obj = el.as_object()?;
+        parts.push(element_id_address_of(&el_obj, ctx)?);
+    }
+    Some(format!("[{}]", parts.join(", ")))
+}
+
 fn format_value(value: &JsValue, ctx: &mut Context) -> String {
     if value.is_undefined() {
         return "undefined".to_string();
@@ -1527,6 +3688,22 @@ fn format_value(value: &JsValue, ctx: &mut Context) -> String {
         return s.to_std_string_escaped();
     }
     if let Some(obj) = value.as_object() {
+        // An `ElementId`-shaped object `{kind, id}` — what
+        // `JSON.parse(paged.selection())[0]` yields — reads far better as its
+        // `kind:id` address than as raw JSON, so `console.log('sel', sel[0])`
+        // prints `sel textFrame:u123`.
+        if let Some(addr) = element_id_address_of(&obj, ctx) {
+            return addr;
+        }
+        // An array of `ElementId`s (e.g. the parsed selection) prints as
+        // `[textFrame:u1, rectangle:u2]`. Only arrays whose every element is
+        // ElementId-shaped take this path; all other arrays fall through to
+        // JSON so numbers/strings are unaffected.
+        if obj.is_array() {
+            if let Some(rendered) = render_element_id_array(&obj, ctx) {
+                return rendered;
+            }
+        }
         // Error-shaped objects: pull `.name`, `.message`, `.stack`.
         let name_v = obj.get(js_string!("name"), ctx).ok();
         let msg_v = obj.get(js_string!("message"), ctx).ok();

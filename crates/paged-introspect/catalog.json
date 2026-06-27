@@ -31,23 +31,23 @@
     {
       "name": "paged.insertTextFrame",
       "params": "(pageId, [t,l,b,r])",
-      "returns": "bool",
+      "returns": "string (created id) | null",
       "kind": "author",
-      "summary": "Create an empty text-pourable frame at page-local point bounds. Mints a story (id NOT returned — see constraints)."
+      "summary": "Create an empty text-pourable frame at page-local point bounds (mints a story) and select it. Returns the new textFrame:<id> address, or null on failure."
     },
     {
       "name": "paged.insertFrame",
       "params": "(pageId, [t,l,b,r])",
-      "returns": "bool",
+      "returns": "string (created id) | null",
       "kind": "author",
-      "summary": "Create an empty graphic (non-text) frame; the usual placeImage target."
+      "summary": "Create an empty graphic (non-text) frame and select it; the usual placeImage target. Returns the new frame's kind:id address, or null."
     },
     {
       "name": "paged.insertPage",
       "params": "(afterPageId?)",
-      "returns": "bool",
+      "returns": "string (page selfId) | null",
       "kind": "author",
-      "summary": "Append a page after afterPageId (or at the end), inheriting the default master."
+      "summary": "Append a page after afterPageId (or at the end), inheriting the default master. Returns the new page's selfId (reusable as the next afterPageId), or null."
     },
     {
       "name": "paged.placeImage",
@@ -97,6 +97,13 @@
       "returns": "SceneTreeNode[] JSON",
       "kind": "read",
       "summary": "Document hierarchy: spreads → pages → frames."
+    },
+    {
+      "name": "paged.pages",
+      "params": "()",
+      "returns": "PageSummary[] JSON",
+      "kind": "read",
+      "summary": "Pages with selfId + 1-based index + sizePt. selfId is the page id for insertFrame/insertTextFrame/insertPage (and the afterPageId of insertPage) — the only way a script can obtain a usable page id."
     },
     {
       "name": "paged.stories",
@@ -202,6 +209,552 @@
       "returns": "ContentSelection JSON | null",
       "kind": "read",
       "summary": "Current text caret / range."
+    },
+    {
+      "name": "paged.deletePage",
+      "params": "(pageId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a page."
+    },
+    {
+      "name": "paged.duplicatePage",
+      "params": "(pageId)",
+      "returns": "string | null",
+      "kind": "author",
+      "summary": "Duplicate a single-page spread after the source; returns the new page selfId."
+    },
+    {
+      "name": "paged.resizePage",
+      "params": "(pageId, [t,l,b,r])",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Set a page's GeometricBounds in page-inner points."
+    },
+    {
+      "name": "paged.applyMasterToPage",
+      "params": "(pageId, masterId?)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Apply a master to a page (omit/null detaches)."
+    },
+    {
+      "name": "paged.deleteElement",
+      "params": "(id)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a page item (kind:id address or bare self id)."
+    },
+    {
+      "name": "paged.dissolveGroup",
+      "params": "(groupId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Ungroup; members return to the group's paint slot."
+    },
+    {
+      "name": "paged.moveFrame",
+      "params": "(frameId, [a,b,c,d,tx,ty])",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Set a frame's affine placement transform."
+    },
+    {
+      "name": "paged.resizeFrame",
+      "params": "(frameId, [t,l,b,r])",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Set a frame's content-box bounds (re-paginating resize)."
+    },
+    {
+      "name": "paged.linkFrames",
+      "params": "(fromId, toId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Thread fromId's overflow into the empty frame toId."
+    },
+    {
+      "name": "paged.unlinkFrames",
+      "params": "(frameId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Break the text thread leaving a frame."
+    },
+    {
+      "name": "paged.insertLine",
+      "params": "(pageId, [x1,y1], [x2,y2])",
+      "returns": "string | null",
+      "kind": "author",
+      "summary": "Insert a two-anchor open GraphicLine."
+    },
+    {
+      "name": "paged.insertOval",
+      "params": "(pageId, [t,l,b,r])",
+      "returns": "string | null",
+      "kind": "author",
+      "summary": "Insert an Oval."
+    },
+    {
+      "name": "paged.insertPath",
+      "params": "(pageId, anchors, open, smooth?)",
+      "returns": "string | null",
+      "kind": "author",
+      "summary": "Insert an arbitrary path; anchors = [{anchor:[x,y],left:[x,y],right:[x,y]}, …]."
+    },
+    {
+      "name": "paged.pathPointInsert",
+      "params": "(elemId, index, anchor, subpathStarts?)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Insert an anchor into a path's flat PathPointArray at index."
+    },
+    {
+      "name": "paged.pathPointRemove",
+      "params": "(elemId, index)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Remove the anchor at flat index."
+    },
+    {
+      "name": "paged.pathPointCurveType",
+      "params": "(elemId, index, smooth)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Toggle an anchor between corner and smooth."
+    },
+    {
+      "name": "paged.pathPointSet",
+      "params": "(elemId, index, role, [x,y])",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Write one Bezier handle (role = anchor|left|right)."
+    },
+    {
+      "name": "paged.pathOpenAt",
+      "params": "(elemId, index)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Cut the path at the anchor at flat index."
+    },
+    {
+      "name": "paged.outlineStroke",
+      "params": "(elemId, width, cap, join, miter)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Replace the path with its stroke-expansion outline."
+    },
+    {
+      "name": "paged.offsetPath",
+      "params": "(elemId, delta, join, miter)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Inset (delta<0) / outset (delta>0) a single closed contour."
+    },
+    {
+      "name": "paged.simplifyPath",
+      "params": "(elemId, tolerance)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Re-express the path with fewer anchors within tolerance pt."
+    },
+    {
+      "name": "paged.pathfinderBoolean",
+      "params": "(keptId, [otherIds], kind)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Pathfinder boolean (kind = union|intersect|subtract|exclude)."
+    },
+    {
+      "name": "paged.insertField",
+      "params": "(storyId, offset, fieldKind)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Insert a field marker; fieldKind = \"pageNumber\" | \"nextPageNumber\" | { placeholder: { plugin, key, value? } }."
+    },
+    {
+      "name": "paged.setFieldValue",
+      "params": "(storyId, offset, value?)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Update a placeholder field's cached display value (null ⇒ unresolved)."
+    },
+    {
+      "name": "paged.replaceImageBytes",
+      "params": "(frameId, bytes?)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Commit inline image bytes (number[] of u8) on a graphic frame; null clears."
+    },
+    {
+      "name": "paged.insertTable",
+      "params": "(storyId, spec)",
+      "returns": "string | null",
+      "kind": "author",
+      "summary": "Create a <Table> at the end of a story; spec = { rows, cols, headerRows?, footerRows?, columnWidths?, rowHeights? }. Returns the table id."
+    },
+    {
+      "name": "paged.setRowHeight",
+      "params": "(storyId, tableId, row, height?)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Set/clear a table row height in pt."
+    },
+    {
+      "name": "paged.setColumnWidth",
+      "params": "(storyId, tableId, col, width?)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Set/clear a table column width in pt."
+    },
+    {
+      "name": "paged.insertTableRow",
+      "params": "(storyId, tableId, at)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Insert an empty body row at index."
+    },
+    {
+      "name": "paged.deleteTableRow",
+      "params": "(storyId, tableId, at)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete the body row at index."
+    },
+    {
+      "name": "paged.insertTableColumn",
+      "params": "(storyId, tableId, at)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Insert an empty column at index."
+    },
+    {
+      "name": "paged.deleteTableColumn",
+      "params": "(storyId, tableId, at)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete the column at index."
+    },
+    {
+      "name": "paged.insertHeaderRow",
+      "params": "(storyId, tableId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Insert a header-band row."
+    },
+    {
+      "name": "paged.removeHeaderRow",
+      "params": "(storyId, tableId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Remove the first header row."
+    },
+    {
+      "name": "paged.insertFooterRow",
+      "params": "(storyId, tableId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Insert a footer-band row."
+    },
+    {
+      "name": "paged.removeFooterRow",
+      "params": "(storyId, tableId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Remove the last footer row."
+    },
+    {
+      "name": "paged.setCellSpan",
+      "params": "(storyId, tableId, row, col, rowSpan, columnSpan)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Set a cell's row/column span."
+    },
+    {
+      "name": "paged.createParagraphStyle",
+      "params": "({id?,name?,basedOn?})",
+      "returns": "string | null",
+      "kind": "author",
+      "summary": "Create a paragraph style; returns its selfId."
+    },
+    {
+      "name": "paged.renameParagraphStyle",
+      "params": "(styleId, name)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Rename a paragraph style."
+    },
+    {
+      "name": "paged.deleteParagraphStyle",
+      "params": "(styleId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a paragraph style."
+    },
+    {
+      "name": "paged.createCharacterStyle",
+      "params": "({id?,name?,basedOn?})",
+      "returns": "string | null",
+      "kind": "author",
+      "summary": "Create a character style; returns its selfId."
+    },
+    {
+      "name": "paged.renameCharacterStyle",
+      "params": "(styleId, name)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Rename a character style."
+    },
+    {
+      "name": "paged.deleteCharacterStyle",
+      "params": "(styleId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a character style."
+    },
+    {
+      "name": "paged.createObjectStyle",
+      "params": "({id?,name?,basedOn?})",
+      "returns": "string | null",
+      "kind": "author",
+      "summary": "Create an object style; returns its selfId."
+    },
+    {
+      "name": "paged.renameObjectStyle",
+      "params": "(styleId, name)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Rename an object style."
+    },
+    {
+      "name": "paged.deleteObjectStyle",
+      "params": "(styleId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete an object style."
+    },
+    {
+      "name": "paged.createCellStyle",
+      "params": "({id?,name?,basedOn?})",
+      "returns": "string | null",
+      "kind": "author",
+      "summary": "Create a cell style; returns its selfId."
+    },
+    {
+      "name": "paged.renameCellStyle",
+      "params": "(styleId, name)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Rename a cell style."
+    },
+    {
+      "name": "paged.deleteCellStyle",
+      "params": "(styleId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a cell style."
+    },
+    {
+      "name": "paged.createTableStyle",
+      "params": "({id?,name?,basedOn?})",
+      "returns": "string | null",
+      "kind": "author",
+      "summary": "Create a table style; returns its selfId."
+    },
+    {
+      "name": "paged.renameTableStyle",
+      "params": "(styleId, name)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Rename a table style."
+    },
+    {
+      "name": "paged.deleteTableStyle",
+      "params": "(styleId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a table style."
+    },
+    {
+      "name": "paged.setStyleProperty",
+      "params": "(collection, styleId, path, value)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Set one property on a style definition (collection = paragraph|character|object|cell|table; path = a settablePaths name)."
+    },
+    {
+      "name": "paged.createNumberingList",
+      "params": "(spec)",
+      "returns": "string | null",
+      "kind": "author",
+      "summary": "Create a <NumberingList>; returns its id."
+    },
+    {
+      "name": "paged.editNumberingList",
+      "params": "(listId, spec)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Edit a <NumberingList>."
+    },
+    {
+      "name": "paged.deleteNumberingList",
+      "params": "(listId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a <NumberingList>."
+    },
+    {
+      "name": "paged.insertSection",
+      "params": "(pageId, {prefix?,style?,start?})",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Anchor a <Section> at a page."
+    },
+    {
+      "name": "paged.editSection",
+      "params": "(sectionId, {prefix?,style?,start?})",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Edit a <Section>; prefix/start are tri-state (omit ⇒ leave, null ⇒ clear)."
+    },
+    {
+      "name": "paged.deleteSection",
+      "params": "(sectionId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a <Section>."
+    },
+    {
+      "name": "paged.setConditionVisible",
+      "params": "(conditionId, visible)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Flip a condition's visibility."
+    },
+    {
+      "name": "paged.activateConditionSet",
+      "params": "(setId)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Activate one <ConditionSet> (\"show only this set\")."
+    },
+    {
+      "name": "paged.layerInsert",
+      "params": "(position, name)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Append a layer at the zero-based stacking index."
+    },
+    {
+      "name": "paged.layerRemove",
+      "params": "(layerId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Remove a layer."
+    },
+    {
+      "name": "paged.layerMove",
+      "params": "(layerId, newIndex)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Reorder a layer to a new zero-based index."
+    },
+    {
+      "name": "paged.insertGuide",
+      "params": "(spreadId, orientation, position, pageIndex?)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Insert a ruler guide (orientation = vertical|horizontal)."
+    },
+    {
+      "name": "paged.moveGuide",
+      "params": "(guideId, position)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Move a guide along its perpendicular axis."
+    },
+    {
+      "name": "paged.deleteGuide",
+      "params": "(guideId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a guide."
+    },
+    {
+      "name": "paged.setDocumentDefaults",
+      "params": "({fill?,stroke?,weight?})",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Set the new-object fill/stroke/weight defaults (whole-triple)."
+    },
+    {
+      "name": "paged.setColorSettings",
+      "params": "({cmykProfileName?,rgbPolicy?,intent?,bpc?})",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Replace the document colour-management settings."
+    },
+    {
+      "name": "paged.setProofSetup",
+      "params": "({profileName?,simulatePaperWhite?,intent?})",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Soft-proofing configuration (profileName null turns proofing off)."
+    },
+    {
+      "name": "paged.importSwatchLibrary",
+      "params": "(bytes, groupName?)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Import an .ase swatch library (bytes = number[]) as one undoable op."
+    },
+    {
+      "name": "paged.setInkSetting",
+      "params": "(spotId, {convertToProcess?,aliasTo?})",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Replace one ink's output-time settings."
+    },
+    {
+      "name": "paged.setUseStandardLabForSpots",
+      "params": "(enabled)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Prefer spots' Lab primary over their CMYK alternate in previews."
+    },
+    {
+      "name": "paged.setPluginMetadata",
+      "params": "(elemId, key, value?, caller?)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Write one Label key/value pair on a leaf page item (value null deletes)."
+    },
+    {
+      "name": "paged.batch",
+      "params": "([mutations])",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Apply an array of { op, args } mutation objects as ONE undoable step."
+    },
+    {
+      "name": "paged.setElementSelection",
+      "params": "([id, ...])",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Replace the element selection with the parseable ids."
+    },
+    {
+      "name": "paged.clearSelection",
+      "params": "()",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Clear the element selection."
+    },
+    {
+      "name": "paged.setContentSelection",
+      "params": "({storyId,start,end} | null)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Set or clear the text caret/range."
     },
     {
       "name": "console.log",
@@ -411,10 +964,11 @@
   ],
   "constraints": [
     "Scripts run in Boa (pure ECMAScript), NOT Node: no require/import, fetch, fs, setTimeout, or network. Use only paged.* and console.*.",
-    "Every paged.* write returns a boolean: true = applied, false = rejected (unknown id/path, bad value, or a failed precondition). Always check it and adapt.",
+    "Reads return JSON STRINGS, not live values: JSON.parse(paged.selection()/tree()/stories()/pages()/…) before you index. Parsed elements are { kind, id } objects — address one as the string `${kind}:${id}` (e.g. textFrame:u3) for paged.set / inspect / get.",
+    "Property writes (paged.set) return a boolean: true = applied, false = rejected (unknown id/path, bad value, or a failed precondition). The structural insert fns are the exception — see below. Always check the result and adapt.",
     "Writes go through the editor's Operation channel, so paged.undo()/paged.redo() work exactly as in the UI.",
     "Runtime budgets: ~10M loop iterations, recursion depth 512, and a ~2s wall-clock checked at every host call. Runaway scripts are aborted (non-catchable).",
-    "insertTextFrame/insertFrame create a new frame (and insertTextFrame mints a story) but return only a boolean — NOT the new id. To fill a freshly-created frame you need its story id: prefer inserting into existing template stories, or re-read paged.stories()/paged.tree() after creating to discover the new id.",
+    "insertFrame/insertTextFrame return the new element's kind:id address (and auto-select it); insertPage returns the new page's selfId. Pass the returned id straight to paged.set / placeImage / insertText (use paged.pages() for a page id, paged.stories() for the minted story).",
     "Bounds are page-local points in [top, left, bottom, right] order. The document works in points (1/72 inch)."
   ],
   "elements": [

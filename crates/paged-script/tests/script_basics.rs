@@ -56,6 +56,7 @@ fn current_opacity(model: &CanvasModel) -> Option<f32> {
 }
 
 #[test]
+// example: set-frame-fill
 fn paged_set_via_js_routes_through_apply_layer() {
     let mut model = load();
     let result = execute_script(
@@ -195,6 +196,7 @@ fn console_log_captured_into_output() {
 }
 
 #[test]
+// example: undo-redo
 fn paged_undo_reverts_a_set() {
     let mut model = load();
     let before = current_opacity(&model);
@@ -845,15 +847,15 @@ fn paged_insert_text_frame_mutates_the_scene() {
     let before = model.current_state_hash();
     let source = format!(
         r#"
-            const ok = paged.insertTextFrame({page_id:?}, [10, 10, 120, 200]);
-            console.log("frame", ok);
+            const id = paged.insertTextFrame({page_id:?}, [10, 10, 120, 200]);
+            console.log("frame", id);
         "#
     );
     let result = execute_script(&mut model, &source);
     assert!(result.error.is_none(), "{:?}", result.error);
     assert!(
-        result.output.iter().any(|l| l.contains("[log] frame true")),
-        "insertTextFrame should return true; got {:?}",
+        result.output.iter().any(|l| l.contains("[log] frame textFrame:")),
+        "insertTextFrame should return the new textFrame:<id> address; got {:?}",
         result.output
     );
     // The new frame changes the canonical scene state.
@@ -883,12 +885,14 @@ fn paged_insert_frame_and_page_author_structure() {
     );
     let result = execute_script(&mut model, &source);
     assert!(result.error.is_none(), "{:?}", result.error);
+    // insertFrame now returns the new element address (rectangle:<id>) and
+    // insertPage the new page selfId — both truthy strings, not bare booleans.
     assert!(
         result
             .output
             .iter()
-            .any(|l| l.contains("[log] frame true page true")),
-        "insertFrame + insertPage should both succeed; got {:?}",
+            .any(|l| l.contains("[log] frame rectangle:") && !l.contains("page null")),
+        "insertFrame should return a kind:id address and insertPage a page selfId; got {:?}",
         result.output
     );
     assert_ne!(
@@ -936,6 +940,211 @@ fn paged_stage2_authoring_fns_are_registered_and_callable() {
             .iter()
             .any(|l| l.contains("[log] group-empty false")),
         "createGroup([]) must return false: {:?}",
+        result.output
+    );
+}
+
+// ----------------------------------------------------------------- complete
+// mutation-surface host fns: delete / dissolve / tables / style CRUD /
+// selection / shape inserts. One representative per family — a single
+// regression in the registration or arg handling surfaces here.
+
+#[test]
+fn paged_delete_element_removes_a_frame() {
+    let mut model = load();
+    let result = execute_script(
+        &mut model,
+        r#"
+            const ok = paged.deleteElement("textFrame:ua365e1");
+            const after = paged.inspect("textFrame:ua365e1");
+            console.log("del", ok, after === null);
+        "#,
+    );
+    assert!(result.error.is_none(), "{:?}", result.error);
+    assert!(
+        result.output.iter().any(|l| l.contains("[log] del true true")),
+        "deleteElement should remove the frame: {:?}",
+        result.output
+    );
+}
+
+fn first_group_id(model: &CanvasModel) -> Option<String> {
+    for parsed in &model.scene().spreads {
+        for g in &parsed.spread.groups {
+            if let Some(gid) = &g.self_id {
+                return Some(gid.clone());
+            }
+        }
+    }
+    None
+}
+
+#[test]
+fn paged_dissolve_group_ungroups() {
+    let mut model = load();
+    let gid = first_group_id(&model).expect("geometry-groups fixture has a group");
+    let result = execute_script(
+        &mut model,
+        &format!(r#"console.log("dis", paged.dissolveGroup("group:{gid}"));"#),
+    );
+    assert!(result.error.is_none(), "{:?}", result.error);
+    assert!(
+        result.output.iter().any(|l| l.contains("[log] dis true")),
+        "dissolveGroup should succeed: {:?}",
+        result.output
+    );
+    assert!(
+        first_group_id(&model).as_deref() != Some(gid.as_str())
+            || !model
+                .scene()
+                .spreads
+                .iter()
+                .flat_map(|s| &s.spread.groups)
+                .any(|g| g.self_id.as_deref() == Some(gid.as_str())),
+        "the dissolved group must be gone"
+    );
+}
+
+#[test]
+// example: insert-table
+fn paged_insert_table_returns_a_table_id() {
+    let mut model = load();
+    let result = execute_script(
+        &mut model,
+        r#"
+            const sid = JSON.parse(paged.stories())[0].selfId;
+            const tid = paged.insertTable(sid, { rows: 3, cols: 2 });
+            console.log("table", typeof tid, tid !== null && tid.length > 0);
+        "#,
+    );
+    assert!(result.error.is_none(), "{:?}", result.error);
+    assert!(
+        result
+            .output
+            .iter()
+            .any(|l| l.contains("[log] table string true")),
+        "insertTable must return a non-empty id string: {:?}",
+        result.output
+    );
+}
+
+#[test]
+// example: table-insert-row
+fn paged_insert_table_row_extends_a_fresh_table() {
+    let mut model = load();
+    let result = execute_script(
+        &mut model,
+        r#"
+            const sid = JSON.parse(paged.stories())[0].selfId;
+            const tid = paged.insertTable(sid, { rows: 2, cols: 2 });
+            const ok = paged.insertTableRow(sid, tid, 1);
+            console.log("row", ok);
+        "#,
+    );
+    assert!(result.error.is_none(), "{:?}", result.error);
+    assert!(
+        result.output.iter().any(|l| l.contains("[log] row true")),
+        "insertTableRow on a fresh table should succeed: {:?}",
+        result.output
+    );
+}
+
+#[test]
+// example: create-paragraph-style
+fn paged_create_paragraph_style_returns_id_and_appears_in_collection() {
+    let mut model = load();
+    let result = execute_script(
+        &mut model,
+        r#"
+            const id = paged.createParagraphStyle({ name: "Script Made" });
+            const found = JSON.parse(paged.paragraphStyles()).some(s => s.selfId === id);
+            console.log("style", typeof id, id !== null && id.length > 0);
+            console.log("found", found);
+        "#,
+    );
+    assert!(result.error.is_none(), "{:?}", result.error);
+    assert!(
+        result
+            .output
+            .iter()
+            .any(|l| l.contains("[log] style string true")),
+        "createParagraphStyle must return a non-empty id: {:?}",
+        result.output
+    );
+    assert!(
+        result.output.iter().any(|l| l.contains("[log] found true")),
+        "the created style must appear in paragraphStyles(): {:?}",
+        result.output
+    );
+}
+
+#[test]
+// example: set-selection
+fn paged_set_element_selection_is_reflected_by_paged_selection() {
+    let mut model = load();
+    let result = execute_script(
+        &mut model,
+        r#"
+            paged.setElementSelection(["textFrame:ua365e1"]);
+            paged.selection();
+        "#,
+    );
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let line = result.output.into_iter().next().expect("no output line");
+    let parsed: Vec<ElementId> = serde_json::from_str(&line).expect("selection JSON parses");
+    assert_eq!(parsed, vec![ElementId::TextFrame(TEXT_FRAME_ID.to_string())]);
+}
+
+#[test]
+fn paged_clear_selection_empties_paged_selection() {
+    let mut model = load();
+    model.element_selection.apply_mode(
+        &[ElementId::TextFrame(TEXT_FRAME_ID.to_string())],
+        SelectionMode::Replace,
+    );
+    let result = execute_script(
+        &mut model,
+        r#"
+            paged.clearSelection();
+            paged.selection();
+        "#,
+    );
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let line = result.output.into_iter().next().expect("no output line");
+    let parsed: Vec<ElementId> = serde_json::from_str(&line).expect("selection JSON parses");
+    assert!(parsed.is_empty(), "clearSelection must empty the selection");
+}
+
+#[test]
+fn paged_insert_oval_and_line_return_addresses() {
+    let mut model = load();
+    let page_id = model.page_ids().next().expect("a page").0.clone();
+    let result = execute_script(
+        &mut model,
+        &format!(
+            r#"
+                const o = paged.insertOval({page_id:?}, [10, 10, 60, 80]);
+                const l = paged.insertLine({page_id:?}, [0, 0], [50, 50]);
+                console.log("oval", o);
+                console.log("line", l);
+            "#
+        ),
+    );
+    assert!(result.error.is_none(), "{:?}", result.error);
+    assert!(
+        result
+            .output
+            .iter()
+            .any(|l| l.contains("[log] oval oval:")),
+        "insertOval must return an oval: address: {:?}",
+        result.output
+    );
+    assert!(
+        result
+            .output
+            .iter()
+            .any(|l| l.contains("[log] line graphicLine:")),
+        "insertLine must return a graphicLine: address: {:?}",
         result.output
     );
 }
