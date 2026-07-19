@@ -2464,6 +2464,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "paged-flow"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "paged-gen"
 version = "0.0.0"
 dependencies = [
@@ -2612,6 +2620,7 @@ name = "paged-scene"
 version = "0.0.0"
 dependencies = [
  "blake3",
+ "paged-flow",
  "paged-parse",
  "serde",
  "serde_json",
