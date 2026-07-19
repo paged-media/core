@@ -2431,12 +2431,20 @@ dependencies = [
 name = "paged-composition"
 version = "0.0.0"
 dependencies = [
- "image",
- "paged-compose",
  "paged-flow",
- "paged-gpu",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "paged-composition-render"
+version = "0.0.0"
+dependencies = [
+ "image",
+ "paged-compose",
+ "paged-composition",
+ "paged-flow",
+ "paged-gpu",
 ]
 
 [[package]]
@@ -2633,6 +2641,7 @@ name = "paged-scene"
 version = "0.0.0"
 dependencies = [
  "blake3",
+ "paged-composition",
  "paged-flow",
  "paged-parse",
  "serde",

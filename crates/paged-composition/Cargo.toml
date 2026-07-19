@@ -10,18 +10,14 @@ description = "The Paged-native composition model (document.pgd): surfaces, page
 [lints]
 workspace = true
 
-[features]
-# The base crate is the model only (light, no render stack). The `render`
-# feature adds the compositor drive: walk a Composition, lower each region's
-# SceneLayer, rasterize (pulls paged-compose + the CPU rasterizer).
-render = ["dep:paged-compose", "dep:paged-gpu", "dep:image"]
-
+# NOTE: this crate stays PURE (paged-flow + serde only, no render stack).
+# `paged-scene` depends on it (for `Document::to_composition`), and the
+# render stack (paged-compose/paged-gpu) depends on `paged-scene` — so the
+# compositor drive lives one layer up, in `paged-composition-render`, to keep
+# the dependency graph acyclic.
 [dependencies]
 paged-flow = { path = "../paged-flow" }
 serde = { workspace = true }
-paged-compose = { path = "../paged-compose", optional = true }
-paged-gpu = { path = "../paged-gpu", features = ["cpu"], optional = true }
-image = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = "1"

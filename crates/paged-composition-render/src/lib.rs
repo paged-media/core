@@ -12,24 +12,29 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! Driving the compositor from a [`Composition`] (S6 slice 2, `render`
-//! feature). Walks the model's regions, asks a [`RegionRenderer`] for each
-//! region's `SceneLayer`, lowers it at the region's page position
-//! (`paged_compose::emit_scene_layer`), and rasterizes
+//! Driving the compositor from a [`paged_composition::Composition`]
+//! (`document.pgd`, S6 slice 2). Walks the model's regions, asks a
+//! [`RegionRenderer`] for each region's `SceneLayer`, lowers it at the
+//! region's page position (`paged_compose::emit_scene_layer`), and rasterizes
 //! (`paged_gpu::rasterize`).
 //!
 //! This is the reusable form of the S5 C1 test: **render a `document.pgd`
 //! composition to pixels with no IDML.** The content itself comes from a
 //! `RegionRenderer` (a content engine, or a test stub) — the composition owns
-//! only the arrangement. Slice-2 scope: single page, `PageRelative` positions;
+//! only the arrangement.
+//!
+//! It lives one layer up from `paged-composition` (which stays pure, so
+//! `paged-scene` can depend on it) because the render stack
+//! (`paged-compose`/`paged-gpu`) itself depends on `paged-scene`.
+//!
+//! Slice-2 scope: single page, `PageRelative` positions;
 //! `FrameRelative`/`Anchor`/`GridCell` resolution, multi-page, and cross-region
 //! flow fragmentation are later slices.
 
 use paged_compose::{Color, DisplayList, SceneLayer, SceneTextItem, Transform};
+use paged_composition::{Composition, Position, Region};
 use paged_flow::RegionGeometry;
 use paged_gpu::{rasterize, RasterOptions};
-
-use crate::{Composition, Position, Region};
 
 /// Produces the `SceneLayer` a region's bound content paints. The composition
 /// is content-agnostic; this is where a content engine (or a test) turns a
@@ -87,8 +92,9 @@ fn emit_region(list: &mut DisplayList, layer: &SceneLayer, at: &[f32; 2], geom: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Bind, Node, Page, PartRef, RegionId, SurfaceKind};
     use paged_compose::{SceneItem, ScenePaint, ScenePathSeg};
+    use paged_composition::{Bind, Node, Page, PartRef, Surface, SurfaceKind};
+    use paged_flow::RegionId;
 
     /// A test content engine: paints each region's bound `selector` as a solid
     /// colour block (the colour encoded in the selector `"color:RRGGBB"`).
@@ -147,7 +153,7 @@ mod tests {
     #[test]
     fn render_page_composites_regions_with_no_idml() {
         let mut comp = Composition::new(1);
-        comp.surfaces = vec![crate::Surface {
+        comp.surfaces = vec![Surface {
             id: "print".to_string(),
             kind: SurfaceKind::Print,
         }];
