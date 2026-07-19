@@ -40,6 +40,11 @@
 use paged_flow::{FlowId, RegionChain, RegionGeometry, RegionId};
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "render")]
+pub mod render;
+#[cfg(feature = "render")]
+pub use render::{render_page, RegionRenderer};
+
 fn default_format() -> String {
     "paged-composition".to_string()
 }

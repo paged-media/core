@@ -2431,7 +2431,10 @@ dependencies = [
 name = "paged-composition"
 version = "0.0.0"
 dependencies = [
+ "image",
+ "paged-compose",
  "paged-flow",
+ "paged-gpu",
  "serde",
  "serde_json",
 ]
