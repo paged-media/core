@@ -1,0 +1,18 @@
+[package]
+name = "paged-composition"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The Paged-native composition model (document.pgd): surfaces, pages, regions, flows, positioning. No IDML."
+
+[lints]
+workspace = true
+
+[dependencies]
+paged-flow = { path = "../paged-flow" }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = "1"

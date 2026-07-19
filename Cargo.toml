@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/paged-parse",
     "crates/paged-flow",
+    "crates/paged-composition",
     "crates/paged-scene",
     "crates/paged-text",
     "crates/paged-color",
