@@ -1,0 +1,18 @@
+[package]
+name = "paged-composition-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Drive the compositor from a Composition (document.pgd) — regions -> SceneLayers -> raster. No IDML."
+
+[lints]
+workspace = true
+
+[dependencies]
+paged-composition = { path = "../paged-composition" }
+paged-flow = { path = "../paged-flow" }
+paged-compose = { path = "../paged-compose" }
+paged-gpu = { path = "../paged-gpu", features = ["cpu"] }
+image = { workspace = true }

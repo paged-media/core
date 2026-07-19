@@ -389,6 +389,103 @@ impl Document {
         paged_flow::RegionChain::new(paged_flow::FlowId::new(story_id), regions)
     }
 
+    /// Project this IDML document's **arrangement** into a Paged-native
+    /// [`paged_composition::Composition`] (`document.pgd`) — the IDML→
+    /// composition adapter (composition-format §9). Maps spreads/pages → pages,
+    /// and each story's frame chain → a `Flow` + text-frame `Region`s tagged
+    /// with that flow (bound to `publishing:story/<id>`, geometry from the
+    /// frame's content box). The story *content* stays in the publishing part;
+    /// this projects only the **arrangement**, so
+    /// `to_composition().flow_chain(FlowId(story)) == self.flow_chain(story)`.
+    ///
+    /// Slice-3 scope: text-frame flows + pages. Rectangles/ovals/groups/layers,
+    /// master-spread templates, anchored objects, and resource references are
+    /// later slices; region positions are best-effort (the frame's spread-space
+    /// translation) pending the positioning solver.
+    pub fn to_composition(&self) -> paged_composition::Composition {
+        use paged_composition::{
+            Bind, Composition, Flow, Node, Page, PartRef, Position, Region, Surface, SurfaceKind,
+        };
+
+        let mut comp = Composition::new(1);
+        comp.capabilities = vec![
+            "flow.regionChain@1".to_string(),
+            "surface.print@1".to_string(),
+        ];
+        comp.surfaces = vec![Surface {
+            id: "print".to_string(),
+            kind: SurfaceKind::Print,
+        }];
+
+        // Pages from spreads.
+        let mut first_page_id: Option<String> = None;
+        for parsed in &self.spreads {
+            let spread_id = parsed.spread.self_id.clone();
+            for page in &parsed.spread.pages {
+                let id = page
+                    .self_id
+                    .clone()
+                    .unwrap_or_else(|| format!("page{}", comp.pages.len()));
+                if first_page_id.is_none() {
+                    first_page_id = Some(id.clone());
+                }
+                comp.pages.push(Page {
+                    id,
+                    size: [page.bounds.width(), page.bounds.height()],
+                    spread: spread_id.clone(),
+                });
+            }
+        }
+
+        // One flow per threaded story; its frames become flow-tagged regions.
+        for parsed in &self.stories {
+            let chain = self.frame_chain(&parsed.self_id);
+            if chain.is_empty() {
+                continue;
+            }
+            let flow_id = paged_flow::FlowId::new(&parsed.self_id);
+            let selector = format!("story/{}", parsed.self_id);
+            comp.flows.push(Flow {
+                id: flow_id.clone(),
+                part: PartRef::new("publishing"),
+                selector: selector.clone(),
+            });
+            for (i, frame) in chain.iter().enumerate() {
+                let id = frame
+                    .self_id
+                    .clone()
+                    .unwrap_or_else(|| format!("{}#frame{i}", parsed.self_id));
+                // Best-effort page: the frame's hosting spread's first page.
+                let page = frame
+                    .self_id
+                    .as_deref()
+                    .and_then(|fid| self.text_frame_index.get(fid))
+                    .and_then(|&(sp, _)| self.spreads.get(sp))
+                    .and_then(|s| s.spread.pages.first())
+                    .and_then(|p| p.self_id.clone())
+                    .or_else(|| first_page_id.clone())
+                    .unwrap_or_else(|| "page0".to_string());
+                let at = match frame.item_transform {
+                    Some(m) => [m[4], m[5]],
+                    None => [frame.bounds.left, frame.bounds.top],
+                };
+                comp.nodes.push(Node::Region(Region {
+                    id: paged_flow::RegionId::new(id),
+                    bind: Bind::Part {
+                        part: PartRef::new("publishing"),
+                        selector: selector.clone(),
+                    },
+                    position: Position::PageRelative { page, at },
+                    geometry: text_frame_content_box(frame),
+                    layer: None,
+                    flow: Some(flow_id.clone()),
+                    visible_on: Vec::new(),
+                }));
+            }
+        }
+        comp
+    }
+
     /// Bytes of a sub-resource in the underlying container (fonts,
     /// linked images, ICC profiles — anything the manifest or frames
     /// reference but that `Document` doesn't parse itself).
@@ -1630,6 +1727,41 @@ mod tests {
         let flow = doc.flow_chain("does-not-exist");
         assert_eq!(flow.flow, paged_flow::FlowId::new("does-not-exist"));
         assert!(flow.is_empty());
+    }
+
+    #[test]
+    fn to_composition_preserves_the_flow_arrangement() {
+        let doc = Document::open(&pack_threaded_idml()).unwrap();
+        let comp = doc.to_composition();
+
+        // One print surface + the single page.
+        assert_eq!(comp.surfaces.len(), 1);
+        assert_eq!(comp.surfaces[0].kind, paged_composition::SurfaceKind::Print);
+        assert_eq!(comp.pages.len(), 1);
+        assert_eq!(comp.pages[0].id, "p1");
+
+        // A flow per threaded story: u10 (frameA→frameB) and u20 (frameC).
+        let flow_ids: Vec<&str> = comp.flows.iter().map(|f| f.id.as_str()).collect();
+        assert!(flow_ids.contains(&"u10") && flow_ids.contains(&"u20"));
+
+        // The native composition reproduces the IDML region-chain exactly —
+        // the adapter preserves the flow arrangement.
+        assert_eq!(
+            comp.flow_chain(&paged_flow::FlowId::new("u10")),
+            doc.flow_chain("u10")
+        );
+        let chain = comp.flow_chain(&paged_flow::FlowId::new("u10"));
+        let ids: Vec<&str> = chain.regions.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["frameA", "frameB"]);
+
+        // Regions carry the publishing bind + the flow tag.
+        let region = comp
+            .regions()
+            .into_iter()
+            .find(|r| r.id.as_str() == "frameA")
+            .unwrap();
+        assert_eq!(region.flow, Some(paged_flow::FlowId::new("u10")));
+        assert!(matches!(&region.bind, paged_composition::Bind::Part { .. }));
     }
 
     /// Pack an IDML with three body pages on a single spread, three
