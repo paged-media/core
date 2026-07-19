@@ -5907,6 +5907,9 @@ impl CanvasModel {
         // panels.md gap 1 — stories the build flagged overset (text
         // dropped past the last frame in their chain).
         let overset = self.built.diagnostics.overset_story_ids();
+        // S4 — the first-class overset continuation (where the flow overran),
+        // keyed by story id.
+        let overset_at = self.built.diagnostics.overset_continuations();
         self.scene
             .stories
             .iter()
@@ -5922,6 +5925,12 @@ impl CanvasModel {
                     character_count: chars,
                     paragraph_count: s.story.paragraphs.len() as u32,
                     overset: overset.contains(&s.self_id),
+                    overset_at: overset_at
+                        .get(&s.self_id)
+                        .map(|c| crate::channel::OversetAt {
+                            paragraph: c.paragraph_idx,
+                            line: c.line_idx,
+                        }),
                 }
             })
             .collect()

@@ -2499,6 +2499,20 @@ pub struct GradientSummary {
     pub kind: String,
 }
 
+/// Where a story's flow overran its frame chain — the first-class overset
+/// **continuation** the engine records (`paged_flow::Overset::Remains`, via
+/// `RenderDiagnostics::overset_continuations()`). Lets the editor jump the
+/// caret to the first clipped line / show "overset at ¶N line M" instead of
+/// only a boolean overset badge. Addresses match the layout stream
+/// (`paragraph` within the story's body flow, `line` within that paragraph).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "camelCase")]
+pub struct OversetAt {
+    pub paragraph: u32,
+    pub line: u32,
+}
+
 /// SDK Phase 3 — one story's identity + total character length.
 /// Surfaced by `CanvasModel::stories()` and the `paged.stories()`
 /// script host function so consumers can pick valid character
@@ -2522,6 +2536,11 @@ pub struct StorySummary {
     /// Preflight panel + the red "+" overset badge on the frame.
     #[serde(default)]
     pub overset: bool,
+    /// When `overset`, *where* the flow overran — the continuation cursor
+    /// (`OversetAt`). `None` when the story fits. Additive/optional, so an
+    /// older client that ignores it still reads the `overset` flag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overset_at: Option<OversetAt>,
 }
 
 /// Inspector P1 — one node in the scene tree. Children are nested

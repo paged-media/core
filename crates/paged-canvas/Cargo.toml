@@ -65,6 +65,8 @@ web-sys = { version = "0.3", features = ["console"] }
 # bytes are committed. criterion drives the measurements.
 criterion = { workspace = true }
 paged-gen = { path = "../paged-gen" }
+# S4 overset-wire test builds a small inline overflowing IDML.
+zip = { workspace = true }
 
 # W1.24 (audit B17) — `make bench` lane. `harness = false` hands the
 # bench main to criterion. Not wired into `verify` (benches are not a
