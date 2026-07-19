@@ -102,6 +102,46 @@ pub struct ParsedMasterSpread {
 /// document with a missed cycle can't make the resolver loop.
 const MAX_FRAME_CHAIN: usize = 256;
 
+/// The IDML default gutter between text columns, in pt (used when a frame
+/// declares a column count but no `TextColumnGutter`).
+const DEFAULT_COLUMN_GUTTER_PT: f32 = 12.0;
+
+/// A text frame's **content box** as a neutral [`paged_flow::RegionGeometry`].
+/// Thin adapter over [`content_box_geometry`] reading the frame's fields.
+fn text_frame_content_box(frame: &TextFrame) -> paged_flow::RegionGeometry {
+    content_box_geometry(
+        frame.bounds,
+        frame.inset_spacing,
+        frame.column_count,
+        frame.column_gutter,
+    )
+}
+
+/// The content box of a text frame from its raw geometry inputs: the frame's
+/// bounds minus its text insets, carrying the column count/gutter.
+/// `InsetSpacing` is IDML order `[top, left, bottom, right]`. Sizes are
+/// clamped non-negative (a degenerate inset must not yield a negative content
+/// box). This is the frame's own *local* box — the `ItemTransform`/spread
+/// placement is composition-positioning, resolved downstream, not part of the
+/// flow's content-box size. Kept as a pure function so the geometry math is
+/// unit-testable without constructing a full `TextFrame`.
+fn content_box_geometry(
+    bounds: Bounds,
+    inset_spacing: Option<[f32; 4]>,
+    column_count: Option<u32>,
+    column_gutter: Option<f32>,
+) -> paged_flow::RegionGeometry {
+    let [inset_top, inset_left, inset_bottom, inset_right] = inset_spacing.unwrap_or([0.0; 4]);
+    let width = (bounds.width() - inset_left - inset_right).max(0.0);
+    let height = (bounds.height() - inset_top - inset_bottom).max(0.0);
+    paged_flow::RegionGeometry {
+        width_pt: width,
+        height_pt: height,
+        columns: column_count.unwrap_or(1).max(1),
+        column_gap_pt: column_gutter.unwrap_or(DEFAULT_COLUMN_GUTTER_PT),
+    }
+}
+
 impl Document {
     /// Parse every resource the manifest points at. Missing spreads
     /// or stories produce an [`OpenError::MissingEntry`] — the parse
@@ -300,6 +340,44 @@ impl Document {
             cursor = next.next_text_frame.clone();
         }
         out
+    }
+
+    /// A story's frame chain, expressed as a **content-agnostic region chain**
+    /// (`paged_flow::RegionChain`) — the composition-format §5 flow protocol.
+    ///
+    /// This is the seam ADR-021 makes explicit: the *region-chain is
+    /// arrangement* (composition-owned), the *story is content* (part-owned).
+    /// Today the two are entangled — the IDML `TextFrame` carries both its
+    /// geometry (arrangement) and its `NextTextFrame` thread + `ParentStory`
+    /// link (which stitch arrangement to content). This projects the
+    /// arrangement half out into the neutral vocabulary: each frame in
+    /// [`frame_chain`](Self::frame_chain) becomes a [`Region`] whose id is the
+    /// frame's `Self` id and whose geometry is the frame's **content box**
+    /// (bounds minus text insets, with the frame's column count/gutter). The
+    /// flow id is the `story_id`.
+    ///
+    /// The geometry here is the frame's *local* content box (its own bounds,
+    /// pre-`ItemTransform`); transform-aware page geometry and footnote
+    /// reservations remain the renderer's job (`StoryEmitter`). This method
+    /// changes no render path — it is the additive bridge that lets the
+    /// content-agnostic driver ([`paged_flow::run_flow`]) drive the same
+    /// region ordering the renderer walks imperatively today.
+    pub fn flow_chain(&self, story_id: &str) -> paged_flow::RegionChain {
+        let regions = self
+            .frame_chain(story_id)
+            .into_iter()
+            .enumerate()
+            .map(|(i, frame)| {
+                // A frame with no `Self` id is synthetic; give it a stable
+                // positional id so the region chain stays addressable.
+                let id = frame
+                    .self_id
+                    .clone()
+                    .unwrap_or_else(|| format!("{story_id}#frame{i}"));
+                paged_flow::Region::new(id, text_frame_content_box(frame))
+            })
+            .collect();
+        paged_flow::RegionChain::new(paged_flow::FlowId::new(story_id), regions)
     }
 
     /// Bytes of a sub-resource in the underlying container (fonts,
@@ -1381,6 +1459,154 @@ mod tests {
         assert_eq!(derive_story_id("Stories/Story_u10.xml"), "u10");
         assert_eq!(derive_story_id("u10.xml"), "u10");
         assert_eq!(derive_story_id("Stories/custom_u10.xml"), "custom_u10");
+    }
+
+    // ---- FlowId / region-chain seam (composition-format §5) -------------
+
+    fn bounds(top: f32, left: f32, bottom: f32, right: f32) -> Bounds {
+        Bounds {
+            top,
+            left,
+            bottom,
+            right,
+        }
+    }
+
+    #[test]
+    fn content_box_subtracts_insets() {
+        // 300×200 bounds, insets [top6 left8 bottom10 right12] →
+        // width 300-8-12=280, height 200-6-10=184.
+        let g = content_box_geometry(bounds(0.0, 0.0, 200.0, 300.0), Some([6.0, 8.0, 10.0, 12.0]), None, None);
+        assert_eq!(g.width_pt, 280.0);
+        assert_eq!(g.height_pt, 184.0);
+        // Defaults: one column, 12pt IDML gutter.
+        assert_eq!(g.columns, 1);
+        assert_eq!(g.column_gap_pt, DEFAULT_COLUMN_GUTTER_PT);
+    }
+
+    #[test]
+    fn content_box_no_insets_is_full_bounds() {
+        let g = content_box_geometry(bounds(0.0, 0.0, 200.0, 300.0), None, Some(2), Some(10.0));
+        assert_eq!(g.width_pt, 300.0);
+        assert_eq!(g.height_pt, 200.0);
+        assert_eq!(g.columns, 2);
+        assert_eq!(g.column_gap_pt, 10.0);
+    }
+
+    #[test]
+    fn content_box_clamps_degenerate_insets_to_zero() {
+        // Insets larger than the box must not yield a negative content box.
+        let g = content_box_geometry(bounds(0.0, 0.0, 10.0, 10.0), Some([50.0, 50.0, 50.0, 50.0]), Some(0), None);
+        assert_eq!(g.width_pt, 0.0);
+        assert_eq!(g.height_pt, 0.0);
+        // A declared 0 columns is floored to 1.
+        assert_eq!(g.columns, 1);
+    }
+
+    /// Two frames threaded into one story (`frameA` → `frameB`), plus a
+    /// third frame on a *different* story that must not leak into the chain.
+    /// `frameA` carries insets + columns so the region geometry is exercised.
+    fn pack_threaded_idml() -> Vec<u8> {
+        let buf = std::io::Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+        zip.start_file("mimetype", stored).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+
+        zip.start_file("designmap.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_u10.xml"/>
+  <idPkg:Story src="Stories/Story_u20.xml"/>
+</Document>"#,
+        )
+        .unwrap();
+
+        zip.start_file("Resources/Graphic.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic/>
+</idPkg:Graphic>"#,
+        )
+        .unwrap();
+
+        // frameA (head, insets + 2 columns) → frameB (tail). frameC is on a
+        // separate story (u20). GeometricBounds is `top left bottom right`.
+        zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 800 1200"/>
+    <TextFrame Self="frameA" ParentStory="u10" NextTextFrame="frameB" GeometricBounds="0 0 200 300" StrokeWeight="0">
+      <Properties/>
+      <TextFramePreference InsetSpacing="6 8 10 12" TextColumnCount="2" TextColumnGutter="10"/>
+    </TextFrame>
+    <TextFrame Self="frameB" ParentStory="u10" GeometricBounds="0 320 200 620" StrokeWeight="0"/>
+    <TextFrame Self="frameC" ParentStory="u20" GeometricBounds="0 640 200 940" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#,
+        )
+        .unwrap();
+
+        for (sid, text) in [("u10", "Threaded story."), ("u20", "Other story.")] {
+            let story = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="{sid}">
+    <ParagraphStyleRange>
+      <CharacterStyleRange><Content>{text}</Content></CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#
+            );
+            zip.start_file(format!("Stories/Story_{sid}.xml"), deflated)
+                .unwrap();
+            zip.write_all(story.as_bytes()).unwrap();
+        }
+
+        zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn flow_chain_projects_the_frame_chain() {
+        let doc = Document::open(&pack_threaded_idml()).unwrap();
+
+        // The flow chain is a faithful projection of the frame chain:
+        // same order, ids = frame Self ids, flow id = story id.
+        let frames = doc.frame_chain("u10");
+        let flow = doc.flow_chain("u10");
+        assert_eq!(flow.flow, paged_flow::FlowId::new("u10"));
+        assert_eq!(flow.len(), frames.len());
+        assert_eq!(flow.len(), 2);
+        let ids: Vec<&str> = flow.regions.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["frameA", "frameB"]);
+
+        // Region 0 (frameA) geometry = bounds 300×200 minus insets [6 8 10 12]
+        // → 280×184, with the declared 2 columns / 10pt gutter.
+        let r0 = &flow.regions[0].geometry;
+        assert_eq!((r0.width_pt, r0.height_pt), (280.0, 184.0));
+        assert_eq!(r0.columns, 2);
+        assert_eq!(r0.column_gap_pt, 10.0);
+
+        // Region 1 (frameB) has no insets → full 300×200, default 1 column.
+        let r1 = &flow.regions[1].geometry;
+        assert_eq!((r1.width_pt, r1.height_pt), (300.0, 200.0));
+        assert_eq!(r1.columns, 1);
+    }
+
+    #[test]
+    fn flow_chain_for_unknown_story_is_empty() {
+        let doc = Document::open(&pack_threaded_idml()).unwrap();
+        let flow = doc.flow_chain("does-not-exist");
+        assert_eq!(flow.flow, paged_flow::FlowId::new("does-not-exist"));
+        assert!(flow.is_empty());
     }
 
     /// Pack an IDML with three body pages on a single spread, three
