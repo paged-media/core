@@ -81,6 +81,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 [dev-dependencies]
 paged-fidelity = { path = "../paged-fidelity" }
 paged-flow = { path = "../paged-flow" }
+# C1-in-code test (tests/c1_no_idml.rs) drives the neutral render pipeline
+# (flow -> SceneLayer -> DisplayList -> raster) directly, with no IDML.
+paged-compose = { path = "../paged-compose" }
+paged-gpu = { path = "../paged-gpu", features = ["cpu"] }
 paged-gen = { path = "../paged-gen" }
 image = { workspace = true }
 zip = { workspace = true }
