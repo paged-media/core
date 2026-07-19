@@ -19,12 +19,14 @@
 
 pub mod asset;
 pub mod diagnostics;
+pub mod flow;
 pub mod pipeline;
 pub mod resource_provider;
 
 mod module;
 
 pub use asset::{AssetResolver, BytesResolver};
+pub use flow::{FlowLine, PlacedLine, TextFlow};
 pub use diagnostics::{Diagnostic, DiagnosticCode, RenderDiagnostics, Severity};
 pub use pipeline::{
     build, build_document, build_run_paint_picker, resolve_fill, resolve_stroke,

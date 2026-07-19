@@ -2583,6 +2583,7 @@ dependencies = [
  "paged-color",
  "paged-compose",
  "paged-fidelity",
+ "paged-flow",
  "paged-gen",
  "paged-gpu",
  "paged-mutate",
