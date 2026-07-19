@@ -34,7 +34,7 @@
 //!   width, then packed by height; variable-width regions that must re-wrap
 //!   (the paged.web rung-2 behaviour) are S3/S6.
 
-use paged_flow::{FlowContent, Placement, Region};
+use paged_flow::{region_overflows, FlowContent, Placement, Region};
 
 /// One shaped line's vertical footprint within a flow: the slot it advances
 /// (`height_pt`, the leading) and where its baseline sits inside that slot
@@ -116,10 +116,11 @@ impl FlowContent for TextFlow {
             let line = self.lines[i];
             let baseline = slot_top + line.baseline_offset_pt;
             // A line belongs to this region while its baseline is within the
-            // content box — the same test StoryEmitter uses to advance frames
-            // (advance when `baseline_y > text_bottom`). The epsilon absorbs
-            // float slack so an exact fit lands.
-            if baseline <= height + 0.01 {
+            // content box — decided by the shared `region_overflows` rule, the
+            // same boundary StoryEmitter uses to advance frames (advance when
+            // `baseline_y > text_bottom`). The epsilon (added to the bottom)
+            // absorbs float slack so an exact fit lands.
+            if !region_overflows(baseline, height + 0.01) {
                 placed.push(PlacedLine {
                     line: i,
                     baseline_y_pt: baseline,

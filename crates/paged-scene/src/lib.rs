@@ -117,23 +117,32 @@ fn text_frame_content_box(frame: &TextFrame) -> paged_flow::RegionGeometry {
     )
 }
 
-/// The content box of a text frame from its raw geometry inputs: the frame's
-/// bounds minus its text insets, carrying the column count/gutter.
+/// The flow region geometry of a text frame from its raw geometry inputs.
+///
+/// - **`width`** is the content-box width (bounds width minus the left/right
+///   text insets) — the width text is line-broken to.
+/// - **`height`** is the **full bounds height**, *not* bounds-minus-insets:
+///   it must model the renderer's vertical **overflow reference**, and the
+///   story emitter overflows a frame at its full bounds height
+///   (`build_engine.rs`: `frame_height_64 = bounds.height()`), applying the
+///   per-frame footnote reservation on top at emit time (which this static
+///   projection cannot know). So the flow height is the frame's full extent;
+///   footnote reservation is layered by the emitter.
+///
 /// `InsetSpacing` is IDML order `[top, left, bottom, right]`. Sizes are
-/// clamped non-negative (a degenerate inset must not yield a negative content
-/// box). This is the frame's own *local* box — the `ItemTransform`/spread
-/// placement is composition-positioning, resolved downstream, not part of the
-/// flow's content-box size. Kept as a pure function so the geometry math is
-/// unit-testable without constructing a full `TextFrame`.
+/// clamped non-negative. This is the frame's own *local* box — the
+/// `ItemTransform`/spread placement is composition-positioning, resolved
+/// downstream. Kept pure so the geometry math is unit-testable without
+/// constructing a full `TextFrame`.
 fn content_box_geometry(
     bounds: Bounds,
     inset_spacing: Option<[f32; 4]>,
     column_count: Option<u32>,
     column_gutter: Option<f32>,
 ) -> paged_flow::RegionGeometry {
-    let [inset_top, inset_left, inset_bottom, inset_right] = inset_spacing.unwrap_or([0.0; 4]);
+    let [_inset_top, inset_left, _inset_bottom, inset_right] = inset_spacing.unwrap_or([0.0; 4]);
     let width = (bounds.width() - inset_left - inset_right).max(0.0);
-    let height = (bounds.height() - inset_top - inset_bottom).max(0.0);
+    let height = bounds.height().max(0.0);
     paged_flow::RegionGeometry {
         width_pt: width,
         height_pt: height,
@@ -352,9 +361,9 @@ impl Document {
     /// link (which stitch arrangement to content). This projects the
     /// arrangement half out into the neutral vocabulary: each frame in
     /// [`frame_chain`](Self::frame_chain) becomes a [`Region`] whose id is the
-    /// frame's `Self` id and whose geometry is the frame's **content box**
-    /// (bounds minus text insets, with the frame's column count/gutter). The
-    /// flow id is the `story_id`.
+    /// frame's `Self` id and whose geometry is the frame's flow box (content-box
+    /// width, full bounds height — the emitter's overflow reference; see
+    /// [`content_box_geometry`]). The flow id is the `story_id`.
     ///
     /// The geometry here is the frame's *local* content box (its own bounds,
     /// pre-`ItemTransform`); transform-aware page geometry and footnote
@@ -1473,12 +1482,19 @@ mod tests {
     }
 
     #[test]
-    fn content_box_subtracts_insets() {
+    fn content_box_subtracts_h_insets_from_width_keeps_full_height() {
         // 300×200 bounds, insets [top6 left8 bottom10 right12] →
-        // width 300-8-12=280, height 200-6-10=184.
-        let g = content_box_geometry(bounds(0.0, 0.0, 200.0, 300.0), Some([6.0, 8.0, 10.0, 12.0]), None, None);
+        // width 300-8-12=280 (line-break width); height stays the FULL 200
+        // (the emitter's overflow reference — top/bottom insets do not reduce
+        // the flow height; footnote reservation is layered by the emitter).
+        let g = content_box_geometry(
+            bounds(0.0, 0.0, 200.0, 300.0),
+            Some([6.0, 8.0, 10.0, 12.0]),
+            None,
+            None,
+        );
         assert_eq!(g.width_pt, 280.0);
-        assert_eq!(g.height_pt, 184.0);
+        assert_eq!(g.height_pt, 200.0);
         // Defaults: one column, 12pt IDML gutter.
         assert_eq!(g.columns, 1);
         assert_eq!(g.column_gap_pt, DEFAULT_COLUMN_GUTTER_PT);
@@ -1494,11 +1510,17 @@ mod tests {
     }
 
     #[test]
-    fn content_box_clamps_degenerate_insets_to_zero() {
-        // Insets larger than the box must not yield a negative content box.
-        let g = content_box_geometry(bounds(0.0, 0.0, 10.0, 10.0), Some([50.0, 50.0, 50.0, 50.0]), Some(0), None);
+    fn content_box_clamps_degenerate_width_and_floors_columns() {
+        // Horizontal insets larger than the box must not yield a negative
+        // width. Height is the full bounds height (10), unaffected by insets.
+        let g = content_box_geometry(
+            bounds(0.0, 0.0, 10.0, 10.0),
+            Some([50.0, 50.0, 50.0, 50.0]),
+            Some(0),
+            None,
+        );
         assert_eq!(g.width_pt, 0.0);
-        assert_eq!(g.height_pt, 0.0);
+        assert_eq!(g.height_pt, 10.0);
         // A declared 0 columns is floored to 1.
         assert_eq!(g.columns, 1);
     }
@@ -1588,10 +1610,11 @@ mod tests {
         let ids: Vec<&str> = flow.regions.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, vec!["frameA", "frameB"]);
 
-        // Region 0 (frameA) geometry = bounds 300×200 minus insets [6 8 10 12]
-        // → 280×184, with the declared 2 columns / 10pt gutter.
+        // Region 0 (frameA): width = 300 minus h-insets 8+12 = 280; height =
+        // the full bounds 200 (the emitter's overflow reference), with the
+        // declared 2 columns / 10pt gutter.
         let r0 = &flow.regions[0].geometry;
-        assert_eq!((r0.width_pt, r0.height_pt), (280.0, 184.0));
+        assert_eq!((r0.width_pt, r0.height_pt), (280.0, 200.0));
         assert_eq!(r0.columns, 2);
         assert_eq!(r0.column_gap_pt, 10.0);
 

@@ -230,6 +230,20 @@ pub trait FlowContent {
     ) -> Placement<Self::Fragment, Self::Cursor>;
 }
 
+/// **The region-fill boundary rule.** Content whose vertical `extent` (a
+/// baseline, a block's bottom — in whatever unit the caller uses) lies past a
+/// region's usable `bottom` overflows to the next region. This is the single
+/// definition of "does this content still fit the current region", shared by
+/// every flow content engine: the IDML story emitter (which passes 1/64-pt
+/// integers) and [`TextFlow`](../paged_renderer/flow/struct.TextFlow.html)
+/// (which passes points) both decide region advance through this one rule, so
+/// they agree by construction rather than by coincidence. Generic over the
+/// unit so no lossy conversion is forced on either caller.
+#[inline]
+pub fn region_overflows<T: PartialOrd>(extent: T, bottom: T) -> bool {
+    extent > bottom
+}
+
 /// Run a content engine's content across a region-chain, in order.
 ///
 /// Orchestrates region order and threads the cursor; **content-agnostic**.
@@ -416,5 +430,16 @@ mod tests {
         let json = serde_json::to_string(&c).unwrap();
         let back: RegionChain = serde_json::from_str(&json).unwrap();
         assert_eq!(c, back);
+    }
+
+    #[test]
+    fn region_overflow_rule_is_strict_and_unit_generic() {
+        // Strictly past the bottom overflows; exactly at it does not.
+        assert!(region_overflows(101.0_f32, 100.0));
+        assert!(!region_overflows(100.0_f32, 100.0));
+        assert!(!region_overflows(99.0_f32, 100.0));
+        // Same rule in the emitter's 1/64-pt integer unit.
+        assert!(region_overflows(6401_i32, 6400));
+        assert!(!region_overflows(6400_i32, 6400));
     }
 }

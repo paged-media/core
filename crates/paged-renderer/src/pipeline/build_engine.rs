@@ -4136,7 +4136,9 @@ pub(super) fn emit_paragraph_into_chain(
                 .copied()
                 .unwrap_or(0))
         .max(0);
-        if line.baseline_y > text_bottom_64 && em.frame_idx + 1 < em.chain.len() {
+        if paged_flow::region_overflows(line.baseline_y, text_bottom_64)
+            && em.frame_idx + 1 < em.chain.len()
+        {
             let prev_baseline = line.baseline_y;
             em.frame_idx += 1;
             let new_baseline =
@@ -4165,7 +4167,7 @@ pub(super) fn emit_paragraph_into_chain(
         // them spill across following frames/pages with no clip. The
         // reference PDFs hide the overflow via the same out-of-frame
         // clip; matching this prevents large ΔE regions.
-        if line.baseline_y > text_bottom_64
+        if paged_flow::region_overflows(line.baseline_y, text_bottom_64)
             && em.frame_idx + 1 >= em.chain.len()
             && !last_frame_grows_height
         {
