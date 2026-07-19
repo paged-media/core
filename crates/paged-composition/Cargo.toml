@@ -10,9 +10,18 @@ description = "The Paged-native composition model (document.pgd): surfaces, page
 [lints]
 workspace = true
 
+[features]
+# The base crate is the model only (light, no render stack). The `render`
+# feature adds the compositor drive: walk a Composition, lower each region's
+# SceneLayer, rasterize (pulls paged-compose + the CPU rasterizer).
+render = ["dep:paged-compose", "dep:paged-gpu", "dep:image"]
+
 [dependencies]
 paged-flow = { path = "../paged-flow" }
 serde = { workspace = true }
+paged-compose = { path = "../paged-compose", optional = true }
+paged-gpu = { path = "../paged-gpu", features = ["cpu"], optional = true }
+image = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = "1"
