@@ -4176,11 +4176,17 @@ pub(super) fn emit_paragraph_into_chain(
             if !em.overset_reported {
                 em.overset_reported = true;
                 let page = em.chain_pages[em.frame_idx];
+                // First-class overset continuation (paged_flow::Overset::
+                // Remains): record WHERE the flow overran — this line is the
+                // first that didn't fit, so `current_line_idx` (not yet
+                // incremented; the increment is at the end of the loop, past
+                // this `continue`) is the overset line within the paragraph.
                 let mut d = Diagnostic::new(
                     DiagnosticCode::OversetTextDropped,
                     "text overflows the last frame in its chain; trailing lines clipped (overset)",
                 )
-                .with_page(page);
+                .with_page(page)
+                .with_overset(em.paragraph_idx, current_line_idx as u32);
                 if !em.current_story_id.is_empty() {
                     d = d.with_story(em.current_story_id.clone());
                 }

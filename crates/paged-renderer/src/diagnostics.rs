@@ -79,6 +79,22 @@ impl DiagnosticCode {
     }
 }
 
+/// Where a story's content overflowed its frame chain — the **first-class
+/// overset continuation**. This is the IDML story engine's realization of
+/// [`paged_flow::Overset::Remains`]`(cursor)`: rather than only signalling
+/// *that* a story is overset, it records *where* the flow would continue (the
+/// first line that did not fit), so a caller can grow the chain, jump the
+/// caret to the clipped text, or report the exact overset point. The address
+/// scheme matches [`crate::LineLayout`] (`paragraph_idx` within the story's
+/// body flow, `line_idx` within that paragraph).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct OversetContinuation {
+    /// Paragraph index (in the story's body flow) of the first overset line.
+    pub paragraph_idx: u32,
+    /// Line index within that paragraph where the overset begins.
+    pub line_idx: u32,
+}
+
 /// One render diagnostic. `message` is pre-rendered for humans; the
 /// structured fields let tooling group / filter without parsing it.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -94,6 +110,11 @@ pub struct Diagnostic {
     pub story_id: Option<String>,
     /// Image link URI, for the image codes.
     pub uri: Option<String>,
+    /// For `OversetTextDropped`: the continuation cursor — where the story's
+    /// flow overran its chain (`paged_flow::Overset::Remains`). `None` for all
+    /// other codes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overset: Option<OversetContinuation>,
 }
 
 impl Diagnostic {
@@ -108,6 +129,7 @@ impl Diagnostic {
             frame_id: None,
             story_id: None,
             uri: None,
+            overset: None,
         }
     }
 
@@ -128,6 +150,16 @@ impl Diagnostic {
 
     pub fn with_uri(mut self, uri: impl Into<String>) -> Self {
         self.uri = Some(uri.into());
+        self
+    }
+
+    /// Attach the overset continuation cursor (the first line that did not fit
+    /// its chain). See [`OversetContinuation`].
+    pub fn with_overset(mut self, paragraph_idx: u32, line_idx: u32) -> Self {
+        self.overset = Some(OversetContinuation {
+            paragraph_idx,
+            line_idx,
+        });
         self
     }
 }
@@ -187,6 +219,20 @@ impl RenderDiagnostics {
             .iter()
             .filter(|d| d.code == DiagnosticCode::OversetTextDropped)
             .filter_map(|d| d.story_id.clone())
+            .collect()
+    }
+
+    /// The first-class overset continuations, keyed by story id — *where* each
+    /// overset story's flow overran its chain ([`OversetContinuation`], the
+    /// IDML engine's `paged_flow::Overset::Remains`). Latched once per story at
+    /// emit time, so at most one entry per story; ordered for determinism.
+    /// Backs the editor's "jump to overset" affordance beyond the plain
+    /// per-story overset flag ([`Self::overset_story_ids`]).
+    pub fn overset_continuations(&self) -> BTreeMap<String, OversetContinuation> {
+        self.items
+            .iter()
+            .filter(|d| d.code == DiagnosticCode::OversetTextDropped)
+            .filter_map(|d| Some((d.story_id.clone()?, d.overset?)))
             .collect()
     }
 
