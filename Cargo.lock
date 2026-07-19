@@ -2428,6 +2428,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "paged-composition"
+version = "0.0.0"
+dependencies = [
+ "paged-flow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "paged-export-pdf"
 version = "0.0.0"
 dependencies = [
