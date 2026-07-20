@@ -1216,7 +1216,35 @@ impl CanvasModel {
     ) -> Result<Self, LoadError> {
         let doc_id = doc_id.into();
         let t_parse = phase_now();
-        let scene = Document::open(bytes).map_err(|e| LoadError::Parse(e.to_string()))?;
+        // Load-time sniff (N3): a `.paged` carrying the native model part
+        // (`document.pgm`) reconstructs the model from it with **no source
+        // parse**; otherwise fall back to parsing the source parts
+        // (`Document::from_container` — the import-adapter path). The real
+        // container is kept either way, so the parts door still serves every
+        // other container part.
+        let scene = {
+            let container =
+                paged_parse::Container::open(bytes).map_err(|e| LoadError::Parse(e.to_string()))?;
+            match container
+                .entry(paged_store::DOCUMENT_PGM_PATH)
+                .map(|b| b.to_vec())
+            {
+                Some(pgm) => {
+                    let mut doc = paged_store::from_bytes(&pgm)
+                        .map_err(|e| LoadError::Parse(format!("document.pgm: {e}")))?;
+                    // The native part is the model truth (including its
+                    // structured designmap); take only the raw carry-through
+                    // bytes from the real container so the parts door still
+                    // serves every other container part and IDML export can
+                    // still carry through.
+                    doc.container.entries = container.entries;
+                    doc.container.designmap_raw = container.designmap_raw;
+                    doc
+                }
+                None => Document::from_container(container)
+                    .map_err(|e| LoadError::Parse(e.to_string()))?,
+            }
+        };
         phase_log("CanvasModel::load parse", t_parse);
 
         // Honour the first font and the ICC profile. Take ownership
