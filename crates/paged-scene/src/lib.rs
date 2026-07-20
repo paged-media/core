@@ -168,7 +168,18 @@ impl Document {
     /// layer's tolerant behaviour (skipping entries without an
     /// archive match) is lifted here to a structured error.
     pub fn open(bytes: &[u8]) -> Result<Self, OpenError> {
-        let container = Container::open(bytes)?;
+        Self::from_container(Container::open(bytes)?)
+    }
+
+    /// Build a document from an already-opened [`Container`] by parsing its
+    /// source parts (Stories / Spreads / Resources).
+    ///
+    /// The import path — used by [`Document::open`] and as the fallback when a
+    /// `.paged` container carries no native model part (`document.pgm`). The
+    /// native reconstruct (deserialize the model, skip the source parse) lives
+    /// one layer up — in the canvas load sniff over `paged-store` — because
+    /// `paged-scene` cannot depend on the codec.
+    pub fn from_container(container: Container) -> Result<Self, OpenError> {
         let palette = match container.entry("Resources/Graphic.xml") {
             Some(raw) => Graphic::parse(raw)?,
             None => Graphic::default(),
