@@ -2699,6 +2699,7 @@ dependencies = [
  "paged-gen",
  "paged-renderer",
  "paged-scene",
+ "serde",
  "serde_json",
 ]
 

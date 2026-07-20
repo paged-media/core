@@ -35,16 +35,50 @@ use paged_scene::Document;
 /// document. `paged/core/` is a core-owned namespace.
 pub const DOCUMENT_PGM_PATH: &str = "paged/core/model/document.pgm";
 
-/// Serialize a [`Document`] to native `.paged` model bytes (no IDML).
+/// The native `.paged` model format version. **Bump on any change to the
+/// model's serde shape** (e.g. the type renames during the `paged-model`
+/// extraction) so an incompatible part is REJECTED — [`from_bytes`] returns
+/// `None` and the loader falls back to the IDML import — rather than
+/// mis-deserialized. The format is pre-stabilization and churns; this gate is
+/// what keeps a stale `.pgm` from silently corrupting a reload (ADR-022 Q2).
+pub const PGM_FORMAT_VERSION: u32 = 1;
+
+/// The on-disk envelope: a version tag around the model. Serialized borrowed
+/// (no clone) and deserialized owned.
+#[derive(serde::Serialize)]
+struct PgmRef<'a> {
+    format_version: u32,
+    model: &'a Document,
+}
+
+#[derive(serde::Deserialize)]
+struct Pgm {
+    format_version: u32,
+    model: Document,
+}
+
+/// Serialize a [`Document`] to native `.paged` model bytes (no IDML), stamped
+/// with [`PGM_FORMAT_VERSION`].
 pub fn to_bytes(doc: &Document) -> Result<Vec<u8>, serde_json::Error> {
-    serde_json::to_vec(doc)
+    serde_json::to_vec(&PgmRef {
+        format_version: PGM_FORMAT_VERSION,
+        model: doc,
+    })
 }
 
 /// Reconstruct a [`Document`] from native `.paged` model bytes, with **no
-/// `Container::open` / IDML parse**: deserialize the primary fields, then
-/// rebuild the `#[serde(skip)]` derived caches.
-pub fn from_bytes(bytes: &[u8]) -> Result<Document, serde_json::Error> {
-    let mut doc: Document = serde_json::from_slice(bytes)?;
+/// `Container::open` / IDML parse**.
+///
+/// Returns `None` when the part is unparseable OR carries an incompatible
+/// [`PGM_FORMAT_VERSION`] — the caller then falls back to the IDML import, so a
+/// stale/foreign `.pgm` is never mis-deserialized (ADR-022 Q2). On success,
+/// rebuilds the `#[serde(skip)]` derived caches.
+pub fn from_bytes(bytes: &[u8]) -> Option<Document> {
+    let pgm: Pgm = serde_json::from_slice(bytes).ok()?;
+    if pgm.format_version != PGM_FORMAT_VERSION {
+        return None;
+    }
+    let mut doc = pgm.model;
     doc.rebuild_indexes();
-    Ok(doc)
+    Some(doc)
 }
