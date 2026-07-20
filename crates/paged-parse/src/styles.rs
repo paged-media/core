@@ -576,31 +576,34 @@ pub struct ParagraphRule {
     pub width: Option<String>,
 }
 
-impl ParagraphRule {
-    /// Parse the `<prefix>*` attrs. `prefix` is either `"RuleAbove"`
-    /// or `"RuleBelow"` to match IDML's two attribute families.
-    pub fn from_attrs(e: &quick_xml::events::BytesStart, prefix: &str) -> Self {
-        // Construct attr names on the fly. quick-xml accepts &[u8] keys
-        // for `attr()`; building owned Vec<u8> per attr is fine — this
-        // runs once per style at parse time.
-        let key = |suffix: &str| -> Vec<u8> {
-            let mut v = Vec::with_capacity(prefix.len() + suffix.len());
-            v.extend_from_slice(prefix.as_bytes());
-            v.extend_from_slice(suffix.as_bytes());
-            v
-        };
-        Self {
-            on: attr(e, &key("")).and_then(|s| s.parse().ok()),
-            color: attr(e, &key("Color")),
-            tint: attr(e, &key("Tint")).and_then(|s| s.parse().ok()),
-            weight: attr(e, &key("LineWeight"))
-                .and_then(|s| s.parse().ok())
-                .or_else(|| attr(e, &key("Weight")).and_then(|s| s.parse().ok())),
-            offset: attr(e, &key("Offset")).and_then(|s| s.parse().ok()),
-            left_indent: attr(e, &key("LeftIndent")).and_then(|s| s.parse().ok()),
-            right_indent: attr(e, &key("RightIndent")).and_then(|s| s.parse().ok()),
-            width: attr(e, &key("Width")),
-        }
+/// Parse a [`ParagraphRule`] from the `<prefix>*` attrs. `prefix` is either
+/// `"RuleAbove"` or `"RuleBelow"` to match IDML's two attribute families.
+/// (De-inherented from `ParagraphRule::from_attrs` so the type can move to
+/// `paged-model`; the XML parsing stays in the parser — N6.)
+pub(crate) fn parse_paragraph_rule(
+    e: &quick_xml::events::BytesStart,
+    prefix: &str,
+) -> ParagraphRule {
+    // Construct attr names on the fly. quick-xml accepts &[u8] keys
+    // for `attr()`; building owned Vec<u8> per attr is fine — this
+    // runs once per style at parse time.
+    let key = |suffix: &str| -> Vec<u8> {
+        let mut v = Vec::with_capacity(prefix.len() + suffix.len());
+        v.extend_from_slice(prefix.as_bytes());
+        v.extend_from_slice(suffix.as_bytes());
+        v
+    };
+    ParagraphRule {
+        on: attr(e, &key("")).and_then(|s| s.parse().ok()),
+        color: attr(e, &key("Color")),
+        tint: attr(e, &key("Tint")).and_then(|s| s.parse().ok()),
+        weight: attr(e, &key("LineWeight"))
+            .and_then(|s| s.parse().ok())
+            .or_else(|| attr(e, &key("Weight")).and_then(|s| s.parse().ok())),
+        offset: attr(e, &key("Offset")).and_then(|s| s.parse().ok()),
+        left_indent: attr(e, &key("LeftIndent")).and_then(|s| s.parse().ok()),
+        right_indent: attr(e, &key("RightIndent")).and_then(|s| s.parse().ok()),
+        width: attr(e, &key("Width")),
     }
 }
 
@@ -628,75 +631,73 @@ pub struct ParagraphBorder {
     pub corners: [CornerSpec; 4],
 }
 
-impl ParagraphBorder {
-    /// Parse the `ParagraphBorder*` attrs off a `<ParagraphStyle>`
-    /// (or `<ParagraphStyleRange>`) element. Returns a fully-default
-    /// instance when no attrs are present; callers can check `on` to
-    /// know whether to emit.
-    pub fn from_attrs(e: &quick_xml::events::BytesStart) -> Self {
-        // Order matches Rectangle::corners — clockwise from top-left.
-        let per = [
-            (
-                "ParagraphBorderTopLeftCornerOption",
-                "ParagraphBorderTopLeftCornerRadius",
-            ),
-            (
-                "ParagraphBorderTopRightCornerOption",
-                "ParagraphBorderTopRightCornerRadius",
-            ),
-            (
-                "ParagraphBorderBottomRightCornerOption",
-                "ParagraphBorderBottomRightCornerRadius",
-            ),
-            (
-                "ParagraphBorderBottomLeftCornerOption",
-                "ParagraphBorderBottomLeftCornerRadius",
-            ),
-        ];
-        let mut corners = [CornerSpec::default(); 4];
-        for (i, (oname, rname)) in per.iter().enumerate() {
-            corners[i].option = attr(e, oname.as_bytes())
-                .as_deref()
-                .and_then(CornerOption::from_idml);
-            corners[i].radius = attr(e, rname.as_bytes()).and_then(|s| s.parse().ok());
-        }
-        Self {
-            on: attr(e, b"ParagraphBorderOn").and_then(|s| s.parse().ok()),
-            color: attr(e, b"ParagraphBorderColor"),
-            tint: attr(e, b"ParagraphBorderTint").and_then(|s| s.parse().ok()),
-            weight: attr(e, b"ParagraphBorderWeight").and_then(|s| s.parse().ok()),
-            offset_top: attr(e, b"ParagraphBorderTopOffset").and_then(|s| s.parse().ok()),
-            offset_left: attr(e, b"ParagraphBorderLeftOffset").and_then(|s| s.parse().ok()),
-            offset_bottom: attr(e, b"ParagraphBorderBottomOffset").and_then(|s| s.parse().ok()),
-            offset_right: attr(e, b"ParagraphBorderRightOffset").and_then(|s| s.parse().ok()),
-            width: attr(e, b"ParagraphBorderWidth"),
-            corners,
-        }
+/// Parse a [`ParagraphBorder`] from the `ParagraphBorder*` attrs off a
+/// `<ParagraphStyle>` (or `<ParagraphStyleRange>`) element. Returns a
+/// fully-default instance when no attrs are present; callers can check `on`
+/// to know whether to emit. (De-inherented from `ParagraphBorder::from_attrs`
+/// — N6.)
+pub(crate) fn parse_paragraph_border(e: &quick_xml::events::BytesStart) -> ParagraphBorder {
+    // Order matches Rectangle::corners — clockwise from top-left.
+    let per = [
+        (
+            "ParagraphBorderTopLeftCornerOption",
+            "ParagraphBorderTopLeftCornerRadius",
+        ),
+        (
+            "ParagraphBorderTopRightCornerOption",
+            "ParagraphBorderTopRightCornerRadius",
+        ),
+        (
+            "ParagraphBorderBottomRightCornerOption",
+            "ParagraphBorderBottomRightCornerRadius",
+        ),
+        (
+            "ParagraphBorderBottomLeftCornerOption",
+            "ParagraphBorderBottomLeftCornerRadius",
+        ),
+    ];
+    let mut corners = [CornerSpec::default(); 4];
+    for (i, (oname, rname)) in per.iter().enumerate() {
+        corners[i].option = attr(e, oname.as_bytes())
+            .as_deref()
+            .and_then(CornerOption::from_idml);
+        corners[i].radius = attr(e, rname.as_bytes()).and_then(|s| s.parse().ok());
+    }
+    ParagraphBorder {
+        on: attr(e, b"ParagraphBorderOn").and_then(|s| s.parse().ok()),
+        color: attr(e, b"ParagraphBorderColor"),
+        tint: attr(e, b"ParagraphBorderTint").and_then(|s| s.parse().ok()),
+        weight: attr(e, b"ParagraphBorderWeight").and_then(|s| s.parse().ok()),
+        offset_top: attr(e, b"ParagraphBorderTopOffset").and_then(|s| s.parse().ok()),
+        offset_left: attr(e, b"ParagraphBorderLeftOffset").and_then(|s| s.parse().ok()),
+        offset_bottom: attr(e, b"ParagraphBorderBottomOffset").and_then(|s| s.parse().ok()),
+        offset_right: attr(e, b"ParagraphBorderRightOffset").and_then(|s| s.parse().ok()),
+        width: attr(e, b"ParagraphBorderWidth"),
+        corners,
     }
 }
 
-impl ParagraphShading {
-    /// Parse the `ParagraphShading*` attrs off a `<ParagraphStyle>`
-    /// (or `<ParagraphStyleRange>`) element. Returns a fully-default
-    /// instance when no attrs are present; callers can check `on` to
-    /// know whether to emit.
-    pub fn from_attrs(e: &quick_xml::events::BytesStart) -> Self {
-        Self {
-            on: attr(e, b"ParagraphShadingOn").and_then(|s| s.parse().ok()),
-            color: attr(e, b"ParagraphShadingColor"),
-            tint: attr(e, b"ParagraphShadingTint").and_then(|s| s.parse().ok()),
-            width: attr(e, b"ParagraphShadingWidth"),
-            offset_top: attr(e, b"ParagraphShadingTopOffset").and_then(|s| s.parse().ok()),
-            offset_left: attr(e, b"ParagraphShadingLeftOffset").and_then(|s| s.parse().ok()),
-            offset_bottom: attr(e, b"ParagraphShadingBottomOffset").and_then(|s| s.parse().ok()),
-            offset_right: attr(e, b"ParagraphShadingRightOffset").and_then(|s| s.parse().ok()),
-            top_origin: attr(e, b"ParagraphShadingTopOrigin"),
-            bottom_origin: attr(e, b"ParagraphShadingBottomOrigin"),
-            clip_to_frame: attr(e, b"ParagraphShadingClipToFrame").and_then(|s| s.parse().ok()),
-            overprint: attr(e, b"ParagraphShadingOverprint").and_then(|s| s.parse().ok()),
-            suppress_printing: attr(e, b"ParagraphShadingSuppressPrinting")
-                .and_then(|s| s.parse().ok()),
-        }
+/// Parse a [`ParagraphShading`] from the `ParagraphShading*` attrs off a
+/// `<ParagraphStyle>` (or `<ParagraphStyleRange>`) element. Returns a
+/// fully-default instance when no attrs are present; callers can check `on`
+/// to know whether to emit. (De-inherented from `ParagraphShading::from_attrs`
+/// — N6.)
+pub(crate) fn parse_paragraph_shading(e: &quick_xml::events::BytesStart) -> ParagraphShading {
+    ParagraphShading {
+        on: attr(e, b"ParagraphShadingOn").and_then(|s| s.parse().ok()),
+        color: attr(e, b"ParagraphShadingColor"),
+        tint: attr(e, b"ParagraphShadingTint").and_then(|s| s.parse().ok()),
+        width: attr(e, b"ParagraphShadingWidth"),
+        offset_top: attr(e, b"ParagraphShadingTopOffset").and_then(|s| s.parse().ok()),
+        offset_left: attr(e, b"ParagraphShadingLeftOffset").and_then(|s| s.parse().ok()),
+        offset_bottom: attr(e, b"ParagraphShadingBottomOffset").and_then(|s| s.parse().ok()),
+        offset_right: attr(e, b"ParagraphShadingRightOffset").and_then(|s| s.parse().ok()),
+        top_origin: attr(e, b"ParagraphShadingTopOrigin"),
+        bottom_origin: attr(e, b"ParagraphShadingBottomOrigin"),
+        clip_to_frame: attr(e, b"ParagraphShadingClipToFrame").and_then(|s| s.parse().ok()),
+        overprint: attr(e, b"ParagraphShadingOverprint").and_then(|s| s.parse().ok()),
+        suppress_printing: attr(e, b"ParagraphShadingSuppressPrinting")
+            .and_then(|s| s.parse().ok()),
     }
 }
 
@@ -1982,7 +1983,7 @@ fn parse_character_style(e: &quick_xml::events::BytesStart) -> Option<CharacterS
         kenten_font_size: attr(e, b"KentenFontSize").and_then(|s| s.parse().ok()),
         ligatures_on: attr(e, b"Ligatures").and_then(|s| s.parse().ok()),
         kerning_method: attr(e, b"KerningMethod"),
-        otf: crate::story::OtfFeatures::from_attrs(e),
+        otf: crate::story::parse_otf_features(e),
     })
 }
 
@@ -2331,10 +2332,10 @@ fn parse_paragraph_style(e: &quick_xml::events::BytesStart) -> Option<ParagraphS
         kinsoku_type: attr(e, b"KinsokuType"),
         mojikumi_table: attr(e, b"MojikumiTable"),
         mojikumi_set: attr(e, b"MojikumiSet"),
-        shading: ParagraphShading::from_attrs(e),
-        rule_above: ParagraphRule::from_attrs(e, "RuleAbove"),
-        rule_below: ParagraphRule::from_attrs(e, "RuleBelow"),
-        border: ParagraphBorder::from_attrs(e),
+        shading: parse_paragraph_shading(e),
+        rule_above: parse_paragraph_rule(e, "RuleAbove"),
+        rule_below: parse_paragraph_rule(e, "RuleBelow"),
+        border: parse_paragraph_border(e),
         // Populated later by the `<NestedStyle>` start-tag handler.
         nested_styles: Vec::new(),
     })
