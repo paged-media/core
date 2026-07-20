@@ -164,7 +164,7 @@ impl StoryDirection {
     }
 }
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Story {
     pub paragraphs: Vec<Paragraph>,
     /// `<StoryPreference OpticalMarginAlignment="true">` enables
@@ -188,7 +188,7 @@ pub struct Story {
     pub story_direction: Option<StoryDirection>,
 }
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Paragraph {
     pub paragraph_style: Option<String>,
     /// `Justification` attribute from IDML, parsed into a typed
@@ -353,7 +353,7 @@ pub struct Paragraph {
 /// IDML `<Footnote>` — a self-contained paragraph stream anchored at
 /// a point inside a host paragraph. The renderer places footnotes in
 /// a per-page footnote pool at the bottom of the host frame.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Footnote {
     pub self_id: Option<String>,
     /// The footnote body, parsed identically to top-level story
@@ -366,7 +366,7 @@ pub struct Footnote {
 /// that records "this paragraph contributes to the index entry for
 /// `topic_name`". The renderer's resolution pass collects all
 /// markers, groups by topic, alphabetises, and emits an index story.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct IndexMarker {
     /// The indexed term. From the marker's `TopicName` attribute,
     /// or — when only `AppliedTopic="Topic/<id>"` is present — the
@@ -384,7 +384,7 @@ pub struct IndexMarker {
 /// frame carries its own geometry / transform and an
 /// `<AnchoredObjectSetting>` describing where it should land relative
 /// to the anchor character.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnchoredFrame {
     pub frame_kind: AnchoredFrameKind,
     pub self_id: Option<String>,
@@ -422,7 +422,7 @@ pub struct AnchoredFrame {
     pub children: Vec<AnchoredFrame>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AnchoredFrameKind {
     TextFrame,
     Rectangle,
@@ -432,7 +432,7 @@ pub enum AnchoredFrameKind {
 /// Mirrors IDML's `<AnchoredObjectSetting>` block. The renderer needs
 /// only the position + offset attributes to place the anchored frame;
 /// fancier kerning / spine-relative behaviour can land in follow-ups.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct AnchoredObjectSetting {
     /// `AnchoredPosition` — `InlinePosition`, `AbovePosition`, or
     /// `Custom`. `None` ⇒ use the cascaded default (`InlinePosition`).
@@ -474,7 +474,7 @@ pub struct AnchoredObjectSetting {
 /// columns by their `Name` (the IDML index, "0"..n-1). Cells in
 /// `cells` are stored in document order — IDML serialises them
 /// column-major (all cells in column 0, then column 1, etc.).
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Table {
     pub self_id: Option<String>,
     pub header_row_count: u32,
@@ -515,7 +515,7 @@ pub struct Table {
 /// Outer-table border attributes serialised directly on `<Table>`
 /// (vs. via an `AppliedTableStyle`). All fields optional — `None`
 /// means "fall through to the TableStyle cascade / default".
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct TableBorder {
     pub top_color: Option<String>,
     pub top_type: Option<String>,
@@ -547,7 +547,7 @@ pub struct TableBorder {
 /// row or column dimension. The "start" set kicks in for the first
 /// `start_count` lines, then "end" for `end_count`, alternating.
 /// Used for IDML's row / column dividers. All fields optional.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct TableLineStrokes {
     pub start_count: Option<u32>,
     pub start_color: Option<String>,
@@ -565,7 +565,7 @@ pub struct TableLineStrokes {
     pub end_gap_tint: Option<f32>,
 }
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct TableRow {
     pub self_id: Option<String>,
     /// IDML index ("0" .. row_count - 1).
@@ -579,14 +579,14 @@ pub struct TableRow {
     pub maximum_height: Option<f32>,
 }
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct TableColumn {
     pub self_id: Option<String>,
     pub name: Option<String>,
     pub single_column_width: Option<f32>,
 }
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct TableCell {
     pub self_id: Option<String>,
     /// `Name="col:row"` (zero-indexed). The `row()` and `column()`
@@ -658,7 +658,7 @@ pub struct TableCell {
 /// describes the diagonal that drops from top-left to bottom-right;
 /// `RightLine*` describes the opposite diagonal. The renderer emits
 /// one `<GraphicLine>`-equivalent stroke per drawn diagonal.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CellDiagonal {
     pub left_line_drawn: Option<bool>,
     pub left_line_color: Option<String>,
@@ -786,7 +786,7 @@ impl OtfFeatures {
     }
 }
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CharacterRun {
     pub character_style: Option<String>,
     pub font: Option<String>,
@@ -946,7 +946,7 @@ pub struct CharacterRun {
 /// the identity the owning plugin re-finds it by; `value` is the
 /// cached resolved display (`None` = not yet resolved → the run shows
 /// the `<key>` token).
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlaceholderField {
     /// The owning bundle's manifest id (host-stamped; e.g.
     /// `media.paged.data`).

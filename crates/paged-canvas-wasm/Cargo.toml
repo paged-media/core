@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "wasm-bindgen surface for the IDML Web Canvas worker model. Thin layer over paged-canvas."
+description = "wasm-bindgen surface for the Paged Web Canvas worker model. Thin layer over paged-canvas."
 
 [lints]
 workspace = true

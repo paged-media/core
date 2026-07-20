@@ -50,7 +50,7 @@ use crate::ParseError;
 /// world chains are 1–3 hops.
 const MAX_BASED_ON_DEPTH: usize = 16;
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct StyleSheet {
     pub character_styles: BTreeMap<String, CharacterStyleDef>,
     pub paragraph_styles: BTreeMap<String, ParagraphStyleDef>,
@@ -115,7 +115,7 @@ pub struct StyleSheet {
 /// document carries the current `Visible` setting per condition. A
 /// run whose `AppliedConditions` reference one or more conditions is
 /// rendered only when every referenced condition resolves to `Visible="true"`.
-#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConditionDef {
     pub self_id: String,
     pub name: Option<String>,
@@ -132,7 +132,7 @@ pub struct ConditionDef {
 /// branch on this today (visibility resolution walks individual
 /// conditions); kept for round-trip + a future "show only this
 /// set" affordance.
-#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConditionSetDef {
     pub self_id: String,
     pub name: Option<String>,
@@ -155,7 +155,7 @@ pub struct ConditionSetDef {
 /// is captured for round-trip only — a single rendered document has
 /// no neighbouring document to continue from, so the renderer treats
 /// it as a no-op (documented in `numbering.rs`).
-#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NumberingListDef {
     pub self_id: String,
     pub name: Option<String>,
@@ -174,7 +174,7 @@ pub struct NumberingListDef {
 /// N parallel rules, and the `Wavy` width/wavelength as a sampled sine
 /// (W1.2). Anything still unused is captured so we don't lose it during
 /// round-trips.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StrokeStyleDef {
     pub self_id: String,
     pub name: Option<String>,
@@ -207,13 +207,13 @@ pub struct StrokeStyleDef {
 /// fractions of the total stroke weight (`0.0..=1.0`). The stripe's
 /// centreline sits at `left + width/2` measured from the stroke's
 /// upper edge, and its sub-weight is `width * total_weight`.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct StripeDef {
     pub left: f32,
     pub width: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StrokeStyleKind {
     Dashed,
     Dotted,
@@ -225,7 +225,7 @@ pub enum StrokeStyleKind {
 /// the paragraph style for the title, and an ordered list of
 /// `<TOCStyleEntry>` children declaring which paragraph styles
 /// should be picked up as TOC entries.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct TOCStyleDef {
     pub self_id: String,
     pub name: Option<String>,
@@ -257,7 +257,7 @@ pub struct TOCStyleDef {
 
 /// `<TOCStyleEntry>` — one row in the TOC style table. IDML serialises
 /// these in document order under the `<TOCStyle>`.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct TOCStyleEntryDef {
     /// `Name` — human-readable label (usually mirrors the paragraph
     /// style name picked up by `IncludeStyle`).
