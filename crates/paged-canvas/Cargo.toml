@@ -31,6 +31,10 @@ paged-export-pdf = { path = "../paged-export-pdf" }
 # (no native-only deps), so the export path compiles into the wasm
 # worker too.
 paged-write = { path = "../paged-write" }
+# S7 — persist the composition (`document.pgd`) into the `.paged` container.
+# paged-composition is a pure leaf (paged-flow + serde, no IDML/render), so
+# it is wasm-clean and introduces no cycle.
+paged-composition = { path = "../paged-composition" }
 serde = { workspace = true }
 serde_json = "1"
 tsify-next = { workspace = true }
