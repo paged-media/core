@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/paged-model",
     "crates/paged-parse",
     "crates/paged-flow",
     "crates/paged-composition",
