@@ -746,26 +746,28 @@ pub struct OtfFeatures {
     pub stylistic_sets: Option<i32>,
 }
 
-impl OtfFeatures {
-    /// Parse the discrete `OTF*` attributes off a CharacterStyleRange /
-    /// CharacterStyle start tag. Returns an all-`None` bag when none of
-    /// the attributes are present (the common case) so the cascade can
-    /// distinguish "nothing declared here" from "declared off".
-    pub fn from_attrs(e: &quick_xml::events::BytesStart) -> Self {
-        let b = |k: &[u8]| attr(e, k).and_then(|s| s.parse::<bool>().ok());
-        Self {
-            fraction: b(b"OTFFraction"),
-            ordinal: b(b"OTFOrdinal"),
-            swash: b(b"OTFSwash"),
-            discretionary_ligatures: b(b"OTFDiscretionaryLigature"),
-            slashed_zero: b(b"OTFSlashedZero"),
-            titling: b(b"OTFTitling"),
-            contextual_alternates: b(b"OTFContextualAlternate"),
-            figure_style: attr(e, b"OTFFigureStyle"),
-            stylistic_sets: attr(e, b"OTFStylisticSets").and_then(|s| s.parse::<i32>().ok()),
-        }
+/// Parse the discrete `OTF*` attributes off a CharacterStyleRange /
+/// CharacterStyle start tag. Returns an all-`None` bag when none of
+/// the attributes are present (the common case) so the cascade can
+/// distinguish "nothing declared here" from "declared off".
+/// (De-inherented from `OtfFeatures::from_attrs` so the type can move to
+/// `paged-model`; the XML parsing stays in the parser — N6.)
+pub(crate) fn parse_otf_features(e: &quick_xml::events::BytesStart) -> OtfFeatures {
+    let b = |k: &[u8]| attr(e, k).and_then(|s| s.parse::<bool>().ok());
+    OtfFeatures {
+        fraction: b(b"OTFFraction"),
+        ordinal: b(b"OTFOrdinal"),
+        swash: b(b"OTFSwash"),
+        discretionary_ligatures: b(b"OTFDiscretionaryLigature"),
+        slashed_zero: b(b"OTFSlashedZero"),
+        titling: b(b"OTFTitling"),
+        contextual_alternates: b(b"OTFContextualAlternate"),
+        figure_style: attr(e, b"OTFFigureStyle"),
+        stylistic_sets: attr(e, b"OTFStylisticSets").and_then(|s| s.parse::<i32>().ok()),
     }
+}
 
+impl OtfFeatures {
     /// Fill any unset field from `below` (a lower cascade level: this
     /// run's character style, then paragraph style). Nothing is
     /// overwritten once set.
@@ -1307,14 +1309,8 @@ impl Story {
                                     .and_then(|s| s.parse::<bool>().ok()),
                                 keep_with_next: attr(&e, b"KeepWithNext")
                                     .and_then(|s| s.parse::<u32>().ok()),
-                                rule_above: crate::styles::ParagraphRule::from_attrs(
-                                    &e,
-                                    "RuleAbove",
-                                ),
-                                rule_below: crate::styles::ParagraphRule::from_attrs(
-                                    &e,
-                                    "RuleBelow",
-                                ),
+                                rule_above: crate::styles::parse_paragraph_rule(&e, "RuleAbove"),
+                                rule_below: crate::styles::parse_paragraph_rule(&e, "RuleBelow"),
                                 kinsoku_set: attr(&e, b"KinsokuSet"),
                                 kinsoku_type: attr(&e, b"KinsokuType"),
                                 mojikumi_table: attr(&e, b"MojikumiTable"),
@@ -1622,7 +1618,7 @@ impl Story {
                                 // authoring string. The discrete parsed
                                 // attributes land in `otf` below.
                                 otf_features: None,
-                                otf: OtfFeatures::from_attrs(&e),
+                                otf: parse_otf_features(&e),
                                 applied_conditions: attr(&e, b"AppliedConditions")
                                     .map(|s| s.split_whitespace().map(|t| t.to_string()).collect())
                                     .unwrap_or_default(),

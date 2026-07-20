@@ -218,7 +218,7 @@ fn table_cascade_story(story_id: &str) -> Vec<u8> {
 /// Page 4 story (raw) — three OTF-bearing runs. Each
 /// `<CharacterStyleRange>` carries one discrete OpenType feature
 /// attribute; the parser reads them off the run via
-/// `OtfFeatures::from_attrs`. `features_on` toggles the attributes so
+/// `parse_otf_features`. `features_on` toggles the attributes so
 /// the render test can diff on/off.
 fn otf_story(story_id: &str, features_on: bool) -> Vec<u8> {
     let mut b = XmlBuilder::new();
