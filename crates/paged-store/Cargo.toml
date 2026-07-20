@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 paged-scene = { path = "../paged-scene" }
+serde = { workspace = true }
 serde_json = "1"
 
 [dev-dependencies]

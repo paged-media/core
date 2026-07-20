@@ -1229,18 +1229,24 @@ impl CanvasModel {
                 .entry(paged_store::DOCUMENT_PGM_PATH)
                 .map(|b| b.to_vec())
             {
-                Some(pgm) => {
-                    let mut doc = paged_store::from_bytes(&pgm)
-                        .map_err(|e| LoadError::Parse(format!("document.pgm: {e}")))?;
-                    // The native part is the model truth (including its
-                    // structured designmap); take only the raw carry-through
-                    // bytes from the real container so the parts door still
-                    // serves every other container part and IDML export can
-                    // still carry through.
-                    doc.container.entries = container.entries;
-                    doc.container.designmap_raw = container.designmap_raw;
-                    doc
-                }
+                // A native part that reconstructs wins; one that is absent OR
+                // incompatible (stale/foreign PGM_FORMAT_VERSION → `from_bytes`
+                // returns None) falls back to the IDML import — a stale `.pgm`
+                // is never a hard load error (ADR-022 Q2).
+                Some(pgm) => match paged_store::from_bytes(&pgm) {
+                    Some(mut doc) => {
+                        // The native part is the model truth (including its
+                        // structured designmap); take only the raw carry-through
+                        // bytes from the real container so the parts door still
+                        // serves every other container part and IDML export can
+                        // still carry through.
+                        doc.container.entries = container.entries;
+                        doc.container.designmap_raw = container.designmap_raw;
+                        doc
+                    }
+                    None => Document::from_container(container)
+                        .map_err(|e| LoadError::Parse(e.to_string()))?,
+                },
                 None => Document::from_container(container)
                     .map_err(|e| LoadError::Parse(e.to_string()))?,
             }
@@ -3437,10 +3443,10 @@ impl CanvasModel {
 
     /// N2 — read the native model part (`document.pgm`) back and reconstruct a
     /// [`Document`] with **no `Container::open`**, or `None` if the part is
-    /// absent / fails to deserialize.
+    /// absent / incompatible / fails to deserialize.
     pub fn read_model_part(&self) -> Option<Document> {
         let bytes = self.get_paged_part(paged_store::DOCUMENT_PGM_PATH)?;
-        paged_store::from_bytes(&bytes).ok()
+        paged_store::from_bytes(&bytes)
     }
 
     /// Phase 4 Step 3 — return the pages whose frame chains touch

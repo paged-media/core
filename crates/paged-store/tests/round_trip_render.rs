@@ -65,3 +65,31 @@ fn model_round_trips_through_native_bytes_and_renders_identically() {
         );
     }
 }
+
+/// A part stamped with an incompatible `PGM_FORMAT_VERSION` is rejected (→ the
+/// loader falls back to the IDML import), never mis-deserialized (ADR-022 Q2).
+#[test]
+fn incompatible_format_version_is_rejected() {
+    let idml = paged_gen::write_idml(&paged_gen::samples::geometry::build())
+        .expect("generate fixture idml");
+    let doc = Document::open(&idml).expect("import fixture");
+    let bytes = paged_store::to_bytes(&doc).expect("serialize to .pgm");
+
+    // Current version round-trips.
+    assert!(
+        paged_store::from_bytes(&bytes).is_some(),
+        "current PGM_FORMAT_VERSION must load"
+    );
+
+    // Bump the envelope's version → incompatible → None.
+    let mut v: serde_json::Value = serde_json::from_slice(&bytes).expect("parse envelope");
+    v["format_version"] = serde_json::json!(paged_store::PGM_FORMAT_VERSION + 1);
+    let future = serde_json::to_vec(&v).expect("reserialize");
+    assert!(
+        paged_store::from_bytes(&future).is_none(),
+        "an incompatible format version must be rejected"
+    );
+
+    // Garbage bytes are also rejected (not a panic).
+    assert!(paged_store::from_bytes(b"not json").is_none());
+}
