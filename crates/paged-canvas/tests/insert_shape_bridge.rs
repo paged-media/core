@@ -450,10 +450,7 @@ fn paged_container_parts_round_trip_through_export() {
     let mut model = load();
     let spec = br#"{"v":1,"data":{}}"#;
     model
-        .set_paged_part(
-            "paged/media.paged.sheet/o1/spec.json".into(),
-            spec.to_vec(),
-        )
+        .set_paged_part("paged/media.paged.sheet/o1/spec.json".into(), spec.to_vec())
         .expect("set spec part");
     model
         .set_paged_part(
@@ -472,7 +469,9 @@ fn paged_container_parts_round_trip_through_export() {
     assert_eq!(model.list_paged_parts("paged/media.paged.sheet/").len(), 2);
     // The parts door never touches the IDML or the manifest.
     assert!(
-        model.set_paged_part("designmap.xml".into(), vec![]).is_err(),
+        model
+            .set_paged_part("designmap.xml".into(), vec![])
+            .is_err(),
         "a non-paged path must be rejected"
     );
     assert!(
@@ -494,8 +493,12 @@ fn paged_container_parts_round_trip_through_export() {
         Some(&[1u8, 2, 3, 4][..])
     );
 
-    // A re-save (no plugin changes) preserves them — round-trip stable.
+    // A re-save (no plugin changes) preserves them — round-trip stable. Count
+    // the plugin parts specifically: `export_paged` now also embeds the native
+    // model part (`paged/core/model/document.pgm`), so a bare `paged/` count
+    // would include it.
     let out2 = re.export_paged(50).expect("re-export");
-    let re2 = CanvasModel::load("doc-paged-2", &out2, CanvasOptions::default()).expect("reload twice");
-    assert_eq!(re2.list_paged_parts("paged/").len(), 2);
+    let re2 =
+        CanvasModel::load("doc-paged-2", &out2, CanvasOptions::default()).expect("reload twice");
+    assert_eq!(re2.list_paged_parts("paged/media.paged.sheet/").len(), 2);
 }

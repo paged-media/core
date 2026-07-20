@@ -3378,12 +3378,20 @@ impl CanvasModel {
     /// `paged/` parts + a refreshed `manifest.json`). `paged_protocol` stamps
     /// the manifest for the data-loss guard / reader-version checks.
     pub fn export_paged(&self, paged_protocol: u32) -> Result<Vec<u8>, paged_write::WriteError> {
-        paged_write::write_paged(
-            &self.scene,
-            &self.source_idml,
-            &self.paged_parts,
-            paged_protocol,
-        )
+        // N4 — auto-embed a fresh native model part so every saved `.paged`
+        // loads native-first (the load sniff reconstructs from it with no source
+        // parse). The IDML parts remain as the derived projection; the model
+        // part is additive under `paged/core/`.
+        //
+        // Transitional cost: until IDML export relocates out of core, a `.paged`
+        // carries BOTH the IDML parts and the native model — larger on disk.
+        // (Cloning the overlay to add one part is likewise a transitional
+        // simplification; both go away when IDML leaves core.)
+        let mut parts = self.paged_parts.clone();
+        if let Ok(pgm) = paged_store::to_bytes(self.scene()) {
+            parts.insert(paged_store::DOCUMENT_PGM_PATH.to_string(), pgm);
+        }
+        paged_write::write_paged(&self.scene, &self.source_idml, &parts, paged_protocol)
     }
 
     /// S7 — the composition (`document.pgd`) **derived** from the current IDML
