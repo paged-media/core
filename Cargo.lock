@@ -2366,6 +2366,7 @@ dependencies = [
  "paged-parse",
  "paged-renderer",
  "paged-scene",
+ "paged-store",
  "paged-text",
  "paged-write",
  "rustybuzz 0.18.0",

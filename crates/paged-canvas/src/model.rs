@@ -3387,6 +3387,26 @@ impl CanvasModel {
         serde_json::from_slice(&bytes).ok()
     }
 
+    /// N2 — serialize the whole model (`self.scene`) into the canonical
+    /// `paged/core/model/document.pgm` container part via the native codec
+    /// ([`paged_store`]). Additive over the v51 parts door (no protocol bump).
+    /// Unlike the composition part (a derived *arrangement* projection), this is
+    /// the whole model — the seam that will let a `.paged` load with no
+    /// source-format parse (the load-time sniff that consumes it is a later
+    /// slice; today nothing reads it on load).
+    pub fn refresh_model_part(&mut self) -> Result<(), String> {
+        let bytes = paged_store::to_bytes(self.scene()).map_err(|e| e.to_string())?;
+        self.set_paged_part(paged_store::DOCUMENT_PGM_PATH.to_string(), bytes)
+    }
+
+    /// N2 — read the native model part (`document.pgm`) back and reconstruct a
+    /// [`Document`] with **no `Container::open`**, or `None` if the part is
+    /// absent / fails to deserialize.
+    pub fn read_model_part(&self) -> Option<Document> {
+        let bytes = self.get_paged_part(paged_store::DOCUMENT_PGM_PATH)?;
+        paged_store::from_bytes(&bytes).ok()
+    }
+
     /// Phase 4 Step 3 — return the pages whose frame chains touch
     /// `story_id`. Used by the wasm dispatch to scope GPU scene-cache
     /// invalidation after a mutation: instead of clearing every page's
