@@ -3967,8 +3967,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v50() {
-        assert_eq!(PROTOCOL_VERSION.0, 50);
+    fn protocol_version_is_v51() {
+        assert_eq!(PROTOCOL_VERSION.0, 51);
     }
 
     /// v38 — `RequestFrameChain` serialises with its camelCase tag and
