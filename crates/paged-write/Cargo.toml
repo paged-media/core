@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "IDML re-serialization (save-back). Carry-through writer: copies untouched package entries verbatim and streaming-patches only the attributes the parsed model owns, so a mutated Document round-trips to a valid IDML package without losing unparsed bytes."
+description = "Export re-serialization (save-back). Carry-through writer: copies untouched package entries verbatim and streaming-patches only the attributes the parsed model owns, so a mutated Document round-trips to a valid export package without losing unparsed bytes."
 
 [lints]
 workspace = true

@@ -19,12 +19,12 @@
 //! seed-corpus round-trips. Full schema coverage lands during Phase 0.
 
 use quick_xml::events::Event;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::util::attr;
 use crate::ParseError;
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct DesignMap {
     pub spreads: Vec<SpreadRef>,
     pub stories: Vec<StoryRef>,
@@ -112,7 +112,7 @@ pub struct DesignMap {
 }
 
 /// Page-numbering style for a `<Section>` (`PageNumberStyle`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NumberingStyle {
     Arabic,
     UpperRoman,
@@ -213,7 +213,7 @@ fn to_alpha(mut n: u32) -> Option<String> {
 }
 
 /// IDML `<Section>` definition.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Section {
     pub self_id: String,
     /// `PageStart` — the `Self` of the `<Page>` this section begins at.
@@ -239,7 +239,7 @@ pub struct Section {
 
 /// IDML `<Article>` definition. Members reference stories via
 /// `ArticleMember/ItemRef`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Article {
     pub self_id: String,
     pub name: Option<String>,
@@ -248,7 +248,7 @@ pub struct Article {
 }
 
 /// IDML `<Hyperlink>` definition.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hyperlink {
     pub self_id: String,
     pub name: Option<String>,
@@ -262,7 +262,7 @@ pub struct Hyperlink {
 }
 
 /// IDML `<Bookmark>` definition.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bookmark {
     pub self_id: String,
     pub name: Option<String>,
@@ -282,14 +282,14 @@ pub struct Bookmark {
 ///   `DestinationText` references the hosting story; the renderer
 ///   resolves it to the page the anchor lands on (best-effort: the
 ///   first page hosting that story).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HyperlinkDestination {
     pub self_id: String,
     pub kind: HyperlinkDestinationKind,
 }
 
 /// The destination flavour + its payload.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HyperlinkDestinationKind {
     /// External URL (e.g. `https://paged.media`).
     Url(String),
@@ -301,7 +301,7 @@ pub enum HyperlinkDestinationKind {
 }
 
 /// IDML `<CrossReferenceSource>` marker.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrossReference {
     pub self_id: String,
     pub name: Option<String>,
@@ -312,7 +312,7 @@ pub struct CrossReference {
 }
 
 /// IDML `<Topic>` definition for an index entry.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexTopic {
     pub self_id: String,
     pub name: Option<String>,
@@ -328,7 +328,7 @@ pub struct IndexTopic {
 /// type-specific payload — the literal contents of a custom variable,
 /// the date `Format` string, and the surrounding `TextBefore` /
 /// `TextAfter` decoration.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextVariable {
     pub self_id: String,
     pub name: Option<String>,
@@ -363,7 +363,7 @@ pub struct TextVariable {
 /// IDML `<Layer>` definition. Only the fields the renderer needs
 /// today; visibility / printability decide whether items on that
 /// layer are emitted at all.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Layer {
     pub self_id: String,
     pub name: Option<String>,
@@ -391,7 +391,7 @@ pub struct Layer {
 /// real InDesign exports carry on the `<Document>` element (CS6 / IDML
 /// 8.0). Empty defaults match "no opinion" and let the renderer pick
 /// a global fallback.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ColorSettings {
     /// `CMYKProfile` attribute, e.g. `"Coated FOGRA39 (ISO 12647-2:2004)"`.
     pub cmyk_profile: Option<String>,
@@ -412,7 +412,7 @@ pub struct ColorSettings {
 /// bleed spells "…InsideOrLeft/…OutsideOrRight" while slug flips the
 /// word order to "SlugRightOrOutsideOffset" — that's faithful to the
 /// spec, not a typo.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct DocumentPreference {
     pub bleed_top: f32,
     pub bleed_bottom: f32,
@@ -435,7 +435,7 @@ pub struct DocumentPreference {
 /// non-printing authoring aid). `present` distinguishes "no
 /// `<GridPreference>`" (InDesign defaults apply) from "explicitly
 /// configured", mirroring [`FootnoteOptions::present`].
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GridPreference {
     /// True when a `<GridPreference>` element was parsed.
     pub present: bool,
@@ -476,7 +476,7 @@ pub struct GridPreference {
 /// `None` everywhere is the absent-element default; the renderer then
 /// falls back to InDesign's own defaults (`rule_on = true`, a 0.5pt
 /// black rule 50% of the column wide). See [`FootnoteOptions::is_default`].
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct FootnoteOptions {
     /// True when the element was present in the designmap. When false
     /// the struct is all-`None` and the renderer applies its built-in
@@ -527,12 +527,12 @@ impl FootnoteOptions {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpreadRef {
     pub src: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoryRef {
     pub src: String,
 }

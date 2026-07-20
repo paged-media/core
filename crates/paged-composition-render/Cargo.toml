@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Drive the compositor from a Composition (document.pgd) — regions -> SceneLayers -> raster. No IDML."
+description = "Drive the compositor from a Composition (document.pgd) — regions -> SceneLayers -> raster. Format-neutral."
 
 [lints]
 workspace = true

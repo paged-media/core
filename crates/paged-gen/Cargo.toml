@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "IDML test-corpus generator. Emits multi-page mega-files where each page exercises one renderable feature variant; pairs with the InDesign-exported PDF reference + paged-fidelity diff harness."
+description = "Test-corpus generator. Emits multi-page mega-files where each page exercises one renderable feature variant; pairs with the InDesign-exported PDF reference + paged-fidelity diff harness."
 
 [lints]
 workspace = true

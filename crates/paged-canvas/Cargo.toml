@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Pure-Rust facade for the IDML Web Canvas worker model. No wasm-bindgen — testable headlessly via `cargo test`. Orchestrates Tiers 1–4 (content, layout, resolution, output) on top of paged-renderer."
+description = "Pure-Rust facade for the Paged Web Canvas worker model. No wasm-bindgen — testable headlessly via `cargo test`. Orchestrates Tiers 1–4 (content, layout, resolution, output) on top of paged-renderer."
 
 [lints]
 workspace = true

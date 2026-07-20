@@ -2684,6 +2684,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "paged-store"
+version = "0.0.0"
+dependencies = [
+ "paged-gen",
+ "paged-renderer",
+ "paged-scene",
+ "serde_json",
+]
+
+[[package]]
 name = "paged-text"
 version = "0.0.0"
 dependencies = [

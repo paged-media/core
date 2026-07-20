@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Content-agnostic region-chain flow protocol (the composition FlowId seam). No IDML, no renderer."
+description = "Content-agnostic region-chain flow protocol (the composition FlowId seam). Format-neutral; no renderer."
 
 [lints]
 workspace = true

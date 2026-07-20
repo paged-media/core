@@ -27,6 +27,7 @@
 use std::io::{self, Cursor, Read};
 
 use bytes::Bytes;
+use serde::{Deserialize, Serialize};
 
 pub mod designmap;
 pub mod graphic;
@@ -83,12 +84,19 @@ pub enum ParseError {
 ///
 /// The raw-entry map keeps `Bytes` so downstream crates can slice sub-
 /// resources (individual `Stories/Story_*.xml` etc.) without copying.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Container {
     pub mimetype: String,
+    /// Raw `designmap.xml` bytes. IDML carry-through only — never part of the
+    /// native model serialization (the structured `designmap` is the truth);
+    /// defaults to empty on native deserialize (N1, Approach A).
+    #[serde(skip)]
     pub designmap_raw: Bytes,
     pub designmap: DesignMap,
-    /// Full decompressed archive contents keyed by entry path.
+    /// Full decompressed archive contents keyed by entry path. IDML
+    /// carry-through only (render-dead) — `#[serde(skip)]` so the native model
+    /// never stores the raw IDML package; empty after native deserialize.
+    #[serde(skip)]
     pub entries: std::collections::BTreeMap<String, Bytes>,
 }
 

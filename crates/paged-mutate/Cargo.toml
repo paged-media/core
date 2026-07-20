@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Operation-based mutation channel for the IDML scene graph. Typed, serializable, invertible Operations + undo/redo + change notification. Consumed by paged-introspect."
+description = "Operation-based mutation channel for the Paged scene graph. Typed, serializable, invertible Operations + undo/redo + change notification. Consumed by paged-introspect."
 
 [lints]
 workspace = true

@@ -34,12 +34,12 @@
 use std::collections::BTreeMap;
 
 use quick_xml::events::Event;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::util::attr;
 use crate::ParseError;
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Graphic {
     /// All `<Color>` entries, keyed by `Self` (e.g. "Color/Red").
     pub colors: BTreeMap<String, ColorEntry>,
@@ -59,7 +59,7 @@ pub struct Graphic {
 /// SDK Phase 5 (v1 sweep) — `<ColorGroup>`. Named grouping of
 /// `Color` self_ids the document organises its swatch palette
 /// into. Kept for round-trip + the editor's Color Groups panel.
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ColorGroupEntry {
     pub self_id: String,
     pub name: Option<String>,
@@ -70,7 +70,7 @@ pub struct ColorGroupEntry {
     pub members: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColorEntry {
     pub self_id: String,
     pub name: Option<String>,
@@ -148,7 +148,7 @@ impl ColorEntry {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwatchEntry {
     pub self_id: String,
     pub name: Option<String>,
@@ -157,7 +157,7 @@ pub struct SwatchEntry {
 }
 
 /// IDML gradient swatch. Stops reference Color entries by `Self` id.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GradientEntry {
     pub self_id: String,
     pub name: Option<String>,
@@ -165,7 +165,7 @@ pub struct GradientEntry {
     pub stops: Vec<GradientStopRef>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum GradientKind {
     Linear,
     Radial,
@@ -173,7 +173,7 @@ pub enum GradientKind {
 }
 
 /// One stop in a gradient: a Color reference + a normalised location.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GradientStopRef {
     pub stop_color: String,
     /// `Location` attribute, 0..=100 in IDML.
@@ -184,7 +184,7 @@ pub struct GradientStopRef {
     pub midpoint_pct: Option<f32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ColorSpace {
     Cmyk,
     Rgb,
@@ -200,7 +200,7 @@ pub enum ColorSpace {
 /// with a CMYK fallback for preview / un-spotted output. `MixedInk`
 /// is recognised but treated as `Unknown` — we don't ship the
 /// per-ink decomposition.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ColorModel {
     Process,
     Spot,

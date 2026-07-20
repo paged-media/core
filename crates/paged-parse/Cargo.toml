@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "IDML ZIP + XML parser. Produces a typed AST of the supported schema subset."
+description = "Import parser (ZIP + XML source packages). Produces a typed AST of the supported schema subset."
 
 [lints]
 workspace = true

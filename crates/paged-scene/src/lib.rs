@@ -26,6 +26,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use serde::{Deserialize, Serialize};
+
 use paged_parse::{
     Bounds, CharacterRun, Container, Graphic, Paragraph, ParseError, Spread, Story, StoryRef,
     StyleSheet, TOCStyleDef, TextFrame,
@@ -41,8 +43,14 @@ pub use layer::{
 };
 pub use value::Value;
 
-/// Owned, parsed representation of an IDML document.
-#[derive(Debug, Clone)]
+/// Owned, parsed representation of a Paged document (imported from IDML today).
+///
+/// Serializes natively (N1, Approach A): the primary fields (`container` minus
+/// its raw-IDML byte blobs, `palette`, `spreads`, `stories`, `master_spreads`,
+/// `styles`) round-trip; the three derived caches below are `#[serde(skip)]`
+/// and rebuilt by [`Document::rebuild_indexes`] after deserialize, so a
+/// `Document` reconstructs from native bytes with no `Container::open`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     pub container: Container,
     pub palette: Graphic,
@@ -54,11 +62,13 @@ pub struct Document {
     pub master_spreads: HashMap<String, ParsedMasterSpread>,
     /// `TextFrame` indexed by its `ParentStory` id — built once so the
     /// pipeline doesn't have to scan every spread for each story.
+    #[serde(skip)]
     pub frame_for_story: HashMap<String, TextFrame>,
     /// `(spread_idx, frame_idx)` for each TextFrame keyed by its
     /// `Self` id. Built at open time so [`text_frame`] is O(1) and
     /// [`frame_chain`] walks long NextTextFrame chains in linear
     /// time rather than O(K × total_frames).
+    #[serde(skip)]
     pub text_frame_index: HashMap<String, (usize, usize)>,
     /// Paragraph + character style definitions loaded from
     /// `Resources/Styles.xml`. Empty when the archive has no styles
@@ -68,11 +78,12 @@ pub struct Document {
     /// (Phase G of the canvas plan). Other anchor kinds (footnotes,
     /// cross-ref targets, bookmarks) join in subsequent Phase 2
     /// work as the parser emits the corresponding markers.
+    #[serde(skip)]
     pub anchors: Vec<Anchor>,
 }
 
 /// A spread plus the path it came from in the container.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedSpread {
     pub src: String,
     pub spread: Spread,
@@ -80,7 +91,7 @@ pub struct ParsedSpread {
 
 /// A story plus its `Self` id (derived from the manifest src) and
 /// source path.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedStory {
     pub src: String,
     pub self_id: String,
@@ -90,7 +101,7 @@ pub struct ParsedStory {
 /// A master spread plus the `Self` id pages reference it by. The
 /// XML schema is identical to a regular `<Spread>`, so we reuse
 /// `Spread` for the geometry payload.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedMasterSpread {
     pub src: String,
     pub self_id: String,
@@ -189,22 +200,11 @@ impl Document {
         }
 
         let mut spreads = Vec::with_capacity(container.designmap.spreads.len());
-        let mut frame_for_story = HashMap::new();
-        let mut text_frame_index: HashMap<String, (usize, usize)> = HashMap::new();
         for spread_ref in &container.designmap.spreads {
             let raw = container
                 .entry(&spread_ref.src)
                 .ok_or_else(|| OpenError::MissingEntry(spread_ref.src.clone()))?;
             let parsed = Spread::parse(raw)?;
-            let spread_idx = spreads.len();
-            for (frame_idx, frame) in parsed.text_frames.iter().enumerate() {
-                if let Some(id) = frame.parent_story.clone() {
-                    frame_for_story.insert(id, frame.clone());
-                }
-                if let Some(self_id) = frame.self_id.clone() {
-                    text_frame_index.insert(self_id, (spread_idx, frame_idx));
-                }
-            }
             spreads.push(ParsedSpread {
                 src: spread_ref.src.clone(),
                 spread: parsed,
@@ -225,12 +225,51 @@ impl Document {
             });
         }
 
-        // Build the heading-anchor table from every story. This is
-        // Phase G of the canvas plan: heading paragraphs become
-        // anchors so the Tier 3 resolver can populate the
-        // numbering map for cross-references and TOC entries.
+        let mut document = Document {
+            container,
+            palette,
+            spreads,
+            stories,
+            master_spreads,
+            // The three derived caches are rebuilt from the primary fields
+            // below (and on native deserialize — they are `#[serde(skip)]`).
+            frame_for_story: HashMap::new(),
+            text_frame_index: HashMap::new(),
+            styles,
+            anchors: Vec::new(),
+        };
+        document.rebuild_indexes();
+        Ok(document)
+    }
+
+    /// Rebuild the derived caches (`frame_for_story`, `text_frame_index`,
+    /// `anchors`) purely from the primary `spreads` / `stories` fields.
+    ///
+    /// Called at the end of [`Document::open`] and by the native codec after
+    /// deserialize (N1, Approach A) — the caches are `#[serde(skip)]`, so this
+    /// is what lets a `Document` reconstruct from native bytes with no IDML
+    /// parse. Must reproduce exactly what `open` used to build inline.
+    pub fn rebuild_indexes(&mut self) {
+        let mut frame_for_story = HashMap::new();
+        let mut text_frame_index: HashMap<String, (usize, usize)> = HashMap::new();
+        for (spread_idx, parsed) in self.spreads.iter().enumerate() {
+            for (frame_idx, frame) in parsed.spread.text_frames.iter().enumerate() {
+                if let Some(id) = frame.parent_story.clone() {
+                    frame_for_story.insert(id, frame.clone());
+                }
+                if let Some(self_id) = frame.self_id.clone() {
+                    text_frame_index.insert(self_id, (spread_idx, frame_idx));
+                }
+            }
+        }
+        self.frame_for_story = frame_for_story;
+        self.text_frame_index = text_frame_index;
+
+        // Heading-anchor table (Phase G): heading paragraphs become anchors so
+        // the Tier 3 resolver can populate the numbering map for cross-refs /
+        // TOC entries.
         let mut anchors: Vec<Anchor> = Vec::new();
-        for parsed_story in &stories {
+        for parsed_story in &self.stories {
             for (paragraph_index, paragraph) in parsed_story.story.paragraphs.iter().enumerate() {
                 let Some(style_name) = paragraph.paragraph_style.as_deref() else {
                     continue;
@@ -247,18 +286,7 @@ impl Document {
                 });
             }
         }
-
-        Ok(Document {
-            container,
-            palette,
-            spreads,
-            stories,
-            master_spreads,
-            frame_for_story,
-            text_frame_index,
-            styles,
-            anchors,
-        })
+        self.anchors = anchors;
     }
 
     /// Look up a master spread by its `Self` id (the suffix stripped
