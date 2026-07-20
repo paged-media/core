@@ -11,6 +11,9 @@ description = "Import parser (ZIP + XML source packages). Produces a typed AST o
 workspace = true
 
 [dependencies]
+# N5 — the Paged model types live here (parser depends on the model, imports
+# into it). paged-parse re-exports them so its dependents are untouched.
+paged-model = { path = "../paged-model" }
 thiserror = { workspace = true }
 bytes = { workspace = true }
 zip = { workspace = true }

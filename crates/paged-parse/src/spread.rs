@@ -1723,28 +1723,9 @@ pub struct Polygon {
     pub locked: bool,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-pub struct Bounds {
-    pub top: f32,
-    pub left: f32,
-    pub bottom: f32,
-    pub right: f32,
-}
-
-impl Bounds {
-    pub const ZERO: Bounds = Bounds {
-        top: 0.0,
-        left: 0.0,
-        bottom: 0.0,
-        right: 0.0,
-    };
-    pub fn width(&self) -> f32 {
-        self.right - self.left
-    }
-    pub fn height(&self) -> f32 {
-        self.bottom - self.top
-    }
-}
+// N5 — `Bounds` now lives in `paged-model` (the Paged-owned model); re-exported
+// here so `paged_parse::Bounds` and every dependent are unchanged.
+pub use paged_model::Bounds;
 
 /// Identifies the most recently opened shape element so child
 /// elements (DropShadowSetting, TextFramePreference, PathPointType,
