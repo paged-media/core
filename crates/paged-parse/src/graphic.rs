@@ -30,6 +30,11 @@
 //! preview behaviour. Spot colours whose `AlternateSpace` isn't CMYK
 //! (rare in practice) fall back to the swatch's own `Space` /
 //! `ColorValue`.
+//!
+//! The swatch-palette value types (`ColorEntry`, `Gradient*`, `Color*`,
+//! `ReservedSwatch`, the colour math) live in `paged-model`; this module
+//! owns only the `Graphic` container + the XML parsing and re-exports the
+//! types so `paged_parse::graphic::*` keeps resolving.
 
 use std::collections::BTreeMap;
 
@@ -38,6 +43,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::util::attr;
 use crate::ParseError;
+
+pub use paged_model::{
+    to_linear_rgb, ColorEntry, ColorGroupEntry, ColorModel, ColorSpace, GradientEntry,
+    GradientKind, GradientStopRef, ReservedSwatch, SwatchEntry,
+};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Graphic {
@@ -54,202 +64,6 @@ pub struct Graphic {
     /// ("Brand colours", "UI accents"). Empty when the document
     /// declares no groups (the renderer doesn't branch on them).
     pub color_groups: BTreeMap<String, ColorGroupEntry>,
-}
-
-/// SDK Phase 5 (v1 sweep) — `<ColorGroup>`. Named grouping of
-/// `Color` self_ids the document organises its swatch palette
-/// into. Kept for round-trip + the editor's Color Groups panel.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct ColorGroupEntry {
-    pub self_id: String,
-    pub name: Option<String>,
-    /// IDML `ColorGroupSwatches` attribute — space-separated
-    /// list of `Color/<self_id>` (or `Swatch/<self_id>`) refs.
-    /// Stored as-parsed; the editor resolves them against the
-    /// `colors` table for display.
-    pub members: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ColorEntry {
-    pub self_id: String,
-    pub name: Option<String>,
-    pub space: ColorSpace,
-    pub value: Vec<f32>,
-    /// IDML `Model` attribute. `Process` is the default; `Spot` marks
-    /// a named-ink swatch (e.g. PANTONE 286) which the renderer
-    /// previews via the alternate-CMYK fallback.
-    pub model: ColorModel,
-    /// `AlternateSpace` — colour space of the CMYK / RGB fallback the
-    /// IDML carries for a spot swatch. `None` when not a spot or when
-    /// the producer omitted it.
-    pub alternate_space: Option<ColorSpace>,
-    /// `AlternateColorValue` — whitespace-separated channel values
-    /// in the `alternate_space`. For a CMYK alternate this is four
-    /// percentages.
-    pub alternate_value: Vec<f32>,
-    /// `TintValue` (0..=100) stored on a spot `<Color>` swatch that
-    /// represents "base spot ink at N% tint". `None` means the swatch
-    /// has no swatch-level tint (the most common case — per-use tints
-    /// arrive via `FillTint` on the *user*, handled separately).
-    pub tint: Option<f32>,
-    /// Optional alpha channel (0..=1, 1 = fully opaque) sourced from
-    /// the IDML `Alpha` / `AlphaPercentage` attribute on `<Color>`.
-    /// `None` means the swatch carries no alpha; the consumer should
-    /// treat the swatch as opaque. Used by the gradient-feather
-    /// renderer when a `<GradientStop>` in spec form references a
-    /// `<Color>` whose alpha defines the stop's opacity.
-    pub alpha: Option<f32>,
-}
-
-impl ColorEntry {
-    /// Resolve a swatch to the effective CMYK percentages a renderer
-    /// should send to ICC. Returns `Some([c, m, y, k])` when:
-    ///
-    /// * the swatch is a process CMYK colour (just returns `value`), or
-    /// * the swatch is a spot colour with a CMYK alternate — in which
-    ///   case the swatch-level `TintValue` (if any) is multiplied into
-    ///   each channel here (`tinted = base * tint / 100`), matching
-    ///   InDesign's preview interpolation between the spot ink and
-    ///   paper white in CMYK before the ICC transform.
-    ///
-    /// Returns `None` for RGB / LAB / Gray swatches and for spot
-    /// colours whose alternate isn't CMYK (rare; caller falls back to
-    /// the swatch's primary `value` via [`to_linear_rgb`]).
-    pub fn effective_cmyk(&self) -> Option<[f32; 4]> {
-        let (base_space, base_value) = match self.model {
-            ColorModel::Spot => {
-                // Spot inks are previewed via the CMYK alternate; we
-                // don't try to interpret the spot's primary Lab/RGB
-                // value because spot rendering requires a spectral
-                // model we don't ship.
-                match self.alternate_space {
-                    Some(ColorSpace::Cmyk) if self.alternate_value.len() == 4 => {
-                        (ColorSpace::Cmyk, self.alternate_value.as_slice())
-                    }
-                    _ => return None,
-                }
-            }
-            _ => (self.space, self.value.as_slice()),
-        };
-        if base_space != ColorSpace::Cmyk || base_value.len() != 4 {
-            return None;
-        }
-        let t = self
-            .tint
-            .map(|v| (v / 100.0).clamp(0.0, 1.0))
-            .unwrap_or(1.0);
-        Some([
-            base_value[0] * t,
-            base_value[1] * t,
-            base_value[2] * t,
-            base_value[3] * t,
-        ])
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SwatchEntry {
-    pub self_id: String,
-    pub name: Option<String>,
-    /// `Self` reference to the Color this swatch wraps, if any.
-    pub color_ref: Option<String>,
-}
-
-/// IDML gradient swatch. Stops reference Color entries by `Self` id.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GradientEntry {
-    pub self_id: String,
-    pub name: Option<String>,
-    pub kind: GradientKind,
-    pub stops: Vec<GradientStopRef>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum GradientKind {
-    Linear,
-    Radial,
-    Unknown,
-}
-
-/// One stop in a gradient: a Color reference + a normalised location.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GradientStopRef {
-    pub stop_color: String,
-    /// `Location` attribute, 0..=100 in IDML.
-    pub location_pct: f32,
-    /// `Midpoint` attribute, 0..=100 (default 50): where, *within the
-    /// segment to the next stop*, the colour reaches the halfway blend.
-    /// `None` ⇒ the file omitted it ⇒ treat as the linear 50.
-    pub midpoint_pct: Option<f32>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum ColorSpace {
-    Cmyk,
-    Rgb,
-    Lab,
-    Gray,
-    /// Anything we didn't recognise — callers should treat it as
-    /// unresolved and fall back to a sensible default.
-    Unknown,
-}
-
-/// IDML `<Color Model="…">`. `Process` is the default (CMYK / RGB /
-/// Lab inks blended on press); `Spot` marks a named ink that ships
-/// with a CMYK fallback for preview / un-spotted output. `MixedInk`
-/// is recognised but treated as `Unknown` — we don't ship the
-/// per-ink decomposition.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum ColorModel {
-    Process,
-    Spot,
-    MixedInk,
-    Unknown,
-}
-
-impl ColorModel {
-    pub fn from_attr(s: &str) -> Self {
-        match s {
-            "Process" => ColorModel::Process,
-            "Spot" => ColorModel::Spot,
-            "MixedInk" | "MixedInkGroup" => ColorModel::MixedInk,
-            _ => ColorModel::Unknown,
-        }
-    }
-
-    /// IDML `Model` attribute string, round-trippable with `from_attr`.
-    pub fn as_attr(self) -> &'static str {
-        match self {
-            ColorModel::Process => "Process",
-            ColorModel::Spot => "Spot",
-            ColorModel::MixedInk => "MixedInk",
-            ColorModel::Unknown => "Unknown",
-        }
-    }
-}
-
-impl ColorSpace {
-    pub fn from_attr(s: &str) -> Self {
-        match s {
-            "CMYK" => ColorSpace::Cmyk,
-            "RGB" => ColorSpace::Rgb,
-            "LAB" | "Lab" => ColorSpace::Lab,
-            "Gray" => ColorSpace::Gray,
-            _ => ColorSpace::Unknown,
-        }
-    }
-
-    /// IDML `Space` attribute string, round-trippable with `from_attr`.
-    pub fn as_attr(self) -> &'static str {
-        match self {
-            ColorSpace::Cmyk => "CMYK",
-            ColorSpace::Rgb => "RGB",
-            ColorSpace::Lab => "LAB",
-            ColorSpace::Gray => "Gray",
-            ColorSpace::Unknown => "Unknown",
-        }
-    }
 }
 
 impl Graphic {
@@ -449,96 +263,6 @@ fn parse_color_group(e: &quick_xml::events::BytesStart) -> Option<ColorGroupEntr
         name: attr(e, b"Name"),
         members,
     })
-}
-
-/// Convert a [`ColorEntry`] to non-color-managed linear RGB (0..=1).
-///
-/// This is a stopgap — the proper path goes through `paged-color` with
-/// ICC profiles. Fine for exploratory tooling and the fidelity
-/// harness's first seed documents.
-///
-/// Spot swatches route through their CMYK alternate (with any
-/// swatch-level `TintValue` already folded in by
-/// [`ColorEntry::effective_cmyk`]). Spot swatches without a CMYK
-/// alternate fall back to whatever the primary `Space` claims —
-/// usually `Lab`, which we render as `None` (unresolved).
-pub fn to_linear_rgb(c: &ColorEntry) -> Option<[f32; 3]> {
-    if let Some([cv, mv, yv, kv]) = c.effective_cmyk() {
-        let cv = cv / 100.0;
-        let mv = mv / 100.0;
-        let yv = yv / 100.0;
-        let kv = kv / 100.0;
-        let r = (1.0 - cv) * (1.0 - kv);
-        let g = (1.0 - mv) * (1.0 - kv);
-        let b = (1.0 - yv) * (1.0 - kv);
-        return Some([srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b)]);
-    }
-    let v = c.value.as_slice();
-    match c.space {
-        ColorSpace::Rgb if v.len() == 3 => Some([
-            srgb_to_linear(v[0] / 255.0),
-            srgb_to_linear(v[1] / 255.0),
-            srgb_to_linear(v[2] / 255.0),
-        ]),
-        ColorSpace::Gray if v.len() == 1 => {
-            let g = srgb_to_linear(1.0 - v[0] / 100.0);
-            Some([g, g, g])
-        }
-        _ => None,
-    }
-}
-
-/// Concept 2 — the reserved swatches (`[None]`, `[Paper]`,
-/// `[Black]`, `[Registration]`). Never editable or deletable;
-/// semantics: None = no paint, Paper = the substrate (knockout, not
-/// white ink), Black = 100% K process, Registration = prints on ALL
-/// plates. This is THE classifier — display sites and the none-fill
-/// fast paths route through it instead of scattering id matches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReservedSwatch {
-    None,
-    Paper,
-    Black,
-    Registration,
-}
-
-impl ReservedSwatch {
-    /// Classify a swatch/colour reference. Handles both the
-    /// `Color/<name>` and `Swatch/<name>` spellings plus the legacy
-    /// `"n"` / empty forms IDML uses for "no paint".
-    pub fn classify(id: &str) -> Option<Self> {
-        match id {
-            "Color/None" | "Swatch/None" | "n" | "" => Some(Self::None),
-            "Color/Paper" | "Swatch/Paper" => Some(Self::Paper),
-            "Color/Black" | "Swatch/Black" => Some(Self::Black),
-            "Color/Registration" | "Swatch/Registration" => Some(Self::Registration),
-            _ => None,
-        }
-    }
-
-    /// True for any spelling of the no-paint swatch.
-    pub fn is_none(id: &str) -> bool {
-        matches!(Self::classify(id), Some(Self::None))
-    }
-
-    /// The wire/display label ("none" / "paper" / "black" /
-    /// "registration").
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Paper => "paper",
-            Self::Black => "black",
-            Self::Registration => "registration",
-        }
-    }
-}
-
-fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.040_45 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
 }
 
 #[cfg(test)]
