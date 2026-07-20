@@ -40,6 +40,12 @@
 use paged_flow::{FlowId, RegionChain, RegionGeometry, RegionId};
 use serde::{Deserialize, Serialize};
 
+/// The canonical container path of the composition part inside a `.paged`
+/// document (container-format-v2 §3.1). A [`Composition`] serialized as JSON
+/// lives here; `paged/core/` is a core-owned namespace. See S7 in
+/// `thoughts/docs/paged/core/flow-implementation-plan.md`.
+pub const DOCUMENT_PGD_PATH: &str = "paged/core/composition/document.pgd";
+
 fn default_format() -> String {
     "paged-composition".to_string()
 }

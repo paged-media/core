@@ -191,4 +191,46 @@ mod tests {
         let comp = Composition::new(1);
         assert!(render_page(&comp, "nope", &BlockRenderer, 72.0, Color::WHITE).is_none());
     }
+
+    /// S7 — a composition survives the on-disk `document.pgd` JSON form and
+    /// renders **pixel-identically** after the round-trip. This is the render
+    /// side of composition persistence: whatever `CanvasModel` writes into the
+    /// container part reconstructs the same page.
+    #[test]
+    fn persisted_composition_renders_identically() {
+        let mut comp = Composition::new(1);
+        comp.surfaces = vec![Surface {
+            id: "print".to_string(),
+            kind: SurfaceKind::Print,
+        }];
+        comp.pages = vec![Page {
+            id: "p1".to_string(),
+            size: [400.0, 200.0],
+            spread: None,
+        }];
+        comp.nodes = vec![
+            block("r0", "e51a1a", [10.0, 10.0], 100.0, 60.0),
+            block("r1", "1a4de5", [200.0, 10.0], 120.0, 80.0),
+        ];
+
+        // Round-trip through the exact bytes the `document.pgd` part carries.
+        let bytes = serde_json::to_vec(&comp).expect("serialize document.pgd");
+        let restored: Composition =
+            serde_json::from_slice(&bytes).expect("deserialize document.pgd");
+        assert_eq!(
+            restored, comp,
+            "composition changed across the JSON round-trip"
+        );
+
+        // The persisted bytes reconstruct a pixel-identical page.
+        let a =
+            render_page(&comp, "p1", &BlockRenderer, 72.0, Color::WHITE).expect("render original");
+        let b = render_page(&restored, "p1", &BlockRenderer, 72.0, Color::WHITE)
+            .expect("render restored");
+        assert_eq!(
+            a.as_raw(),
+            b.as_raw(),
+            "persisted composition renders differently"
+        );
+    }
 }

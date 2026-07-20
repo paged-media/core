@@ -3358,6 +3358,35 @@ impl CanvasModel {
         )
     }
 
+    /// S7 — the composition (`document.pgd`) **derived** from the current IDML
+    /// scene via the S6 adapter ([`paged_scene::Document::to_composition`]).
+    /// Arrangement only — no content (composition-format §0). This is a
+    /// projection of the IDML model, which remains the source of truth
+    /// (evolutionary; ADR-021).
+    pub fn composition(&self) -> paged_composition::Composition {
+        self.scene().to_composition()
+    }
+
+    /// S7 — serialize the current [`Self::composition`] into the canonical
+    /// `paged/core/composition/document.pgd` container part. Additive: it rides
+    /// the v51 parts door and the unknown-parts round-trip guarantee, so it
+    /// needs no protocol bump. The part is a persisted *derived* projection,
+    /// not yet authoritative — [`Self::read_composition_part`] reads it back but
+    /// nothing drives rendering from it yet (that is S7b).
+    pub fn refresh_composition_part(&mut self) -> Result<(), String> {
+        let comp = self.composition();
+        let bytes = serde_json::to_vec(&comp).map_err(|e| e.to_string())?;
+        self.set_paged_part(paged_composition::DOCUMENT_PGD_PATH.to_string(), bytes)
+    }
+
+    /// S7 — read the composition part (`document.pgd`) back from the container,
+    /// if present. Returns `None` when the part is absent or fails to
+    /// deserialize (a foreign / older container simply has no such part).
+    pub fn read_composition_part(&self) -> Option<paged_composition::Composition> {
+        let bytes = self.get_paged_part(paged_composition::DOCUMENT_PGD_PATH)?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
     /// Phase 4 Step 3 — return the pages whose frame chains touch
     /// `story_id`. Used by the wasm dispatch to scope GPU scene-cache
     /// invalidation after a mutation: instead of clearing every page's

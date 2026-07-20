@@ -16,3 +16,8 @@ paged-flow = { path = "../paged-flow" }
 paged-compose = { path = "../paged-compose" }
 paged-gpu = { path = "../paged-gpu", features = ["cpu"] }
 image = { workspace = true }
+
+[dev-dependencies]
+# S7 — prove a composition survives the on-disk `document.pgd` JSON form and
+# renders identically after the round-trip.
+serde_json = "1"
