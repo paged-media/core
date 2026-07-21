@@ -1223,8 +1223,8 @@ impl CanvasModel {
         // container is kept either way, so the parts door still serves every
         // other container part.
         let scene = {
-            let container =
-                paged_parse::Container::open(bytes).map_err(|e| LoadError::Parse(e.to_string()))?;
+            let container = paged_parse::open_source_archive(bytes)
+                .map_err(|e| LoadError::Parse(e.to_string()))?;
             match container
                 .entry(paged_store::DOCUMENT_PGM_PATH)
                 .map(|b| b.to_vec())
@@ -3442,7 +3442,7 @@ impl CanvasModel {
     }
 
     /// N2 — read the native model part (`document.pgm`) back and reconstruct a
-    /// [`Document`] with **no `Container::open`**, or `None` if the part is
+    /// [`Document`] with **no `open_source_archive`**, or `None` if the part is
     /// absent / incompatible / fails to deserialize.
     pub fn read_model_part(&self) -> Option<Document> {
         let bytes = self.get_paged_part(paged_store::DOCUMENT_PGM_PATH)?;

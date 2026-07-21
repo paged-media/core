@@ -15,7 +15,7 @@
 //! N1 proof (Approach A) — the Paged model **self-owns via native bytes, no
 //! IDML**. Parse a generated fixture, serialize the model to native `.paged`
 //! bytes, reconstruct a fresh `Document` from those bytes with **no
-//! `Container::open`**, and assert the two render to identical display-list
+//! `open_source_archive`**, and assert the two render to identical display-list
 //! digests.
 
 use paged_renderer::pipeline::{self, PipelineOptions};
@@ -29,7 +29,7 @@ fn model_round_trips_through_native_bytes_and_renders_identically() {
         .expect("generate fixture idml");
     let doc = Document::open(&idml).expect("import fixture");
 
-    // Native round-trip: model -> bytes -> model (no Container::open).
+    // Native round-trip: model -> bytes -> model (no open_source_archive).
     let bytes = paged_store::to_bytes(&doc).expect("serialize to .pgm");
     let doc2 = paged_store::from_bytes(&bytes).expect("reconstruct from .pgm");
 

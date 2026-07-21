@@ -17,10 +17,10 @@
 //!
 //! This is the counterpart to the IDML import/export adapter: the adapter
 //! converts `.idml` ↔ model, this codec persists the model itself. The raw-IDML
-//! carry-through (`Container`'s byte blobs) is `#[serde(skip)]`, and the model's
+//! carry-through (`SourceArchive`'s byte blobs) is `#[serde(skip)]`, and the model's
 //! derived caches are rebuilt via [`Document::rebuild_indexes`] after
 //! deserialize — so a document reconstructs from native bytes with **no
-//! `Container::open` / IDML parse** (N1, Approach A: the "self-owning model"
+//! `open_source_archive` / IDML parse** (N1, Approach A: the "self-owning model"
 //! first slice).
 //!
 //! Format is JSON via `serde_json` for now (inspectable, wasm-clean, matching
@@ -44,7 +44,7 @@ pub const DOCUMENT_PGM_PATH: &str = "paged/core/model/document.pgm";
 ///
 /// - v1: initial native shape.
 /// - v2 (N7): the structured `designmap` moved off `container` up to a
-///   top-level `Document.designmap` field, and `Container` lost its
+///   top-level `Document.designmap` field, and `SourceArchive` lost its
 ///   `designmap` field — a serde-shape change, so a v1 part is rejected.
 pub const PGM_FORMAT_VERSION: u32 = 2;
 
@@ -72,7 +72,7 @@ pub fn to_bytes(doc: &Document) -> Result<Vec<u8>, serde_json::Error> {
 }
 
 /// Reconstruct a [`Document`] from native `.paged` model bytes, with **no
-/// `Container::open` / IDML parse**.
+/// `open_source_archive` / IDML parse**.
 ///
 /// Returns `None` when the part is unparseable OR carries an incompatible
 /// [`PGM_FORMAT_VERSION`] — the caller then falls back to the IDML import, so a

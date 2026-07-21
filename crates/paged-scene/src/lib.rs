@@ -29,9 +29,9 @@ use std::collections::{BTreeMap, HashMap};
 use serde::{Deserialize, Serialize};
 
 use paged_parse::{
-    parse_designmap, parse_graphic, parse_spread, parse_story, parse_stylesheet, Bounds,
-    CharacterRun, Container, DesignMap, Graphic, Paragraph, ParseError, Spread, Story, StoryRef,
-    StyleSheet, TOCStyleDef, TextFrame,
+    open_source_archive, parse_designmap, parse_graphic, parse_spread, parse_story,
+    parse_stylesheet, Bounds, CharacterRun, DesignMap, Graphic, Paragraph, ParseError,
+    SourceArchive, Spread, Story, StoryRef, StyleSheet, TOCStyleDef, TextFrame,
 };
 
 pub mod anchors;
@@ -50,15 +50,15 @@ pub use value::Value;
 /// its raw-IDML byte blobs, `palette`, `spreads`, `stories`, `master_spreads`,
 /// `styles`) round-trip; the three derived caches below are `#[serde(skip)]`
 /// and rebuilt by [`Document::rebuild_indexes`] after deserialize, so a
-/// `Document` reconstructs from native bytes with no `Container::open`.
+/// `Document` reconstructs from native bytes with no `open_source_archive`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     /// Raw IDML source archive (carry-through only — mimetype + entry blobs).
     /// The structured manifest lives in `designmap`, not here (N7).
-    pub container: Container,
+    pub container: SourceArchive,
     /// Structured `designmap.xml` manifest — spread/story order, layers,
     /// sections, hyperlinks, doc preferences. Parsed from the source archive at
-    /// import; the model's truth (no longer wrapped in the raw `Container`).
+    /// import; the model's truth (no longer wrapped in the raw `SourceArchive`).
     pub designmap: DesignMap,
     pub palette: Graphic,
     pub spreads: Vec<ParsedSpread>,
@@ -175,10 +175,10 @@ impl Document {
     /// layer's tolerant behaviour (skipping entries without an
     /// archive match) is lifted here to a structured error.
     pub fn open(bytes: &[u8]) -> Result<Self, OpenError> {
-        Self::from_container(Container::open(bytes)?)
+        Self::from_container(open_source_archive(bytes)?)
     }
 
-    /// Build a document from an already-opened [`Container`] by parsing its
+    /// Build a document from an already-opened [`SourceArchive`] by parsing its
     /// source parts (Stories / Spreads / Resources).
     ///
     /// The import path — used by [`Document::open`] and as the fallback when a
@@ -186,8 +186,8 @@ impl Document {
     /// native reconstruct (deserialize the model, skip the source parse) lives
     /// one layer up — in the canvas load sniff over `paged-store` — because
     /// `paged-scene` cannot depend on the codec.
-    pub fn from_container(container: Container) -> Result<Self, OpenError> {
-        // The structured manifest is parsed here (not in `Container::open`) so
+    pub fn from_container(container: SourceArchive) -> Result<Self, OpenError> {
+        // The structured manifest is parsed here (not in `open_source_archive`) so
         // the raw source archive carries no model data (N7).
         let designmap = parse_designmap(&container.designmap_raw)?;
         let palette = match container.entry("Resources/Graphic.xml") {

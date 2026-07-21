@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use bytes::Bytes;
-use paged_parse::{Bounds, Container, DesignMap, Graphic, Spread, StyleSheet, TextFrame};
+use paged_parse::{Bounds, DesignMap, Graphic, SourceArchive, Spread, StyleSheet, TextFrame};
 use paged_scene::{Document, ParsedSpread};
 
 pub fn empty_text_frame(self_id: &str, bounds: Bounds) -> TextFrame {
@@ -101,7 +101,7 @@ pub fn document_with_one_textframe(self_id: &str) -> Document {
         show_master_items: None,
     });
     Document {
-        container: Container {
+        container: SourceArchive {
             mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
             designmap_raw: Bytes::new(),
             entries: BTreeMap::new(),
