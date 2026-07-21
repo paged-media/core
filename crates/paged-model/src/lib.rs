@@ -2544,3 +2544,1226 @@ impl OtfFeatures {
         self.stylistic_sets = self.stylistic_sets.or(below.stylistic_sets);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Style-definition value types — condition/stroke/TOC/object/cell/table/character/
+// paragraph style defs, nested styles, and the Resolved* cascade accumulators
+// (moved out of `paged-parse::styles`; `StyleSheet` + `StyleSheet::parse` + all the
+// `parse_*` free fns stay in the parser). The merge_below cascade + merge_rule/
+// merge_border are pure style resolution, so they live with the model (N5).
+// ---------------------------------------------------------------------------
+/// IDML `<Condition>` — a named visibility toggle that can be applied
+/// to a `<CharacterStyleRange>` (and other text-marker elements). The
+/// document carries the current `Visible` setting per condition. A
+/// run whose `AppliedConditions` reference one or more conditions is
+/// rendered only when every referenced condition resolves to `Visible="true"`.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConditionDef {
+    pub self_id: String,
+    pub name: Option<String>,
+    /// `Visible="true|false"`. Default: true (`None` ⇒ visible).
+    pub visible: Option<bool>,
+    /// `IndicatorMethod` — `Underline` / `Highlight` / `None`. The
+    /// renderer ignores indicators today; captured for round-trip.
+    pub indicator_method: Option<String>,
+}
+/// SDK Phase 5 (v1 sweep) — IDML `<ConditionSet>`. Each entry is a
+/// named grouping of `Condition` self_ids that the editor's
+/// Conditions panel can toggle as a unit. The renderer doesn't
+/// branch on this today (visibility resolution walks individual
+/// conditions); kept for round-trip + a future "show only this
+/// set" affordance.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConditionSetDef {
+    pub self_id: String,
+    pub name: Option<String>,
+    /// IDML `Conditions` attribute — space-separated list of
+    /// `Condition/<self_id>` refs (or `Condition/$ID/...` for
+    /// IDs in the special namespace). Stored as-parsed; the
+    /// editor de-dupes for display.
+    pub conditions: Vec<String>,
+}
+/// W1.22 (engine gap 22) — IDML `<NumberingList>` resource. A named
+/// list definition. Paragraphs reference one via
+/// `AppliedNumberingList="NumberingList/<self_id>"`; the numbering
+/// counter for that list is scoped per the continuity flags below.
+///
+/// `ContinueNumbersAcrossStories` is the field that matters to the
+/// renderer: when `true`, paragraphs sharing this list keep counting
+/// across story boundaries (in document story order) instead of
+/// restarting at 1 in each story. `ContinueNumbersAcrossDocuments`
+/// is captured for round-trip only — a single rendered document has
+/// no neighbouring document to continue from, so the renderer treats
+/// it as a no-op (documented in `numbering.rs`).
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NumberingListDef {
+    pub self_id: String,
+    pub name: Option<String>,
+    /// `ContinueNumbersAcrossStories="true|false"`. Default: false
+    /// (`None` ⇒ each story restarts — InDesign's default for a new
+    /// list). When true, the renderer carries the counter forward
+    /// across stories that share this list.
+    pub continue_across_stories: Option<bool>,
+    /// `ContinueNumbersAcrossDocuments="true|false"`. Round-trip only;
+    /// see the struct doc. Default: false.
+    pub continue_across_documents: Option<bool>,
+}
+/// Custom stroke-style definition. The renderer consumes the
+/// `Dashed`/`Dotted` patterns directly, the `Striped` stripe table as
+/// N parallel rules, and the `Wavy` width/wavelength as a sampled sine
+/// (W1.2). Anything still unused is captured so we don't lose it during
+/// round-trips.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StrokeStyleDef {
+    pub self_id: String,
+    pub name: Option<String>,
+    pub kind: StrokeStyleKind,
+    /// On/off pattern in pt for `Dashed` (the `Pattern` attribute
+    /// parsed as space-separated floats). Empty for the other kinds.
+    pub pattern: Vec<f32>,
+    /// `<Stripe>` children of a `<StripedStrokeStyle>`. Each entry is
+    /// `(left, width)` as fractions in `0.0..=1.0` of the *total*
+    /// stroke weight — InDesign serialises them as 0..1 ratios on the
+    /// `StartWidth` / `Width` attributes. Empty for non-striped kinds.
+    pub stripes: Vec<StripeDef>,
+    /// `<WavyStrokeStyle Width=… Wavelength=…>` — the wave amplitude
+    /// and period as fractions of the stroke weight (InDesign's 0..1
+    /// ratios). `None` when this isn't a wavy style or the attribute
+    /// was absent (the renderer then substitutes IDML defaults).
+    pub wave_width: Option<f32>,
+    pub wave_length: Option<f32>,
+    /// `GapColor` swatch ref painted in the gaps of a dashed / dotted /
+    /// striped stroke (W1.2). IDML carries this on the *stroke-style
+    /// definition*, not the page item. `Swatch/None` normalises to
+    /// `None` (no gap fill — the default).
+    pub gap_color: Option<String>,
+    /// `GapTint` — 0..100 dilution of the gap colour toward paper.
+    /// `None` ⇒ full strength.
+    pub gap_tint: Option<f32>,
+}
+/// One stripe of a `<StripedStrokeStyle>`. `left` and `width` are
+/// fractions of the total stroke weight (`0.0..=1.0`). The stripe's
+/// centreline sits at `left + width/2` measured from the stroke's
+/// upper edge, and its sub-weight is `width * total_weight`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct StripeDef {
+    pub left: f32,
+    pub width: f32,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StrokeStyleKind {
+    Dashed,
+    Dotted,
+    Striped,
+    Wavy,
+}
+/// `<TOCStyle>` — Table of Contents style. Carries the heading text,
+/// the paragraph style for the title, and an ordered list of
+/// `<TOCStyleEntry>` children declaring which paragraph styles
+/// should be picked up as TOC entries.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct TOCStyleDef {
+    pub self_id: String,
+    pub name: Option<String>,
+    /// `Title` attribute — the heading text printed at the top of
+    /// the resolved TOC story (e.g. `"Contents"` / `"Inhalt"`).
+    /// `None` when omitted; some IDMLs use an empty string.
+    pub title: Option<String>,
+    /// `TitleStyle` — `ParagraphStyle/<id>` reference applied to
+    /// the title paragraph. May resolve to the `[No paragraph
+    /// style]` sentinel for the default TOCStyle.
+    pub title_style: Option<String>,
+    /// `IncludeBookDocuments` — true when entries should be pulled
+    /// from sibling book documents in addition to this one. Single-
+    /// document renders ignore this; captured for round-trip.
+    pub include_book_documents: Option<bool>,
+    /// `IncludeHidden` — when true the resolver should also pick up
+    /// paragraphs on hidden layers. The renderer currently honours
+    /// layer visibility at emission time and matches this default.
+    pub include_hidden: Option<bool>,
+    /// `RunIn` — when true, sibling entries at the same level
+    /// concatenate on the same line separated by a soft separator
+    /// rather than each landing on its own line. The current
+    /// resolver leaves run-in handling to the renderer; captured
+    /// here for round-trip.
+    pub run_in: Option<bool>,
+    /// Ordered list of `<TOCStyleEntry>` children in document order.
+    pub entries: Vec<TOCStyleEntryDef>,
+}
+/// `<TOCStyleEntry>` — one row in the TOC style table. IDML serialises
+/// these in document order under the `<TOCStyle>`.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct TOCStyleEntryDef {
+    /// `Name` — human-readable label (usually mirrors the paragraph
+    /// style name picked up by `IncludeStyle`).
+    pub name: Option<String>,
+    /// `IncludeStyle` — `ParagraphStyle/<id>` reference. Paragraphs
+    /// with this applied paragraph style feed the TOC entry.
+    pub include_style: Option<String>,
+    /// `FormatStyle` — `ParagraphStyle/<id>` reference applied to
+    /// the rendered TOC entry paragraph.
+    pub format_style: Option<String>,
+    /// `Level` — outline depth (1 is the top level). `None` falls
+    /// back to 1 at resolve time.
+    pub level: Option<u32>,
+    /// `PageNumber` — IDML enum (`On` / `Off` / `NoPageNumber`).
+    /// `On` is the default when absent.
+    pub page_number: Option<String>,
+    /// `Separator` — string placed between the entry text and the
+    /// page number. IDML serialises tabs as `^t`; the resolver
+    /// expands them at use time. Default `^t` when absent.
+    pub separator: Option<String>,
+}
+/// `<ObjectStyle>` — the page-item analogue of paragraph/character
+/// styles. Carries fill + stroke defaults that flow into a frame
+/// when it carries no per-element override.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct ObjectStyleDef {
+    pub self_id: String,
+    pub name: Option<String>,
+    pub based_on: Option<String>,
+    pub fill_color: Option<String>,
+    /// `FillTint` percentage [0..100] from `<ObjectStyle FillTint="…">`.
+    /// `None` ⇒ inherit from BasedOn (and ultimately default to 100%
+    /// at the renderer). Cascades into a frame whose own inline
+    /// `FillTint` is absent — needed for placeholder rects whose
+    /// 15% grey paint comes entirely from the style.
+    pub fill_tint: Option<f32>,
+    pub stroke_color: Option<String>,
+    pub stroke_tint: Option<f32>,
+    pub stroke_weight: Option<f32>,
+    /// `CornerRadius` in pt. Only honoured when `CornerOption` is one
+    /// of the rounding variants (`Rounded`, `InverseRounded`, `Inset`,
+    /// `Bevel`, `Fancy`). `None` ⇒ inherit from BasedOn.
+    pub corner_radius: Option<f32>,
+    /// `CornerOption` value (`None | Rounded | InverseRounded | Inset
+    /// | Bevel | Fancy`). The renderer maps `Rounded` to a rounded-
+    /// rect path; the decorative variants currently fall back to
+    /// `Rounded` until per-shape parsers land.
+    pub corner_option: Option<String>,
+}
+/// Effective object-level attributes after walking BasedOn.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ResolvedObject {
+    pub fill_color: Option<String>,
+    pub fill_tint: Option<f32>,
+    pub stroke_color: Option<String>,
+    pub stroke_tint: Option<f32>,
+    pub stroke_weight: Option<f32>,
+    pub corner_radius: Option<f32>,
+    pub corner_option: Option<String>,
+}
+/// `<CellStyle>` — per-cell defaults for fill, edge strokes, and
+/// vertical justification. Cells can override individual fields
+/// inline; missing fields cascade through `BasedOn` and finally
+/// fall through to renderer defaults.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct CellStyleDef {
+    pub self_id: String,
+    pub name: Option<String>,
+    pub based_on: Option<String>,
+    pub fill_color: Option<String>,
+    pub vertical_justification: Option<String>,
+    /// `RotationAngle` (degrees) for the cell's content.
+    pub rotation_angle: Option<f32>,
+    pub top_edge_stroke_color: Option<String>,
+    pub top_edge_stroke_weight: Option<f32>,
+    pub bottom_edge_stroke_color: Option<String>,
+    pub bottom_edge_stroke_weight: Option<f32>,
+    pub left_edge_stroke_color: Option<String>,
+    pub left_edge_stroke_weight: Option<f32>,
+    pub right_edge_stroke_color: Option<String>,
+    pub right_edge_stroke_weight: Option<f32>,
+}
+/// `<TableStyle>` — table-level defaults that flow through to
+/// cells. Carries the region → CellStyle map (Header / Body /
+/// Footer / Left / Right column regions) plus the table border
+/// strokes. BasedOn cascade applies the same way as the other
+/// resolvers.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct TableStyleDef {
+    pub self_id: String,
+    pub name: Option<String>,
+    pub based_on: Option<String>,
+    pub header_region_cell_style: Option<String>,
+    pub body_region_cell_style: Option<String>,
+    pub footer_region_cell_style: Option<String>,
+    pub left_column_region_cell_style: Option<String>,
+    pub right_column_region_cell_style: Option<String>,
+    pub top_border_stroke_color: Option<String>,
+    pub top_border_stroke_weight: Option<f32>,
+    pub bottom_border_stroke_color: Option<String>,
+    pub bottom_border_stroke_weight: Option<f32>,
+    pub left_border_stroke_color: Option<String>,
+    pub left_border_stroke_weight: Option<f32>,
+    pub right_border_stroke_color: Option<String>,
+    pub right_border_stroke_weight: Option<f32>,
+    /// `AlternatingFills` discriminator: `"None"` (default),
+    /// `"AlternatingRows"`, or `"AlternatingColumns"`. Selects which
+    /// axis the Start/End fill pattern paints along — InDesign reuses
+    /// the same Start/End fill attributes for both axes and this
+    /// attribute disambiguates. The renderer treats an absent /
+    /// `"None"` value as "no alternating fill" even if a Start fill
+    /// colour is present.
+    pub alternating_fills: Option<String>,
+    /// Alternating-row fill: every Nth body row from the top gets
+    /// `start_row_fill_color`. `start_row_fill_count` is the
+    /// number of consecutive rows that participate in the
+    /// "starting" fill before alternating to the end-row fill.
+    pub start_row_fill_color: Option<String>,
+    pub start_row_fill_count: Option<u32>,
+    pub start_row_fill_tint: Option<f32>,
+    pub end_row_fill_color: Option<String>,
+    pub end_row_fill_count: Option<u32>,
+    pub end_row_fill_tint: Option<f32>,
+    /// `SkipFirstAlternatingFillRows` / `SkipLastAlternatingFillRows`:
+    /// body rows at the start / end of the table that the alternating
+    /// pattern leaves unfilled. `None` ⇒ 0.
+    pub skip_first_alternating_fill_rows: Option<u32>,
+    pub skip_last_alternating_fill_rows: Option<u32>,
+    /// Alternating-column fill: the column analogue of the row fields
+    /// above. Paints column-by-column from the first body column when
+    /// `alternating_fills == "AlternatingColumns"`.
+    pub start_column_fill_color: Option<String>,
+    pub start_column_fill_count: Option<u32>,
+    pub start_column_fill_tint: Option<f32>,
+    pub end_column_fill_color: Option<String>,
+    pub end_column_fill_count: Option<u32>,
+    pub end_column_fill_tint: Option<f32>,
+    pub skip_first_alternating_fill_columns: Option<u32>,
+    pub skip_last_alternating_fill_columns: Option<u32>,
+}
+/// Effective table-level attributes after walking BasedOn.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ResolvedTable {
+    pub header_region_cell_style: Option<String>,
+    pub body_region_cell_style: Option<String>,
+    pub footer_region_cell_style: Option<String>,
+    pub left_column_region_cell_style: Option<String>,
+    pub right_column_region_cell_style: Option<String>,
+    pub top_border_stroke_color: Option<String>,
+    pub top_border_stroke_weight: Option<f32>,
+    pub bottom_border_stroke_color: Option<String>,
+    pub bottom_border_stroke_weight: Option<f32>,
+    pub left_border_stroke_color: Option<String>,
+    pub left_border_stroke_weight: Option<f32>,
+    pub right_border_stroke_color: Option<String>,
+    pub right_border_stroke_weight: Option<f32>,
+    pub alternating_fills: Option<String>,
+    pub start_row_fill_color: Option<String>,
+    pub start_row_fill_count: Option<u32>,
+    pub start_row_fill_tint: Option<f32>,
+    pub end_row_fill_color: Option<String>,
+    pub end_row_fill_count: Option<u32>,
+    pub end_row_fill_tint: Option<f32>,
+    pub skip_first_alternating_fill_rows: Option<u32>,
+    pub skip_last_alternating_fill_rows: Option<u32>,
+    pub start_column_fill_color: Option<String>,
+    pub start_column_fill_count: Option<u32>,
+    pub start_column_fill_tint: Option<f32>,
+    pub end_column_fill_color: Option<String>,
+    pub end_column_fill_count: Option<u32>,
+    pub end_column_fill_tint: Option<f32>,
+    pub skip_first_alternating_fill_columns: Option<u32>,
+    pub skip_last_alternating_fill_columns: Option<u32>,
+}
+/// Effective cell-level attributes after walking BasedOn.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ResolvedCell {
+    pub fill_color: Option<String>,
+    pub vertical_justification: Option<String>,
+    pub rotation_angle: Option<f32>,
+    pub top_edge_stroke_color: Option<String>,
+    pub top_edge_stroke_weight: Option<f32>,
+    pub bottom_edge_stroke_color: Option<String>,
+    pub bottom_edge_stroke_weight: Option<f32>,
+    pub left_edge_stroke_color: Option<String>,
+    pub left_edge_stroke_weight: Option<f32>,
+    pub right_edge_stroke_color: Option<String>,
+    pub right_edge_stroke_weight: Option<f32>,
+}
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct CharacterStyleDef {
+    pub self_id: String,
+    pub name: Option<String>,
+    pub based_on: Option<String>,
+    pub font: Option<String>,
+    pub font_style: Option<String>,
+    pub point_size: Option<f32>,
+    pub fill_color: Option<String>,
+    /// `FillTint` — see `CharacterRun::fill_tint` for semantics.
+    pub fill_tint: Option<f32>,
+    /// `StrokeColor` declared on the `<CharacterStyle>`. Cascades
+    /// through `BasedOn` like every other field. `Swatch/None` is
+    /// normalised to `None` at parse time so a cascade can fall
+    /// through to a real colour from the base style.
+    pub stroke_color: Option<String>,
+    /// `StrokeWeight` declared on the `<CharacterStyle>` in pt.
+    pub stroke_weight: Option<f32>,
+    pub capitalization: Option<String>,
+    pub baseline_shift: Option<f32>,
+    pub horizontal_scale: Option<f32>,
+    pub vertical_scale: Option<f32>,
+    pub skew: Option<f32>,
+    pub position: Option<String>,
+    pub tracking: Option<f32>,
+    pub underline: Option<bool>,
+    pub strikethru: Option<bool>,
+    /// `OverprintFill="true"` declared on the `<CharacterStyle>`.
+    /// Cascades through `BasedOn` like every other field. None ⇒
+    /// inherit; bottom of cascade = false (IDML's default).
+    pub overprint_fill: Option<bool>,
+    /// `OverprintStroke="true"` analogue. Currently rare on text
+    /// runs (only outlined text carries a stroke) but parsed for
+    /// completeness.
+    pub overprint_stroke: Option<bool>,
+    /// `RubyFlag` — when `true`, this character style carries ruby
+    /// annotation. See [`CharacterRun::ruby_flag`]. Parser-only;
+    /// renderer integration is queued under Tier 4 — CJK Stage 4.
+    pub ruby_flag: Option<bool>,
+    /// `RubyType` — `PerCharacter` / `GroupRuby`. See
+    /// [`CharacterRun::ruby_type`].
+    pub ruby_type: Option<String>,
+    /// `RubyString` — the ruby annotation text. See
+    /// [`CharacterRun::ruby_string`].
+    pub ruby_string: Option<String>,
+    /// `KentenKind` — emphasis-mark glyph. See
+    /// [`CharacterRun::kenten_kind`].
+    pub kenten_kind: Option<String>,
+    /// `KentenCharacter` — custom emphasis-mark codepoint when
+    /// `kenten_kind == "Custom"`.
+    pub kenten_character: Option<String>,
+    /// `KentenFontSize` — emphasis-mark size as a % of base size.
+    pub kenten_font_size: Option<f32>,
+    /// Phase 4 typography — IDML `Ligatures="true|false"`. Standard +
+    /// contextual OpenType ligatures (`liga`, `clig`). Default (when
+    /// None and bottom of cascade) is `true`, matching InDesign's
+    /// CharacterStyle default.
+    pub ligatures_on: Option<bool>,
+    /// IDML `KerningMethod="Metrics|Optical|None"`. Default
+    /// (when None and bottom of cascade) is `Metrics`. `Optical`
+    /// falls back to `Metrics` at the renderer until the outline-
+    /// driven pass lands.
+    pub kerning_method: Option<String>,
+    /// Discrete OpenType feature toggles (`OTFFraction`, `OTFOrdinal`,
+    /// `OTFSwash`, `OTFDiscretionaryLigature`, `OTFFigureStyle`,
+    /// `OTFStylisticSets`, …) declared on the `<CharacterStyle>`.
+    /// Cascades through `BasedOn` per-field. See
+    /// [`OtfFeatures`].
+    pub otf: OtfFeatures,
+}
+/// Q-09: `ParagraphShading*` attributes parsed off a
+/// `<ParagraphStyle>` or `<ParagraphStyleRange>`. The renderer emits
+/// a coloured rectangle behind each line of the paragraph when `on`
+/// is true. `None` for any field means "not set at this level" so the
+/// cascade can inherit from `BasedOn`. The decorative per-corner
+/// options + radii live alongside the bag in case a future cycle
+/// renders rounded shading bands.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParagraphShading {
+    pub on: Option<bool>,
+    pub color: Option<String>,
+    pub tint: Option<f32>,
+    /// `ColumnWidth` | `TextWidth`. None ⇒ ColumnWidth default.
+    pub width: Option<String>,
+    /// Inset offsets in pt, order `[top, left, bottom, right]`.
+    pub offset_top: Option<f32>,
+    pub offset_left: Option<f32>,
+    pub offset_bottom: Option<f32>,
+    pub offset_right: Option<f32>,
+    /// `AscentTopOrigin` | `BaselineTopOrigin` | etc. Drives the
+    /// shading band's top edge: `None` ⇒ AscentTopOrigin default.
+    pub top_origin: Option<String>,
+    /// `DescentBottomOrigin` | `BaselineBottomOrigin` | etc.
+    pub bottom_origin: Option<String>,
+    pub clip_to_frame: Option<bool>,
+    pub overprint: Option<bool>,
+    pub suppress_printing: Option<bool>,
+}
+/// Q-09: `RuleAbove*` / `RuleBelow*` rule-line parameters parsed
+/// off a `<ParagraphStyle>` or `<ParagraphStyleRange>`. The renderer
+/// strokes a horizontal line above the first line (RuleAbove) or
+/// below the last line (RuleBelow) of the paragraph when `on` is
+/// true. Only the fields actually consumed by the renderer are
+/// listed; gap / stroke-style / overprint variants are queued.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParagraphRule {
+    pub on: Option<bool>,
+    pub color: Option<String>,
+    pub tint: Option<f32>,
+    /// Stroke weight in pt.
+    pub weight: Option<f32>,
+    /// Distance from the paragraph's baseline (RuleAbove) or
+    /// descent (RuleBelow) to the rule.
+    pub offset: Option<f32>,
+    pub left_indent: Option<f32>,
+    pub right_indent: Option<f32>,
+    /// `ColumnWidth` | `TextWidth`. None ⇒ ColumnWidth default.
+    pub width: Option<String>,
+}
+/// Q-09: `ParagraphBorder*` attributes parsed off a `<ParagraphStyle>`
+/// or `<ParagraphStyleRange>`. The renderer strokes a rectangular
+/// border around the paragraph's content box when `on` is true.
+/// Per-corner `CornerOption` / `CornerRadius` attrs are honoured via
+/// `corners` (Track 4d) — order matches `Rectangle::corners`:
+/// `[top_left, top_right, bottom_right, bottom_left]`.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParagraphBorder {
+    pub on: Option<bool>,
+    pub color: Option<String>,
+    pub tint: Option<f32>,
+    /// Stroke weight in pt.
+    pub weight: Option<f32>,
+    /// Inset offsets in pt.
+    pub offset_top: Option<f32>,
+    pub offset_left: Option<f32>,
+    pub offset_bottom: Option<f32>,
+    pub offset_right: Option<f32>,
+    /// `ColumnWidth` | `TextWidth`. None ⇒ ColumnWidth default.
+    pub width: Option<String>,
+    /// Per-corner option/radius overrides. `[tl, tr, br, bl]`.
+    pub corners: [CornerSpec; 4],
+}
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct ParagraphStyleDef {
+    pub self_id: String,
+    pub name: Option<String>,
+    pub based_on: Option<String>,
+    pub font: Option<String>,
+    pub font_style: Option<String>,
+    pub point_size: Option<f32>,
+    pub fill_color: Option<String>,
+    /// `FillTint` — see `CharacterRun::fill_tint` for semantics.
+    pub fill_tint: Option<f32>,
+    /// `StrokeColor` declared on the `<ParagraphStyle>` — the paint
+    /// used to outline glyphs whose run / character style don't
+    /// override it. `Swatch/None` normalises to `None`.
+    pub stroke_color: Option<String>,
+    /// `StrokeWeight` declared on the `<ParagraphStyle>` in pt.
+    pub stroke_weight: Option<f32>,
+    pub capitalization: Option<String>,
+    pub baseline_shift: Option<f32>,
+    pub horizontal_scale: Option<f32>,
+    pub vertical_scale: Option<f32>,
+    pub skew: Option<f32>,
+    pub position: Option<String>,
+    pub tracking: Option<f32>,
+    /// `Justification` from the style. Parsed into the typed
+    /// `Justification` enum at XML-read time.
+    pub justification: Option<Justification>,
+    pub first_line_indent: Option<f32>,
+    /// `LeftIndent` / `RightIndent` in pt — the paragraph's left/right
+    /// margin offsets. Narrow the composed column and shift the body
+    /// (FINDING #7.2). `None` ⇒ inherit through the cascade.
+    pub left_indent: Option<f32>,
+    pub right_indent: Option<f32>,
+    pub space_before: Option<f32>,
+    pub space_after: Option<f32>,
+    pub underline: Option<bool>,
+    pub strikethru: Option<bool>,
+    /// `<TabList>` parsed from the style. Empty means "no
+    /// declaration" — the cascade may inherit from `BasedOn`.
+    pub tab_list: Vec<TabStop>,
+    /// `BulletsAndNumberingListType`: `BulletList` /
+    /// `NumberedList` / `NoList`. `None` when absent.
+    pub bullets_list_type: Option<String>,
+    /// `<BulletChar BulletCharacterValue="...">` — Unicode code
+    /// point of the bullet glyph. None when no bullet declared.
+    pub bullet_character: Option<u32>,
+    /// `BulletsTextAfter` — string rendered between the bullet
+    /// and the paragraph text (typically a tab `^t` or a space).
+    /// IDML serialises tabs as the literal `^t` sequence.
+    pub bullets_text_after: Option<String>,
+    /// `NumberingFormat` for `NumberedList` paragraphs. IDML
+    /// serialises these as the literal sample string, e.g.
+    /// `"1, 2, 3, 4..."`, `"I, II, III, IV..."`,
+    /// `"01, 02, 03, 04..."`, `"A, B, C, D..."`. The renderer
+    /// reads only the prefix before the first comma to decide
+    /// the format. `None` falls back to Arabic.
+    pub numbering_format: Option<String>,
+    /// `BulletsCharacterStyle` — a `CharacterStyle/<id>` reference
+    /// that styles the bullet marker (font, size, colour) independently
+    /// of the paragraph text. IDML applies this only to `BulletList`
+    /// paragraphs. `None` ⇒ the bullet inherits the first run's
+    /// formatting (the historical fallback).
+    pub bullets_character_style: Option<String>,
+    /// `BulletsAndNumberingDigitsCharacterStyle` — a `CharacterStyle/<id>`
+    /// reference that styles the digits of a `NumberedList` paragraph's
+    /// marker. IDML overloads this same field as the bullet-style
+    /// reference for `BulletList` paragraphs when
+    /// `bullets_character_style` is absent (the InDesign UI presents
+    /// one "Character Style" picker regardless of list kind), so the
+    /// renderer falls back to it when shaping bullets.
+    pub bullets_and_numbering_digits_character_style: Option<String>,
+    /// `NumberingExpression` — the formatting template for the
+    /// numbered-list marker. Tokens:
+    /// - `^#` substitutes the formatted counter (per
+    ///   `numbering_format`),
+    /// - `^.` is a literal period,
+    /// - `^t` is a literal tab.
+    ///
+    /// Anything else passes through unchanged. `None` falls back
+    /// to the IDML default `^#.^t` (e.g. `"1.\t"`).
+    pub numbering_expression: Option<String>,
+    /// `NumberingStartAt` — explicit integer the paragraph's
+    /// counter starts at. Overrides any continued count from a
+    /// previous paragraph. `None` means "no explicit start"; the
+    /// counter increments off whatever the story carries.
+    pub numbering_start_at: Option<i32>,
+    /// `NumberingContinue` — when `true`, the counter persists
+    /// across the previous paragraph (even if that paragraph
+    /// applied a different style or wasn't a numbered list at all,
+    /// up to whatever the previous numbered-list state was). When
+    /// `false`, the counter resets at the start of this paragraph.
+    /// `None` ⇒ inherit; the renderer's default is "continue".
+    pub numbering_continue: Option<bool>,
+    /// W1.22 — `AppliedNumberingList="NumberingList/<id>"`. Binds the
+    /// paragraph (via the style cascade) to a named `<NumberingList>`
+    /// resource. The renderer reads the list's
+    /// `ContinueNumbersAcrossStories` flag off this reference to
+    /// decide cross-story numbering continuity. `None` ⇒ no named
+    /// list (the paragraph still numbers, but the counter is scoped
+    /// per story as before). IDML's literal "no list" sentinel
+    /// `n` / `NumberingList/$ID/[No numbering list]` normalises to
+    /// `None`.
+    pub applied_numbering_list: Option<String>,
+    /// styles.next-style — `NextStyle="ParagraphStyle/<id>"`. The
+    /// style InDesign applies to the FOLLOWING paragraph when the
+    /// user presses Enter at this paragraph's end (the "Next Style"
+    /// field in the paragraph-style options dialog). The renderer
+    /// does not act on this — it is a typing-time editor behaviour —
+    /// but the data is surfaced so the editor can implement the flow.
+    /// `None` ⇒ no chaining (InDesign defaults this to "[Same style]"
+    /// which serialises as the style's own self id; that self-loop is
+    /// preserved verbatim, the editor reads it as "stay").
+    pub next_style: Option<String>,
+    /// `Hyphenation` boolean. IDML default is true; the resolver
+    /// only flips a paragraph off when an explicit `Hyphenation="false"`
+    /// lands on the cascade. Drives whether the composer registers a
+    /// language-specific hyphenator with the breaker.
+    pub hyphenation: Option<bool>,
+    /// `HyphenationZone` in pt. InDesign's "hyphenation zone" is the
+    /// width of whitespace allowed at the end of a line before a word
+    /// is broken: a word becomes hyphenation-eligible only when it
+    /// would otherwise start within `zone` of the right margin (i.e.
+    /// the gap before it exceeds the zone). Larger zones ⇒ fewer
+    /// hyphens (more raggedness tolerated); `0` ⇒ no zone restriction
+    /// (the breaker may hyphenate anywhere). Only consulted for
+    /// left-aligned / ragged paragraphs in InDesign; `None` ⇒ inherit.
+    pub hyphenation_zone: Option<f32>,
+    /// `AppliedLanguage` reference (e.g. `$ID/English: USA`). Used to
+    /// pick the hyphenation dictionary; unrecognised values fall back
+    /// to English-US so we always have *some* dictionary loaded.
+    pub applied_language: Option<String>,
+    /// `MinimumWordSpacing` percentage (`80` = 80% of normal). Drives
+    /// the composer's shrink ratio.
+    pub minimum_word_spacing: Option<f32>,
+    /// `DesiredWordSpacing` percentage (`100` = 100% of normal). The
+    /// renderer scales `Min`/`Max` against this so the composer's
+    /// ratios stay relative to the desired baseline.
+    pub desired_word_spacing: Option<f32>,
+    /// `MaximumWordSpacing` percentage (`133` = 133% of normal).
+    /// Drives the composer's stretch ratio.
+    pub maximum_word_spacing: Option<f32>,
+    /// Q-20: `MinimumLetterSpacing` pt (additive, signed). Allows
+    /// the composer to tighten inter-glyph advance up to this much
+    /// when justifying lines.
+    pub minimum_letter_spacing: Option<f32>,
+    /// Q-20: `DesiredLetterSpacing` pt (default 0 = none).
+    pub desired_letter_spacing: Option<f32>,
+    /// Q-20: `MaximumLetterSpacing` pt (additive, signed).
+    pub maximum_letter_spacing: Option<f32>,
+    /// Q-20: `MinimumGlyphScaling` percent (default 100 = identity).
+    /// Allows per-glyph x-advance scaling for justification.
+    pub minimum_glyph_scaling: Option<f32>,
+    /// Q-20: `DesiredGlyphScaling` percent.
+    pub desired_glyph_scaling: Option<f32>,
+    /// Q-20: `MaximumGlyphScaling` percent.
+    pub maximum_glyph_scaling: Option<f32>,
+    /// `DropCapCharacters` count. 0 / `None` ⇒ no drop cap.
+    pub drop_cap_characters: Option<u32>,
+    /// `DropCapLines` — vertical extent of the drop cap.
+    pub drop_cap_lines: Option<u32>,
+    /// `DropCapDetail` — InDesign's scaling-factor integer.
+    pub drop_cap_detail: Option<i32>,
+    /// `OverprintFill="true"` declared on the `<ParagraphStyle>`. See
+    /// [`CharacterStyleDef::overprint_fill`]. Cascades like every other
+    /// paragraph attribute via `merge_below`.
+    pub overprint_fill: Option<bool>,
+    /// `OverprintStroke="true"` analogue.
+    pub overprint_stroke: Option<bool>,
+    /// `KinsokuSet="KinsokuTable/$ID/PhotoshopKinsokuHard"` ref on the
+    /// `<ParagraphStyle>`. Cascades like every other paragraph attribute.
+    /// See [`Paragraph::kinsoku_set`].
+    pub kinsoku_set: Option<String>,
+    /// `KinsokuType` flavour. See [`Paragraph::kinsoku_type`].
+    pub kinsoku_type: Option<String>,
+    /// `MojikumiTable` ref. See [`Paragraph::mojikumi_table`].
+    pub mojikumi_table: Option<String>,
+    /// `MojikumiSet` (older IDML attribute name; see
+    /// [`Paragraph::mojikumi_set`]).
+    pub mojikumi_set: Option<String>,
+    /// Q-09: paragraph-level shading band parameters. `on` defaulting
+    /// to `None` means "not declared at this style level" so the
+    /// `BasedOn` cascade can inherit. Renderer emit module is a
+    /// separate follow-up.
+    pub shading: ParagraphShading,
+    /// Q-09: horizontal rule above the first line of the paragraph.
+    pub rule_above: ParagraphRule,
+    /// Q-09: horizontal rule below the last line of the paragraph.
+    pub rule_below: ParagraphRule,
+    /// Q-09: rectangular border around the paragraph's content box.
+    pub border: ParagraphBorder,
+    /// Phase 4 typography — nested character styles applied to the
+    /// paragraph's leading characters. Each entry restyles a prefix
+    /// range; successive entries chain (the previous entry's end is
+    /// the next entry's start). Empty when the IDML declares no
+    /// `<NestedStyle>` children. Always replaces (no cascade merge)
+    /// because the IDML serialiser writes the full list per style.
+    pub nested_styles: Vec<NestedStyle>,
+}
+/// IDML `<NestedStyle>` — a CharacterStyle applied to a leading
+/// portion of a paragraph, bounded by a delimiter (count of
+/// words / sentences / characters, a literal char, or a special
+/// "any digit / letter / quote" matcher).
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NestedStyle {
+    /// `AppliedCharacterStyle="CharacterStyle/<id>"`. The named style
+    /// applies to the entry's range. Resolved by the renderer
+    /// against `Styles::character_styles`.
+    pub applied_character_style: String,
+    /// `Delimiter` — what marks the boundary. See [`NestedDelimiter`].
+    pub delimiter: NestedDelimiter,
+    /// `Repetition` — how many of the delimiter unit this range
+    /// covers. Default 1. Negative / zero ⇒ no application.
+    pub repetition: i32,
+    /// `Inclusive` — when true the delimiter character itself sits
+    /// inside the styled range; when false the range ends just
+    /// before it. InDesign default: true.
+    pub inclusive: bool,
+}
+/// What delimits the end of a `<NestedStyle>` range.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub enum NestedDelimiter {
+    /// `Words` — N whitespace-delimited words.
+    Words,
+    /// `Sentences` — N sentences (terminated by `.!?`).
+    Sentences,
+    /// `Characters` — N source characters.
+    Characters,
+    /// `AnyDigit` — N digit characters.
+    AnyDigit,
+    /// `AnyLetter` — N letter characters (Unicode `is_alphabetic`).
+    AnyLetter,
+    /// `AnyDoubleQuotes` — N occurrences of `"`, U+201C, U+201D.
+    AnyDoubleQuotes,
+    /// `AnySingleQuotes` — N occurrences of `'`, U+2018, U+2019.
+    AnySingleQuotes,
+    /// `Tab` — N tab characters (`\t`).
+    Tab,
+    /// `ForcedLineBreak` — N forced line breaks (rare in paragraph
+    /// styles; mirrors IDML's enumerated value).
+    ForcedLineBreak,
+    /// `EndNestedStyle` — InDesign's "End Nested Style Here" marker
+    /// (U+0003). Often inserted manually in the source text.
+    EndNestedStyle,
+    /// Literal character delimiter, e.g. `:` or `;` from an
+    /// `Delimiter="ANY_CHARACTER"` + explicit char on the style.
+    Char(char),
+    /// Fallback for unsupported / unparseable delimiter values —
+    /// the nested style entry is effectively a no-op (matches
+    /// nothing).
+    #[default]
+    Unknown,
+}
+/// Effective character-level attributes after walking BasedOn.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ResolvedCharacter {
+    pub font: Option<String>,
+    pub font_style: Option<String>,
+    pub point_size: Option<f32>,
+    pub fill_color: Option<String>,
+    pub fill_tint: Option<f32>,
+    /// Cascaded text-stroke colour. See
+    /// [`CharacterStyleDef::stroke_color`].
+    pub stroke_color: Option<String>,
+    /// Cascaded text-stroke weight in pt.
+    pub stroke_weight: Option<f32>,
+    pub capitalization: Option<String>,
+    pub baseline_shift: Option<f32>,
+    pub horizontal_scale: Option<f32>,
+    pub vertical_scale: Option<f32>,
+    pub skew: Option<f32>,
+    pub position: Option<String>,
+    pub tracking: Option<f32>,
+    pub underline: Option<bool>,
+    pub strikethru: Option<bool>,
+    /// Cascaded `OverprintFill` flag. See
+    /// [`CharacterStyleDef::overprint_fill`]. None at the bottom of
+    /// the cascade ⇒ false (the IDML default).
+    pub overprint_fill: Option<bool>,
+    /// Cascaded `OverprintStroke` flag.
+    pub overprint_stroke: Option<bool>,
+    /// Cascaded `RubyFlag`. See [`CharacterStyleDef::ruby_flag`].
+    pub ruby_flag: Option<bool>,
+    /// Cascaded `RubyType`.
+    pub ruby_type: Option<String>,
+    /// Cascaded `RubyString`.
+    pub ruby_string: Option<String>,
+    /// Cascaded `KentenKind`.
+    pub kenten_kind: Option<String>,
+    /// Cascaded `KentenCharacter`.
+    pub kenten_character: Option<String>,
+    /// Cascaded `KentenFontSize`.
+    pub kenten_font_size: Option<f32>,
+    /// Phase 4 typography — cascaded `Ligatures` flag. See
+    /// [`CharacterStyleDef::ligatures_on`].
+    pub ligatures_on: Option<bool>,
+    /// Cascaded `KerningMethod` string. See
+    /// [`CharacterStyleDef::kerning_method`].
+    pub kerning_method: Option<String>,
+    /// Cascaded discrete OpenType feature toggles. See
+    /// [`CharacterStyleDef::otf`].
+    pub otf: OtfFeatures,
+}
+/// Effective paragraph-level attributes after walking BasedOn.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ResolvedParagraph {
+    pub font: Option<String>,
+    pub font_style: Option<String>,
+    pub point_size: Option<f32>,
+    pub fill_color: Option<String>,
+    pub fill_tint: Option<f32>,
+    /// Cascaded text-stroke colour. See
+    /// [`ParagraphStyleDef::stroke_color`].
+    pub stroke_color: Option<String>,
+    /// Cascaded text-stroke weight in pt.
+    pub stroke_weight: Option<f32>,
+    pub capitalization: Option<String>,
+    pub baseline_shift: Option<f32>,
+    pub horizontal_scale: Option<f32>,
+    pub vertical_scale: Option<f32>,
+    pub skew: Option<f32>,
+    pub position: Option<String>,
+    pub tracking: Option<f32>,
+    pub justification: Option<Justification>,
+    pub first_line_indent: Option<f32>,
+    /// `LeftIndent` / `RightIndent` in pt (FINDING #7.2) — the
+    /// paragraph's left/right margin offsets resolved through the
+    /// cascade. `None` ⇒ no indent.
+    pub left_indent: Option<f32>,
+    pub right_indent: Option<f32>,
+    pub space_before: Option<f32>,
+    pub space_after: Option<f32>,
+    pub underline: Option<bool>,
+    pub strikethru: Option<bool>,
+    /// `<TabList>` from the cascade. Empty means inherited / none.
+    pub tab_list: Vec<TabStop>,
+    pub bullets_list_type: Option<String>,
+    pub bullet_character: Option<u32>,
+    pub bullets_text_after: Option<String>,
+    pub numbering_format: Option<String>,
+    /// Cascaded `BulletsCharacterStyle` ref. See
+    /// [`ParagraphStyleDef::bullets_character_style`].
+    pub bullets_character_style: Option<String>,
+    /// Cascaded `BulletsAndNumberingDigitsCharacterStyle` ref. See
+    /// [`ParagraphStyleDef::bullets_and_numbering_digits_character_style`].
+    pub bullets_and_numbering_digits_character_style: Option<String>,
+    /// `NumberingExpression` template (`^#`, `^.`, `^t` tokens
+    /// plus literal characters). `None` ⇒ renderer default `^#.^t`.
+    pub numbering_expression: Option<String>,
+    /// `NumberingStartAt` explicit start integer. See
+    /// `ParagraphStyleDef::numbering_start_at`.
+    pub numbering_start_at: Option<i32>,
+    /// `NumberingContinue` flag. See
+    /// `ParagraphStyleDef::numbering_continue`.
+    pub numbering_continue: Option<bool>,
+    /// W1.22 — cascaded `AppliedNumberingList` ref. See
+    /// [`ParagraphStyleDef::applied_numbering_list`].
+    pub applied_numbering_list: Option<String>,
+    /// styles.next-style — cascaded `NextStyle` ref. See
+    /// [`ParagraphStyleDef::next_style`].
+    pub next_style: Option<String>,
+    pub hyphenation: Option<bool>,
+    /// Cascaded `HyphenationZone` in pt. See
+    /// [`ParagraphStyleDef::hyphenation_zone`].
+    pub hyphenation_zone: Option<f32>,
+    pub applied_language: Option<String>,
+    pub minimum_word_spacing: Option<f32>,
+    pub desired_word_spacing: Option<f32>,
+    pub maximum_word_spacing: Option<f32>,
+    /// Q-20: cascaded letter / glyph spacing knobs.
+    pub minimum_letter_spacing: Option<f32>,
+    pub desired_letter_spacing: Option<f32>,
+    pub maximum_letter_spacing: Option<f32>,
+    pub minimum_glyph_scaling: Option<f32>,
+    pub desired_glyph_scaling: Option<f32>,
+    pub maximum_glyph_scaling: Option<f32>,
+    /// `DropCapCharacters` count (number of leading characters that
+    /// drop down across `drop_cap_lines` lines). 0 / `None` ⇒ no
+    /// drop cap.
+    pub drop_cap_characters: Option<u32>,
+    /// `DropCapLines` count (lines the drop cap spans). 0 / `None` ⇒
+    /// no drop cap.
+    pub drop_cap_lines: Option<u32>,
+    /// `DropCapDetail` (the IDML scaling factor InDesign records on
+    /// the drop cap's character formatting; an arbitrary integer).
+    pub drop_cap_detail: Option<i32>,
+    /// Cascaded `OverprintFill` flag from the paragraph style chain.
+    /// See [`CharacterStyleDef::overprint_fill`].
+    pub overprint_fill: Option<bool>,
+    /// Cascaded `OverprintStroke` flag.
+    pub overprint_stroke: Option<bool>,
+    /// Cascaded `KinsokuSet` ref. See [`Paragraph::kinsoku_set`].
+    pub kinsoku_set: Option<String>,
+    /// Cascaded `KinsokuType` flavour.
+    pub kinsoku_type: Option<String>,
+    /// Cascaded `MojikumiTable` ref.
+    pub mojikumi_table: Option<String>,
+    /// Cascaded `MojikumiSet` ref.
+    pub mojikumi_set: Option<String>,
+    /// Q-09: cascaded paragraph shading. Each field falls through
+    /// `BasedOn` only when unset at higher levels.
+    pub shading: ParagraphShading,
+    pub rule_above: ParagraphRule,
+    pub rule_below: ParagraphRule,
+    pub border: ParagraphBorder,
+    /// Phase 4 typography — cascaded `<NestedStyle>` entries.
+    /// Replaces rather than merges (the IDML serialiser writes the
+    /// full list per ParagraphStyle).
+    pub nested_styles: Vec<NestedStyle>,
+}
+impl ResolvedObject {
+    pub fn merge_below(&mut self, def: &ObjectStyleDef) {
+        if self.fill_color.is_none() {
+            self.fill_color = def.fill_color.clone();
+        }
+        self.fill_tint = self.fill_tint.or(def.fill_tint);
+        if self.stroke_color.is_none() {
+            self.stroke_color = def.stroke_color.clone();
+        }
+        self.stroke_tint = self.stroke_tint.or(def.stroke_tint);
+        self.stroke_weight = self.stroke_weight.or(def.stroke_weight);
+        self.corner_radius = self.corner_radius.or(def.corner_radius);
+        if self.corner_option.is_none() {
+            self.corner_option = def.corner_option.clone();
+        }
+    }
+}
+impl ResolvedTable {
+    pub fn merge_below(&mut self, def: &TableStyleDef) {
+        macro_rules! merge_str {
+            ($field:ident) => {
+                if self.$field.is_none() {
+                    self.$field = def.$field.clone();
+                }
+            };
+        }
+        merge_str!(header_region_cell_style);
+        merge_str!(body_region_cell_style);
+        merge_str!(footer_region_cell_style);
+        merge_str!(left_column_region_cell_style);
+        merge_str!(right_column_region_cell_style);
+        merge_str!(top_border_stroke_color);
+        merge_str!(bottom_border_stroke_color);
+        merge_str!(left_border_stroke_color);
+        merge_str!(right_border_stroke_color);
+        merge_str!(alternating_fills);
+        merge_str!(start_row_fill_color);
+        merge_str!(end_row_fill_color);
+        merge_str!(start_column_fill_color);
+        merge_str!(end_column_fill_color);
+        self.top_border_stroke_weight = self
+            .top_border_stroke_weight
+            .or(def.top_border_stroke_weight);
+        self.bottom_border_stroke_weight = self
+            .bottom_border_stroke_weight
+            .or(def.bottom_border_stroke_weight);
+        self.left_border_stroke_weight = self
+            .left_border_stroke_weight
+            .or(def.left_border_stroke_weight);
+        self.right_border_stroke_weight = self
+            .right_border_stroke_weight
+            .or(def.right_border_stroke_weight);
+        self.start_row_fill_count = self.start_row_fill_count.or(def.start_row_fill_count);
+        self.start_row_fill_tint = self.start_row_fill_tint.or(def.start_row_fill_tint);
+        self.end_row_fill_count = self.end_row_fill_count.or(def.end_row_fill_count);
+        self.end_row_fill_tint = self.end_row_fill_tint.or(def.end_row_fill_tint);
+        self.skip_first_alternating_fill_rows = self
+            .skip_first_alternating_fill_rows
+            .or(def.skip_first_alternating_fill_rows);
+        self.skip_last_alternating_fill_rows = self
+            .skip_last_alternating_fill_rows
+            .or(def.skip_last_alternating_fill_rows);
+        self.start_column_fill_count = self.start_column_fill_count.or(def.start_column_fill_count);
+        self.start_column_fill_tint = self.start_column_fill_tint.or(def.start_column_fill_tint);
+        self.end_column_fill_count = self.end_column_fill_count.or(def.end_column_fill_count);
+        self.end_column_fill_tint = self.end_column_fill_tint.or(def.end_column_fill_tint);
+        self.skip_first_alternating_fill_columns = self
+            .skip_first_alternating_fill_columns
+            .or(def.skip_first_alternating_fill_columns);
+        self.skip_last_alternating_fill_columns = self
+            .skip_last_alternating_fill_columns
+            .or(def.skip_last_alternating_fill_columns);
+    }
+}
+impl ResolvedCell {
+    pub fn merge_below(&mut self, def: &CellStyleDef) {
+        if self.fill_color.is_none() {
+            self.fill_color = def.fill_color.clone();
+        }
+        if self.vertical_justification.is_none() {
+            self.vertical_justification = def.vertical_justification.clone();
+        }
+        self.rotation_angle = self.rotation_angle.or(def.rotation_angle);
+        if self.top_edge_stroke_color.is_none() {
+            self.top_edge_stroke_color = def.top_edge_stroke_color.clone();
+        }
+        self.top_edge_stroke_weight = self.top_edge_stroke_weight.or(def.top_edge_stroke_weight);
+        if self.bottom_edge_stroke_color.is_none() {
+            self.bottom_edge_stroke_color = def.bottom_edge_stroke_color.clone();
+        }
+        self.bottom_edge_stroke_weight = self
+            .bottom_edge_stroke_weight
+            .or(def.bottom_edge_stroke_weight);
+        if self.left_edge_stroke_color.is_none() {
+            self.left_edge_stroke_color = def.left_edge_stroke_color.clone();
+        }
+        self.left_edge_stroke_weight = self.left_edge_stroke_weight.or(def.left_edge_stroke_weight);
+        if self.right_edge_stroke_color.is_none() {
+            self.right_edge_stroke_color = def.right_edge_stroke_color.clone();
+        }
+        self.right_edge_stroke_weight = self
+            .right_edge_stroke_weight
+            .or(def.right_edge_stroke_weight);
+    }
+}
+impl ResolvedCharacter {
+    /// Fill any unset (`None`) field from `def`. Cascade convention:
+    /// already-set fields on `self` win; `def` only patches gaps.
+    pub fn merge_below(&mut self, def: &CharacterStyleDef) {
+        if self.font.is_none() {
+            self.font = def.font.clone();
+        }
+        if self.font_style.is_none() {
+            self.font_style = def.font_style.clone();
+        }
+        self.point_size = self.point_size.or(def.point_size);
+        if self.fill_color.is_none() {
+            self.fill_color = def.fill_color.clone();
+        }
+        self.fill_tint = self.fill_tint.or(def.fill_tint);
+        if self.stroke_color.is_none() {
+            self.stroke_color = def.stroke_color.clone();
+        }
+        self.stroke_weight = self.stroke_weight.or(def.stroke_weight);
+        if self.capitalization.is_none() {
+            self.capitalization = def.capitalization.clone();
+        }
+        self.baseline_shift = self.baseline_shift.or(def.baseline_shift);
+        self.horizontal_scale = self.horizontal_scale.or(def.horizontal_scale);
+        self.vertical_scale = self.vertical_scale.or(def.vertical_scale);
+        self.skew = self.skew.or(def.skew);
+        if self.position.is_none() {
+            self.position = def.position.clone();
+        }
+        self.tracking = self.tracking.or(def.tracking);
+        self.underline = self.underline.or(def.underline);
+        self.strikethru = self.strikethru.or(def.strikethru);
+        self.overprint_fill = self.overprint_fill.or(def.overprint_fill);
+        self.overprint_stroke = self.overprint_stroke.or(def.overprint_stroke);
+        self.ruby_flag = self.ruby_flag.or(def.ruby_flag);
+        if self.ruby_type.is_none() {
+            self.ruby_type = def.ruby_type.clone();
+        }
+        if self.ruby_string.is_none() {
+            self.ruby_string = def.ruby_string.clone();
+        }
+        if self.kenten_kind.is_none() {
+            self.kenten_kind = def.kenten_kind.clone();
+        }
+        if self.kenten_character.is_none() {
+            self.kenten_character = def.kenten_character.clone();
+        }
+        self.kenten_font_size = self.kenten_font_size.or(def.kenten_font_size);
+        self.ligatures_on = self.ligatures_on.or(def.ligatures_on);
+        if self.kerning_method.is_none() {
+            self.kerning_method = def.kerning_method.clone();
+        }
+        self.otf.merge_below(&def.otf);
+    }
+}
+impl ResolvedParagraph {
+    /// Fill any unset field from `def` (BasedOn cascade). For
+    /// `tab_list` "unset" means empty — IDML has no
+    /// distinction between "no tabs" and "tab list inherited".
+    pub fn merge_below(&mut self, def: &ParagraphStyleDef) {
+        if self.font.is_none() {
+            self.font = def.font.clone();
+        }
+        if self.font_style.is_none() {
+            self.font_style = def.font_style.clone();
+        }
+        self.point_size = self.point_size.or(def.point_size);
+        if self.fill_color.is_none() {
+            self.fill_color = def.fill_color.clone();
+        }
+        self.fill_tint = self.fill_tint.or(def.fill_tint);
+        if self.stroke_color.is_none() {
+            self.stroke_color = def.stroke_color.clone();
+        }
+        self.stroke_weight = self.stroke_weight.or(def.stroke_weight);
+        if self.capitalization.is_none() {
+            self.capitalization = def.capitalization.clone();
+        }
+        self.baseline_shift = self.baseline_shift.or(def.baseline_shift);
+        self.horizontal_scale = self.horizontal_scale.or(def.horizontal_scale);
+        self.vertical_scale = self.vertical_scale.or(def.vertical_scale);
+        self.skew = self.skew.or(def.skew);
+        if self.position.is_none() {
+            self.position = def.position.clone();
+        }
+        self.tracking = self.tracking.or(def.tracking);
+        self.justification = self.justification.or(def.justification);
+        self.first_line_indent = self.first_line_indent.or(def.first_line_indent);
+        self.left_indent = self.left_indent.or(def.left_indent);
+        self.right_indent = self.right_indent.or(def.right_indent);
+        self.space_before = self.space_before.or(def.space_before);
+        self.space_after = self.space_after.or(def.space_after);
+        self.underline = self.underline.or(def.underline);
+        self.strikethru = self.strikethru.or(def.strikethru);
+        if self.tab_list.is_empty() && !def.tab_list.is_empty() {
+            self.tab_list = def.tab_list.clone();
+        }
+        if self.bullets_list_type.is_none() {
+            self.bullets_list_type = def.bullets_list_type.clone();
+        }
+        self.bullet_character = self.bullet_character.or(def.bullet_character);
+        if self.bullets_text_after.is_none() {
+            self.bullets_text_after = def.bullets_text_after.clone();
+        }
+        if self.numbering_format.is_none() {
+            self.numbering_format = def.numbering_format.clone();
+        }
+        if self.bullets_character_style.is_none() {
+            self.bullets_character_style = def.bullets_character_style.clone();
+        }
+        if self.bullets_and_numbering_digits_character_style.is_none() {
+            self.bullets_and_numbering_digits_character_style =
+                def.bullets_and_numbering_digits_character_style.clone();
+        }
+        if self.numbering_expression.is_none() {
+            self.numbering_expression = def.numbering_expression.clone();
+        }
+        self.numbering_start_at = self.numbering_start_at.or(def.numbering_start_at);
+        self.numbering_continue = self.numbering_continue.or(def.numbering_continue);
+        if self.applied_numbering_list.is_none() {
+            self.applied_numbering_list = def.applied_numbering_list.clone();
+        }
+        if self.next_style.is_none() {
+            self.next_style = def.next_style.clone();
+        }
+        self.hyphenation = self.hyphenation.or(def.hyphenation);
+        self.hyphenation_zone = self.hyphenation_zone.or(def.hyphenation_zone);
+        if self.applied_language.is_none() {
+            self.applied_language = def.applied_language.clone();
+        }
+        self.minimum_word_spacing = self.minimum_word_spacing.or(def.minimum_word_spacing);
+        self.desired_word_spacing = self.desired_word_spacing.or(def.desired_word_spacing);
+        self.maximum_word_spacing = self.maximum_word_spacing.or(def.maximum_word_spacing);
+        // Q-20: letter / glyph spacing per-field inheritance.
+        self.minimum_letter_spacing = self.minimum_letter_spacing.or(def.minimum_letter_spacing);
+        self.desired_letter_spacing = self.desired_letter_spacing.or(def.desired_letter_spacing);
+        self.maximum_letter_spacing = self.maximum_letter_spacing.or(def.maximum_letter_spacing);
+        self.minimum_glyph_scaling = self.minimum_glyph_scaling.or(def.minimum_glyph_scaling);
+        self.desired_glyph_scaling = self.desired_glyph_scaling.or(def.desired_glyph_scaling);
+        self.maximum_glyph_scaling = self.maximum_glyph_scaling.or(def.maximum_glyph_scaling);
+        self.drop_cap_characters = self.drop_cap_characters.or(def.drop_cap_characters);
+        self.drop_cap_lines = self.drop_cap_lines.or(def.drop_cap_lines);
+        self.drop_cap_detail = self.drop_cap_detail.or(def.drop_cap_detail);
+        self.overprint_fill = self.overprint_fill.or(def.overprint_fill);
+        self.overprint_stroke = self.overprint_stroke.or(def.overprint_stroke);
+        if self.kinsoku_set.is_none() {
+            self.kinsoku_set = def.kinsoku_set.clone();
+        }
+        if self.kinsoku_type.is_none() {
+            self.kinsoku_type = def.kinsoku_type.clone();
+        }
+        if self.mojikumi_table.is_none() {
+            self.mojikumi_table = def.mojikumi_table.clone();
+        }
+        if self.mojikumi_set.is_none() {
+            self.mojikumi_set = def.mojikumi_set.clone();
+        }
+        // Q-09: per-field shading inheritance. Each Option survives
+        // the cascade independently so a child can override `tint`
+        // without dragging in the parent's `width`, etc.
+        let s = &mut self.shading;
+        let p = &def.shading;
+        s.on = s.on.or(p.on);
+        if s.color.is_none() {
+            s.color = p.color.clone();
+        }
+        s.tint = s.tint.or(p.tint);
+        if s.width.is_none() {
+            s.width = p.width.clone();
+        }
+        s.offset_top = s.offset_top.or(p.offset_top);
+        s.offset_left = s.offset_left.or(p.offset_left);
+        s.offset_bottom = s.offset_bottom.or(p.offset_bottom);
+        s.offset_right = s.offset_right.or(p.offset_right);
+        if s.top_origin.is_none() {
+            s.top_origin = p.top_origin.clone();
+        }
+        if s.bottom_origin.is_none() {
+            s.bottom_origin = p.bottom_origin.clone();
+        }
+        s.clip_to_frame = s.clip_to_frame.or(p.clip_to_frame);
+        s.overprint = s.overprint.or(p.overprint);
+        s.suppress_printing = s.suppress_printing.or(p.suppress_printing);
+        // Q-09: per-field rule_above / rule_below inheritance.
+        merge_rule(&mut self.rule_above, &def.rule_above);
+        merge_rule(&mut self.rule_below, &def.rule_below);
+        // Q-09: per-field border inheritance.
+        merge_border(&mut self.border, &def.border);
+        // Phase 4 — nested styles replace as a whole list. The IDML
+        // serialiser writes the full list per style; cascade through
+        // BasedOn only when the lower style has none of its own.
+        if self.nested_styles.is_empty() && !def.nested_styles.is_empty() {
+            self.nested_styles = def.nested_styles.clone();
+        }
+    }
+}
+fn merge_rule(child: &mut ParagraphRule, parent: &ParagraphRule) {
+    child.on = child.on.or(parent.on);
+    if child.color.is_none() {
+        child.color = parent.color.clone();
+    }
+    child.tint = child.tint.or(parent.tint);
+    child.weight = child.weight.or(parent.weight);
+    child.offset = child.offset.or(parent.offset);
+    child.left_indent = child.left_indent.or(parent.left_indent);
+    child.right_indent = child.right_indent.or(parent.right_indent);
+    if child.width.is_none() {
+        child.width = parent.width.clone();
+    }
+}
+fn merge_border(child: &mut ParagraphBorder, parent: &ParagraphBorder) {
+    child.on = child.on.or(parent.on);
+    if child.color.is_none() {
+        child.color = parent.color.clone();
+    }
+    child.tint = child.tint.or(parent.tint);
+    child.weight = child.weight.or(parent.weight);
+    child.offset_top = child.offset_top.or(parent.offset_top);
+    child.offset_left = child.offset_left.or(parent.offset_left);
+    child.offset_bottom = child.offset_bottom.or(parent.offset_bottom);
+    child.offset_right = child.offset_right.or(parent.offset_right);
+    if child.width.is_none() {
+        child.width = parent.width.clone();
+    }
+    for i in 0..4 {
+        child.corners[i].option = child.corners[i].option.or(parent.corners[i].option);
+        child.corners[i].radius = child.corners[i].radius.or(parent.corners[i].radius);
+    }
+}
