@@ -2119,7 +2119,7 @@ fn inserted_text_frame_with_minted_story_survives_export() {
         "ParentStory resolves through frame_for_story"
     );
 
-    // Container deltas: exactly one ADDED entry (the story part), and
+    // SourceArchive deltas: exactly one ADDED entry (the story part), and
     // only the host spread + designmap changed.
     let src_e = entries(&original);
     let dst_e = entries(&out);
@@ -2231,7 +2231,7 @@ fn inserted_page_spread_survives_export() {
         .expect("rectangle on the minted page survived");
     assert_eq!(rect.fill_color.as_deref(), Some("Color/Black"));
 
-    // Container deltas: one added entry, only designmap changed.
+    // SourceArchive deltas: one added entry, only designmap changed.
     let src_e = entries(&original);
     let dst_e = entries(&out);
     let added: Vec<&String> = dst_e.keys().filter(|k| !src_e.contains_key(*k)).collect();

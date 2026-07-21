@@ -23,7 +23,7 @@ fn main() {
         .expect("usage: dump_markers <idml>")
         .into();
     let bytes = std::fs::read(&path).unwrap();
-    let container = paged_parse::Container::open(&bytes).unwrap();
+    let container = paged_parse::open_source_archive(&bytes).unwrap();
     for (name, raw) in container.entries.iter() {
         if !name.starts_with("Stories/") || !name.ends_with(".xml") {
             continue;

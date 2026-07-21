@@ -80,12 +80,13 @@ pub enum ParseError {
     Xml(#[from] quick_xml::Error),
 }
 
-/// Parsed IDML container. Holds decompressed entries in memory.
+/// The raw IDML source archive — decompressed entries held in memory (IDML
+/// carry-through only; no model data lives here — N7). Renamed from `Container`.
 ///
 /// The raw-entry map keeps `Bytes` so downstream crates can slice sub-
 /// resources (individual `Stories/Story_*.xml` etc.) without copying.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Container {
+pub struct SourceArchive {
     pub mimetype: String,
     /// Raw `designmap.xml` bytes. IDML carry-through only — never part of the
     /// native model serialization (the structured `designmap` on `Document` is
@@ -99,49 +100,51 @@ pub struct Container {
     pub entries: std::collections::BTreeMap<String, Bytes>,
 }
 
-impl Container {
-    /// Open an IDML container from raw bytes.
-    pub fn open(bytes: &[u8]) -> Result<Self, ParseError> {
-        let mut zip = zip::ZipArchive::new(Cursor::new(bytes))?;
-        let mut entries = std::collections::BTreeMap::<String, Bytes>::new();
+/// Open an IDML source archive from raw bytes — unzips the archive and confirms
+/// the mimetype, retaining `designmap.xml` bytes for the scene layer to parse.
+/// (De-inherented from `Container::open` — N7.)
+pub fn open_source_archive(bytes: &[u8]) -> Result<SourceArchive, ParseError> {
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes))?;
+    let mut entries = std::collections::BTreeMap::<String, Bytes>::new();
 
-        for i in 0..zip.len() {
-            let mut entry = zip.by_index(i)?;
-            if entry.is_dir() {
-                continue;
-            }
-            let name = entry.name().to_string();
-            let mut buf = Vec::with_capacity(entry.size() as usize);
-            entry.read_to_end(&mut buf)?;
-            entries.insert(name, Bytes::from(buf));
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i)?;
+        if entry.is_dir() {
+            continue;
         }
-
-        let mimetype = entries
-            .get("mimetype")
-            .ok_or(ParseError::MissingEntry("mimetype"))?;
-        let mimetype_str = std::str::from_utf8(mimetype)
-            .map_err(|e| ParseError::NotIdml(format!("mimetype not utf-8: {e}")))?
-            .trim()
-            .to_string();
-        // Adobe's IDML mimetype constant.
-        if mimetype_str != "application/vnd.adobe.indesign-idml-package" {
-            return Err(ParseError::NotIdml(format!(
-                "unexpected mimetype {mimetype_str:?}"
-            )));
-        }
-
-        let designmap_raw = entries
-            .get("designmap.xml")
-            .cloned()
-            .ok_or(ParseError::MissingEntry("designmap.xml"))?;
-
-        Ok(Self {
-            mimetype: mimetype_str,
-            designmap_raw,
-            entries,
-        })
+        let name = entry.name().to_string();
+        let mut buf = Vec::with_capacity(entry.size() as usize);
+        entry.read_to_end(&mut buf)?;
+        entries.insert(name, Bytes::from(buf));
     }
 
+    let mimetype = entries
+        .get("mimetype")
+        .ok_or(ParseError::MissingEntry("mimetype"))?;
+    let mimetype_str = std::str::from_utf8(mimetype)
+        .map_err(|e| ParseError::NotIdml(format!("mimetype not utf-8: {e}")))?
+        .trim()
+        .to_string();
+    // Adobe's IDML mimetype constant.
+    if mimetype_str != "application/vnd.adobe.indesign-idml-package" {
+        return Err(ParseError::NotIdml(format!(
+            "unexpected mimetype {mimetype_str:?}"
+        )));
+    }
+
+    let designmap_raw = entries
+        .get("designmap.xml")
+        .cloned()
+        .ok_or(ParseError::MissingEntry("designmap.xml"))?;
+
+    Ok(SourceArchive {
+        mimetype: mimetype_str,
+        designmap_raw,
+        entries,
+    })
+}
+
+impl SourceArchive {
     /// Fetch a sub-resource by archive path (e.g. "Stories/Story_u123.xml").
     pub fn entry(&self, path: &str) -> Option<&Bytes> {
         self.entries.get(path)

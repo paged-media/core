@@ -38,7 +38,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use bytes::Bytes;
-use paged_parse::{Bounds, Container, DesignMap, Graphic, Page, Spread, StyleSheet};
+use paged_parse::{Bounds, DesignMap, Graphic, Page, SourceArchive, Spread, StyleSheet};
 use paged_renderer::pipeline::{self, PipelineOptions};
 use paged_scene::{Document, ParsedSpread};
 
@@ -113,8 +113,8 @@ fn build_document_accepts_a_hand_constructed_single_page_document() {
     assert_eq!(built.pages[0].height_pt, 200.0);
 }
 
-fn empty_container() -> Container {
-    Container {
+fn empty_container() -> SourceArchive {
+    SourceArchive {
         mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
         designmap_raw: Bytes::new(),
         entries: BTreeMap::new(),

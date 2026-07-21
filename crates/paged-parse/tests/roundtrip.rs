@@ -15,13 +15,13 @@
 //! Synthetic-IDML round-trip test.
 //!
 //! Builds a minimal valid IDML container in-memory, hands it to
-//! `Container::open`, and verifies mimetype + designmap extraction.
+//! `open_source_archive`, and verifies mimetype + designmap extraction.
 //! This is the closest we can get to a corpus-level test without
 //! checking in binary fixtures.
 
 use std::io::Write;
 
-use paged_parse::Container;
+use paged_parse::open_source_archive;
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 fn build_idml() -> Vec<u8> {
@@ -65,13 +65,13 @@ fn build_idml() -> Vec<u8> {
 #[test]
 fn opens_synthetic_idml_and_extracts_manifest() {
     let bytes = build_idml();
-    let container = Container::open(&bytes).expect("valid IDML");
+    let container = open_source_archive(&bytes).expect("valid IDML");
     assert_eq!(
         container.mimetype,
         "application/vnd.adobe.indesign-idml-package"
     );
     // The structured manifest is parsed from the source archive's raw bytes
-    // (it no longer lives on Container — N7).
+    // (it no longer lives on SourceArchive — N7).
     let designmap = paged_parse::parse_designmap(&container.designmap_raw).expect("designmap");
     assert_eq!(designmap.spreads.len(), 1);
     assert_eq!(designmap.stories.len(), 1);
@@ -93,7 +93,7 @@ fn rejects_wrong_mimetype() {
     zip.write_all(b"<Document/>").unwrap();
     let bytes = zip.finish().unwrap().into_inner();
 
-    let err = Container::open(&bytes).unwrap_err();
+    let err = open_source_archive(&bytes).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("not an IDML container"), "got {msg}");
 }
@@ -108,6 +108,6 @@ fn rejects_missing_designmap() {
         .unwrap();
     let bytes = zip.finish().unwrap().into_inner();
 
-    let err = Container::open(&bytes).unwrap_err();
+    let err = open_source_archive(&bytes).unwrap_err();
     assert!(err.to_string().contains("designmap.xml"), "got {err}");
 }

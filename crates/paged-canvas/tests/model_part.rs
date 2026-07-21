@@ -18,7 +18,7 @@
 //! `refresh_model_part` serializes the whole model into
 //! `paged/core/model/document.pgm` over the v51 parts door; after
 //! `export_paged` + a fresh reload, `read_model_part` reconstructs the model
-//! from that part (no `Container::open`) and it renders identically to the
+//! from that part (no `open_source_archive`) and it renders identically to the
 //! reloaded, source-parsed scene. Additive — no load-path change yet.
 
 use paged_canvas::{CanvasModel, CanvasOptions};
@@ -47,7 +47,7 @@ fn model_part_round_trips_through_the_paged_container() {
     );
 
     // Export a real `.paged`, reload it, and reconstruct the model from the
-    // native part (no `Container::open` for the model fields).
+    // native part (no `open_source_archive` for the model fields).
     let bytes = model.export_paged(protocol()).expect("export .paged");
     let reloaded = CanvasModel::load("doc-n2-reloaded", &bytes, CanvasOptions::default())
         .expect("reload .paged");

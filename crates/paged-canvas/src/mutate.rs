@@ -971,7 +971,7 @@ mod tests {
     /// table `tbl1` with the supplied cells. `Document` doesn't derive
     /// `Default`, so we clone a real loaded scene and replace its single
     /// story's paragraphs — this keeps `find_story_mut` / cell lookup
-    /// honest without hand-building `Container` / `Graphic` / styles.
+    /// honest without hand-building `SourceArchive` / `Graphic` / styles.
     fn doc_with_table(cells: Vec<TableCell>) -> Document {
         doc_with_paragraphs(vec![Paragraph {
             table: Some(Table {
