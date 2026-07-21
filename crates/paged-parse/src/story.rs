@@ -42,6 +42,8 @@ use serde::{Deserialize, Serialize};
 use crate::util::{attr, parse_tint_attr};
 use crate::ParseError;
 
+pub use paged_model::{Justification, OtfFeatures, TabStop};
+
 /// Private-use Unicode codepoint placed inline by the story parser
 /// where IDML carries `<?ACE 18?>` (auto current-page-number).
 /// Renderers substitute this with the live page's number / Name
@@ -51,96 +53,6 @@ pub const AUTO_PAGE_NUMBER_MARKER: char = '\u{E018}';
 /// Same idea for `<?ACE 19?>` (next-page-number marker; used in
 /// "continued on page" footers).
 pub const NEXT_PAGE_NUMBER_MARKER: char = '\u{E019}';
-
-/// IDML `Justification` attribute values, as carried on
-/// `<ParagraphStyleRange>` and `<ParagraphStyle>`. The IDML default
-/// is `LeftAlign`. Parsed once at XML-read time; the renderer maps
-/// these down to `paged_text::Alignment` (Left / Right / Center /
-/// Justify).
-///
-/// `ToBindingSide` / `AwayFromBindingSide` are binding-aware values
-/// (left page vs. right page in a spread). The renderer currently
-/// treats them as `LeftAlign` / `RightAlign` respectively — binding
-/// side is a document-level setting that's not yet plumbed through.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Justification {
-    LeftAlign,
-    CenterAlign,
-    RightAlign,
-    /// Justify with last line left-aligned.
-    LeftJustified,
-    /// Justify with last line centered.
-    CenterJustified,
-    /// Justify with last line right-aligned.
-    RightJustified,
-    /// "Fully justified" — every line including the last is stretched
-    /// to fill the column. The composer currently treats this the
-    /// same as `LeftJustified`; kept as a distinct variant so
-    /// round-tripping the parsed attribute is lossless.
-    FullyJustified,
-    /// Binding-aware: aligns toward the spine. Falls back to
-    /// `LeftAlign` until binding side is plumbed through.
-    ToBindingSide,
-    /// Binding-aware: aligns away from the spine. Falls back to
-    /// `RightAlign`.
-    AwayFromBindingSide,
-}
-
-impl Justification {
-    /// Parse an IDML attribute value. Unknown values return `None`,
-    /// which mirrors the pre-enum stringly-typed behaviour (the
-    /// renderer's `map_justification` fell through to Left for any
-    /// value it didn't recognise).
-    pub fn from_idml(s: &str) -> Option<Self> {
-        match s {
-            "LeftAlign" => Some(Self::LeftAlign),
-            "CenterAlign" => Some(Self::CenterAlign),
-            "RightAlign" => Some(Self::RightAlign),
-            "LeftJustified" => Some(Self::LeftJustified),
-            "CenterJustified" => Some(Self::CenterJustified),
-            "RightJustified" => Some(Self::RightJustified),
-            "FullyJustified" => Some(Self::FullyJustified),
-            "ToBindingSide" => Some(Self::ToBindingSide),
-            "AwayFromBindingSide" => Some(Self::AwayFromBindingSide),
-            _ => None,
-        }
-    }
-
-    /// Render back to the IDML attribute string. Used by JSON
-    /// surfaces (the editor wasm bridge) and any path that needs to
-    /// round-trip the value through a string format.
-    pub fn as_idml(self) -> &'static str {
-        match self {
-            Self::LeftAlign => "LeftAlign",
-            Self::CenterAlign => "CenterAlign",
-            Self::RightAlign => "RightAlign",
-            Self::LeftJustified => "LeftJustified",
-            Self::CenterJustified => "CenterJustified",
-            Self::RightJustified => "RightJustified",
-            Self::FullyJustified => "FullyJustified",
-            Self::ToBindingSide => "ToBindingSide",
-            Self::AwayFromBindingSide => "AwayFromBindingSide",
-        }
-    }
-}
-
-// Serialise as the IDML attribute string ("LeftAlign", etc.) so the
-// JSON wire format used by the editor bridge stays stable across
-// the enum promotion. Deserialise rejects unknown strings via a
-// serde error (matches `from_idml`'s strictness).
-impl Serialize for Justification {
-    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
-        ser.serialize_str(self.as_idml())
-    }
-}
-
-impl<'de> Deserialize<'de> for Justification {
-    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
-        let s = <&str>::deserialize(de)?;
-        Self::from_idml(s)
-            .ok_or_else(|| serde::de::Error::custom(format!("unknown Justification value: {s:?}")))
-    }
-}
 
 /// IDML `StoryDirection` attribute — the writing-mode flag carried on
 /// `<Story>`. The IDML default is `HorizontalWritingDirection` (left-
@@ -687,65 +599,6 @@ impl TableCell {
     }
 }
 
-/// One stop in a paragraph's `<TabList>`. Position is in pt from
-/// the column's left edge.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TabStop {
-    pub position: f32,
-    /// IDML alignment string: `LeftAlign`, `RightAlign`,
-    /// `CenterAlign`, `CharacterAlign`.
-    pub alignment: Option<String>,
-    /// `AlignmentCharacter` for `CharacterAlign` stops (rare).
-    pub alignment_character: Option<String>,
-    /// `Leader` string rendered in the tab gap.
-    pub leader: Option<String>,
-}
-
-/// Phase 4 typography — the discrete OpenType feature toggles IDML
-/// records as individual attributes on a `<CharacterStyleRange>` /
-/// `<CharacterStyle>` (each `OTF*` attribute is its own flag, not a
-/// packed tag list).
-///
-/// Every field is `Option` so the style cascade can distinguish
-/// "unset at this level — inherit" from "explicitly off". A bottom-of-
-/// cascade `None` means the feature is off (its OpenType default).
-/// `merge_below` fills each unset field from the level below.
-///
-/// The renderer maps these to rustybuzz feature tags in
-/// `paged_text::ShapingFeatures` — see that type for the tag table.
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OtfFeatures {
-    /// `OTFFraction="true"` — `frac` (diagonal fractions like ½).
-    pub fraction: Option<bool>,
-    /// `OTFOrdinal="true"` — `ordn` (superscripted ordinals: 1st, 2nd).
-    pub ordinal: Option<bool>,
-    /// `OTFSwash="true"` — `swsh` (swash alternates).
-    pub swash: Option<bool>,
-    /// `OTFDiscretionaryLigature="true"` — `dlig` (discretionary
-    /// ligatures, distinct from the standard `liga`/`clig` driven by
-    /// [`CharacterRun::ligatures_on`]).
-    pub discretionary_ligatures: Option<bool>,
-    /// `OTFSlashedZero="true"` — `zero` (slashed zero).
-    pub slashed_zero: Option<bool>,
-    /// `OTFTitling="true"` — `titl` (titling alternates).
-    pub titling: Option<bool>,
-    /// `OTFContextualAlternate` — `calt` (contextual alternates). IDML
-    /// defaults this on; we treat `None` as "inherit", and only the
-    /// explicit `false` disables `calt`.
-    pub contextual_alternates: Option<bool>,
-    /// `OTFFigureStyle` raw string — one of `Default`, `Lining`,
-    /// `OldStyle`, `TabularLining`, `ProportionalLining`,
-    /// `TabularOldstyle`, `ProportionalOldstyle`. Drives the figure
-    /// (digit) features `lnum`/`onum` (lining vs oldstyle) and
-    /// `pnum`/`tnum` (proportional vs tabular). `None`/`Default` ⇒ the
-    /// font's own default digits (no figure feature forced).
-    pub figure_style: Option<String>,
-    /// `OTFStylisticSets` integer bitfield. InDesign packs the enabled
-    /// stylistic sets into one integer where bit `i` (0-based) enables
-    /// `ss{i+1}` (`ss01`..`ss20`). `0`/`None` ⇒ no stylistic set.
-    pub stylistic_sets: Option<i32>,
-}
-
 /// Parse the discrete `OTF*` attributes off a CharacterStyleRange /
 /// CharacterStyle start tag. Returns an all-`None` bag when none of
 /// the attributes are present (the common case) so the cascade can
@@ -764,27 +617,6 @@ pub(crate) fn parse_otf_features(e: &quick_xml::events::BytesStart) -> OtfFeatur
         contextual_alternates: b(b"OTFContextualAlternate"),
         figure_style: attr(e, b"OTFFigureStyle"),
         stylistic_sets: attr(e, b"OTFStylisticSets").and_then(|s| s.parse::<i32>().ok()),
-    }
-}
-
-impl OtfFeatures {
-    /// Fill any unset field from `below` (a lower cascade level: this
-    /// run's character style, then paragraph style). Nothing is
-    /// overwritten once set.
-    pub fn merge_below(&mut self, below: &OtfFeatures) {
-        self.fraction = self.fraction.or(below.fraction);
-        self.ordinal = self.ordinal.or(below.ordinal);
-        self.swash = self.swash.or(below.swash);
-        self.discretionary_ligatures = self
-            .discretionary_ligatures
-            .or(below.discretionary_ligatures);
-        self.slashed_zero = self.slashed_zero.or(below.slashed_zero);
-        self.titling = self.titling.or(below.titling);
-        self.contextual_alternates = self.contextual_alternates.or(below.contextual_alternates);
-        if self.figure_style.is_none() {
-            self.figure_style = below.figure_style.clone();
-        }
-        self.stylistic_sets = self.stylistic_sets.or(below.stylistic_sets);
     }
 }
 
