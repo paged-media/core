@@ -45,8 +45,8 @@ pub use graphic::{
     GradientStopRef, Graphic, SwatchEntry,
 };
 pub use spread::{
-    ArrowheadType, AutoSizingReferencePoint, AutoSizingType, BevelEmbossParams, Bounds,
-    ClippingPathSettings, ClippingType, ContourOptionType, CornerOption, CornerSpec,
+    parse_spread, ArrowheadType, AutoSizingReferencePoint, AutoSizingType, BevelEmbossParams,
+    Bounds, ClippingPathSettings, ClippingType, ContourOptionType, CornerOption, CornerSpec,
     DirectionalFeatherParams, DropShadowSetting, FeatherParams, FirstBaselineOffset, FrameEffects,
     FrameFittingOption, FrameRef, GradientFeatherParams, GradientFeatherStop, GraphicLine, Group,
     GroupTransparency, GuideOrientation, ImageMetadata, InnerGlowParams, InnerShadowParams,

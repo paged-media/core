@@ -274,7 +274,7 @@ fn transparency_round_trips_through_parser() {
             continue;
         }
         let xml = &container.entries[entry_path];
-        let spread = paged_parse::Spread::parse(xml).expect("Spread::parse");
+        let spread = paged_parse::parse_spread(xml).expect("Spread::parse");
         for r in &spread.rectangles {
             if r.drop_shadow.is_some() {
                 shadows += 1;
@@ -325,7 +325,7 @@ fn text_wrap_round_trips_through_parser() {
             continue;
         }
         let xml = &container.entries[entry_path];
-        let spread = paged_parse::Spread::parse(xml).expect("Spread::parse");
+        let spread = paged_parse::parse_spread(xml).expect("Spread::parse");
         for r in &spread.rectangles {
             if r.text_wrap.is_some() {
                 wraps_found += 1;
@@ -358,7 +358,7 @@ fn text_in_shape_text_frames_carry_non_rectangular_path_geometry() {
             continue;
         }
         let xml = &container.entries[entry_path];
-        let spread = paged_parse::Spread::parse(xml).expect("Spread::parse");
+        let spread = paged_parse::parse_spread(xml).expect("Spread::parse");
         for tf in &spread.text_frames {
             // A non-rectangular outline has more than the 4 plain-rect
             // corner anchors OR carries explicit Bezier handles.
@@ -413,7 +413,7 @@ fn anchored_round_trips_through_parser() {
             continue;
         }
         let xml = &container.entries[entry_path];
-        let spread = paged_parse::Spread::parse(xml).expect("Spread::parse");
+        let spread = paged_parse::parse_spread(xml).expect("Spread::parse");
         for f in &spread.text_frames {
             if f.is_anchored {
                 anchored_found += 1;
@@ -557,7 +557,7 @@ fn images_round_trips_through_parser() {
             continue;
         }
         let xml = &container.entries[entry_path];
-        let spread = paged_parse::Spread::parse(xml).expect("Spread::parse");
+        let spread = paged_parse::parse_spread(xml).expect("Spread::parse");
         for r in &spread.rectangles {
             if r.image_link.is_some() {
                 images_found += 1;
@@ -603,7 +603,7 @@ fn image_clipping_round_trips_clipping_path_settings() {
             continue;
         }
         let spread =
-            paged_parse::Spread::parse(&container.entries[entry_path]).expect("Spread::parse");
+            paged_parse::parse_spread(&container.entries[entry_path]).expect("Spread::parse");
         for r in &spread.rectangles {
             if let Some(clip) = &r.image_clip {
                 if clip.has_renderable_geometry() {
@@ -660,7 +660,7 @@ fn text_overset_round_trips_through_parser() {
         if !entry_path.starts_with("Spreads/") {
             continue;
         }
-        let spread = paged_parse::Spread::parse(&container.entries[entry_path]).expect("Spread");
+        let spread = paged_parse::parse_spread(&container.entries[entry_path]).expect("Spread");
         for f in &spread.text_frames {
             if let Some(next) = f.next_text_frame.as_deref() {
                 if next != "n" {
@@ -728,7 +728,7 @@ fn text_autosize_round_trips_through_parser() {
         .keys()
         .find(|p| p.starts_with("Spreads/"))
         .expect("a spread entry");
-    let spread = paged_parse::Spread::parse(&container.entries[spread_path]).expect("Spread");
+    let spread = paged_parse::parse_spread(&container.entries[spread_path]).expect("Spread");
     let autosizing: Vec<_> = spread
         .text_frames
         .iter()
@@ -865,7 +865,7 @@ fn links_broken_round_trips_through_parser() {
         .find(|k| k.starts_with("Spreads/"))
         .expect("a spread entry")
         .clone();
-    let spread = paged_parse::Spread::parse(&container.entries[&spread_path]).expect("Spread");
+    let spread = paged_parse::parse_spread(&container.entries[&spread_path]).expect("Spread");
 
     // Four image-bearing rectangles, all with a link URI.
     let with_link = spread
@@ -1555,7 +1555,7 @@ fn links_ok_all_images_resolve_with_healthy_ppi() {
         .expect("a spread entry")
         .clone();
     let spread =
-        paged_parse::Spread::parse(&doc.container.entries[&spread_path]).expect("Spread::parse");
+        paged_parse::parse_spread(&doc.container.entries[&spread_path]).expect("Spread::parse");
 
     // Two image rectangles, both inline-embedded (resolve "ok").
     let with_inline = spread
