@@ -88,11 +88,10 @@ pub enum ParseError {
 pub struct Container {
     pub mimetype: String,
     /// Raw `designmap.xml` bytes. IDML carry-through only — never part of the
-    /// native model serialization (the structured `designmap` is the truth);
-    /// defaults to empty on native deserialize (N1, Approach A).
+    /// native model serialization (the structured `designmap` on `Document` is
+    /// the truth); defaults to empty on native deserialize (N1, Approach A).
     #[serde(skip)]
     pub designmap_raw: Bytes,
-    pub designmap: DesignMap,
     /// Full decompressed archive contents keyed by entry path. IDML
     /// carry-through only (render-dead) — `#[serde(skip)]` so the native model
     /// never stores the raw IDML package; empty after native deserialize.
@@ -135,12 +134,10 @@ impl Container {
             .get("designmap.xml")
             .cloned()
             .ok_or(ParseError::MissingEntry("designmap.xml"))?;
-        let designmap = parse_designmap(&designmap_raw)?;
 
         Ok(Self {
             mimetype: mimetype_str,
             designmap_raw,
-            designmap,
             entries,
         })
     }

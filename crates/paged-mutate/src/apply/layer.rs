@@ -31,7 +31,7 @@ pub(super) fn apply_move_layer(
     layer_id: &str,
     new_index: usize,
 ) -> Result<AppliedOperation, OperationError> {
-    let layers = &mut doc.container.designmap.layers;
+    let layers = &mut doc.designmap.layers;
     let original_index = layers
         .iter()
         .position(|l| l.self_id == layer_id)
@@ -67,7 +67,7 @@ pub(super) fn apply_insert_layer(
     name: &str,
     requested_self_id: Option<&str>,
 ) -> Result<AppliedOperation, OperationError> {
-    let layers = &mut doc.container.designmap.layers;
+    let layers = &mut doc.designmap.layers;
     let clamped = position.min(layers.len());
     let self_id = match requested_self_id {
         Some(s) => {
@@ -125,7 +125,7 @@ pub(super) fn apply_remove_layer(
     doc: &mut Document,
     layer_id: &str,
 ) -> Result<AppliedOperation, OperationError> {
-    let layers = &mut doc.container.designmap.layers;
+    let layers = &mut doc.designmap.layers;
     let idx = layers
         .iter()
         .position(|l| l.self_id == layer_id)

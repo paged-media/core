@@ -213,14 +213,14 @@ fn main() -> Result<()> {
     if !args.json {
         println!("file          {}", args.file.display());
         println!("mimetype      {}", document.container.mimetype);
-        if let Some(v) = document.container.designmap.dom_version.as_deref() {
+        if let Some(v) = document.designmap.dom_version.as_deref() {
             println!("DOMVersion    {v}");
         }
         println!(
             "manifest      {} spread(s), {} story ref(s), {} master(s)",
-            document.container.designmap.spreads.len(),
-            document.container.designmap.stories.len(),
-            document.container.designmap.master_spreads.len(),
+            document.designmap.spreads.len(),
+            document.designmap.stories.len(),
+            document.designmap.master_spreads.len(),
         );
         if !palette.colors.is_empty() || !palette.swatches.is_empty() {
             println!(
@@ -402,13 +402,7 @@ fn main() -> Result<()> {
     // host's Adobe ColorSync install. Naive fallback is fine.
     let cmyk_profile_bytes: Option<Vec<u8>> = if let Some(path) = args.cmyk_profile.as_deref() {
         Some(std::fs::read(path).with_context(|| format!("read {}", path.display()))?)
-    } else if let Some(name) = document
-        .container
-        .designmap
-        .color_settings
-        .cmyk_profile
-        .as_deref()
-    {
+    } else if let Some(name) = document.designmap.color_settings.cmyk_profile.as_deref() {
         match resolve_cmyk_profile_by_name(name) {
             Some(bytes) => {
                 eprintln!("color: using CMYK profile match for {name:?}");
@@ -1215,11 +1209,11 @@ fn build_json_report(
     json!({
         "file": args.file,
         "mimetype": document.container.mimetype,
-        "dom_version": document.container.designmap.dom_version,
+        "dom_version": document.designmap.dom_version,
         "manifest": {
-            "spreads": document.container.designmap.spreads.len(),
-            "stories": document.container.designmap.stories.len(),
-            "masters": document.container.designmap.master_spreads.len(),
+            "spreads": document.designmap.spreads.len(),
+            "stories": document.designmap.stories.len(),
+            "masters": document.designmap.master_spreads.len(),
         },
         "palette": {
             "colors": palette.colors.len(),

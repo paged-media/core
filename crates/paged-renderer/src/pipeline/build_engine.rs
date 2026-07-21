@@ -113,7 +113,7 @@ pub(super) fn build_document_inner(
     // coordinate system and two spreads' page bounds can collide.
     let mut page_geometries: Vec<PageGeom> = Vec::new();
     let mut page_labels: Vec<String> = Vec::new();
-    let mut section_walk = SectionWalk::new(&document.container.designmap.sections);
+    let mut section_walk = SectionWalk::new(&document.designmap.sections);
     let mut spread_page_ranges: Vec<std::ops::Range<usize>> =
         Vec::with_capacity(document.spreads.len());
     for (spread_idx, parsed) in document.spreads.iter().enumerate() {
@@ -179,7 +179,7 @@ pub(super) fn build_document_inner(
     // read from a baked `<Page Name>` — an honest signal that numbering
     // came from section rules / the 1-based fallback, not InDesign.
     if section_walk.used_fallback {
-        let detail = if document.container.designmap.sections.is_empty() {
+        let detail = if document.designmap.sections.is_empty() {
             "page label(s) computed via 1-based fallback (no <Page Name>, no <Section>)"
         } else {
             "page label(s) computed from <Section> numbering rules (no baked <Page Name>)"
@@ -260,7 +260,7 @@ pub(super) fn build_document_inner(
         .enumerate()
         .map(|(idx, p)| (p.id.0.clone(), idx))
         .collect();
-    let sections = &document.container.designmap.sections;
+    let sections = &document.designmap.sections;
     let chapter_numbers: Vec<String> = (0..pages.len())
         .map(|idx| links::chapter_number_for_page(sections, &page_starts, idx).unwrap_or_default())
         .collect();
@@ -575,7 +575,7 @@ pub(super) fn build_document_inner(
     // without an explicit ItemLayer always render — matches InDesign's
     // single-layer-by-default behaviour. The same predicate is consumed
     // by the canvas hit-tester so selection cannot disagree with paint.
-    let layer_renders = paged_scene::build_layer_render_map(&document.container.designmap);
+    let layer_renders = paged_scene::build_layer_render_map(&document.designmap);
     let layer_visible = |layer_ref: Option<&str>| -> bool {
         paged_scene::lookup_layer_render_visible(&layer_renders, layer_ref)
     };
@@ -616,7 +616,7 @@ pub(super) fn build_document_inner(
     // note in `paged_scene::layer`. Shared helper so the canvas
     // hit-tester walks items in the same paint order — divergence here
     // would break selection on multi-layer documents.
-    let layer_z_index = paged_scene::layer_z_index(&document.container.designmap);
+    let layer_z_index = paged_scene::layer_z_index(&document.designmap);
     for (spread_idx, parsed) in document.spreads.iter().enumerate() {
         let spread = &parsed.spread;
         let range = spread_page_ranges[spread_idx].clone();
@@ -3264,7 +3264,7 @@ pub(super) fn emit_paragraph_into_chain(
         // very page.
         let host_page = em.chain_pages.get(em.frame_idx).copied().unwrap_or(0);
         let ctx = links::VarResolveCtx {
-            designmap: &em.document.container.designmap,
+            designmap: &em.document.designmap,
             total_pages,
             clock: &em.options.document_clock,
             chapter_number: em.chapter_numbers.get(host_page).map(String::as_str),
@@ -3427,11 +3427,10 @@ pub(super) fn emit_paragraph_into_chain(
                 if run_len == 0 {
                     continue;
                 }
-                let target = links::resolve_link_target(
-                    &em.document.container.designmap,
-                    source_id,
-                    |page_id| em.page_index_for_target(page_id),
-                );
+                let target =
+                    links::resolve_link_target(&em.document.designmap, source_id, |page_id| {
+                        em.page_index_for_target(page_id)
+                    });
                 spans.push((start..byte_cursor, target));
             }
             spans

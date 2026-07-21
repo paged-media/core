@@ -1277,7 +1277,7 @@ impl CanvasModel {
         // default render from the reference. The declared name is
         // still surfaced via DocumentMeta for the settings dialog.
         let mut color_settings = ColorSettingsState::default();
-        let designmap_settings = scene.container.designmap.color_settings.clone();
+        let designmap_settings = scene.designmap.color_settings.clone();
         let icc_bytes = match opts.cmyk_icc_profile {
             Some(bytes) => Some(bytes),
             None => designmap_settings.cmyk_profile.as_ref().and_then(|name| {
@@ -3478,7 +3478,6 @@ impl CanvasModel {
     pub fn layers(&self) -> Vec<crate::channel::LayerSummary> {
         use crate::channel::LayerSummary;
         self.scene
-            .container
             .designmap
             .layers
             .iter()
@@ -5324,7 +5323,7 @@ impl CanvasModel {
         // panels.md gap 10 — document bleed is document-level
         // (`<DocumentPreference>`); carry it on every page so the
         // overlay has it without a second request.
-        let bleed = self.scene.container.designmap.document_preference;
+        let bleed = self.scene.designmap.document_preference;
         // Build page-self-id → MarginPreference once across all
         // spreads (each spread carries its own pages' margins).
         let mut margins: std::collections::HashMap<&str, &paged_parse::MarginPreference> =
@@ -5367,7 +5366,7 @@ impl CanvasModel {
     /// (sections are in document order) or the document end.
     pub fn sections(&self) -> Vec<crate::channel::SectionSummary> {
         use crate::channel::SectionSummary;
-        let sections = &self.scene.container.designmap.sections;
+        let sections = &self.scene.designmap.sections;
         // page Self id → flat body-page index.
         let page_index: HashMap<&str, u32> = self
             .built
@@ -5565,7 +5564,6 @@ impl CanvasModel {
     pub fn articles(&self) -> Vec<crate::channel::ArticleSummary> {
         use crate::channel::ArticleSummary;
         self.scene
-            .container
             .designmap
             .articles
             .iter()
@@ -5581,7 +5579,6 @@ impl CanvasModel {
     pub fn hyperlinks(&self) -> Vec<crate::channel::HyperlinkSummary> {
         use crate::channel::HyperlinkSummary;
         self.scene
-            .container
             .designmap
             .hyperlinks
             .iter()
@@ -5598,7 +5595,6 @@ impl CanvasModel {
     pub fn bookmarks(&self) -> Vec<crate::channel::BookmarkSummary> {
         use crate::channel::BookmarkSummary;
         self.scene
-            .container
             .designmap
             .bookmarks
             .iter()
@@ -5614,7 +5610,6 @@ impl CanvasModel {
     pub fn cross_references(&self) -> Vec<crate::channel::CrossReferenceSummary> {
         use crate::channel::CrossReferenceSummary;
         self.scene
-            .container
             .designmap
             .cross_references
             .iter()
@@ -5631,7 +5626,6 @@ impl CanvasModel {
     pub fn index_topics(&self) -> Vec<crate::channel::IndexTopicSummary> {
         use crate::channel::IndexTopicSummary;
         self.scene
-            .container
             .designmap
             .index_topics
             .iter()
@@ -6077,7 +6071,7 @@ impl CanvasModel {
     /// cover v1 panel needs.
     pub fn document_meta(&self) -> crate::channel::DocumentMeta {
         // W2.5 — baseline-grid settings live on the parsed designmap.
-        let gp = &self.scene.container.designmap.grid_preference;
+        let gp = &self.scene.designmap.grid_preference;
         crate::channel::DocumentMeta {
             page_count: self.built.pages.len() as u32,
             // `active_page` is application state (canvas-side camera
@@ -6097,14 +6091,11 @@ impl CanvasModel {
             // working space so the settings dialog can show what the
             // document asks for even before a registered profile
             // activates it.
-            cmyk_profile_name: self.color_settings.cmyk_profile_name.clone().or_else(|| {
-                self.scene
-                    .container
-                    .designmap
-                    .color_settings
-                    .cmyk_profile
-                    .clone()
-            }),
+            cmyk_profile_name: self
+                .color_settings
+                .cmyk_profile_name
+                .clone()
+                .or_else(|| self.scene.designmap.color_settings.cmyk_profile.clone()),
             rgb_policy: self.color_settings.rgb_policy.clone(),
             cmyk_profile_active: self.icc_bytes.is_some(),
             rendering_intent: Some(self.color_settings.intent.name().to_string()),
@@ -6724,7 +6715,7 @@ impl CanvasModel {
     }
 
     pub fn document_preference(&self) -> paged_parse::DocumentPreference {
-        self.scene.container.designmap.document_preference
+        self.scene.designmap.document_preference
     }
 
     pub fn palette(&self) -> &paged_parse::graphic::Graphic {

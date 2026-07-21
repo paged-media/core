@@ -1033,7 +1033,7 @@ pub fn build_document(
     // Does the document need the post-layout pass? (Same predicate the
     // inner builder uses; cheap to recompute and avoids plumbing a flag
     // back out.)
-    let dm = &document.container.designmap;
+    let dm = &document.designmap;
     let has_running_header = dm.text_variables.iter().any(|v| {
         matches!(
             v.variable_type.as_deref(),

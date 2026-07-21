@@ -51,7 +51,7 @@ pub(super) fn apply_insert_section(
             at_page.to_string(),
         )));
     }
-    let sections = &mut doc.container.designmap.sections;
+    let sections = &mut doc.designmap.sections;
     let id = match self_id {
         Some(id) => id,
         None => {
@@ -105,7 +105,7 @@ pub(super) fn apply_edit_section(
     numbering_style: Option<String>,
     start_at: Option<Option<u32>>,
 ) -> Result<AppliedOperation, OperationError> {
-    let sections = &mut doc.container.designmap.sections;
+    let sections = &mut doc.designmap.sections;
     let section = sections
         .iter_mut()
         .find(|s| s.self_id == section_id)
@@ -153,7 +153,7 @@ pub(super) fn apply_delete_section(
     doc: &mut Document,
     section_id: &str,
 ) -> Result<AppliedOperation, OperationError> {
-    let sections = &mut doc.container.designmap.sections;
+    let sections = &mut doc.designmap.sections;
     let pos = sections
         .iter()
         .position(|s| s.self_id == section_id)

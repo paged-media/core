@@ -46,6 +46,7 @@ use paged_scene::{Document, ParsedSpread};
 fn build_document_accepts_a_hand_constructed_empty_document() {
     let document = Document {
         container: empty_container(),
+        designmap: DesignMap::default(),
         palette: Graphic::default(),
         spreads: Vec::new(),
         stories: Vec::new(),
@@ -90,6 +91,7 @@ fn build_document_accepts_a_hand_constructed_single_page_document() {
 
     let document = Document {
         container: empty_container(),
+        designmap: DesignMap::default(),
         palette: Graphic::default(),
         spreads: vec![ParsedSpread {
             src: "Spreads/synth.xml".to_string(),
@@ -115,7 +117,6 @@ fn empty_container() -> Container {
     Container {
         mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
         designmap_raw: Bytes::new(),
-        designmap: DesignMap::default(),
         entries: BTreeMap::new(),
     }
 }

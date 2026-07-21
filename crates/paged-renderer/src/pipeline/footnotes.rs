@@ -383,7 +383,7 @@ pub(super) fn resolve_footnote_metrics(
     cmyk_xform: Option<&paged_color::IccTransform>,
     default_size: f32,
 ) -> FootnoteMetrics {
-    let fo = &document.container.designmap.footnote_options;
+    let fo = &document.designmap.footnote_options;
     // Separator: InDesign's factory default is a tab; but our legacy
     // (pre-W1.8) flat path used ". ", and the reservation tests lock to
     // that visual. Honour an explicit SeparatorText; otherwise keep the

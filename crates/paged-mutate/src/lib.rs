@@ -246,9 +246,9 @@ mod tests {
             container: Container {
                 mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
                 designmap_raw: Bytes::new(),
-                designmap: DesignMap::default(),
                 entries: BTreeMap::new(),
             },
+            designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
                 src: "Spreads/syn.xml".to_string(),
@@ -1697,9 +1697,9 @@ mod tests {
             container: Container {
                 mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
                 designmap_raw: Bytes::new(),
-                designmap: DesignMap::default(),
                 entries: BTreeMap::new(),
             },
+            designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![
                 ParsedSpread {
@@ -1902,9 +1902,9 @@ mod tests {
             container: Container {
                 mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
                 designmap_raw: Bytes::new(),
-                designmap: DesignMap::default(),
                 entries: BTreeMap::new(),
             },
+            designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
                 src: "Spreads/syn.xml".to_string(),
@@ -2055,9 +2055,9 @@ mod tests {
             container: Container {
                 mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
                 designmap_raw: Bytes::new(),
-                designmap: DesignMap::default(),
                 entries: BTreeMap::new(),
             },
+            designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
                 src: "Spreads/syn.xml".to_string(),
@@ -2254,9 +2254,9 @@ mod tests {
             container: Container {
                 mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
                 designmap_raw: Bytes::new(),
-                designmap: DesignMap::default(),
                 entries: BTreeMap::new(),
             },
+            designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
                 src: "Spreads/syn.xml".to_string(),
@@ -2642,9 +2642,9 @@ mod tests {
             container: Container {
                 mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
                 designmap_raw: Bytes::new(),
-                designmap,
                 entries: BTreeMap::new(),
             },
+            designmap,
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
                 src: "Spreads/syn.xml".to_string(),
@@ -2668,7 +2668,7 @@ mod tests {
     }
 
     fn layer_of(project: &Project) -> &paged_parse::Layer {
-        &project.document().container.designmap.layers[0]
+        &project.document().designmap.layers[0]
     }
 
     #[test]
@@ -2730,18 +2730,14 @@ mod tests {
         let mut project = {
             let doc = document_with_one_layer("ua");
             let mut p = Project::new(doc);
-            p.document_mut()
-                .container
-                .designmap
-                .layers
-                .push(paged_parse::Layer {
-                    self_id: "ub".to_string(),
-                    name: Some("Guides".to_string()),
-                    visible: true,
-                    locked: false,
-                    printable: true,
-                    parent_id: None,
-                });
+            p.document_mut().designmap.layers.push(paged_parse::Layer {
+                self_id: "ub".to_string(),
+                name: Some("Guides".to_string()),
+                visible: true,
+                locked: false,
+                printable: true,
+                parent_id: None,
+            });
             p
         };
         // Move "ub" to index 0 (becomes the backmost layer — cycle-8
@@ -2754,7 +2750,6 @@ mod tests {
             .expect("move");
         let ids: Vec<_> = project
             .document()
-            .container
             .designmap
             .layers
             .iter()
@@ -2765,7 +2760,6 @@ mod tests {
         crate::apply(project.document_mut(), &applied.inverse).unwrap();
         let ids: Vec<_> = project
             .document()
-            .container
             .designmap
             .layers
             .iter()
@@ -2784,12 +2778,12 @@ mod tests {
                 self_id: None,
             })
             .expect("insert");
-        let layers = &project.document().container.designmap.layers;
+        let layers = &project.document().designmap.layers;
         assert_eq!(layers.len(), 2);
         assert_eq!(layers[1].name.as_deref(), Some("New"));
         // Inverse removes it.
         crate::apply(project.document_mut(), &applied.inverse).unwrap();
-        assert_eq!(project.document().container.designmap.layers.len(), 1);
+        assert_eq!(project.document().designmap.layers.len(), 1);
     }
 
     #[test]
@@ -2797,17 +2791,17 @@ mod tests {
         let mut project = Project::new(document_with_one_layer("ua"));
         // Toggle every flag before removal so the inverse exercises
         // the flag-restore branch.
-        project.document_mut().container.designmap.layers[0].locked = true;
-        project.document_mut().container.designmap.layers[0].printable = false;
+        project.document_mut().designmap.layers[0].locked = true;
+        project.document_mut().designmap.layers[0].printable = false;
         let applied = project
             .apply(Operation::RemoveLayer {
                 layer_id: "ua".to_string(),
             })
             .expect("remove");
-        assert!(project.document().container.designmap.layers.is_empty());
+        assert!(project.document().designmap.layers.is_empty());
         // Inverse restores the layer with its flags.
         crate::apply(project.document_mut(), &applied.inverse).unwrap();
-        let layer = &project.document().container.designmap.layers[0];
+        let layer = &project.document().designmap.layers[0];
         assert_eq!(layer.self_id, "ua");
         assert!(layer.locked);
         assert!(!layer.printable);
@@ -2967,9 +2961,9 @@ mod tests {
             container: Container {
                 mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
                 designmap_raw: Bytes::new(),
-                designmap: DesignMap::default(),
                 entries: BTreeMap::new(),
             },
+            designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: Vec::new(),
             stories: vec![ParsedStory {
@@ -3367,9 +3361,9 @@ mod tests {
             container: Container {
                 mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
                 designmap_raw: Bytes::new(),
-                designmap: DesignMap::default(),
                 entries: BTreeMap::new(),
             },
+            designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
                 src: "Spreads/syn.xml".to_string(),
@@ -3956,9 +3950,9 @@ mod tests {
             container: Container {
                 mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
                 designmap_raw: Bytes::new(),
-                designmap: DesignMap::default(),
                 entries: BTreeMap::new(),
             },
+            designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
                 src: "Spreads/syn.xml".to_string(),
@@ -4023,9 +4017,9 @@ mod tests {
             container: Container {
                 mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
                 designmap_raw: Bytes::new(),
-                designmap: DesignMap::default(),
                 entries: BTreeMap::new(),
             },
+            designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
                 src: "Spreads/syn.xml".to_string(),
@@ -6214,9 +6208,9 @@ mod tests {
                 container: Container {
                     mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
                     designmap_raw: Bytes::new(),
-                    designmap: DesignMap::default(),
                     entries: BTreeMap::new(),
                 },
+                designmap: DesignMap::default(),
                 palette: Graphic::default(),
                 spreads: Vec::new(),
                 stories: Vec::new(),
@@ -6716,13 +6710,13 @@ mod tests {
                     self_id: None,
                 })
                 .expect("insert section");
-            assert_eq!(p.document().container.designmap.sections.len(), 1);
+            assert_eq!(p.document().designmap.sections.len(), 1);
             let sid = match &applied.op {
                 Operation::InsertSection { self_id, .. } => self_id.clone().unwrap(),
                 _ => unreachable!(),
             };
             assert_eq!(
-                p.document().container.designmap.sections[0].numbering_style,
+                p.document().designmap.sections[0].numbering_style,
                 paged_parse::NumberingStyle::UpperRoman
             );
             // Edit it.
@@ -6734,23 +6728,18 @@ mod tests {
             })
             .expect("edit section");
             assert_eq!(
-                p.document().container.designmap.sections[0].numbering_style,
+                p.document().designmap.sections[0].numbering_style,
                 paged_parse::NumberingStyle::Arabic
             );
-            assert_eq!(
-                p.document().container.designmap.sections[0].start_at,
-                Some(5)
-            );
+            assert_eq!(p.document().designmap.sections[0].start_at, Some(5));
             // Undo the edit restores UpperRoman + prefix.
             p.undo().expect("undo edit");
             assert_eq!(
-                p.document().container.designmap.sections[0].numbering_style,
+                p.document().designmap.sections[0].numbering_style,
                 paged_parse::NumberingStyle::UpperRoman
             );
             assert_eq!(
-                p.document().container.designmap.sections[0]
-                    .section_prefix
-                    .as_deref(),
+                p.document().designmap.sections[0].section_prefix.as_deref(),
                 Some("A-")
             );
             // Delete + undo restores it.
@@ -6758,9 +6747,9 @@ mod tests {
                 section_id: sid.clone(),
             })
             .expect("delete section");
-            assert_eq!(p.document().container.designmap.sections.len(), 0);
+            assert_eq!(p.document().designmap.sections.len(), 0);
             p.undo().expect("undo delete");
-            assert_eq!(p.document().container.designmap.sections.len(), 1);
+            assert_eq!(p.document().designmap.sections.len(), 1);
         }
 
         // ---- Oval NodeSpec ----------------------------------------------
@@ -6888,9 +6877,9 @@ mod tests {
                 container: Container {
                     mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
                     designmap_raw: Bytes::new(),
-                    designmap: DesignMap::default(),
                     entries: BTreeMap::new(),
                 },
+                designmap: DesignMap::default(),
                 palette: Graphic::default(),
                 spreads: vec![ParsedSpread {
                     src: "Spreads/syn.xml".to_string(),

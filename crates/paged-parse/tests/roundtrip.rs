@@ -70,10 +70,13 @@ fn opens_synthetic_idml_and_extracts_manifest() {
         container.mimetype,
         "application/vnd.adobe.indesign-idml-package"
     );
-    assert_eq!(container.designmap.spreads.len(), 1);
-    assert_eq!(container.designmap.stories.len(), 1);
-    assert_eq!(container.designmap.master_spreads.len(), 1);
-    assert_eq!(container.designmap.spreads[0].src, "Spreads/Spread_u1.xml");
+    // The structured manifest is parsed from the source archive's raw bytes
+    // (it no longer lives on Container — N7).
+    let designmap = paged_parse::parse_designmap(&container.designmap_raw).expect("designmap");
+    assert_eq!(designmap.spreads.len(), 1);
+    assert_eq!(designmap.stories.len(), 1);
+    assert_eq!(designmap.master_spreads.len(), 1);
+    assert_eq!(designmap.spreads[0].src, "Spreads/Spread_u1.xml");
     // Sub-resources are addressable by path.
     assert!(container.entry("Stories/Story_u10.xml").is_some());
     assert!(container.entry("Spreads/Spread_u1.xml").is_some());

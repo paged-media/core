@@ -147,7 +147,7 @@ impl CanvasModel {
         ];
 
         let scene = self.scene();
-        let designmap = &scene.container.designmap;
+        let designmap = &scene.designmap;
         let layer_renders = paged_scene::build_layer_render_map(designmap);
         let layer_lockeds = paged_scene::build_layer_locked_map(designmap);
         let layer_z = paged_scene::layer_z_index(designmap);
@@ -217,7 +217,7 @@ impl CanvasModel {
         let spread_point = (local.0 + page_origin_x, local.1 + page_origin_y);
 
         let scene = self.scene();
-        let designmap = &scene.container.designmap;
+        let designmap = &scene.designmap;
         let layer_renders = paged_scene::build_layer_render_map(designmap);
         let layer_lockeds = paged_scene::build_layer_locked_map(designmap);
         let layer_z = paged_scene::layer_z_index(designmap);

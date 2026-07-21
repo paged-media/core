@@ -124,7 +124,6 @@ pub fn write_idml(doc: &Document, original: &[u8]) -> Result<Vec<u8>, WriteError
     // nothing, so none of this fires and the round-trip stays
     // byte-identical.
     let dom_version = doc
-        .container
         .designmap
         .dom_version
         .clone()
