@@ -1236,12 +1236,11 @@ impl CanvasModel {
                 Some(pgm) => match paged_store::from_bytes(&pgm) {
                     Some(mut doc) => {
                         // The native part is the model truth (including its
-                        // structured designmap); take only the raw carry-through
-                        // bytes from the real container so the parts door still
+                        // structured designmap); attach the real source archive
+                        // (raw carry-through bytes) so the parts door still
                         // serves every other container part and IDML export can
                         // still carry through.
-                        doc.container.entries = container.entries;
-                        doc.container.designmap_raw = container.designmap_raw;
+                        doc.source = Some(container);
                         doc
                     }
                     None => Document::from_container(container)
@@ -3360,16 +3359,22 @@ impl CanvasModel {
         if let Some(b) = self.paged_parts.get(path) {
             return Some(b.clone());
         }
-        self.scene.container.entries.get(path).map(|b| b.to_vec())
+        self.scene
+            .source
+            .as_ref()
+            .and_then(|s| s.entries.get(path))
+            .map(|b| b.to_vec())
     }
 
     /// List `.paged` part paths under `prefix` (the union of the loaded
     /// container and the live overlay), restricted to the `paged/` namespace.
     pub fn list_paged_parts(&self, prefix: &str) -> Vec<String> {
         let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for k in self.scene.container.entries.keys() {
-            if k.starts_with(paged_write::PAGED_PREFIX) && k.starts_with(prefix) {
-                names.insert(k.clone());
+        if let Some(source) = &self.scene.source {
+            for k in source.entries.keys() {
+                if k.starts_with(paged_write::PAGED_PREFIX) && k.starts_with(prefix) {
+                    names.insert(k.clone());
+                }
             }
         }
         for k in self.paged_parts.keys() {

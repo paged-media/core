@@ -98,7 +98,11 @@ fn plain_source_still_loads_via_the_parse_path() {
     let idml = paged_gen::write_idml(&paged_gen::samples::geometry::build()).expect("gen fixture");
     let direct = CanvasModel::load("d", &idml, CanvasOptions::default()).expect("load source");
     assert!(
-        !direct.scene().container.entries.is_empty(),
+        direct
+            .scene()
+            .source
+            .as_ref()
+            .is_some_and(|s| !s.entries.is_empty()),
         "the parse path keeps the raw source archive"
     );
     assert!(

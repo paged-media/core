@@ -45,7 +45,7 @@
 //!
 //! [`write_idml`] takes `(&Document, original_bytes)` rather than reading
 //! the source package off `Document` — even though `Document` *does*
-//! retain the original entries (`Document.container.entries`). Taking the
+//! retain the original entries (`Document.source`'s entries). Taking the
 //! original bytes explicitly keeps the ZIP container structure (entry
 //! order, compression, the stored-mimetype rule, local-header layout)
 //! available for a faithful re-zip, which the decompressed entry map

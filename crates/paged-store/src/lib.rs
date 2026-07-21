@@ -43,10 +43,13 @@ pub const DOCUMENT_PGM_PATH: &str = "paged/core/model/document.pgm";
 /// what keeps a stale `.pgm` from silently corrupting a reload (ADR-022 Q2).
 ///
 /// - v1: initial native shape.
-/// - v2 (N7): the structured `designmap` moved off `container` up to a
+/// - v2 (N7.1): the structured `designmap` moved off `container` up to a
 ///   top-level `Document.designmap` field, and `SourceArchive` lost its
 ///   `designmap` field — a serde-shape change, so a v1 part is rejected.
-pub const PGM_FORMAT_VERSION: u32 = 2;
+/// - v3 (N7.2): `Document.container: SourceArchive` became
+///   `Document.source: Option<SourceArchive>`, now fully `#[serde(skip)]` (the
+///   mimetype no longer rides in the `.pgm`) — a v2 part is rejected.
+pub const PGM_FORMAT_VERSION: u32 = 3;
 
 /// The on-disk envelope: a version tag around the model. Serialized borrowed
 /// (no clone) and deserialized owned.

@@ -57,7 +57,7 @@ fn model_part_round_trips_through_the_paged_container() {
 
     // Native reconstruct carries no raw source archive...
     assert!(
-        reconstructed.container.entries.is_empty(),
+        reconstructed.source.is_none(),
         "native reconstruct must not carry the raw source archive"
     );
 
