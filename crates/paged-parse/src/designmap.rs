@@ -19,97 +19,11 @@
 //! seed-corpus round-trips. Full schema coverage lands during Phase 0.
 
 use quick_xml::events::Event;
-use serde::{Deserialize, Serialize};
 
 use crate::util::attr;
 use crate::ParseError;
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct DesignMap {
-    pub spreads: Vec<SpreadRef>,
-    pub stories: Vec<StoryRef>,
-    pub master_spreads: Vec<String>,
-    /// `DOMVersion` attribute on the root `<Document>` element (e.g.
-    /// `"18.5"` for InDesign 2023). Surfaced read-only so tooling can
-    /// report the authoring DOM; the parser is version-agnostic and
-    /// does **not** branch on it yet (no version negotiation).
-    pub dom_version: Option<String>,
-    /// `Name` attribute on the root `<Document>` element — the source
-    /// `.indd` file name (e.g. `"generated.indd"`). W1.4: feeds the
-    /// `FileNameVariable` text variable. `None` when absent.
-    pub document_name: Option<String>,
-    /// Document-level color management settings, extracted from the
-    /// root `<Document>` element. Drives ICC transform construction —
-    /// the renderer matches `color_settings.cmyk_profile` against its
-    /// bundled profile set and falls back to a naive CMYK→sRGB
-    /// approximation when the named profile isn't shipped.
-    pub color_settings: ColorSettings,
-    /// `<DocumentPreference>` bleed/slug offsets (points). Unread by
-    /// the renderer (pages rasterise at trim); the PDF exporter uses
-    /// them for BleedBox/MediaBox geometry. Zeros when the element
-    /// or attribute is absent.
-    pub document_preference: DocumentPreference,
-    /// W2.5 — document-level `<GridPreference>` baseline-grid settings.
-    /// Default (all-`None`, `present=false`) when the element is absent.
-    /// The renderer does NOT draw the baseline grid (it's a non-print
-    /// authoring overlay, drawn editor-side); these values are surfaced
-    /// read-only so the editor's baseline-grid panel + the overlay show
-    /// the document's real numbers. Snapping text to this grid is a
-    /// layout-engine task deferred separately. See [`GridPreference`].
-    pub grid_preference: GridPreference,
-    /// W1.8 — document-level `<FootnoteOption>` settings (separator
-    /// rule + footnote spacing). Default (all-`None`, `present=false`)
-    /// when the element is absent; the renderer then applies InDesign's
-    /// built-in defaults. See [`FootnoteOptions`].
-    pub footnote_options: FootnoteOptions,
-    /// Document layers, in serialization order (which mirrors the
-    /// stacking order — first layer = bottom of the z-stack). Each
-    /// page item references its layer via `ItemLayer="<self_id>"`.
-    /// The renderer skips items whose layer is hidden or non-printable.
-    pub layers: Vec<Layer>,
-    /// `<TextVariable>` definitions. Each carries a `VariableType`
-    /// (`FileNameVariable`, `RunningHeaderVariable`, `ChapterNumberType`,
-    /// `XrefPageNumberType`, etc.) and is referenced from stories via
-    /// `<TextVariableInstance AssociatedTextVariable="TextVariable/<id>"
-    /// ResultText="..."/>`. The renderer treats `ResultText` as the
-    /// authoritative value at the moment InDesign exported the IDML —
-    /// "live" recomputation per page is a future task.
-    pub text_variables: Vec<TextVariable>,
-    /// SDK Phase 5 (v1 sweep) — `<Article>` definitions. Each is a
-    /// named ordered list of `ArticleMember` refs that group
-    /// related stories for accessibility / linked-text reading
-    /// order. The renderer doesn't branch on them today; the
-    /// editor surfaces them via the Articles panel.
-    pub articles: Vec<Article>,
-    /// SDK Phase 5 (v1 sweep) — `<Hyperlink>` definitions. Each
-    /// has a name + a source (HyperlinkTextSource ref) + a
-    /// destination (URL, page, or anchor).
-    pub hyperlinks: Vec<Hyperlink>,
-    /// W1.4 — `<HyperlinkURLDestination>` / `<HyperlinkPageDestination>`
-    /// / `<HyperlinkTextDestination>` resources, keyed by `Self`. A
-    /// `<Hyperlink Destination="...">` resolves through this table to a
-    /// concrete URL or page target.
-    pub hyperlink_destinations: Vec<HyperlinkDestination>,
-    /// SDK Phase 5 (v1 sweep) — `<Bookmark>` definitions. Each
-    /// is a named anchor pointing at a destination (typically a
-    /// hyperlink-page-destination or text-anchor).
-    pub bookmarks: Vec<Bookmark>,
-    /// SDK Phase 5 (v1 sweep) — `<CrossReferenceSource>` markers.
-    /// Each names a CrossReferenceFormat + the destination.
-    pub cross_references: Vec<CrossReference>,
-    /// SDK Phase 5 (v1 sweep) — `<Topic>` definitions for the
-    /// document's index. Flat list (the IDML schema's nested
-    /// topics are flattened to one entry per Self for v1).
-    pub index_topics: Vec<IndexTopic>,
-    /// `<Section>` definitions, in document order. Each anchors at a
-    /// `<Page>` (via `PageStart`) and carries the numbering style /
-    /// start value / prefix InDesign uses to label that section's
-    /// pages. The renderer consults these to compute a page label when
-    /// the `<Page>` itself carries no baked `Name` (and they feed the
-    /// auto-page-number marker reflow). When `Name` is present it stays
-    /// authoritative.
-    pub sections: Vec<Section>,
-}
+pub use paged_model::DesignMap;
 
 pub use paged_model::{
     Article, Bookmark, ColorSettings, CrossReference, DocumentPreference, FootnoteOptions,
@@ -117,319 +31,316 @@ pub use paged_model::{
     NumberingStyle, Section, SpreadRef, StoryRef, TextVariable,
 };
 
-impl DesignMap {
-    /// Parse a `designmap.xml` byte slice.
-    pub fn parse(xml: &[u8]) -> Result<Self, ParseError> {
-        let mut reader = quick_xml::Reader::from_reader(xml);
-        reader.config_mut().trim_text(false);
+/// Parse a `designmap.xml` byte slice.
+pub fn parse_designmap(xml: &[u8]) -> Result<DesignMap, ParseError> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
 
-        let mut out = DesignMap::default();
-        let mut buf = Vec::new();
-        // Stack of currently-open `<Layer Self=...>` ids, so a nested
-        // `<Layer>` (layer group / folder) records its parent. Only
-        // `Event::Start` opens a scope; a self-closing `<Layer/>` (the
-        // flat common case) records `parent_id` from the stack top but
-        // doesn't push, keeping flat documents byte-identical.
-        let mut layer_stack: Vec<String> = Vec::new();
-        // W1.4 — the `<TextVariable>` currently being parsed (the
-        // wrapping form parks here so its `<TextVariablePreference>`
-        // child can fold in before `</TextVariable>` pushes it).
-        let mut current_text_variable: Option<TextVariable> = None;
+    let mut out = DesignMap::default();
+    let mut buf = Vec::new();
+    // Stack of currently-open `<Layer Self=...>` ids, so a nested
+    // `<Layer>` (layer group / folder) records its parent. Only
+    // `Event::Start` opens a scope; a self-closing `<Layer/>` (the
+    // flat common case) records `parent_id` from the stack top but
+    // doesn't push, keeping flat documents byte-identical.
+    let mut layer_stack: Vec<String> = Vec::new();
+    // W1.4 — the `<TextVariable>` currently being parsed (the
+    // wrapping form parks here so its `<TextVariablePreference>`
+    // child can fold in before `</TextVariable>` pushes it).
+    let mut current_text_variable: Option<TextVariable> = None;
 
-        loop {
-            let ev = reader.read_event_into(&mut buf)?;
-            if let Event::End(ref e) = ev {
+    loop {
+        let ev = reader.read_event_into(&mut buf)?;
+        if let Event::End(ref e) = ev {
+            if e.name().as_ref() == b"Layer" {
+                layer_stack.pop();
+            }
+            if e.name().as_ref() == b"TextVariable" {
+                if let Some(var) = current_text_variable.take() {
+                    out.text_variables.push(var);
+                }
+            }
+        }
+        let is_start = matches!(ev, Event::Start(_));
+        match ev {
+            Event::Start(e) | Event::Empty(e) => {
+                if e.name().as_ref() == b"Document" {
+                    out.dom_version = attr(&e, b"DOMVersion");
+                    out.document_name = attr(&e, b"Name");
+                    out.color_settings = ColorSettings {
+                        cmyk_profile: attr(&e, b"CMYKProfile"),
+                        rgb_profile: attr(&e, b"RGBProfile"),
+                        solid_color_intent: attr(&e, b"SolidColorIntent"),
+                        after_blending_intent: attr(&e, b"AfterBlendingIntent"),
+                        default_image_intent: attr(&e, b"DefaultImageIntent"),
+                    };
+                }
+                if e.name().as_ref() == b"DocumentPreference" {
+                    let f = |name: &[u8]| -> f32 {
+                        attr(&e, name).and_then(|s| s.parse().ok()).unwrap_or(0.0)
+                    };
+                    out.document_preference = DocumentPreference {
+                        bleed_top: f(b"DocumentBleedTopOffset"),
+                        bleed_bottom: f(b"DocumentBleedBottomOffset"),
+                        bleed_inside_or_left: f(b"DocumentBleedInsideOrLeftOffset"),
+                        bleed_outside_or_right: f(b"DocumentBleedOutsideOrRightOffset"),
+                        slug_top: f(b"SlugTopOffset"),
+                        slug_bottom: f(b"SlugBottomOffset"),
+                        slug_inside_or_left: f(b"SlugInsideOrLeftOffset"),
+                        slug_right_or_outside: f(b"SlugRightOrOutsideOffset"),
+                    };
+                }
+                // W1.8 — `<FootnoteOption>` document-level footnote
+                // separator + spacing settings. InDesign serialises
+                // this once per document (inside `<RootFootnoteStory>`
+                // or directly under `<Document>`); we match on the
+                // element name wherever it appears. Attribute names
+                // mirror the DOM `FootnoteOption` object.
+                if e.name().as_ref() == b"FootnoteOption" {
+                    let f = |name: &[u8]| -> Option<f32> {
+                        attr(&e, name).and_then(|s| s.parse().ok())
+                    };
+                    out.footnote_options = FootnoteOptions {
+                        present: true,
+                        rule_on: attr(&e, b"RuleOn").and_then(|s| s.parse().ok()),
+                        rule_color: attr(&e, b"RuleColor"),
+                        rule_tint: f(b"RuleTint"),
+                        rule_line_weight: f(b"RuleLineWeight"),
+                        rule_width: f(b"RuleWidth"),
+                        rule_left_indent: f(b"RuleLeftIndent"),
+                        rule_offset: f(b"RuleOffset"),
+                        separator_text: attr(&e, b"SeparatorText"),
+                        spacer: f(b"Spacer"),
+                        space_between: f(b"SpaceBetween"),
+                    };
+                }
+                // W2.5 — `<GridPreference>` baseline-grid + document-
+                // grid settings (serialised once under `<Document>`).
+                // Surfaced read-only for the editor's baseline panel +
+                // overlay; the renderer never draws it.
+                if e.name().as_ref() == b"GridPreference" {
+                    let f = |name: &[u8]| -> Option<f32> {
+                        attr(&e, name).and_then(|s| s.parse().ok())
+                    };
+                    out.grid_preference = GridPreference {
+                        present: true,
+                        baseline_start: f(b"BaselineStart"),
+                        baseline_division: f(b"BaselineDivision"),
+                        baseline_grid_shown: attr(&e, b"BaselineGridShown")
+                            .and_then(|s| s.parse().ok()),
+                        baseline_grid_relative_option: attr(&e, b"BaselineGridRelativeOption"),
+                        baseline_color: attr(&e, b"BaselineColor"),
+                        horizontal_gridline_division: f(b"HorizontalGridlineDivision"),
+                        vertical_gridline_division: f(b"VerticalGridlineDivision"),
+                    };
+                }
                 if e.name().as_ref() == b"Layer" {
-                    layer_stack.pop();
+                    if let Some(self_id) = attr(&e, b"Self") {
+                        out.layers.push(Layer {
+                            self_id: self_id.clone(),
+                            name: attr(&e, b"Name"),
+                            visible: attr(&e, b"Visible")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(true),
+                            locked: attr(&e, b"Locked")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(false),
+                            printable: attr(&e, b"Printable")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(true),
+                            parent_id: layer_stack.last().cloned(),
+                        });
+                        // A non-self-closing <Layer> opens a group
+                        // scope; its descendant layers inherit it.
+                        if is_start {
+                            layer_stack.push(self_id);
+                        }
+                    }
                 }
                 if e.name().as_ref() == b"TextVariable" {
-                    if let Some(var) = current_text_variable.take() {
-                        out.text_variables.push(var);
+                    if let Some(self_id) = attr(&e, b"Self") {
+                        let var = TextVariable {
+                            self_id,
+                            name: attr(&e, b"Name"),
+                            variable_type: attr(&e, b"VariableType"),
+                            contents: None,
+                            date_format: None,
+                            text_before: None,
+                            text_after: None,
+                            running_header_style: None,
+                            running_header_use: None,
+                        };
+                        // A self-closing `<TextVariable/>` carries no
+                        // preference child; push it straight away.
+                        // The wrapping form parks it until `</TextVariable>`
+                        // so the `<TextVariablePreference>` child folds in.
+                        if is_start {
+                            current_text_variable = Some(var);
+                        } else {
+                            out.text_variables.push(var);
+                        }
                     }
                 }
-            }
-            let is_start = matches!(ev, Event::Start(_));
-            match ev {
-                Event::Start(e) | Event::Empty(e) => {
-                    if e.name().as_ref() == b"Document" {
-                        out.dom_version = attr(&e, b"DOMVersion");
-                        out.document_name = attr(&e, b"Name");
-                        out.color_settings = ColorSettings {
-                            cmyk_profile: attr(&e, b"CMYKProfile"),
-                            rgb_profile: attr(&e, b"RGBProfile"),
-                            solid_color_intent: attr(&e, b"SolidColorIntent"),
-                            after_blending_intent: attr(&e, b"AfterBlendingIntent"),
-                            default_image_intent: attr(&e, b"DefaultImageIntent"),
-                        };
+                // `<TextVariablePreference>` carries the type-specific
+                // payload of the enclosing `<TextVariable>`. Real
+                // exports vary which attribute they use per type:
+                // CustomText → `Contents`; the date types → `Format`;
+                // both decorated by `TextBefore` / `TextAfter`.
+                if e.name().as_ref() == b"TextVariablePreference" {
+                    if let Some(var) = current_text_variable.as_mut() {
+                        var.contents = attr(&e, b"Contents").or(var.contents.take());
+                        var.date_format = attr(&e, b"Format").or(var.date_format.take());
+                        var.text_before = attr(&e, b"TextBefore").or(var.text_before.take());
+                        var.text_after = attr(&e, b"TextAfter").or(var.text_after.take());
+                        // W1.18c — running-header pickup: the style
+                        // whose nearest on-page occurrence supplies
+                        // the text, plus the First/LastOnPage choice.
+                        // InDesign serialises the style under either
+                        // `AppliedParagraphStyle` or
+                        // `AppliedCharacterStyle` depending on the
+                        // MatchParagraphStyle vs MatchCharacterStyle
+                        // variant; either fills the same slot.
+                        var.running_header_style = attr(&e, b"AppliedParagraphStyle")
+                            .or_else(|| attr(&e, b"AppliedCharacterStyle"))
+                            .or(var.running_header_style.take());
+                        var.running_header_use = attr(&e, b"Use").or(var.running_header_use.take());
                     }
-                    if e.name().as_ref() == b"DocumentPreference" {
-                        let f = |name: &[u8]| -> f32 {
-                            attr(&e, name).and_then(|s| s.parse().ok()).unwrap_or(0.0)
-                        };
-                        out.document_preference = DocumentPreference {
-                            bleed_top: f(b"DocumentBleedTopOffset"),
-                            bleed_bottom: f(b"DocumentBleedBottomOffset"),
-                            bleed_inside_or_left: f(b"DocumentBleedInsideOrLeftOffset"),
-                            bleed_outside_or_right: f(b"DocumentBleedOutsideOrRightOffset"),
-                            slug_top: f(b"SlugTopOffset"),
-                            slug_bottom: f(b"SlugBottomOffset"),
-                            slug_inside_or_left: f(b"SlugInsideOrLeftOffset"),
-                            slug_right_or_outside: f(b"SlugRightOrOutsideOffset"),
-                        };
+                }
+                // W1.4 — hyperlink destination resources.
+                if e.name().as_ref() == b"HyperlinkURLDestination" {
+                    if let Some(self_id) = attr(&e, b"Self") {
+                        let url = attr(&e, b"DestinationURL").unwrap_or_default();
+                        out.hyperlink_destinations.push(HyperlinkDestination {
+                            self_id,
+                            kind: HyperlinkDestinationKind::Url(url),
+                        });
                     }
-                    // W1.8 — `<FootnoteOption>` document-level footnote
-                    // separator + spacing settings. InDesign serialises
-                    // this once per document (inside `<RootFootnoteStory>`
-                    // or directly under `<Document>`); we match on the
-                    // element name wherever it appears. Attribute names
-                    // mirror the DOM `FootnoteOption` object.
-                    if e.name().as_ref() == b"FootnoteOption" {
-                        let f = |name: &[u8]| -> Option<f32> {
-                            attr(&e, name).and_then(|s| s.parse().ok())
-                        };
-                        out.footnote_options = FootnoteOptions {
-                            present: true,
-                            rule_on: attr(&e, b"RuleOn").and_then(|s| s.parse().ok()),
-                            rule_color: attr(&e, b"RuleColor"),
-                            rule_tint: f(b"RuleTint"),
-                            rule_line_weight: f(b"RuleLineWeight"),
-                            rule_width: f(b"RuleWidth"),
-                            rule_left_indent: f(b"RuleLeftIndent"),
-                            rule_offset: f(b"RuleOffset"),
-                            separator_text: attr(&e, b"SeparatorText"),
-                            spacer: f(b"Spacer"),
-                            space_between: f(b"SpaceBetween"),
-                        };
-                    }
-                    // W2.5 — `<GridPreference>` baseline-grid + document-
-                    // grid settings (serialised once under `<Document>`).
-                    // Surfaced read-only for the editor's baseline panel +
-                    // overlay; the renderer never draws it.
-                    if e.name().as_ref() == b"GridPreference" {
-                        let f = |name: &[u8]| -> Option<f32> {
-                            attr(&e, name).and_then(|s| s.parse().ok())
-                        };
-                        out.grid_preference = GridPreference {
-                            present: true,
-                            baseline_start: f(b"BaselineStart"),
-                            baseline_division: f(b"BaselineDivision"),
-                            baseline_grid_shown: attr(&e, b"BaselineGridShown")
-                                .and_then(|s| s.parse().ok()),
-                            baseline_grid_relative_option: attr(&e, b"BaselineGridRelativeOption"),
-                            baseline_color: attr(&e, b"BaselineColor"),
-                            horizontal_gridline_division: f(b"HorizontalGridlineDivision"),
-                            vertical_gridline_division: f(b"VerticalGridlineDivision"),
-                        };
-                    }
-                    if e.name().as_ref() == b"Layer" {
-                        if let Some(self_id) = attr(&e, b"Self") {
-                            out.layers.push(Layer {
-                                self_id: self_id.clone(),
-                                name: attr(&e, b"Name"),
-                                visible: attr(&e, b"Visible")
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(true),
-                                locked: attr(&e, b"Locked")
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(false),
-                                printable: attr(&e, b"Printable")
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(true),
-                                parent_id: layer_stack.last().cloned(),
-                            });
-                            // A non-self-closing <Layer> opens a group
-                            // scope; its descendant layers inherit it.
-                            if is_start {
-                                layer_stack.push(self_id);
-                            }
-                        }
-                    }
-                    if e.name().as_ref() == b"TextVariable" {
-                        if let Some(self_id) = attr(&e, b"Self") {
-                            let var = TextVariable {
-                                self_id,
-                                name: attr(&e, b"Name"),
-                                variable_type: attr(&e, b"VariableType"),
-                                contents: None,
-                                date_format: None,
-                                text_before: None,
-                                text_after: None,
-                                running_header_style: None,
-                                running_header_use: None,
-                            };
-                            // A self-closing `<TextVariable/>` carries no
-                            // preference child; push it straight away.
-                            // The wrapping form parks it until `</TextVariable>`
-                            // so the `<TextVariablePreference>` child folds in.
-                            if is_start {
-                                current_text_variable = Some(var);
-                            } else {
-                                out.text_variables.push(var);
-                            }
-                        }
-                    }
-                    // `<TextVariablePreference>` carries the type-specific
-                    // payload of the enclosing `<TextVariable>`. Real
-                    // exports vary which attribute they use per type:
-                    // CustomText → `Contents`; the date types → `Format`;
-                    // both decorated by `TextBefore` / `TextAfter`.
-                    if e.name().as_ref() == b"TextVariablePreference" {
-                        if let Some(var) = current_text_variable.as_mut() {
-                            var.contents = attr(&e, b"Contents").or(var.contents.take());
-                            var.date_format = attr(&e, b"Format").or(var.date_format.take());
-                            var.text_before = attr(&e, b"TextBefore").or(var.text_before.take());
-                            var.text_after = attr(&e, b"TextAfter").or(var.text_after.take());
-                            // W1.18c — running-header pickup: the style
-                            // whose nearest on-page occurrence supplies
-                            // the text, plus the First/LastOnPage choice.
-                            // InDesign serialises the style under either
-                            // `AppliedParagraphStyle` or
-                            // `AppliedCharacterStyle` depending on the
-                            // MatchParagraphStyle vs MatchCharacterStyle
-                            // variant; either fills the same slot.
-                            var.running_header_style = attr(&e, b"AppliedParagraphStyle")
-                                .or_else(|| attr(&e, b"AppliedCharacterStyle"))
-                                .or(var.running_header_style.take());
-                            var.running_header_use =
-                                attr(&e, b"Use").or(var.running_header_use.take());
-                        }
-                    }
-                    // W1.4 — hyperlink destination resources.
-                    if e.name().as_ref() == b"HyperlinkURLDestination" {
-                        if let Some(self_id) = attr(&e, b"Self") {
-                            let url = attr(&e, b"DestinationURL").unwrap_or_default();
+                }
+                if e.name().as_ref() == b"HyperlinkPageDestination" {
+                    if let Some(self_id) = attr(&e, b"Self") {
+                        if let Some(page) = attr(&e, b"DestinationPage") {
                             out.hyperlink_destinations.push(HyperlinkDestination {
                                 self_id,
-                                kind: HyperlinkDestinationKind::Url(url),
+                                kind: HyperlinkDestinationKind::Page(page),
                             });
                         }
-                    }
-                    if e.name().as_ref() == b"HyperlinkPageDestination" {
-                        if let Some(self_id) = attr(&e, b"Self") {
-                            if let Some(page) = attr(&e, b"DestinationPage") {
-                                out.hyperlink_destinations.push(HyperlinkDestination {
-                                    self_id,
-                                    kind: HyperlinkDestinationKind::Page(page),
-                                });
-                            }
-                        }
-                    }
-                    if e.name().as_ref() == b"HyperlinkTextDestination" {
-                        if let Some(self_id) = attr(&e, b"Self") {
-                            if let Some(text) = attr(&e, b"DestinationText") {
-                                out.hyperlink_destinations.push(HyperlinkDestination {
-                                    self_id,
-                                    kind: HyperlinkDestinationKind::TextAnchor(text),
-                                });
-                            }
-                        }
-                    }
-                    if e.name().as_ref() == b"Section" {
-                        if let Some(self_id) = attr(&e, b"Self") {
-                            out.sections.push(Section {
-                                self_id,
-                                page_start: attr(&e, b"PageStart"),
-                                continue_numbering: attr(&e, b"ContinueNumbering")
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(false),
-                                start_at: attr(&e, b"PageNumberStart").and_then(|s| s.parse().ok()),
-                                numbering_style: attr(&e, b"PageNumberStyle")
-                                    .map(|s| NumberingStyle::from_idml(&s))
-                                    .unwrap_or(NumberingStyle::Arabic),
-                                section_prefix: attr(&e, b"SectionPrefix"),
-                                marker: attr(&e, b"Marker"),
-                                include_prefix: attr(&e, b"IncludeSectionPrefix")
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(false),
-                            });
-                        }
-                    }
-                    if e.name().as_ref() == b"Article" {
-                        if let Some(self_id) = attr(&e, b"Self") {
-                            // `MemberItemRefs` is the typical attribute on
-                            // a self-closing Article; nested
-                            // <ArticleMember> children are flattened to
-                            // their `ItemRef` attribute by a future polish.
-                            let members = attr(&e, b"MemberItemRefs")
-                                .map(|s| {
-                                    s.split_whitespace()
-                                        .map(|t| t.to_string())
-                                        .collect::<Vec<_>>()
-                                })
-                                .unwrap_or_default();
-                            out.articles.push(Article {
-                                self_id,
-                                name: attr(&e, b"Name"),
-                                members,
-                            });
-                        }
-                    }
-                    if e.name().as_ref() == b"Hyperlink" {
-                        if let Some(self_id) = attr(&e, b"Self") {
-                            out.hyperlinks.push(Hyperlink {
-                                self_id,
-                                name: attr(&e, b"Name"),
-                                source: attr(&e, b"Source"),
-                                destination: attr(&e, b"DestinationUniqueKey")
-                                    .or_else(|| attr(&e, b"Destination")),
-                            });
-                        }
-                    }
-                    if e.name().as_ref() == b"Bookmark" {
-                        if let Some(self_id) = attr(&e, b"Self") {
-                            out.bookmarks.push(Bookmark {
-                                self_id,
-                                name: attr(&e, b"Name"),
-                                destination: attr(&e, b"Destination"),
-                            });
-                        }
-                    }
-                    if e.name().as_ref() == b"CrossReferenceSource" {
-                        if let Some(self_id) = attr(&e, b"Self") {
-                            out.cross_references.push(CrossReference {
-                                self_id,
-                                name: attr(&e, b"Name"),
-                                format: attr(&e, b"AppliedFormat"),
-                                destination: attr(&e, b"Destination"),
-                            });
-                        }
-                    }
-                    if e.name().as_ref() == b"Topic" {
-                        if let Some(self_id) = attr(&e, b"Self") {
-                            out.index_topics.push(IndexTopic {
-                                self_id,
-                                name: attr(&e, b"Name"),
-                                sort_order: attr(&e, b"SortOrder"),
-                            });
-                        }
-                    }
-                    let src = attr(&e, b"src");
-                    match e.name().as_ref() {
-                        b"idPkg:Spread" => {
-                            if let Some(src) = src {
-                                out.spreads.push(SpreadRef { src });
-                            }
-                        }
-                        b"idPkg:Story" => {
-                            if let Some(src) = src {
-                                out.stories.push(StoryRef { src });
-                            }
-                        }
-                        b"idPkg:MasterSpread" => {
-                            if let Some(src) = src {
-                                out.master_spreads.push(src);
-                            }
-                        }
-                        _ => {}
                     }
                 }
-                Event::Eof => break,
-                _ => {}
+                if e.name().as_ref() == b"HyperlinkTextDestination" {
+                    if let Some(self_id) = attr(&e, b"Self") {
+                        if let Some(text) = attr(&e, b"DestinationText") {
+                            out.hyperlink_destinations.push(HyperlinkDestination {
+                                self_id,
+                                kind: HyperlinkDestinationKind::TextAnchor(text),
+                            });
+                        }
+                    }
+                }
+                if e.name().as_ref() == b"Section" {
+                    if let Some(self_id) = attr(&e, b"Self") {
+                        out.sections.push(Section {
+                            self_id,
+                            page_start: attr(&e, b"PageStart"),
+                            continue_numbering: attr(&e, b"ContinueNumbering")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(false),
+                            start_at: attr(&e, b"PageNumberStart").and_then(|s| s.parse().ok()),
+                            numbering_style: attr(&e, b"PageNumberStyle")
+                                .map(|s| NumberingStyle::from_idml(&s))
+                                .unwrap_or(NumberingStyle::Arabic),
+                            section_prefix: attr(&e, b"SectionPrefix"),
+                            marker: attr(&e, b"Marker"),
+                            include_prefix: attr(&e, b"IncludeSectionPrefix")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(false),
+                        });
+                    }
+                }
+                if e.name().as_ref() == b"Article" {
+                    if let Some(self_id) = attr(&e, b"Self") {
+                        // `MemberItemRefs` is the typical attribute on
+                        // a self-closing Article; nested
+                        // <ArticleMember> children are flattened to
+                        // their `ItemRef` attribute by a future polish.
+                        let members = attr(&e, b"MemberItemRefs")
+                            .map(|s| {
+                                s.split_whitespace()
+                                    .map(|t| t.to_string())
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+                        out.articles.push(Article {
+                            self_id,
+                            name: attr(&e, b"Name"),
+                            members,
+                        });
+                    }
+                }
+                if e.name().as_ref() == b"Hyperlink" {
+                    if let Some(self_id) = attr(&e, b"Self") {
+                        out.hyperlinks.push(Hyperlink {
+                            self_id,
+                            name: attr(&e, b"Name"),
+                            source: attr(&e, b"Source"),
+                            destination: attr(&e, b"DestinationUniqueKey")
+                                .or_else(|| attr(&e, b"Destination")),
+                        });
+                    }
+                }
+                if e.name().as_ref() == b"Bookmark" {
+                    if let Some(self_id) = attr(&e, b"Self") {
+                        out.bookmarks.push(Bookmark {
+                            self_id,
+                            name: attr(&e, b"Name"),
+                            destination: attr(&e, b"Destination"),
+                        });
+                    }
+                }
+                if e.name().as_ref() == b"CrossReferenceSource" {
+                    if let Some(self_id) = attr(&e, b"Self") {
+                        out.cross_references.push(CrossReference {
+                            self_id,
+                            name: attr(&e, b"Name"),
+                            format: attr(&e, b"AppliedFormat"),
+                            destination: attr(&e, b"Destination"),
+                        });
+                    }
+                }
+                if e.name().as_ref() == b"Topic" {
+                    if let Some(self_id) = attr(&e, b"Self") {
+                        out.index_topics.push(IndexTopic {
+                            self_id,
+                            name: attr(&e, b"Name"),
+                            sort_order: attr(&e, b"SortOrder"),
+                        });
+                    }
+                }
+                let src = attr(&e, b"src");
+                match e.name().as_ref() {
+                    b"idPkg:Spread" => {
+                        if let Some(src) = src {
+                            out.spreads.push(SpreadRef { src });
+                        }
+                    }
+                    b"idPkg:Story" => {
+                        if let Some(src) = src {
+                            out.stories.push(StoryRef { src });
+                        }
+                    }
+                    b"idPkg:MasterSpread" => {
+                        if let Some(src) = src {
+                            out.master_spreads.push(src);
+                        }
+                    }
+                    _ => {}
+                }
             }
-            buf.clear();
+            Event::Eof => break,
+            _ => {}
         }
-        Ok(out)
+        buf.clear();
     }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -446,7 +357,7 @@ mod tests {
 
     #[test]
     fn parses_spread_and_story_manifest() {
-        let dm = DesignMap::parse(SAMPLE).unwrap();
+        let dm = parse_designmap(SAMPLE).unwrap();
         assert_eq!(dm.spreads.len(), 2);
         assert_eq!(dm.stories.len(), 1);
         assert_eq!(dm.master_spreads.len(), 1);
@@ -464,7 +375,7 @@ mod tests {
 
     #[test]
     fn q17_layer_printable_attribute_round_trips() {
-        let dm = DesignMap::parse(LAYERS_SAMPLE).unwrap();
+        let dm = parse_designmap(LAYERS_SAMPLE).unwrap();
         assert_eq!(dm.layers.len(), 4);
         let printable: Vec<bool> = dm.layers.iter().map(|l| l.printable).collect();
         assert_eq!(printable, vec![true, false, true, true]);
@@ -474,7 +385,7 @@ mod tests {
 
     #[test]
     fn flat_layers_have_no_parent() {
-        let dm = DesignMap::parse(LAYERS_SAMPLE).unwrap();
+        let dm = parse_designmap(LAYERS_SAMPLE).unwrap();
         assert!(dm.layers.iter().all(|l| l.parent_id.is_none()));
     }
 
@@ -491,7 +402,7 @@ mod tests {
   </Layer>
   <Layer Self="peer" Name="Peer"/>
 </Document>"#;
-        let dm = DesignMap::parse(xml).unwrap();
+        let dm = parse_designmap(xml).unwrap();
         assert_eq!(dm.layers.len(), 4);
         let by_id = |id: &str| dm.layers.iter().find(|l| l.self_id == id).unwrap();
         assert_eq!(by_id("grp").parent_id, None);
@@ -522,7 +433,7 @@ mod tests {
   <Section Self="sec2" PageStart="page3" PageNumberStyle="Arabic"
            SectionPrefix="A-" IncludeSectionPrefix="true" PageNumberStart="1"/>
 </Document>"#;
-        let dm = DesignMap::parse(xml).unwrap();
+        let dm = parse_designmap(xml).unwrap();
         assert_eq!(dm.sections.len(), 2);
         assert_eq!(dm.sections[0].page_start.as_deref(), Some("page1"));
         assert_eq!(dm.sections[0].numbering_style, NumberingStyle::LowerRoman);
@@ -538,14 +449,14 @@ mod tests {
 <Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="18.5">
   <idPkg:Spread src="Spreads/Spread_u1.xml"/>
 </Document>"#;
-        let dm = DesignMap::parse(xml).unwrap();
+        let dm = parse_designmap(xml).unwrap();
         assert_eq!(dm.dom_version.as_deref(), Some("18.5"));
     }
 
     #[test]
     fn dom_version_absent_is_none() {
         // SAMPLE's <Document> carries no DOMVersion attribute.
-        let dm = DesignMap::parse(SAMPLE).unwrap();
+        let dm = parse_designmap(SAMPLE).unwrap();
         assert_eq!(dm.dom_version, None);
     }
 
@@ -560,7 +471,7 @@ mod tests {
   <Hyperlink Self="h1" Name="web" Source="HyperlinkTextSource/src1" Destination="d1"/>
   <Hyperlink Self="h2" Name="jump" Source="HyperlinkTextSource/src2" Destination="d2"/>
 </Document>"#;
-        let dm = DesignMap::parse(xml).unwrap();
+        let dm = parse_designmap(xml).unwrap();
         assert_eq!(dm.document_name.as_deref(), Some("brochure.indd"));
         assert_eq!(dm.hyperlinks.len(), 2);
         assert_eq!(
@@ -594,7 +505,7 @@ mod tests {
   </TextVariable>
   <TextVariable Self="TextVariable/v2" Name="Pages" VariableType="PageCountType"/>
 </Document>"#;
-        let dm = DesignMap::parse(xml).unwrap();
+        let dm = parse_designmap(xml).unwrap();
         assert_eq!(dm.text_variables.len(), 2);
         let custom = &dm.text_variables[0];
         assert_eq!(custom.variable_type.as_deref(), Some("CustomTextType"));
@@ -623,7 +534,7 @@ mod document_preference_tests {
     SlugInsideOrLeftOffset="0"
     SlugRightOrOutsideOffset="0"/>
 </Document>"#;
-        let dm = DesignMap::parse(xml).expect("parse");
+        let dm = parse_designmap(xml).expect("parse");
         let p = dm.document_preference;
         assert!((p.bleed_top - 8.5039).abs() < 1e-3);
         assert!((p.bleed_outside_or_right - 8.5039).abs() < 1e-3);
@@ -634,7 +545,7 @@ mod document_preference_tests {
     #[test]
     fn absent_element_defaults_to_zero() {
         let xml = br#"<?xml version="1.0"?><Document DOMVersion="18.5"/>"#;
-        let dm = DesignMap::parse(xml).expect("parse");
+        let dm = parse_designmap(xml).expect("parse");
         assert_eq!(dm.document_preference, DocumentPreference::default());
     }
 
@@ -651,7 +562,7 @@ mod document_preference_tests {
       SeparatorText="^t" Spacer="9" SpaceBetween="3"/>
   </RootFootnoteStory>
 </Document>"#;
-        let dm = DesignMap::parse(xml).expect("parse");
+        let dm = parse_designmap(xml).expect("parse");
         let fo = &dm.footnote_options;
         assert!(fo.present);
         assert!(!fo.is_default());
@@ -674,13 +585,13 @@ mod document_preference_tests {
         // distinguishes "rule explicitly off" from "no element at all"
         // (which defaults to rule ON, InDesign's behaviour).
         let off = br#"<?xml version="1.0"?><Document><FootnoteOption RuleOn="false"/></Document>"#;
-        let dm = DesignMap::parse(off).expect("parse");
+        let dm = parse_designmap(off).expect("parse");
         assert!(dm.footnote_options.present);
         assert_eq!(dm.footnote_options.rule_on, Some(false));
         assert!(!dm.footnote_options.rule_on_effective());
 
         let absent = br#"<?xml version="1.0"?><Document/>"#;
-        let dm = DesignMap::parse(absent).expect("parse");
+        let dm = parse_designmap(absent).expect("parse");
         assert!(dm.footnote_options.is_default());
         assert_eq!(dm.footnote_options.rule_on, None);
         // Absent ⇒ default to rule ON.
@@ -699,7 +610,7 @@ mod document_preference_tests {
     BaselineColor="Color/Grid"
     HorizontalGridlineDivision="72" VerticalGridlineDivision="72"/>
 </Document>"#;
-        let dm = DesignMap::parse(xml).expect("parse");
+        let dm = parse_designmap(xml).expect("parse");
         let gp = &dm.grid_preference;
         assert!(gp.present);
         assert_eq!(gp.baseline_start, Some(48.0));
@@ -717,7 +628,7 @@ mod document_preference_tests {
     #[test]
     fn grid_preference_absent_is_default() {
         let absent = br#"<?xml version="1.0"?><Document/>"#;
-        let dm = DesignMap::parse(absent).expect("parse");
+        let dm = parse_designmap(absent).expect("parse");
         assert!(!dm.grid_preference.present);
         assert_eq!(dm.grid_preference, GridPreference::default());
         assert_eq!(dm.grid_preference.baseline_division, None);
