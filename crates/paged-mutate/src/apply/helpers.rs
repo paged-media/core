@@ -868,8 +868,7 @@ pub(super) fn find_layer_mut<'a>(
     doc: &'a mut Document,
     self_id: &str,
 ) -> Option<&'a mut paged_parse::Layer> {
-    doc.container
-        .designmap
+    doc.designmap
         .layers
         .iter_mut()
         .find(|l| l.self_id == self_id)

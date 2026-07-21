@@ -203,7 +203,6 @@ pub fn write_paged(
     //    unknown fields + other plugins' metadata survive the rewrite.
     let idml_hash = idml_parts_hash(&idml)?;
     let dom_version = doc
-        .container
         .designmap
         .dom_version
         .clone()

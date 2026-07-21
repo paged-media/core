@@ -32,6 +32,12 @@ fn sha256(bytes: &[u8]) -> String {
     s
 }
 
+/// Parse the structured manifest from a source archive (it no longer lives
+/// on `Container` — N7).
+fn dm(c: &paged_parse::Container) -> paged_parse::DesignMap {
+    paged_parse::parse_designmap(&c.designmap_raw).expect("designmap")
+}
+
 #[test]
 fn geometry_emit_is_byte_deterministic() {
     let a = paged_gen::write_idml(&paged_gen::samples::geometry::build()).unwrap();
@@ -60,7 +66,7 @@ fn strokes_fills_round_trips_through_parser() {
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = paged_parse::Container::open(&bytes).expect("Container::open");
     assert_eq!(
-        container.designmap.spreads.len(),
+        dm(&container).spreads.len(),
         sample.spreads.len(),
         "manifest spread count must match",
     );
@@ -85,8 +91,8 @@ fn text_round_trips_through_parser() {
     let sample = paged_gen::samples::text::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = paged_parse::Container::open(&bytes).expect("Container::open");
-    assert_eq!(container.designmap.spreads.len(), sample.spreads.len());
-    assert_eq!(container.designmap.stories.len(), sample.stories.len());
+    assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
+    assert_eq!(dm(&container).stories.len(), sample.stories.len());
 }
 
 #[test]
@@ -101,8 +107,8 @@ fn text_advanced_round_trips_through_parser() {
     let sample = paged_gen::samples::text_advanced::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = paged_parse::Container::open(&bytes).expect("Container::open");
-    assert_eq!(container.designmap.spreads.len(), sample.spreads.len());
-    assert_eq!(container.designmap.stories.len(), sample.stories.len());
+    assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
+    assert_eq!(dm(&container).stories.len(), sample.stories.len());
 }
 
 #[test]
@@ -117,9 +123,9 @@ fn layers_z_round_trips_through_parser() {
     let sample = paged_gen::samples::layers_z::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = paged_parse::Container::open(&bytes).expect("Container::open");
-    assert_eq!(container.designmap.spreads.len(), sample.spreads.len());
+    assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
     // The two <Layer> definitions parse onto the document.
-    assert_eq!(container.designmap.layers.len(), 2);
+    assert_eq!(dm(&container).layers.len(), 2);
 }
 
 #[test]
@@ -134,8 +140,8 @@ fn effects_round_trips_through_parser() {
     let sample = paged_gen::samples::effects::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = paged_parse::Container::open(&bytes).expect("Container::open");
-    assert_eq!(container.designmap.spreads.len(), sample.spreads.len());
-    assert_eq!(container.designmap.stories.len(), sample.stories.len());
+    assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
+    assert_eq!(dm(&container).stories.len(), sample.stories.len());
 }
 
 #[test]
@@ -157,7 +163,7 @@ fn tables_round_trips_through_parser() {
     let sample = paged_gen::samples::tables::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = paged_parse::Container::open(&bytes).expect("Container::open");
-    assert_eq!(container.designmap.spreads.len(), sample.spreads.len());
+    assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
     // Every body story must parse a Table out of its host paragraph.
     let mut tables_found = 0;
     // W1.13 — the v2 variant carries a JustifyAlign cell with MULTIPLE
@@ -197,7 +203,7 @@ fn gradients_round_trips_through_parser() {
     let sample = paged_gen::samples::gradients::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = paged_parse::Container::open(&bytes).expect("Container::open");
-    assert_eq!(container.designmap.spreads.len(), sample.spreads.len());
+    assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
     // The Graphic.xml must register all five gradient swatches.
     let graphic_xml = container
         .entries
@@ -213,9 +219,9 @@ fn geometry_round_trips_through_parser() {
     let expected = sample.spreads.len();
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = paged_parse::Container::open(&bytes).expect("Container::open");
-    assert_eq!(container.designmap.spreads.len(), expected);
-    assert_eq!(container.designmap.stories.len(), expected);
-    assert_eq!(container.designmap.master_spreads.len(), expected);
+    assert_eq!(dm(&container).spreads.len(), expected);
+    assert_eq!(dm(&container).stories.len(), expected);
+    assert_eq!(dm(&container).master_spreads.len(), expected);
     assert_eq!(
         container.mimetype,
         "application/vnd.adobe.indesign-idml-package",
@@ -246,7 +252,7 @@ fn geometry_groups_round_trips_through_parser() {
     let sample = paged_gen::samples::geometry_groups::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = paged_parse::Container::open(&bytes).expect("Container::open");
-    assert_eq!(container.designmap.spreads.len(), sample.spreads.len());
+    assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
 }
 
 #[test]
@@ -261,8 +267,8 @@ fn transparency_round_trips_through_parser() {
     let sample = paged_gen::samples::transparency::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = paged_parse::Container::open(&bytes).expect("Container::open");
-    assert_eq!(container.designmap.spreads.len(), sample.spreads.len());
-    assert_eq!(container.designmap.stories.len(), sample.stories.len());
+    assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
+    assert_eq!(dm(&container).stories.len(), sample.stories.len());
     // Every page must round-trip its TransparencySetting payload —
     // either a BlendingSetting (Opacity/BlendMode) or a
     // DropShadowSetting must surface on at least one rectangle per
@@ -315,7 +321,7 @@ fn text_wrap_round_trips_through_parser() {
     let sample = paged_gen::samples::text_wrap::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = paged_parse::Container::open(&bytes).expect("Container::open");
-    assert_eq!(container.designmap.spreads.len(), sample.spreads.len());
+    assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
     // Every spread must surface a `<TextWrapPreference>` on at least
     // one rectangle — the obstacle. Stays decoupled from the wrap
     // mode so the test isn't sensitive to which variants ship.
@@ -399,7 +405,7 @@ fn anchored_round_trips_through_parser() {
     let sample = paged_gen::samples::anchored::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = paged_parse::Container::open(&bytes).expect("Container::open");
-    assert_eq!(container.designmap.spreads.len(), sample.spreads.len());
+    assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
     // Every spread's host body story must contain at least one
     // `<AnchoredObjectSetting>` element nested inside a
     // CharacterStyleRange. `paged-parse` flips `is_anchored = true`
@@ -446,16 +452,15 @@ fn markers_round_trips_through_parser() {
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = paged_parse::Container::open(&bytes).expect("Container::open");
     // 2 spreads (body page + link-target page), 1 story.
-    assert_eq!(container.designmap.spreads.len(), 2);
-    assert_eq!(container.designmap.stories.len(), 1);
+    assert_eq!(dm(&container).spreads.len(), 2);
+    assert_eq!(dm(&container).stories.len(), 1);
     // Two text variables (custom + page-count) and two hyperlinks
     // (URL + page) with their destination resources must parse.
-    assert_eq!(container.designmap.text_variables.len(), 2);
-    assert_eq!(container.designmap.hyperlinks.len(), 2);
-    assert_eq!(container.designmap.hyperlink_destinations.len(), 2);
+    assert_eq!(dm(&container).text_variables.len(), 2);
+    assert_eq!(dm(&container).hyperlinks.len(), 2);
+    assert_eq!(dm(&container).hyperlink_destinations.len(), 2);
     // The custom variable carries its literal Contents.
-    assert!(container
-        .designmap
+    assert!(dm(&container)
         .text_variables
         .iter()
         .any(|v| v.variable_type.as_deref() == Some("CustomTextType")
@@ -498,7 +503,7 @@ fn variables_round_trips_through_parser() {
     let sample = paged_gen::samples::variables::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = paged_parse::Container::open(&bytes).expect("Container::open");
-    let dm = &container.designmap;
+    let dm = &dm(&container);
     // Four variables (creation date / chapter / running-header / output
     // date), one section, one xref hyperlink + its text-anchor
     // destination.
@@ -544,7 +549,7 @@ fn images_round_trips_through_parser() {
     let sample = paged_gen::samples::images::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = paged_parse::Container::open(&bytes).expect("Container::open");
-    assert_eq!(container.designmap.spreads.len(), sample.spreads.len());
+    assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
     // Every spread's Rectangle must surface a placed-image link via
     // the parser, and every spread's FrameFittingOption must round-
     // trip with its FittingOnEmptyFrame string. Belt-and-braces:
@@ -652,7 +657,7 @@ fn text_overset_round_trips_through_parser() {
     let sample = paged_gen::samples::text_overset::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = paged_parse::Container::open(&bytes).expect("Container::open");
-    assert_eq!(container.designmap.spreads.len(), 2, "two pages");
+    assert_eq!(dm(&container).spreads.len(), 2, "two pages");
     // The threaded chain on page 2 must surface a `NextTextFrame` link
     // on its head frame (parse-level proof the threading round-trips).
     let mut chains = 0;
@@ -722,7 +727,7 @@ fn text_autosize_round_trips_through_parser() {
     let sample = paged_gen::samples::text_autosize::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = paged_parse::Container::open(&bytes).expect("Container::open");
-    assert_eq!(container.designmap.spreads.len(), 1, "one page");
+    assert_eq!(dm(&container).spreads.len(), 1, "one page");
     let spread_path = container
         .entries
         .keys()
@@ -857,7 +862,7 @@ fn links_broken_round_trips_through_parser() {
     let sample = paged_gen::samples::links_broken::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = paged_parse::Container::open(&bytes).expect("Container::open");
-    assert_eq!(container.designmap.spreads.len(), 1, "single page");
+    assert_eq!(dm(&container).spreads.len(), 1, "single page");
 
     let spread_path = container
         .entries
@@ -939,7 +944,7 @@ fn footnotes_round_trips_through_parser() {
     let sample = paged_gen::samples::footnotes::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = paged_parse::Container::open(&bytes).expect("Container::open");
-    let fo = &container.designmap.footnote_options;
+    let fo = &dm(&container).footnote_options;
     assert!(fo.present, "FootnoteOption must round-trip");
     assert_eq!(fo.rule_on, Some(true));
     assert_eq!(fo.rule_width, Some(140.0));
@@ -1169,7 +1174,7 @@ fn navigation_round_trips_toc_index_bookmarks_and_xref() {
         .any(|m| m.topic_name == navigation::TOPIC_PEAR));
 
     // The `<Topic>` table + two `<Bookmark>` anchors.
-    let dm = &doc.container.designmap;
+    let dm = &doc.designmap;
     assert!(
         dm.index_topics
             .iter()
@@ -1499,7 +1504,7 @@ fn preflight_round_trips_overset_and_missing_font() {
     use paged_gen::samples::preflight::MISSING_FAMILY;
     let bytes = paged_gen::write_idml(&paged_gen::samples::preflight::build()).unwrap();
     let doc = paged_scene::Document::open(&bytes).expect("Document::open");
-    assert_eq!(doc.container.designmap.spreads.len(), 1, "single page");
+    assert_eq!(doc.designmap.spreads.len(), 1, "single page");
 
     // The missing family is referenced by a run's AppliedFont.
     let fonts_referenced: Vec<&str> = doc
@@ -1545,7 +1550,7 @@ fn links_ok_all_images_resolve_with_healthy_ppi() {
     // badge). Parse + build to assert both.
     let bytes = paged_gen::write_idml(&paged_gen::samples::links_ok::build()).unwrap();
     let doc = paged_scene::Document::open(&bytes).expect("Document::open");
-    assert_eq!(doc.container.designmap.spreads.len(), 1, "single page");
+    assert_eq!(doc.designmap.spreads.len(), 1, "single page");
 
     let spread_path = doc
         .container

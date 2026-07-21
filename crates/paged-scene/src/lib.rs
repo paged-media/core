@@ -29,8 +29,9 @@ use std::collections::{BTreeMap, HashMap};
 use serde::{Deserialize, Serialize};
 
 use paged_parse::{
-    parse_graphic, parse_spread, parse_story, parse_stylesheet, Bounds, CharacterRun, Container,
-    Graphic, Paragraph, ParseError, Spread, Story, StoryRef, StyleSheet, TOCStyleDef, TextFrame,
+    parse_designmap, parse_graphic, parse_spread, parse_story, parse_stylesheet, Bounds,
+    CharacterRun, Container, DesignMap, Graphic, Paragraph, ParseError, Spread, Story, StoryRef,
+    StyleSheet, TOCStyleDef, TextFrame,
 };
 
 pub mod anchors;
@@ -52,7 +53,13 @@ pub use value::Value;
 /// `Document` reconstructs from native bytes with no `Container::open`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
+    /// Raw IDML source archive (carry-through only — mimetype + entry blobs).
+    /// The structured manifest lives in `designmap`, not here (N7).
     pub container: Container,
+    /// Structured `designmap.xml` manifest — spread/story order, layers,
+    /// sections, hyperlinks, doc preferences. Parsed from the source archive at
+    /// import; the model's truth (no longer wrapped in the raw `Container`).
+    pub designmap: DesignMap,
     pub palette: Graphic,
     pub spreads: Vec<ParsedSpread>,
     pub stories: Vec<ParsedStory>,
@@ -180,6 +187,9 @@ impl Document {
     /// one layer up — in the canvas load sniff over `paged-store` — because
     /// `paged-scene` cannot depend on the codec.
     pub fn from_container(container: Container) -> Result<Self, OpenError> {
+        // The structured manifest is parsed here (not in `Container::open`) so
+        // the raw source archive carries no model data (N7).
+        let designmap = parse_designmap(&container.designmap_raw)?;
         let palette = match container.entry("Resources/Graphic.xml") {
             Some(raw) => parse_graphic(raw)?,
             None => Graphic::default(),
@@ -194,7 +204,7 @@ impl Document {
         // is identical to a `<Spread>` (same Page / TextFrame /
         // Rectangle children), so we reuse `parse_spread`.
         let mut master_spreads: HashMap<String, ParsedMasterSpread> = HashMap::new();
-        for src in &container.designmap.master_spreads {
+        for src in &designmap.master_spreads {
             let raw = container
                 .entry(src)
                 .ok_or_else(|| OpenError::MissingEntry(src.clone()))?;
@@ -210,8 +220,8 @@ impl Document {
             );
         }
 
-        let mut spreads = Vec::with_capacity(container.designmap.spreads.len());
-        for spread_ref in &container.designmap.spreads {
+        let mut spreads = Vec::with_capacity(designmap.spreads.len());
+        for spread_ref in &designmap.spreads {
             let raw = container
                 .entry(&spread_ref.src)
                 .ok_or_else(|| OpenError::MissingEntry(spread_ref.src.clone()))?;
@@ -222,8 +232,8 @@ impl Document {
             });
         }
 
-        let mut stories = Vec::with_capacity(container.designmap.stories.len());
-        for story_ref in &container.designmap.stories {
+        let mut stories = Vec::with_capacity(designmap.stories.len());
+        for story_ref in &designmap.stories {
             let raw = container
                 .entry(&story_ref.src)
                 .ok_or_else(|| OpenError::MissingEntry(story_ref.src.clone()))?;
@@ -238,6 +248,7 @@ impl Document {
 
         let mut document = Document {
             container,
+            designmap,
             palette,
             spreads,
             stories,
@@ -565,7 +576,7 @@ impl Document {
     /// Manifest-advertised story metadata; a convenience for callers
     /// that need the original src paths without walking `stories`.
     pub fn story_refs(&self) -> &[StoryRef] {
-        &self.container.designmap.stories
+        &self.designmap.stories
     }
 
     /// Stable 256-bit content hash of the editable parts of the

@@ -489,7 +489,7 @@ pub(super) fn is_layer_visible(document: &Document, layer_ref: Option<&str>) -> 
     // Route through the scene helper so the renderer and the canvas
     // hit-tester agree, including the layer-group ancestor walk (a
     // visible child inside a hidden group resolves hidden).
-    paged_scene::layer_render_visible(&document.container.designmap, layer_ref)
+    paged_scene::layer_render_visible(&document.designmap, layer_ref)
 }
 
 pub(super) fn page_for_frame(frame: &paged_parse::Bounds, pages: &[PageGeom]) -> Option<usize> {

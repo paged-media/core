@@ -122,7 +122,7 @@ fn main() -> anyhow::Result<()> {
         None => None,
     };
 
-    let pref = document.container.designmap.document_preference;
+    let pref = document.designmap.document_preference;
     let result = export_pdf(ExportInput {
         doc: &built,
         palette: &document.palette,

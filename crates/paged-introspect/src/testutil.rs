@@ -104,9 +104,9 @@ pub fn document_with_one_textframe(self_id: &str) -> Document {
         container: Container {
             mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
             designmap_raw: Bytes::new(),
-            designmap: DesignMap::default(),
             entries: BTreeMap::new(),
         },
+        designmap: DesignMap::default(),
         palette: Graphic::default(),
         spreads: vec![ParsedSpread {
             src: "Spreads/syn.xml".to_string(),

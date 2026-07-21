@@ -41,7 +41,12 @@ pub const DOCUMENT_PGM_PATH: &str = "paged/core/model/document.pgm";
 /// `None` and the loader falls back to the IDML import — rather than
 /// mis-deserialized. The format is pre-stabilization and churns; this gate is
 /// what keeps a stale `.pgm` from silently corrupting a reload (ADR-022 Q2).
-pub const PGM_FORMAT_VERSION: u32 = 1;
+///
+/// - v1: initial native shape.
+/// - v2 (N7): the structured `designmap` moved off `container` up to a
+///   top-level `Document.designmap` field, and `Container` lost its
+///   `designmap` field — a serde-shape change, so a v1 part is rejected.
+pub const PGM_FORMAT_VERSION: u32 = 2;
 
 /// The on-disk envelope: a version tag around the model. Serialized borrowed
 /// (no clone) and deserialized owned.
