@@ -36,117 +36,75 @@
 //! owns only the `Graphic` container + the XML parsing and re-exports the
 //! types so `paged_parse::graphic::*` keeps resolving.
 
-use std::collections::BTreeMap;
-
 use quick_xml::events::Event;
-use serde::{Deserialize, Serialize};
 
 use crate::util::attr;
 use crate::ParseError;
 
 pub use paged_model::{
     to_linear_rgb, ColorEntry, ColorGroupEntry, ColorModel, ColorSpace, GradientEntry,
-    GradientKind, GradientStopRef, ReservedSwatch, SwatchEntry,
+    GradientKind, GradientStopRef, Graphic, ReservedSwatch, SwatchEntry,
 };
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct Graphic {
-    /// All `<Color>` entries, keyed by `Self` (e.g. "Color/Red").
-    pub colors: BTreeMap<String, ColorEntry>,
-    /// Named `<Swatch>` entries — "None", "Paper", "Black", etc.
-    pub swatches: BTreeMap<String, SwatchEntry>,
-    /// `<Gradient>` swatches (linear / radial), keyed by `Self`
-    /// (e.g. "Gradient/Sky").
-    pub gradients: BTreeMap<String, GradientEntry>,
-    /// SDK Phase 5 (v1 sweep) — `<ColorGroup>` named groupings of
-    /// `Color` self_ids. The Color Groups panel surfaces them as
-    /// a way to organise the palette into themed families
-    /// ("Brand colours", "UI accents"). Empty when the document
-    /// declares no groups (the renderer doesn't branch on them).
-    pub color_groups: BTreeMap<String, ColorGroupEntry>,
-}
+/// Parse `Resources/Graphic.xml` into a [`Graphic`] swatch palette.
+/// (De-inherented from `Graphic::parse` so the type lives in `paged-model`;
+/// the XML parsing stays in the parser — N6.)
+pub fn parse_graphic(xml: &[u8]) -> Result<Graphic, ParseError> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    reader.config_mut().trim_text(true);
 
-impl Graphic {
-    pub fn parse(xml: &[u8]) -> Result<Self, ParseError> {
-        let mut reader = quick_xml::Reader::from_reader(xml);
-        reader.config_mut().trim_text(true);
+    let mut out = Graphic::default();
+    let mut buf = Vec::new();
+    // State for the open <Gradient> element. Stops are children
+    // of the surrounding <Gradient>; we collect them here and
+    // commit once the close tag fires.
+    let mut current_gradient: Option<GradientEntry> = None;
 
-        let mut out = Graphic::default();
-        let mut buf = Vec::new();
-        // State for the open <Gradient> element. Stops are children
-        // of the surrounding <Gradient>; we collect them here and
-        // commit once the close tag fires.
-        let mut current_gradient: Option<GradientEntry> = None;
-
-        loop {
-            match reader.read_event_into(&mut buf)? {
-                Event::Start(e) | Event::Empty(e) => match e.name().as_ref() {
-                    b"Color" => {
-                        if let Some(entry) = parse_color(&e) {
-                            out.colors.insert(entry.self_id.clone(), entry);
-                        }
-                    }
-                    b"Swatch" => {
-                        if let Some(entry) = parse_swatch(&e) {
-                            out.swatches.insert(entry.self_id.clone(), entry);
-                        }
-                    }
-                    b"Gradient" => {
-                        if let Some(entry) = parse_gradient(&e) {
-                            current_gradient = Some(entry);
-                        }
-                    }
-                    b"GradientStop" => {
-                        if let (Some(g), Some(stop)) =
-                            (current_gradient.as_mut(), parse_gradient_stop(&e))
-                        {
-                            g.stops.push(stop);
-                        }
-                    }
-                    b"ColorGroup" => {
-                        if let Some(entry) = parse_color_group(&e) {
-                            out.color_groups.insert(entry.self_id.clone(), entry);
-                        }
-                    }
-                    _ => {}
-                },
-                Event::End(e) => {
-                    if e.name().as_ref() == b"Gradient" {
-                        if let Some(g) = current_gradient.take() {
-                            out.gradients.insert(g.self_id.clone(), g);
-                        }
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Start(e) | Event::Empty(e) => match e.name().as_ref() {
+                b"Color" => {
+                    if let Some(entry) = parse_color(&e) {
+                        out.colors.insert(entry.self_id.clone(), entry);
                     }
                 }
-                Event::Eof => break,
+                b"Swatch" => {
+                    if let Some(entry) = parse_swatch(&e) {
+                        out.swatches.insert(entry.self_id.clone(), entry);
+                    }
+                }
+                b"Gradient" => {
+                    if let Some(entry) = parse_gradient(&e) {
+                        current_gradient = Some(entry);
+                    }
+                }
+                b"GradientStop" => {
+                    if let (Some(g), Some(stop)) =
+                        (current_gradient.as_mut(), parse_gradient_stop(&e))
+                    {
+                        g.stops.push(stop);
+                    }
+                }
+                b"ColorGroup" => {
+                    if let Some(entry) = parse_color_group(&e) {
+                        out.color_groups.insert(entry.self_id.clone(), entry);
+                    }
+                }
                 _ => {}
+            },
+            Event::End(e) => {
+                if e.name().as_ref() == b"Gradient" {
+                    if let Some(g) = current_gradient.take() {
+                        out.gradients.insert(g.self_id.clone(), g);
+                    }
+                }
             }
-            buf.clear();
+            Event::Eof => break,
+            _ => {}
         }
-        Ok(out)
+        buf.clear();
     }
-
-    /// Look up a colour by its `Self` id. Follows a `<Swatch>` indirection
-    /// one level if the id names a Swatch rather than a Color directly.
-    pub fn resolve(&self, id: &str) -> Option<&ColorEntry> {
-        if let Some(c) = self.colors.get(id) {
-            return Some(c);
-        }
-        let swatch = self.swatches.get(id)?;
-        let color_ref = swatch.color_ref.as_deref()?;
-        self.colors.get(color_ref)
-    }
-
-    /// Resolve a swatch's alpha channel (0..=1, 1 = fully opaque).
-    /// Used by the gradient-feather renderer when a `<GradientStop>`
-    /// in IDML spec form (`StopColor="Color/..."`) references a
-    /// `<Color>` swatch whose alpha defines the stop's opacity.
-    /// Returns `None` when the swatch carries no alpha (CMYK / RGB
-    /// without `AlphaPercentage`) — callers should treat that as
-    /// "opaque" and fall back to whatever inline alpha attribute the
-    /// stop carries (e.g. the IDML `Alpha` / `Opacity`).
-    pub fn resolve_alpha(&self, id: &str) -> Option<f32> {
-        self.resolve(id).and_then(|c| c.alpha)
-    }
+    Ok(out)
 }
 
 fn parse_color(e: &quick_xml::events::BytesStart) -> Option<ColorEntry> {
@@ -280,7 +238,7 @@ mod tests {
 
     #[test]
     fn parses_color_entries() {
-        let g = Graphic::parse(SAMPLE).unwrap();
+        let g = parse_graphic(SAMPLE).unwrap();
         assert_eq!(g.colors.len(), 3);
         let red = g.resolve("Color/Red").unwrap();
         assert_eq!(red.name.as_deref(), Some("Red"));
@@ -290,7 +248,7 @@ mod tests {
 
     #[test]
     fn cmyk_pure_red_converts_to_red_rgb() {
-        let g = Graphic::parse(SAMPLE).unwrap();
+        let g = parse_graphic(SAMPLE).unwrap();
         let red = g.resolve("Color/Red").unwrap();
         let rgb = to_linear_rgb(red).unwrap();
         // R ≈ 1, G ≈ 0, B ≈ 0 for C=0 M=100 Y=100 K=0. sRGB→linear
@@ -302,7 +260,7 @@ mod tests {
 
     #[test]
     fn gray_converts_to_achromatic_rgb() {
-        let g = Graphic::parse(SAMPLE).unwrap();
+        let g = parse_graphic(SAMPLE).unwrap();
         let dg = g.resolve("Color/DarkGray").unwrap();
         let rgb = to_linear_rgb(dg).unwrap();
         assert!(rgb[0] > 0.0 && rgb[0] < 1.0);
@@ -312,7 +270,7 @@ mod tests {
 
     #[test]
     fn unknown_color_id_resolves_to_none() {
-        let g = Graphic::parse(SAMPLE).unwrap();
+        let g = parse_graphic(SAMPLE).unwrap();
         assert!(g.resolve("Color/NotThere").is_none());
     }
 
@@ -330,7 +288,7 @@ mod tests {
 
     #[test]
     fn parses_linear_gradient_with_two_stops() {
-        let g = Graphic::parse(GRADIENT_SAMPLE).unwrap();
+        let g = parse_graphic(GRADIENT_SAMPLE).unwrap();
         let grad = g.gradients.get("Gradient/Sky").expect("gradient parsed");
         assert_eq!(grad.kind, GradientKind::Linear);
         assert_eq!(grad.stops.len(), 2);
@@ -352,7 +310,7 @@ mod tests {
     #[test]
     fn resolve_alpha_reads_alpha_percentage() {
         // AlphaPercentage="40" → 0.40.
-        let g = Graphic::parse(ALPHA_SAMPLE).unwrap();
+        let g = parse_graphic(ALPHA_SAMPLE).unwrap();
         let alpha = g.resolve_alpha("Color/Translucent").expect("alpha set");
         assert!((alpha - 0.40).abs() < 1e-4, "got {}", alpha);
     }
@@ -360,7 +318,7 @@ mod tests {
     #[test]
     fn resolve_alpha_accepts_unit_float_form() {
         // Some tooling serialises `Alpha="0.5"` as a unit float.
-        let g = Graphic::parse(ALPHA_SAMPLE).unwrap();
+        let g = parse_graphic(ALPHA_SAMPLE).unwrap();
         let alpha = g.resolve_alpha("Color/HalfAlpha").expect("alpha set");
         assert!((alpha - 0.5).abs() < 1e-4, "got {}", alpha);
     }
@@ -369,13 +327,13 @@ mod tests {
     fn resolve_alpha_returns_none_for_swatch_without_alpha() {
         // Color without an Alpha attribute → None (caller treats as
         // opaque and falls back to inline stop attributes).
-        let g = Graphic::parse(ALPHA_SAMPLE).unwrap();
+        let g = parse_graphic(ALPHA_SAMPLE).unwrap();
         assert!(g.resolve_alpha("Color/Opaque").is_none());
     }
 
     #[test]
     fn resolve_alpha_unknown_id_returns_none() {
-        let g = Graphic::parse(ALPHA_SAMPLE).unwrap();
+        let g = parse_graphic(ALPHA_SAMPLE).unwrap();
         assert!(g.resolve_alpha("Color/NotThere").is_none());
     }
 
@@ -398,7 +356,7 @@ mod tests {
 
     #[test]
     fn parses_spot_color_with_alternate_cmyk() {
-        let g = Graphic::parse(SPOT_SAMPLE).unwrap();
+        let g = parse_graphic(SPOT_SAMPLE).unwrap();
         let spot = g.resolve("Color/Pantone286").unwrap();
         assert_eq!(spot.model, ColorModel::Spot);
         assert_eq!(spot.alternate_space, Some(ColorSpace::Cmyk));
@@ -408,7 +366,7 @@ mod tests {
 
     #[test]
     fn parses_swatch_level_tint_value() {
-        let g = Graphic::parse(SPOT_SAMPLE).unwrap();
+        let g = parse_graphic(SPOT_SAMPLE).unwrap();
         let spot = g.resolve("Color/Pantone286Half").unwrap();
         assert_eq!(spot.tint, Some(50.0));
     }
@@ -416,14 +374,14 @@ mod tests {
     #[test]
     fn effective_cmyk_for_process_returns_value_unchanged() {
         // (M=100) → (M=100). No tint, no spot fallback.
-        let g = Graphic::parse(SPOT_SAMPLE).unwrap();
+        let g = parse_graphic(SPOT_SAMPLE).unwrap();
         let m = g.resolve("Color/ProcessPureM").unwrap();
         assert_eq!(m.effective_cmyk(), Some([0.0, 100.0, 0.0, 0.0]));
     }
 
     #[test]
     fn effective_cmyk_for_spot_uses_alternate() {
-        let g = Graphic::parse(SPOT_SAMPLE).unwrap();
+        let g = parse_graphic(SPOT_SAMPLE).unwrap();
         let spot = g.resolve("Color/Pantone286").unwrap();
         assert_eq!(spot.effective_cmyk(), Some([100.0, 75.0, 0.0, 0.0]));
     }
@@ -432,7 +390,7 @@ mod tests {
     fn effective_cmyk_for_spot_with_tint_scales_each_channel() {
         // The pinned math: spot at 50% tint mixes 50% toward paper
         // white in CMYK, i.e. multiplies each channel by 0.5.
-        let g = Graphic::parse(SPOT_SAMPLE).unwrap();
+        let g = parse_graphic(SPOT_SAMPLE).unwrap();
         let spot = g.resolve("Color/Pantone286Half").unwrap();
         assert_eq!(spot.effective_cmyk(), Some([50.0, 37.5, 0.0, 0.0]));
     }
@@ -443,7 +401,7 @@ mod tests {
         // tint, so the renderer must fall back to the swatch's
         // primary `Space` via to_linear_rgb (which will say None
         // because we don't ship Lab→RGB).
-        let g = Graphic::parse(SPOT_SAMPLE).unwrap();
+        let g = parse_graphic(SPOT_SAMPLE).unwrap();
         let spot = g.resolve("Color/PantonePlain").unwrap();
         assert!(spot.effective_cmyk().is_none());
     }
@@ -453,7 +411,7 @@ mod tests {
         // 50% tinted PANTONE 286 (CMYK alt 100,75,0,0) should render
         // visibly lighter / less saturated than the 100% version.
         // Naive CMYK→linear-RGB suffices for the comparison.
-        let g = Graphic::parse(SPOT_SAMPLE).unwrap();
+        let g = parse_graphic(SPOT_SAMPLE).unwrap();
         let full = to_linear_rgb(g.resolve("Color/Pantone286").unwrap()).unwrap();
         let half = to_linear_rgb(g.resolve("Color/Pantone286Half").unwrap()).unwrap();
         // 100% tint: R = (1-1)(1-0)=0; G = (1-0.75)(1-0)=0.25; B=1.
@@ -474,7 +432,7 @@ mod tests {
            AlternateSpace="CMYK" AlternateColorValue="100 0 0 0" TintValue="-1"/>
   </Graphic>
 </idPkg:Graphic>"#;
-        let g = Graphic::parse(NEG).unwrap();
+        let g = parse_graphic(NEG).unwrap();
         let c = g.resolve("Color/X").unwrap();
         assert!(c.tint.is_none());
         // Effective CMYK is the unscaled alternate.

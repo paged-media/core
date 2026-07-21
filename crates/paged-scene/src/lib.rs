@@ -29,8 +29,8 @@ use std::collections::{BTreeMap, HashMap};
 use serde::{Deserialize, Serialize};
 
 use paged_parse::{
-    Bounds, CharacterRun, Container, Graphic, Paragraph, ParseError, Spread, Story, StoryRef,
-    StyleSheet, TOCStyleDef, TextFrame,
+    parse_graphic, Bounds, CharacterRun, Container, Graphic, Paragraph, ParseError, Spread, Story,
+    StoryRef, StyleSheet, TOCStyleDef, TextFrame,
 };
 
 pub mod anchors;
@@ -181,7 +181,7 @@ impl Document {
     /// `paged-scene` cannot depend on the codec.
     pub fn from_container(container: Container) -> Result<Self, OpenError> {
         let palette = match container.entry("Resources/Graphic.xml") {
-            Some(raw) => Graphic::parse(raw)?,
+            Some(raw) => parse_graphic(raw)?,
             None => Graphic::default(),
         };
         let styles = match container.entry("Resources/Styles.xml") {

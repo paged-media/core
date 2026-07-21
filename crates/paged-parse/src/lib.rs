@@ -41,8 +41,8 @@ pub use designmap::{
     HyperlinkDestinationKind, Layer, NumberingStyle, Section, SpreadRef, StoryRef, TextVariable,
 };
 pub use graphic::{
-    ColorEntry, ColorModel, ColorSpace, GradientEntry, GradientKind, GradientStopRef, Graphic,
-    SwatchEntry,
+    parse_graphic, ColorEntry, ColorModel, ColorSpace, GradientEntry, GradientKind,
+    GradientStopRef, Graphic, SwatchEntry,
 };
 pub use spread::{
     ArrowheadType, AutoSizingReferencePoint, AutoSizingType, BevelEmbossParams, Bounds,
