@@ -35,10 +35,7 @@
 //! geometry knobs). `BasedOn` chains are followed at resolve time;
 //! cycles are bounded by `MAX_BASED_ON_DEPTH`.
 
-use std::collections::BTreeMap;
-
 use quick_xml::events::Event;
-use serde::{Deserialize, Serialize};
 
 use crate::spread::{CornerOption, CornerSpec};
 use crate::story::{Justification, TabStop};
@@ -53,70 +50,7 @@ pub use paged_model::{
     TableStyleDef,
 };
 
-/// Maximum BasedOn chain length. IDML doesn't forbid cycles, so the
-/// resolver short-circuits once it hits this depth — typical real-
-/// world chains are 1–3 hops.
-const MAX_BASED_ON_DEPTH: usize = 16;
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct StyleSheet {
-    pub character_styles: BTreeMap<String, CharacterStyleDef>,
-    pub paragraph_styles: BTreeMap<String, ParagraphStyleDef>,
-    /// `<ObjectStyle>` definitions from `<RootObjectStyleGroup>`.
-    /// Page-item shapes (TextFrame, Rectangle, Oval, GraphicLine,
-    /// Polygon) reference these via `AppliedObjectStyle="..."` to
-    /// inherit fill / stroke / etc. when their own attributes are
-    /// absent. Real-world IDMLs use this almost exclusively for
-    /// rectangle fills.
-    pub object_styles: BTreeMap<String, ObjectStyleDef>,
-    /// `<CellStyle>` definitions from `<RootCellStyleGroup>`. Cells
-    /// reference these via `AppliedCellStyle="..."` to inherit
-    /// fill / VJ / per-edge strokes when their own attributes are
-    /// absent.
-    pub cell_styles: BTreeMap<String, CellStyleDef>,
-    /// `<TableStyle>` definitions. Tables reference one via
-    /// `AppliedTableStyle="..."`; the style nominates a default
-    /// CellStyle per region (header, body, footer, left column,
-    /// right column) plus the table-level border strokes.
-    pub table_styles: BTreeMap<String, TableStyleDef>,
-    /// `<TOCStyle>` definitions from `Resources/Styles.xml`. Each
-    /// carries an ordered list of `<TOCStyleEntry>` children
-    /// declaring which paragraph styles feed the TOC, the format
-    /// style applied to each rendered entry, and the page-number /
-    /// separator settings. Real-world IDMLs commonly serialise a
-    /// single default empty TOCStyle (no entries) alongside any
-    /// user-defined ones.
-    pub toc_styles: BTreeMap<String, TOCStyleDef>,
-    /// Track 4a: custom `<DashedStrokeStyle>` / `<DottedStrokeStyle>` /
-    /// `<StripedStrokeStyle>` definitions from `Resources/Styles.xml`.
-    /// Page items reference these via `StrokeType="StrokeStyle/<id>"`;
-    /// without this table the renderer fell back to `Solid` for every
-    /// user-defined stroke (e.g. business-proposal-template's
-    /// diagonal-stripe cover, which is a dense custom dash).
-    pub stroke_styles: BTreeMap<String, StrokeStyleDef>,
-    /// Phase 5 — `<Condition>` definitions from `Resources/Styles.xml`.
-    /// A `<CharacterStyleRange AppliedConditions="Condition/A Condition/B">`
-    /// is rendered iff every referenced condition has `Visible="true"`
-    /// at the document level. Empty when the IDML declares no
-    /// conditional text.
-    pub conditions: BTreeMap<String, ConditionDef>,
-    /// SDK Phase 5 (v1 sweep) — `<ConditionSet>` named groupings of
-    /// Conditions. A user-defined collection of `Condition` refs
-    /// the document organises into one toggleable set (e.g. "Print
-    /// preview", "Online preview"). Empty when the IDML declares
-    /// no condition sets.
-    pub condition_sets: BTreeMap<String, ConditionSetDef>,
-    /// W1.22 (engine gap 22) — `<NumberingList>` resources. A named
-    /// list definition paragraphs bind to via `AppliedNumberingList`;
-    /// its `continue_across_stories` / `continue_across_documents`
-    /// flags control whether the renderer's numbering counter carries
-    /// forward when the same list spans multiple stories. Empty when
-    /// the IDML declares no numbered lists. Lives in `Resources/
-    /// Styles.xml` alongside `<Condition>` (and inside the optional
-    /// `<RootNumberingListGroup>` wrapper InDesign sometimes emits) —
-    /// mirrors the `conditions` table's home.
-    pub numbering_lists: BTreeMap<String, NumberingListDef>,
-}
+pub use paged_model::StyleSheet;
 
 /// Parse a [`ParagraphRule`] from the `<prefix>*` attrs. `prefix` is either
 /// `"RuleAbove"` or `"RuleBelow"` to match IDML's two attribute families.
@@ -244,469 +178,387 @@ enum CurrentProperty {
     NumberingExpression,
 }
 
-impl StyleSheet {
-    pub fn parse(xml: &[u8]) -> Result<Self, ParseError> {
-        let mut reader = quick_xml::Reader::from_reader(xml);
-        reader.config_mut().trim_text(true);
+pub fn parse_stylesheet(xml: &[u8]) -> Result<StyleSheet, ParseError> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    reader.config_mut().trim_text(true);
 
-        let mut out = StyleSheet::default();
-        let mut buf = Vec::new();
-        // Track the open ParagraphStyle's id so nested <TabStop>
-        // children attach to the right entry.
-        let mut current_paragraph_style: Option<String> = None;
-        // Same idea for <CharacterStyle>, used when we read
-        // <AppliedFont> as an element inside <Properties>.
-        let mut current_character_style: Option<String> = None;
-        let mut current_object_style: Option<String> = None;
-        let mut current_cell_style: Option<String> = None;
-        let mut current_table_style: Option<String> = None;
-        // Track an open `<TOCStyle>` so nested `<TOCStyleEntry>` /
-        // `<Properties>` text events attach to the right entry. TOC
-        // styles aren't part of the cascade-tracking `CurrentStyle`
-        // because they don't share the AppliedFont / BasedOn /
-        // NumberingExpression property elements the others do.
-        let mut current_toc_style: Option<String> = None;
-        // Track an open element-form `<StripedStrokeStyle>` so its
-        // `<Stripe>` children attach to the right definition (W1.2).
-        let mut current_stroke_style: Option<String> = None;
-        let mut current_style: Option<CurrentStyle> = None;
-        let mut pending_property: Option<CurrentProperty> = None;
-        loop {
-            match reader.read_event_into(&mut buf)? {
-                Event::Start(e) => match e.name().as_ref() {
-                    b"CharacterStyle" => {
-                        if let Some(s) = parse_character_style(&e) {
-                            current_character_style = Some(s.self_id.clone());
-                            current_style = Some(CurrentStyle::Character);
-                            out.character_styles.insert(s.self_id.clone(), s);
-                        }
-                    }
-                    b"ParagraphStyle" => {
-                        if let Some(s) = parse_paragraph_style(&e) {
-                            current_paragraph_style = Some(s.self_id.clone());
-                            current_style = Some(CurrentStyle::Paragraph);
-                            out.paragraph_styles.insert(s.self_id.clone(), s);
-                        }
-                    }
-                    b"ObjectStyle" => {
-                        if let Some(s) = parse_object_style(&e) {
-                            current_object_style = Some(s.self_id.clone());
-                            current_style = Some(CurrentStyle::Object);
-                            out.object_styles.insert(s.self_id.clone(), s);
-                        }
-                    }
-                    b"CellStyle" => {
-                        if let Some(s) = parse_cell_style(&e) {
-                            current_cell_style = Some(s.self_id.clone());
-                            current_style = Some(CurrentStyle::Cell);
-                            out.cell_styles.insert(s.self_id.clone(), s);
-                        }
-                    }
-                    b"TableStyle" => {
-                        if let Some(s) = parse_table_style(&e) {
-                            current_table_style = Some(s.self_id.clone());
-                            current_style = Some(CurrentStyle::Table);
-                            out.table_styles.insert(s.self_id.clone(), s);
-                        }
-                    }
-                    b"TOCStyle" => {
-                        if let Some(s) = parse_toc_style(&e) {
-                            current_toc_style = Some(s.self_id.clone());
-                            out.toc_styles.insert(s.self_id.clone(), s);
-                        }
-                    }
-                    b"DashedStrokeStyle"
-                    | b"DottedStrokeStyle"
-                    | b"StripedStrokeStyle"
-                    | b"WavyStrokeStyle" => {
-                        // Real-world IDMLs emit these as self-closing
-                        // (handled in the Empty branch) but the schema
-                        // permits child `<Properties>` and `<Stripe>`
-                        // children; accept either. Remember the open id
-                        // so `<Stripe>` children attach to it (W1.2).
-                        if let Some(def) = parse_stroke_style(&e) {
-                            current_stroke_style = Some(def.self_id.clone());
-                            out.stroke_styles.insert(def.self_id.clone(), def);
-                        }
-                    }
-                    b"Condition" => {
-                        if let Some(def) = parse_condition(&e) {
-                            out.conditions.insert(def.self_id.clone(), def);
-                        }
-                    }
-                    b"ConditionSet" => {
-                        if let Some(def) = parse_condition_set(&e) {
-                            out.condition_sets.insert(def.self_id.clone(), def);
-                        }
-                    }
-                    b"NumberingList" => {
-                        if let Some(def) = parse_numbering_list(&e) {
-                            out.numbering_lists.insert(def.self_id.clone(), def);
-                        }
-                    }
-                    b"TOCStyleEntry" => {
-                        // Element-form `<TOCStyleEntry>...</TOCStyleEntry>`
-                        // appears when InDesign attaches `<Properties>`
-                        // children. The attributes we care about all live
-                        // on the start tag, so reuse the same parser.
-                        if let (Some(id), Some(entry)) =
-                            (current_toc_style.as_deref(), parse_toc_style_entry(&e))
-                        {
-                            if let Some(t) = out.toc_styles.get_mut(id) {
-                                t.entries.push(entry);
-                            }
-                        }
-                    }
-                    b"AppliedFont" if current_style.is_some() => {
-                        pending_property = Some(CurrentProperty::AppliedFont);
-                    }
-                    b"BasedOn" if current_style.is_some() => {
-                        pending_property = Some(CurrentProperty::BasedOn);
-                    }
-                    b"NumberingExpression"
-                        if matches!(current_style, Some(CurrentStyle::Paragraph)) =>
-                    {
-                        pending_property = Some(CurrentProperty::NumberingExpression);
-                    }
-                    _ => {}
-                },
-                Event::Text(t) if pending_property.is_some() => {
-                    let text = t
-                        .xml_content(quick_xml::XmlVersion::Implicit1_0)
-                        .map(|c| c.into_owned())
-                        .unwrap_or_default();
-                    if text.is_empty() {
-                        pending_property = None;
-                    } else {
-                        match (current_style, pending_property) {
-                            (Some(CurrentStyle::Paragraph), Some(prop)) => {
-                                if let Some(id) = current_paragraph_style.as_deref() {
-                                    if let Some(p) = out.paragraph_styles.get_mut(id) {
-                                        match prop {
-                                            CurrentProperty::AppliedFont => {
-                                                if p.font.is_none() {
-                                                    p.font = Some(text);
-                                                }
-                                            }
-                                            CurrentProperty::BasedOn => {
-                                                if p.based_on.is_none() {
-                                                    p.based_on = Some(text);
-                                                }
-                                            }
-                                            CurrentProperty::NumberingExpression => {
-                                                if p.numbering_expression.is_none() {
-                                                    p.numbering_expression = Some(text);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            (Some(CurrentStyle::Character), Some(prop)) => {
-                                if let Some(id) = current_character_style.as_deref() {
-                                    if let Some(c) = out.character_styles.get_mut(id) {
-                                        match prop {
-                                            CurrentProperty::AppliedFont => {
-                                                if c.font.is_none() {
-                                                    c.font = Some(text);
-                                                }
-                                            }
-                                            CurrentProperty::BasedOn => {
-                                                if c.based_on.is_none() {
-                                                    c.based_on = Some(text);
-                                                }
-                                            }
-                                            // NumberingExpression is paragraph-only.
-                                            CurrentProperty::NumberingExpression => {}
-                                        }
-                                    }
-                                }
-                            }
-                            (Some(CurrentStyle::Object), Some(CurrentProperty::BasedOn)) => {
-                                if let Some(id) = current_object_style.as_deref() {
-                                    if let Some(o) = out.object_styles.get_mut(id) {
-                                        if o.based_on.is_none() {
-                                            o.based_on = Some(text);
-                                        }
-                                    }
-                                }
-                            }
-                            (Some(CurrentStyle::Cell), Some(CurrentProperty::BasedOn)) => {
-                                if let Some(id) = current_cell_style.as_deref() {
-                                    if let Some(c) = out.cell_styles.get_mut(id) {
-                                        if c.based_on.is_none() {
-                                            c.based_on = Some(text);
-                                        }
-                                    }
-                                }
-                            }
-                            (Some(CurrentStyle::Table), Some(CurrentProperty::BasedOn)) => {
-                                if let Some(id) = current_table_style.as_deref() {
-                                    if let Some(t) = out.table_styles.get_mut(id) {
-                                        if t.based_on.is_none() {
-                                            t.based_on = Some(text);
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                        pending_property = None;
+    let mut out = StyleSheet::default();
+    let mut buf = Vec::new();
+    // Track the open ParagraphStyle's id so nested <TabStop>
+    // children attach to the right entry.
+    let mut current_paragraph_style: Option<String> = None;
+    // Same idea for <CharacterStyle>, used when we read
+    // <AppliedFont> as an element inside <Properties>.
+    let mut current_character_style: Option<String> = None;
+    let mut current_object_style: Option<String> = None;
+    let mut current_cell_style: Option<String> = None;
+    let mut current_table_style: Option<String> = None;
+    // Track an open `<TOCStyle>` so nested `<TOCStyleEntry>` /
+    // `<Properties>` text events attach to the right entry. TOC
+    // styles aren't part of the cascade-tracking `CurrentStyle`
+    // because they don't share the AppliedFont / BasedOn /
+    // NumberingExpression property elements the others do.
+    let mut current_toc_style: Option<String> = None;
+    // Track an open element-form `<StripedStrokeStyle>` so its
+    // `<Stripe>` children attach to the right definition (W1.2).
+    let mut current_stroke_style: Option<String> = None;
+    let mut current_style: Option<CurrentStyle> = None;
+    let mut pending_property: Option<CurrentProperty> = None;
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Start(e) => match e.name().as_ref() {
+                b"CharacterStyle" => {
+                    if let Some(s) = parse_character_style(&e) {
+                        current_character_style = Some(s.self_id.clone());
+                        current_style = Some(CurrentStyle::Character);
+                        out.character_styles.insert(s.self_id.clone(), s);
                     }
                 }
-                Event::Empty(e) => match e.name().as_ref() {
-                    b"CharacterStyle" => {
-                        if let Some(s) = parse_character_style(&e) {
-                            out.character_styles.insert(s.self_id.clone(), s);
+                b"ParagraphStyle" => {
+                    if let Some(s) = parse_paragraph_style(&e) {
+                        current_paragraph_style = Some(s.self_id.clone());
+                        current_style = Some(CurrentStyle::Paragraph);
+                        out.paragraph_styles.insert(s.self_id.clone(), s);
+                    }
+                }
+                b"ObjectStyle" => {
+                    if let Some(s) = parse_object_style(&e) {
+                        current_object_style = Some(s.self_id.clone());
+                        current_style = Some(CurrentStyle::Object);
+                        out.object_styles.insert(s.self_id.clone(), s);
+                    }
+                }
+                b"CellStyle" => {
+                    if let Some(s) = parse_cell_style(&e) {
+                        current_cell_style = Some(s.self_id.clone());
+                        current_style = Some(CurrentStyle::Cell);
+                        out.cell_styles.insert(s.self_id.clone(), s);
+                    }
+                }
+                b"TableStyle" => {
+                    if let Some(s) = parse_table_style(&e) {
+                        current_table_style = Some(s.self_id.clone());
+                        current_style = Some(CurrentStyle::Table);
+                        out.table_styles.insert(s.self_id.clone(), s);
+                    }
+                }
+                b"TOCStyle" => {
+                    if let Some(s) = parse_toc_style(&e) {
+                        current_toc_style = Some(s.self_id.clone());
+                        out.toc_styles.insert(s.self_id.clone(), s);
+                    }
+                }
+                b"DashedStrokeStyle"
+                | b"DottedStrokeStyle"
+                | b"StripedStrokeStyle"
+                | b"WavyStrokeStyle" => {
+                    // Real-world IDMLs emit these as self-closing
+                    // (handled in the Empty branch) but the schema
+                    // permits child `<Properties>` and `<Stripe>`
+                    // children; accept either. Remember the open id
+                    // so `<Stripe>` children attach to it (W1.2).
+                    if let Some(def) = parse_stroke_style(&e) {
+                        current_stroke_style = Some(def.self_id.clone());
+                        out.stroke_styles.insert(def.self_id.clone(), def);
+                    }
+                }
+                b"Condition" => {
+                    if let Some(def) = parse_condition(&e) {
+                        out.conditions.insert(def.self_id.clone(), def);
+                    }
+                }
+                b"ConditionSet" => {
+                    if let Some(def) = parse_condition_set(&e) {
+                        out.condition_sets.insert(def.self_id.clone(), def);
+                    }
+                }
+                b"NumberingList" => {
+                    if let Some(def) = parse_numbering_list(&e) {
+                        out.numbering_lists.insert(def.self_id.clone(), def);
+                    }
+                }
+                b"TOCStyleEntry" => {
+                    // Element-form `<TOCStyleEntry>...</TOCStyleEntry>`
+                    // appears when InDesign attaches `<Properties>`
+                    // children. The attributes we care about all live
+                    // on the start tag, so reuse the same parser.
+                    if let (Some(id), Some(entry)) =
+                        (current_toc_style.as_deref(), parse_toc_style_entry(&e))
+                    {
+                        if let Some(t) = out.toc_styles.get_mut(id) {
+                            t.entries.push(entry);
                         }
                     }
-                    b"ParagraphStyle" => {
-                        if let Some(s) = parse_paragraph_style(&e) {
-                            out.paragraph_styles.insert(s.self_id.clone(), s);
-                        }
-                    }
-                    // Self-closing forms of the page-item style kinds.
-                    // IDML's default `[None]` entries ship as
-                    // `<ObjectStyle Self="..." Name="..." .../>` with
-                    // no body — without these arms the BTreeMap never
-                    // populates and `documentCollection:objectStyles`
-                    // returns empty even though the entries exist.
-                    b"ObjectStyle" => {
-                        if let Some(s) = parse_object_style(&e) {
-                            out.object_styles.insert(s.self_id.clone(), s);
-                        }
-                    }
-                    b"CellStyle" => {
-                        if let Some(s) = parse_cell_style(&e) {
-                            out.cell_styles.insert(s.self_id.clone(), s);
-                        }
-                    }
-                    b"TableStyle" => {
-                        if let Some(s) = parse_table_style(&e) {
-                            out.table_styles.insert(s.self_id.clone(), s);
-                        }
-                    }
-                    b"TOCStyle" => {
-                        // Self-closing `<TOCStyle ... />` — common for
-                        // the document's default empty TOCStyle that
-                        // carries no entries (real-world IDMLs ship this
-                        // even when the document has no TOC).
-                        if let Some(s) = parse_toc_style(&e) {
-                            out.toc_styles.insert(s.self_id.clone(), s);
-                        }
-                    }
-                    b"TOCStyleEntry" => {
-                        if let (Some(id), Some(entry)) =
-                            (current_toc_style.as_deref(), parse_toc_style_entry(&e))
-                        {
-                            if let Some(t) = out.toc_styles.get_mut(id) {
-                                t.entries.push(entry);
-                            }
-                        }
-                    }
-                    b"TabStop" => {
-                        if let (Some(id), Some(stop)) = (
-                            current_paragraph_style.as_deref(),
-                            parse_tab_stop_styles(&e),
-                        ) {
-                            if let Some(p) = out.paragraph_styles.get_mut(id) {
-                                p.tab_list.push(stop);
-                            }
-                        }
-                    }
-                    b"NestedStyle" => {
-                        if let (Some(id), Some(ns)) =
-                            (current_paragraph_style.as_deref(), parse_nested_style(&e))
-                        {
-                            if let Some(p) = out.paragraph_styles.get_mut(id) {
-                                p.nested_styles.push(ns);
-                            }
-                        }
-                    }
-                    b"DashedStrokeStyle"
-                    | b"DottedStrokeStyle"
-                    | b"StripedStrokeStyle"
-                    | b"WavyStrokeStyle" => {
-                        if let Some(def) = parse_stroke_style(&e) {
-                            out.stroke_styles.insert(def.self_id.clone(), def);
-                        }
-                    }
-                    b"Stripe" => {
-                        // A `<Stripe Left=… Width=…/>` child of an open
-                        // `<StripedStrokeStyle>` (W1.2). Append in source
-                        // order so the renderer's perpendicular offsets
-                        // march top→bottom across the stroke width.
-                        if let (Some(id), Some(stripe)) =
-                            (current_stroke_style.as_deref(), parse_stripe(&e))
-                        {
-                            if let Some(def) = out.stroke_styles.get_mut(id) {
-                                def.stripes.push(stripe);
-                            }
-                        }
-                    }
-                    b"Condition" => {
-                        if let Some(def) = parse_condition(&e) {
-                            out.conditions.insert(def.self_id.clone(), def);
-                        }
-                    }
-                    b"ConditionSet" => {
-                        if let Some(def) = parse_condition_set(&e) {
-                            out.condition_sets.insert(def.self_id.clone(), def);
-                        }
-                    }
-                    b"NumberingList" => {
-                        if let Some(def) = parse_numbering_list(&e) {
-                            out.numbering_lists.insert(def.self_id.clone(), def);
-                        }
-                    }
-                    b"BulletChar" => {
-                        if let (Some(id), Some(cp)) = (
-                            current_paragraph_style.as_deref(),
-                            attr(&e, b"BulletCharacterValue").and_then(|s| s.parse::<u32>().ok()),
-                        ) {
-                            if let Some(p) = out.paragraph_styles.get_mut(id) {
-                                p.bullet_character = Some(cp);
-                            }
-                        }
-                    }
-                    _ => {}
-                },
-                Event::End(e) => match e.name().as_ref() {
-                    b"DashedStrokeStyle"
-                    | b"DottedStrokeStyle"
-                    | b"StripedStrokeStyle"
-                    | b"WavyStrokeStyle" => {
-                        current_stroke_style = None;
-                    }
-                    b"ParagraphStyle" => {
-                        current_paragraph_style = None;
-                        if matches!(current_style, Some(CurrentStyle::Paragraph)) {
-                            current_style = None;
-                        }
-                    }
-                    b"CharacterStyle" => {
-                        current_character_style = None;
-                        if matches!(current_style, Some(CurrentStyle::Character)) {
-                            current_style = None;
-                        }
-                    }
-                    b"ObjectStyle" => {
-                        current_object_style = None;
-                        if matches!(current_style, Some(CurrentStyle::Object)) {
-                            current_style = None;
-                        }
-                    }
-                    b"CellStyle" => {
-                        current_cell_style = None;
-                        if matches!(current_style, Some(CurrentStyle::Cell)) {
-                            current_style = None;
-                        }
-                    }
-                    b"TableStyle" => {
-                        current_table_style = None;
-                        if matches!(current_style, Some(CurrentStyle::Table)) {
-                            current_style = None;
-                        }
-                    }
-                    b"TOCStyle" => {
-                        current_toc_style = None;
-                    }
-                    b"AppliedFont" | b"BasedOn" | b"NumberingExpression" => {
-                        // Pending property is consumed by the next
-                        // Text event; clearing here prevents
-                        // mismatched-tag leaks if the element was
-                        // empty (no text content).
-                        pending_property = None;
-                    }
-                    _ => {}
-                },
-                Event::Eof => break,
+                }
+                b"AppliedFont" if current_style.is_some() => {
+                    pending_property = Some(CurrentProperty::AppliedFont);
+                }
+                b"BasedOn" if current_style.is_some() => {
+                    pending_property = Some(CurrentProperty::BasedOn);
+                }
+                b"NumberingExpression"
+                    if matches!(current_style, Some(CurrentStyle::Paragraph)) =>
+                {
+                    pending_property = Some(CurrentProperty::NumberingExpression);
+                }
                 _ => {}
+            },
+            Event::Text(t) if pending_property.is_some() => {
+                let text = t
+                    .xml_content(quick_xml::XmlVersion::Implicit1_0)
+                    .map(|c| c.into_owned())
+                    .unwrap_or_default();
+                if text.is_empty() {
+                    pending_property = None;
+                } else {
+                    match (current_style, pending_property) {
+                        (Some(CurrentStyle::Paragraph), Some(prop)) => {
+                            if let Some(id) = current_paragraph_style.as_deref() {
+                                if let Some(p) = out.paragraph_styles.get_mut(id) {
+                                    match prop {
+                                        CurrentProperty::AppliedFont => {
+                                            if p.font.is_none() {
+                                                p.font = Some(text);
+                                            }
+                                        }
+                                        CurrentProperty::BasedOn => {
+                                            if p.based_on.is_none() {
+                                                p.based_on = Some(text);
+                                            }
+                                        }
+                                        CurrentProperty::NumberingExpression => {
+                                            if p.numbering_expression.is_none() {
+                                                p.numbering_expression = Some(text);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        (Some(CurrentStyle::Character), Some(prop)) => {
+                            if let Some(id) = current_character_style.as_deref() {
+                                if let Some(c) = out.character_styles.get_mut(id) {
+                                    match prop {
+                                        CurrentProperty::AppliedFont => {
+                                            if c.font.is_none() {
+                                                c.font = Some(text);
+                                            }
+                                        }
+                                        CurrentProperty::BasedOn => {
+                                            if c.based_on.is_none() {
+                                                c.based_on = Some(text);
+                                            }
+                                        }
+                                        // NumberingExpression is paragraph-only.
+                                        CurrentProperty::NumberingExpression => {}
+                                    }
+                                }
+                            }
+                        }
+                        (Some(CurrentStyle::Object), Some(CurrentProperty::BasedOn)) => {
+                            if let Some(id) = current_object_style.as_deref() {
+                                if let Some(o) = out.object_styles.get_mut(id) {
+                                    if o.based_on.is_none() {
+                                        o.based_on = Some(text);
+                                    }
+                                }
+                            }
+                        }
+                        (Some(CurrentStyle::Cell), Some(CurrentProperty::BasedOn)) => {
+                            if let Some(id) = current_cell_style.as_deref() {
+                                if let Some(c) = out.cell_styles.get_mut(id) {
+                                    if c.based_on.is_none() {
+                                        c.based_on = Some(text);
+                                    }
+                                }
+                            }
+                        }
+                        (Some(CurrentStyle::Table), Some(CurrentProperty::BasedOn)) => {
+                            if let Some(id) = current_table_style.as_deref() {
+                                if let Some(t) = out.table_styles.get_mut(id) {
+                                    if t.based_on.is_none() {
+                                        t.based_on = Some(text);
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    pending_property = None;
+                }
             }
-            buf.clear();
+            Event::Empty(e) => match e.name().as_ref() {
+                b"CharacterStyle" => {
+                    if let Some(s) = parse_character_style(&e) {
+                        out.character_styles.insert(s.self_id.clone(), s);
+                    }
+                }
+                b"ParagraphStyle" => {
+                    if let Some(s) = parse_paragraph_style(&e) {
+                        out.paragraph_styles.insert(s.self_id.clone(), s);
+                    }
+                }
+                // Self-closing forms of the page-item style kinds.
+                // IDML's default `[None]` entries ship as
+                // `<ObjectStyle Self="..." Name="..." .../>` with
+                // no body — without these arms the BTreeMap never
+                // populates and `documentCollection:objectStyles`
+                // returns empty even though the entries exist.
+                b"ObjectStyle" => {
+                    if let Some(s) = parse_object_style(&e) {
+                        out.object_styles.insert(s.self_id.clone(), s);
+                    }
+                }
+                b"CellStyle" => {
+                    if let Some(s) = parse_cell_style(&e) {
+                        out.cell_styles.insert(s.self_id.clone(), s);
+                    }
+                }
+                b"TableStyle" => {
+                    if let Some(s) = parse_table_style(&e) {
+                        out.table_styles.insert(s.self_id.clone(), s);
+                    }
+                }
+                b"TOCStyle" => {
+                    // Self-closing `<TOCStyle ... />` — common for
+                    // the document's default empty TOCStyle that
+                    // carries no entries (real-world IDMLs ship this
+                    // even when the document has no TOC).
+                    if let Some(s) = parse_toc_style(&e) {
+                        out.toc_styles.insert(s.self_id.clone(), s);
+                    }
+                }
+                b"TOCStyleEntry" => {
+                    if let (Some(id), Some(entry)) =
+                        (current_toc_style.as_deref(), parse_toc_style_entry(&e))
+                    {
+                        if let Some(t) = out.toc_styles.get_mut(id) {
+                            t.entries.push(entry);
+                        }
+                    }
+                }
+                b"TabStop" => {
+                    if let (Some(id), Some(stop)) = (
+                        current_paragraph_style.as_deref(),
+                        parse_tab_stop_styles(&e),
+                    ) {
+                        if let Some(p) = out.paragraph_styles.get_mut(id) {
+                            p.tab_list.push(stop);
+                        }
+                    }
+                }
+                b"NestedStyle" => {
+                    if let (Some(id), Some(ns)) =
+                        (current_paragraph_style.as_deref(), parse_nested_style(&e))
+                    {
+                        if let Some(p) = out.paragraph_styles.get_mut(id) {
+                            p.nested_styles.push(ns);
+                        }
+                    }
+                }
+                b"DashedStrokeStyle"
+                | b"DottedStrokeStyle"
+                | b"StripedStrokeStyle"
+                | b"WavyStrokeStyle" => {
+                    if let Some(def) = parse_stroke_style(&e) {
+                        out.stroke_styles.insert(def.self_id.clone(), def);
+                    }
+                }
+                b"Stripe" => {
+                    // A `<Stripe Left=… Width=…/>` child of an open
+                    // `<StripedStrokeStyle>` (W1.2). Append in source
+                    // order so the renderer's perpendicular offsets
+                    // march top→bottom across the stroke width.
+                    if let (Some(id), Some(stripe)) =
+                        (current_stroke_style.as_deref(), parse_stripe(&e))
+                    {
+                        if let Some(def) = out.stroke_styles.get_mut(id) {
+                            def.stripes.push(stripe);
+                        }
+                    }
+                }
+                b"Condition" => {
+                    if let Some(def) = parse_condition(&e) {
+                        out.conditions.insert(def.self_id.clone(), def);
+                    }
+                }
+                b"ConditionSet" => {
+                    if let Some(def) = parse_condition_set(&e) {
+                        out.condition_sets.insert(def.self_id.clone(), def);
+                    }
+                }
+                b"NumberingList" => {
+                    if let Some(def) = parse_numbering_list(&e) {
+                        out.numbering_lists.insert(def.self_id.clone(), def);
+                    }
+                }
+                b"BulletChar" => {
+                    if let (Some(id), Some(cp)) = (
+                        current_paragraph_style.as_deref(),
+                        attr(&e, b"BulletCharacterValue").and_then(|s| s.parse::<u32>().ok()),
+                    ) {
+                        if let Some(p) = out.paragraph_styles.get_mut(id) {
+                            p.bullet_character = Some(cp);
+                        }
+                    }
+                }
+                _ => {}
+            },
+            Event::End(e) => match e.name().as_ref() {
+                b"DashedStrokeStyle"
+                | b"DottedStrokeStyle"
+                | b"StripedStrokeStyle"
+                | b"WavyStrokeStyle" => {
+                    current_stroke_style = None;
+                }
+                b"ParagraphStyle" => {
+                    current_paragraph_style = None;
+                    if matches!(current_style, Some(CurrentStyle::Paragraph)) {
+                        current_style = None;
+                    }
+                }
+                b"CharacterStyle" => {
+                    current_character_style = None;
+                    if matches!(current_style, Some(CurrentStyle::Character)) {
+                        current_style = None;
+                    }
+                }
+                b"ObjectStyle" => {
+                    current_object_style = None;
+                    if matches!(current_style, Some(CurrentStyle::Object)) {
+                        current_style = None;
+                    }
+                }
+                b"CellStyle" => {
+                    current_cell_style = None;
+                    if matches!(current_style, Some(CurrentStyle::Cell)) {
+                        current_style = None;
+                    }
+                }
+                b"TableStyle" => {
+                    current_table_style = None;
+                    if matches!(current_style, Some(CurrentStyle::Table)) {
+                        current_style = None;
+                    }
+                }
+                b"TOCStyle" => {
+                    current_toc_style = None;
+                }
+                b"AppliedFont" | b"BasedOn" | b"NumberingExpression" => {
+                    // Pending property is consumed by the next
+                    // Text event; clearing here prevents
+                    // mismatched-tag leaks if the element was
+                    // empty (no text content).
+                    pending_property = None;
+                }
+                _ => {}
+            },
+            Event::Eof => break,
+            _ => {}
         }
-        Ok(out)
+        buf.clear();
     }
-
-    /// Walk a CharacterStyle's `BasedOn` chain, folding each hop's
-    /// unset attributes from its parent. Missing or cyclic chains
-    /// short-circuit at `MAX_BASED_ON_DEPTH`.
-    pub fn resolve_character(&self, id: &str) -> ResolvedCharacter {
-        let mut acc = ResolvedCharacter::default();
-        let mut cursor = Some(id.to_string());
-        for _ in 0..MAX_BASED_ON_DEPTH {
-            let Some(cur_id) = cursor else { break };
-            let Some(s) = self.character_styles.get(&cur_id) else {
-                break;
-            };
-            acc.merge_below(s);
-            cursor = s.based_on.clone();
-        }
-        acc
-    }
-
-    pub fn resolve_paragraph(&self, id: &str) -> ResolvedParagraph {
-        let mut acc = ResolvedParagraph::default();
-        let mut cursor = Some(id.to_string());
-        for _ in 0..MAX_BASED_ON_DEPTH {
-            let Some(cur_id) = cursor else { break };
-            let Some(s) = self.paragraph_styles.get(&cur_id) else {
-                break;
-            };
-            acc.merge_below(s);
-            cursor = s.based_on.clone();
-        }
-        acc
-    }
-
-    /// Walk an ObjectStyle's `BasedOn` chain. Same depth-bounded
-    /// pattern as `resolve_paragraph` / `resolve_character`.
-    pub fn resolve_object(&self, id: &str) -> ResolvedObject {
-        let mut acc = ResolvedObject::default();
-        let mut cursor = Some(id.to_string());
-        for _ in 0..MAX_BASED_ON_DEPTH {
-            let Some(cur_id) = cursor else { break };
-            let Some(s) = self.object_styles.get(&cur_id) else {
-                break;
-            };
-            acc.merge_below(s);
-            cursor = s.based_on.clone();
-        }
-        acc
-    }
-
-    /// Walk a CellStyle's BasedOn chain. Cell strokes / fills /
-    /// vertical justification cascade through it.
-    pub fn resolve_cell(&self, id: &str) -> ResolvedCell {
-        let mut acc = ResolvedCell::default();
-        let mut cursor = Some(id.to_string());
-        for _ in 0..MAX_BASED_ON_DEPTH {
-            let Some(cur_id) = cursor else { break };
-            let Some(s) = self.cell_styles.get(&cur_id) else {
-                break;
-            };
-            acc.merge_below(s);
-            cursor = s.based_on.clone();
-        }
-        acc
-    }
-
-    /// Walk a TableStyle's BasedOn chain. Resolves region →
-    /// CellStyle assignments + table border strokes + alternating
-    /// row fills.
-    pub fn resolve_table(&self, id: &str) -> ResolvedTable {
-        let mut acc = ResolvedTable::default();
-        let mut cursor = Some(id.to_string());
-        for _ in 0..MAX_BASED_ON_DEPTH {
-            let Some(cur_id) = cursor else { break };
-            let Some(s) = self.table_styles.get(&cur_id) else {
-                break;
-            };
-            acc.merge_below(s);
-            cursor = s.based_on.clone();
-        }
-        acc
-    }
+    Ok(out)
 }
 
 fn parse_character_style(e: &quick_xml::events::BytesStart) -> Option<CharacterStyleDef> {
@@ -1138,7 +990,7 @@ mod tests {
 
     #[test]
     fn parses_styles_table() {
-        let s = StyleSheet::parse(SAMPLE).unwrap();
+        let s = parse_stylesheet(SAMPLE).unwrap();
         assert_eq!(s.character_styles.len(), 2);
         assert_eq!(s.paragraph_styles.len(), 2);
         let bold = s.character_styles.get("CharacterStyle/Bold").unwrap();
@@ -1148,7 +1000,7 @@ mod tests {
 
     #[test]
     fn resolve_character_walks_based_on_chain() {
-        let s = StyleSheet::parse(SAMPLE).unwrap();
+        let s = parse_stylesheet(SAMPLE).unwrap();
         let r = s.resolve_character("CharacterStyle/Bold");
         // FontStyle from Bold itself; AppliedFont + PointSize +
         // FillColor inherited from Base.
@@ -1160,7 +1012,7 @@ mod tests {
 
     #[test]
     fn resolve_paragraph_walks_based_on_chain() {
-        let s = StyleSheet::parse(SAMPLE).unwrap();
+        let s = parse_stylesheet(SAMPLE).unwrap();
         let r = s.resolve_paragraph("ParagraphStyle/Heading");
         assert_eq!(r.point_size, Some(22.0)); // override
         assert_eq!(r.font.as_deref(), Some("Body Font")); // inherited
@@ -1180,7 +1032,7 @@ mod tests {
                             BasedOn="ParagraphStyle/Body"/>
           </RootParagraphStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         // Direct value parses.
         let body = s.resolve_paragraph("ParagraphStyle/Body");
         assert_eq!(body.hyphenation_zone, Some(36.0));
@@ -1207,7 +1059,7 @@ mod tests {
                             ParagraphShadingClipToFrame="false"/>
           </RootParagraphStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let p = s.paragraph_styles.get("ParagraphStyle/Banner").unwrap();
         let sh = &p.shading;
         assert_eq!(sh.on, Some(true));
@@ -1236,7 +1088,7 @@ mod tests {
                             ParagraphShadingTint="20"/>
           </RootParagraphStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let r = s.resolve_paragraph("ParagraphStyle/Child");
         // tint overridden, color + on inherited.
         assert_eq!(r.shading.on, Some(true));
@@ -1261,7 +1113,7 @@ mod tests {
                             ParagraphBorderWidth="ColumnWidth"/>
           </RootParagraphStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let p = s.paragraph_styles.get("ParagraphStyle/Boxed").unwrap();
         let b = &p.border;
         assert_eq!(b.on, Some(true));
@@ -1289,7 +1141,7 @@ mod tests {
                             ParagraphBorderWeight="1"/>
           </RootParagraphStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let r = s.resolve_paragraph("ParagraphStyle/Child");
         // weight overridden, color + on inherited.
         assert_eq!(r.border.on, Some(true));
@@ -1314,7 +1166,7 @@ mod tests {
                             ParagraphBorderBottomLeftCornerRadius="9"/>
           </RootParagraphStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let p = s.paragraph_styles.get("ParagraphStyle/Boxed").unwrap();
         let c = &p.border.corners;
         assert_eq!(c[0].radius, Some(6.0));
@@ -1342,7 +1194,7 @@ mod tests {
                             ParagraphBorderTopRightCornerRadius="8"/>
           </RootParagraphStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let r = s.resolve_paragraph("ParagraphStyle/Child");
         // top-left inherited fully; top-right radius overridden but
         // option still inherited from parent.
@@ -1372,7 +1224,7 @@ mod tests {
                             MaximumGlyphScaling="105"/>
           </RootParagraphStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let p = s.paragraph_styles.get("ParagraphStyle/Tight").unwrap();
         assert_eq!(p.minimum_letter_spacing, Some(-5.0));
         assert_eq!(p.desired_letter_spacing, Some(0.0));
@@ -1397,7 +1249,7 @@ mod tests {
                             MaximumLetterSpacing="15"/>
           </RootParagraphStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let r = s.resolve_paragraph("ParagraphStyle/Child");
         assert_eq!(r.minimum_letter_spacing, Some(-3.0)); // inherited
         assert_eq!(r.maximum_letter_spacing, Some(15.0)); // overridden
@@ -1419,7 +1271,7 @@ mod tests {
             </ParagraphStyle>
           </RootParagraphStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let p = s.paragraph_styles.get("ParagraphStyle/Bulleted").unwrap();
         assert_eq!(p.bullets_list_type.as_deref(), Some("BulletList"));
         assert_eq!(p.bullet_character, Some(8226)); // U+2022 BULLET
@@ -1442,7 +1294,7 @@ mod tests {
                             BulletsAndNumberingDigitsCharacterStyle="CharacterStyle/BlueDigit"/>
           </RootParagraphStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let b = s.paragraph_styles.get("ParagraphStyle/Bulleted").unwrap();
         assert_eq!(
             b.bullets_character_style.as_deref(),
@@ -1473,7 +1325,7 @@ mod tests {
                             BasedOn="ParagraphStyle/Base"/>
           </RootParagraphStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let r = s.resolve_paragraph("ParagraphStyle/Child");
         assert_eq!(
             r.bullets_character_style.as_deref(),
@@ -1487,7 +1339,7 @@ mod tests {
 
     #[test]
     fn resolve_unknown_id_returns_default() {
-        let s = StyleSheet::parse(SAMPLE).unwrap();
+        let s = parse_stylesheet(SAMPLE).unwrap();
         let r = s.resolve_character("CharacterStyle/Missing");
         assert!(r.font.is_none());
         assert!(r.point_size.is_none());
@@ -1503,7 +1355,7 @@ mod tests {
             <CharacterStyle Self="CharacterStyle/B" BasedOn="CharacterStyle/A" FontStyle="Bold"/>
           </RootCharacterStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let r = s.resolve_character("CharacterStyle/A");
         // Both were folded in once; the depth limiter prevents looping.
         assert_eq!(r.point_size, Some(10.0));
@@ -1524,7 +1376,7 @@ mod tests {
                             NumberingContinue="false"/>
           </RootParagraphStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let p = s.paragraph_styles.get("ParagraphStyle/Numbered").unwrap();
         assert_eq!(p.numbering_expression.as_deref(), Some("Step ^# of 5^t"));
         assert_eq!(p.numbering_start_at, Some(5));
@@ -1548,7 +1400,7 @@ mod tests {
             </ParagraphStyle>
           </RootParagraphStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let p = s.paragraph_styles.get("ParagraphStyle/Numbered").unwrap();
         assert_eq!(p.numbering_expression.as_deref(), Some("^#)^t"));
     }
@@ -1570,7 +1422,7 @@ mod tests {
                             NumberingContinue="true"/>
           </RootParagraphStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let r = s.resolve_paragraph("ParagraphStyle/Child");
         assert_eq!(r.numbering_expression.as_deref(), Some("^#.^t"));
         assert_eq!(r.numbering_start_at, Some(3));
@@ -1607,7 +1459,7 @@ mod tests {
             </CharacterStyle>
           </RootCharacterStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let p = s.paragraph_styles.get("ParagraphStyle/Body").unwrap();
         assert_eq!(p.font.as_deref(), Some("Open Sans"));
         assert_eq!(p.based_on.as_deref(), Some("$ID/[No paragraph style]"));
@@ -1655,7 +1507,7 @@ mod tests {
                            Separator=" -- "/>
           </TOCStyle>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let toc = s.toc_styles.get("TOCStyle/Main").unwrap();
         assert_eq!(toc.title.as_deref(), Some("Contents"));
         assert_eq!(toc.title_style.as_deref(), Some("ParagraphStyle/TocTitle"));
@@ -1692,7 +1544,7 @@ mod tests {
                     IncludeHidden="false"
                     IncludeBookDocuments="false"/>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let toc = s
             .toc_styles
             .get("TOCStyle/$ID/DefaultTOCStyleName")
@@ -1715,7 +1567,7 @@ mod tests {
                             MojikumiSet="MojikumiSet/$ID/OldSet"/>
           </RootParagraphStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let p = s.paragraph_styles.get("ParagraphStyle/Japanese").unwrap();
         assert_eq!(
             p.kinsoku_set.as_deref(),
@@ -1742,7 +1594,7 @@ mod tests {
                             KentenFontSize="50"/>
           </RootCharacterStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let c = s.character_styles.get("CharacterStyle/RubyBase").unwrap();
         assert_eq!(c.ruby_flag, Some(true));
         assert_eq!(c.ruby_type.as_deref(), Some("GroupRuby"));
@@ -1767,7 +1619,7 @@ mod tests {
                             KinsokuType="PushOut"/>
           </RootParagraphStyleGroup>
         </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let r = s.resolve_paragraph("ParagraphStyle/JpChild");
         // Local override wins for KinsokuType.
         assert_eq!(r.kinsoku_type.as_deref(), Some("PushOut"));
@@ -1795,7 +1647,7 @@ mod tests {
             <DottedStrokeStyle Self="StrokeStyle/u164" Name="Tight"
                                GapColor="Swatch/None" GapTint="100"/>
           </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let dash = s.stroke_styles.get("StrokeStyle/u163").unwrap();
         assert_eq!(dash.kind, StrokeStyleKind::Dashed);
         assert_eq!(dash.name.as_deref(), Some("Diag"));
@@ -1827,7 +1679,7 @@ mod tests {
                           SkipLastAlternatingFillColumns="1"/>
             </RootTableStyleGroup>
           </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let t = s.table_styles.get("TableStyle/Alt").unwrap();
         assert_eq!(t.alternating_fills.as_deref(), Some("AlternatingRows"));
         // Row fields.
@@ -1865,7 +1717,7 @@ mod tests {
                           StartRowFillColor="Color/Magenta"/>
             </RootTableStyleGroup>
           </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let r = s.resolve_table("TableStyle/Child");
         // Override from child.
         assert_eq!(r.start_row_fill_color.as_deref(), Some("Color/Magenta"));
@@ -1884,7 +1736,7 @@ mod tests {
                                GapColor="Color/Cyan" GapTint="60"
                                Pattern="6 4"/>
           </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let dash = s.stroke_styles.get("StrokeStyle/u165").unwrap();
         assert_eq!(dash.gap_color.as_deref(), Some("Color/Cyan"));
         assert_eq!(dash.gap_tint, Some(60.0));
@@ -1901,7 +1753,7 @@ mod tests {
               <Stripe Left="0.8" Width="0.2"/>
             </StripedStrokeStyle>
           </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let striped = s.stroke_styles.get("StrokeStyle/u200").unwrap();
         assert_eq!(striped.kind, StrokeStyleKind::Striped);
         assert_eq!(striped.name.as_deref(), Some("ThickThin"));
@@ -1929,7 +1781,7 @@ mod tests {
             <WavyStrokeStyle Self="StrokeStyle/u201" Name="Wave"
                              Width="0.5" Wavelength="1.5"/>
           </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let wavy = s.stroke_styles.get("StrokeStyle/u201").unwrap();
         assert_eq!(wavy.kind, StrokeStyleKind::Wavy);
         assert_eq!(wavy.wave_width, Some(0.5));
@@ -1953,7 +1805,7 @@ mod tests {
                  Name="Local"
                  ContinueNumbersAcrossStories="false"/>
 </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         assert_eq!(s.numbering_lists.len(), 2);
         let steps = s.numbering_lists.get("NumberingList/Steps").unwrap();
         assert_eq!(steps.name.as_deref(), Some("Steps"));
@@ -1978,7 +1830,7 @@ mod tests {
     <ParagraphStyle Self="ParagraphStyle/Body" Name="Body"/>
   </RootParagraphStyleGroup>
 </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let step = s.paragraph_styles.get("ParagraphStyle/Step").unwrap();
         assert_eq!(
             step.applied_numbering_list.as_deref(),
@@ -2005,7 +1857,7 @@ mod tests {
                     BasedOn="ParagraphStyle/Base"/>
   </RootParagraphStyleGroup>
 </idPkg:Styles>"#;
-        let s = StyleSheet::parse(xml).unwrap();
+        let s = parse_stylesheet(xml).unwrap();
         let r = s.resolve_paragraph("ParagraphStyle/Child");
         assert_eq!(
             r.applied_numbering_list.as_deref(),
