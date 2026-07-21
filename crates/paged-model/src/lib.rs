@@ -4793,3 +4793,96 @@ pub struct Story {
     /// Stage 3.
     pub story_direction: Option<StoryDirection>,
 }
+
+// ---------------------------------------------------------------------------
+// DesignMap — the parsed `designmap.xml` manifest (spreads/stories order, layers,
+// sections, hyperlinks, doc preferences). The XML parsing (`parse_designmap`)
+// stays in the parser; the value struct lives in the model (N6).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct DesignMap {
+    pub spreads: Vec<SpreadRef>,
+    pub stories: Vec<StoryRef>,
+    pub master_spreads: Vec<String>,
+    /// `DOMVersion` attribute on the root `<Document>` element (e.g.
+    /// `"18.5"` for InDesign 2023). Surfaced read-only so tooling can
+    /// report the authoring DOM; the parser is version-agnostic and
+    /// does **not** branch on it yet (no version negotiation).
+    pub dom_version: Option<String>,
+    /// `Name` attribute on the root `<Document>` element — the source
+    /// `.indd` file name (e.g. `"generated.indd"`). W1.4: feeds the
+    /// `FileNameVariable` text variable. `None` when absent.
+    pub document_name: Option<String>,
+    /// Document-level color management settings, extracted from the
+    /// root `<Document>` element. Drives ICC transform construction —
+    /// the renderer matches `color_settings.cmyk_profile` against its
+    /// bundled profile set and falls back to a naive CMYK→sRGB
+    /// approximation when the named profile isn't shipped.
+    pub color_settings: ColorSettings,
+    /// `<DocumentPreference>` bleed/slug offsets (points). Unread by
+    /// the renderer (pages rasterise at trim); the PDF exporter uses
+    /// them for BleedBox/MediaBox geometry. Zeros when the element
+    /// or attribute is absent.
+    pub document_preference: DocumentPreference,
+    /// W2.5 — document-level `<GridPreference>` baseline-grid settings.
+    /// Default (all-`None`, `present=false`) when the element is absent.
+    /// The renderer does NOT draw the baseline grid (it's a non-print
+    /// authoring overlay, drawn editor-side); these values are surfaced
+    /// read-only so the editor's baseline-grid panel + the overlay show
+    /// the document's real numbers. Snapping text to this grid is a
+    /// layout-engine task deferred separately. See [`GridPreference`].
+    pub grid_preference: GridPreference,
+    /// W1.8 — document-level `<FootnoteOption>` settings (separator
+    /// rule + footnote spacing). Default (all-`None`, `present=false`)
+    /// when the element is absent; the renderer then applies InDesign's
+    /// built-in defaults. See [`FootnoteOptions`].
+    pub footnote_options: FootnoteOptions,
+    /// Document layers, in serialization order (which mirrors the
+    /// stacking order — first layer = bottom of the z-stack). Each
+    /// page item references its layer via `ItemLayer="<self_id>"`.
+    /// The renderer skips items whose layer is hidden or non-printable.
+    pub layers: Vec<Layer>,
+    /// `<TextVariable>` definitions. Each carries a `VariableType`
+    /// (`FileNameVariable`, `RunningHeaderVariable`, `ChapterNumberType`,
+    /// `XrefPageNumberType`, etc.) and is referenced from stories via
+    /// `<TextVariableInstance AssociatedTextVariable="TextVariable/<id>"
+    /// ResultText="..."/>`. The renderer treats `ResultText` as the
+    /// authoritative value at the moment InDesign exported the IDML —
+    /// "live" recomputation per page is a future task.
+    pub text_variables: Vec<TextVariable>,
+    /// SDK Phase 5 (v1 sweep) — `<Article>` definitions. Each is a
+    /// named ordered list of `ArticleMember` refs that group
+    /// related stories for accessibility / linked-text reading
+    /// order. The renderer doesn't branch on them today; the
+    /// editor surfaces them via the Articles panel.
+    pub articles: Vec<Article>,
+    /// SDK Phase 5 (v1 sweep) — `<Hyperlink>` definitions. Each
+    /// has a name + a source (HyperlinkTextSource ref) + a
+    /// destination (URL, page, or anchor).
+    pub hyperlinks: Vec<Hyperlink>,
+    /// W1.4 — `<HyperlinkURLDestination>` / `<HyperlinkPageDestination>`
+    /// / `<HyperlinkTextDestination>` resources, keyed by `Self`. A
+    /// `<Hyperlink Destination="...">` resolves through this table to a
+    /// concrete URL or page target.
+    pub hyperlink_destinations: Vec<HyperlinkDestination>,
+    /// SDK Phase 5 (v1 sweep) — `<Bookmark>` definitions. Each
+    /// is a named anchor pointing at a destination (typically a
+    /// hyperlink-page-destination or text-anchor).
+    pub bookmarks: Vec<Bookmark>,
+    /// SDK Phase 5 (v1 sweep) — `<CrossReferenceSource>` markers.
+    /// Each names a CrossReferenceFormat + the destination.
+    pub cross_references: Vec<CrossReference>,
+    /// SDK Phase 5 (v1 sweep) — `<Topic>` definitions for the
+    /// document's index. Flat list (the IDML schema's nested
+    /// topics are flattened to one entry per Self for v1).
+    pub index_topics: Vec<IndexTopic>,
+    /// `<Section>` definitions, in document order. Each anchors at a
+    /// `<Page>` (via `PageStart`) and carries the numbering style /
+    /// start value / prefix InDesign uses to label that section's
+    /// pages. The renderer consults these to compute a page label when
+    /// the `<Page>` itself carries no baked `Name` (and they feed the
+    /// auto-page-number marker reflow). When `Name` is present it stays
+    /// authoritative.
+    pub sections: Vec<Section>,
+}

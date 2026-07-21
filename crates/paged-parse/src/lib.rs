@@ -37,7 +37,7 @@ pub mod styles;
 mod util;
 
 pub use designmap::{
-    ColorSettings, DesignMap, DocumentPreference, Hyperlink, HyperlinkDestination,
+    parse_designmap, ColorSettings, DesignMap, DocumentPreference, Hyperlink, HyperlinkDestination,
     HyperlinkDestinationKind, Layer, NumberingStyle, Section, SpreadRef, StoryRef, TextVariable,
 };
 pub use graphic::{
@@ -135,7 +135,7 @@ impl Container {
             .get("designmap.xml")
             .cloned()
             .ok_or(ParseError::MissingEntry("designmap.xml"))?;
-        let designmap = DesignMap::parse(&designmap_raw)?;
+        let designmap = parse_designmap(&designmap_raw)?;
 
         Ok(Self {
             mimetype: mimetype_str,
