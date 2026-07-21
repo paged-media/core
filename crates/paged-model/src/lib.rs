@@ -4511,3 +4511,156 @@ impl Graphic {
         self.resolve(id).and_then(|c| c.alpha)
     }
 }
+
+// ---------------------------------------------------------------------------
+// StyleSheet — the parsed style tables + the BasedOn-cascade resolvers (moved
+// out of `paged-parse::styles`; `parse_stylesheet` stays in the parser). The
+// resolve_* methods are pure cascade resolution, so they live with the model (N6).
+// ---------------------------------------------------------------------------
+
+/// Maximum BasedOn chain length. IDML doesn't forbid cycles, so the
+/// resolver short-circuits once it hits this depth — typical real-
+/// world chains are 1–3 hops.
+const MAX_BASED_ON_DEPTH: usize = 16;
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct StyleSheet {
+    pub character_styles: BTreeMap<String, CharacterStyleDef>,
+    pub paragraph_styles: BTreeMap<String, ParagraphStyleDef>,
+    /// `<ObjectStyle>` definitions from `<RootObjectStyleGroup>`.
+    /// Page-item shapes (TextFrame, Rectangle, Oval, GraphicLine,
+    /// Polygon) reference these via `AppliedObjectStyle="..."` to
+    /// inherit fill / stroke / etc. when their own attributes are
+    /// absent. Real-world IDMLs use this almost exclusively for
+    /// rectangle fills.
+    pub object_styles: BTreeMap<String, ObjectStyleDef>,
+    /// `<CellStyle>` definitions from `<RootCellStyleGroup>`. Cells
+    /// reference these via `AppliedCellStyle="..."` to inherit
+    /// fill / VJ / per-edge strokes when their own attributes are
+    /// absent.
+    pub cell_styles: BTreeMap<String, CellStyleDef>,
+    /// `<TableStyle>` definitions. Tables reference one via
+    /// `AppliedTableStyle="..."`; the style nominates a default
+    /// CellStyle per region (header, body, footer, left column,
+    /// right column) plus the table-level border strokes.
+    pub table_styles: BTreeMap<String, TableStyleDef>,
+    /// `<TOCStyle>` definitions from `Resources/Styles.xml`. Each
+    /// carries an ordered list of `<TOCStyleEntry>` children
+    /// declaring which paragraph styles feed the TOC, the format
+    /// style applied to each rendered entry, and the page-number /
+    /// separator settings. Real-world IDMLs commonly serialise a
+    /// single default empty TOCStyle (no entries) alongside any
+    /// user-defined ones.
+    pub toc_styles: BTreeMap<String, TOCStyleDef>,
+    /// Track 4a: custom `<DashedStrokeStyle>` / `<DottedStrokeStyle>` /
+    /// `<StripedStrokeStyle>` definitions from `Resources/Styles.xml`.
+    /// Page items reference these via `StrokeType="StrokeStyle/<id>"`;
+    /// without this table the renderer fell back to `Solid` for every
+    /// user-defined stroke (e.g. business-proposal-template's
+    /// diagonal-stripe cover, which is a dense custom dash).
+    pub stroke_styles: BTreeMap<String, StrokeStyleDef>,
+    /// Phase 5 — `<Condition>` definitions from `Resources/Styles.xml`.
+    /// A `<CharacterStyleRange AppliedConditions="Condition/A Condition/B">`
+    /// is rendered iff every referenced condition has `Visible="true"`
+    /// at the document level. Empty when the IDML declares no
+    /// conditional text.
+    pub conditions: BTreeMap<String, ConditionDef>,
+    /// SDK Phase 5 (v1 sweep) — `<ConditionSet>` named groupings of
+    /// Conditions. A user-defined collection of `Condition` refs
+    /// the document organises into one toggleable set (e.g. "Print
+    /// preview", "Online preview"). Empty when the IDML declares
+    /// no condition sets.
+    pub condition_sets: BTreeMap<String, ConditionSetDef>,
+    /// W1.22 (engine gap 22) — `<NumberingList>` resources. A named
+    /// list definition paragraphs bind to via `AppliedNumberingList`;
+    /// its `continue_across_stories` / `continue_across_documents`
+    /// flags control whether the renderer's numbering counter carries
+    /// forward when the same list spans multiple stories. Empty when
+    /// the IDML declares no numbered lists. Lives in `Resources/
+    /// Styles.xml` alongside `<Condition>` (and inside the optional
+    /// `<RootNumberingListGroup>` wrapper InDesign sometimes emits) —
+    /// mirrors the `conditions` table's home.
+    pub numbering_lists: BTreeMap<String, NumberingListDef>,
+}
+
+impl StyleSheet {
+    /// Walk a CharacterStyle's `BasedOn` chain, folding each hop's
+    /// unset attributes from its parent. Missing or cyclic chains
+    /// short-circuit at `MAX_BASED_ON_DEPTH`.
+    pub fn resolve_character(&self, id: &str) -> ResolvedCharacter {
+        let mut acc = ResolvedCharacter::default();
+        let mut cursor = Some(id.to_string());
+        for _ in 0..MAX_BASED_ON_DEPTH {
+            let Some(cur_id) = cursor else { break };
+            let Some(s) = self.character_styles.get(&cur_id) else {
+                break;
+            };
+            acc.merge_below(s);
+            cursor = s.based_on.clone();
+        }
+        acc
+    }
+
+    pub fn resolve_paragraph(&self, id: &str) -> ResolvedParagraph {
+        let mut acc = ResolvedParagraph::default();
+        let mut cursor = Some(id.to_string());
+        for _ in 0..MAX_BASED_ON_DEPTH {
+            let Some(cur_id) = cursor else { break };
+            let Some(s) = self.paragraph_styles.get(&cur_id) else {
+                break;
+            };
+            acc.merge_below(s);
+            cursor = s.based_on.clone();
+        }
+        acc
+    }
+
+    /// Walk an ObjectStyle's `BasedOn` chain. Same depth-bounded
+    /// pattern as `resolve_paragraph` / `resolve_character`.
+    pub fn resolve_object(&self, id: &str) -> ResolvedObject {
+        let mut acc = ResolvedObject::default();
+        let mut cursor = Some(id.to_string());
+        for _ in 0..MAX_BASED_ON_DEPTH {
+            let Some(cur_id) = cursor else { break };
+            let Some(s) = self.object_styles.get(&cur_id) else {
+                break;
+            };
+            acc.merge_below(s);
+            cursor = s.based_on.clone();
+        }
+        acc
+    }
+
+    /// Walk a CellStyle's BasedOn chain. Cell strokes / fills /
+    /// vertical justification cascade through it.
+    pub fn resolve_cell(&self, id: &str) -> ResolvedCell {
+        let mut acc = ResolvedCell::default();
+        let mut cursor = Some(id.to_string());
+        for _ in 0..MAX_BASED_ON_DEPTH {
+            let Some(cur_id) = cursor else { break };
+            let Some(s) = self.cell_styles.get(&cur_id) else {
+                break;
+            };
+            acc.merge_below(s);
+            cursor = s.based_on.clone();
+        }
+        acc
+    }
+
+    /// Walk a TableStyle's BasedOn chain. Resolves region →
+    /// CellStyle assignments + table border strokes + alternating
+    /// row fills.
+    pub fn resolve_table(&self, id: &str) -> ResolvedTable {
+        let mut acc = ResolvedTable::default();
+        let mut cursor = Some(id.to_string());
+        for _ in 0..MAX_BASED_ON_DEPTH {
+            let Some(cur_id) = cursor else { break };
+            let Some(s) = self.table_styles.get(&cur_id) else {
+                break;
+            };
+            acc.merge_below(s);
+            cursor = s.based_on.clone();
+        }
+        acc
+    }
+}

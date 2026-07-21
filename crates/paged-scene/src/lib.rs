@@ -29,8 +29,8 @@ use std::collections::{BTreeMap, HashMap};
 use serde::{Deserialize, Serialize};
 
 use paged_parse::{
-    parse_graphic, Bounds, CharacterRun, Container, Graphic, Paragraph, ParseError, Spread, Story,
-    StoryRef, StyleSheet, TOCStyleDef, TextFrame,
+    parse_graphic, parse_stylesheet, Bounds, CharacterRun, Container, Graphic, Paragraph,
+    ParseError, Spread, Story, StoryRef, StyleSheet, TOCStyleDef, TextFrame,
 };
 
 pub mod anchors;
@@ -185,7 +185,7 @@ impl Document {
             None => Graphic::default(),
         };
         let styles = match container.entry("Resources/Styles.xml") {
-            Some(raw) => StyleSheet::parse(raw)?,
+            Some(raw) => parse_stylesheet(raw)?,
             None => StyleSheet::default(),
         };
 

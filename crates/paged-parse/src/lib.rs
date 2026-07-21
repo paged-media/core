@@ -60,10 +60,10 @@ pub use story::{
     NEXT_PAGE_NUMBER_MARKER,
 };
 pub use styles::{
-    CellStyleDef, CharacterStyleDef, ConditionDef, NestedDelimiter, NestedStyle, ObjectStyleDef,
-    ParagraphBorder, ParagraphRule, ParagraphShading, ParagraphStyleDef, ResolvedCell,
-    ResolvedCharacter, ResolvedObject, ResolvedParagraph, ResolvedTable, StripeDef, StrokeStyleDef,
-    StrokeStyleKind, StyleSheet, TOCStyleDef, TOCStyleEntryDef, TableStyleDef,
+    parse_stylesheet, CellStyleDef, CharacterStyleDef, ConditionDef, NestedDelimiter, NestedStyle,
+    ObjectStyleDef, ParagraphBorder, ParagraphRule, ParagraphShading, ParagraphStyleDef,
+    ResolvedCell, ResolvedCharacter, ResolvedObject, ResolvedParagraph, ResolvedTable, StripeDef,
+    StrokeStyleDef, StrokeStyleKind, StyleSheet, TOCStyleDef, TOCStyleEntryDef, TableStyleDef,
 };
 
 #[derive(Debug, thiserror::Error)]
