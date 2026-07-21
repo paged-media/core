@@ -33,10 +33,10 @@ fn model_round_trips_through_native_bytes_and_renders_identically() {
     let bytes = paged_store::to_bytes(&doc).expect("serialize to .pgm");
     let doc2 = paged_store::from_bytes(&bytes).expect("reconstruct from .pgm");
 
-    // The reconstructed model carries NO raw IDML (the carry-through is
-    // `#[serde(skip)]`) yet is fully usable.
+    // The reconstructed model carries NO raw IDML source archive (it is
+    // `#[serde(skip)]`, so `source` deserializes to `None`) yet is fully usable.
     assert!(
-        doc2.container.entries.is_empty(),
+        doc2.source.is_none(),
         "native reconstruct must not carry the raw IDML archive"
     );
     assert_eq!(

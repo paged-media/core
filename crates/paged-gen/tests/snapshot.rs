@@ -1552,15 +1552,17 @@ fn links_ok_all_images_resolve_with_healthy_ppi() {
     let doc = paged_scene::Document::open(&bytes).expect("Document::open");
     assert_eq!(doc.designmap.spreads.len(), 1, "single page");
 
-    let spread_path = doc
-        .container
+    let source = doc
+        .source
+        .as_ref()
+        .expect("imported doc has a source archive");
+    let spread_path = source
         .entries
         .keys()
         .find(|k| k.starts_with("Spreads/"))
         .expect("a spread entry")
         .clone();
-    let spread =
-        paged_parse::parse_spread(&doc.container.entries[&spread_path]).expect("Spread::parse");
+    let spread = paged_parse::parse_spread(&source.entries[&spread_path]).expect("Spread::parse");
 
     // Two image rectangles, both inline-embedded (resolve "ok").
     let with_inline = spread

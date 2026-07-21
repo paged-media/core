@@ -54,8 +54,13 @@ pub use value::Value;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     /// Raw IDML source archive (carry-through only — mimetype + entry blobs).
-    /// The structured manifest lives in `designmap`, not here (N7).
-    pub container: SourceArchive,
+    /// `None` for a natively-created or pure-native-reconstructed document that
+    /// has no IDML origin; `Some` only after an IDML import (or when the load
+    /// sniff re-attaches the sibling archive). `#[serde(skip)]` — the raw
+    /// archive never rides in the native `.pgm` (N7). The structured manifest
+    /// lives in `designmap`, not here.
+    #[serde(skip)]
+    pub source: Option<SourceArchive>,
     /// Structured `designmap.xml` manifest — spread/story order, layers,
     /// sections, hyperlinks, doc preferences. Parsed from the source archive at
     /// import; the model's truth (no longer wrapped in the raw `SourceArchive`).
@@ -247,7 +252,7 @@ impl Document {
         }
 
         let mut document = Document {
-            container,
+            source: Some(container),
             designmap,
             palette,
             spreads,
@@ -540,7 +545,10 @@ impl Document {
     /// linked images, ICC profiles — anything the manifest or frames
     /// reference but that `Document` doesn't parse itself).
     pub fn entry(&self, path: &str) -> Option<&[u8]> {
-        self.container.entry(path).map(|b| b.as_ref())
+        self.source
+            .as_ref()
+            .and_then(|s| s.entry(path))
+            .map(|b| b.as_ref())
     }
 
     /// Resolve a run's effective character-level attributes by

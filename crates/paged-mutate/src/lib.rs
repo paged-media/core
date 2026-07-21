@@ -162,14 +162,13 @@ impl Project {
 mod tests {
     use super::*;
     use std::cell::Cell;
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::HashMap;
 
     use crate::operation::PathAnchorSpec;
     use crate::path_math::smooth_handles_from_neighbours;
-    use bytes::Bytes;
     use paged_parse::{
-        Bounds, DesignMap, FrameRef, Graphic, PathAnchor, Polygon, SourceArchive, Spread,
-        StyleSheet, TextFrame as ParsedTextFrame,
+        Bounds, DesignMap, FrameRef, Graphic, PathAnchor, Polygon, Spread, StyleSheet,
+        TextFrame as ParsedTextFrame,
     };
     use paged_scene::{ParsedSpread, ParsedStory};
 
@@ -243,11 +242,7 @@ mod tests {
         ));
 
         Document {
-            container: SourceArchive {
-                mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
-                designmap_raw: Bytes::new(),
-                entries: BTreeMap::new(),
-            },
+            source: None,
             designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
@@ -1694,11 +1689,7 @@ mod tests {
         ]);
 
         Document {
-            container: SourceArchive {
-                mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
-                designmap_raw: Bytes::new(),
-                entries: BTreeMap::new(),
-            },
+            source: None,
             designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![
@@ -1899,11 +1890,7 @@ mod tests {
             item_transform: group_xform,
         });
         Document {
-            container: SourceArchive {
-                mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
-                designmap_raw: Bytes::new(),
-                entries: BTreeMap::new(),
-            },
+            source: None,
             designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
@@ -2052,11 +2039,7 @@ mod tests {
             .polygons
             .push(polygon_with_anchors(self_id, anchors, subpath_starts));
         let doc = Document {
-            container: SourceArchive {
-                mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
-                designmap_raw: Bytes::new(),
-                entries: BTreeMap::new(),
-            },
+            source: None,
             designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
@@ -2251,11 +2234,7 @@ mod tests {
             end_arrow_scale: 100.0,
         });
         let doc = Document {
-            container: SourceArchive {
-                mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
-                designmap_raw: Bytes::new(),
-                entries: BTreeMap::new(),
-            },
+            source: None,
             designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
@@ -2639,11 +2618,7 @@ mod tests {
             parent_id: None,
         });
         Document {
-            container: SourceArchive {
-                mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
-                designmap_raw: Bytes::new(),
-                entries: BTreeMap::new(),
-            },
+            source: None,
             designmap,
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
@@ -2958,11 +2933,7 @@ mod tests {
         };
 
         Document {
-            container: SourceArchive {
-                mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
-                designmap_raw: Bytes::new(),
-                entries: BTreeMap::new(),
-            },
+            source: None,
             designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: Vec::new(),
@@ -3358,11 +3329,7 @@ mod tests {
     fn pathfinder_subtract_round_trips_via_operation() {
         use paged_parse::Spread;
         let mut project = Project::new(Document {
-            container: SourceArchive {
-                mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
-                designmap_raw: Bytes::new(),
-                entries: BTreeMap::new(),
-            },
+            source: None,
             designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
@@ -3947,11 +3914,7 @@ mod tests {
     #[test]
     fn frame_stroke_end_cap_round_trips_on_rectangle() {
         let mut project = Project::new(Document {
-            container: SourceArchive {
-                mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
-                designmap_raw: Bytes::new(),
-                entries: BTreeMap::new(),
-            },
+            source: None,
             designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
@@ -4014,11 +3977,7 @@ mod tests {
     #[test]
     fn frame_stroke_arrowheads_round_trip_on_graphic_line() {
         let mut project = Project::new(Document {
-            container: SourceArchive {
-                mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
-                designmap_raw: Bytes::new(),
-                entries: BTreeMap::new(),
-            },
+            source: None,
             designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
@@ -6205,11 +6164,7 @@ mod tests {
 
         fn base_doc() -> Document {
             Document {
-                container: SourceArchive {
-                    mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
-                    designmap_raw: Bytes::new(),
-                    entries: BTreeMap::new(),
-                },
+                source: None,
                 designmap: DesignMap::default(),
                 palette: Graphic::default(),
                 spreads: Vec::new(),
@@ -6874,11 +6829,7 @@ mod tests {
             frame_for_story.insert("Story/t1".to_string(), frame);
 
             Document {
-                container: SourceArchive {
-                    mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
-                    designmap_raw: Bytes::new(),
-                    entries: BTreeMap::new(),
-                },
+                source: None,
                 designmap: DesignMap::default(),
                 palette: Graphic::default(),
                 spreads: vec![ParsedSpread {

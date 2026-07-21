@@ -212,7 +212,14 @@ fn main() -> Result<()> {
 
     if !args.json {
         println!("file          {}", args.file.display());
-        println!("mimetype      {}", document.container.mimetype);
+        println!(
+            "mimetype      {}",
+            document
+                .source
+                .as_ref()
+                .map(|s| s.mimetype.as_str())
+                .unwrap_or("(no source archive)")
+        );
         if let Some(v) = document.designmap.dom_version.as_deref() {
             println!("DOMVersion    {v}");
         }
@@ -363,9 +370,11 @@ fn main() -> Result<()> {
     // by basename — IDML LinkResourceURIs are commonly absolute paths
     // baked at packaging time and we just want to match the basename.
     let embedded_images: Vec<(String, bytes::Bytes)> = document
-        .container
-        .entries
-        .iter()
+        .source
+        .as_ref()
+        .map(|s| &s.entries)
+        .into_iter()
+        .flatten()
         .filter(|(name, _)| is_image_path(name))
         .map(|(name, bytes)| (name.clone(), bytes.clone()))
         .collect();
@@ -624,9 +633,11 @@ fn render_page_hashes(doc: &Document, dpi: f32) -> Result<Vec<[u8; 32]>> {
     // Harvest the document's own embedded images so placed-content URIs
     // pointing inside the package resolve (same logic as the main flow).
     let embedded: Vec<(String, bytes::Bytes)> = doc
-        .container
-        .entries
-        .iter()
+        .source
+        .as_ref()
+        .map(|s| &s.entries)
+        .into_iter()
+        .flatten()
         .filter(|(name, _)| is_image_path(name))
         .map(|(name, bytes)| (name.clone(), bytes.clone()))
         .collect();
@@ -1208,7 +1219,7 @@ fn build_json_report(
 
     json!({
         "file": args.file,
-        "mimetype": document.container.mimetype,
+        "mimetype": document.source.as_ref().map(|s| s.mimetype.as_str()),
         "dom_version": document.designmap.dom_version,
         "manifest": {
             "spreads": document.designmap.spreads.len(),

@@ -35,17 +35,16 @@
 //! work can pull in when it actually needs it. The two scenarios here
 //! are enough to detect parser leaks at the seam.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
-use bytes::Bytes;
-use paged_parse::{Bounds, DesignMap, Graphic, Page, SourceArchive, Spread, StyleSheet};
+use paged_parse::{Bounds, DesignMap, Graphic, Page, Spread, StyleSheet};
 use paged_renderer::pipeline::{self, PipelineOptions};
 use paged_scene::{Document, ParsedSpread};
 
 #[test]
 fn build_document_accepts_a_hand_constructed_empty_document() {
     let document = Document {
-        container: empty_container(),
+        source: None,
         designmap: DesignMap::default(),
         palette: Graphic::default(),
         spreads: Vec::new(),
@@ -90,7 +89,7 @@ fn build_document_accepts_a_hand_constructed_single_page_document() {
     });
 
     let document = Document {
-        container: empty_container(),
+        source: None,
         designmap: DesignMap::default(),
         palette: Graphic::default(),
         spreads: vec![ParsedSpread {
@@ -111,12 +110,4 @@ fn build_document_accepts_a_hand_constructed_single_page_document() {
     assert_eq!(built.pages.len(), 1);
     assert_eq!(built.pages[0].width_pt, 300.0);
     assert_eq!(built.pages[0].height_pt, 200.0);
-}
-
-fn empty_container() -> SourceArchive {
-    SourceArchive {
-        mimetype: "application/vnd.adobe.indesign-idml-package".to_string(),
-        designmap_raw: Bytes::new(),
-        entries: BTreeMap::new(),
-    }
 }
